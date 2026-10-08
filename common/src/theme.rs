@@ -155,18 +155,6 @@ pub struct PublishedThemePresentation {
 }
 
 impl PublishedThemePresentation {
-    /// The built-in fallback presentation used when no valid selection is available.
-    #[must_use]
-    pub fn built_in(theme: Theme) -> Self {
-        Self {
-            identity: PublishedThemeIdentity::BuiltIn(theme),
-            revision: None,
-            stylesheet_url: built_in_theme_stylesheet(),
-            logo_url: None,
-            header_url: None,
-        }
-    }
-
     /// Stable root attribute value understood by the built-in stylesheet.
     #[must_use]
     pub fn data_theme(&self) -> String {
@@ -175,12 +163,6 @@ impl PublishedThemePresentation {
             PublishedThemeIdentity::Custom(_) => "custom".to_owned(),
         }
     }
-}
-
-fn built_in_theme_stylesheet() -> RootRelativeUrl {
-    const PATH: &str = "/style/jaunder-themes.css";
-
-    RootRelativeUrl::from_trusted_path(PATH)
 }
 
 /// The two Style Contract image roles a Theme Package may supply.
@@ -567,7 +549,13 @@ mod tests {
 
     #[test]
     fn published_theme_presentation_serde_fixtures_are_complete() {
-        let built_in = PublishedThemePresentation::built_in(Theme::Reader);
+        let built_in = PublishedThemePresentation {
+            identity: PublishedThemeIdentity::BuiltIn(Theme::Reader),
+            revision: Some("a".repeat(64).parse().unwrap()),
+            stylesheet_url: format!("/theme/{}", "b".repeat(64)).parse().unwrap(),
+            logo_url: None,
+            header_url: None,
+        };
         let custom = PublishedThemePresentation {
             identity: PublishedThemeIdentity::Custom(crate::ids::ThemeId::from(42)),
             revision: Some("a".repeat(64).parse().unwrap()),
@@ -576,7 +564,11 @@ mod tests {
             header_url: Some(format!("/theme/{}", "d".repeat(64)).parse().unwrap()),
         };
 
-        let built_in_fixture = r#"{"identity":{"kind":"built_in","value":"reader"},"revision":null,"stylesheet_url":"/style/jaunder-themes.css","logo_url":null,"header_url":null}"#;
+        let built_in_fixture = format!(
+            r#"{{"identity":{{"kind":"built_in","value":"reader"}},"revision":"{}","stylesheet_url":"/theme/{}","logo_url":null,"header_url":null}}"#,
+            "a".repeat(64),
+            "b".repeat(64),
+        );
         let custom_fixture = format!(
             r#"{{"identity":{{"kind":"custom","value":42}},"revision":"{}","stylesheet_url":"/theme/{}","logo_url":"/theme/{}","header_url":"/theme/{}"}}"#,
             "a".repeat(64),
@@ -587,7 +579,7 @@ mod tests {
 
         assert_eq!(serde_json::to_string(&built_in).unwrap(), built_in_fixture);
         assert_eq!(
-            serde_json::from_str::<PublishedThemePresentation>(built_in_fixture).unwrap(),
+            serde_json::from_str::<PublishedThemePresentation>(&built_in_fixture).unwrap(),
             built_in
         );
         assert_eq!(serde_json::to_string(&custom).unwrap(), custom_fixture);

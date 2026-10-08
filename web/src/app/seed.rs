@@ -35,9 +35,13 @@ mod tests {
 
     #[test]
     fn valid_presentation_retains_the_server_resolved_destination_theme() {
-        let json = r#"{"theme":{"identity":{"kind":"built_in","value":"reader"},"revision":null,"stylesheet_url":"/style/jaunder-themes.css","logo_url":null,"header_url":null},"page":{"SiteTimeline":{"identity":{"title":"Jaunder","base_url":null},"registration_policy":"open","order":"newest","page":{"posts":[],"next_cursor":null,"has_more":false}}}}"#;
+        let json = format!(
+            r#"{{"theme":{{"identity":{{"kind":"built_in","value":"reader"}},"revision":"{}","stylesheet_url":"/theme/{}","logo_url":null,"header_url":null}},"page":{{"SiteTimeline":{{"identity":{{"title":"Jaunder","base_url":null}},"registration_policy":"open","order":"newest","page":{{"posts":[],"next_cursor":null,"has_more":false}}}}}}}}"#,
+            "a".repeat(64),
+            "b".repeat(64),
+        );
 
-        let decoded = decode_projector_seed(Some(json)).expect("valid presentation");
+        let decoded = decode_projector_seed(Some(&json)).expect("valid presentation");
         assert!(matches!(
             decoded,
             Some(PublicPresentation {
@@ -47,7 +51,13 @@ mod tests {
                     order: common::seed::TimelineOrder::Newest,
                     ..
                 },
-            }) if theme == common::theme::PublishedThemePresentation::built_in(common::theme::Theme::Reader)
+            }) if theme == common::theme::PublishedThemePresentation {
+                identity: common::theme::PublishedThemeIdentity::BuiltIn(common::theme::Theme::Reader),
+                revision: Some("a".repeat(64).parse().unwrap()),
+                stylesheet_url: format!("/theme/{}", "b".repeat(64)).parse().unwrap(),
+                logo_url: None,
+                header_url: None,
+            }
                 && identity.title == common::site::SiteTitle::default()
                 && identity.tagline.is_none()
                 && identity.base_url.is_none()

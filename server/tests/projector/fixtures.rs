@@ -9,15 +9,44 @@ use axum::{
 use common::theme::{PublicThemeSelection, Theme};
 use common::{post_title::PostTitle, registration::RegistrationPolicy, site::SiteIdentity};
 use jiff::tz::Offset;
-use storage::test_support::{SeedRawPost, SeedUser};
+use storage::test_support::{SeedRawPost, SeedUser, TestEnv, confirmed};
 use storage::{
     MockSiteConfigStorage, MockThemeStorage, PostStorage, RenderedHtml, SiteConfigStorage,
-    ThemeOwner, ThemeStorage, UserStorage,
+    SystemThemeRevision, ThemeAssetManager, ThemeOwner, ThemeStorage, UserStorage,
 };
 
 /// A recognizable stand-in for the real `index.html`, so tests can tell a
 /// shell-fallback response apart from a projected one.
 pub(super) const TEST_SHELL: &str = "<!DOCTYPE html><!--test-shell--><html><body></body></html>";
+
+/// Installs the closed release inventory at an explicit projector test root.
+///
+/// Projector tests intentionally start from pristine storage; unlike production
+/// startup they must opt into system artifact installation before public
+/// presentation resolution can be exercised.
+pub(super) async fn install_projector_system_inventory(env: &TestEnv) {
+    let inventory = host::system_theme::compile_system_artifact_inventory()
+        .expect("closed system artifact inventory compiles");
+    let manager = ThemeAssetManager::new(
+        env.themes(),
+        env.write_scope().clone(),
+        Arc::new(env.base.path().to_path_buf()),
+    );
+    confirmed(
+        manager
+            .install_system(&inventory, 0)
+            .await
+            .expect("install projector system artifact inventory"),
+    );
+}
+
+fn application_stylesheet_url() -> common::root_relative_url::RootRelativeUrl {
+    host::system_theme::compile_system_artifact_inventory()
+        .expect("closed system artifact inventory compiles")
+        .application()
+        .content_digest()
+        .content_url()
+}
 
 /// A router carrying only the public projector routes and their storage
 /// dependencies.
@@ -58,6 +87,7 @@ pub(super) fn projector_app_with_site_config(
         users,
         themes,
         site_config,
+        application_stylesheet_url(),
         jaunder::projector::Shell(TEST_SHELL.into()),
     );
     jaunder::projector::register(Router::new(), projector)
@@ -88,9 +118,30 @@ pub(super) fn failing_site_theme_selection(message: &'static str) -> Arc<dyn The
     Arc::new(themes)
 }
 
+fn mocked_system_revision(theme: Theme) -> SystemThemeRevision {
+    let digest = match theme {
+        Theme::Terminal => 'a',
+        Theme::Studio => 'b',
+        Theme::Reader => 'c',
+    }
+    .to_string()
+    .repeat(64);
+    SystemThemeRevision {
+        theme,
+        digest: digest.parse().expect("test revision digest"),
+        source_digest: digest.parse().expect("test source digest"),
+        stylesheet_digest: digest.parse().expect("test stylesheet digest"),
+        manifest: br#"{"defaults":{}}"#.to_vec(),
+        assets: vec![],
+    }
+}
+
 /// An author selection store that resolves the site selection before failing.
 pub(super) fn failing_author_theme_selection(message: &'static str) -> Arc<dyn ThemeStorage> {
     let mut themes = MockThemeStorage::new();
+    themes
+        .expect_system_theme_revision()
+        .returning(|theme| Ok(Some(mocked_system_revision(theme))));
     themes
         .expect_selection()
         .times(2)

@@ -11,7 +11,9 @@ use common::test_support::parse_post_body;
 use jiff::tz::Offset;
 use storage::test_support::{Backend, SeedRawPost, SeedUser, backends};
 
-use super::fixtures::{get, projector_app, seed_published_post};
+use super::fixtures::{
+    get, install_projector_system_inventory, projector_app, seed_published_post,
+};
 
 #[apply(backends)]
 #[tokio::test]
@@ -19,6 +21,7 @@ async fn refreshed_post_changes_public_permalink_etag_but_keeps_cache_age_bound(
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let user = SeedUser::new().seed(env.users(), env.write_scope()).await;
     let post = SeedRawPost::new(user.user_id)
         .body(parse_post_body("```elisp\n(message \"refreshed\")\n```"))
@@ -82,6 +85,7 @@ async fn permalink_stale_if_none_match_serves_full_200(#[case] backend: Backend)
     // A non-matching `If-None-Match` must not 304 — the client's cached copy is
     // stale, so serve the full document.
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (u, y, m, d, slug, ..) =
         seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let uri = format!("/~{u}/{y}/{m}/{d}/{slug}");
@@ -102,6 +106,7 @@ async fn permalink_stale_if_none_match_serves_full_200(#[case] backend: Backend)
 #[tokio::test]
 async fn permalink_if_none_match_returns_304(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (u, y, m, d, slug, ..) =
         seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let uri = format!("/~{u}/{y}/{m}/{d}/{slug}");
@@ -142,6 +147,7 @@ async fn projected_bytes_ignore_request_auth(#[case] backend: Backend) {
     // request carrying a session cookie yields byte-identical output to an
     // anonymous one — one cacheable response for every visitor.
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (u, y, m, d, slug, ..) =
         seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let uri = format!("/~{u}/{y}/{m}/{d}/{slug}");
@@ -181,6 +187,7 @@ async fn projected_bytes_ignore_request_auth(#[case] backend: Backend) {
 #[tokio::test]
 async fn projected_response_is_publicly_cacheable(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (u, y, m, d, slug, ..) =
         seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let uri = format!("/~{u}/{y}/{m}/{d}/{slug}");
@@ -203,6 +210,7 @@ async fn projected_response_is_publicly_cacheable(#[case] backend: Backend) {
 #[tokio::test]
 async fn timeline_order_urls_produce_distinct_cacheable_representations(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     seed_published_post(env.users(), env.posts(), env.write_scope()).await;
 
     let newest = projector_app(env.posts(), env.users(), env.themes())

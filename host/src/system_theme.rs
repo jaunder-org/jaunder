@@ -7,7 +7,12 @@
 //! below. Both roles expose exact content bytes and digests without inventing a
 //! second package compiler or hashing scheme.
 
-use std::{collections::BTreeMap, fmt::Write as _, fs, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Write as _,
+    fs,
+    path::Path,
+};
 
 use common::theme::{
     Theme, ThemeAssetDigest, ThemeContentDigest, ThemeRevisionDigest, ThemeSourceDigest,
@@ -144,6 +149,244 @@ pub struct SystemArtifactStageError {
     path: std::path::PathBuf,
     #[source]
     source: std::io::Error,
+}
+
+/// A source of staged system-artifact files.
+///
+/// This is an intentionally open transport seam for the trusted build tree and
+/// private binary embed. The loader authenticates neither provider nor release;
+/// composition roots choose those trusted sources. It does enforce the fixed
+/// role grammar and never exposes application-CSS construction to custom APIs.
+pub trait SystemArtifactSource {
+    /// Returns the complete relative file inventory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the source inventory cannot be enumerated.
+    fn paths(&self) -> Result<BTreeSet<String>, SystemArtifactLoadError>;
+
+    /// Returns exact bytes for one declared relative path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the declared artifact cannot be read.
+    fn read(&self, path: &str) -> Result<Vec<u8>, SystemArtifactLoadError>;
+}
+
+/// A persisted system-artifact tree was malformed or disagreed with compiler-minted identity.
+#[derive(Debug, Error)]
+pub enum SystemArtifactLoadError {
+    #[error("invalid system-artifact inventory: {0}")]
+    Invalid(String),
+    #[error("reading system artifact `{path}`: {source}")]
+    Read {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("invalid bundled Theme Package `{theme}`: {source}")]
+    Package {
+        theme: Theme,
+        #[source]
+        source: ThemePackageError,
+    },
+}
+
+/// Filesystem source for a producer-staged system-artifact tree.
+pub struct DirectorySystemArtifactSource<'a> {
+    root: &'a Path,
+}
+
+impl<'a> DirectorySystemArtifactSource<'a> {
+    #[must_use]
+    pub const fn new(root: &'a Path) -> Self {
+        Self { root }
+    }
+}
+
+impl SystemArtifactSource for DirectorySystemArtifactSource<'_> {
+    fn paths(&self) -> Result<BTreeSet<String>, SystemArtifactLoadError> {
+        let mut paths = BTreeSet::new();
+        collect_source_paths(self.root, Path::new(""), &mut paths)?;
+        Ok(paths)
+    }
+
+    fn read(&self, path: &str) -> Result<Vec<u8>, SystemArtifactLoadError> {
+        fs::read(self.root.join(path)).map_err(|source| SystemArtifactLoadError::Read {
+            path: path.to_owned(),
+            source,
+        })
+    }
+}
+
+fn collect_source_paths(
+    root: &Path,
+    relative: &Path,
+    paths: &mut BTreeSet<String>,
+) -> Result<(), SystemArtifactLoadError> {
+    let directory = root.join(relative);
+    for entry in fs::read_dir(&directory).map_err(|source| SystemArtifactLoadError::Read {
+        path: relative.display().to_string(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| SystemArtifactLoadError::Read {
+            path: relative.display().to_string(),
+            source,
+        })?;
+        let child = relative.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .map_err(|source| SystemArtifactLoadError::Read {
+                path: child.display().to_string(),
+                source,
+            })?;
+        if file_type.is_dir() {
+            collect_source_paths(root, &child, paths)?;
+        } else if file_type.is_file() {
+            let path = child.to_str().ok_or_else(|| {
+                SystemArtifactLoadError::Invalid("artifact path is not UTF-8".into())
+            })?;
+            if path.contains('\\') || path.split('/').any(|part| matches!(part, "" | "." | "..")) {
+                return Err(SystemArtifactLoadError::Invalid(
+                    "artifact path is not canonical".into(),
+                ));
+            }
+            paths.insert(path.to_owned());
+        } else {
+            return Err(SystemArtifactLoadError::Invalid(
+                "artifact tree contains a non-file".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Loads a staged inventory only when every declared role replayed through the
+/// canonical validator/compiler agrees with its exact source and compiled bytes.
+///
+/// # Errors
+///
+/// Rejects incomplete, extra, duplicate, traversal-shaped, or inconsistent staged input.
+pub fn load_system_artifact_inventory(
+    source: &dyn SystemArtifactSource,
+) -> Result<SystemArtifactInventory, SystemArtifactLoadError> {
+    let expected = BTreeSet::from([
+        "inventory.txt".to_owned(),
+        "application.css".to_owned(),
+        "themes/terminal.css".to_owned(),
+        "themes/studio.css".to_owned(),
+        "themes/reader.css".to_owned(),
+        "packages/terminal.zip".to_owned(),
+        "packages/studio.zip".to_owned(),
+        "packages/reader.zip".to_owned(),
+    ]);
+    if source.paths()? != expected {
+        return Err(SystemArtifactLoadError::Invalid(
+            "artifact paths are not the closed producer inventory".into(),
+        ));
+    }
+    let manifest = String::from_utf8(source.read("inventory.txt")?)
+        .map_err(|_| SystemArtifactLoadError::Invalid("inventory is not UTF-8".into()))?;
+    let application = ApplicationStylesheet {
+        bytes: source.read("application.css")?,
+    };
+    let application_content = application.content();
+    let mut records = manifest.lines();
+    let application_record = records.next().ok_or_else(|| {
+        SystemArtifactLoadError::Invalid("inventory omits application role".into())
+    })?;
+    let expected_application = format!(
+        "application\tmime={}\tdigest={}\tbytes={}\tpath=application.css",
+        application_content.mime(),
+        application.content_digest(),
+        application_content.bytes().len(),
+    );
+    if application_record != expected_application {
+        return Err(SystemArtifactLoadError::Invalid(
+            "application role metadata disagrees with bytes".into(),
+        ));
+    }
+    let mut packages = Vec::new();
+    for theme in [Theme::Terminal, Theme::Studio, Theme::Reader] {
+        packages.push(load_staged_theme(source, theme, records.next())?);
+    }
+    if records.next().is_some() {
+        return Err(SystemArtifactLoadError::Invalid(
+            "inventory has extra roles".into(),
+        ));
+    }
+    let [terminal, studio, reader] = packages.try_into().map_err(|_| {
+        SystemArtifactLoadError::Invalid("inventory has an incomplete theme set".into())
+    })?;
+    Ok(SystemArtifactInventory {
+        application,
+        themes: [terminal, studio, reader],
+    })
+}
+
+fn load_staged_theme(
+    source: &dyn SystemArtifactSource,
+    theme: Theme,
+    record: Option<&str>,
+) -> Result<BundledThemePackage, SystemArtifactLoadError> {
+    let package_path = format!("packages/{}.zip", theme.token());
+    let stylesheet_path = format!("themes/{}.css", theme.token());
+    let package_bytes = source.read(&package_path)?;
+    let stylesheet = source.read(&stylesheet_path)?;
+    let validated = validate_theme_package(&package_bytes, ThemePackageLimits::default())
+        .map_err(|source| SystemArtifactLoadError::Package { theme, source })?;
+    let source_digest = validated.source_digest();
+    if validated
+        .export_archive()
+        .map_err(|source| SystemArtifactLoadError::Package { theme, source })?
+        != package_bytes
+    {
+        return Err(SystemArtifactLoadError::Invalid(format!(
+            "package source is not canonical for {}",
+            theme.token()
+        )));
+    }
+    let asset_urls = validated
+        .asset_digests()
+        .map(|(path, digest)| {
+            (
+                path.to_owned(),
+                ThemeAssetDigest::from_digest(digest)
+                    .content_url()
+                    .to_string(),
+            )
+        })
+        .collect();
+    let revision = validated
+        .compile(&asset_urls, ThemePackageLimits::default())
+        .map_err(|source| SystemArtifactLoadError::Package { theme, source })?;
+    if revision.stylesheet_content().bytes() != stylesheet {
+        return Err(SystemArtifactLoadError::Invalid(format!(
+            "compiled stylesheet disagrees for {}",
+            theme.token()
+        )));
+    }
+    let expected = format!(
+        "theme={}\tsource={}\tsource_path={package_path}\trevision={}\tmime={}\tdigest={}\tbytes={}\tpath={stylesheet_path}",
+        theme.token(),
+        ThemeSourceDigest::from_digest(source_digest),
+        ThemeRevisionDigest::from_digest(revision.revision_digest()),
+        revision.stylesheet_content().mime(),
+        ThemeStylesheetDigest::from_digest(revision.stylesheet_content().digest()),
+        stylesheet.len(),
+    );
+    if record != Some(expected.as_str()) {
+        return Err(SystemArtifactLoadError::Invalid(format!(
+            "theme metadata disagrees for {}",
+            theme.token()
+        )));
+    }
+    Ok(BundledThemePackage {
+        theme,
+        source_digest,
+        package_bytes,
+        revision,
+    })
 }
 
 /// Writes the compiler-minted system inventory as a build-only artifact tree.
@@ -376,8 +619,8 @@ pub mod shared_asset_fixture {
 
     const ASSET_A: &str = "assets/shared-a.png";
     const ASSET_B: &str = "assets/shared-b.png";
-    const ASSET_MANIFEST_TERMINAL: &[u8] = br#"{"schema":1,"name":"Terminal","style_contract":1,"assets":{"assets/shared-a.png":"image/png","assets/shared-b.png":"image/png"},"defaults":{"header":["assets/shared-a.png","assets/shared-b.png"]}}"#;
-    const ASSET_MANIFEST_STUDIO: &[u8] = br#"{"schema":1,"name":"Studio","style_contract":1,"assets":{"assets/shared-a.png":"image/png","assets/shared-b.png":"image/png"},"defaults":{"header":["assets/shared-a.png","assets/shared-b.png"]}}"#;
+    const ASSET_MANIFEST_TERMINAL: &[u8] = br#"{"schema":1,"name":"Terminal","style_contract":1,"assets":{"assets/shared-a.png":"image/png","assets/shared-b.png":"image/png"},"defaults":{"logo":"assets/shared-a.png","header":["assets/shared-a.png","assets/shared-b.png"]}}"#;
+    const ASSET_MANIFEST_STUDIO: &[u8] = br#"{"schema":1,"name":"Studio","style_contract":1,"assets":{"assets/shared-a.png":"image/png","assets/shared-b.png":"image/png"},"defaults":{"logo":"assets/shared-a.png","header":["assets/shared-a.png","assets/shared-b.png"]}}"#;
     const ASSET_CSS: &[u8] = b"\nbody { background-image: url(\"assets/shared-a.png\"); }\n";
 
     /// Compiles a closed asset-sharing inventory from validated PNG package
@@ -526,6 +769,267 @@ mod tests {
         assert_eq!(
             replay.stylesheet_content().bytes(),
             package.stylesheet_content().bytes(),
+        );
+    }
+
+    #[test]
+    fn staged_inventory_replays_exact_compiler_identity() {
+        let inventory = compile_system_artifact_inventory().expect("shipped packages compile");
+        let root = tempfile::tempdir().expect("temporary staging root");
+        stage_system_artifact_inventory(&inventory, root.path()).expect("stage inventory");
+        let loaded =
+            load_system_artifact_inventory(&DirectorySystemArtifactSource::new(root.path()))
+                .expect("staged inventory replays");
+        assert_eq!(
+            loaded.application().content_digest(),
+            inventory.application().content_digest()
+        );
+        for theme in [Theme::Terminal, Theme::Studio, Theme::Reader] {
+            assert_eq!(
+                loaded.theme(theme).source_digest(),
+                inventory.theme(theme).source_digest()
+            );
+            assert_eq!(
+                loaded.theme(theme).revision_digest(),
+                inventory.theme(theme).revision_digest()
+            );
+            assert_eq!(
+                loaded.theme(theme).stylesheet_digest(),
+                inventory.theme(theme).stylesheet_digest()
+            );
+            assert_eq!(
+                loaded.theme(theme).package_bytes(),
+                inventory.theme(theme).package_bytes()
+            );
+        }
+    }
+
+    fn assert_staged_inventory_replays(inventory: &SystemArtifactInventory) {
+        let root = tempfile::tempdir().expect("temporary staging root");
+        stage_system_artifact_inventory(inventory, root.path()).expect("stage inventory");
+        let loaded =
+            load_system_artifact_inventory(&DirectorySystemArtifactSource::new(root.path()))
+                .expect("staged inventory replays");
+        assert_eq!(
+            loaded.application().content().mime(),
+            inventory.application().content().mime()
+        );
+        assert_eq!(
+            loaded.application().content().bytes(),
+            inventory.application().content().bytes()
+        );
+        assert_eq!(
+            loaded.application().content_digest(),
+            inventory.application().content_digest()
+        );
+        for theme in [Theme::Terminal, Theme::Studio, Theme::Reader] {
+            let loaded = loaded.theme(theme);
+            let expected = inventory.theme(theme);
+            assert_eq!(loaded.package_bytes(), expected.package_bytes());
+            assert_eq!(loaded.source_digest(), expected.source_digest());
+            assert_eq!(loaded.revision_digest(), expected.revision_digest());
+            assert_eq!(loaded.stylesheet_digest(), expected.stylesheet_digest());
+            assert_eq!(
+                loaded.stylesheet_content().bytes(),
+                expected.stylesheet_content().bytes()
+            );
+            assert_eq!(
+                loaded.stylesheet_content().mime(),
+                expected.stylesheet_content().mime()
+            );
+            assert_eq!(
+                loaded.revision().assets().collect::<Vec<_>>(),
+                expected.revision().assets().collect::<Vec<_>>(),
+                "loaded package assets preserve path, MIME, digest, and exact bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn staged_loader_replays_a_b_application_b_theme_and_shared_assets() {
+        let a = qualification::compile(qualification::Fixture::A).expect("A compiles");
+        let b_application = qualification::compile(qualification::Fixture::BApplication)
+            .expect("B application compiles");
+        let b_theme =
+            qualification::compile(qualification::Fixture::BTheme).expect("B theme compiles");
+        let png = include_bytes!("../../testdata/theme-repository/minimal/preview.png");
+        let shared = shared_asset_fixture::compile(shared_asset_fixture::SharingFixture::Both, png)
+            .expect("asset-bearing fixture compiles");
+        for inventory in [&a, &b_application, &b_theme, &shared] {
+            assert_staged_inventory_replays(inventory);
+        }
+        assert!(
+            shared
+                .theme(Theme::Terminal)
+                .revision()
+                .assets()
+                .next()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn staged_inventory_rejects_extra_and_corrupt_artifacts() {
+        let inventory = compile_system_artifact_inventory().expect("shipped packages compile");
+        let root = tempfile::tempdir().expect("temporary staging root");
+        stage_system_artifact_inventory(&inventory, root.path()).expect("stage inventory");
+        fs::write(root.path().join("unexpected"), b"extra").expect("write extra artifact");
+        assert!(
+            load_system_artifact_inventory(&DirectorySystemArtifactSource::new(root.path()))
+                .is_err()
+        );
+        fs::remove_file(root.path().join("unexpected")).expect("remove extra artifact");
+        fs::write(root.path().join("themes/studio.css"), b"corrupt").expect("corrupt stylesheet");
+        assert!(
+            load_system_artifact_inventory(&DirectorySystemArtifactSource::new(root.path()))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn staged_loader_rejects_closed_inventory_mutation_matrix() {
+        for (name, mutate) in inventory_mutation_cases() {
+            assert_inventory_mutation_rejected(name, mutate.as_ref());
+        }
+    }
+
+    type InventoryMutation = (&'static str, Box<dyn Fn(&Path)>);
+
+    fn inventory_mutation_cases() -> Vec<InventoryMutation> {
+        let mut cases: Vec<InventoryMutation> = vec![
+            (
+                "missing file",
+                Box::new(|root| {
+                    fs::remove_file(root.join("application.css")).expect("remove application");
+                }),
+            ),
+            (
+                "malformed role",
+                Box::new(|root| {
+                    fs::write(root.join("inventory.txt"), b"malformed\n")
+                        .expect("write malformed inventory");
+                }),
+            ),
+            (
+                "duplicate role",
+                Box::new(|root| {
+                    let mut text =
+                        fs::read_to_string(root.join("inventory.txt")).expect("read inventory");
+                    let application = text.lines().next().expect("application role").to_owned();
+                    text.push_str(&application);
+                    text.push('\n');
+                    fs::write(root.join("inventory.txt"), text).expect("duplicate role");
+                }),
+            ),
+            (
+                "extra role",
+                Box::new(|root| {
+                    let mut text =
+                        fs::read_to_string(root.join("inventory.txt")).expect("read inventory");
+                    text.push_str("theme=extra\n");
+                    fs::write(root.join("inventory.txt"), text).expect("extra role");
+                }),
+            ),
+            (
+                "reordered roles",
+                Box::new(|root| {
+                    let text =
+                        fs::read_to_string(root.join("inventory.txt")).expect("read inventory");
+                    let mut lines = text.lines().collect::<Vec<_>>();
+                    lines.swap(1, 2);
+                    fs::write(
+                        root.join("inventory.txt"),
+                        format!("{}\n", lines.join("\n")),
+                    )
+                    .expect("reorder roles");
+                }),
+            ),
+            ("traversal metadata", Box::new(traversal_metadata)),
+            (
+                "corrupt source ZIP",
+                Box::new(|root| {
+                    fs::write(root.join("packages/studio.zip"), b"not a ZIP")
+                        .expect("corrupt source zip");
+                }),
+            ),
+            (
+                "noncanonical ZIP transport",
+                Box::new(|root| {
+                    use std::io::Write as _;
+                    fs::OpenOptions::new()
+                        .append(true)
+                        .open(root.join("packages/reader.zip"))
+                        .expect("open package")
+                        .write_all(b"trailer")
+                        .expect("append transport bytes");
+                }),
+            ),
+        ];
+        // Change one field per case so another rejected field cannot hide a gap.
+        for (name, role, field) in [
+            ("application MIME", "application\t", "mime"),
+            ("application digest", "application\t", "digest"),
+            ("application length", "application\t", "bytes"),
+            ("application path", "application\t", "path"),
+            ("theme source", "theme=terminal\t", "source"),
+            ("theme source path", "theme=terminal\t", "source_path"),
+            ("theme revision", "theme=terminal\t", "revision"),
+            ("theme MIME", "theme=terminal\t", "mime"),
+            ("theme digest", "theme=terminal\t", "digest"),
+            ("theme length", "theme=terminal\t", "bytes"),
+            ("theme path", "theme=terminal\t", "path"),
+        ] {
+            cases.push((
+                name,
+                Box::new(move |root| wrong_role_metadata(root, role, field)),
+            ));
+        }
+        cases
+    }
+
+    fn wrong_role_metadata(root: &Path, role: &str, field: &str) {
+        let text = fs::read_to_string(root.join("inventory.txt")).expect("read inventory");
+        let text = text
+            .lines()
+            .map(|line| {
+                if line.starts_with(role) {
+                    line.split('\t')
+                        .map(|value| {
+                            if value.starts_with(&format!("{field}=")) {
+                                format!("{field}=invalid")
+                            } else {
+                                value.to_owned()
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\t")
+                } else {
+                    line.to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(root.join("inventory.txt"), format!("{text}\n")).expect("wrong role metadata");
+    }
+
+    fn traversal_metadata(root: &Path) {
+        let text = fs::read_to_string(root.join("inventory.txt"))
+            .expect("read inventory")
+            .replacen("path=themes/terminal.css", "path=themes/../terminal.css", 1);
+        fs::write(root.join("inventory.txt"), text).expect("traversal metadata");
+    }
+
+    fn assert_inventory_mutation_rejected(name: &str, mutate: &dyn Fn(&Path)) {
+        let inventory = compile_system_artifact_inventory().expect("shipped packages compile");
+        let root = tempfile::tempdir().expect("temporary staging root");
+        stage_system_artifact_inventory(&inventory, root.path()).expect("stage inventory");
+        mutate(root.path());
+        let error =
+            load_system_artifact_inventory(&DirectorySystemArtifactSource::new(root.path()))
+                .expect_err(name);
+        assert!(
+            !error.to_string().is_empty(),
+            "{name} reports a loader error"
         );
     }
 

@@ -14,21 +14,31 @@ use crate::bundle;
 
 use super::Shell;
 
-/// Assemble a document from a server-resolved public presentation.
+/// Assemble a document from a server-resolved public presentation and the
+/// exact application stylesheet identity admitted before the server was ready.
 #[must_use]
-pub fn document_presentation(presentation: &PublicPresentation<PageSeed>) -> String {
-    document_with_urls(presentation, bundle::boot_urls())
+pub fn document_presentation(
+    presentation: &PublicPresentation<PageSeed>,
+    application_stylesheet_url: &common::root_relative_url::RootRelativeUrl,
+) -> String {
+    document_with_urls(
+        presentation,
+        bundle::boot_urls(),
+        application_stylesheet_url,
+    )
 }
 
 fn document_with_urls(
     presentation: &PublicPresentation<PageSeed>,
     urls: Option<bundle::BootUrls>,
+    application_stylesheet_url: &common::root_relative_url::RootRelativeUrl,
 ) -> String {
     // Both arrive as `Markup` (trust is type-carried across the crate boundary);
     // this is where they exit to the untyped response body.
     let seed = &presentation.page;
     let early_fetch = urls.map(bundle::early_wasm_fetch_script);
-    let mut head = app::render_head(seed, early_fetch.as_deref()).into_string();
+    let mut head =
+        app::render_head(seed, early_fetch.as_deref(), application_stylesheet_url).into_string();
     head.push_str(&app::render_theme_stylesheet(&presentation.theme).into_string());
     let body = app::render_shell(presentation).into_string();
     let blob = serde_json::to_string(presentation).unwrap_or_else(|_| "null".to_string());
@@ -57,8 +67,13 @@ fn document_with_urls(
 pub(super) fn cacheable_presentation(
     headers: &HeaderMap,
     presentation: &PublicPresentation<PageSeed>,
+    application_stylesheet_url: &common::root_relative_url::RootRelativeUrl,
 ) -> Response {
-    let body = document_presentation(presentation);
+    let body = document_presentation(presentation, application_stylesheet_url);
+    cacheable_body(headers, body)
+}
+
+fn cacheable_body(headers: &HeaderMap, body: String) -> Response {
     let etag = etag::sha256_of(body.as_bytes());
 
     if let Some(inm) = headers.get(header::IF_NONE_MATCH)
@@ -125,17 +140,44 @@ pub(super) fn permalink_alias_redirect(route: &PermalinkRoute, query: Option<&st
 
 #[cfg(test)]
 mod tests {
-    use super::{cacheable_presentation, document_presentation};
-    use axum::http::{HeaderMap, header};
+    use super::{
+        cacheable_presentation as cacheable_with_application,
+        document_presentation as document_with_application,
+    };
+    use axum::{
+        http::{HeaderMap, header},
+        response::Response,
+    };
     use common::{
         seed::{Page, PageSeed, PublicPresentation},
         site::SiteIdentity,
         theme::Theme,
     };
 
+    fn application_url() -> common::root_relative_url::RootRelativeUrl {
+        "/theme/application".parse().unwrap()
+    }
+
+    fn document_presentation(presentation: &PublicPresentation<PageSeed>) -> String {
+        document_with_application(presentation, &application_url())
+    }
+
+    fn cacheable_presentation(
+        headers: &HeaderMap,
+        presentation: &PublicPresentation<PageSeed>,
+    ) -> Response {
+        cacheable_with_application(headers, presentation, &application_url())
+    }
+
     fn presentation(theme: Theme) -> PublicPresentation<PageSeed> {
         PublicPresentation {
-            theme: common::theme::PublishedThemePresentation::built_in(theme),
+            theme: common::theme::PublishedThemePresentation {
+                identity: common::theme::PublishedThemeIdentity::BuiltIn(theme),
+                revision: Some("a".repeat(64).parse().unwrap()),
+                stylesheet_url: "/theme/bundled".parse().unwrap(),
+                logo_url: None,
+                header_url: None,
+            },
             page: PageSeed::SiteTimeline {
                 identity: SiteIdentity {
                     title: "Jaunder".parse().unwrap(),
@@ -264,7 +306,11 @@ mod tests {
             glue: "/pkg/glue-content-hash.js",
             wasm: "/pkg/wasm-content-hash.wasm",
         };
-        let doc = document_with_urls(&presentation(Theme::Studio), Some(urls));
+        let doc = document_with_urls(
+            &presentation(Theme::Studio),
+            Some(urls),
+            &"/theme/application".parse().unwrap(),
+        );
 
         for url in [urls.glue, urls.wasm] {
             assert_eq!(doc.matches(url).count(), 1, "{doc}");
@@ -273,8 +319,9 @@ mod tests {
             .find("window.__jaunderWasmFetch = fetch")
             .expect("early fetch");
         let stylesheet = doc
-            .find(r#"<link rel="stylesheet" href="/style/jaunder.css">"#)
+            .find(r#"<link rel="stylesheet" href="/theme/application">"#)
             .expect("stylesheet");
+        assert!(!doc.contains("/style/"), "{doc}");
         let import = doc.find("import {initMeasured}").expect("glue import");
         let mark = doc.find("performance.mark").expect("init mark");
         let init = doc
@@ -294,7 +341,11 @@ mod tests {
     fn local_no_bundle_projector_omits_boot_scripts() {
         use super::document_with_urls;
 
-        let doc = document_with_urls(&presentation(Theme::Studio), None);
+        let doc = document_with_urls(
+            &presentation(Theme::Studio),
+            None,
+            &"/theme/application".parse().unwrap(),
+        );
         assert!(
             !doc.contains("initMeasured") && !doc.contains("__jaunderWasmFetch"),
             "{doc}"

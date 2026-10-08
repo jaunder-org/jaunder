@@ -86,6 +86,7 @@ pub fn stage_bundle(
     site: &Path,
     public_src: &Path,
     manifest: &Manifest,
+    application_stylesheet_url: &str,
 ) -> Result<(), BundleStageError> {
     reject_public_collisions(public_src, manifest)?;
     copy_file(&root.join("index.html"), &site.join("index.html"))?;
@@ -103,7 +104,7 @@ pub fn stage_bundle(
     if public_src.is_dir() {
         copy_tree(public_src, site)?;
     }
-    verify_staged_bundle(site, manifest)
+    verify_staged_bundle(site, manifest, application_stylesheet_url)
 }
 
 fn reject_public_collisions(
@@ -160,7 +161,11 @@ fn reject_public_collisions_below(
     Ok(())
 }
 
-fn verify_staged_bundle(site: &Path, manifest: &Manifest) -> Result<(), BundleStageError> {
+fn verify_staged_bundle(
+    site: &Path,
+    manifest: &Manifest,
+    application_stylesheet_url: &str,
+) -> Result<(), BundleStageError> {
     manifest.verify_bundle(site).map_err(|error| {
         BundleStageError(format!("invalid staged bundle {}: {error}", site.display()))
     })?;
@@ -176,10 +181,16 @@ fn verify_staged_bundle(site: &Path, manifest: &Manifest) -> Result<(), BundleSt
         &shell,
         &format!("/{}", glue.path),
         &format!("/{}", wasm.path),
+        application_stylesheet_url,
     )
 }
 
-fn validate_shell(shell: &str, glue: &str, wasm: &str) -> Result<(), BundleStageError> {
+fn validate_shell(
+    shell: &str,
+    glue: &str,
+    wasm: &str,
+    application_stylesheet_url: &str,
+) -> Result<(), BundleStageError> {
     for (role, url) in [("glue", glue), ("WASM", wasm)] {
         if shell.matches(url).count() != 1 {
             return Err(BundleStageError(format!(
@@ -190,9 +201,16 @@ fn validate_shell(shell: &str, glue: &str, wasm: &str) -> Result<(), BundleStage
     let early_fetch = shell
         .find("window.__jaunderWasmFetch = fetch")
         .ok_or_else(|| BundleStageError("staged shell is missing the early WASM fetch".into()))?;
-    let stylesheet = shell
-        .find(r#"<link rel="stylesheet" href="/style/jaunder.css" />"#)
-        .ok_or_else(|| BundleStageError("staged shell is missing the base stylesheet".into()))?;
+    let application_stylesheet =
+        format!(r#"<link rel="stylesheet" href="{application_stylesheet_url}" />"#);
+    let (Some(stylesheet), 1) = (
+        shell.find(&application_stylesheet),
+        shell.matches(&application_stylesheet).count(),
+    ) else {
+        return Err(BundleStageError(
+            "staged shell must contain exactly one verified application stylesheet URL".into(),
+        ));
+    };
     let import = shell
         .find("import {initMeasured}")
         .ok_or_else(|| BundleStageError("staged shell is missing the glue import".into()))?;
@@ -242,6 +260,46 @@ pub fn stage_public_tree(src: &Path, dst: &Path) -> Result<(), BundleStageError>
     Ok(())
 }
 
+/// Verifies and copies the private producer inventory for binary embedding.
+///
+/// # Errors
+///
+/// Returns an error when the closed inventory cannot replay through the shared
+/// validator/compiler or when its private staging copy fails.
+#[cfg(test)]
+pub fn stage_system_artifacts(src: &Path, dst: &Path) -> Result<(), BundleStageError> {
+    let inventory = host::system_theme::load_system_artifact_inventory(
+        &host::system_theme::DirectorySystemArtifactSource::new(src),
+    )
+    .map_err(|error| BundleStageError(format!("invalid system artifacts: {error}")))?;
+    stage_verified_system_artifacts(&inventory, dst)
+}
+
+/// Stages a previously verified inventory, retaining its exact application identity
+/// across shell and private-artifact staging.
+pub fn stage_verified_system_artifacts(
+    inventory: &host::system_theme::SystemArtifactInventory,
+    dst: &Path,
+) -> Result<(), BundleStageError> {
+    host::system_theme::stage_system_artifact_inventory(inventory, dst)
+        .map_err(|error| BundleStageError(format!("staging system artifacts: {error}")))?;
+    let staged = host::system_theme::load_system_artifact_inventory(
+        &host::system_theme::DirectorySystemArtifactSource::new(dst),
+    )
+    .map_err(|error| BundleStageError(format!("invalid staged system artifacts: {error}")))?;
+    if staged.application().content().bytes() != inventory.application().content().bytes()
+        || staged
+            .themes()
+            .zip(inventory.themes())
+            .any(|(staged, source)| staged.package_bytes() != source.package_bytes())
+    {
+        return Err(BundleStageError(
+            "staged system artifacts disagree with verified source".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn copy_tree(src: &Path, dst: &Path) -> Result<(), BundleStageError> {
     fs::create_dir_all(dst)
         .map_err(|error| BundleStageError(format!("creating {}: {error}", dst.display())))?;
@@ -277,13 +335,18 @@ mod tests {
 
     use super::{
         copy_file, prepare_staging_with, reject_public_collisions, reject_public_collisions_below,
-        stage_bundle, stage_public_tree, validate_shell,
+        stage_bundle, stage_public_tree, stage_system_artifacts, validate_shell,
     };
 
+    fn application_url() -> String {
+        format!("/theme/{}", "a".repeat(64))
+    }
+
     fn shell(glue: &str, wasm: &str) -> String {
+        let application_url = application_url();
         format!(
             r#"<script>const __jaunderWasmUrl = "{wasm}"; window.__jaunderWasmFetch = fetch(__jaunderWasmUrl);</script>
-<link rel="stylesheet" href="/style/jaunder.css" />
+<link rel="stylesheet" href="{application_url}" />
 <script type="module">import {{initMeasured}} from "{glue}"; performance.mark("jaunder.module.before_init"); initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl);</script>"#
         )
     }
@@ -356,6 +419,72 @@ mod tests {
     }
 
     #[test]
+    fn stages_private_system_artifacts_after_verifying_source_and_destination() {
+        let source = tempfile::tempdir().expect("system artifact source");
+        let destination = tempfile::tempdir().expect("system artifact destination");
+        let inventory = host::system_theme::compile_system_artifact_inventory()
+            .expect("compile system inventory");
+        host::system_theme::stage_system_artifact_inventory(&inventory, source.path())
+            .expect("stage system source");
+
+        stage_system_artifacts(source.path(), destination.path()).expect("private stage");
+        let loaded = host::system_theme::load_system_artifact_inventory(
+            &host::system_theme::DirectorySystemArtifactSource::new(destination.path()),
+        )
+        .expect("destination replays");
+        assert_eq!(
+            loaded.application().content_digest(),
+            inventory.application().content_digest()
+        );
+        assert_eq!(
+            fs::read(destination.path().join("application.css")).expect("copied application"),
+            inventory.application().content().bytes()
+        );
+    }
+
+    #[test]
+    fn private_staging_replaces_a_different_valid_destination_with_verified_source() {
+        let source = tempfile::tempdir().expect("system artifact source");
+        let destination = tempfile::tempdir().expect("system artifact destination");
+        let a = host::system_theme::qualification::compile(
+            host::system_theme::qualification::Fixture::A,
+        )
+        .expect("compile A");
+        let b = host::system_theme::qualification::compile(
+            host::system_theme::qualification::Fixture::BApplication,
+        )
+        .expect("compile B");
+        host::system_theme::stage_system_artifact_inventory(&a, source.path())
+            .expect("stage source");
+        host::system_theme::stage_system_artifact_inventory(&b, destination.path())
+            .expect("stage different destination");
+
+        stage_system_artifacts(source.path(), destination.path()).expect("stage verified source");
+        let staged = host::system_theme::load_system_artifact_inventory(
+            &host::system_theme::DirectorySystemArtifactSource::new(destination.path()),
+        )
+        .expect("destination replays source");
+        assert_eq!(
+            staged.application().content().bytes(),
+            a.application().content().bytes()
+        );
+        assert_ne!(
+            staged.application().content().bytes(),
+            b.application().content().bytes()
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_private_system_artifact_source() {
+        let source = tempfile::tempdir().expect("system artifact source");
+        let destination = tempfile::tempdir().expect("system artifact destination");
+        fs::write(source.path().join("inventory.txt"), b"invalid")
+            .expect("write invalid inventory");
+        assert!(stage_system_artifacts(source.path(), destination.path()).is_err());
+        assert!(!destination.path().join("application.css").exists());
+    }
+
+    #[test]
     fn stages_verified_bundle_and_nested_public_assets() {
         let bundle = tempfile::tempdir().expect("bundle root");
         let site = tempfile::tempdir().expect("site root");
@@ -366,7 +495,14 @@ mod tests {
             .expect("create stylesheet parent");
         fs::write(&stylesheet, "body {}").expect("write stylesheet");
 
-        stage_bundle(bundle.path(), site.path(), public.path(), &manifest).expect("stage bundle");
+        stage_bundle(
+            bundle.path(),
+            site.path(),
+            public.path(),
+            &manifest,
+            &application_url(),
+        )
+        .expect("stage bundle");
 
         manifest
             .verify_bundle(site.path())
@@ -401,20 +537,35 @@ mod tests {
     fn shell_requires_unique_urls_and_required_order() {
         let glue = "/pkg/glue.js";
         let wasm = "/pkg/module.wasm";
-        validate_shell(&shell(glue, wasm), glue, wasm).expect("valid shell");
+        validate_shell(&shell(glue, wasm), glue, wasm, &application_url()).expect("valid shell");
+        let wrong_application_url = format!("/theme/{}", "b".repeat(64));
+        assert!(
+            validate_shell(&shell(glue, wasm), glue, wasm, &wrong_application_url)
+                .expect_err("wrong application digest")
+                .to_string()
+                .contains("verified application stylesheet URL")
+        );
+        let retired = shell(glue, wasm).replace(&application_url(), "/style/jaunder.css");
+        assert!(
+            validate_shell(&retired, glue, wasm, &application_url())
+                .expect_err("retired stylesheet URL")
+                .to_string()
+                .contains("verified application stylesheet URL")
+        );
 
         let duplicate = format!("{}\n{glue}", shell(glue, wasm));
         assert!(
-            validate_shell(&duplicate, glue, wasm)
+            validate_shell(&duplicate, glue, wasm, &application_url())
                 .expect_err("duplicate glue URL")
                 .to_string()
                 .contains("exactly one glue URL")
         );
         let misordered = format!(
-            r#"<link rel="stylesheet" href="/style/jaunder.css" />window.__jaunderWasmFetch = fetch import {{initMeasured}} performance.mark initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl) {glue} {wasm}"#
+            r#"<link rel="stylesheet" href="{}" />window.__jaunderWasmFetch = fetch import {{initMeasured}} performance.mark initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl) {glue} {wasm}"#,
+            application_url()
         );
         assert!(
-            validate_shell(&misordered, glue, wasm)
+            validate_shell(&misordered, glue, wasm, &application_url())
                 .expect_err("misordered shell")
                 .to_string()
                 .contains("does not preserve")
@@ -504,18 +655,19 @@ mod tests {
             site.path(),
             &bundle.path().join("missing"),
             &manifest,
+            &application_url(),
         )
         .expect("missing public tree is permitted");
 
         for required in [
             "window.__jaunderWasmFetch = fetch",
-            r#"<link rel="stylesheet" href="/style/jaunder.css" />"#,
+            r#"<link rel="stylesheet" href="/theme/"#,
             "import {initMeasured}",
             "performance.mark",
             "initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl)",
         ] {
-            let error =
-                validate_shell(required, "glue", "wasm").expect_err("missing required position");
+            let error = validate_shell(required, "glue", "wasm", &application_url())
+                .expect_err("missing required position");
             assert!(
                 error.to_string().contains("missing") || error.to_string().contains("exactly one")
             );
@@ -527,8 +679,13 @@ mod tests {
             "initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl)",
         ] {
             let incomplete = shell_with_unique_urls.replacen(required, "", 1);
-            let error = validate_shell(&incomplete, "/pkg/glue.js", "/pkg/module.wasm")
-                .expect_err("unique URLs do not excuse a missing required shell marker");
+            let error = validate_shell(
+                &incomplete,
+                "/pkg/glue.js",
+                "/pkg/module.wasm",
+                &application_url(),
+            )
+            .expect_err("unique URLs do not excuse a missing required shell marker");
             assert!(error.to_string().contains("missing"));
         }
     }
@@ -546,8 +703,14 @@ mod tests {
         let bundle = tempfile::tempdir().expect("bundle");
         let site = tempfile::tempdir().expect("site");
         fs::write(bundle.path().join("index.html"), "shell").expect("shell");
-        let error = stage_bundle(bundle.path(), site.path(), bundle.path(), &manifest)
-            .expect_err("public shell collision");
+        let error = stage_bundle(
+            bundle.path(),
+            site.path(),
+            bundle.path(),
+            &manifest,
+            &application_url(),
+        )
+        .expect_err("public shell collision");
         assert!(error.to_string().contains("overwrites"));
     }
 
@@ -567,8 +730,14 @@ mod tests {
         let manifest = write_bundle(bundle.path());
         let glue = manifest.role(Role::Glue).expect("glue role");
         fs::write(bundle.path().join(&glue.path), "mutated").expect("mutate verified source");
-        let error = stage_bundle(bundle.path(), site.path(), public.path(), &manifest)
-            .expect_err("invalid staged bundle");
+        let error = stage_bundle(
+            bundle.path(),
+            site.path(),
+            public.path(),
+            &manifest,
+            &application_url(),
+        )
+        .expect_err("invalid staged bundle");
         assert!(error.to_string().contains("invalid staged bundle"));
     }
     #[test]
@@ -597,8 +766,14 @@ mod tests {
             },
         );
 
-        let error = stage_bundle(bundle.path(), site.path(), public.path(), &manifest)
-            .expect_err("missing declared representation must fail staging");
+        let error = stage_bundle(
+            bundle.path(),
+            site.path(),
+            public.path(),
+            &manifest,
+            &application_url(),
+        )
+        .expect_err("missing declared representation must fail staging");
 
         assert!(error.to_string().contains("copying"));
     }

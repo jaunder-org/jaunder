@@ -12,7 +12,7 @@ use common::{
 };
 use serde::Deserialize;
 
-use crate::{ThemeOwner, ThemePackageAsset, ThemeRoleBinding, ThemeStorage};
+use crate::{SystemThemeRevision, ThemeOwner, ThemePackageAsset, ThemeRoleBinding, ThemeStorage};
 
 /// Ownership scope for one public presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,9 +39,10 @@ pub async fn resolve_public_theme(
     route: &PublicThemeRoute,
     themes: &dyn ThemeStorage,
 ) -> Result<PublishedThemePresentation, sqlx::Error> {
-    let site = resolve_selection(ThemeOwner::Site, route, themes)
-        .await?
-        .unwrap_or_else(|| PublishedThemePresentation::built_in(Theme::Studio));
+    let site = match resolve_selection(ThemeOwner::Site, route, themes).await? {
+        Some(presentation) => presentation,
+        None => resolve_system(Theme::Studio, route, themes).await?,
+    };
     match owner {
         PublicThemeOwner::Site => Ok(site),
         PublicThemeOwner::Author(user_id) => {
@@ -62,12 +63,26 @@ async fn resolve_selection(
     match themes.selection(owner).await? {
         None => Ok(None),
         Some(PublicThemeSelection::BuiltIn(theme)) => {
-            Ok(Some(PublishedThemePresentation::built_in(theme)))
+            resolve_system(theme, route, themes).await.map(Some)
         }
         Some(PublicThemeSelection::Custom(theme_id)) => {
             resolve_custom(owner, theme_id, route, themes).await
         }
     }
+}
+
+async fn resolve_system(
+    theme: Theme,
+    route: &PublicThemeRoute,
+    themes: &dyn ThemeStorage,
+) -> Result<PublishedThemePresentation, sqlx::Error> {
+    let revision = themes.system_theme_revision(theme).await?.ok_or_else(|| {
+        sqlx::Error::Protocol(format!(
+            "missing installed system Theme Package `{}`",
+            theme.token()
+        ))
+    })?;
+    resolve_system_revision(&revision, route)
 }
 async fn resolve_custom(
     owner: ThemeOwner,
@@ -116,9 +131,10 @@ async fn resolve_custom(
         None
     };
     let stylesheet_url = revision.stylesheet_digest.content_url();
-    let logo_url = resolve_role(
+    let package_url = |path: &str| package_url(&assets, path);
+    let logo_url = resolve_role_with_package_url(
         logo.as_ref(),
-        &assets,
+        &package_url,
         &revision.digest,
         route,
         None,
@@ -145,6 +161,51 @@ async fn resolve_custom(
         header_url,
     }))
 }
+
+fn resolve_system_revision(
+    revision: &SystemThemeRevision,
+    route: &PublicThemeRoute,
+) -> Result<PublishedThemePresentation, sqlx::Error> {
+    let defaults = manifest_defaults(&revision.manifest).ok_or_else(|| {
+        sqlx::Error::Protocol("invalid installed system Theme Package manifest".into())
+    })?;
+    let package_url = |path: &str| package_url(&revision.assets, path);
+    if defaults
+        .logo
+        .as_deref()
+        .is_some_and(|path| package_url(path).is_none())
+        || defaults
+            .header
+            .as_deref()
+            .is_some_and(|paths| paths.iter().any(|path| package_url(path).is_none()))
+    {
+        return Err(sqlx::Error::Protocol(
+            "installed system Theme Package default references unavailable asset".into(),
+        ));
+    }
+    let logo_url = resolve_role_with_package_url(
+        None,
+        &package_url,
+        &revision.digest,
+        route,
+        None,
+        defaults.logo.as_ref().map(std::slice::from_ref),
+    );
+    let header_url = resolve_packaged_header_default(
+        defaults.header.as_deref(),
+        &package_url,
+        &revision.digest,
+        route,
+    );
+    Ok(PublishedThemePresentation {
+        identity: PublishedThemeIdentity::BuiltIn(revision.theme),
+        revision: Some(revision.digest.clone()),
+        stylesheet_url: revision.stylesheet_digest.content_url(),
+        logo_url,
+        header_url,
+    })
+}
+
 fn resolve_role_with_package_url(
     binding: Option<&ThemeRoleBinding>,
     package_url: &dyn Fn(&str) -> Option<RootRelativeUrl>,
@@ -369,14 +430,38 @@ mod tests {
     use rstest::*;
     use rstest_reuse::*;
 
+    fn system_revision(theme: Theme) -> SystemThemeRevision {
+        let token = match theme {
+            Theme::Terminal => 'a',
+            Theme::Studio => 'b',
+            Theme::Reader => 'c',
+        };
+        SystemThemeRevision {
+            theme,
+            digest: token.to_string().repeat(64).parse().unwrap(),
+            source_digest: token.to_string().repeat(64).parse().unwrap(),
+            stylesheet_digest: token.to_string().repeat(64).parse().unwrap(),
+            manifest: br#"{"defaults":{}}"#.to_vec(),
+            assets: vec![],
+        }
+    }
+
     fn builtin(theme: Theme) -> PublishedThemePresentation {
-        PublishedThemePresentation::built_in(theme)
+        let revision = system_revision(theme);
+        resolve_system_revision(&revision, &PublicThemeRoute::site()).unwrap()
+    }
+
+    fn expect_system_theme_revisions(themes: &mut crate::MockThemeStorage) {
+        themes
+            .expect_system_theme_revision()
+            .returning(|theme| Ok(Some(system_revision(theme))));
     }
 
     // guard:no-backend — exercises resolver policy through the aggregate storage mock
     #[tokio::test]
     async fn site_owner_uses_site_selection() {
         let mut themes = crate::MockThemeStorage::new();
+        expect_system_theme_revisions(&mut themes);
         themes.expect_selection().return_once(|owner| {
             assert_eq!(owner, ThemeOwner::Site);
             Ok(Some(PublicThemeSelection::BuiltIn(Theme::Terminal)))
@@ -395,6 +480,7 @@ mod tests {
     async fn author_without_override_inherits_site_selection() {
         let author = UserId::from(7);
         let mut themes = crate::MockThemeStorage::new();
+        expect_system_theme_revisions(&mut themes);
         themes.expect_selection().returning(move |owner| {
             Ok(match owner {
                 ThemeOwner::Site => Some(PublicThemeSelection::BuiltIn(Theme::Terminal)),
@@ -422,6 +508,7 @@ mod tests {
     async fn author_override_wins_over_site_selection() {
         let author = UserId::from(7);
         let mut themes = crate::MockThemeStorage::new();
+        expect_system_theme_revisions(&mut themes);
         themes.expect_selection().returning(move |owner| {
             Ok(match owner {
                 ThemeOwner::Site => Some(PublicThemeSelection::BuiltIn(Theme::Terminal)),
@@ -450,6 +537,7 @@ mod tests {
     #[tokio::test]
     async fn missing_site_selection_falls_back_to_studio() {
         let mut themes = crate::MockThemeStorage::new();
+        expect_system_theme_revisions(&mut themes);
         themes.expect_selection().return_once(|_| Ok(None));
 
         assert_eq!(
@@ -504,6 +592,7 @@ mod tests {
     async fn unpublished_custom_site_selection_falls_back_to_studio() {
         let theme_id = ThemeId::from(9);
         let mut themes = crate::MockThemeStorage::new();
+        expect_system_theme_revisions(&mut themes);
         themes
             .expect_selection()
             .return_once(move |_| Ok(Some(PublicThemeSelection::Custom(theme_id))));
@@ -536,6 +625,7 @@ mod tests {
             ),
         ] {
             let mut themes = crate::MockThemeStorage::new();
+            expect_system_theme_revisions(&mut themes);
             themes
                 .expect_selection()
                 .return_once(move |_| Ok(Some(PublicThemeSelection::Custom(theme_id))));
@@ -715,6 +805,7 @@ mod tests {
         let author = UserId::from(7);
         let theme_id = ThemeId::from(9);
         let mut themes = crate::MockThemeStorage::new();
+        expect_system_theme_revisions(&mut themes);
         themes.expect_selection().returning(move |owner| {
             Ok(match owner {
                 ThemeOwner::Site => Some(PublicThemeSelection::BuiltIn(Theme::Terminal)),
@@ -1190,10 +1281,429 @@ mod tests {
         );
     }
 
+    fn system_manager(env: &crate::test_support::TestEnv) -> crate::ThemeAssetManager {
+        crate::ThemeAssetManager::new(
+            env.themes(),
+            env.write_scope().clone(),
+            Arc::new(env.base.path().to_path_buf()),
+        )
+    }
+
+    async fn select_theme(
+        env: &crate::test_support::TestEnv,
+        owner: ThemeOwner,
+        selection: Option<PublicThemeSelection>,
+    ) {
+        let themes = env.themes();
+        confirmed(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(
+                        async move { themes.set_selection(transaction, owner, selection).await },
+                    )
+                })
+                .await
+                .unwrap(),
+        );
+    }
+
+    async fn reject_selection(
+        env: &crate::test_support::TestEnv,
+        owner: ThemeOwner,
+        selection: PublicThemeSelection,
+    ) {
+        let themes = env.themes();
+        let result = env
+            .write_scope()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    themes
+                        .set_selection(transaction, owner, Some(selection))
+                        .await
+                })
+            })
+            .await;
+        assert!(matches!(
+            result,
+            Err(crate::WriteScopeError::Operation(sqlx::Error::RowNotFound))
+        ));
+    }
+
+    fn expected_system_presentation(
+        inventory: &host::system_theme::SystemArtifactInventory,
+        theme: Theme,
+        route: &PublicThemeRoute,
+    ) -> PublishedThemePresentation {
+        let package = inventory.theme(theme);
+        let revision = package.revision();
+        let asset_url = |path: &str| {
+            revision
+                .assets()
+                .find(|(candidate, _, _, _)| *candidate == path)
+                .map(|(_, _, _, digest)| {
+                    common::theme::ThemeAssetDigest::from_digest(digest).content_url()
+                })
+        };
+        let header = select_packaged_header_default(
+            revision.default_header_paths(),
+            &package.revision_digest(),
+            route,
+        );
+        PublishedThemePresentation {
+            identity: PublishedThemeIdentity::BuiltIn(theme),
+            revision: Some(package.revision_digest()),
+            stylesheet_url: package.stylesheet_digest().content_url(),
+            logo_url: revision.default_logo_path().and_then(asset_url),
+            header_url: header.and_then(asset_url),
+        }
+    }
+
+    async fn public_site(env: &crate::test_support::TestEnv) -> PublishedThemePresentation {
+        resolve_public_theme(
+            PublicThemeOwner::Site,
+            &PublicThemeRoute::site(),
+            env.themes().as_ref(),
+        )
+        .await
+        .unwrap()
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn installed_system_missing_metadata_fails_and_all_selections_resolve(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        assert!(matches!(
+            resolve_public_theme(
+                PublicThemeOwner::Site,
+                &PublicThemeRoute::site(),
+                env.themes().as_ref()
+            )
+            .await,
+            Err(sqlx::Error::Protocol(_))
+        ));
+        let inventory = host::system_theme::compile_system_artifact_inventory().unwrap();
+        confirmed(
+            system_manager(&env)
+                .install_system(&inventory, 100)
+                .await
+                .unwrap(),
+        );
+        for theme in [Theme::Studio, Theme::Terminal, Theme::Reader] {
+            select_theme(
+                &env,
+                ThemeOwner::Site,
+                Some(PublicThemeSelection::BuiltIn(theme)),
+            )
+            .await;
+            assert_eq!(
+                public_site(&env).await,
+                expected_system_presentation(&inventory, theme, &PublicThemeRoute::site())
+            );
+        }
+        select_theme(&env, ThemeOwner::Site, None).await;
+        assert_eq!(
+            public_site(&env).await,
+            expected_system_presentation(&inventory, Theme::Studio, &PublicThemeRoute::site())
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn installed_system_presentation_tracks_release_upgrade_and_rollback(
+        #[case] backend: Backend,
+    ) {
+        use host::system_theme::qualification::{self, Fixture};
+        let env = backend.setup().await;
+        let manager = system_manager(&env);
+        let a = qualification::compile(Fixture::A).unwrap();
+        let b = qualification::compile(Fixture::BTheme).unwrap();
+        assert_ne!(
+            a.theme(Theme::Studio).revision_digest(),
+            b.theme(Theme::Studio).revision_digest()
+        );
+        for (time, inventory) in [(100, &a), (200, &b), (300, &a)] {
+            confirmed(manager.install_system(inventory, time).await.unwrap());
+            for theme in [Theme::Studio, Theme::Terminal, Theme::Reader] {
+                select_theme(
+                    &env,
+                    ThemeOwner::Site,
+                    Some(PublicThemeSelection::BuiltIn(theme)),
+                )
+                .await;
+                assert_eq!(
+                    public_site(&env).await,
+                    expected_system_presentation(inventory, theme, &PublicThemeRoute::site())
+                );
+            }
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn installed_system_defaults_use_validated_asset_urls_and_route_assignment(
+        #[case] backend: Backend,
+    ) {
+        use host::system_theme::shared_asset_fixture::{self, SharingFixture};
+        let env = backend.setup().await;
+        let compiled = crate::test_support::compiled_theme_fixture();
+        let png = compiled
+            .assets()
+            .find(|(_, mime, _, _)| *mime == "image/png")
+            .unwrap()
+            .2;
+        let inventory = shared_asset_fixture::compile(SharingFixture::Both, png).unwrap();
+        confirmed(
+            system_manager(&env)
+                .install_system(&inventory, 100)
+                .await
+                .unwrap(),
+        );
+        let tag = "rust".parse().unwrap();
+        for theme in [Theme::Terminal, Theme::Studio] {
+            select_theme(
+                &env,
+                ThemeOwner::Site,
+                Some(PublicThemeSelection::BuiltIn(theme)),
+            )
+            .await;
+            for route in [PublicThemeRoute::site(), PublicThemeRoute::site_tag(&tag)] {
+                let expected = expected_system_presentation(&inventory, theme, &route);
+                assert!(expected.logo_url.is_some());
+                assert!(expected.header_url.is_some());
+                for _ in 0..2 {
+                    assert_eq!(
+                        resolve_public_theme(PublicThemeOwner::Site, &route, env.themes().as_ref())
+                            .await
+                            .unwrap(),
+                        expected
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn corrupt_system_manifest_or_default_asset_is_not_optional_absence() {
+        for manifest in [
+            b"not JSON".as_slice(),
+            br#"{"defaults":{"logo":"assets/missing.png"}}"#,
+            br#"{"defaults":{"header":["assets/missing.png"]}}"#,
+        ] {
+            let mut revision = system_revision(Theme::Studio);
+            revision.manifest = manifest.to_vec();
+            assert!(matches!(
+                resolve_system_revision(&revision, &PublicThemeRoute::site()),
+                Err(sqlx::Error::Protocol(_))
+            ));
+        }
+    }
+
+    async fn custom_theme(
+        env: &crate::test_support::TestEnv,
+        owner: ThemeOwner,
+        publish: bool,
+    ) -> ThemeId {
+        let compiled = crate::test_support::compiled_theme_fixture();
+        let id = crate::seed_theme_fixture::try_create_theme(
+            env.themes(),
+            env.write_scope().clone(),
+            owner,
+            &compiled,
+        )
+        .await
+        .unwrap();
+        if publish {
+            publish_custom_theme(env, owner, id).await;
+        }
+        id
+    }
+
+    async fn publish_custom_theme(
+        env: &crate::test_support::TestEnv,
+        owner: ThemeOwner,
+        id: ThemeId,
+    ) {
+        confirmed(
+            system_manager(env)
+                .publish(
+                    owner,
+                    id,
+                    &crate::test_support::compiled_theme_fixture(),
+                    crate::ThemeQuotaLimits::production(),
+                    100,
+                )
+                .await
+                .unwrap(),
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn installed_system_fallback_preserves_custom_site_publication_and_removal(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let inventory = host::system_theme::compile_system_artifact_inventory().unwrap();
+        confirmed(
+            system_manager(&env)
+                .install_system(&inventory, 100)
+                .await
+                .unwrap(),
+        );
+        let studio =
+            expected_system_presentation(&inventory, Theme::Studio, &PublicThemeRoute::site());
+        let draft = custom_theme(&env, ThemeOwner::Site, false).await;
+        reject_selection(&env, ThemeOwner::Site, PublicThemeSelection::Custom(draft)).await;
+        assert_eq!(public_site(&env).await, studio);
+        publish_custom_theme(&env, ThemeOwner::Site, draft).await;
+        let published = draft;
+        select_theme(
+            &env,
+            ThemeOwner::Site,
+            Some(PublicThemeSelection::Custom(published)),
+        )
+        .await;
+        let presentation = public_site(&env).await;
+        let compiled = crate::test_support::compiled_theme_fixture();
+        assert_eq!(
+            presentation.identity,
+            PublishedThemeIdentity::Custom(published)
+        );
+        assert_eq!(
+            presentation.revision,
+            Some(ThemeRevisionDigest::from_digest(compiled.revision_digest()))
+        );
+        assert_eq!(
+            presentation.stylesheet_url,
+            common::theme::ThemeStylesheetDigest::from_digest(
+                compiled.stylesheet_content().digest()
+            )
+            .content_url()
+        );
+        let themes = env.themes();
+        confirmed(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .remove_theme(transaction, ThemeOwner::Site, published, 31_536_500)
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+        assert_eq!(public_site(&env).await, studio);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn installed_system_and_custom_author_overrides_preserve_owner_precedence(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let inventory = host::system_theme::compile_system_artifact_inventory().unwrap();
+        confirmed(
+            system_manager(&env)
+                .install_system(&inventory, 100)
+                .await
+                .unwrap(),
+        );
+        let author = SeedUser::new()
+            .seed(env.users(), env.write_scope().clone())
+            .await;
+        let owner = ThemeOwner::Author(author.user_id);
+        let site_custom = custom_theme(&env, ThemeOwner::Site, true).await;
+        select_theme(
+            &env,
+            ThemeOwner::Site,
+            Some(PublicThemeSelection::Custom(site_custom)),
+        )
+        .await;
+        let site = public_site(&env).await;
+        let route = PublicThemeRoute::site();
+        // A foreign valid Theme ID is not an author-owned selection.
+        reject_selection(&env, owner, PublicThemeSelection::Custom(site_custom)).await;
+        assert_eq!(
+            resolve_public_theme(
+                PublicThemeOwner::Author(author.user_id),
+                &route,
+                env.themes().as_ref()
+            )
+            .await
+            .unwrap(),
+            site
+        );
+        let draft = custom_theme(&env, owner, false).await;
+        reject_selection(&env, owner, PublicThemeSelection::Custom(draft)).await;
+        assert_eq!(
+            resolve_public_theme(
+                PublicThemeOwner::Author(author.user_id),
+                &route,
+                env.themes().as_ref()
+            )
+            .await
+            .unwrap(),
+            site
+        );
+        publish_custom_theme(&env, owner, draft).await;
+        let published = draft;
+        select_theme(&env, owner, Some(PublicThemeSelection::Custom(published))).await;
+        let presentation = resolve_public_theme(
+            PublicThemeOwner::Author(author.user_id),
+            &route,
+            env.themes().as_ref(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            presentation.identity,
+            PublishedThemeIdentity::Custom(published)
+        );
+        assert_eq!(presentation.revision, site.revision);
+        assert_eq!(presentation.stylesheet_url, site.stylesheet_url);
+        select_theme(
+            &env,
+            owner,
+            Some(PublicThemeSelection::BuiltIn(Theme::Reader)),
+        )
+        .await;
+        assert_eq!(
+            resolve_public_theme(
+                PublicThemeOwner::Author(author.user_id),
+                &route,
+                env.themes().as_ref()
+            )
+            .await
+            .unwrap(),
+            expected_system_presentation(&inventory, Theme::Reader, &route)
+        );
+        select_theme(&env, owner, None).await;
+        assert_eq!(
+            resolve_public_theme(
+                PublicThemeOwner::Author(author.user_id),
+                &route,
+                env.themes().as_ref()
+            )
+            .await
+            .unwrap(),
+            site
+        );
+    }
+
     #[apply(backends)]
     #[tokio::test]
     async fn persisted_selections_preserve_site_author_precedence(#[case] backend: Backend) {
         let env = backend.setup().await;
+        let manager = crate::ThemeAssetManager::new(
+            env.themes(),
+            env.write_scope().clone(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+        let inventory = host::system_theme::compile_system_artifact_inventory().unwrap();
+        confirmed(manager.install_system(&inventory, 100).await.unwrap());
         let author = SeedUser::new()
             .seed(
                 std::sync::Arc::clone(&env.users()),
@@ -1218,6 +1728,14 @@ mod tests {
                 .unwrap(),
         );
 
+        let terminal = inventory.theme(Theme::Terminal);
+        let expected_terminal = PublishedThemePresentation {
+            identity: PublishedThemeIdentity::BuiltIn(Theme::Terminal),
+            revision: Some(terminal.revision_digest()),
+            stylesheet_url: terminal.stylesheet_digest().content_url(),
+            logo_url: None,
+            header_url: None,
+        };
         assert_eq!(
             resolve_public_theme(
                 PublicThemeOwner::Site,
@@ -1226,7 +1744,7 @@ mod tests {
             )
             .await
             .unwrap(),
-            builtin(Theme::Terminal)
+            expected_terminal
         );
         assert_eq!(
             resolve_public_theme(
@@ -1236,7 +1754,7 @@ mod tests {
             )
             .await
             .unwrap(),
-            builtin(Theme::Terminal)
+            expected_terminal
         );
 
         let themes = Arc::clone(&env.themes());
@@ -1257,6 +1775,7 @@ mod tests {
                 .unwrap(),
         );
 
+        let reader = inventory.theme(Theme::Reader);
         assert_eq!(
             resolve_public_theme(
                 PublicThemeOwner::Author(author.user_id),
@@ -1265,7 +1784,13 @@ mod tests {
             )
             .await
             .unwrap(),
-            builtin(Theme::Reader)
+            PublishedThemePresentation {
+                identity: PublishedThemeIdentity::BuiltIn(Theme::Reader),
+                revision: Some(reader.revision_digest()),
+                stylesheet_url: reader.stylesheet_digest().content_url(),
+                logo_url: None,
+                header_url: None,
+            }
         );
     }
 }

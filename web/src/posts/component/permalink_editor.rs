@@ -30,7 +30,7 @@ use super::support;
 /// reactive fetch runs (client-side navigation, no seed).
 fn permalink_first_paint(
     seed_post: Option<AuthoredPost>,
-    theme: RwSignal<common::theme::PublishedThemePresentation>,
+    theme: RwSignal<Option<common::theme::PublishedThemePresentation>>,
 ) -> AnyView {
     match seed_post {
         Some(seed) => {

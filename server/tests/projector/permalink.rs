@@ -21,14 +21,15 @@ use storage::test_support::{Backend, CloseablePool, SeedRawPost, SeedUser, backe
 
 use super::fixtures::{
     assert_sanitized_internal_server_error, assert_shell_miss, failing_author_theme_selection,
-    failing_site_theme_selection, get, projector_app, projector_app_with_dependencies,
-    seed_published_post,
+    failing_site_theme_selection, get, install_projector_system_inventory, projector_app,
+    projector_app_with_dependencies, seed_published_post,
 };
 
 #[apply(backends)]
 #[tokio::test]
 async fn permalink_projects_cacheable_crawlable_html(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (u, y, m, d, slug, title, rendered_html) =
         seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let uri = format!("/~{u}/{y}/{m}/{d}/{slug}");
@@ -72,6 +73,7 @@ async fn permalink_projects_cacheable_crawlable_html(#[case] backend: Backend) {
 #[tokio::test]
 async fn historical_permalink_alias_redirects_to_current_canonical_route(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let user = SeedUser::new().seed(env.users(), env.write_scope()).await;
     let published_at = parse_utc_instant("2026-08-01T12:00:00Z");
     let target = SeedRawPost::new(user.user_id)
@@ -148,6 +150,7 @@ async fn historical_permalink_alias_redirects_to_current_canonical_route(#[case]
 #[tokio::test]
 async fn historical_permalink_alias_hidden_targets_serve_shell(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let user = SeedUser::new().seed(env.users(), env.write_scope()).await;
     let public_time = parse_utc_instant("2026-08-01T12:00:00Z");
     let private = SeedRawPost::new(user.user_id)
@@ -245,6 +248,7 @@ async fn historical_permalink_alias_storage_failure_reports_boundary_once(
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let mut posts = MockPostStorage::new();
     posts
         .expect_get_post_by_permalink()
@@ -282,6 +286,7 @@ async fn permalink_unknown_serves_spa_shell(#[case] backend: Backend) {
     // author may see) must serve the SPA shell — not a hard 404 — so the CSR
     // client resolves it with the session (draft view, or a client-side 404).
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/~ghost/2026/1/2/missing"))
         .await
@@ -301,6 +306,7 @@ async fn permalink_non_numeric_date_serves_shell(#[case] backend: Backend) {
     // A decoded five-segment permalink with a non-numeric date remains a projector soft miss:
     // the shell, never axum's pre-handler 400 (#697, ADR-0063 §4).
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/~ghost/not-a-year/1/2/missing"))
         .await
@@ -318,6 +324,7 @@ async fn permalink_non_numeric_date_serves_shell(#[case] backend: Backend) {
 #[tokio::test]
 async fn permalink_overflowing_date_serves_shell(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/~ghost/2147483648/1/2/missing"))
         .await
@@ -335,6 +342,7 @@ async fn permalink_overflowing_date_serves_shell(#[case] backend: Backend) {
 #[tokio::test]
 async fn permalink_impossible_date_serves_shell(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/~ghost/2026/13/40/missing"))
         .await
@@ -350,6 +358,7 @@ async fn permalink_invalid_segment_serves_shell(#[case] backend: Backend) {
     // An unparseable username segment (a dot is not allowed) is never public
     // content — serve the shell and let the client route it.
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/~in.valid/2026/1/2/slug"))
         .await
@@ -367,6 +376,7 @@ async fn permalink_invalid_segment_serves_shell(#[case] backend: Backend) {
 #[tokio::test]
 async fn permalink_storage_failure_keeps_500_and_reports_boundary_once(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (u, y, m, d, slug, ..) =
         seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let uri = format!("/~{u}/{y}/{m}/{d}/{slug}");
@@ -402,6 +412,7 @@ async fn permalink_site_theme_failure_keeps_500_and_reports_boundary_once(
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (u, y, m, d, slug, ..) =
         seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let uri = format!("/~{u}/{y}/{m}/{d}/{slug}");
@@ -432,6 +443,7 @@ async fn permalink_author_theme_failure_keeps_500_and_reports_boundary_once(
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (u, y, m, d, slug, ..) =
         seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let uri = format!("/~{u}/{y}/{m}/{d}/{slug}");
@@ -460,6 +472,7 @@ async fn permalink_author_theme_failure_keeps_500_and_reports_boundary_once(
 #[tokio::test]
 async fn permalink_alias_redirects_with_raw_query_and_no_store(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (username, year, month, day, slug, ..) =
         seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let alias = format!("/{year:04}/{month:02}/{day:02}/{slug}?utm=%2f&utm=&tag=one&tag=two");
@@ -492,6 +505,7 @@ async fn permalink_alias_redirects_with_raw_query_and_no_store(#[case] backend: 
 #[tokio::test]
 async fn permalink_alias_redirect_without_query_has_no_delimiter(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (username, year, month, day, slug, ..) =
         seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let alias = format!("/{year:04}/{month:02}/{day:02}/{slug}");
@@ -517,6 +531,7 @@ async fn permalink_alias_redirect_without_query_has_no_delimiter(#[case] backend
 #[tokio::test]
 async fn permalink_alias_head_is_not_redirect_or_resolution(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (_, year, month, day, slug, ..) =
         seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let alias = format!("/{year:04}/{month:02}/{day:02}/{slug}");
@@ -552,6 +567,7 @@ async fn permalink_alias_head_is_not_redirect_or_resolution(#[case] backend: Bac
 #[tokio::test]
 async fn permalink_alias_strict_dates_and_invalid_utf8_serve_shell(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
 
     for path in ["/2026/7/12/slug", "/+2026/07/12/slug", "/2026/07/12/%FF"] {
         let response = projector_app(env.posts(), env.users(), env.themes())
@@ -566,6 +582,7 @@ async fn permalink_alias_strict_dates_and_invalid_utf8_serve_shell(#[case] backe
 #[tokio::test]
 async fn permalink_alias_misses_remain_indistinguishable(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let now = UtcInstant::now();
     let author = SeedUser::new().seed(env.users(), env.write_scope()).await;
     let private = SeedRawPost::new(author.user_id)
@@ -611,6 +628,7 @@ async fn permalink_alias_misses_remain_indistinguishable(#[case] backend: Backen
 #[tokio::test]
 async fn permalink_alias_inactive_post_serves_shell(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let author = SeedUser::new().seed(env.users(), env.write_scope()).await;
     let scheduled_at: UtcInstant = "2099-01-02T03:04:05Z".parse().expect("valid instant");
     let scheduled = SeedRawPost::new(author.user_id)
@@ -639,6 +657,7 @@ async fn permalink_alias_inactive_post_serves_shell(#[case] backend: Backend) {
 #[tokio::test]
 async fn permalink_alias_encodes_unicode_slug_in_location(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let author = SeedUser::new().seed(env.users(), env.write_scope()).await;
     let post = SeedRawPost::new(author.user_id)
         .slug("café")
@@ -679,6 +698,7 @@ async fn permalink_alias_encodes_unicode_slug_in_location(#[case] backend: Backe
 #[tokio::test]
 async fn permalink_alias_storage_failure_reports_boundary_once(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (_, year, month, day, slug, ..) =
         seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let app = projector_app(env.posts(), env.users(), env.themes());

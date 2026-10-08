@@ -23,14 +23,16 @@ use storage::{
 
 use super::fixtures::{
     TEST_SHELL, assert_sanitized_internal_server_error, assert_shell_miss,
-    failing_site_theme_selection, get, projector_app, projector_app_with_dependencies,
-    projector_app_with_site_config, seed_published_post, seed_tagged_post,
+    failing_site_theme_selection, get, install_projector_system_inventory, projector_app,
+    projector_app_with_dependencies, projector_app_with_site_config, seed_published_post,
+    seed_tagged_post,
 };
 
 #[apply(backends)]
 #[tokio::test]
 async fn profile_projects_user_timeline(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (u, .., title, _rendered_html) =
         seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let resp = projector_app(env.posts(), env.users(), env.themes())
@@ -51,6 +53,7 @@ async fn profile_projects_user_timeline(#[case] backend: Backend) {
 #[tokio::test]
 async fn local_discovery_projects_three_existing_syndication_formats(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let response = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/feeds"))
         .await
@@ -75,6 +78,7 @@ async fn local_discovery_projects_three_existing_syndication_formats(#[case] bac
 #[tokio::test]
 async fn contextual_discovery_links_match_each_timeline(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (username, _) = seed_tagged_post(env.users(), env.posts(), env.write_scope()).await;
     let app = projector_app(env.posts(), env.users(), env.themes());
     for (path, context, prefix) in [
@@ -118,6 +122,7 @@ async fn contextual_discovery_links_match_each_timeline(#[case] backend: Backend
 #[tokio::test]
 async fn discovery_preserves_empty_and_missing_context_semantics(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let app = projector_app(env.posts(), env.users(), env.themes());
     for (path, context) in [
         ("/tags/unused/feeds", "site tag #unused"),
@@ -146,6 +151,7 @@ async fn discovery_preserves_empty_and_missing_context_semantics(#[case] backend
 #[tokio::test]
 async fn site_timeline_projects_local_posts(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (.., title, _rendered_html) =
         seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let resp = projector_app(env.posts(), env.users(), env.themes())
@@ -184,6 +190,7 @@ async fn site_timeline_projects_local_posts(#[case] backend: Backend) {
 #[tokio::test]
 async fn site_timeline_projects_register_only_for_open_policy(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     for (policy, expect_register) in [
         (RegistrationPolicy::Closed, false),
         (RegistrationPolicy::OperatorInvites, false),
@@ -233,6 +240,7 @@ async fn site_timeline_resolves_one_configured_identity_for_head_body_and_seed(
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let mut site_config = MockSiteConfigStorage::new();
     site_config.expect_get_identity().times(1).return_once(|| {
         Ok(SiteIdentity {
@@ -300,6 +308,7 @@ async fn site_timeline_maps_identity_storage_failure_at_the_projector_boundary(
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let mut site_config = MockSiteConfigStorage::new();
     site_config
         .expect_get_identity()
@@ -326,6 +335,7 @@ async fn site_timeline_maps_registration_policy_failure_at_the_projector_boundar
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let mut site_config = MockSiteConfigStorage::new();
     site_config.expect_get_identity().times(1).return_once(|| {
         Ok(SiteIdentity {
@@ -360,6 +370,7 @@ async fn site_timeline_maps_registration_policy_failure_at_the_projector_boundar
 #[tokio::test]
 async fn site_timeline_treats_malformed_persisted_tagline_as_absent(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     env.inject_invalid_site_config(
         host::config_key::SiteConfigKey::SiteTagline,
         "invalid\u{2028}persisted tagline",
@@ -399,6 +410,7 @@ async fn site_timeline_treats_malformed_persisted_tagline_as_absent(#[case] back
 #[tokio::test]
 async fn direct_order_urls_embed_matching_seed_order(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (username, _) = seed_tagged_post(env.users(), env.posts(), env.write_scope()).await;
 
     for route in [
@@ -431,6 +443,7 @@ async fn direct_order_urls_embed_matching_seed_order(#[case] backend: Backend) {
 #[tokio::test]
 async fn profile_invalid_username_serves_shell(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/~in.valid"))
         .await
@@ -448,6 +461,7 @@ async fn profile_invalid_username_serves_shell(#[case] backend: Backend) {
 #[tokio::test]
 async fn profile_unknown_valid_username_is_cacheable_projection(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/~ghost"))
         .await
@@ -471,6 +485,7 @@ async fn site_timeline_storage_failure_keeps_500_and_reports_boundary_once(
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let app = projector_app(env.posts(), env.users(), env.themes());
     env.base.close_pool().await;
@@ -502,6 +517,7 @@ async fn site_timeline_storage_failure_keeps_500_and_reports_boundary_once(
 #[tokio::test]
 async fn site_timeline_theme_failure_keeps_500_and_reports_boundary_once(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let app = projector_app_with_dependencies(
         env.posts(),
@@ -528,6 +544,7 @@ async fn site_timeline_theme_failure_keeps_500_and_reports_boundary_once(#[case]
 #[tokio::test]
 async fn profile_storage_failure_keeps_no_store_shell_and_reports_once(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (username, ..) = seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let app = projector_app(env.posts(), env.users(), env.themes());
     env.base.close_pool().await;
@@ -568,6 +585,7 @@ async fn profile_owner_lookup_failure_keeps_500_and_reports_boundary_once(
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (username, ..) = seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let mut users = MockUserStorage::new();
     users
@@ -607,6 +625,7 @@ async fn profile_owner_lookup_failure_keeps_500_and_reports_boundary_once(
 #[tokio::test]
 async fn profile_theme_failure_keeps_500_and_reports_boundary_once(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (username, ..) = seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let app = projector_app_with_dependencies(
         env.posts(),
@@ -637,6 +656,7 @@ async fn profile_theme_failure_keeps_500_and_reports_boundary_once(#[case] backe
 #[tokio::test]
 async fn every_page_seed_variant_serializes_without_null_fallback(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (username, year, month, day, slug, ..) =
         seed_published_post(env.users(), env.posts(), env.write_scope()).await;
     let username = username.parse().expect("seeded username");
@@ -704,13 +724,22 @@ async fn every_page_seed_variant_serializes_without_null_fallback(#[case] backen
             PageSeed::FeedDiscovery(_) => "feed discovery",
         };
         let presentation = PublicPresentation {
-            theme: PublishedThemePresentation::built_in(Theme::Studio),
+            theme: PublishedThemePresentation {
+                identity: common::theme::PublishedThemeIdentity::BuiltIn(Theme::Studio),
+                revision: Some("a".repeat(64).parse().unwrap()),
+                stylesheet_url: format!("/theme/{}", "b".repeat(64)).parse().unwrap(),
+                logo_url: None,
+                header_url: None,
+            },
             page: seed,
         };
         let json = serde_json::to_string(&presentation)
             .unwrap_or_else(|error| panic!("{variant} must serialize: {error}"));
         assert_ne!(json, "null", "{variant}");
-        let document = jaunder::projector::document_presentation(&presentation);
+        let document = jaunder::projector::document_presentation(
+            &presentation,
+            &"/theme/application".parse().unwrap(),
+        );
         assert!(
             !document.contains(r#"id="jaunder-seed">null</script>"#),
             "{variant} selected the defensive null fallback"

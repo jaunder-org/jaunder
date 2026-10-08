@@ -353,6 +353,7 @@ macro_rules! make_app {
                 users.clone(),
                 themes.clone(),
                 site_config.clone(),
+                "/theme/application".parse().expect("test application URL"),
                 jaunder::projector::Shell(jaunder::site::shell_html()),
             );
             let app = jaunder::application_routes(

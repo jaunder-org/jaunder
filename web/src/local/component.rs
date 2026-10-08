@@ -48,6 +48,22 @@ fn wire_local_destination(
     });
 }
 
+fn local_load_more(state: TimelineState, order: Memo<TimelineOrder>) -> Callback<()> {
+    Callback::new(move |()| {
+        let order = order.get_untracked();
+        timeline::spawn_load_more(state, move |cursor, limit| async move {
+            timeline::list_local_timeline(common::seed::TimelinePageRequest {
+                order,
+                cursor,
+                limit,
+            })
+            .await
+            .map(super::site_destination)
+            .map(|destination| destination.page)
+        });
+    })
+}
+
 fn local_identity_metadata(identity: RwSignal<Option<SiteIdentity>>) -> impl IntoView {
     move || {
         identity.get().map(|identity| {
@@ -145,19 +161,7 @@ pub fn LocalPage() -> impl IntoView {
         presentation,
     );
 
-    let on_load_more = Callback::new(move |()| {
-        let order = order.get_untracked();
-        timeline::spawn_load_more(state, move |cursor, limit| async move {
-            timeline::list_local_timeline(common::seed::TimelinePageRequest {
-                order,
-                cursor,
-                limit,
-            })
-            .await
-            .map(super::site_destination)
-            .map(|destination| destination.page)
-        });
-    });
+    let on_load_more = local_load_more(state, order);
     let navigate = use_navigate();
     let route_base = super::site_timeline_base_url();
     let on_order_change = Callback::new(move |order| {
@@ -192,10 +196,22 @@ pub fn LocalPage() -> impl IntoView {
                                 &super::render::masthead(
                                     &identity,
                                     registration_policy.get(),
-                                    &crate::app::render_theme_logo(&theme.get()),
+                                    &theme
+                                        .get()
+                                        .as_ref()
+                                        .map_or_else(
+                                            crate::html::Markup::empty,
+                                            crate::app::render_theme_logo,
+                                        ),
                                     order.get(),
                                 ),
-                                &crate::app::render_theme_header(&theme.get()),
+                                &theme
+                                    .get()
+                                    .as_ref()
+                                    .map_or_else(
+                                        crate::html::Markup::empty,
+                                        crate::app::render_theme_header,
+                                    ),
                             ),
                             order,
                             on_order_change,

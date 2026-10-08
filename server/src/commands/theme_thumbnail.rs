@@ -1,6 +1,12 @@
 //! Loopback preview server and private Chromium `DevTools` adapter for thumbnails.
 
-use std::{collections::HashSet, path::Path, process::Stdio, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, HashSet},
+    path::Path,
+    process::Stdio,
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{Context, anyhow, bail};
 use axum::{
@@ -11,7 +17,6 @@ use axum::{
     response::Response,
     routing::get,
 };
-use axum_embed::ServeEmbed;
 use futures_util::{SinkExt, StreamExt};
 use host::error;
 use serde_json::{Value, json};
@@ -45,18 +50,14 @@ pub async fn cmd_theme_thumbnail(
                 repository.display()
             )
         })?;
-    let logo_url = thumbnail_asset_url(accepted.revision().default_logo_path())?;
-    let header_path = common::theme::select_packaged_header_default(
-        accepted.revision().default_header_paths(),
-        accepted.publication_revision(),
-        &common::theme::PublicThemeRoute::site(),
-    );
-    let header_url = thumbnail_asset_url(header_path)?;
-    let fixture =
-        web::themes::thumbnail_document(logo_url, header_url).context("build thumbnail fixture")?;
-    let accepted = Arc::new(accepted);
+    let package = PreviewPackage::from_repository(&accepted)?;
+    let system_inventory = crate::system_artifacts::load()
+        .context("load verified system application artifact for thumbnail")?;
+    let application = PreviewApplication::from_inventory(&system_inventory)?;
+    let fixture = web::themes::thumbnail_document(&application.url, package.presentation.clone())
+        .context("build thumbnail fixture")?;
     let profile = tempfile::tempdir().context("create temporary Chromium profile")?;
-    let preview = match PreviewServer::start(fixture, Arc::clone(&accepted)).await {
+    let preview = match PreviewServer::start(fixture, application, package).await {
         Ok(preview) => preview,
         // cov:ignore-start: A loopback bind or preview-task startup failure needs an OS or Tokio fault that host tests cannot deterministically inject.
         Err(error) => {
@@ -67,7 +68,12 @@ pub async fn cmd_theme_thumbnail(
             );
         } // cov:ignore-stop
     };
-    let requests = PreviewRequestPolicy::new(preview.origin(), accepted.revision());
+    let requests = PreviewRequestPolicy::new(
+        preview.origin(),
+        preview.application_url(),
+        preview.stylesheet_url(),
+        preview.asset_urls(),
+    );
     let capture = capture(browser, profile.path(), &requests).await;
     let capture =
         merge_primary_and_cleanup(capture, preview.stop().await, "stop thumbnail preview");
@@ -81,28 +87,19 @@ pub async fn cmd_theme_thumbnail(
     Ok(())
 }
 
-fn thumbnail_asset_url(
-    path: Option<&str>,
-) -> anyhow::Result<Option<common::root_relative_url::RootRelativeUrl>> {
-    path.map(|path| {
-        format!(
-            "/theme-assets/{}",
-            host::theme_package::percent_encode_asset_path(path)
-        )
-        .parse()
-        .context("build thumbnail default asset URL")
-    })
-    .transpose()
-}
 struct PreviewServer {
     origin: String,
+    application_url: common::root_relative_url::RootRelativeUrl,
+    package_stylesheet_url: common::root_relative_url::RootRelativeUrl,
+    package_asset_urls: Vec<common::root_relative_url::RootRelativeUrl>,
     shutdown: Option<oneshot::Sender<()>>,
     task: JoinHandle<anyhow::Result<()>>,
 }
 impl PreviewServer {
     async fn start(
         document: String,
-        accepted: Arc<host::theme_repository::AcceptedThemeRepository>,
+        application: PreviewApplication,
+        package: PreviewPackage,
     ) -> anyhow::Result<Self> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -111,12 +108,17 @@ impl PreviewServer {
             .local_addr()
             .context("read loopback thumbnail preview address")?;
         let (shutdown, receiver) = oneshot::channel();
+        let application_url = application.url.clone();
+        let package_stylesheet_url = package.stylesheet_url.clone();
+        let package_asset_urls = package.asset_urls.clone();
         let app = Router::new()
-            .nest_service("/style", ServeEmbed::<crate::assets::StaticAssets>::new())
             .route("/", get(document_handler))
-            .route("/theme.css", get(css_handler))
-            .route("/theme-assets/{*path}", get(asset_handler))
-            .with_state(Arc::new(PreviewState { document, accepted }));
+            .route("/theme/{digest}", get(content_handler))
+            .with_state(Arc::new(PreviewState {
+                document,
+                application,
+                package,
+            }));
         let task = tokio::spawn(async move {
             axum::serve(listener, app)
                 .with_graceful_shutdown(async {
@@ -128,12 +130,27 @@ impl PreviewServer {
         });
         Ok(Self {
             origin: format!("http://{address}"),
+            application_url,
+            package_stylesheet_url,
+            package_asset_urls,
             shutdown: Some(shutdown),
             task,
         })
     }
     fn origin(&self) -> &str {
         &self.origin
+    }
+
+    fn application_url(&self) -> &common::root_relative_url::RootRelativeUrl {
+        &self.application_url
+    }
+
+    fn stylesheet_url(&self) -> &common::root_relative_url::RootRelativeUrl {
+        &self.package_stylesheet_url
+    }
+
+    fn asset_urls(&self) -> &[common::root_relative_url::RootRelativeUrl] {
+        &self.package_asset_urls
     }
     async fn stop(mut self) -> anyhow::Result<()> {
         let shutdown = self.shutdown.take().map_or(Ok(()), |sender| {
@@ -151,36 +168,177 @@ impl PreviewServer {
 }
 struct PreviewState {
     document: String,
-    accepted: Arc<host::theme_repository::AcceptedThemeRepository>,
+    application: PreviewApplication,
+    package: PreviewPackage,
 }
-async fn document_handler(State(state): State<Arc<PreviewState>>) -> Response {
-    response(
-        StatusCode::OK,
-        "text/html; charset=utf-8",
-        state.document.as_bytes(),
-    )
+
+#[derive(Clone)]
+struct PreviewApplication {
+    url: common::root_relative_url::RootRelativeUrl,
+    mime: String,
+    bytes: Vec<u8>,
+    etag: common::etag::ETag,
 }
-async fn css_handler(State(state): State<Arc<PreviewState>>) -> Response {
-    let content = state.accepted.revision().stylesheet_content();
-    response(StatusCode::OK, content.mime(), content.bytes())
-}
-async fn asset_handler(
-    AxumPath(path): AxumPath<String>,
-    State(state): State<Arc<PreviewState>>,
-) -> Response {
-    match state.accepted.revision().asset_content(&path) {
-        Some(content) => response(StatusCode::OK, content.mime(), content.bytes()),
-        None => response(StatusCode::NOT_FOUND, "text/plain", b"not found"),
+
+impl PreviewApplication {
+    fn from_inventory(
+        inventory: &host::system_theme::SystemArtifactInventory,
+    ) -> anyhow::Result<Self> {
+        let content = inventory.application().content();
+        let digest = inventory.application().content_digest();
+        let hash = digest
+            .as_ref()
+            .parse()
+            .context("application artifact digest is a content hash")?;
+        Ok(Self {
+            url: digest.content_url(),
+            mime: content.mime().to_owned(),
+            bytes: content.bytes().to_vec(),
+            etag: host::etag::from_content_hash(&hash),
+        })
     }
 }
-fn response(status: StatusCode, mime: &str, bytes: &[u8]) -> Response {
-    let mut response = Response::new(Body::from(bytes.to_vec()));
-    *response.status_mut() = status;
+async fn document_handler(State(state): State<Arc<PreviewState>>) -> Response {
+    let mut response = Response::new(Body::from(state.document.clone()));
     response.headers_mut().insert(
         header::CONTENT_TYPE,
-        HeaderValue::from_str(mime).unwrap_or(HeaderValue::from_static("application/octet-stream")),
+        HeaderValue::from_static("text/html; charset=utf-8"),
     );
     response
+}
+#[derive(Clone)]
+struct PreviewContent {
+    mime: String,
+    bytes: Vec<u8>,
+    etag: common::etag::ETag,
+}
+
+struct PreviewPackage {
+    presentation: common::theme::PublishedThemePresentation,
+    stylesheet_url: common::root_relative_url::RootRelativeUrl,
+    asset_urls: Vec<common::root_relative_url::RootRelativeUrl>,
+    contents: BTreeMap<String, PreviewContent>,
+}
+
+impl PreviewPackage {
+    fn from_repository(
+        repository: &host::theme_repository::AcceptedThemeRepository,
+    ) -> anyhow::Result<Self> {
+        let revision = repository.revision();
+        let stylesheet = revision.stylesheet_content();
+        let stylesheet_url =
+            common::theme::ThemeStylesheetDigest::from_digest(stylesheet.digest()).content_url();
+        let mut contents = BTreeMap::new();
+        let mut asset_urls = Vec::new();
+        for (path, mime, bytes, digest) in revision.assets() {
+            let url = common::theme::ThemeAssetDigest::from_digest(digest).content_url();
+            let content = PreviewContent::from_compiled(mime, bytes, digest);
+            contents.insert(url.to_string(), content);
+            asset_urls.push(url);
+            let _ = path;
+        }
+        contents.insert(
+            stylesheet_url.to_string(),
+            PreviewContent::from_compiled(
+                stylesheet.mime(),
+                stylesheet.bytes(),
+                stylesheet.digest(),
+            ),
+        );
+        let asset_url = |path: &str| {
+            revision.asset(path).map(|(_, _, digest)| {
+                common::theme::ThemeAssetDigest::from_digest(digest).content_url()
+            })
+        };
+        let logo_url = revision
+            .default_logo_path()
+            .map(|path| {
+                asset_url(path).ok_or_else(|| anyhow!("default logo path is not a package asset"))
+            })
+            .transpose()?;
+        let header_path = common::theme::select_packaged_header_default(
+            revision.default_header_paths(),
+            repository.publication_revision(),
+            &common::theme::PublicThemeRoute::site(),
+        );
+        let header_url = header_path
+            .map(|path| {
+                asset_url(path).ok_or_else(|| anyhow!("default header path is not a package asset"))
+            })
+            .transpose()?;
+        Ok(Self {
+            presentation: common::theme::PublishedThemePresentation {
+                identity: common::theme::PublishedThemeIdentity::Custom(
+                    common::ids::ThemeId::from(0),
+                ),
+                revision: Some(repository.publication_revision().clone()),
+                stylesheet_url: stylesheet_url.clone(),
+                logo_url,
+                header_url,
+            },
+            stylesheet_url,
+            asset_urls,
+            contents,
+        })
+    }
+}
+
+impl PreviewContent {
+    fn from_compiled(mime: &str, bytes: &[u8], digest: [u8; 32]) -> Self {
+        let hash = common::media::ContentHash::from_digest(digest);
+        Self {
+            mime: mime.to_owned(),
+            bytes: bytes.to_vec(),
+            etag: host::etag::from_content_hash(&hash),
+        }
+    }
+}
+
+async fn content_handler(
+    AxumPath(digest): AxumPath<String>,
+    State(state): State<Arc<PreviewState>>,
+    request_headers: axum::http::HeaderMap,
+) -> Result<Response, StatusCode> {
+    let url = format!("/theme/{digest}");
+    let content = if state.application.url.as_ref() == url {
+        PreviewContent {
+            mime: state.application.mime.clone(),
+            bytes: state.application.bytes.clone(),
+            etag: state.application.etag.clone(),
+        }
+    } else {
+        state
+            .package
+            .contents
+            .get(&url)
+            .cloned()
+            .ok_or(StatusCode::NOT_FOUND)?
+    };
+    immutable_preview_response(&request_headers, &content)
+}
+
+fn immutable_preview_response(
+    request_headers: &axum::http::HeaderMap,
+    content: &PreviewContent,
+) -> Result<Response, StatusCode> {
+    let status = if crate::feed::conditional::if_none_match_matches(
+        request_headers,
+        content.etag.as_ref().as_bytes(),
+    ) {
+        StatusCode::NOT_MODIFIED
+    } else {
+        StatusCode::OK
+    };
+    let body = (status == StatusCode::NOT_MODIFIED)
+        .then(Body::empty)
+        .unwrap_or_else(|| Body::from(content.bytes.clone()));
+    crate::immutable_content::response(
+        status,
+        body,
+        &content.mime,
+        &content.etag,
+        "server.theme_thumbnail.content",
+    )
 }
 
 async fn capture(
@@ -413,25 +571,29 @@ fn preview_origin_allowed(origin: &str, request_url: &str) -> bool {
 struct PreviewRequestPolicy {
     origin: String,
     allowed: HashSet<String>,
+    required: [String; 3],
 }
 
 impl PreviewRequestPolicy {
-    fn new(origin: &str, revision: &host::theme_package::CompiledThemeRevision) -> Self {
-        let mut allowed = HashSet::from([
+    fn new(
+        origin: &str,
+        application_url: &common::root_relative_url::RootRelativeUrl,
+        stylesheet_url: &common::root_relative_url::RootRelativeUrl,
+        asset_urls: &[common::root_relative_url::RootRelativeUrl],
+    ) -> Self {
+        // Required resources are named at admission, not rediscovered from the
+        // allowed set: optional assets cannot become the application's identity.
+        let required = [
             format!("{origin}/"),
-            format!("{origin}/style/jaunder.css"),
-            format!("{origin}/style/jaunder-themes.css"),
-            format!("{origin}/theme.css"),
-        ]);
-        allowed.extend(revision.assets().map(|(path, _, _, _)| {
-            format!(
-                "{origin}/theme-assets/{}",
-                host::theme_package::percent_encode_asset_path(path)
-            )
-        }));
+            format!("{origin}{application_url}"),
+            format!("{origin}{stylesheet_url}"),
+        ];
+        let mut allowed = HashSet::from(required.clone());
+        allowed.extend(asset_urls.iter().map(|url| format!("{origin}{url}")));
         Self {
             origin: origin.to_owned(),
             allowed,
+            required,
         }
     }
 
@@ -440,13 +602,8 @@ impl PreviewRequestPolicy {
     }
 
     fn verify_required_requests(&self, accepted: &HashSet<String>) -> anyhow::Result<()> {
-        for required in [
-            format!("{}/", self.origin),
-            format!("{}/style/jaunder.css", self.origin),
-            format!("{}/style/jaunder-themes.css", self.origin),
-            format!("{}/theme.css", self.origin),
-        ] {
-            if !accepted.contains(&required) {
+        for required in &self.required {
+            if !accepted.contains(required) {
                 bail!("Chromium did not request required thumbnail resource: {required}");
             }
         }
@@ -614,7 +771,7 @@ async fn cdp_capture(endpoint: &str, requests: &PreviewRequestPolicy) -> anyhow:
             let value = session
                 .send_command(
                     "Runtime.evaluate",
-                    json!({"expression":"document.documentElement.dataset.jaunderThumbnailReady === '1' && Array.from(document.images).every(image => image.complete) && Array.from(document.styleSheets).some(sheet => sheet.href === location.origin + '/theme.css')","returnByValue":true}),
+                    json!({"expression":format!("document.documentElement.dataset.jaunderThumbnailReady === '1' && Array.from(document.images).every(image => image.complete) && Array.from(document.styleSheets).some(sheet => sheet.href === '{}')", requests.required[2]),"returnByValue":true}),
                 )
                 .await?;
             if value.pointer("/result/value").and_then(Value::as_bool) == Some(true)
@@ -654,9 +811,9 @@ async fn cdp_capture(endpoint: &str, requests: &PreviewRequestPolicy) -> anyhow:
 #[cfg(test)]
 mod tests {
     use super::{
-        PreviewRequestPolicy, PreviewServer, cdp_capture, cmd_theme_thumbnail,
-        join_chromium_stderr_with_timeout, merge_primary_and_cleanup, page_endpoint,
-        preview_origin_allowed, read_chromium_diagnostics,
+        PreviewApplication, PreviewPackage, PreviewRequestPolicy, PreviewServer, cdp_capture,
+        cmd_theme_thumbnail, join_chromium_stderr_with_timeout, merge_primary_and_cleanup,
+        page_endpoint, preview_origin_allowed, read_chromium_diagnostics,
     };
     use futures_util::{SinkExt, StreamExt};
     use serde_json::{Value, json};
@@ -700,9 +857,25 @@ mod tests {
             .expect("declared asset")
             .1
             .to_vec();
-        let preview = PreviewServer::start("<main>fixture document</main>".to_owned(), accepted)
-            .await
-            .expect("preview server");
+        let application = PreviewApplication::from_inventory(
+            &host::system_theme::compile_system_artifact_inventory().expect("system inventory"),
+        )
+        .expect("preview application");
+        let expected_application = application.clone();
+        let package = PreviewPackage::from_repository(accepted.as_ref()).expect("preview package");
+        let stylesheet_url = package.stylesheet_url.clone();
+        let asset_url = package
+            .asset_urls
+            .first()
+            .expect("declared asset URL")
+            .clone();
+        let preview = PreviewServer::start(
+            "<main>fixture document</main>".to_owned(),
+            application,
+            package,
+        )
+        .await
+        .expect("preview server");
         let client = reqwest::Client::builder()
             .no_proxy()
             .build()
@@ -719,63 +892,38 @@ mod tests {
             "<main>fixture document</main>"
         );
 
-        for stylesheet in ["jaunder.css", "jaunder-themes.css"] {
-            let response = client
-                .get(format!("{}/style/{stylesheet}", preview.origin()))
-                .send()
-                .await
-                .expect("embedded stylesheet response");
-            assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_application_transport(&client, preview.origin(), &expected_application).await;
+        for legacy in ["/style/jaunder.css", "/style/jaunder-themes.css"] {
             assert_eq!(
-                response.headers().get(reqwest::header::CONTENT_TYPE),
-                Some(&reqwest::header::HeaderValue::from_static("text/css"))
-            );
-            let embedded =
-                crate::assets::StaticAssets::get(stylesheet).expect("embedded stylesheet");
-            assert_eq!(
-                response
-                    .bytes()
+                client
+                    .get(format!("{}{}", preview.origin(), legacy))
+                    .send()
                     .await
-                    .expect("embedded stylesheet body")
-                    .as_ref(),
-                embedded.data.as_ref()
+                    .expect("legacy response")
+                    .status(),
+                reqwest::StatusCode::NOT_FOUND
             );
         }
 
-        let css = client
-            .get(format!("{}/theme.css", preview.origin()))
-            .send()
-            .await
-            .expect("stylesheet response");
-        assert_eq!(css.status(), reqwest::StatusCode::OK);
-        assert_eq!(
-            css.bytes().await.expect("stylesheet body").as_ref(),
-            expected_css
-        );
-
-        let asset = client
-            .get(format!(
-                "{}/theme-assets/assets/pixel.avif",
-                preview.origin()
-            ))
-            .send()
-            .await
-            .expect("asset response");
-        assert_eq!(asset.status(), reqwest::StatusCode::OK);
-        assert_eq!(
-            asset.headers().get(reqwest::header::CONTENT_TYPE),
-            Some(&reqwest::header::HeaderValue::from_static("image/avif"))
-        );
-        assert_eq!(
-            asset.bytes().await.expect("asset body").as_ref(),
-            expected_asset
-        );
+        assert_package_transport(
+            &client,
+            preview.origin(),
+            &stylesheet_url,
+            "text/css; charset=utf-8",
+            &expected_css,
+        )
+        .await;
+        assert_package_transport(
+            &client,
+            preview.origin(),
+            &asset_url,
+            "image/avif",
+            &expected_asset,
+        )
+        .await;
 
         let missing = client
-            .get(format!(
-                "{}/theme-assets/assets/missing.avif",
-                preview.origin()
-            ))
+            .get(format!("{}/theme/{}", preview.origin(), "f".repeat(64)))
             .send()
             .await
             .expect("missing asset response");
@@ -783,30 +931,144 @@ mod tests {
         preview.stop().await.expect("stop preview server");
     }
 
+    async fn assert_package_transport(
+        client: &reqwest::Client,
+        origin: &str,
+        url: &common::root_relative_url::RootRelativeUrl,
+        mime: &str,
+        expected_bytes: &[u8],
+    ) {
+        let hash = url
+            .as_ref()
+            .strip_prefix("/theme/")
+            .expect("compiler content address")
+            .parse()
+            .expect("compiler content hash");
+        let etag = host::etag::from_content_hash(&hash);
+        for conditional in [false, true] {
+            let request = client.get(format!("{origin}{url}"));
+            let request = if conditional {
+                request.header(reqwest::header::IF_NONE_MATCH, etag.as_ref())
+            } else {
+                request
+            };
+            let response = request.send().await.expect("owned package response");
+            assert_eq!(
+                response.status(),
+                if conditional {
+                    reqwest::StatusCode::NOT_MODIFIED
+                } else {
+                    reqwest::StatusCode::OK
+                }
+            );
+            for (name, value) in [
+                (reqwest::header::CONTENT_TYPE, mime),
+                (reqwest::header::ETAG, etag.as_ref()),
+                (
+                    reqwest::header::CACHE_CONTROL,
+                    "public, max-age=31536000, immutable",
+                ),
+                (reqwest::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            ] {
+                assert_eq!(
+                    response
+                        .headers()
+                        .get(name)
+                        .expect("immutable header")
+                        .to_str()
+                        .expect("header text"),
+                    value
+                );
+            }
+            let bytes = response.bytes().await.expect("owned package body");
+            if conditional {
+                assert!(bytes.is_empty());
+            } else {
+                assert_eq!(bytes.as_ref(), expected_bytes);
+            }
+        }
+    }
+
+    async fn assert_application_transport(
+        client: &reqwest::Client,
+        origin: &str,
+        expected: &PreviewApplication,
+    ) {
+        for conditional in [false, true] {
+            let request = client.get(format!("{origin}{}", expected.url));
+            let request = if conditional {
+                request.header(reqwest::header::IF_NONE_MATCH, expected.etag.as_ref())
+            } else {
+                request
+            };
+            let response = request
+                .send()
+                .await
+                .expect("application stylesheet response");
+            assert_eq!(
+                response.status(),
+                if conditional {
+                    reqwest::StatusCode::NOT_MODIFIED
+                } else {
+                    reqwest::StatusCode::OK
+                }
+            );
+            for (header, value) in [
+                (reqwest::header::CONTENT_TYPE, expected.mime.as_str()),
+                (
+                    reqwest::header::CACHE_CONTROL,
+                    "public, max-age=31536000, immutable",
+                ),
+                (reqwest::header::ETAG, expected.etag.as_ref()),
+                (reqwest::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            ] {
+                assert_eq!(
+                    response.headers().get(header).unwrap().to_str().unwrap(),
+                    value
+                );
+            }
+            let bytes = response.bytes().await.expect("application bytes");
+            if conditional {
+                assert!(bytes.is_empty());
+            } else {
+                assert_eq!(bytes.as_ref(), expected.bytes);
+            }
+        }
+    }
+
     #[test]
     fn preview_request_policy_admits_only_declared_resources_and_requires_base_fixture_files() {
         let (_repository, accepted) = repository_with_asset();
         let origin = "http://127.0.0.1:41237";
-        let requests = PreviewRequestPolicy::new(origin, accepted.revision());
+        let application_url: common::root_relative_url::RootRelativeUrl =
+            format!("/theme/{}", "a".repeat(64)).parse().unwrap();
+        let package = PreviewPackage::from_repository(accepted.as_ref()).expect("preview package");
+        let requests = PreviewRequestPolicy::new(
+            origin,
+            &application_url,
+            &package.stylesheet_url,
+            &package.asset_urls,
+        );
 
         for path in [
             "/",
-            "/style/jaunder.css",
-            "/style/jaunder-themes.css",
-            "/theme.css",
-            "/theme-assets/assets/pixel.avif",
+            application_url.as_ref(),
+            package.stylesheet_url.as_ref(),
+            package.asset_urls[0].as_ref(),
         ] {
             assert!(requests.allows(&format!("{origin}{path}")), "{path}");
         }
-        assert!(!requests.allows(&format!("{origin}/theme.css?cache=1")));
-        assert!(!requests.allows(&format!("{origin}/theme-assets/assets/missing.avif")));
+        assert!(!requests.allows(&format!("{origin}{}?cache=1", package.stylesheet_url)));
+        assert!(!requests.allows(&format!("{origin}/style/jaunder.css")));
+        assert!(!requests.allows(&format!("{origin}/style/jaunder-themes.css")));
+        assert!(!requests.allows(&format!("{origin}/theme/{}", "b".repeat(64))));
+        assert!(!requests.allows(&format!("{origin}/theme/{}", "d".repeat(64))));
         assert!(!requests.allows("http://127.0.0.1:41238/theme.css"));
 
         let accepted = HashSet::from([
             format!("{origin}/"),
-            format!("{origin}/style/jaunder.css"),
-            format!("{origin}/style/jaunder-themes.css"),
-            format!("{origin}/theme.css"),
+            format!("{origin}{application_url}"),
+            format!("{origin}{}", package.stylesheet_url),
         ]);
         requests
             .verify_required_requests(&accepted)
@@ -940,6 +1202,12 @@ mod tests {
             )
             .expect("default image");
         }
+        let accepted_preview = host::theme_repository::accept_theme_repository(repository.path())
+            .expect("accepted repository");
+        let stylesheet_path = PreviewPackage::from_repository(&accepted_preview)
+            .expect("preview package")
+            .stylesheet_url
+            .to_string();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("DevTools listener");
@@ -959,7 +1227,7 @@ mod tests {
             drop(target_socket);
             let (stream, _) = listener.accept().await.expect("CDP connection");
             let mut socket = accept_async(stream).await.expect("WebSocket handshake");
-            serve_successful_cdp(&mut socket).await;
+            serve_successful_cdp(&mut socket, &stylesheet_path).await;
         });
         let browser = repository.path().join("browser");
         fs::write(
@@ -986,10 +1254,14 @@ mod tests {
 
     #[tokio::test]
     async fn devtools_connection_failure_is_reported() {
-        let requests = PreviewRequestPolicy {
-            origin: "http://127.0.0.1:9".to_owned(),
-            allowed: HashSet::new(),
-        };
+        let (_repository, accepted) = repository_with_asset();
+        let package = PreviewPackage::from_repository(accepted.as_ref()).expect("preview package");
+        let requests = PreviewRequestPolicy::new(
+            "http://127.0.0.1:9",
+            &test_application_path().parse().unwrap(),
+            &package.stylesheet_url,
+            &package.asset_urls,
+        );
         let error = cdp_capture("ws://127.0.0.1:9/devtools/page/1", &requests)
             .await
             .expect_err("DevTools endpoint refuses connections");
@@ -1146,17 +1418,33 @@ mod tests {
             "http://127.0.0.1:41238/theme.css"
         ));
     }
+    fn test_application_path() -> String {
+        host::system_theme::compile_system_artifact_inventory()
+            .expect("system inventory")
+            .application()
+            .content_digest()
+            .content_url()
+            .to_string()
+    }
+
+    fn test_stylesheet_path() -> String {
+        let (_repository, accepted) = repository_with_asset();
+        PreviewPackage::from_repository(accepted.as_ref())
+            .expect("preview package")
+            .stylesheet_url
+            .to_string()
+    }
+
     fn test_request_policy() -> PreviewRequestPolicy {
         let origin = "http://127.0.0.1:41237";
-        PreviewRequestPolicy {
-            origin: origin.to_owned(),
-            allowed: HashSet::from([
-                format!("{origin}/"),
-                format!("{origin}/style/jaunder.css"),
-                format!("{origin}/style/jaunder-themes.css"),
-                format!("{origin}/theme.css"),
-            ]),
-        }
+        let (_repository, accepted) = repository_with_asset();
+        let package = PreviewPackage::from_repository(accepted.as_ref()).expect("preview package");
+        PreviewRequestPolicy::new(
+            origin,
+            &test_application_path().parse().unwrap(),
+            &package.stylesheet_url,
+            &package.asset_urls,
+        )
     }
 
     async fn next_command(
@@ -1193,6 +1481,7 @@ mod tests {
     }
     async fn serve_successful_cdp(
         socket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+        stylesheet_path: &str,
     ) {
         for method in [
             "Page.enable",
@@ -1224,14 +1513,10 @@ mod tests {
         .expect("valid preview navigation URL")
         .origin()
         .ascii_serialization();
-        for (index, path) in [
-            "/",
-            "/style/jaunder.css",
-            "/style/jaunder-themes.css",
-            "/theme.css",
-        ]
-        .into_iter()
-        .enumerate()
+        let application_path = test_application_path();
+        for (index, path) in ["/", application_path.as_str(), stylesheet_path]
+            .into_iter()
+            .enumerate()
         {
             socket
                 .send(Message::Text(
@@ -1285,10 +1570,11 @@ mod tests {
             "ws://{}/devtools/page/1",
             listener.local_addr().expect("address")
         );
+        let stylesheet_path = test_stylesheet_path();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.expect("CDP connection");
             let mut socket = accept_async(stream).await.expect("WebSocket handshake");
-            serve_successful_cdp(&mut socket).await;
+            serve_successful_cdp(&mut socket, &stylesheet_path).await;
         });
 
         assert_eq!(

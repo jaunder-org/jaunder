@@ -458,9 +458,21 @@ fn render_shell(root: &Path, glue: &str, wasm: &str) -> anyhow::Result<Vec<u8>> 
         root.join("system-artifacts/inventory.txt").is_file(),
         "system styling inventory must be staged before rendering the CSR shell"
     );
+    let inventory = host::system_theme::load_system_artifact_inventory(
+        &host::system_theme::DirectorySystemArtifactSource::new(&root.join("system-artifacts")),
+    )
+    .context("loading staged system styling inventory for CSR shell")?;
     let rendered = SHELL
         .replace("{{GLUE_URL}}", glue)
-        .replace("{{WASM_URL}}", wasm);
+        .replace("{{WASM_URL}}", wasm)
+        .replace(
+            "{{APPLICATION_STYLESHEET_URL}}",
+            inventory
+                .application()
+                .content_digest()
+                .content_url()
+                .as_ref(),
+        );
     anyhow::ensure!(
         rendered.matches(glue).count() == 1,
         "shell must contain exactly one glue URL"
@@ -1108,8 +1120,9 @@ mod tests {
         assert!(first.join("system-artifacts/packages/studio.zip").is_file());
         assert!(system_inventory.contains("path=application.css"));
         let shell = fs::read_to_string(first.join("index.html")).unwrap();
-        assert!(shell.contains(r#"<link rel="stylesheet" href="/style/jaunder.css" />"#));
-        assert!(shell.contains(r#"<link rel="stylesheet" href="/style/jaunder-themes.css" />"#));
+        assert!(shell.contains(r#"<link rel="stylesheet" href="/theme/"#));
+        assert!(!shell.contains("data-jaunder-theme-stylesheet"));
+        assert!(!shell.contains("/style/"));
         for role in [Role::Glue, Role::Wasm] {
             assert_eq!(
                 manifest.role(role).unwrap().representations.len(),

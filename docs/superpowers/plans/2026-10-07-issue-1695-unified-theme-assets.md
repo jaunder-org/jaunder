@@ -98,7 +98,7 @@ subsystems or authorization for parallel implementation writers.
     independent Standards and Spec follow-up reviews pass. Runtime adoption
     remains task 4 work.
 
-- [ ] Task 4: Wire startup and all document/serving consumers to the inventory.
+- [x] Task 4: Wire startup and all document/serving consumers to the inventory.
   - Install and reconcile current system artifacts before readiness; inject only
     the exact handles/typed artifact values each subsystem needs (ADR-0016).
     Resolve bundled and custom selections through the shared package
@@ -116,6 +116,21 @@ subsystems or authorization for parallel implementation writers.
   - Verification: real router/document/startup tests on both backends, package
     transition tests, thumbnail command integration, immutable 200/304 checks,
     legacy-route 404 checks, and generated-shell/staging/Nix parity checks.
+  - Evidence: canonical startup installation/refusal, stored bundled/custom
+    resolution, projector roots, generated-shell/private staging, immutable
+    serving, and retired-route proofs pass. The real thumbnail command is
+    database-independent and preserves its baseline pixels. Eight focused
+    Chromium cases cover private cleanup/error/retry, failed staging/promotion,
+    custom font/syntax identity, and a real delayed Terminal stylesheet
+    superseded by Local Studio with detached callbacks and no staged residue.
+    Existing private Home visual/accessibility and hostile-theme recovery also
+    pass. Fourteen final full-page pairs under
+    `/tmp/pi-playwright/issue-1695-after-final/` match baseline dimensions and
+    appearance apart from timestamps; Home has application-only CSS and restored
+    private density, with unchanged image geometry. Fresh focused integration,
+    host all-target Clippy, WASM lint, and independent Standards/Spec follow-up
+    reviews pass. Same-origin release switching and actual Safari remain task 5
+    qualification boundaries, not claims of these local browser proofs.
 
 - [ ] Task 5: Prove deployment transitions and unchanged visual presentation.
   - Extend the existing isolated production-baseline coordinator/Playwright

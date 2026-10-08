@@ -52,6 +52,7 @@ fn main() {
         .parent()
         .unwrap_or_else(|| panic!("server has workspace parent"));
     let site_dir = out_dir.join("site");
+    let system_artifacts_dir = out_dir.join("system-artifacts");
     let generated = out_dir.join("csr_bundle_data.rs");
 
     println!("cargo:rerun-if-env-changed=JAUNDER_CSR_BUNDLE_DIR");
@@ -70,14 +71,44 @@ fn main() {
     match decide_bundle_action(bundle_root.is_dir(), bundle_env.is_some()) {
         BundleAction::Stage => {
             let manifest = load_bundle(&bundle_root);
+            let system_inventory = host::system_theme::load_system_artifact_inventory(
+                &host::system_theme::DirectorySystemArtifactSource::new(
+                    &bundle_root.join("system-artifacts"),
+                ),
+            )
+            .unwrap_or_else(|error| panic!("invalid system artifacts: {error}"));
+            let application_stylesheet_url = system_inventory
+                .application()
+                .content_digest()
+                .content_url()
+                .to_string();
             write_generated_data(&generated, Some(&manifest));
             prepare_staging_with(
                 &site_dir,
                 |path| fs::remove_dir_all(path),
                 |path| fs::create_dir_all(path),
                 || {
-                    stage_bundle(&bundle_root, &site_dir, &public_src, &manifest)
-                        .unwrap_or_else(|error| panic!("{error}"));
+                    stage_bundle(
+                        &bundle_root,
+                        &site_dir,
+                        &public_src,
+                        &manifest,
+                        &application_stylesheet_url,
+                    )
+                    .unwrap_or_else(|error| panic!("{error}"));
+                    prepare_staging_with(
+                        &system_artifacts_dir,
+                        |path| fs::remove_dir_all(path),
+                        |path| fs::create_dir_all(path),
+                        || {
+                            build_staging::stage_verified_system_artifacts(
+                                &system_inventory,
+                                &system_artifacts_dir,
+                            )
+                            .unwrap_or_else(|error| panic!("{error}"));
+                        },
+                    )
+                    .unwrap_or_else(|error| panic!("{error}"));
                 },
             )
             .unwrap_or_else(|error| panic!("{error}"));
@@ -95,6 +126,13 @@ fn main() {
                 || {
                     build_staging::stage_public_tree(&public_src, &site_dir)
                         .unwrap_or_else(|error| panic!("{error}"));
+                    prepare_staging_with(
+                        &system_artifacts_dir,
+                        |path| fs::remove_dir_all(path),
+                        |path| fs::create_dir_all(path),
+                        || {},
+                    )
+                    .unwrap_or_else(|error| panic!("{error}"));
                 },
             )
             .unwrap_or_else(|error| panic!("{error}"));

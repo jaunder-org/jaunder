@@ -48,22 +48,15 @@ pub const MODULE_BEFORE_INIT_MARK: &str = "jaunder.module.before_init";
 /// CSR presentation reconciler.
 pub const THEME_STYLESHEET_MARKER_ATTR: &str = "data-jaunder-theme-stylesheet";
 
-/// Render the custom presentation stylesheet, if this is a custom theme.
+/// Render the resolved public Theme Package stylesheet.
 ///
-/// The marker makes the server-emitted node adoptable at boot and lets CSR
-/// replace it without disturbing the two base stylesheets.
+/// The marker makes both bundled and custom installed-package presentations
+/// adoptable at boot and lets CSR replace them without disturbing application CSS.
 #[must_use]
 pub fn render_theme_stylesheet(theme: &common::theme::PublishedThemePresentation) -> Markup {
-    if matches!(
-        theme.identity,
-        common::theme::PublishedThemeIdentity::Custom(_)
-    ) {
-        Markup::new(html! {
-            link data-jaunder-theme-stylesheet rel="stylesheet" href=(theme.stylesheet_url);
-        })
-    } else {
-        Markup::empty()
-    }
+    Markup::new(html! {
+        link data-jaunder-theme-stylesheet rel="stylesheet" href=(theme.stylesheet_url);
+    })
 }
 
 /// Render the optional decorative logo role without replacing text identity.
@@ -108,10 +101,14 @@ pub fn render_theme_hero(masthead: &Markup, header: &Markup) -> Markup {
     })
 }
 
-/// The document `<head>` inner HTML: the host supplies the generated early
-/// wasm fetch script, keeping final runtime asset identity outside `web`.
+/// The document `<head>` inner HTML. The host supplies the generated early
+/// wasm fetch script and the exact installed application stylesheet identity.
 #[must_use]
-pub fn render_head(seed: &PageSeed, early_wasm_fetch_script: Option<&str>) -> Markup {
+pub fn render_head(
+    seed: &PageSeed,
+    early_wasm_fetch_script: Option<&str>,
+    application_stylesheet_url: &common::root_relative_url::RootRelativeUrl,
+) -> Markup {
     let (title, description) = match seed {
         PageSeed::Permalink(authored) => (
             authored.title.clone().map_or_else(
@@ -152,8 +149,7 @@ pub fn render_head(seed: &PageSeed, early_wasm_fetch_script: Option<&str>) -> Ma
         // NO wasm preload here — a measured decision with a fired abort rule, not
         // an oversight (#866; docs/adr/0121-no-wasm-preload.md). Do not re-add
         // without reading that draft; `crossorigin` would be mandatory.
-        link rel="stylesheet" href="/style/jaunder.css";
-        link rel="stylesheet" href="/style/jaunder-themes.css";
+        link rel="stylesheet" href=(application_stylesheet_url);
         @if matches!(seed, PageSeed::SiteTimeline { .. }) {
             title data-jaunder-projected-local-metadata { (title) }
             meta data-jaunder-projected-local-metadata name="description" content=(description);
@@ -278,6 +274,20 @@ mod tests {
             title: "Jaunder".parse().unwrap(),
             tagline: None,
             base_url: None,
+        }
+    }
+
+    fn application_url() -> common::root_relative_url::RootRelativeUrl {
+        "/theme/application".parse().unwrap()
+    }
+
+    fn bundled_theme(theme: common::theme::Theme) -> common::theme::PublishedThemePresentation {
+        common::theme::PublishedThemePresentation {
+            identity: common::theme::PublishedThemeIdentity::BuiltIn(theme),
+            revision: Some("a".repeat(64).parse().unwrap()),
+            stylesheet_url: format!("/theme/{}", "b".repeat(64)).parse().unwrap(),
+            logo_url: None,
+            header_url: None,
         }
     }
 
@@ -406,6 +416,7 @@ mod tests {
                 page: one_post_page(),
             },
             None,
+            &application_url(),
         )
         .into_string();
 
@@ -445,7 +456,12 @@ mod tests {
 
     #[test]
     fn non_local_head_metadata_is_unmarked() {
-        let head = render_head(&PageSeed::Permalink(sample_post()), None).into_string();
+        let head = render_head(
+            &PageSeed::Permalink(sample_post()),
+            None,
+            &application_url(),
+        )
+        .into_string();
         assert!(
             !head.contains("data-jaunder-projected-local-metadata"),
             "{head}"
@@ -505,10 +521,11 @@ mod tests {
                 page: one_post_page(),
             },
             Some(starter),
+            &application_url(),
         )
         .into_string();
         let style = head
-            .find(r#"<link rel="stylesheet" href="/style/jaunder.css">"#)
+            .find(r#"<link rel="stylesheet" href="/theme/application">"#)
             .expect("base stylesheet");
         assert!(head.starts_with(starter) && starter.len() < style, "{head}");
     }
@@ -517,7 +534,7 @@ mod tests {
     fn permalink_head_sets_escaped_title_and_effective_description() {
         let mut post = sample_post();
         post.permalink_description = Some("Rendered & <description>".parse().unwrap());
-        let head = render_head(&PageSeed::Permalink(post), None).into_string();
+        let head = render_head(&PageSeed::Permalink(post), None, &application_url()).into_string();
         assert!(
             head.contains("<title>Hello &amp; &lt;World&gt;</title>"),
             "{head}"
@@ -542,7 +559,8 @@ mod tests {
         authored.post.rendered_title = Some(common::test_support::rendered_post_title(
             "<em>Rendered presentation</em>",
         ));
-        let head = render_head(&PageSeed::Permalink(authored), None).into_string();
+        let head =
+            render_head(&PageSeed::Permalink(authored), None, &application_url()).into_string();
         assert!(head.contains("<title>*Authored syntax*</title>"), "{head}");
         assert!(!head.contains("Rendered presentation"), "{head}");
     }
@@ -554,7 +572,8 @@ mod tests {
     fn permalink_head_falls_back_to_the_author_when_a_post_has_no_title() {
         let mut untitled = sample_post();
         untitled.title = None;
-        let head = render_head(&PageSeed::Permalink(untitled), None).into_string();
+        let head =
+            render_head(&PageSeed::Permalink(untitled), None, &application_url()).into_string();
         assert!(head.contains("<title>Post by alice</title>"), "{head}");
     }
 
@@ -597,7 +616,7 @@ mod tests {
             ),
         ];
         for (seed, expected_title) in cases {
-            let head = render_head(&seed, None).into_string();
+            let head = render_head(&seed, None, &application_url()).into_string();
             assert!(head.contains(expected_title), "{head}");
         }
     }
@@ -605,9 +624,7 @@ mod tests {
     #[test]
     fn shell_has_one_versioned_theme_surface_inside_a_paint_clip() {
         let html = render_shell(&PublicPresentation {
-            theme: common::theme::PublishedThemePresentation::built_in(
-                common::theme::Theme::Studio,
-            ),
+            theme: bundled_theme(common::theme::Theme::Studio),
             page: PageSeed::SiteTimeline {
                 identity: site_identity(),
                 registration_policy: common::registration::RegistrationPolicy::Open,
@@ -669,9 +686,7 @@ mod tests {
     #[test]
     fn shell_marks_home_active_only_for_the_site_timeline() {
         let root = render_shell(&PublicPresentation {
-            theme: common::theme::PublishedThemePresentation::built_in(
-                common::theme::Theme::Studio,
-            ),
+            theme: bundled_theme(common::theme::Theme::Studio),
             page: PageSeed::SiteTimeline {
                 identity: site_identity(),
                 registration_policy: common::registration::RegistrationPolicy::Open,
@@ -686,9 +701,7 @@ mod tests {
         );
 
         let non_root = render_shell(&PublicPresentation {
-            theme: common::theme::PublishedThemePresentation::built_in(
-                common::theme::Theme::Studio,
-            ),
+            theme: bundled_theme(common::theme::Theme::Studio),
             page: PageSeed::Profile {
                 username: parse_username("bob"),
                 order: common::seed::TimelineOrder::Newest,

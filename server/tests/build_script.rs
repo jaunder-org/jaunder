@@ -88,18 +88,29 @@ fn representation_bytes(path: &str) -> Vec<u8> {
     }
 }
 
+fn application_url() -> String {
+    format!("/theme/{}", "a".repeat(64))
+}
+
 fn shell(glue: &str, wasm: &str) -> String {
+    let application_url = application_url();
     format!(
         r#"<script>const __jaunderWasmUrl = "{wasm}"; window.__jaunderWasmFetch = fetch(__jaunderWasmUrl);</script>
-<link rel="stylesheet" href="/style/jaunder.css" />
+<link rel="stylesheet" href="{application_url}" />
 <script type="module">import {{initMeasured}} from "{glue}"; performance.mark("jaunder.module.before_init"); initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl);</script>"#
     )
 }
 
 fn stage(root: &TempDir, manifest: &Manifest, public: &TempDir) -> Result<(), String> {
     let site = TempDir::new().expect("staging root");
-    build_impl::stage_bundle(root.path(), site.path(), public.path(), manifest)
-        .map_err(|error| error.to_string())
+    build_impl::stage_bundle(
+        root.path(),
+        site.path(),
+        public.path(),
+        manifest,
+        &application_url(),
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[test]
@@ -129,8 +140,14 @@ fn verified_bundle_and_nested_public_assets_stage_together() {
         .expect("create stylesheet parent");
     fs::write(&stylesheet, "body {}").expect("write stylesheet");
 
-    build_impl::stage_bundle(bundle.path(), site.path(), public.path(), &manifest)
-        .expect("stage verified bundle");
+    build_impl::stage_bundle(
+        bundle.path(),
+        site.path(),
+        public.path(),
+        &manifest,
+        &application_url(),
+    )
+    .expect("stage verified bundle");
 
     manifest
         .verify_bundle(site.path())

@@ -19,7 +19,7 @@ use thiserror::Error;
 
 use crate::theme_package::{
     CompiledThemeRevision, ThemePackageError, ThemePackageLimits, export_theme_package,
-    percent_encode_asset_path, validate_theme_package,
+    validate_theme_package,
 };
 
 /// Why a repository directory cannot be admitted as a Theme Package.
@@ -155,22 +155,13 @@ fn accept_theme_repository_with_limits(
             )
         })
         .collect();
-    let preview_asset_urls = validated
-        .asset_paths()
-        .map(|path| {
-            (
-                path.to_owned(),
-                format!("/theme-assets/{}", percent_encode_asset_path(path)),
-            )
-        })
-        .collect();
-    let (revision, publication_revision) = validated
-        .compile_with_identity_asset_urls(&preview_asset_urls, &publication_asset_urls, limits)
+    let revision = validated
+        .compile(&publication_asset_urls, limits)
         .map_err(|source| ThemeRepositoryError::Stylesheet {
             path: root.join("style.css"),
             source,
         })?;
-    let publication_revision = ThemeRevisionDigest::from_digest(publication_revision);
+    let publication_revision = ThemeRevisionDigest::from_digest(revision.revision_digest());
     Ok(AcceptedThemeRepository {
         package_bytes,
         revision,
@@ -485,7 +476,7 @@ mod tests {
         assert!(
             std::str::from_utf8(accepted.revision().css().bytes())
                 .expect("compiled stylesheet")
-                .contains("/theme-assets/assets/pixel%20%3F%23.avif")
+                .contains("/theme/")
         );
         let publication_urls = BTreeMap::from([(
             "assets/pixel ?#.avif".to_owned(),
@@ -508,7 +499,7 @@ mod tests {
             accepted.publication_revision(),
             &ThemeRevisionDigest::from_digest(published.revision_digest())
         );
-        assert_ne!(
+        assert_eq!(
             accepted.publication_revision(),
             &ThemeRevisionDigest::from_digest(accepted.revision().revision_digest())
         );

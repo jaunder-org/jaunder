@@ -73,6 +73,20 @@
   --card-shadow: 0 1px 0 rgba(0, 0, 0, 0.02);
 }
 
+/* Private routes retain Studio-compatible application presentation without loading
+ * a selectable public Theme Package. These values intentionally differ from the
+ * generic public/custom fallback above and are scoped to the router-owned marker. */
+.j-root[data-jaunder-private="true"] {
+  --accent-ink: #3a2fc9;
+  --font-body: "Geist", "Inter", system-ui, -apple-system, sans-serif;
+  --font-display: "Geist", "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "Geist Mono", "JetBrains Mono", ui-monospace, monospace;
+  --font-meta: "Geist", "Inter", sans-serif;
+  --tracking-head: -0.7px;
+  --brand-tracking: -0.2px;
+  --post-pad-y: 20px;
+}
+
 /* ─── reset ─── */
 .j-root {
   all: initial;
