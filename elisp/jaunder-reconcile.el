@@ -39,6 +39,7 @@
 (declare-function jaunder-pull-result-local-effect "jaunder-pull")
 
 (defvar jaunder--pull-link-inventory)
+(defvar jaunder--pull-link-inventory-provider)
 (defvar jaunder--pull-original-proof)
 
 (cl-defstruct (jaunder-reconcile-row
@@ -636,7 +637,7 @@ report remains visibly reviewable, and the User must refresh before retrying."
                                       ,value))))
 
 (defvar jaunder--reconcile-batch-members nil
-  "Dynamic remote Collection evidence for one matched pull or keep-remote batch.
+  "Dynamic remote Collection evidence for one pull or keep-remote batch.
 The plist records `unacquired', `complete', or `failed' acquisition state so an
 empty complete Collection is never mistaken for absent or failed evidence.")
 
@@ -650,7 +651,10 @@ row and returns a result plist; its independent errors become failed results."
                                                        jaunder-reconcile-report)))
                                               (jaunder--reconcile-batch-members
                                                (when (memq action '(pull keep-remote))
-                                                 (list :state 'unacquired :root root))))
+                                                 (list :state 'unacquired :root root)))
+                                              (jaunder--pull-link-inventory-provider
+                                               (when jaunder--reconcile-batch-members
+                                                 #'jaunder--reconcile-pull-inventory)))
                                          (with-current-buffer buffer
                                            (setq-local jaunder-reconcile-last-batch-results nil)
                                            (setq rows (cl-remove-if-not
@@ -697,7 +701,8 @@ row and returns a result plist; its independent errors become failed results."
                                              (redisplay))
                                            ;; Operation evidence is intentionally unavailable to the new
                                            ;; report inventory and to callbacks it may invoke.
-                                           (setq jaunder--reconcile-batch-members nil)
+                                           (setq jaunder--reconcile-batch-members nil
+                                                 jaunder--pull-link-inventory-provider nil)
                                            (let* ((jaunder--reconcile-batch-refresh-progress (eq action 'pull))
                                                   (refresh (jaunder--reconcile-show-results-and-refresh buffer)))
                                              (if (eq refresh 'refresh-failed)
@@ -932,7 +937,7 @@ Return a plist suitable for a terminal result; no DELETE is sent here."
 (defun jaunder--reconcile-batch-remote-members ()
   "Return this batch's complete remote Members or signal its retained failure.
 Only confirmed pull and keep-remote batches bind this evidence.  Acquisition is
-lazy because batches without a matched row have no need for a Collection walk."
+lazy until matched replacement or Post-link localization requires proof."
   (pcase (plist-get jaunder--reconcile-batch-members :state)
     ('complete (plist-get jaunder--reconcile-batch-members :members))
     ('failed (signal (plist-get jaunder--reconcile-batch-members :condition)

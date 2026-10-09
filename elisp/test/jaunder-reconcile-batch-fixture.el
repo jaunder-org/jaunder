@@ -33,6 +33,7 @@ before cleaning up.  All reconciliation and install logic remains real."
          (entries (make-hash-table))
          (member-reads (make-hash-table))
          (originals (make-hash-table))
+         (paths (make-hash-table))
          (pages 0) (operation-pages 0) (refreshing nil) (active nil)
          (real-rename (symbol-function 'rename-file))
          buffer current-id state rows)
@@ -46,6 +47,7 @@ before cleaning up.  All reconciliation and install logic remains real."
                           (path (expand-file-name (concat local-slug ".org") root))
                           (bytes (format "#+TITLE: Local\n#+PROPERTY: JAUNDER_ID %d\n#+PROPERTY: JAUNDER_SLUG %s\n#+PROPERTY: JAUNDER_SYNCED \"old\"\n\nLocal body.\n" id local-slug)))
                      (puthash id bytes originals)
+                     (puthash id path paths)
                      (with-temp-file path (insert bytes))
                      (puthash id (jaunder-test--batch-entry
                                   id (format "Remote body. [[/media/upload/%s/%s/%s/a-%d.bin][Media]]."
@@ -57,7 +59,8 @@ before cleaning up.  All reconciliation and install logic remains real."
                       :member (jaunder--make-inventory-member
                                :id (number-to-string id) :slug slug
                                :edit-uri (format "https://example.test/atompub/alice/posts/%d" id))))) ids))
-          (setq state (list :root root :rows rows :entries entries :originals originals))
+          (setq state (list :root root :rows rows :entries entries :originals originals :paths paths))
+          (funcall hook '(:phase setup :id 0) state)
           (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t))
                     ((symbol-function 'plz)
                      (lambda (_method _url &rest _)
@@ -104,10 +107,10 @@ before cleaning up.  All reconciliation and install logic remains real."
               (list :results jaunder-reconcile-last-batch-results :pages pages
                     :operation-pages operation-pages :member-reads member-reads
                     :originals originals
-                    :bytes (mapcar (lambda (row)
-                                     (let ((path (jaunder-inventory-local-path (jaunder-reconcile-row-local row))))
+                    :bytes (mapcar (lambda (id)
+                                     (let ((path (gethash id paths)))
                                        (when (file-exists-p path)
-                                         (with-temp-buffer (insert-file-contents-literally path) (buffer-string))))) rows)))))
+                                         (with-temp-buffer (insert-file-contents-literally path) (buffer-string))))) ids)))))
       (dolist (visiting (buffer-list))
         (when (and (buffer-file-name visiting)
                    (string-prefix-p root (buffer-file-name visiting)))

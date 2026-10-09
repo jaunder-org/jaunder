@@ -38,7 +38,7 @@ push, keep-local, interactive merge, standalone pull, and publish-time links.
     destination changes between rows. Inject a new duplicate local ID during
     Media finalization and after the prior Member check; both operations must
     preserve the reviewed Post. Retain Media and rename recovery regressions.
-- [ ] Task 2: Share remote proof through pull-time link staging.
+- [x] Task 2: Share remote proof through pull-time link staging.
   - Contract: reconciliation staging supplies `jaunder--pull-stage-member` with
     an inventory joining Task 1's remote Members to current local files when
     link proof is needed. Do not freeze the report's local evidence or change
