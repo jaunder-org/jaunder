@@ -1366,39 +1366,48 @@ mod reader_tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn historical_corpus_entries_restore_through_each_public_input(#[case] backend: Backend) {
+    async fn historical_corpus_entries_restore_through_each_public_input(
+        #[case] backend: Backend,
+        #[values(CorpusIoMode::Directory, CorpusIoMode::Archive)] input: CorpusIoMode,
+        #[values(false, true)] materializable: bool,
+    ) {
         let corpus = compatibility_result(BackupCorpus::checked_in(), "load corpus");
-        for entry in corpus.entries() {
-            for input in CorpusIoMode::ALL {
-                let target = InitializedCommandEnv::new(backend).await;
-                let fixture = if entry.materializable {
-                    let schema_version = current_schema_version(&target).await;
-                    let materialized = target.base.path().join("materialized");
+        // Give each public input and compatibility class its own whole-test budget;
+        // enumerate the live index so adding a fixture cannot silently drop coverage.
+        for entry in corpus
+            .entries()
+            .iter()
+            .filter(|entry| entry.materializable == materializable)
+        {
+            let target = InitializedCommandEnv::new(backend).await;
+            let fixture = if entry.materializable {
+                let schema_version = current_schema_version(&target).await;
+                let materialized = target.base.path().join("materialized");
+                compatibility_result(
+                    corpus.materialize(entry, &materialized, schema_version),
+                    "materialize verified current-schema fixture",
+                );
+                assert_fixture_wire_inventory(&materialized);
+                materialized
+            } else {
+                compatibility_result(corpus.verify(entry), "verify historical schema fixture");
+                corpus.root.join(&entry.fixture)
+            };
+            let restore_path = match input {
+                CorpusIoMode::Directory => fixture,
+                CorpusIoMode::Archive => {
+                    let archive = target.base.path().join("fixture.tar.gz");
                     compatibility_result(
-                        corpus.materialize(entry, &materialized, schema_version),
-                        "materialize verified current-schema fixture",
+                        BackupCorpus::package_archive(&fixture, &archive),
+                        "independently package fixture archive",
                     );
-                    assert_fixture_wire_inventory(&materialized);
-                    materialized
-                } else {
-                    compatibility_result(corpus.verify(entry), "verify historical schema fixture");
-                    corpus.root.join(&entry.fixture)
-                };
-                let restore_path = match input {
-                    CorpusIoMode::Directory => fixture,
-                    CorpusIoMode::Archive => {
-                        let archive = target.base.path().join("fixture.tar.gz");
-                        compatibility_result(
-                            BackupCorpus::package_archive(&fixture, &archive),
-                            "independently package fixture archive",
-                        );
-                        archive
-                    }
-                };
+                    archive
+                }
+            };
 
-                match expected_restore(entry) {
-                    RestoreExpectation::Succeeds => {
-                        cmd_restore(&target.args, &restore_path)
+            match expected_restore(entry) {
+                RestoreExpectation::Succeeds => {
+                    cmd_restore(&target.args, &restore_path)
                             .await
                             .unwrap_or_else(|error| {
                                 panic!(
@@ -1410,49 +1419,46 @@ mod reader_tests {
                                     ))
                                 )
                             });
-                        assert_reader_inventory(
-                            &target.args,
-                            entry.format_version,
-                            entry.materializable,
-                        )
-                        .await;
-                    }
-                    RestoreExpectation::SchemaMismatch => {
-                        let before =
-                            snapshot_target_state(&target, "before-schema-mismatched-restore")
-                                .await;
-                        let Err(error) = cmd_restore(&target.args, &restore_path).await else {
-                            panic!(
-                                "{}",
-                                super::format_compatibility_diagnostic(
-                                    "historical schema fixture must be rejected"
-                                )
-                            );
-                        };
-                        assert!(matches!(
-                            error.downcast_ref::<BackupError>(),
-                            Some(BackupError::SchemaVersionMismatch { .. })
-                        ));
-                        assert_target_unmodified(&target, &before).await;
-                    }
-                    RestoreExpectation::TypedUnsupportedFormat => {
-                        let before =
-                            snapshot_target_state(&target, "before-rejected-restore").await;
-                        let Err(error) = cmd_restore(&target.args, &restore_path).await else {
-                            panic!(
-                                "{}",
-                                super::format_compatibility_diagnostic(
-                                    "retired format must be rejected"
-                                )
-                            );
-                        };
-                        assert!(matches!(
-                            error.downcast_ref::<BackupError>(),
-                            Some(BackupError::UnsupportedFormatVersion { backup_version, .. })
-                                if *backup_version == entry.format_version
-                        ));
-                        assert_target_unmodified(&target, &before).await;
-                    }
+                    assert_reader_inventory(
+                        &target.args,
+                        entry.format_version,
+                        entry.materializable,
+                    )
+                    .await;
+                }
+                RestoreExpectation::SchemaMismatch => {
+                    let before =
+                        snapshot_target_state(&target, "before-schema-mismatched-restore").await;
+                    let Err(error) = cmd_restore(&target.args, &restore_path).await else {
+                        panic!(
+                            "{}",
+                            super::format_compatibility_diagnostic(
+                                "historical schema fixture must be rejected"
+                            )
+                        );
+                    };
+                    assert!(matches!(
+                        error.downcast_ref::<BackupError>(),
+                        Some(BackupError::SchemaVersionMismatch { .. })
+                    ));
+                    assert_target_unmodified(&target, &before).await;
+                }
+                RestoreExpectation::TypedUnsupportedFormat => {
+                    let before = snapshot_target_state(&target, "before-rejected-restore").await;
+                    let Err(error) = cmd_restore(&target.args, &restore_path).await else {
+                        panic!(
+                            "{}",
+                            super::format_compatibility_diagnostic(
+                                "retired format must be rejected"
+                            )
+                        );
+                    };
+                    assert!(matches!(
+                        error.downcast_ref::<BackupError>(),
+                        Some(BackupError::UnsupportedFormatVersion { backup_version, .. })
+                            if *backup_version == entry.format_version
+                    ));
+                    assert_target_unmodified(&target, &before).await;
                 }
             }
         }
