@@ -7,7 +7,7 @@
 ## Scope
 
 In: the
-[approved spec](../specs/2026-10-07-issue-1699-reconcile-fetch-performance.md) —
+[approved spec](2026-10-07-issue-1699-reconcile-fetch-performance-spec.md) —
 identity-indexed Local Post Link proof, realistic scale/flow regressions, opt-in
 diagnostic core, exhaustive operation integration and evidence.
 

@@ -13,14 +13,14 @@ exposing credentials or authored content.
 
 - Fix the confirmed replacement-construction bottleneck: 450.616s inside
   451.434s staging, versus 0.397s Media materialization; see
-  [the diagnosis](../research/2026-10-07-issue-1699-reconcile-fetch-performance.md).
+  [the diagnosis](../superpowers/research/2026-10-07-issue-1699-reconcile-fetch-performance.md).
   Match identity before filesystem validation; unique inventories must not
   require their Cartesian product. Ambiguity never selects an arbitrary winner.
-- Preserve [ADR-0201](../../adr/0201-emacs-local-post-link-round-trip.md): exact
+- Preserve [ADR-0201](../adr/0201-emacs-local-post-link-round-trip.md): exact
   canonical href and local ID/slug/filename agreement, current same-root file
   checks, unchanged unproven links, no guessed destinations or extra downloads.
-- Preserve [ADR-0200](../../adr/0200-revalidated-matched-post-pull.md) and
-  [ADR-0211](../../adr/0211-emacs-reconciliation-conflict-resolution.md): staged
+- Preserve [ADR-0200](../adr/0200-revalidated-matched-post-pull.md) and
+  [ADR-0211](../adr/0211-emacs-reconciliation-conflict-resolution.md): staged
   replacement, per-Post fresh Collection uniqueness and Member ETag checks,
   unchanged local bytes/identity, clean visiting buffers, explicit conflicts,
   recoverable installation, and honest partial/unknown outcomes. Do not share
