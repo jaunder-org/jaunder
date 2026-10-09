@@ -70,7 +70,8 @@ tree-sitter-typescript = "=0.23.2"
 tree-sitter-xml = "=0.7.0"
 tree-sitter-yaml = "=0.7.1"
 tree-sitter-zig = "=1.1.2"
-tokio = { workspace = true, optional = true }
+tokio.workspace = true
+tempfile.workspace = true
 tracing-log.workspace = true
 tracing-subscriber.workspace = true
 serde.workspace = true
@@ -106,7 +107,7 @@ tracing-subscriber = { workspace = true }
 # `sqlx` itself is a non-optional dep above.
 default = ["sqlx"]
 sqlx = []
-test-utils = ["cheap-kdf", "dep:tokio"]
+test-utils = ["cheap-kdf"]
 # Internal build-only A/B artifact inputs for deployment qualification. This is
 # never enabled by normal application/package outputs.
 qualification = []

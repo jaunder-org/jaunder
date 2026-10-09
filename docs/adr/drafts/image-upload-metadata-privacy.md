@@ -19,11 +19,15 @@ against that identity ([ADR-0084](../0084-media-filename-encoded-canonical.md),
 bytes beneath a hash URL would violate that trust chain and immutable-cache
 semantics.
 
-Removing all metadata indiscriminately can change orientation or color and break
-animation; arbitrary color profiles can themselves carry descriptive data.
-Decode/re-encode can degrade the photo. These are real fidelity/privacy
-tradeoffs, not reasons to return a successful upload with its identifying
-metadata intact.
+Indiscriminate metadata deletion can remove orientation or a color profile;
+decode/re-encode can degrade the photo. The practical response is conventional
+metadata editing that retains rendering information, backed by focused output
+checks, not a custom image-codec validator.
+
+The user narrowed the proposed scope on 2026-10-09: prevent inadvertent
+disclosure of ordinary photo metadata such as GPS. Forensic hidden-data removal,
+custom ICC scrubbing, compressed-stream validation and normative-syntax research
+are not part of this feature.
 
 ## Decision
 
@@ -31,24 +35,26 @@ Mandatory shared ingestion sanitizes new JPEG, PNG/APNG, GIF, WebP and HEIC/HEIF
 uploads before public placement and Media Record creation. Identification uses
 bytes, not caller labels, and determines the stored/served Content-Type of
 covered images even when labels disagree; canonical filenames remain unchanged.
-Non-image Content-Type behavior remains unchanged. GPS, device
-identifiers/descriptions, timestamps, author/copyright descriptions, comments,
-descriptive profile fields and embedded previews are removed. Only validated
-presentation data needed for orientation, color/HDR, transparency and animation
-remains. Optional device-editing extras other than the always-removed embedded
-thumbnails/previews may be discarded; required rendering data and displayed
-frames may not.
+Non-image Content-Type behavior remains unchanged. Established metadata tooling
+removes ordinary GPS/location, camera/device identifiers, capture timestamps,
+author descriptions, comments, EXIF/XMP/IPTC descriptive fields and metadata
+thumbnails/previews it supports. Rendering information needed for orientation,
+color/HDR, transparency and animation remains.
 
-Source formats and compressed image payloads are preserved without lossy
-re-encoding. ICC descriptive fields are scrubbed without changing their color
-transforms. Covered input that cannot meet this contract is rejected, not served
-unsanitized or silently degraded. Resource execution is bounded. The exact
-implementation, supported variants and limits require fixture-backed proof;
-generic metadata-editor success is not the privacy guarantee.
+Source formats and image/frame data are preserved without lossy re-encoding.
+Color profiles remain intact, including their descriptive text; bespoke ICC
+canonicalization is outside this ordinary-metadata policy. Processing or
+post-edit metadata-check failures reject the upload, never publish the original
+as a fallback. Runtime, input/output sizes, concurrency and child lifetime have
+ordinary application limits. A small fixture set checks actual removal and
+preserved presentation; tool exit status alone is not proof. No exhaustive
+codec/conformance or ignored-byte ownership proof is required.
 
 SVG remains accepted unchanged and outside this guarantee, as does non-image
-Media. The policy does not promise removal of visible PII, PII in filenames, or
-arbitrary steganography. Neither User nor operator has a metadata opt-out.
+Media. The policy does not promise removal of visible PII, PII in filenames,
+descriptive text in retained rendering profiles, arbitrary steganography or
+forensically recoverable ignored/padding bytes. Neither User nor operator has a
+metadata opt-out.
 
 Stored-byte hash, URL, ETag, deduplication, size and quota describe the
 sanitized output. Sanitization is deterministic and byte-idempotent, preserving
@@ -67,10 +73,12 @@ ownership. Production execution needs separate approval.
 ## Consequences
 
 Sanitization becomes a cross-protocol privacy boundary, not an optional UI
-feature. Fidelity, metadata removal, failure cleanup, resource limits and
-idempotence require independent output and consumer tests on both backends.
-HEIC/HEIF acceptance needs successful representative device-photo proofs, not
-blanket rejection or an assumed capability from a library format table.
+feature. Fidelity, ordinary metadata removal, failure cleanup, execution limits
+and reupload identity receive focused output and consumer tests on both
+backends. HEIC/HEIF must actually work in the fixture check rather than be
+rejected wholesale or assumed from a format table. Native-device samples are
+useful additional coverage, not a prerequisite to integration or an excuse for
+another standards-research project.
 
 We reject public originals plus sanitized derivatives, metadata opt-outs, lossy
 format conversion and in-place historical rewrites. Remaining optional editing

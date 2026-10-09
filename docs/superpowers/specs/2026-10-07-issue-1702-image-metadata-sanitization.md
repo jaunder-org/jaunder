@@ -4,18 +4,24 @@ Issue: https://github.com/jaunder-org/jaunder/issues/1702
 
 ## Outcome
 
-New device-photo and other covered raster uploads cannot expose their embedded
-GPS or other descriptive metadata through Jaunder's public Media URLs. Web and
-AtomPub uploads share mandatory sanitization while preserving the displayed
-image and the content-addressed identity of the bytes actually served.
+Prevent accidental publication of GPS/location and common personal metadata when
+someone uploads a picture. Web and AtomPub uploads share mandatory metadata
+removal while preserving the displayed image and the content-addressed identity
+of the bytes actually served.
+
+**Scope revised 2026-10-09 at the user's direction:** use conventional metadata
+editing and practical regression tests. This is not forensic sanitization,
+compressed-stream validation, or proof that every byte is free of hidden data.
+The earlier research remains historical evidence, not a delivery prerequisite.
 
 ## Load-bearing decisions
 
 ### Privacy and image fidelity
 
-- Cover JPEG, PNG/APNG, GIF, WebP, and HEIC/HEIF. Successful sanitization of
-  representative device-native HEIC/HEIF is required; rejecting every HEIF file
-  does not satisfy this spec.
+- Cover JPEG, PNG/APNG, GIF, WebP, and HEIC/HEIF using established metadata
+  tooling. Demonstrate actual successful metadata removal for each format;
+  rejecting every HEIF file does not satisfy this spec. A camera-original sample
+  is useful additional coverage, not a prerequisite to integration.
 - Detect covered image content from bytes, not the filename or supplied
   Content-Type. Relabeling a covered image cannot bypass sanitization.
   Image-labeled malformed or unrecognized raster input cannot become an
@@ -25,26 +31,21 @@ image and the content-addressed identity of the bytes actually served.
   Content-Type behavior.
 - Sanitization is unconditional for new covered uploads, with no user or
   operator opt-out. Both upload transports enforce the same policy.
-- Remove embedded GPS/location, device/camera descriptions and identifiers,
-  timestamps, author/copyright descriptions, comments, XMP/IPTC and equivalent
-  descriptive metadata, and embedded thumbnails/previews. This is a metadata
-  guarantee, not removal of visible sensitive content or arbitrary
-  steganography.
-- Preserve source format and compressed image/frame payloads: no lossy
-  re-encoding, resizing, or automatic conversion of HEIC/HEIF to another format.
-- Preserve orientation, displayed dimensions, color/HDR appearance,
-  transparency, displayed frames, timing, looping, blend, and disposal behavior.
-  Retain only validated presentation metadata needed for those properties.
-- Scrub descriptive ICC fields while preserving their color transforms. Neither
-  discarding a necessary profile nor retaining arbitrary descriptive profile
-  data satisfies the policy.
-- Embedded thumbnails/previews must be removed. Other optional camera editing
-  extras, including portrait depth data, may be discarded. Required alpha/HDR/
-  color information or displayed images/animation must not be discarded as an
-  editing-extra shortcut.
-- Unsafe, malformed, unsupported covered variants and sanitization/verification
-  failures reject the upload; never publish the original as a fallback.
-  Unsupported variants must be documented rather than silently accepted.
+- Remove ordinary embedded GPS/location, camera/device identifiers, capture
+  timestamps, author descriptions, comments, EXIF/XMP/IPTC descriptive fields,
+  and metadata thumbnails/previews supported by the chosen editor. Preserve
+  rendering-relevant fields rather than indiscriminately deleting everything.
+- Preserve source format and image/frame data: no lossy re-encoding, resizing,
+  or automatic conversion of HEIC/HEIF to another format.
+- Preserve orientation, displayed dimensions, color/HDR signaling, transparency
+  and animation. Retain color profiles intact; do not implement bespoke
+  ICC-description scrubbing or reject ordinary profiles because their internal
+  fields have not been independently certified. Descriptive text within retained
+  rendering profiles is outside this ordinary-metadata policy.
+- A tool error, unsupported covered format, or failed post-edit metadata check
+  rejects the upload; never publish the original as a fallback. Use the editor's
+  supported formats and ordinary error handling, not custom codec grammars,
+  universal conformance validation or a forensic accepted envelope.
 - SVG remains accepted unchanged and is explicitly outside the guarantee.
   Non-image Media is also outside scope; this must not become a new general
   attachment allowlist.
@@ -57,9 +58,9 @@ image and the content-addressed identity of the bytes actually served.
 - Hash, deduplication identity, returned size, URL, ETag, and quota accounting
   describe the sanitized bytes actually stored and served. Existing canonical
   filename/path and independent per-user Media Record contracts remain intact.
-- Repeated sanitation is deterministic and byte-idempotent: reuploading the same
-  input, or republishing its already-sanitized Local Media Copy under the same
-  filename, does not manufacture another byte identity.
+- Verify repeated processing and already-sanitized reupload with the chosen
+  tool: the same input and filename should retain a stable sanitized identity.
+  Do not add custom format canonicalizers to obtain this property.
 - Preserve existing upload-capability admission and positive limits. Enforce
   maximum file size on both received and sanitized bytes; charge user quota for
   stored bytes. Sanitization introduces bounded parser/resource execution, with
@@ -81,10 +82,15 @@ image and the content-addressed identity of the bytes actually served.
   create sanitized replacements with new identities and update current Post
   references through supported writes. Never overwrite an old hash-addressed
   file.
-- Retire sensitive original records/files using existing ownership/reclaim
-  safety checks. The owner explicitly accepts broken old links in retained Post
-  Revisions/Deleted Posts where an authorized force deletion overrides owner
-  history. Global safety and other Users' ownership are not bypassed.
+- Rehearse the supported ownership/reclaim outcomes without claiming original
+  retirement: retained Post history can keep a public file accessible after an
+  owner's Media Record is deleted. Global safety and other Users' ownership are
+  not bypassed.
+- Owner-approved scope amendment (2026-10-09): actual historical-original
+  retirement and its operator remediation script are a separate follow-up,
+  [#1714](https://github.com/jaunder-org/jaunder/issues/1714), not acceptance
+  for #1702. That issue must obtain an approved retention policy and separate
+  production execution approval.
 - Verify whether old binaries are actually unavailable; removing one owner's
   record alone is not proof when another record retains the bytes. Refusal or
   remaining ownership is an explicit incomplete-remediation outcome.
@@ -98,17 +104,19 @@ image and the content-addressed identity of the bytes actually served.
    ingress, public retrieval, rejection, quota and record/file cleanup. A
    browser upload flow proves successful sanitation and a clear failure; retain
    existing presentation rather than adding a privacy-settings UI.
-2. A versioned synthetic/non-personal fixture corpus covers every accepted
-   format, representative real-device HEIC/HEIF structures, misleading
-   MIME/name, descriptive metadata classes, ICC descriptions, previews,
-   malformed input, and unsupported structures. Use independent output
-   inspection, not merely the sanitizer's exit status or its own report.
-3. Fixture proofs compare compressed payloads, orientation and rendering,
-   color/HDR transforms, transparency, and animation semantics as applicable.
-   Metadata inspection proves descriptive fields and embedded
-   thumbnails/previews gone. Both ingress paths serve detected MIME for
-   misleading labels. HEIF's retained item/reference graph is verified, not just
-   its primary Exif.
+2. A small owned/non-personal fixture set covers each format, planted GPS and
+   common personal fields, orientation, a color profile, one representative
+   HDR-signaling case, animation where applicable, misleading MIME/name, and an
+   ordinary invalid-file/tool-failure case. Inspect edited output in a separate
+   metadata-reading invocation; the editor's successful exit alone is not
+   evidence of removal.
+3. Focused tests show location/personal fields and metadata previews removed,
+   image data preserved, correct orientation and retained color/animation
+   behavior. Compare the representative HDR signal before and after editing;
+   this is a focused signaling check, not certification of arbitrary HDR
+   displays or device variants. Both ingress paths serve detected MIME for
+   misleading labels. No CABAC/LZW/JPEG entropy validator, exhaustive HEIF graph
+   census, mutation campaign or published ISO field-layout proof is required.
 4. Same-input and already-sanitized reupload tests prove
    deterministic/idempotent identities, truthful serving hash/ETag/size, and
    existing dedup semantics. Emacs consumer proof covers sanitized upload,
@@ -117,21 +125,28 @@ image and the content-addressed identity of the bytes actually served.
 5. Failure proofs include resource-limit breach and tooling/write/verification
    failure; assert no public original, persisted record, quota charge or leaked
    temporary input. Cover SQLite and PostgreSQL persisted behavior equivalently.
-6. A disposable-instance rehearsal of the one-off procedure proves replacements,
-   current references and original retirement, including owner-history override
-   and a shared/global-safety refusal. Document caches/backups/local-copy
-   limits.
+6. A disposable-instance rehearsal proves sanitized replacements and updated
+   current references, owner-history refusal/record override, independent-owner
+   sharing and legacy/global-safety refusal. Verify and report whether old
+   public bytes remain; record deletion is not proof of retirement. Document
+   caches/backups/local-copy limits. Per the owner's 2026-10-09 approval, actual
+   original retirement is deferred to remediation-script issue
+   [#1714](https://github.com/jaunder-org/jaunder/issues/1714).
 7. Pin chosen dependencies through normal Cargo/Nix mechanisms and demonstrate
    their license, supported-platform packaging, and hermetic gate compatibility.
-   Source-backed research is not a substitute for fixture and consumer proof.
+   Use practical fixture and consumer checks, not another standards-research or
+   codec-conformance project.
 
 ## Boundaries
 
 No pixel redaction, filename-PII sanitization, SVG sanitization, audio/video/PDF
 metadata policy, browser-format conversion, new privacy controls, automatic
 historical migration, rewriting immutable Post Revisions, or production mutation
-is authorized by this implementation cycle. No storage identity, deletion
-safety, backup-retention or Local Media Copy trust contract is weakened.
+is authorized by this implementation cycle. Arbitrary hidden-data detection,
+steganography, forensic recovery of ignored/padding bytes, bespoke ICC
+canonicalization and custom compressed-stream validators are also out of scope.
+No storage identity, deletion safety, backup-retention or Local Media Copy trust
+contract is weakened.
 
 Policy: `docs/adr/drafts/image-upload-metadata-privacy.md`. Feasibility
 evidence:

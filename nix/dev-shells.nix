@@ -20,60 +20,62 @@ let
   # Everything `cargo xtask validate` needs on the host (toolchain + the
   # static-check tools) plus what the Nix checks pull anyway — so the CI
   # shell shares those store paths rather than adding cost.
-  ciInputs =
-    [
-      toolchain
-      pkgs.ast-grep
-      pkgs.cachix
-      cargo-crap
-      pkgs.cargo-deny
-      pkgs.cargo-llvm-cov
-      pkgs.cargo-nextest
-      pkgs.curl
-      # The shell exports Nix OpenSSL through `LD_LIBRARY_PATH` for
-      # host-built Rust binaries. Use the matching Nix git too: a
-      # distro git would load that OpenSSL into its older host glibc
-      # process, which fails before Nix can fetch git inputs (#815).
-      pkgs.git
-      # `devtool run -- <cmd>` for humans/agents, and the `shellHook`'s
-      # `devtool provision-node-modules` (#229) — so it must be on PATH in the
-      # CI shell too, not just the interactive one. Already built for the
-      # coverage and static-checks derivations, so this adds no new build.
-      devtoolBin
-      emacsForCi
-      pkgs.jq
-      leptosfmt
-      # Rust's wasm32-unknown-unknown target invokes the generic `lld` driver on
-      # Darwin; `cargo xtask e2e-local` owns the CSR wasm build, so the shell it
-      # runs in must provide the linker instead of relying on a host install.
-      pkgs.lld
-      pkgs.nodejs
-      pkgs.openssl
-      pkgs.pkg-config
-      pkgs.dav1d
-      pkgs.playwright-test
-      pkgs.postgresql_18
-      # `cargo xtask e2e-local` supervises this pinned collector for its
-      # shared VM/host JSONL trace pipeline.
-      pkgs.opentelemetry-collector-contrib
-      pkgs.prettier
-      # xtask's executable NixOS-test-script regressions run the generated
-      # Python helper under the same pinned interpreter as CI and developers.
-      pkgs.python3
-      pkgs.sqlite
-      pkgs.typescript
-      # Theme-package export assertions use this pinned ZIP reader on the host.
-      pkgs.unzip
-      # Host xtask steps opt Rust-compiling cargo invocations into
-      # `RUSTC_WRAPPER=sccache`; xtask maintains the multi-checkout
-      # `SCCACHE_BASEDIRS` registry at runtime.
-      pkgs.sccache
-      # `wasm-opt`, run by `devtool csr-bundle` after `wasm-bindgen` (#836).
-      # In `ciInputs` rather than `devOnly` because `cargo xtask build-csr`
-      # invokes it on the host, so the CI shell needs it too.
-      pkgs.binaryen
-      wasm-bindgen-cli
-    ];
+  ciInputs = [
+    toolchain
+    pkgs.ast-grep
+    pkgs.cachix
+    cargo-crap
+    pkgs.cargo-deny
+    pkgs.cargo-llvm-cov
+    pkgs.cargo-nextest
+    pkgs.curl
+    pkgs.exiftool
+    pkgs.imagemagick
+    (pkgs.python3.withPackages (ps: [ ps.pillow ]))
+    # The shell exports Nix OpenSSL through `LD_LIBRARY_PATH` for
+    # host-built Rust binaries. Use the matching Nix git too: a
+    # distro git would load that OpenSSL into its older host glibc
+    # process, which fails before Nix can fetch git inputs (#815).
+    pkgs.git
+    # `devtool run -- <cmd>` for humans/agents, and the `shellHook`'s
+    # `devtool provision-node-modules` (#229) — so it must be on PATH in the
+    # CI shell too, not just the interactive one. Already built for the
+    # coverage and static-checks derivations, so this adds no new build.
+    devtoolBin
+    emacsForCi
+    pkgs.jq
+    leptosfmt
+    # Rust's wasm32-unknown-unknown target invokes the generic `lld` driver on
+    # Darwin; `cargo xtask e2e-local` owns the CSR wasm build, so the shell it
+    # runs in must provide the linker instead of relying on a host install.
+    pkgs.lld
+    pkgs.nodejs
+    pkgs.openssl
+    pkgs.pkg-config
+    pkgs.dav1d
+    pkgs.playwright-test
+    pkgs.postgresql_18
+    # `cargo xtask e2e-local` supervises this pinned collector for its
+    # shared VM/host JSONL trace pipeline.
+    pkgs.opentelemetry-collector-contrib
+    pkgs.prettier
+    # xtask's executable NixOS-test-script regressions run the generated
+    # Python helper under the same pinned interpreter as CI and developers.
+    pkgs.python3
+    pkgs.sqlite
+    pkgs.typescript
+    # Theme-package export assertions use this pinned ZIP reader on the host.
+    pkgs.unzip
+    # Host xtask steps opt Rust-compiling cargo invocations into
+    # `RUSTC_WRAPPER=sccache`; xtask maintains the multi-checkout
+    # `SCCACHE_BASEDIRS` registry at runtime.
+    pkgs.sccache
+    # `wasm-opt`, run by `devtool csr-bundle` after `wasm-bindgen` (#836).
+    # In `ciInputs` rather than `devOnly` because `cargo xtask build-csr`
+    # invokes it on the host, so the CI shell needs it too.
+    pkgs.binaryen
+    wasm-bindgen-cli
+  ];
 
   # Interactive-only tools that `cargo xtask validate` never invokes and no
   # Nix check pulls (the language servers are the bulk). Kept out of
@@ -108,6 +110,9 @@ let
 
   shellEnv = (if pkgs.stdenv.hostPlatform.isDarwin then darwinBrowserEnv else linuxBrowserEnv) // {
     RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
+    JAUNDER_EXIFTOOL = "${pkgs.exiftool}/bin/exiftool";
+    JAUNDER_IMAGE_MAGICK = "${pkgs.imagemagick}/bin/magick";
+    JAUNDER_IMAGE_PYTHON = "${pkgs.python3.withPackages (ps: [ ps.pillow ])}/bin/python3";
     LC_ALL = "C.UTF-8";
     TZ = "UTC";
     # The host `ert` step (run via `nix develop .#ci -c cargo xtask …`)
@@ -128,7 +133,12 @@ let
     E2E_PLAYWRIGHT_TEST = "${pkgs.playwright-test}/lib/node_modules/@playwright/test";
     shellHook = ''
       ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-        export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:$LD_LIBRARY_PATH"
+        export LD_LIBRARY_PATH="${
+          pkgs.lib.makeLibraryPath [
+            pkgs.openssl
+            pkgs.dav1d
+          ]
+        }:$LD_LIBRARY_PATH"
       ''}
       ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
         export PLAYWRIGHT_BROWSERS_PATH="''${XDG_CACHE_HOME:-$HOME/Library/Caches}/ms-playwright-jaunder/${pkgs.playwright-test.version}"
@@ -154,7 +164,8 @@ in
   mutants = pkgs.mkShell (shellEnv // { buildInputs = ciInputs ++ [ pkgs.cargo-mutants ]; });
   # Full interactive shell for local development.
   default = pkgs.mkShell (shellEnv // { buildInputs = ciInputs ++ devOnly; });
-} // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+}
+// pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
   theme-thumbnail = pkgs.mkShell {
     buildInputs = [ themeThumbnailEnvironment ];
     FONTCONFIG_FILE = "${visualFontConfig}";

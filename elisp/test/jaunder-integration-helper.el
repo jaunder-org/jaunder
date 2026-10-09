@@ -15,6 +15,29 @@
 (require 'subr-x)
 (require 'cl-lib)
 
+(defconst jaunder-test--image-fixture-directory
+  (or (getenv "JAUNDER_TEST_IMAGE_FIXTURES")
+      (expand-file-name "../../host/src/image_sanitizer_fixtures/"
+                        (file-name-directory (or load-file-name buffer-file-name))))
+  "Owned synthetic image fixtures for live consumer proofs.")
+
+(defun jaunder-test--file-bytes (path)
+  "Read PATH as literal, unibyte data for exact byte/hash assertions."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally path)
+    (buffer-string)))
+
+(defun jaunder-test--image-bytes (name)
+  "Read owned fixture NAME as literal, unibyte data."
+  (jaunder-test--file-bytes
+   (expand-file-name name jaunder-test--image-fixture-directory)))
+
+(defun jaunder-test--copy-image (name destination)
+  "Copy owned fixture NAME to author-local DESTINATION without transcoding."
+  (copy-file (expand-file-name name jaunder-test--image-fixture-directory)
+             destination t))
+
 (defconst jaunder-test--connect-timeout 2
   "Per-attempt `plz' connect timeout (seconds) for the readiness polls.  Short so
 a hung connect on a loaded VM can't consume the wall-clock poll budget (#628).")

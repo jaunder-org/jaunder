@@ -1047,9 +1047,9 @@ When DRAFT is non-nil, create a draft Member."
          (jaunder--call-with-blog
           root
           (lambda ()
-            (with-temp-file first-source (insert "verified partial media"))
-            (with-temp-file failed-source (insert "rejected media"))
-            (with-temp-file success-source (insert "successful media"))
+            (jaunder-test--copy-image "png-sanitized.png" first-source)
+            (jaunder-test--copy-image "apng-first-original.png" failed-source)
+            (jaunder-test--copy-image "apng-default-original.png" success-source)
             (setq first-url (jaunder--upload-media first-source "image/png")
                   failed-url (jaunder--upload-media failed-source "image/png")
                   success-url (jaunder--upload-media success-source "image/png"))

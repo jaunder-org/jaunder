@@ -557,6 +557,15 @@ async fn cmd_seed_sandbox_profile(
         }
         SandboxProfile::Demo => {
             let storage_path = std::sync::Arc::new(storage_path.to_path_buf());
+            let executable = std::env::var_os("JAUNDER_EXIFTOOL")
+                .map(std::path::PathBuf::from)
+                .or_else(|| host::image_sanitizer::PACKAGED_EXIFTOOL.map(std::path::PathBuf::from))
+                .ok_or_else(|| {
+                    anyhow::anyhow!("required image metadata runtime is not configured")
+                })?;
+            let sanitizer =
+                std::sync::Arc::new(host::image_sanitizer::ImageSanitizer::new(executable)?);
+            sanitizer.check_runtime().await?;
             let media_manager = storage::MediaManager::new(
                 factory.media(),
                 factory.posts(),
@@ -567,7 +576,8 @@ async fn cmd_seed_sandbox_profile(
                 ))),
                 opened.instance_id,
                 std::sync::Arc::new(SandboxMediaOwnershipResolver),
-            );
+            )
+            .with_image_sanitizer(sanitizer);
             seed_demo_sandbox_profile(
                 factory.site_config(),
                 factory.users(),

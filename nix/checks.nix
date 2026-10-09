@@ -89,7 +89,8 @@ let
     || pkgs.lib.hasPrefix "storage/migrations/" relative
     || pkgs.lib.hasPrefix "host/system_theme_sources/" relative
     || relative == "testdata/theme-repository/minimal/preview.png"
-    || pkgs.lib.hasPrefix "server/tests/misc/backup_corpus/" relative;
+    || pkgs.lib.hasPrefix "server/tests/misc/backup_corpus/" relative
+    || pkgs.lib.hasPrefix "host/src/image_sanitizer_fixtures/" relative;
   coverageSrc =
     # Pure source-filter negative case: excluded auxiliary assets cannot perturb
     # coverage source identity.
@@ -2112,6 +2113,7 @@ e2eGateChecks
       machine.succeed("mkdir -p /tmp/elisp-coverage")
       machine.succeed(
           "JAUNDER_TEST_BINARY=${jaunderBin}/bin/jaunder "
+          + "JAUNDER_TEST_IMAGE_FIXTURES=${../host/src/image_sanitizer_fixtures} "
           + "JAUNDER_ELISP_COVERAGE_DIR=/tmp/elisp-coverage "
           + "emacs --batch -Q -l ${emacsSrc}/scripts/run-coverage.el"
       )

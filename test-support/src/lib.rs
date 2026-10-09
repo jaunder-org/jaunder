@@ -1448,7 +1448,15 @@ mod sandbox_profile_tests {
             ))),
             env.base.instance_id().clone(),
             Arc::new(SandboxMediaOwnershipResolver),
-        );
+        )
+        .with_image_sanitizer(Arc::new(
+            host::image_sanitizer::ImageSanitizer::new(
+                std::env::var_os("JAUNDER_EXIFTOOL")
+                    .map(std::path::PathBuf::from)
+                    .expect("configured image runtime"),
+            )
+            .expect("image runtime"),
+        ));
         let anchor = "2026-09-06T12:34:00Z".parse().expect("fixed minute anchor");
         let actual = seed_demo_sandbox_profile(
             env.site_config(),

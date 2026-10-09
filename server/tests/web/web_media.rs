@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+const JPEG: &[u8] = include_bytes!("../../../host/src/image_sanitizer_fixtures/jpeg-sanitized.jpg");
+
 use async_trait::async_trait;
 use axum::{
     body::Body,
@@ -771,6 +773,260 @@ async fn delete_nested_request_force_can_break_owner_retained_history(#[case] ba
     );
 }
 
+// Explicit pre-policy fixture placement is restricted to this disposable rehearsal.
+#[apply(backends)]
+#[tokio::test]
+async fn historical_image_replacement_rehearsal(#[case] backend: Backend) {
+    use crate::helpers::{atompub_get, atompub_post_xml, atompub_put_xml, body_string};
+    use common::ids::PostId;
+    use common::media::ContentHash;
+    use sha2::{Digest, Sha256};
+
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let owner = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
+    let other = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
+    let cases: [(&str, &str, &[u8], &[u8]); 2] = [
+        (
+            "historical-private.png",
+            "image/png",
+            include_bytes!("../../../host/src/image_sanitizer_fixtures/png-original.png"),
+            include_bytes!("../../../host/src/image_sanitizer_fixtures/png-sanitized.png"),
+        ),
+        (
+            "historical-private.jpg",
+            "image/jpeg",
+            include_bytes!("../../../host/src/image_sanitizer_fixtures/jpeg-original.jpg"),
+            JPEG,
+        ),
+    ];
+    for (index, (name, mime, original, golden)) in cases.into_iter().enumerate() {
+        let old_hash = ContentHash::from_digest(Sha256::digest(original).into());
+        let new_hash = ContentHash::from_digest(Sha256::digest(golden).into());
+        assert_ne!(old_hash, new_hash);
+        let filename = parse_filename(name);
+        let old_url = common::media::url(&MediaSource::Upload, &old_hash, &filename);
+        let old_path = env.base.path().join("media").join(common::media::path(
+            &MediaSource::Upload,
+            &old_hash,
+            &filename,
+        ));
+        std::fs::create_dir_all(old_path.parent().unwrap()).unwrap();
+        std::fs::write(&old_path, original).unwrap();
+        create_media(
+            env.media(),
+            env.write_scope(),
+            &MediaRecord {
+                user_id: owner.user_id,
+                sha256: old_hash.clone(),
+                filename: filename.clone(),
+                source: MediaSource::Upload,
+                content_type: parse_content_type(mime),
+                size_bytes: parse_byte_size(&original.len().to_string()),
+                source_url: None,
+                created_at: UtcInstant::now(),
+            },
+        )
+        .await;
+        let entry = |url: &str| {
+            format!(
+                r#"<entry xmlns="http://www.w3.org/2005/Atom"><title>Replacement rehearsal</title><content type="html">&lt;img src=&quot;{url}&quot;&gt;</content></entry>"#
+            )
+        };
+        let created = app
+            .clone()
+            .oneshot(atompub_post_xml(&owner, "posts", &entry(old_url.as_ref())))
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let post_id = PostId::from(
+            created.headers()[header::LOCATION]
+                .to_str()
+                .unwrap()
+                .rsplit('/')
+                .next()
+                .unwrap()
+                .parse::<i64>()
+                .unwrap(),
+        );
+        let suffix = format!("posts/{post_id}");
+        let member = app
+            .clone()
+            .oneshot(atompub_get(&owner, &suffix))
+            .await
+            .unwrap();
+        assert_eq!(member.status(), StatusCode::OK);
+        let etag = member.headers()[header::ETAG].clone();
+        // Supported ingress, never an in-place rewrite of historical public bytes.
+        let (status, body) = post_multipart(
+            app.clone(),
+            <web::media::Upload as ServerFn>::PATH,
+            MultipartFile {
+                filename: name,
+                content_type: mime,
+                bytes: original,
+            },
+            Some(&owner.cookie()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let uploaded = confirmed_upload(&body);
+        assert!(uploaded.url.contains(new_hash.as_ref()));
+        assert_eq!(uploaded.filename, name);
+        assert_eq!(uploaded.content_type, mime);
+        let new_path = env.base.path().join("media").join(common::media::path(
+            &MediaSource::Upload,
+            &new_hash,
+            &filename,
+        ));
+        assert_eq!(std::fs::read(&new_path).unwrap(), golden);
+        assert_eq!(std::fs::read(&old_path).unwrap(), original);
+        let mut update = atompub_put_xml(&owner, &suffix, &entry(&uploaded.url));
+        update.headers_mut().insert(header::IF_MATCH, etag);
+        let updated = app.clone().oneshot(update).await.unwrap();
+        assert_eq!(
+            updated.status(),
+            StatusCode::OK,
+            "{}",
+            body_string(updated).await
+        );
+        let current = env.current_post_media(post_id).await;
+        assert_eq!(current.len(), 1);
+        assert_eq!(current[0].0.sha256, new_hash);
+        // Current references changed, but ordinary deletion still protects revisions.
+        let request = |force| web::media::Delete {
+            request: web::media::DeleteMediaRequest {
+                sha256: old_hash.clone(),
+                filename: filename.clone(),
+                source: MediaSource::Upload,
+                force,
+            },
+        };
+        let (status, body) =
+            post_server_fn(app.clone(), &request(None), Some(&owner.cookie())).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            confirmed_media_deletion(&body),
+            MediaDeletion::OwnerRetainedHistory {
+                post_ids: vec![post_id],
+                theme_reference_count: 0,
+            }
+        );
+        if index == 0 {
+            // A supported cross-user Post create materializes an independent
+            // record. It retains public bytes, not control over the source row.
+            let shared = app
+                .clone()
+                .oneshot(atompub_post_xml(&other, "posts", &entry(old_url.as_ref())))
+                .await
+                .unwrap();
+            assert_eq!(shared.status(), StatusCode::CREATED);
+            let shared_post_id = PostId::from(
+                shared.headers()[header::LOCATION]
+                    .to_str()
+                    .unwrap()
+                    .rsplit('/')
+                    .next()
+                    .unwrap()
+                    .parse::<i64>()
+                    .unwrap(),
+            );
+            let source_record = env
+                .media()
+                .get_media(owner.user_id, &old_hash, &filename, &MediaSource::Upload)
+                .await
+                .unwrap()
+                .unwrap();
+            let independent = env
+                .media()
+                .get_media(other.user_id, &old_hash, &filename, &MediaSource::Upload)
+                .await
+                .unwrap()
+                .expect("supported sharing must materialize its author's record");
+            assert_eq!(independent.content_type, source_record.content_type);
+            assert_eq!(independent.size_bytes, source_record.size_bytes);
+            assert_eq!(independent.created_at, source_record.created_at);
+            assert_eq!(independent.source_url, source_record.source_url);
+            let (status, body) =
+                post_server_fn(app.clone(), &request(None), Some(&other.cookie())).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(
+                confirmed_media_deletion(&body),
+                MediaDeletion::OwnerRetainedHistory {
+                    post_ids: vec![shared_post_id],
+                    theme_reference_count: 0,
+                }
+            );
+        }
+        if index == 1 {
+            // Legacy retained sharing without a materialized independent record:
+            // no owner's history override can make global reclaim safe.
+            SeedRawPost::new(other.user_id)
+                .body(parse_post_body(&format!("<img src=\"{old_url}\">")))
+                .seed(env.posts(), env.write_scope())
+                .await;
+        }
+        let (status, body) =
+            post_server_fn(app.clone(), &request(Some(true)), Some(&owner.cookie())).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let expected = if index == 0 {
+            MediaDeletion::Deleted
+        } else {
+            MediaDeletion::GlobalSafety {
+                theme_reference_count: 0,
+            }
+        };
+        assert_eq!(confirmed_media_deletion(&body), expected);
+        let served = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(old_url.as_ref())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(served.status(), StatusCode::OK);
+        assert_eq!(std::fs::read(&old_path).unwrap(), original);
+        // Record removal is not a public-byte erasure promise: the storage
+        // reclaim guard still protects retained history, even for the owner.
+        let old_member = app
+            .clone()
+            .oneshot(atompub_get(&owner, &format!("media/{old_hash}/{filename}")))
+            .await
+            .unwrap();
+        assert_eq!(
+            old_member.status(),
+            if index == 0 {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::OK
+            }
+        );
+        if index == 0 {
+            let shared_member = app
+                .clone()
+                .oneshot(atompub_get(&other, &format!("media/{old_hash}/{filename}")))
+                .await
+                .unwrap();
+            assert_eq!(
+                shared_member.status(),
+                StatusCode::OK,
+                "source-owner record deletion must preserve the independent owner's record"
+            );
+            assert!(
+                env.media()
+                    .get_media(other.user_id, &old_hash, &filename, &MediaSource::Upload)
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+        }
+        assert_eq!(std::fs::read(&new_path).unwrap(), golden);
+    }
+}
+
 // ─── upload_media ─────────────────────────────────────────────
 
 #[apply(backends)]
@@ -794,7 +1050,7 @@ async fn upload_media_stores_file_and_returns_metadata(#[case] backend: Backend)
         MultipartFile {
             filename: "photo.jpg",
             content_type: "image/jpeg",
-            bytes: b"fake jpeg data",
+            bytes: JPEG,
         },
         Some(&cookie),
     )
@@ -821,9 +1077,11 @@ async fn upload_media_detects_content_type_when_field_omits_it(#[case] backend: 
     .cookie();
     let storage = TempDir::new().unwrap();
     let boundary = "----testboundary1234";
-    let body = format!(
-        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"photo.jpg\"\r\n\r\nfake jpeg data\r\n--{boundary}--\r\n"
-    );
+    let mut body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"photo.jpg\"\r\n\r\n"
+    ).into_bytes();
+    body.extend_from_slice(JPEG);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
     let response = make_app!(&env, &storage)
         .oneshot(
             Request::builder()
@@ -869,7 +1127,7 @@ async fn upload_then_serve_round_trips_a_filename_needing_encoding(#[case] backe
         MultipartFile {
             filename: "my photo.jpg",
             content_type: "image/jpeg",
-            bytes: b"fake jpeg data",
+            bytes: JPEG,
         },
         Some(&cookie),
     )
@@ -928,7 +1186,7 @@ async fn upload_then_serve_round_trips_a_filename_needing_encoding(#[case] backe
     let served = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("body should be readable");
-    assert_eq!(&served[..], b"fake jpeg data");
+    assert_eq!(&served[..], JPEG);
 }
 
 #[apply(backends)]
@@ -954,7 +1212,7 @@ async fn upload_then_serve_survives_a_name_too_long_to_store(#[case] backend: Ba
         MultipartFile {
             filename: &long_name,
             content_type: "image/jpeg",
-            bytes: b"long name content",
+            bytes: JPEG,
         },
         Some(&cookie),
     )
@@ -981,7 +1239,7 @@ async fn upload_then_serve_survives_a_name_too_long_to_store(#[case] backend: Ba
     let served = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("body should be readable");
-    assert_eq!(&served[..], b"long name content");
+    assert_eq!(&served[..], JPEG);
 }
 
 #[apply(backends)]
@@ -996,7 +1254,7 @@ async fn upload_media_rejects_unauthenticated_request(#[case] backend: Backend) 
         MultipartFile {
             filename: "photo.jpg",
             content_type: "image/jpeg",
-            bytes: b"fake jpeg data",
+            bytes: JPEG,
         },
         None,
     )
@@ -1088,7 +1346,7 @@ async fn upload_media_rejects_invalid_filename(#[case] backend: Backend) {
         MultipartFile {
             filename: "..",
             content_type: "image/jpeg",
-            bytes: b"fake jpeg data",
+            bytes: JPEG,
         },
         Some(&cookie),
     )
@@ -1099,6 +1357,95 @@ async fn upload_media_rejects_invalid_filename(#[case] backend: Backend) {
         StatusCode::OK,
         "invalid filename must be rejected: {body}"
     );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn rejected_raster_upload_preserves_empty_durable_state(#[case] backend: Backend) {
+    for over_quota in [false, true] {
+        let quota = if over_quota {
+            "5".parse().unwrap()
+        } else {
+            UserQuota::default()
+        };
+        let env = backend
+            .setup()
+            .media_limits(MaxFileSize::default(), quota)
+            .await;
+        let session = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
+        let storage = TempDir::new().unwrap();
+        let app = make_app!(&env, &storage);
+        let bytes: &[u8] = if over_quota {
+            include_bytes!("../../../host/src/image_sanitizer_fixtures/png-original.png")
+        } else {
+            b"malformed raster"
+        };
+        let (status, body) = post_multipart(
+            app,
+            <web::media::Upload as ServerFn>::PATH,
+            MultipartFile {
+                filename: "rejected.png",
+                content_type: "application/octet-stream",
+                bytes,
+            },
+            Some(&session.cookie()),
+        )
+        .await;
+        // The existing Leptos server-fn transport carries typed validation
+        // errors in a 500 envelope; AtomPub retains its REST 400/507 statuses.
+        assert_eq!(
+            status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "web validation envelope: {body}"
+        );
+        let error: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(
+            error.get("validation").is_some(),
+            "expected client validation, not infrastructure failure"
+        );
+        assert!(body.contains(if over_quota {
+            "insufficient storage"
+        } else {
+            "Invalid image upload"
+        }));
+        assert_eq!(
+            env.media()
+                .get_user_upload_usage(session.user_id)
+                .await
+                .unwrap()
+                .value(),
+            0
+        );
+        assert!(
+            env.media()
+                .list_media(
+                    session.user_id,
+                    None,
+                    RowLimit::at_most(100),
+                    PageOffset::default()
+                )
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let mut directories = vec![storage.path().join("media")];
+        while let Some(directory) = directories.pop() {
+            for entry in std::fs::read_dir(directory).unwrap() {
+                let entry = entry.unwrap();
+                assert!(
+                    entry.file_type().unwrap().is_dir(),
+                    "no private original, output or public file may survive"
+                );
+                directories.push(entry.path());
+            }
+        }
+        assert!(
+            std::fs::read_dir(storage.path().join("media/tmp"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+    }
 }
 
 #[apply(backends)]
@@ -1125,7 +1472,7 @@ async fn upload_media_rejects_oversized_file(#[case] backend: Backend) {
         MultipartFile {
             filename: "big.jpg",
             content_type: "image/jpeg",
-            bytes: b"fake jpeg data",
+            bytes: JPEG,
         },
         Some(&cookie),
     )
@@ -1162,7 +1509,7 @@ async fn upload_media_rejects_over_quota_file(#[case] backend: Backend) {
         MultipartFile {
             filename: "big.jpg",
             content_type: "image/jpeg",
-            bytes: b"fake jpeg data",
+            bytes: JPEG,
         },
         Some(&cookie),
     )

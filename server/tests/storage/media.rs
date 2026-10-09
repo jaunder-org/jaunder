@@ -168,7 +168,7 @@ async fn upload_race_media(manager: &MediaManager, source_owner: UserId) -> Medi
             source_owner,
             &parse_filename("serialized-race.jpg"),
             "image/jpeg".parse().unwrap(),
-            b"real media file",
+            include_bytes!("../../../host/src/image_sanitizer_fixtures/png-sanitized.png"),
         )
         .await
         .expect("real source upload");
@@ -684,6 +684,17 @@ async fn find_by_hash_returns_any_match(#[case] backend: Backend) {
     assert_eq!(found.sha256, sha256);
 }
 
+fn test_image_sanitizer() -> Arc<host::image_sanitizer::ImageSanitizer> {
+    Arc::new(
+        host::image_sanitizer::ImageSanitizer::new(
+            std::env::var_os("JAUNDER_EXIFTOOL")
+                .map(std::path::PathBuf::from)
+                .expect("configured image runtime"),
+        )
+        .expect("image runtime"),
+    )
+}
+
 async fn serialized_post_write_and_removal(backend: Backend, reclaim: bool, writer_first: bool) {
     let env = backend.setup().await;
     let (source_owner, author) = seed_race_users(Arc::clone(&env.users()), env.write_scope()).await;
@@ -699,7 +710,8 @@ async fn serialized_post_write_and_removal(backend: Backend, reclaim: bool, writ
         Arc::clone(&locks),
         env.base.instance_id().clone(),
         Arc::new(LocalMediaResolver),
-    );
+    )
+    .with_image_sanitizer(test_image_sanitizer());
     let manager = if reclaim {
         manager.with_reclaim_unlink_gate_for_test(Arc::clone(&reclaim_gate))
     } else {
