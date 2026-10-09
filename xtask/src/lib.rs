@@ -65,7 +65,6 @@ mod steps {
     mod process;
     pub mod proffered_secret_check;
     pub mod raw_html_door_check;
-    pub mod rendered_html_compiler_boundary;
     pub mod sandbox;
     pub mod scan;
     pub mod sequence_check;

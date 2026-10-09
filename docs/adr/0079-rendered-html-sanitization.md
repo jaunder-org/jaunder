@@ -63,6 +63,18 @@ Supporting choices:
 - **No sanitizing on read, and no backfill.** Decode preserves persisted
   rendered HTML exactly.
 
+## Subsequent decision
+
+On 2026-10-08, the necessity experiments for #1705 demonstrated that the
+isolated check duplicated existing constructor doctests and did not detect
+production feature activation of the fixture helper. The
+[RenderedHtml proof policy](drafts/rendered-html-proof-without-standalone-compiler-gate.md)
+recorded the decision to remove that check without replacement, relinquishing
+its distinct bare-feature helper proof. Only the isolated-check mechanism was
+superseded; the type, sanitization, fixture gating and trusted reconstruction
+policy were retained. Current proof policy is projected in
+[the architecture view](../ARCHITECTURE.md).
+
 ## Consequences
 
 - **`RenderedHtml` means what its name says.** The provenance framing of #398's

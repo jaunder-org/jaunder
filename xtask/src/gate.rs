@@ -309,11 +309,6 @@ pub(crate) const HOST_GATE_NON_TEST_STEPS: &[HostGateStep] = &[
         markdown_eligible: false,
     },
     HostGateStep::ResultOnly {
-        name: "rendered-html-compiler-boundary",
-        run: steps::rendered_html_compiler_boundary::run,
-        markdown_eligible: false,
-    },
-    HostGateStep::ResultOnly {
         name: "raw-html-door",
         run: steps::raw_html_door_check::run,
         markdown_eligible: false,
