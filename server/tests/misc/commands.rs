@@ -51,9 +51,9 @@ use crate::misc::backup_fixture::{
     assert_backup_fixture_restored, assert_target_unmodified, populate_backup_fixture,
 };
 use storage::test_support::{
-    Backend, PostgresDbGuard, PostgresTestConfig, SeedUser, UpdateRawPost, backends, confirmed,
-    nonexistent_postgres_url, raw_media_filename_exists, rewrite_media_filename_in_backup,
-    sqlite_url, unique_postgres_url,
+    Backend, PostgresDbGuard, PostgresTestConfig, SeedUser, UpdateRawPost, backends,
+    backends_matrix, confirmed, nonexistent_postgres_url, raw_media_filename_exists,
+    rewrite_media_filename_in_backup, sqlite_url, unique_postgres_url,
 };
 
 fn default_host_config() -> (host::telemetry::TelemetryConfig, Option<ServeCapturePaths>) {
@@ -2404,62 +2404,62 @@ async fn seed_backup_revision(
     );
 }
 
-#[apply(backends)]
+#[apply(backends_matrix)]
+#[case::post_title("posts", "title")]
+#[case::post_rendered_title("posts", "rendered_title")]
+#[case::revision_title("post_revisions", "title")]
+#[case::revision_rendered_title("post_revisions", "rendered_title")]
 #[tokio::test]
-async fn cmd_restore_reports_rendered_title_presence_mismatches(#[case] backend: Backend) {
-    for (table, null_column) in [
-        ("posts", "title"),
-        ("posts", "rendered_title"),
-        ("post_revisions", "title"),
-        ("post_revisions", "rendered_title"),
-    ] {
-        let source_env = InitializedCommandEnv::new(backend).await;
-        let source_args = source_env.args;
-        let ids = populate_backup_fixture(&source_args).await;
-        seed_backup_revision(
-            &source_args,
-            ids.public_post,
-            ids.author,
-            "presence-revision",
-        )
-        .await;
-        let backup_path = source_env.base.path().join("backup");
-        cmd_backup(
-            &source_args,
-            BackupMode::Directory,
-            Some(backup_path.clone()),
-        )
-        .await
-        .expect("backup");
-        let path = backup_path.join("db").join(format!("{table}.ndjson"));
-        let rewritten = std::fs::read_to_string(&path)
-            .expect("read backup rows")
-            .lines()
-            .enumerate()
-            .map(|(index, line)| {
-                let mut row: serde_json::Value =
-                    serde_json::from_str(line).expect("parse backup row");
-                if index == 0 {
-                    row[null_column] = serde_json::Value::Null;
-                }
-                serde_json::to_string(&row).expect("serialize backup row")
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        std::fs::write(&path, format!("{rewritten}\n")).expect("write mismatch backup row");
+async fn cmd_restore_reports_rendered_title_presence_mismatches(
+    backend: Backend,
+    #[case] table: &str,
+    #[case] null_column: &str,
+) {
+    let source_env = InitializedCommandEnv::new(backend).await;
+    let source_args = source_env.args;
+    let ids = populate_backup_fixture(&source_args).await;
+    seed_backup_revision(
+        &source_args,
+        ids.public_post,
+        ids.author,
+        "presence-revision",
+    )
+    .await;
+    let backup_path = source_env.base.path().join("backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+    let path = backup_path.join("db").join(format!("{table}.ndjson"));
+    let rewritten = std::fs::read_to_string(&path)
+        .expect("read backup rows")
+        .lines()
+        .enumerate()
+        .map(|(index, line)| {
+            let mut row: serde_json::Value = serde_json::from_str(line).expect("parse backup row");
+            if index == 0 {
+                row[null_column] = serde_json::Value::Null;
+            }
+            serde_json::to_string(&row).expect("serialize backup row")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&path, format!("{rewritten}\n")).expect("write mismatch backup row");
 
-        let target_env = InitializedCommandEnv::new(backend).await;
-        let target_args = target_env.args;
-        let error = cmd_restore(&target_args, &backup_path)
-            .await
-            .expect_err("presence mismatch must fail structurally before restore");
-        assert!(matches!(
-            error.downcast_ref::<BackupError>(),
-            Some(BackupError::InvalidBackup(message))
-                if message.contains(table) && message.contains("rendered_title")
-        ));
-        assert_target_unmodified(&target_args).await;
-    }
+    let target_env = InitializedCommandEnv::new(backend).await;
+    let target_args = target_env.args;
+    let error = cmd_restore(&target_args, &backup_path)
+        .await
+        .expect_err("presence mismatch must fail structurally before restore");
+    assert!(matches!(
+        error.downcast_ref::<BackupError>(),
+        Some(BackupError::InvalidBackup(message))
+            if message.contains(table) && message.contains("rendered_title")
+    ));
+    assert_target_unmodified(&target_args).await;
 }
 
 #[apply(backends)]

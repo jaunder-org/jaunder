@@ -198,14 +198,28 @@ impl std::fmt::Debug for ReclaimUnlinkGate {
 /// mandatory sanitizer. `MediaManager<()>` is an initialization-only state.
 ///
 /// ```compile_fail
-/// async fn upload_without_sanitizer(
-///     manager: storage::MediaManager<()>,
-///     user: common::ids::UserId,
-///     name: common::media::Filename,
-///     mime: common::media::ContentType,
-/// ) {
-///     manager.upload_bytes(user, &name, mime, b"bytes").await;
-/// }
+/// # use common::{ids::UserId, media::{ContentType, Filename}};
+/// # use host::image_sanitizer::ImageSanitizer;
+/// # use std::sync::Arc;
+/// # use storage::MediaManager;
+/// # async fn upload(manager: MediaManager<()>, sanitizer: Arc<ImageSanitizer>, user: UserId, name: Filename, mime: ContentType) -> Result<(), Box<dyn std::error::Error>> {
+/// manager.upload_bytes(user, &name, mime, b"bytes").await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// The same fixture can upload after the mandatory sanitizer is supplied:
+///
+/// ```
+/// # use common::{ids::UserId, media::{ContentType, Filename}};
+/// # use host::image_sanitizer::ImageSanitizer;
+/// # use std::sync::Arc;
+/// # use storage::MediaManager;
+/// # async fn upload(manager: MediaManager<()>, sanitizer: Arc<ImageSanitizer>, user: UserId, name: Filename, mime: ContentType) -> Result<(), Box<dyn std::error::Error>> {
+/// let manager = manager.with_image_sanitizer(sanitizer);
+/// manager.upload_bytes(user, &name, mime, b"bytes").await?;
+/// # Ok(())
+/// # }
 /// ```
 pub struct MediaManager<S = Arc<ImageSanitizer>> {
     media: Arc<dyn MediaStorage>,
