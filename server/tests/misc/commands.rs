@@ -1663,6 +1663,37 @@ fn assert_durable_runtime_lookalikes(root: &Path) {
     assert!(root.join("media/cached/empty").is_dir());
 }
 
+fn seed_theme_runtime_sentinels(storage_path: &Path) {
+    for (path, bytes) in [
+        ("themes/.locks/historical", b"target theme lock" as &[u8]),
+        ("themes/.staging/historical", b"target theme staging"),
+    ] {
+        let file = storage_path.join(path);
+        std::fs::create_dir_all(file.parent().expect("theme sentinel parent"))
+            .expect("create theme sentinel parent");
+        std::fs::write(file, bytes).expect("write theme sentinel");
+    }
+}
+
+fn assert_historical_runtime_restore_state(storage_path: &Path) {
+    for path in ["media/.locks/historical", "media/tmp/historical"] {
+        assert!(
+            !storage_path.join(path).exists(),
+            "historical runtime entry {path} is not restored"
+        );
+    }
+    for (path, expected) in [
+        ("themes/.locks/historical", b"target theme lock" as &[u8]),
+        ("themes/.staging/historical", b"target theme staging"),
+    ] {
+        assert_eq!(
+            std::fs::read(storage_path.join(path)).expect("read target theme sentinel"),
+            expected,
+            "historical runtime entry {path} does not overwrite target state"
+        );
+    }
+}
+
 fn archive_inventory(path: &Path) -> BTreeSet<String> {
     let file = std::fs::File::open(path).expect("open archive");
     let decoder = flate2::read::GzDecoder::new(file);
@@ -1721,7 +1752,12 @@ async fn cli_backup_filters_root_runtime_files_without_discarding_durable_lookal
 
     // A legacy sibling can contain excluded files, but reuse only links paths
     // visited by the current root-scoped walk.
-    for path in ["media/.locks/historical", "media/tmp/historical"] {
+    for path in [
+        "media/.locks/historical",
+        "media/tmp/historical",
+        "themes/.locks/historical",
+        "themes/.staging/historical",
+    ] {
         let file = first_backup.join(path);
         std::fs::create_dir_all(file.parent().expect("historical parent"))
             .expect("create historical runtime parent");
@@ -1761,30 +1797,22 @@ async fn cli_backup_filters_root_runtime_files_without_discarding_durable_lookal
     assert!(inventory.contains("media/nested/ordinary.lock"));
 
     let directory_target = InitializedCommandEnv::new(backend).await;
+    seed_theme_runtime_sentinels(&directory_target.args.storage_path);
     cmd_restore(&directory_target.args, &first_backup)
         .await
         .expect("restore historical directory backup");
     assert_durable_runtime_lookalikes(&directory_target.args.storage_path);
-    for path in ["media/.locks/historical", "media/tmp/historical"] {
-        assert!(
-            !directory_target.args.storage_path.join(path).exists(),
-            "historical runtime entry {path} is not restored"
-        );
-    }
+    assert_historical_runtime_restore_state(&directory_target.args.storage_path);
 
     let historical_archive = source.base.path().join("historical.tar.gz");
     package_archive(&first_backup, &historical_archive);
     let archive_target = InitializedCommandEnv::new(backend).await;
+    seed_theme_runtime_sentinels(&archive_target.args.storage_path);
     cmd_restore(&archive_target.args, &historical_archive)
         .await
         .expect("restore historical archive backup");
     assert_durable_runtime_lookalikes(&archive_target.args.storage_path);
-    for path in ["media/.locks/historical", "media/tmp/historical"] {
-        assert!(
-            !archive_target.args.storage_path.join(path).exists(),
-            "historical runtime entry {path} is not restored"
-        );
-    }
+    assert_historical_runtime_restore_state(&archive_target.args.storage_path);
 }
 
 #[apply(backends)]
@@ -1870,18 +1898,30 @@ async fn cmd_restore_refuses_populated_database(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_restore_refuses_nonempty_media_directory(#[case] backend: Backend) {
-    let env = InitializedCommandEnv::new(backend).await;
-    let args = env.args;
-    let base = &env.base;
-    std::fs::write(args.storage_path.join("media").join("file.txt"), "media").expect("write media");
+    for (path, bytes) in [
+        ("file.txt", b"media" as &[u8]),
+        (".locks/sentinel", b"lock"),
+        ("tmp/sentinel", b"temporary"),
+    ] {
+        let env = InitializedCommandEnv::new(backend).await;
+        let file = env.args.storage_path.join("media").join(path);
+        std::fs::create_dir_all(file.parent().expect("media sentinel parent"))
+            .expect("create media sentinel parent");
+        std::fs::write(&file, bytes).expect("write media sentinel");
 
-    let backup_path = base.path().join("backup");
-    std::fs::create_dir(&backup_path).expect("backup dir");
-    let err = cmd_restore(&args, &backup_path)
-        .await
-        .expect_err("restore fails");
+        let backup_path = env.base.path().join("backup");
+        std::fs::create_dir(&backup_path).expect("backup dir");
+        let err = cmd_restore(&env.args, &backup_path)
+            .await
+            .expect_err("restore fails");
 
-    assert!(err.to_string().contains("non-empty media directory"));
+        assert!(err.to_string().contains("non-empty media directory"));
+        assert_eq!(
+            std::fs::read(&file).expect("read unchanged media sentinel"),
+            bytes,
+            "restore refusal leaves {path} unchanged"
+        );
+    }
 }
 
 // M6.3.3: an empty target passes safety checks and validates the backup layout.
