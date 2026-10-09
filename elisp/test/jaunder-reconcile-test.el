@@ -1780,8 +1780,52 @@ The current filename supplies the local slug evidence used by matched-pull tests
           (should-error (jaunder-reconcile-merge-finish) :type 'user-error))
       (kill-buffer report))))
 
-(ert-deftest jaunder-reconcile-merge-guards-multi-selection-and-existing-scratch ()
-  "A selection of two or a prior result cannot create another Ediff session."
+(ert-deftest jaunder-reconcile-merge-does-not-fall-back-to-selected-conflict ()
+  "Off-row point errors; an ineligible current row blocks despite marked conflicts."
+  (let* ((conflict (jaunder--make-reconcile-row
+                    :key "post:7" :state 'conflict
+                    :member (jaunder-reconcile-test--member "7" "conflict")))
+         (unchanged (jaunder--make-reconcile-row
+                     :key "post:8" :state 'unchanged
+                     :member (jaunder-reconcile-test--member "8" "unchanged")))
+         (report (jaunder--render-reconcile-report
+                  (jaunder--make-reconcile-report
+                   :root "/tmp/" :rows (list conflict unchanged)))))
+    (unwind-protect
+        (with-current-buffer report
+          (puthash "post:7" t jaunder-reconcile-marks)
+          (cl-letf (((symbol-function 'jaunder--call-with-blog)
+                     (lambda (_root thunk) (funcall thunk)))
+                    ((symbol-function 'jaunder--pull-stage-member)
+                     (lambda (&rest _) (ert-fail "Must not stage a Member")))
+                    ((symbol-function 'jaunder--http-request)
+                     (lambda (&rest _) (ert-fail "Must not send a request")))
+                    ((symbol-function 'ediff-merge-buffers)
+                     (lambda (&rest _) (ert-fail "Must not open Ediff")))
+                    ((symbol-function 'jaunder--reconcile-refresh-buffer)
+                     (lambda (_) nil)))
+            (dolist (selection '(marks region))
+              (goto-char (point-min))
+              (when (eq selection 'region)
+                (setq-local transient-mark-mode t)
+                (set-mark (point-max))
+                (activate-mark)
+                (should (use-region-p)))
+              (should-error (call-interactively #'jaunder-reconcile-merge-selected)
+                            :type 'user-error)
+              (should-not jaunder-reconcile-last-batch-results))
+            (deactivate-mark)
+            (goto-char (jaunder--reconcile-row-key-position "post:8"))
+            (should-not (call-interactively #'jaunder-reconcile-merge-selected))
+            (should (= (length jaunder-reconcile-last-batch-results) 1))
+            (let ((result (car jaunder-reconcile-last-batch-results)))
+              (should (equal (jaunder-reconcile-result-post-id result) "8"))
+              (should (eq (jaunder-reconcile-result-reason result) 'conflict-ineligible))
+              (should (eq (jaunder-reconcile-result-local-effect result) 'unchanged)))))
+      (kill-buffer report))))
+
+(ert-deftest jaunder-reconcile-merge-guards-existing-scratch ()
+  "A prior result at the current row cannot create another Ediff session."
   (let* ((root "/tmp/")
          (row (jaunder--make-reconcile-row
                :state 'conflict :member (jaunder-reconcile-test--member "7" "old")))
@@ -1790,14 +1834,11 @@ The current filename supplies the local slug evidence used by matched-pull tests
          scratch)
     (unwind-protect
         (with-current-buffer report
-          (cl-letf (((symbol-function 'jaunder-reconcile-selected-rows)
-                     (lambda () (list row row))))
-            (should-error (jaunder-reconcile-merge-selected) :type 'user-error))
+          (goto-char (jaunder--reconcile-row-key-position "post:7"))
           (setq scratch (generate-new-buffer
                          (jaunder--reconcile-merge-scratch-name row root)))
-          (cl-letf (((symbol-function 'jaunder-reconcile-selected-rows)
-                     (lambda () (list row))))
-            (should-error (jaunder-reconcile-merge-selected) :type 'user-error)))
+          (should-error (call-interactively #'jaunder-reconcile-merge-selected)
+                        :type 'user-error))
       (when (buffer-live-p scratch) (kill-buffer scratch))
       (kill-buffer report))))
 
@@ -1807,64 +1848,85 @@ The current filename supplies the local slug evidence used by matched-pull tests
     (should-error (jaunder--reconcile-merge-bind-ediff-result nil "*No result*"))))
 
 (ert-deftest jaunder-reconcile-merge-ediff-keeps-independent-authored-scratch ()
-  "Ediff compares the real local/remote copies; cancelling retains edited work."
-  (let* ((root (file-name-as-directory (make-temp-file "jaunder-merge-ediff-" t)))
-         (path (expand-file-name "old.org" root))
-         (local-bytes (jaunder-reconcile-test--pulled-bytes "7" "old" "\"saved\""))
-         (remote-bytes (jaunder-reconcile-test--pulled-bytes "7" "old" "\"old\""))
-         (report-buffer (generate-new-buffer "*Jaunder merge test*"))
-         row scratch seen ediff-output)
-    (unwind-protect
-        (progn
-          (with-temp-file path (insert local-bytes))
-          (setq row (jaunder-reconcile-test--matched-pull-row path "old" 'conflict))
-          (jaunder--render-reconcile-report
-           (jaunder--make-reconcile-report :root root :rows (list row)) report-buffer)
-          (with-current-buffer report-buffer
-            (puthash "post:7" t jaunder-reconcile-marks)
-            (cl-letf (((symbol-function 'jaunder--call-with-blog)
-                       (lambda (_root thunk) (funcall thunk)))
-                      ((symbol-function 'jaunder--reconcile-conflict-preflight)
-                       (lambda (_) '(:ok t :etag "\"old\"")))
-                      ((symbol-function 'jaunder--pull-stage-member)
-                       (lambda (&rest _)
-                         (list :id "7" :slug "old" :etag "\"old\""
-                               :bytes remote-bytes)))
-                      ((symbol-function 'ediff-buffers)
-                       (lambda (&rest _) (ert-fail "must use Ediff merge output")))
-                      ((symbol-function 'ediff-merge-buffers)
-                       (lambda (a b &optional startup _job _file)
-                         (setq seen (list (with-current-buffer a (buffer-string))
-                                          (with-current-buffer b (buffer-string)))
-                               ediff-output (generate-new-buffer " *Ediff result fixture*"))
-                         (with-current-buffer ediff-output (insert local-bytes))
-                         (with-temp-buffer
-                           (setq-local ediff-buffer-C ediff-output)
-                           (dolist (hook startup) (funcall hook))
-                           ;; This is Ediff writing into its own C buffer.
-                           (with-current-buffer ediff-output
-                             (goto-char (point-max))
-                             (insert "\nChoice copied via Ediff\n"))))))
-              (setq scratch (jaunder-reconcile-merge-selected))))
-          (should (equal seen (list local-bytes remote-bytes)))
-          (should (eq scratch ediff-output))
-          (should (buffer-live-p scratch))
+  "The current row opens Ediff independently of marks and an active region."
+  (dolist (selection '(none other multiple region))
+    (let* ((root (file-name-as-directory (make-temp-file "jaunder-merge-ediff-" t)))
+           (path (expand-file-name "old.org" root))
+           (local-bytes (jaunder-reconcile-test--pulled-bytes "7" "old" "\"saved\""))
+           (remote-bytes (jaunder-reconcile-test--pulled-bytes "7" "old" "\"old\""))
+           (report-buffer (generate-new-buffer "*Jaunder merge test*"))
+           (other (jaunder--make-reconcile-row
+                   :key "post:8" :state 'conflict
+                   :member (jaunder-reconcile-test--member "8" "other")))
+           (another (jaunder--make-reconcile-row
+                     :key "post:9" :state 'conflict
+                     :member (jaunder-reconcile-test--member "9" "another")))
+           row scratch seen ediff-output)
+      (unwind-protect
+          (progn
+            (with-temp-file path (insert local-bytes))
+            (setq row (jaunder-reconcile-test--matched-pull-row path "old" 'conflict))
+            (jaunder--render-reconcile-report
+             (jaunder--make-reconcile-report :root root :rows (list other another row))
+             report-buffer)
+            (with-current-buffer report-buffer
+              (unless (eq selection 'none)
+                (puthash "post:8" t jaunder-reconcile-marks))
+              (when (eq selection 'multiple)
+                (puthash "post:9" t jaunder-reconcile-marks))
+              (goto-char (jaunder--reconcile-row-key-position "post:7"))
+              (when (eq selection 'region)
+                (setq-local transient-mark-mode t)
+                (set-mark (jaunder--reconcile-row-key-position "post:8"))
+                (activate-mark)
+                (should (use-region-p))
+                (should (equal (mapcar #'jaunder-reconcile-row-key
+                                       (jaunder-reconcile-selected-rows))
+                               '("post:8" "post:9"))))
+              (cl-letf (((symbol-function 'jaunder--call-with-blog)
+                         (lambda (_root thunk) (funcall thunk)))
+                        ((symbol-function 'jaunder--reconcile-conflict-preflight)
+                         (lambda (_) '(:ok t :etag "\"old\"")))
+                        ((symbol-function 'jaunder--pull-stage-member)
+                         (lambda (_root member &rest _)
+                           (should (equal (jaunder-inventory-member-id member) "7"))
+                           (list :id "7" :slug "old" :etag "\"old\""
+                                 :bytes remote-bytes)))
+                        ((symbol-function 'ediff-buffers)
+                         (lambda (&rest _) (ert-fail "must use Ediff merge output")))
+                        ((symbol-function 'ediff-merge-buffers)
+                         (lambda (a b &optional startup _job _file)
+                           (setq seen (list (with-current-buffer a (buffer-string))
+                                            (with-current-buffer b (buffer-string)))
+                                 ediff-output (generate-new-buffer " *Ediff result fixture*"))
+                           (with-current-buffer ediff-output (insert local-bytes))
+                           (with-temp-buffer
+                             (setq-local ediff-buffer-C ediff-output)
+                             (dolist (hook startup) (funcall hook))
+                             ;; This is Ediff writing into its own C buffer.
+                             (with-current-buffer ediff-output
+                               (goto-char (point-max))
+                               (insert "\nChoice copied via Ediff\n"))))))
+                (setq scratch (call-interactively #'jaunder-reconcile-merge-selected))))
+            (should (equal seen (list local-bytes remote-bytes)))
+            (should (eq scratch ediff-output))
+            (should (buffer-live-p scratch))
+            (with-current-buffer scratch
+              (should (derived-mode-p 'org-mode))
+              (should (string-match-p "Choice copied via Ediff" (buffer-string)))
+              (goto-char (point-max)) (insert "\nMerged authored content\n")
+              (jaunder-reconcile-merge-cancel)
+              (should (string-match-p "Merged authored content" (buffer-string))))
+            (should (equal (with-temp-buffer (insert-file-contents-literally path)
+                                             (buffer-string)) local-bytes)))
+        (when (buffer-live-p scratch)
+          (jaunder--reconcile-merge-close-views
+           (buffer-local-value 'jaunder-reconcile-merge-session scratch))
           (with-current-buffer scratch
-            (should (derived-mode-p 'org-mode))
-            (should (string-match-p "Choice copied via Ediff" (buffer-string)))
-            (goto-char (point-max)) (insert "\nMerged authored content\n")
-            (jaunder-reconcile-merge-cancel)
-            (should (string-match-p "Merged authored content" (buffer-string))))
-          (should (equal (with-temp-buffer (insert-file-contents-literally path)
-                                           (buffer-string)) local-bytes)))
-      (when (buffer-live-p scratch)
-        (jaunder--reconcile-merge-close-views
-         (buffer-local-value 'jaunder-reconcile-merge-session scratch))
-        (with-current-buffer scratch
-          (setq-local jaunder-reconcile-merge-allow-kill t))
-        (kill-buffer scratch))
-      (when (buffer-live-p report-buffer) (kill-buffer report-buffer))
-      (delete-directory root t))))
+            (setq-local jaunder-reconcile-merge-allow-kill t))
+          (kill-buffer scratch))
+        (when (buffer-live-p report-buffer) (kill-buffer report-buffer))
+        (delete-directory root t)))))
 
 (ert-deftest jaunder-reconcile-merge-post-staging-drift-does-not-open-scratch ()
   "A final Member drift after Media staging is not a merge session."
@@ -1897,6 +1959,7 @@ The current filename supplies the local slug evidence used by matched-pull tests
                        (lambda (_) nil))
                       ((symbol-function 'ediff-buffers)
                        (lambda (&rest _) (ert-fail "Ediff opened on drift"))))
+              (goto-char (jaunder--reconcile-row-key-position "post:7"))
               (should-not (jaunder-reconcile-merge-selected))
               (should (= checks 2))
               (should (eq (jaunder-reconcile-result-reason
@@ -1939,6 +2002,7 @@ The current filename supplies the local slug evidence used by matched-pull tests
                         ((symbol-function 'ediff-merge-buffers)
                          (lambda (&rest _)
                            (when (eq mode 'throw) (error "Ediff unavailable")))))
+                (goto-char (jaunder--reconcile-row-key-position "post:7"))
                 (should-not (jaunder-reconcile-merge-selected))
                 (should (eq (jaunder-reconcile-result-reason
                              (car jaunder-reconcile-last-batch-results))
@@ -1990,6 +2054,7 @@ The current filename supplies the local slug evidence used by matched-pull tests
                            (setq first-view (funcall make-snapshot name contents)))))
                       ((symbol-function 'ediff-merge-buffers)
                        (lambda (&rest _) (ert-fail "Ediff must not open"))))
+              (goto-char (jaunder--reconcile-row-key-position "post:7"))
               (should-not (jaunder-reconcile-merge-selected))
               (should (eq (jaunder-reconcile-result-reason
                            (car jaunder-reconcile-last-batch-results))
@@ -2035,6 +2100,7 @@ The current filename supplies the local slug evidence used by matched-pull tests
                              (setq org-starts (1+ org-starts))
                              (when (= org-starts 3)
                                (error "Org failed on Ediff C"))))))
+                (goto-char (jaunder--reconcile-row-key-position "post:7"))
                 (should-not (jaunder-reconcile-merge-selected)))
               (should (eq (jaunder-reconcile-result-reason
                            (car jaunder-reconcile-last-batch-results))
@@ -2081,6 +2147,7 @@ The current filename supplies the local slug evidence used by matched-pull tests
                              (dolist (hook startup) (funcall hook)))
                            (setq scratch result)
                            (error "Ediff startup interrupted")))))
+              (goto-char (jaunder--reconcile-row-key-position "post:7"))
               (should-not (jaunder-reconcile-merge-selected))
               (should (eq (jaunder-reconcile-result-reason
                            (car jaunder-reconcile-last-batch-results))
@@ -2437,6 +2504,7 @@ The current filename supplies the local slug evidence used by matched-pull tests
                        (lambda (_) nil))
                       ((symbol-function 'ediff-buffers)
                        (lambda (&rest _) (ert-fail "Ediff opened on stage failure"))))
+              (goto-char (jaunder--reconcile-row-key-position "post:7"))
               (should-not (jaunder-reconcile-merge-selected))
               (should (eq (jaunder-reconcile-result-reason
                            (car jaunder-reconcile-last-batch-results))

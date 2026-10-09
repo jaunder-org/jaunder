@@ -326,7 +326,7 @@ When DRAFT is non-nil, create a draft Member."
              id "Initial media" (format "Remote merge text.\n[[%s#merge-fragment][merge label]]\n" url))
             (jaunder-reconcile root)
             (with-current-buffer "*Jaunder Reconcile*"
-              (puthash (format "post:%s" id) t jaunder-reconcile-marks)
+              (goto-char (jaunder--reconcile-row-key-position (format "post:%s" id)))
               (cl-letf (((symbol-function 'ediff-merge-buffers)
                          (lambda (a b &optional startup _job _file)
                            (should (string-match-p
@@ -791,7 +791,7 @@ When DRAFT is non-nil, create a draft Member."
                                       jaunder-reconcile-report)
                                   :key #'jaunder--reconcile-row-post-id :test #'equal)))
                 (should (eq (jaunder-reconcile-row-state row) 'conflict))
-                (puthash (format "post:%s" id) t jaunder-reconcile-marks)
+                (goto-char (jaunder--reconcile-row-key-position (format "post:%s" id)))
                 (cl-letf (((symbol-function 'ediff-merge-buffers)
                            (lambda (a b &optional startup _job _file)
                              (setq compared

@@ -384,14 +384,15 @@ and unusable metadata fall back to Member reads. A report is only a preview:
 operations still perform their own remote and local safety checks. It never
 chooses a direction or mutates either side on its own. Press `m` on a row to
 toggle its mark. Alternatively, make an active contiguous region over report
-rows; the region takes precedence over marks for the next command. The report
-keeps display order, so every selected batch has a predictable order.
+rows; the region takes precedence over marks for bulk actions. Merge instead
+uses the row at point, ignoring both marks and regions. The report keeps display
+order, so every selected batch has a predictable order.
 
 Use `g` to refresh the report from current local and remote state, `p` to push
 selected local drafts or safely local-ahead Posts, `f` to fetch selected
 server-only or safely server-ahead Posts, `l` to keep the local authored version
-of a true conflict, `r` to keep its remote version, `e` to merge exactly one
-conflict through two-way Ediff, and `D` to delete selected remote Posts. Refresh
+of a true conflict, `r` to keep its remote version, `e` to merge the conflict at
+point through two-way Ediff, and `D` to delete selected remote Posts. Refresh
 keeps marks for rows that remain, removes marks for rows that do not, restores
 point when its row remains, and retains the ordered **Last batch** summary. Each
 transfer command shows its selected count and asks once before its first
@@ -440,17 +441,19 @@ being adopted as a new baseline. A failure in one row does not undo earlier
 successes or stop later eligible Posts; cancellation takes effect only between
 Posts.
 
-For `e`, select exactly one conflict row. Two-way Ediff compares read-only
-snapshots of the actual local and staged remote Post; **Ediff's merge output**
-is the independent editable Org scratch. Copy either side's hunks through Ediff
-or edit its authored fields (title, body, summary, tags, audiences, date and
-publication state) directly. There is no saved common content ancestor.
-Identity, slug and sync markers in scratch are ignored and restored from the
-reviewed local Post. Exiting Ediff **never** publishes. In the scratch,
-`C-c C-c` explicitly confirms completion after fresh local and remote checks;
-`C-c C-k` cancels but retains the scratch; `C-c C-d` discards it only after
-confirmation. Killing the scratch buffer also asks before discarding it. An
-initial staging or Ediff setup failure opens no finishable scratch. If Ediff
+For `e`, move point onto the conflict row; no selection is required. Marks and
+an active region never redirect merge to another Post. Point outside a row
+produces a user error, and an ineligible current row is blocked. Two-way Ediff
+compares read-only snapshots of the actual local and staged remote Post;
+**Ediff's merge output** is the independent editable Org scratch. Copy either
+side's hunks through Ediff or edit its authored fields (title, body, summary,
+tags, audiences, date and publication state) directly. There is no saved common
+content ancestor. Identity, slug and sync markers in scratch are ignored and
+restored from the reviewed local Post. Exiting Ediff **never** publishes. In the
+scratch, `C-c C-c` explicitly confirms completion after fresh local and remote
+checks; `C-c C-k` cancels but retains the scratch; `C-c C-d` discards it only
+after confirmation. Killing the scratch buffer also asks before discarding it.
+An initial staging or Ediff setup failure opens no finishable scratch. If Ediff
 fails after creating its C result, that result remains available for inspection
 or explicit discard but cannot be published; reopen a fresh reconciliation
 report and merge session after fixing Ediff. Once a two-way result is open,
