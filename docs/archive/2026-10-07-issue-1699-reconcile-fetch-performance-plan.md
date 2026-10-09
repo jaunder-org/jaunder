@@ -141,12 +141,12 @@ backend behavior changes; use existing live Emacs fixtures for consumer proof.
     authoring, merge scratch and Ediff-view exit without deleting retained
     diagnostics.
 - [x] **5. Reconcile evidence, document usage, and verify the branch.**
-  - Delivered evidence after upstream reconciliation: README maps all 52
+  - Pre-consolidation evidence after upstream reconciliation: README maps all 52
     expanded labels to 68 actual production boundaries and named permanent
     proofs; the source-reader census reconciles both directions. The full pure
     population passes 532/532; the full live population passes 46/46 with
     diagnostics disabled and enabled. Production byte-compilation is
-    warning-free. The fresh authoritative `ci-validate test-checks` lane passes
+    warning-free. That revision's authoritative `ci-validate test-checks` lane passes
     its hermetic Emacs producer, artifact lift and consumer: 4,205 covered
     points and 223 accepted ignored points; producer outcome is success across
     all 18 modules. No branch suppressions were added. Deferred fields and batch
@@ -156,6 +156,13 @@ backend behavior changes; use existing live Emacs fixtures for consumer proof.
     original/fallback path safety own spans; ordinary composition adds no
     duplicate facade span. Five new tests demonstrate controlled red/green,
     off/on behavior, standalone roots, exact native conditions and topology.
+  - Diagnostic test consolidation: `jaunder-debug-test.el` owns the core
+    contracts, including setup/rewrite guards. Six overlapping tests are
+    removed in favor of the retained serialized-schema, failure-matrix and
+    buffer-lifecycle proofs; the full pure population is now 526 tests.
+    Distinct actual-owner, native compatibility, cancellation and Edebug
+    regressions remain. The 532-test and live evidence above records the
+    pre-consolidation revision, not certification of a later test tree.
   - Privacy evidence after the Media-owner fix: the complete enabled live
     population retains 7,512 events, 3,756 paired spans, 543 roots and 47
     labels; the five labels absent from live execution have pure
