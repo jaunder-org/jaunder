@@ -13,14 +13,6 @@
 (load (expand-file-name "jaunder-debug-boundary-fixture.el"
                         (file-name-directory (or load-file-name buffer-file-name))) nil t)
 
-;; Suite-local vocabulary delegates session ownership to the shared fixture.
-(defmacro jaunder-pull-boundary-debug-test--with-session (&rest body)
-  "Delegate BODY's session ownership to the shared boundary fixture."
-  (declare (indent 0) (debug t))
-  `(jaunder-debug-boundary--with-session ,@body))
-(defalias 'jaunder-pull-boundary-debug-test--text 'jaunder-debug-boundary--text)
-(defalias 'jaunder-pull-boundary-debug-test--count 'jaunder-debug-boundary--label-count)
-
 (defun jaunder-pull-boundary-debug-test--entry ()
   "Return valid draft Member XML containing privacy sentinels."
   (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\""
@@ -58,7 +50,7 @@
 
 (ert-deftest jaunder-pull-boundary-debug-real-stage-revalidate-preflight-install-nest ()
   "Actual pull boundaries retain staged bytes, freshness request count, and rename."
-  (jaunder-pull-boundary-debug-test--with-session
+  (jaunder-debug-boundary--with-session
    (jaunder-pull-boundary-debug-test--with-root (root path)
                                                 (write-region (jaunder-pull-boundary-debug-test--bytes) nil path nil 'silent)
                                                 (let* ((member (jaunder-pull-boundary-debug-test--member))
@@ -98,18 +90,18 @@
                                                     (should (= requests 2))
                                                     (should (file-exists-p (expand-file-name "remote.org" root)))
                                                     (should-not (file-exists-p path))
-                                                    (let ((text (jaunder-pull-boundary-debug-test--text)))
+                                                    (let ((text (jaunder-debug-boundary--text)))
                                                       (dolist (label '("pull.stage" "pull.revalidate" "pull.install"))
-                                                        (should (= 2 (jaunder-pull-boundary-debug-test--count label text))))
+                                                        (should (= 2 (jaunder-debug-boundary--label-count label text))))
                                                       ;; Direct preflight plus both install guards bracket Media finalization.
-                                                      (should (= 6 (jaunder-pull-boundary-debug-test--count "pull.preflight" text)))
+                                                      (should (= 6 (jaunder-debug-boundary--label-count "pull.preflight" text)))
                                                       (should (string-match-p "parent=" text))
                                                       (should-not (string-match-p
                                                                    "private.example\\|private-user\\|private-title\\|private-body\\|sha256" text))))))))
 
 (ert-deftest jaunder-pull-boundary-debug-preserves-errors-quit-and-disabled-work ()
   "Actual pull boundaries preserve signals and disabled calls avoid diagnostics."
-  (jaunder-pull-boundary-debug-test--with-session
+  (jaunder-debug-boundary--with-session
    (let ((jaunder-debug t))
      (should-error (jaunder--pull-stage-member "/private-root" 'not-a-member)))
    (jaunder-pull-boundary-debug-test--with-root (root path)
@@ -138,7 +130,7 @@
                                                       (should (equal (plist-get (jaunder--reconcile-replace-pulled-file path path "private-bytes") :local-effect)
                                                                      'replaced)))
                                                     (should (= before jaunder--debug-id-counter)))
-                                                  (let ((text (jaunder-pull-boundary-debug-test--text)))
+                                                  (let ((text (jaunder-debug-boundary--text)))
                                                     (should (string-match-p "outcome=error" text))
                                                     (should (string-match-p "outcome=cancelled" text))
                                                     (should-not (string-match-p "private-root\\|private-quit\\|private-bytes" text)))))))

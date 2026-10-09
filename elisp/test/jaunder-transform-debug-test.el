@@ -13,14 +13,6 @@
 (load (expand-file-name "jaunder-debug-boundary-fixture.el"
                         (file-name-directory (or load-file-name buffer-file-name))) nil t)
 
-;; Suite-local vocabulary delegates session ownership to the shared fixture.
-(defmacro jaunder-transform-debug-test--with-session (&rest body)
-  "Delegate BODY's session ownership to the shared boundary fixture."
-  (declare (indent 0) (debug t))
-  `(jaunder-debug-boundary--with-session ,@body))
-(defalias 'jaunder-transform-debug-test--text 'jaunder-debug-boundary--text)
-(defalias 'jaunder-transform-debug-test--label-count 'jaunder-debug-boundary--label-count)
-
 (defun jaunder-transform-debug-test--member-xml (&optional body)
   "Return a valid draft Member XML containing BODY."
   (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\""
@@ -53,7 +45,7 @@
 
 (ert-deftest jaunder-transform-debug-org-and-member-boundaries-pair-and-hide-content ()
   "Real Org and Member transformations retain only bounded format fields."
-  (jaunder-transform-debug-test--with-session
+  (jaunder-debug-boundary--with-session
    (let ((jaunder-debug t))
      (with-temp-buffer
        (org-mode)
@@ -68,13 +60,13 @@
        (should (equal (jaunder--pull-response-identity xml) '("1" . "target")))
        (should (equal (jaunder--render-pulled-member member "localized-sentinel")
                       (concat (jaunder-pulled-member-org-prefix member) "localized-sentinel"))))
-     (let ((text (jaunder-transform-debug-test--text)))
+     (let ((text (jaunder-debug-boundary--text)))
        (dolist (label '("org.parse" "member.identity"))
-         (should (= 2 (jaunder-transform-debug-test--label-count label text))))
+         (should (= 2 (jaunder-debug-boundary--label-count label text))))
        ;; Direct parsing, the adapter, and explicit rendering each produce Org bytes.
-       (should (= 6 (jaunder-transform-debug-test--label-count "org.serialize" text)))
-       (should (= 4 (jaunder-transform-debug-test--label-count "member.parse" text)))
-       (should (>= (jaunder-transform-debug-test--label-count "atom.parse" text) 6))
+       (should (= 6 (jaunder-debug-boundary--label-count "org.serialize" text)))
+       (should (= 4 (jaunder-debug-boundary--label-count "member.parse" text)))
+       (should (>= (jaunder-debug-boundary--label-count "atom.parse" text) 6))
        (should (string-match-p "format=org" text))
        (should-not (string-match-p
                     "title-sentinel\\|body-sentinel\\|localized-sentinel\\|private.example\\|sha256-test"
@@ -82,7 +74,7 @@
 
 (ert-deftest jaunder-transform-debug-member-format-producer-is-closed-and-byte-preserving ()
   "Every accepted wire format projects identically off/on without source leakage."
-  (jaunder-transform-debug-test--with-session
+  (jaunder-debug-boundary--with-session
    (dolist (case '(("text/org" . "org") ("text/markdown" . "markdown")
                    ("html" . "html") ("text/html" . "html") ("xhtml" . "html")))
      (let* ((body (if (equal (car case) "xhtml")
@@ -104,27 +96,27 @@
        (replace-regexp-in-string "text/org" "format-sentinel"
                                  (jaunder-transform-debug-test--member-xml) t t)
        "\"sha256-test\"" (seconds-to-time 0) "UTC")))
-   (let ((text (jaunder-transform-debug-test--text)))
+   (let ((text (jaunder-debug-boundary--text)))
      (dolist (format '("org" "markdown" "html"))
        (should (string-match-p (concat "format=" format) text)))
      (should-not (string-match-p "sentinel\\|private.example\\|sha256-test" text)))))
 
 (ert-deftest jaunder-transform-debug-serialization-nests-under-member-parsing ()
   "The parser's original Org byte construction owns a serialization child span."
-  (jaunder-transform-debug-test--with-session
+  (jaunder-debug-boundary--with-session
    (let ((jaunder-debug t))
      (jaunder-transform-debug-test--member)
-     (let ((text (jaunder-transform-debug-test--text)))
+     (let ((text (jaunder-debug-boundary--text)))
        (should (string-match "span=\\([^ ]+\\) label=member.parse phase=start" text))
        (let ((parent (match-string 1 text)))
          (should (string-match-p
                   (regexp-quote (concat "label=org.serialize phase=start parent=" parent " "))
                   text)))
-       (should (= 2 (jaunder-transform-debug-test--label-count "org.serialize" text)))))))
+       (should (= 2 (jaunder-debug-boundary--label-count "org.serialize" text)))))))
 
 (ert-deftest jaunder-transform-debug-post-link-boundaries-preserve-bytes-and-work ()
   "Publish/pull/evidence spans keep exact replacements and request/work bounds."
-  (jaunder-transform-debug-test--with-session
+  (jaunder-debug-boundary--with-session
    (jaunder-transform-debug-test--with-root (root source target)
                                             (write-region "#+PROPERTY: JAUNDER_ID 1\n#+PROPERTY: JAUNDER_SLUG target\n\nbody-sentinel"
                                                           nil target nil 'silent)
@@ -161,17 +153,17 @@
                                                                       "[[./target.org][description]]"))))))
                                                 (should (= requests 2))
                                                 (should (= checks 1)))
-                                              (let ((text (jaunder-transform-debug-test--text)))
-                                                (should (= 2 (jaunder-transform-debug-test--label-count "post-link.publish" text)))
-                                                (should (= 2 (jaunder-transform-debug-test--label-count "post-link.pull" text)))
-                                                (should (= 2 (jaunder-transform-debug-test--label-count "post-link.evidence" text)))
+                                              (let ((text (jaunder-debug-boundary--text)))
+                                                (should (= 2 (jaunder-debug-boundary--label-count "post-link.publish" text)))
+                                                (should (= 2 (jaunder-debug-boundary--label-count "post-link.pull" text)))
+                                                (should (= 2 (jaunder-debug-boundary--label-count "post-link.evidence" text)))
                                                 (should (string-match-p "members=1" text))
                                                 (should (string-match-p "count=1" text))
                                                 (should-not (string-match-p "private.example\\|body-sentinel\\|description" text)))))))
 
 (ert-deftest jaunder-transform-debug-preserves-errors-quit-and-disabled-bypass ()
   "Actual boundaries retain signals and disabled calls skip diagnostic work."
-  (jaunder-transform-debug-test--with-session
+  (jaunder-debug-boundary--with-session
    (with-temp-buffer
      (org-mode)
      (insert "#+TITLE: one\n#+TITLE: two\n\nbody")
@@ -207,7 +199,7 @@
                                                   (should (equal "x" (jaunder--localize-post-links "x")))
                                                   (should (equal "x" (jaunder--reverse-pulled-post-links "x" root nil nil))))
                                                 (should (= jaunder--debug-id-counter before))))
-                                            (let ((text (jaunder-transform-debug-test--text)))
+                                            (let ((text (jaunder-debug-boundary--text)))
                                               (should (string-match-p "outcome=error" text))
                                               (should (string-match-p "outcome=cancelled" text))
                                               (should-not (string-match-p "private-content\\|private-quit\\|private-title\\|private-body" text))))))

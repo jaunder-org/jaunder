@@ -12,14 +12,6 @@
 (load (expand-file-name "jaunder-debug-boundary-fixture.el"
                         (file-name-directory (or load-file-name buffer-file-name))) nil t)
 
-;; Suite-local vocabulary delegates session ownership to the shared fixture.
-(defmacro jaunder-acquisition-debug-test--with-session (&rest body)
-  "Delegate BODY's session ownership to the shared boundary fixture."
-  (declare (indent 0) (debug t))
-  `(jaunder-debug-boundary--with-session ,@body))
-(defalias 'jaunder-acquisition-debug-test--text 'jaunder-debug-boundary--text)
-(defalias 'jaunder-acquisition-debug-test--label-count 'jaunder-debug-boundary--label-count)
-
 (defconst jaunder-acquisition-debug-test--service-document
   (concat "<service xmlns=\"http://www.w3.org/2007/app\""
           " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
@@ -28,7 +20,7 @@
 
 (ert-deftest jaunder-acquisition-debug-service-retrieval-nests-transport-and-parse ()
   "Service retrieval owns a root with real transport and parser child spans."
-  (jaunder-acquisition-debug-test--with-session
+  (jaunder-debug-boundary--with-session
    (let ((jaunder-debug t)
          (jaunder--active-blog '(:base-url "https://private.example" :username "private-user")))
      (cl-letf (((symbol-function 'jaunder--auth-secret) (lambda () "credential-sentinel"))
@@ -38,9 +30,9 @@
                    :status 200 :headers nil
                    :body jaunder-acquisition-debug-test--service-document))))
        (should (listp (jaunder--fetch-service-document "https://private.example"))))
-     (let ((text (jaunder-acquisition-debug-test--text)))
+     (let ((text (jaunder-debug-boundary--text)))
        (dolist (label '("service.read" "transport.request" "service.parse"))
-         (should (= 2 (jaunder-acquisition-debug-test--label-count label text))))
+         (should (= 2 (jaunder-debug-boundary--label-count label text))))
        (should (string-match-p "method=GET" text))
        (should (string-match-p "http-status=200" text))
        (should-not (string-match-p "credential-sentinel\\|private.example\\|private-user" text))
@@ -49,7 +41,7 @@
 
 (ert-deftest jaunder-acquisition-debug-atom-boundaries-pair-as-standalone-roots ()
   "Atom parsing and serialization pair independently outside a caller span."
-  (jaunder-acquisition-debug-test--with-session
+  (jaunder-debug-boundary--with-session
    (let ((jaunder-debug t))
      (jaunder--atom-entry->xml
       (jaunder--make-entry :title "title-sentinel" :content-type "text/org"
@@ -57,9 +49,9 @@
      (jaunder--harvest-response-fields
       (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\">"
               "<content type=\"text/org\">content-sentinel</content></entry>"))
-     (let ((text (jaunder-acquisition-debug-test--text)))
+     (let ((text (jaunder-debug-boundary--text)))
        (dolist (label '("atom.serialize" "atom.parse"))
-         (should (= 2 (jaunder-acquisition-debug-test--label-count label text))))
+         (should (= 2 (jaunder-debug-boundary--label-count label text))))
        (should (= 4 (cl-count-if (lambda (line) (string-match-p "format=atom" line))
                                  (split-string text "\n" t))))
        (should-not (string-match-p "title-sentinel\\|body-sentinel\\|content-sentinel" text))
@@ -72,7 +64,7 @@
 
 (ert-deftest jaunder-acquisition-debug-preserves-errors-and-quit ()
   "Actual boundaries retain their conditions while their terminal outcomes differ."
-  (jaunder-acquisition-debug-test--with-session
+  (jaunder-debug-boundary--with-session
    (let ((jaunder-debug t)
          (jaunder--active-blog '(:base-url "https://private.example" :username "private-user")))
      (cl-letf (((symbol-function 'jaunder--auth-secret) (lambda () "credential-sentinel"))
@@ -90,7 +82,7 @@
                        (jaunder--parse-service-document "content-sentinel")
                      (quit (car err))))))
      (should-error (jaunder--harvest-response-fields "<content-sentinel"))
-     (let ((text (jaunder-acquisition-debug-test--text)))
+     (let ((text (jaunder-debug-boundary--text)))
        (should (string-match-p "label=transport.request" text))
        (should (string-match-p "label=service.parse" text))
        (should (string-match-p "label=atom.parse" text))
@@ -103,7 +95,7 @@
 
 (ert-deftest jaunder-acquisition-debug-disabled-skips-boundary-diagnostic-work ()
   "Disabled actual boundaries neither sample nor create diagnostic state."
-  (jaunder-acquisition-debug-test--with-session
+  (jaunder-debug-boundary--with-session
    (let ((jaunder--active-blog '(:base-url "https://private.example" :username "private-user")))
      (cl-letf (((symbol-function 'jaunder--debug-now) (lambda () (error "clock")))
                ((symbol-function 'jaunder--debug-format-event) (lambda (_) (error "format")))
@@ -126,7 +118,7 @@
 
 (ert-deftest jaunder-acquisition-debug-preserves-wire-and-representation-bytes ()
   "Enabling diagnostics preserves requests, response bodies and transformations."
-  (jaunder-acquisition-debug-test--with-session
+  (jaunder-debug-boundary--with-session
    (let* ((jaunder--active-blog '(:base-url "https://private.example" :username "private-user"))
           (payload (concat "body-sentinel\r\n" (string 0)))
           (entry (jaunder--make-entry :title "title-sentinel" :content-type "text/org" :body payload))
@@ -153,11 +145,11 @@
      (should (equal (car snapshots) (cadr snapshots)))
      (should (= 5 (length (caar snapshots))))
      (should-not (string-match-p "sentinel\\|private.example\\|private-user"
-                                 (jaunder-acquisition-debug-test--text))))))
+                                 (jaunder-debug-boundary--text))))))
 
 (ert-deftest jaunder-acquisition-debug-status-producers-reject-source-text ()
   "Both response-status producers reject a malformed status without leaking it."
-  (jaunder-acquisition-debug-test--with-session
+  (jaunder-debug-boundary--with-session
    (let ((jaunder-debug t)
          (jaunder--active-blog '(:base-url "https://private.example" :username "private-user"))
          warnings)
@@ -173,6 +165,6 @@
      (should (= 3 (length warnings)))
      (should (cl-every (lambda (text) (equal text "jaunder: diagnostic output unavailable")) warnings))
      (should-not (string-match-p "sentinel\\|private.example\\|private-user"
-                                 (jaunder-acquisition-debug-test--text))))))
+                                 (jaunder-debug-boundary--text))))))
 
 ;;; jaunder-acquisition-debug-test.el ends here

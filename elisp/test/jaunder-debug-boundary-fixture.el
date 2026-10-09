@@ -26,8 +26,10 @@
          (kill-buffer buffer)))))
 
 (defun jaunder-debug-boundary--text ()
-  "Return the current session's retained diagnostic text."
-  (with-current-buffer jaunder--debug-buffer-name (buffer-string)))
+  "Return the current session's retained diagnostic text, or an empty string."
+  (if-let* ((buffer (get-buffer jaunder--debug-buffer-name)))
+      (with-current-buffer buffer (buffer-string))
+    ""))
 
 (defun jaunder-debug-boundary--label-count (label text)
   "Count complete events with exact LABEL in TEXT."

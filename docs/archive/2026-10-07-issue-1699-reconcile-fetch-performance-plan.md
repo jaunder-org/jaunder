@@ -38,8 +38,7 @@ backend behavior changes; use existing live Emacs fixtures for consumer proof.
     `jaunder--debug-fields` form adds final status/count/decision fields to that
     span. All field expressions and diagnostics bypass execution when disabled.
     These are the only event-writing routes; callers never format raw values.
-  - Verification: `elisp/test/jaunder-debug-test.el` and
-    `elisp/test/jaunder-debug-acceptance-test.el` cover disabled sentinels,
+  - Verification: `elisp/test/jaunder-debug-test.el` covers disabled sentinels,
     every spec allowlist/range, event size/ASCII limits, nesting/standalone
     roots, return/signal/quit preservation, buffer lifecycle, clear without
     creation, fresh IDs after clear, eviction-marker accounting, and
