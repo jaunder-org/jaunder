@@ -67,6 +67,173 @@ steps in `cargo xtask check` and `cargo xtask validate` — both via
 `devtool check` — and, through the same implementation, as part of the
 `static-checks` Nix check (so `nix flake check` covers them too).
 
+## Diagnostics
+
+Set `jaunder-debug` to non-nil before an operation to retain bounded, safe
+operation timing in `*Jaunder Debug*`. The buffer is never displayed
+automatically and contains only the diagnostic field vocabulary; do not use it
+to capture request data, paths, URLs, credentials, or Post content. Use
+`M-x jaunder-debug-show` to inspect it, `M-x jaunder-debug-clear` to remove
+retained events, and `M-x jaunder-debug-disable` to stop future capture without
+erasing evidence. The buffer retains its 10,000 newest complete event lines and
+one cumulative eviction marker, is read-only, and `q` buries it. Killing it
+discards its retained evidence; the next enabled event recreates it.
+
+Diagnostics are client-local, unsaved troubleshooting evidence. Share only after
+reviewing it. They time client boundaries but do not remove the
+per-selected-Post complete Collection verification cost during pull.
+
+`reconcile.batch` encloses the confirmed executor, including result recording
+and report refresh. `reconcile.row` encloses the actual push, pull, delete,
+keep-local, and keep-remote owners; direct calls are independent roots. Both use
+allowlisted `action`/`decision` fields: action is known at start; decision is
+initially `unknown` until native results exist. Row decisions project native
+outcomes: success → `proceed`, blocked → `blocked`, no-op → `no-op`, partial →
+`partial`, lost remote outcome → `remote-unknown`, and other outcomes →
+`unknown`. Batch decisions summarize retained outcomes; cancellation after a
+recorded row or refresh failure means a partial batch, not that the row failed.
+Event `outcome` classifies native return/error/quit, distinct from the business
+decision. Pending keyboard input remains owned by the executor until its result
+checkpoint. Disabled diagnostics perform no field projection.
+
+`conflict.local`, `conflict.remote`, and `conflict.merge` time the explicit
+resolution commands, including native confirmation and eligibility guards.
+`merge.stage` times remote staging and, separately, the actual snapshot/Ediff
+setup block. `merge.finish`, `merge.cancel`, and `merge.discard` time
+independent scratch callbacks, not a fictitious operation spanning the User's
+editing time. These boundaries add no optional fields; scratch bytes, names,
+paths, reviewed ETags, and raw conditions never enter diagnostics. Exiting Ediff
+or cancelling still does not publish; only the existing explicit finish flow may
+do so.
+
+### Diagnostic boundary inventory
+
+The table lists every registered label and every production owner. Shared labels
+cover multiple real owners, not an invented operation spanning them. Selection
+accessors and individual property reads have no separate timing. The pagination
+iteration and Ediff setup block are the actual inline boundaries.
+
+Proof references below name permanent ERT tests in `elisp/test/`.
+Controlled-wire proofs establish client behavior, not production network
+timings. Their companion condition/disabled tests check native error/quit data
+and lazy diagnostic work.
+
+| Proof | Test file                              | Actual-owner ERT test(s)                                                                                                                                                                                                                                                                                                                                                      |
+| ----- | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C1    | `jaunder-context-debug-test.el`        | `jaunder-context-debug-resolution-off-on-selection-and-errors`                                                                                                                                                                                                                                                                                                                |
+| C2    | `jaunder-context-debug-test.el`        | `jaunder-context-debug-auth-off-on-opaque-secret-and-lookup-count`                                                                                                                                                                                                                                                                                                            |
+| A1    | `jaunder-author-debug-test.el`         | `jaunder-author-debug-new-and-cancel-off-on-real-files`                                                                                                                                                                                                                                                                                                                       |
+| A2    | `jaunder-author-debug-test.el`         | `jaunder-author-debug-complete-off-on-real-publish-and-buffer-exit`                                                                                                                                                                                                                                                                                                           |
+| P1    | `jaunder-publish-debug-test.el`        | `jaunder-publish-debug-real-create-draft-update-and-delete-off-on`                                                                                                                                                                                                                                                                                                            |
+| P2    | `jaunder-publish-debug-test.el`        | `jaunder-publish-debug-real-durable-recovery-off-on`                                                                                                                                                                                                                                                                                                                          |
+| P3    | `jaunder-publish-debug-test.el`        | `jaunder-publish-debug-reviewed-update-standalone-off-on-conditions`                                                                                                                                                                                                                                                                                                          |
+| P4    | `jaunder-publish-debug-test.el`        | `jaunder-publish-debug-create-retries-and-source-validation-standalone`, `jaunder-publish-debug-invalid-title-precedes-resolution-and-io`                                                                                                                                                                                                                                     |
+| P5    | `jaunder-publish-debug-test.el`        | `jaunder-publish-debug-intent-write-back-rename-standalone-off-on`                                                                                                                                                                                                                                                                                                            |
+| I1    | `jaunder-inventory-debug-test.el`      | `jaunder-inventory-debug-real-report-open-refresh-and-standalone-off-on`                                                                                                                                                                                                                                                                                                      |
+| R1    | `jaunder-reconcile-debug-test.el`      | `jaunder-reconcile-debug-executor-order-cancellation-results-refresh`                                                                                                                                                                                                                                                                                                         |
+| R2    | `jaunder-reconcile-debug-test.el`      | `jaunder-reconcile-debug-real-row-owners-standalone-noop-blocked`                                                                                                                                                                                                                                                                                                             |
+| F1    | `jaunder-conflict-debug-test.el`       | `jaunder-conflict-debug-confirmation-command-owners`, `jaunder-conflict-debug-actual-command-batch-row-parentage`                                                                                                                                                                                                                                                             |
+| F2    | `jaunder-conflict-debug-test.el`       | `jaunder-conflict-debug-ediff-stage-and-independent-callbacks`, `jaunder-conflict-debug-staging-setup-and-finish-failures`                                                                                                                                                                                                                                                    |
+| F3    | `jaunder-conflict-debug-test.el`       | `jaunder-conflict-debug-cancel-discard-roots-preserve-private-scratch`                                                                                                                                                                                                                                                                                                        |
+| U1    | `jaunder-pull-boundary-debug-test.el`  | `jaunder-pull-boundary-debug-real-stage-revalidate-preflight-install-nest`                                                                                                                                                                                                                                                                                                    |
+| Q1    | `jaunder-acquisition-debug-test.el`    | `jaunder-acquisition-debug-service-retrieval-nests-transport-and-parse`                                                                                                                                                                                                                                                                                                       |
+| Q2    | `jaunder-acquisition-debug-test.el`    | `jaunder-acquisition-debug-atom-boundaries-pair-as-standalone-roots`                                                                                                                                                                                                                                                                                                          |
+| T1    | `jaunder-transform-debug-test.el`      | `jaunder-transform-debug-org-and-member-boundaries-pair-and-hide-content`, `jaunder-transform-debug-serialization-nests-under-member-parsing`                                                                                                                                                                                                                                 |
+| T2    | `jaunder-transform-debug-test.el`      | `jaunder-transform-debug-post-link-boundaries-preserve-bytes-and-work`                                                                                                                                                                                                                                                                                                        |
+| M1    | `jaunder-media-boundary-debug-test.el` | `jaunder-media-debug-pull-off-on-reuse-rejection-and-partial-effects`                                                                                                                                                                                                                                                                                                         |
+| M2    | `jaunder-media-boundary-debug-test.el` | `jaunder-media-debug-publish-off-on-real-source-and-disabled-counters`                                                                                                                                                                                                                                                                                                        |
+| M3    | `jaunder-matched-media-debug-test.el`  | `jaunder-matched-media-debug-consumers-preserve-reuse-fallback-and-topology`; `jaunder-matched-media-debug-path-owners-standalone-and-disabled-lazy`; `jaunder-matched-media-debug-stages-standalone-and-disabled-lazy`; `jaunder-matched-media-debug-new-owners-preserve-exact-native-signals`; `jaunder-matched-media-debug-ordinary-materialization-has-two-actual-stages` |
+
+| Label                  | Actual owner(s)                                                                                                                                                                        | Proof      |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| `config.resolve`       | `jaunder--resolve-blog`                                                                                                                                                                | C1         |
+| `auth.lookup`          | `jaunder--auth-secret`                                                                                                                                                                 | C2         |
+| `author.new`           | `jaunder-new-post`                                                                                                                                                                     | A1         |
+| `author.complete`      | `jaunder-new-post-complete`                                                                                                                                                            | A2         |
+| `author.cancel`        | `jaunder-new-post-cancel`                                                                                                                                                              | A1         |
+| `publish.post`         | `jaunder-publish`                                                                                                                                                                      | P1         |
+| `publish.draft`        | `jaunder-save-draft`                                                                                                                                                                   | P1         |
+| `publish.validate`     | early TITLE block in `jaunder-publish`; `jaunder--validate-publish`                                                                                                                    | P4         |
+| `publish.create`       | `jaunder--create-with-retry`                                                                                                                                                           | P1, P4     |
+| `publish.recover`      | `jaunder--create-intent` (durable preparation/matching)                                                                                                                                | P2, P5     |
+| `publish.update`       | ordinary PUT block in `jaunder-publish`; `jaunder--send-reviewed-update`                                                                                                               | P1, P3     |
+| `publish.checkpoint`   | `jaunder--write-back`; `jaunder--rename-to-slug`                                                                                                                                       | P1, P5     |
+| `delete.post`          | `jaunder-delete-post`                                                                                                                                                                  | P1         |
+| `report.open`          | `jaunder-reconcile`                                                                                                                                                                    | I1         |
+| `report.refresh`       | `jaunder--reconcile-refresh-buffer`                                                                                                                                                    | I1         |
+| `inventory.build`      | `jaunder--join-inventory`                                                                                                                                                              | I1         |
+| `inventory.local`      | `jaunder--scan-root-locals`                                                                                                                                                            | I1         |
+| `inventory.collection` | `jaunder--fetch-collection-members`                                                                                                                                                    | I1         |
+| `inventory.page`       | complete loop iteration in `jaunder--fetch-collection-members`                                                                                                                         | I1         |
+| `reconcile.batch`      | `jaunder--reconcile-execute-batch`, including record/refresh                                                                                                                           | R1         |
+| `reconcile.row`        | `jaunder--reconcile-push-row`, `jaunder--reconcile-pull-row`, `jaunder--reconcile-delete-row`, `jaunder--reconcile-keep-local-row`, `jaunder--reconcile-keep-remote-row`               | R1, R2     |
+| `conflict.local`       | `jaunder-reconcile-keep-local-selected`                                                                                                                                                | F1         |
+| `conflict.remote`      | `jaunder-reconcile-keep-remote-selected`                                                                                                                                               | F1         |
+| `conflict.merge`       | `jaunder-reconcile-merge-selected`                                                                                                                                                     | F2         |
+| `merge.stage`          | `jaunder--reconcile-merge-stage`; snapshot/Ediff setup block in `jaunder-reconcile-merge-selected`                                                                                     | F2         |
+| `merge.finish`         | `jaunder-reconcile-merge-finish`                                                                                                                                                       | F2         |
+| `merge.cancel`         | `jaunder-reconcile-merge-cancel`                                                                                                                                                       | F2, F3     |
+| `merge.discard`        | `jaunder-reconcile-merge-discard`                                                                                                                                                      | F2, F3     |
+| `pull.stage`           | `jaunder--pull-stage-member`                                                                                                                                                           | U1         |
+| `pull.revalidate`      | `jaunder--reconcile-pull-remote-revalidation`                                                                                                                                          | U1         |
+| `pull.preflight`       | `jaunder--reconcile-pull-preflight`                                                                                                                                                    | U1         |
+| `pull.install`         | `jaunder--reconcile-replace-pulled-file` (rename remains caller behavior)                                                                                                              | U1         |
+| `transport.request`    | `jaunder--http-request`                                                                                                                                                                | Q1         |
+| `service.read`         | `jaunder--fetch-service-document`                                                                                                                                                      | Q1         |
+| `service.parse`        | `jaunder--parse-service-document`                                                                                                                                                      | Q1         |
+| `atom.parse`           | `jaunder--harvest-response-fields`                                                                                                                                                     | Q2         |
+| `atom.serialize`       | `jaunder--atom-entry->xml`                                                                                                                                                             | Q2         |
+| `org.parse`            | `jaunder--org->atom`                                                                                                                                                                   | T1         |
+| `org.serialize`        | `jaunder--render-pulled-member`                                                                                                                                                        | T1         |
+| `member.identity`      | `jaunder--pull-response-identity`                                                                                                                                                      | T1         |
+| `member.parse`         | `jaunder--parse-pulled-member`                                                                                                                                                         | T1         |
+| `post-link.publish`    | `jaunder--localize-post-links`                                                                                                                                                         | T2         |
+| `post-link.pull`       | `jaunder--reverse-pulled-post-links`                                                                                                                                                   | T2         |
+| `post-link.evidence`   | `jaunder--pulled-post-link-replacements`                                                                                                                                               | T2         |
+| `media.plan`           | `jaunder--localize-media`; `jaunder--pull-media-plan`                                                                                                                                  | M2, M1     |
+| `media.materialize`    | `jaunder--pull-media-stage` (verified acquisition/reuse); `jaunder--pull-media-finalize-staged` (fallback installation)                                                                | M1, M3     |
+| `media.apply`          | `jaunder--substitute-media`; `jaunder--pull-media-apply-plan`                                                                                                                          | M2, M1     |
+| `media.upload`         | `jaunder--upload-media`                                                                                                                                                                | M2         |
+| `media.download`       | `jaunder--pull-media-get`                                                                                                                                                              | M1         |
+| `media.path`           | `jaunder--media-preflight`; `jaunder--pull-media-target-path`; `jaunder--pull-media-original-root`; `jaunder--pull-media-original-safe-regular-p`; `jaunder--pull-media-fallback-path` | M2, M1, M3 |
+| `media.hash`           | `jaunder--pull-media-file-sha256`                                                                                                                                                      | M1         |
+| `media.verify`         | `jaunder--pull-media-validate-response`; `jaunder--pull-media-require-existing-copy`                                                                                                   | M1         |
+
+Media acquisition and fallback installation are separate actual stages, each
+using `media.materialize`. The ordinary materialization helper composes them
+without adding a duplicate span. Matched pull, keep-remote, and merge invoke
+these same timed stages and original-path checks; stale originals can require
+another installation stage using retained verified bytes, never an extra fetch.
+
+### Diagnostic field producers
+
+Common timestamp, correlation/span/parent IDs, elapsed time and terminal outcome
+are generated by `jaunder-debug.el`, never copied from authored or HTTP data.
+All owners not listed below supply no optional fields. The diagnostic core
+rejects unknown keys and unsafe values, bounds numeric/string output, retains
+only complete bounded events, and contains failures without replacing native
+returns or conditions. Core contracts, including invalid-setup and bounded
+cancellation-rewrite guards, live in `jaunder-debug-test.el`; mutation-owner
+keyboard cancellation is exercised by `jaunder-deferred-quit-debug-test.el`.
+
+| Actual producer                                                    | Optional safe projection                                                    | Producer proof                                                                                                                                                                                                                |
+| ------------------------------------------------------------------ | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jaunder--http-request`                                            | closed method enum; validated numeric terminal `http-status`                | Q1; `jaunder-acquisition-debug-status-producers-reject-source-text`; `jaunder-acquisition-debug-preserves-wire-and-representation-bytes`                                                                                      |
+| `jaunder--harvest-response-fields`, `jaunder--atom-entry->xml`     | literal `format=atom`                                                       | Q2                                                                                                                                                                                                                            |
+| `jaunder--org->atom`, `jaunder--render-pulled-member`              | literal `format=org`                                                        | T1                                                                                                                                                                                                                            |
+| `jaunder--parse-pulled-member`                                     | closed terminal representation enum                                         | T1; `jaunder-transform-debug-member-format-producer-is-closed-and-byte-preserving`                                                                                                                                            |
+| `jaunder--pulled-post-link-replacements`                           | lazy integer `members`/`count`, not IDs/hrefs                               | T2                                                                                                                                                                                                                            |
+| `jaunder--pull-media-stage`; `jaunder--pull-media-finalize-staged` | lazy integer reference/fallback `count`, not Media paths/URLs/bytes         | M1, M3                                                                                                                                                                                                                        |
+| batch and five row macro expansions                                | closed action enum; native/retained outcomes projected to literal decisions | R1, R2; `jaunder-reconcile-debug-row-result-field-producer-privacy-and-native-identity`; `jaunder-reconcile-debug-batch-retained-outcome-projection`; `jaunder-reconcile-debug-disabled-field-laziness-and-native-conditions` |
+
+`jaunder-debug-edebug-test.el` additionally instruments actual macro call
+syntax: keys remain literal, field forms remain lazy, and native
+values/condition data retain identity. Deferred fields/projections keep their
+own coverage counters across instrumented helper calls; they must not be treated
+as data or attributed to a helper. Edebug/coverage instrumentation must not turn
+field plists into function calls. Host pure/live and controlled-wire proofs are
+distinct from the authoritative hermetic coverage producer/consumer verdict.
+
 ## Post audience metadata
 
 An Org Post may declare its explicit audience with repeated file properties:

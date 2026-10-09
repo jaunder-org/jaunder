@@ -27,6 +27,7 @@
 (require 'jaunder-config)
 (require 'jaunder-transport)
 (require 'jaunder-warn)
+(require 'jaunder-debug)
 
 (defconst jaunder--media-types
   '(("jpg" . "image/jpeg")
@@ -66,16 +67,17 @@ POSTs the raw bytes to `/atompub/{user}/media' with the filename in a `Slug'
 header (the server sha256-dedups: 201 new / 200 re-upload), then harvests the
 server-assigned binary URL from the response entry's `<content src>' via
 `jaunder--harvest-response-fields'.  Signals an error on any non-2xx status."
-  (let* ((url (jaunder--build-url (jaunder--active-base-url) "atompub"
-                                  (jaunder--active-username) "media"))
-         (resp (jaunder--http-request
-                "POST" url (list 'file path) content-type
-                (list (cons "Slug" (file-name-nondirectory path)))))
-         (status (plist-get resp :status)))
-    (unless (memq status '(200 201))
-      (error "jaunder: media upload of %s failed (HTTP %s)" path status))
-    (cdr (assq 'content-src
-               (jaunder--harvest-response-fields (plist-get resp :body))))))
+  (jaunder--with-debug-operation "media.upload" ()
+                                 (let* ((url (jaunder--build-url (jaunder--active-base-url) "atompub"
+                                                                 (jaunder--active-username) "media"))
+                                        (resp (jaunder--http-request
+                                               "POST" url (list 'file path) content-type
+                                               (list (cons "Slug" (file-name-nondirectory path)))))
+                                        (status (plist-get resp :status)))
+                                   (unless (memq status '(200 201))
+                                     (error "jaunder: media upload of %s failed (HTTP %s)" path status))
+                                   (cdr (assq 'content-src
+                                              (jaunder--harvest-response-fields (plist-get resp :body)))))))
 
 (defun jaunder--collect-media-links ()
   "Collect qualifying local-file links in the buffer's body region, in order.
@@ -96,24 +98,26 @@ with the links in the sent body."
   "Return BODY with its qualifying media links rewritten to URLS, in order.
 Delegates the org rewrite to `jaunder--org-substitute-links', selecting the
 media links via `jaunder--media-link-p'."
-  (jaunder--org-substitute-links body #'jaunder--media-link-p urls))
+  (jaunder--with-debug-operation "media.apply" ()
+                                 (jaunder--org-substitute-links body #'jaunder--media-link-p urls)))
 
 (defun jaunder--media-preflight (records)
   "Signal one error if any RECORDS `:path' cannot be uploaded.
 Every resolved path must exist, be readable, and be a regular file.  All failing
 paths are reported before any upload begins."
-  (let ((failing
-         (delq nil
-               (mapcar (lambda (record)
-                         (let ((path (plist-get record :path)))
-                           (unless (and (file-exists-p path)
-                                        (file-readable-p path)
-                                        (file-regular-p path))
-                             path)))
-                       records))))
-    (when failing
-      (error "jaunder: media file(s) missing, unreadable, or not regular: %s"
-             (mapconcat #'identity failing ", ")))))
+  (jaunder--with-debug-operation "media.path" ()
+                                 (let ((failing
+                                        (delq nil
+                                              (mapcar (lambda (record)
+                                                        (let ((path (plist-get record :path)))
+                                                          (unless (and (file-exists-p path)
+                                                                       (file-readable-p path)
+                                                                       (file-regular-p path))
+                                                            path)))
+                                                      records))))
+                                   (when failing
+                                     (error "jaunder: media file(s) missing, unreadable, or not regular: %s"
+                                            (mapconcat #'identity failing ", "))))))
 
 (defun jaunder--git-toplevel (dir)
   "Return the git work-tree toplevel containing DIR, or nil.
@@ -164,19 +168,20 @@ Detect qualifying links in the buffer's body region, preflight every target,
 warn about untracked media, upload each distinct resolved file once, and rewrite
 those links in BODY to harvested server URLs in document order.  The authoring
 buffer is never modified."
-  (let ((records (jaunder--collect-media-links)))
-    (jaunder--media-preflight records)
-    (jaunder--warn-untracked-media records)
-    (let ((cache (make-hash-table :test 'equal)))
-      (dolist (r records)
-        (let ((path (plist-get r :path)))
-          (unless (gethash path cache)
-            (puthash path
-                     (jaunder--upload-media path (plist-get r :content-type))
-                     cache))))
-      (jaunder--substitute-media
-       body
-       (mapcar (lambda (r) (gethash (plist-get r :path) cache)) records)))))
+  (jaunder--with-debug-operation "media.plan" ()
+                                 (let ((records (jaunder--collect-media-links)))
+                                   (jaunder--media-preflight records)
+                                   (jaunder--warn-untracked-media records)
+                                   (let ((cache (make-hash-table :test 'equal)))
+                                     (dolist (r records)
+                                       (let ((path (plist-get r :path)))
+                                         (unless (gethash path cache)
+                                           (puthash path
+                                                    (jaunder--upload-media path (plist-get r :content-type))
+                                                    cache))))
+                                     (jaunder--substitute-media
+                                      body
+                                      (mapcar (lambda (r) (gethash (plist-get r :path) cache)) records))))))
 
 (provide 'jaunder-media)
 ;;; jaunder-media.el ends here

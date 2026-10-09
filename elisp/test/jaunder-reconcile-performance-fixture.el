@@ -6,6 +6,7 @@
 ;; The inventory-only and complete selected-pull measurements share the same
 ;; 100-Member, four-page Collection topology.  Only the full pull needs ETags
 ;; in the Collection; the inventory-only test also covers their absence.
+;; Public alternate hrefs exercise identity-aware Local Post Link reversal.
 
 ;;; Code:
 
@@ -22,8 +23,8 @@
      (mapconcat
       (lambda (id)
         (format
-         "<entry><link rel=\"edit\" href=\"https://example.test/atompub/alice/posts/%d\"/><j:slug>post-%03d</j:slug>%s</entry>"
-         id id (if etag (format "<j:etag>%s</j:etag>" etag) "")))
+         "<entry><link rel=\"edit\" href=\"https://example.test/atompub/alice/posts/%d\"/><link rel=\"alternate\" href=\"https://example.test/~alice/post-%03d\"/><j:slug>post-%03d</j:slug>%s</entry>"
+         id id id (if etag (format "<j:etag>%s</j:etag>" etag) "")))
       (number-sequence start (+ start 24)) "")
      "</feed>")))
 

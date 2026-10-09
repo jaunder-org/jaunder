@@ -14,6 +14,7 @@
 (require 'url-parse)
 (require 'jaunder-atom)
 (require 'jaunder-config)
+(require 'jaunder-debug)
 (require 'jaunder-org)
 (require 'jaunder-transport)
 (require 'jaunder-datetime)
@@ -236,33 +237,35 @@ returned."
 
 (defun jaunder--fetch-collection-members ()
   "Enumerate the active blog's Collection, preserving page and Entry order."
-  (let* ((collection-url (jaunder--collection-url))
-         (url collection-url)
-         (seen (make-hash-table :test #'equal))
-         (ids (make-hash-table :test #'equal))
-         (page-number 0)
-         members)
-    (while url
-      (when (gethash url seen)
-        (jaunder--inventory-error "Collection rel=next URI cycle"))
-      (puthash url t seen)
-      (let ((response (jaunder--http-request "GET" url)))
-        (unless (and (integerp (plist-get response :status))
-                     (<= 200 (plist-get response :status) 299))
-          (jaunder--inventory-error "Collection page returned non-2xx status"))
-        (let ((page (jaunder--parse-collection-page
-                     (plist-get response :body) collection-url)))
-          (dolist (member (plist-get page :members))
-            (when (gethash (jaunder-inventory-member-id member) ids)
-              (signal 'jaunder-inventory-duplicate-remote-id
-                      (list (jaunder-inventory-member-id member))))
-            (puthash (jaunder-inventory-member-id member) t ids))
-          (setq members (nconc members (plist-get page :members))
-                url (plist-get page :next)
-                page-number (1+ page-number))
-          (when jaunder--inventory-page-progress
-            (funcall jaunder--inventory-page-progress page-number)))))
-    members))
+  (jaunder--with-debug-operation "inventory.collection" nil
+                                 (let* ((collection-url (jaunder--collection-url))
+                                        (url collection-url)
+                                        (seen (make-hash-table :test #'equal))
+                                        (ids (make-hash-table :test #'equal))
+                                        (page-number 0)
+                                        members)
+                                   (while url
+                                     (jaunder--with-debug-operation "inventory.page" nil
+                                                                    (when (gethash url seen)
+                                                                      (jaunder--inventory-error "Collection rel=next URI cycle"))
+                                                                    (puthash url t seen)
+                                                                    (let ((response (jaunder--http-request "GET" url)))
+                                                                      (unless (and (integerp (plist-get response :status))
+                                                                                   (<= 200 (plist-get response :status) 299))
+                                                                        (jaunder--inventory-error "Collection page returned non-2xx status"))
+                                                                      (let ((page (jaunder--parse-collection-page
+                                                                                   (plist-get response :body) collection-url)))
+                                                                        (dolist (member (plist-get page :members))
+                                                                          (when (gethash (jaunder-inventory-member-id member) ids)
+                                                                            (signal 'jaunder-inventory-duplicate-remote-id
+                                                                                    (list (jaunder-inventory-member-id member))))
+                                                                          (puthash (jaunder-inventory-member-id member) t ids))
+                                                                        (setq members (nconc members (plist-get page :members))
+                                                                              url (plist-get page :next)
+                                                                              page-number (1+ page-number))
+                                                                        (when jaunder--inventory-page-progress
+                                                                          (funcall jaunder--inventory-page-progress page-number))))))
+                                   members)))
 
 (defun jaunder--inventory-buffer-property (key)
   "Return file-level property KEY from the current buffer's leading header."
@@ -292,14 +295,15 @@ returned."
 
 (defun jaunder--scan-root-locals (root)
   "Return regular root-level .org files under ROOT in deterministic order."
-  (mapcar (lambda (path)
-            (pcase-let ((`(,raw-id ,slug) (jaunder--read-local-properties path)))
-              (jaunder--make-inventory-local
-               :path path :id (and raw-id (or (jaunder--canonical-post-id raw-id)
-                                              raw-id))
-               :slug slug)))
-          (cl-remove-if-not #'file-regular-p
-                            (directory-files (expand-file-name root) t "\\.org\\'"))))
+  (jaunder--with-debug-operation "inventory.local" nil
+                                 (mapcar (lambda (path)
+                                           (pcase-let ((`(,raw-id ,slug) (jaunder--read-local-properties path)))
+                                             (jaunder--make-inventory-local
+                                              :path path :id (and raw-id (or (jaunder--canonical-post-id raw-id)
+                                                                             raw-id))
+                                              :slug slug)))
+                                         (cl-remove-if-not #'file-regular-p
+                                                           (directory-files (expand-file-name root) t "\\.org\\'")))))
 
 (defun jaunder--inventory-local-member-evidence-reason (local member)
   "Return LOCAL's first failed identity proof against MEMBER, or nil.
@@ -471,50 +475,51 @@ A local filename is evidence only after the Post ID and slug agree."
 
 (defun jaunder--join-inventory (locals members)
   "Join LOCALS and MEMBERS into a deterministic total `jaunder-inventory'."
-  (let* ((groups (jaunder--conflict-groups locals members))
-         (owned (jaunder--conflict-owned-table groups))
-         (available-locals (cl-remove-if (lambda (local) (gethash local owned)) locals))
-         (available-members (cl-remove-if (lambda (member) (gethash member owned)) members))
-         (local-id-index
-          (jaunder--index-by available-locals
-                             (lambda (local)
-                               (jaunder--canonical-post-id
-                                (jaunder-inventory-local-id local)))))
-         (member-id-index
-          (jaunder--index-by available-members #'jaunder-inventory-member-id))
-         matches orphans server-only)
-    (dolist (local available-locals)
-      (let ((id (jaunder--canonical-post-id (jaunder-inventory-local-id local))))
-        (cond
-         ((null (jaunder-inventory-local-id local)))
-         ((gethash id member-id-index)
-          (push (jaunder--make-inventory-match
-                 :local local :member (car (gethash id member-id-index)))
-                matches))
-         (id (push local orphans)))))
-    (dolist (member available-members)
-      (unless (gethash (jaunder-inventory-member-id member) local-id-index)
-        (push member server-only)))
-    (jaunder--make-inventory
-     :local-drafts (cl-remove-if (lambda (local) (gethash local owned))
-                                 (cl-remove-if-not
-                                  (lambda (local) (null (jaunder-inventory-local-id local)))
-                                  locals))
-     :server-only (nreverse server-only)
-     :matched (nreverse matches)
-     :orphans (nreverse orphans)
-     :conflicts
-     (mapcar
-      (lambda (group)
-        (let ((group-owned (make-hash-table :test #'eq)))
-          (dolist (node (plist-get group :nodes))
-            (puthash (jaunder--node-value node) t group-owned))
-          (jaunder--make-inventory-conflict
-           :kinds (plist-get group :kinds)
-           :locals (cl-remove-if-not (lambda (local) (gethash local group-owned)) locals)
-           :members (cl-remove-if-not (lambda (member) (gethash member group-owned))
-                                      members))))
-      groups))))
+  (jaunder--with-debug-operation "inventory.build" nil
+                                 (let* ((groups (jaunder--conflict-groups locals members))
+                                        (owned (jaunder--conflict-owned-table groups))
+                                        (available-locals (cl-remove-if (lambda (local) (gethash local owned)) locals))
+                                        (available-members (cl-remove-if (lambda (member) (gethash member owned)) members))
+                                        (local-id-index
+                                         (jaunder--index-by available-locals
+                                                            (lambda (local)
+                                                              (jaunder--canonical-post-id
+                                                               (jaunder-inventory-local-id local)))))
+                                        (member-id-index
+                                         (jaunder--index-by available-members #'jaunder-inventory-member-id))
+                                        matches orphans server-only)
+                                   (dolist (local available-locals)
+                                     (let ((id (jaunder--canonical-post-id (jaunder-inventory-local-id local))))
+                                       (cond
+                                        ((null (jaunder-inventory-local-id local)))
+                                        ((gethash id member-id-index)
+                                         (push (jaunder--make-inventory-match
+                                                :local local :member (car (gethash id member-id-index)))
+                                               matches))
+                                        (id (push local orphans)))))
+                                   (dolist (member available-members)
+                                     (unless (gethash (jaunder-inventory-member-id member) local-id-index)
+                                       (push member server-only)))
+                                   (jaunder--make-inventory
+                                    :local-drafts (cl-remove-if (lambda (local) (gethash local owned))
+                                                                (cl-remove-if-not
+                                                                 (lambda (local) (null (jaunder-inventory-local-id local)))
+                                                                 locals))
+                                    :server-only (nreverse server-only)
+                                    :matched (nreverse matches)
+                                    :orphans (nreverse orphans)
+                                    :conflicts
+                                    (mapcar
+                                     (lambda (group)
+                                       (let ((group-owned (make-hash-table :test #'eq)))
+                                         (dolist (node (plist-get group :nodes))
+                                           (puthash (jaunder--node-value node) t group-owned))
+                                         (jaunder--make-inventory-conflict
+                                          :kinds (plist-get group :kinds)
+                                          :locals (cl-remove-if-not (lambda (local) (gethash local group-owned)) locals)
+                                          :members (cl-remove-if-not (lambda (member) (gethash member group-owned))
+                                                                     members))))
+                                     groups)))))
 
 (defun jaunder--inventory-post-link-evidence (inventory)
   "Return unconflicted (MEMBERS LOCALS) from INVENTORY for Post link mapping."

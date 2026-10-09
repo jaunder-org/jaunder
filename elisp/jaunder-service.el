@@ -29,6 +29,7 @@
 (require 'xml)
 (require 'jaunder-atom)
 (require 'jaunder-config)
+(require 'jaunder-debug)
 (require 'jaunder-transport)
 (require 'jaunder-warn)
 
@@ -42,33 +43,34 @@ not cached, so a later publish may retry.  Reset only by restarting Emacs.")
 
 (defun jaunder--parse-service-document (body)
   "Parse BODY into an AtomPub Service Document DOM, or return `unknown'."
-  (condition-case nil
-      (with-temp-buffer
-        (insert (or body ""))
-        (let* ((roots (xml-parse-region (point-min) (point-max)))
-               (dom (car roots)))
-          (if (and (= (length roots) 1)
-                   (listp dom)
-                   (eq (jaunder--atom-local-name (dom-tag dom)) 'service)
-                   (equal (jaunder--atom-element-namespace
-                           dom (jaunder--atom-namespace-context dom nil))
-                          jaunder--app-ns))
-              (let* ((namespaces (jaunder--atom-namespace-context dom nil))
-                     (workspaces (jaunder--atom-direct-elements-in-namespace
-                                  dom 'workspace jaunder--app-ns namespaces)))
-                (if (and workspaces
-                         (cl-every
-                          (lambda (workspace)
-                            (= (length
-                                (jaunder--atom-direct-elements-in-namespace
-                                 workspace 'title jaunder--atom-ns
-                                 (jaunder--atom-namespace-context workspace namespaces)))
-                               1))
-                          workspaces))
-                    dom
-                  'unknown))
-            'unknown)))
-    (error 'unknown)))
+  (jaunder--with-debug-operation "service.parse" ()
+                                 (condition-case nil
+                                     (with-temp-buffer
+                                       (insert (or body ""))
+                                       (let* ((roots (xml-parse-region (point-min) (point-max)))
+                                              (dom (car roots)))
+                                         (if (and (= (length roots) 1)
+                                                  (listp dom)
+                                                  (eq (jaunder--atom-local-name (dom-tag dom)) 'service)
+                                                  (equal (jaunder--atom-element-namespace
+                                                          dom (jaunder--atom-namespace-context dom nil))
+                                                         jaunder--app-ns))
+                                             (let* ((namespaces (jaunder--atom-namespace-context dom nil))
+                                                    (workspaces (jaunder--atom-direct-elements-in-namespace
+                                                                 dom 'workspace jaunder--app-ns namespaces)))
+                                               (if (and workspaces
+                                                        (cl-every
+                                                         (lambda (workspace)
+                                                           (= (length
+                                                               (jaunder--atom-direct-elements-in-namespace
+                                                                workspace 'title jaunder--atom-ns
+                                                                (jaunder--atom-namespace-context workspace namespaces)))
+                                                              1))
+                                                         workspaces))
+                                                   dom
+                                                 'unknown))
+                                           'unknown)))
+                                   (error 'unknown))))
 
 (defun jaunder--service-descendants (node tag)
   "Return NODE descendants whose local XML name is TAG, in document order."
@@ -146,15 +148,17 @@ categories are returned; categories from other Collections are ignored."
 (defun jaunder--fetch-service-document (base-url)
   "Fetch BASE-URL's AtomPub Service Document DOM, or return `unknown'.
 Transport errors, non-2xx responses, and invalid documents never signal."
-  (condition-case nil
-      (let* ((response
-              (jaunder--http-request
-               "GET" (jaunder--build-url base-url "atompub" "service")))
-             (status (plist-get response :status)))
-        (if (and (integerp status) (<= 200 status 299))
-            (jaunder--parse-service-document (plist-get response :body))
-          'unknown))
-    (error 'unknown)))
+  (jaunder--with-debug-operation "service.read" ()
+                                 (condition-case nil
+                                     (let* ((response
+                                             (jaunder--http-request
+                                              "GET" (jaunder--build-url base-url "atompub" "service")))
+                                            (status (plist-get response :status)))
+                                       (jaunder--debug-fields http-status status)
+                                       (if (and (integerp status) (<= 200 status 299))
+                                           (jaunder--parse-service-document (plist-get response :body))
+                                         'unknown))
+                                   (error 'unknown))))
 
 (defun jaunder--require-synchronization-audience-evidence (base-url audiences)
   "Return BASE-URL's audience capability for one synchronization operation.

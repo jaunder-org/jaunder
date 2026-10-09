@@ -27,6 +27,7 @@
 (require 'url-parse)
 (require 'plz)
 (require 'jaunder-config)
+(require 'jaunder-debug)
 
 (defconst jaunder--http-connect-timeout-seconds 15
   "Maximum time to establish an AtomPub or public-Media HTTP connection.")
@@ -109,14 +110,16 @@ them up case-insensitively."
 (defun jaunder--auth-secret ()
   "Retrieve the app password for the active blog's user via auth-source.
 Thin I/O wrapper over `auth-source-search' using `jaunder--auth-source-spec'."
-  (let* ((match (car (apply #'auth-source-search
-                            (jaunder--auth-source-spec (jaunder--active-base-url)
-                                                       (jaunder--active-username)))))
-         (secret (and match (plist-get match :secret))))
-    (cond ((functionp secret) (funcall secret))
-          (secret secret)
-          (t (error "jaunder: no auth-source entry for %s@%s"
-                    (jaunder--active-username) (jaunder--active-base-url))))))
+  (jaunder--with-debug-operation
+   "auth.lookup" nil
+   (let* ((match (car (apply #'auth-source-search
+                             (jaunder--auth-source-spec (jaunder--active-base-url)
+                                                        (jaunder--active-username)))))
+          (secret (and match (plist-get match :secret))))
+     (cond ((functionp secret) (funcall secret))
+           (secret secret)
+           (t (error "jaunder: no auth-source entry for %s@%s"
+                     (jaunder--active-username) (jaunder--active-base-url)))))))
 
 (defun jaunder--curl-header-value (value)
   "Escape VALUE so `plz' transmits the header intact through curl's config file.
@@ -141,33 +144,44 @@ transport-level failure re-signals.
 `plz' drives the `curl' binary, so request construction does not depend on
 the finicky dynamic-variable handling that made `url.el' occasionally drop
 the auth header under load (ADR-0038)."
-  (let* ((headers (mapcar
-                   (lambda (h) (cons (car h) (jaunder--curl-header-value (cdr h))))
-                   (append
-                    (list (jaunder--basic-auth-header (jaunder--active-username)
-                                                      (jaunder--auth-secret))
-                          ;; A proxy's coded strong ETag cannot be replayed as
-                          ;; the canonical AtomPub If-Match on a later write.
-                          (cons "Accept-Encoding" "identity"))
-                    (when content-type (list (cons "Content-Type" content-type)))
-                    extra-headers)))
-         (verb (intern (downcase method)))
-         (plz-curl-default-args
-          (if (eq verb 'get)
-              (jaunder--bounded-read-curl-args plz-curl-default-args)
-            plz-curl-default-args)))
-    (condition-case err
-        (jaunder--plz-response->plist
-         ;; plz's text mode maps to curl --data, which strips CR/LF while
-         ;; reading stdin or a file. Source documents and Media are byte streams.
-         (plz verb url :headers headers :body body :body-type 'binary
-              :connect-timeout jaunder--http-connect-timeout-seconds :as 'response))
-      (plz-error
-       (let* ((pe (seq-find #'plz-error-p (cdr err)))
-              (resp (and pe (plz-error-response pe))))
-         (if resp
-             (jaunder--plz-response->plist resp)
-           (signal (car err) (cdr err))))))))
+  (jaunder--with-debug-operation
+   "transport.request"
+   (method (cond ((equal method "GET") "GET")
+                 ((equal method "HEAD") "HEAD")
+                 ((equal method "POST") "POST")
+                 ((equal method "PUT") "PUT")
+                 ((equal method "DELETE") "DELETE")
+                 (t "unknown")))
+   (let* ((headers (mapcar
+                    (lambda (h) (cons (car h) (jaunder--curl-header-value (cdr h))))
+                    (append
+                     (list (jaunder--basic-auth-header (jaunder--active-username)
+                                                       (jaunder--auth-secret))
+                           ;; A proxy's coded strong ETag cannot be replayed as
+                           ;; the canonical AtomPub If-Match on a later write.
+                           (cons "Accept-Encoding" "identity"))
+                     (when content-type (list (cons "Content-Type" content-type)))
+                     extra-headers)))
+          (verb (intern (downcase method)))
+          (plz-curl-default-args
+           (if (eq verb 'get)
+               (jaunder--bounded-read-curl-args plz-curl-default-args)
+             plz-curl-default-args))
+          (response
+           (condition-case err
+               (jaunder--plz-response->plist
+                ;; plz's text mode maps to curl --data, which strips CR/LF while
+                ;; reading stdin or a file. Source documents and Media are byte streams.
+                (plz verb url :headers headers :body body :body-type 'binary
+                     :connect-timeout jaunder--http-connect-timeout-seconds :as 'response))
+             (plz-error
+              (let* ((pe (seq-find #'plz-error-p (cdr err)))
+                     (resp (and pe (plz-error-response pe))))
+                (if resp
+                    (jaunder--plz-response->plist resp)
+                  (signal (car err) (cdr err))))))))
+     (jaunder--debug-fields http-status (plist-get response :status))
+     response)))
 
 (provide 'jaunder-transport)
 ;;; jaunder-transport.el ends here

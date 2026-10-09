@@ -34,6 +34,7 @@
 (require 'url-util)
 (require 'jaunder-entry)
 (require 'jaunder-datetime)
+(require 'jaunder-debug)
 
 (defconst jaunder--org-media-type "text/org"
   "The atom:content media type for org source.
@@ -239,39 +240,40 @@ body-only content with the header block stripped.  Non-mutating.  The
 `published' slot is filled by the timezone computation (see
 `jaunder--org-date->utc'); `body' still holds local media links, substituted
 later by the media unit."
-  (let* ((kws (org-collect-keywords
-               '("TITLE" "DATE" "DESCRIPTION" "PROPERTY")))
-         (props (jaunder--collect-properties kws))
-         (title (jaunder--org-title kws))
-         (categories
-          (jaunder--split-keywords (jaunder--category-keyword-values)))
-         (descriptions (cdr (assoc "DESCRIPTION" kws)))
-         (summary (and descriptions (mapconcat #'identity descriptions "\n")))
-         (audiences
-          (jaunder--canonical-audiences
-           (mapcar #'cdr
-                   (cl-remove-if-not
-                    (lambda (property)
-                      (equal (car property) "JAUNDER_AUDIENCE"))
-                    props))))
-         (status (cdr (assoc "JAUNDER_STATUS" props)))
-         (draft (and status (string= (downcase status) "draft") t))
-         (date-raw (cadr (assoc "DATE" kws)))
-         (tz (cdr (assoc "JAUNDER_DATE_TZ" props)))
-         ;; Drafts carry no publish time; "publish now" (published status, no
-         ;; #+DATE) omits it so the server stamps it (see the spec status table).
-         (published (and (not draft) date-raw
-                         (jaunder--org-date->utc date-raw tz))))
-    (jaunder--make-entry
-     :title title
-     :categories categories
-     :summary summary
-     :audiences audiences
-     :draft draft
-     :content-type jaunder--org-media-type
-     :body (string-trim-right
-            (buffer-substring-no-properties (jaunder--body-start) (point-max)))
-     :published published)))
+  (jaunder--with-debug-operation "org.parse" (format "org")
+                                 (let* ((kws (org-collect-keywords
+                                              '("TITLE" "DATE" "DESCRIPTION" "PROPERTY")))
+                                        (props (jaunder--collect-properties kws))
+                                        (title (jaunder--org-title kws))
+                                        (categories
+                                         (jaunder--split-keywords (jaunder--category-keyword-values)))
+                                        (descriptions (cdr (assoc "DESCRIPTION" kws)))
+                                        (summary (and descriptions (mapconcat #'identity descriptions "\n")))
+                                        (audiences
+                                         (jaunder--canonical-audiences
+                                          (mapcar #'cdr
+                                                  (cl-remove-if-not
+                                                   (lambda (property)
+                                                     (equal (car property) "JAUNDER_AUDIENCE"))
+                                                   props))))
+                                        (status (cdr (assoc "JAUNDER_STATUS" props)))
+                                        (draft (and status (string= (downcase status) "draft") t))
+                                        (date-raw (cadr (assoc "DATE" kws)))
+                                        (tz (cdr (assoc "JAUNDER_DATE_TZ" props)))
+                                        ;; Drafts carry no publish time; "publish now" (published status, no
+                                        ;; #+DATE) omits it so the server stamps it (see the spec status table).
+                                        (published (and (not draft) date-raw
+                                                        (jaunder--org-date->utc date-raw tz))))
+                                   (jaunder--make-entry
+                                    :title title
+                                    :categories categories
+                                    :summary summary
+                                    :audiences audiences
+                                    :draft draft
+                                    :content-type jaunder--org-media-type
+                                    :body (string-trim-right
+                                           (buffer-substring-no-properties (jaunder--body-start) (point-max)))
+                                    :published published))))
 
 (defun jaunder--ensure-date-tz ()
   "Ensure the buffer records a JAUNDER_DATE_TZ; return the effective zone string.

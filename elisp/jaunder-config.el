@@ -23,6 +23,7 @@
 ;;; Code:
 
 (require 'url-parse)
+(require 'jaunder-debug)
 
 (defgroup jaunder nil
   "Emacs blogging front-end for Jaunder over AtomPub."
@@ -112,20 +113,22 @@ Errors when no blog matches, when the entry's :base-url is not an absolute URL,
 or when it lacks a non-empty :username — a request is never issued
 half-configured.  The returned :base-url is normalized (trailing slashes
 stripped), so downstream URL joining can treat it as a clean prefix."
-  (let ((best (cdr (jaunder--blog-entry-for file-or-dir))))
-    (unless best
-      (error "jaunder: no blog configured for %s (see `jaunder-blogs')" file-or-dir))
-    (let* ((base-url (plist-get best :base-url))
-           (username (plist-get best :username))
-           (parsed (and (stringp base-url) (url-generic-parse-url base-url))))
-      (unless (and parsed (url-type parsed)
-                   (url-host parsed) (not (string= (url-host parsed) "")))
-        (error "jaunder: blog for %s has a malformed :base-url: %S"
-               file-or-dir base-url))
-      (when (or (null username) (string= username ""))
-        (error "jaunder: blog for %s has no :username" file-or-dir))
-      (list :base-url (replace-regexp-in-string "/+\\'" "" base-url)
-            :username username))))
+  (jaunder--with-debug-operation
+   "config.resolve" nil
+   (let ((best (cdr (jaunder--blog-entry-for file-or-dir))))
+     (unless best
+       (error "jaunder: no blog configured for %s (see `jaunder-blogs')" file-or-dir))
+     (let* ((base-url (plist-get best :base-url))
+            (username (plist-get best :username))
+            (parsed (and (stringp base-url) (url-generic-parse-url base-url))))
+       (unless (and parsed (url-type parsed)
+                    (url-host parsed) (not (string= (url-host parsed) "")))
+         (error "jaunder: blog for %s has a malformed :base-url: %S"
+                file-or-dir base-url))
+       (when (or (null username) (string= username ""))
+         (error "jaunder: blog for %s has no :username" file-or-dir))
+       (list :base-url (replace-regexp-in-string "/+\\'" "" base-url)
+             :username username)))))
 
 (defun jaunder--call-with-blog (file thunk)
   "Resolve FILE and call THUNK with `jaunder--active-blog' dynamically bound.

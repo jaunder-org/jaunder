@@ -20,6 +20,7 @@
 (require 'jaunder-reconcile)
 (require 'jaunder-pull-media)
 (require 'jaunder-post-link)
+(require 'jaunder-debug)
 
 (defvar jaunder--pull-link-inventory nil
   "Optional inventory evidence supplied by a reconciliation pull staging run.")
@@ -181,80 +182,82 @@ KIND is `text' or `xhtml'."
 ETAG, CAPTURED-AT, and ZONE have the same validation and projection semantics
 as `jaunder--atom->org'.  AUDIENCE-CAPABLE is the current service verdict.
 This function performs no network or filesystem I/O."
-  (unless (jaunder--strong-etag-p etag)
-    (jaunder--pull-error "Member response must carry a strong quoted ETag"))
-  (unless (and (stringp zone) (not (string-empty-p zone)))
-    (jaunder--pull-error "pull zone must be non-empty"))
-  (let* ((fields (jaunder--harvest-response-fields entry-xml))
-         (title (jaunder--pull-exactly-one fields 'titles "title"))
-         (content (jaunder--pull-exactly-one fields 'content-nodes "content"))
-         (edit-uri (jaunder--pull-exactly-one fields 'edit-uris "edit URI"))
-         (slug (jaunder--pull-exactly-one fields 'slugs "j:slug"))
-         (summary (jaunder--pull-at-most-one fields 'summaries "summary"))
-         (audiences
-          (condition-case err
-              (jaunder--synchronized-response-audiences fields audience-capable)
-            (error (jaunder--pull-error (error-message-string err)))))
-         (draft-value (jaunder--pull-at-most-one fields 'drafts "app:draft"))
-         (published (jaunder--pull-at-most-one fields 'published-values "published"))
-         (id (jaunder--pull-edit-id edit-uri))
-         (format-kind (jaunder--pull-content-format content))
-         (format (car format-kind))
-         (body (jaunder--pull-content-body content (cdr format-kind)))
-         (draft (cond ((null draft-value) nil)
-                      ((equal draft-value "yes") t)
-                      ((equal draft-value "no") nil)
-                      (t (jaunder--pull-error "app:draft must be yes or no"))))
-         status date-line date-tz date-utc)
-    (when (jaunder--title-has-line-separator-p title)
-      (jaunder--pull-error "Member title must be one line"))
-    (unless id
-      (jaunder--pull-error "Member edit URI must end in a decimal Post ID"))
-    (unless (jaunder--safe-pull-slug-p slug)
-      (jaunder--pull-error "Member j:slug must name one safe path component"))
-    (dolist (category (cdr (assq 'categories fields)))
-      (unless (and (stringp category) (not (string-empty-p category)))
-        (jaunder--pull-error "Member category term must be non-empty")))
-    (if draft
-        (setq status "draft")
-      (unless published
-        (jaunder--pull-error "non-draft Member must have published"))
-      (let ((published-time (jaunder--pull-rfc-3339-time published)))
-        (setq status (if (time-less-p captured-at published-time)
-                         "scheduled"
-                       "published")
-              date-line (jaunder--utc->org-date published zone)
-              date-tz zone
-              date-utc published)))
-    (let ((lines (append
-                  (jaunder--pull-header-lines "TITLE" title)
-                  (when date-line (list (format "#+DATE: %s" date-line)))
-                  (let ((categories (cdr (assq 'categories fields))))
-                    (when categories
-                      (list (format "#+KEYWORDS: %s"
-                                    (mapconcat #'identity categories ", ")))))
-                  (and summary (jaunder--pull-header-lines "DESCRIPTION" summary))
-                  (list (format "#+PROPERTY: JAUNDER_STATUS %s" status))
-                  (mapcar (lambda (audience)
-                            (format "#+PROPERTY: JAUNDER_AUDIENCE %s" audience))
-                          audiences)
-                  (when date-tz
-                    (list (format "#+PROPERTY: JAUNDER_DATE_TZ %s" date-tz)
-                          (format "#+PROPERTY: JAUNDER_DATE_UTC %s" date-utc)))
-                  (list (format "#+PROPERTY: JAUNDER_FORMAT %s" format)
-                        (format "#+PROPERTY: JAUNDER_SLUG %s" slug)
-                        (format "#+PROPERTY: JAUNDER_ID %s" id)
-                        (format "#+PROPERTY: JAUNDER_SYNCED %s" etag)
-                        (format "#+PROPERTY: JAUNDER_SYNCED_AT %s"
-                                (format-time-string "%Y-%m-%dT%H:%M:%SZ"
-                                                    captured-at t))))))
-      (let ((org-prefix (concat (mapconcat #'identity lines "\n") "\n\n")))
-        (jaunder--make-pulled-member
-         :org-prefix org-prefix
-         :org (concat org-prefix body)
-         :format format
-         :body body
-         :audience-omitted (null audiences))))))
+  (jaunder--with-debug-operation "member.parse" ()
+                                 (unless (jaunder--strong-etag-p etag)
+                                   (jaunder--pull-error "Member response must carry a strong quoted ETag"))
+                                 (unless (and (stringp zone) (not (string-empty-p zone)))
+                                   (jaunder--pull-error "pull zone must be non-empty"))
+                                 (let* ((fields (jaunder--harvest-response-fields entry-xml))
+                                        (title (jaunder--pull-exactly-one fields 'titles "title"))
+                                        (content (jaunder--pull-exactly-one fields 'content-nodes "content"))
+                                        (edit-uri (jaunder--pull-exactly-one fields 'edit-uris "edit URI"))
+                                        (slug (jaunder--pull-exactly-one fields 'slugs "j:slug"))
+                                        (summary (jaunder--pull-at-most-one fields 'summaries "summary"))
+                                        (audiences
+                                         (condition-case err
+                                             (jaunder--synchronized-response-audiences fields audience-capable)
+                                           (error (jaunder--pull-error (error-message-string err)))))
+                                        (draft-value (jaunder--pull-at-most-one fields 'drafts "app:draft"))
+                                        (published (jaunder--pull-at-most-one fields 'published-values "published"))
+                                        (id (jaunder--pull-edit-id edit-uri))
+                                        (format-kind (jaunder--pull-content-format content))
+                                        (format (car format-kind))
+                                        (body (jaunder--pull-content-body content (cdr format-kind)))
+                                        (draft (cond ((null draft-value) nil)
+                                                     ((equal draft-value "yes") t)
+                                                     ((equal draft-value "no") nil)
+                                                     (t (jaunder--pull-error "app:draft must be yes or no"))))
+                                        status date-line date-tz date-utc)
+                                   (when (jaunder--title-has-line-separator-p title)
+                                     (jaunder--pull-error "Member title must be one line"))
+                                   (unless id
+                                     (jaunder--pull-error "Member edit URI must end in a decimal Post ID"))
+                                   (unless (jaunder--safe-pull-slug-p slug)
+                                     (jaunder--pull-error "Member j:slug must name one safe path component"))
+                                   (dolist (category (cdr (assq 'categories fields)))
+                                     (unless (and (stringp category) (not (string-empty-p category)))
+                                       (jaunder--pull-error "Member category term must be non-empty")))
+                                   (if draft
+                                       (setq status "draft")
+                                     (unless published
+                                       (jaunder--pull-error "non-draft Member must have published"))
+                                     (let ((published-time (jaunder--pull-rfc-3339-time published)))
+                                       (setq status (if (time-less-p captured-at published-time)
+                                                        "scheduled"
+                                                      "published")
+                                             date-line (jaunder--utc->org-date published zone)
+                                             date-tz zone
+                                             date-utc published)))
+                                   (let ((lines (append
+                                                 (jaunder--pull-header-lines "TITLE" title)
+                                                 (when date-line (list (format "#+DATE: %s" date-line)))
+                                                 (let ((categories (cdr (assq 'categories fields))))
+                                                   (when categories
+                                                     (list (format "#+KEYWORDS: %s"
+                                                                   (mapconcat #'identity categories ", ")))))
+                                                 (and summary (jaunder--pull-header-lines "DESCRIPTION" summary))
+                                                 (list (format "#+PROPERTY: JAUNDER_STATUS %s" status))
+                                                 (mapcar (lambda (audience)
+                                                           (format "#+PROPERTY: JAUNDER_AUDIENCE %s" audience))
+                                                         audiences)
+                                                 (when date-tz
+                                                   (list (format "#+PROPERTY: JAUNDER_DATE_TZ %s" date-tz)
+                                                         (format "#+PROPERTY: JAUNDER_DATE_UTC %s" date-utc)))
+                                                 (list (format "#+PROPERTY: JAUNDER_FORMAT %s" format)
+                                                       (format "#+PROPERTY: JAUNDER_SLUG %s" slug)
+                                                       (format "#+PROPERTY: JAUNDER_ID %s" id)
+                                                       (format "#+PROPERTY: JAUNDER_SYNCED %s" etag)
+                                                       (format "#+PROPERTY: JAUNDER_SYNCED_AT %s"
+                                                               (format-time-string "%Y-%m-%dT%H:%M:%SZ"
+                                                                                   captured-at t))))))
+                                     (let ((org-prefix (concat (mapconcat #'identity lines "\n") "\n\n")))
+                                       (jaunder--debug-fields format format)
+                                       (let ((member (jaunder--make-pulled-member
+                                                      :org-prefix org-prefix :format format :body body
+                                                      :audience-omitted (null audiences))))
+                                         (setf (jaunder-pulled-member-org member)
+                                               (jaunder--render-pulled-member member body))
+                                         member))))))
 
 (defun jaunder--atom->org (entry-xml etag captured-at zone &optional audience-capable)
   "Map Member ENTRY-XML to Org using ETAG, CAPTURED-AT, ZONE, and service evidence."
@@ -263,9 +266,10 @@ This function performs no network or filesystem I/O."
 
 (defun jaunder--render-pulled-member (member body)
   "Render MEMBER's exact Org header bytes with replacement native BODY."
-  (unless (stringp body)
-    (jaunder--pull-error "localized Member body must be a string"))
-  (concat (jaunder-pulled-member-org-prefix member) body))
+  (jaunder--with-debug-operation "org.serialize" (format "org")
+                                 (unless (stringp body)
+                                   (jaunder--pull-error "localized Member body must be a string"))
+                                 (concat (jaunder-pulled-member-org-prefix member) body)))
 
 
 (cl-defstruct (jaunder-pull-result (:constructor jaunder--make-pull-result))
@@ -289,13 +293,14 @@ Successful results retain server-confirmed metadata for reconciliation."
 
 (defun jaunder--pull-response-identity (entry-xml)
   "Return (ID . SLUG) from complete response ENTRY-XML."
-  (let* ((fields (jaunder--harvest-response-fields entry-xml))
-         (edit-uri (jaunder--pull-exactly-one fields 'edit-uris "edit URI"))
-         (slug (jaunder--pull-exactly-one fields 'slugs "j:slug"))
-         (id (jaunder--pull-edit-id edit-uri)))
-    (unless id
-      (jaunder--pull-error "Member edit URI must end in a decimal Post ID"))
-    (cons id slug)))
+  (jaunder--with-debug-operation "member.identity" ()
+                                 (let* ((fields (jaunder--harvest-response-fields entry-xml))
+                                        (edit-uri (jaunder--pull-exactly-one fields 'edit-uris "edit URI"))
+                                        (slug (jaunder--pull-exactly-one fields 'slugs "j:slug"))
+                                        (id (jaunder--pull-edit-id edit-uri)))
+                                   (unless id
+                                     (jaunder--pull-error "Member edit URI must end in a decimal Post ID"))
+                                   (cons id slug))))
 
 (defun jaunder--pull-member-instance-id (response)
   "Return RESPONSE's sole canonical Jaunder instance UUID."
@@ -342,68 +347,69 @@ finalize Local Media Copies here.  The caller owns the final destination safety
 check and installation.  `jaunder--pull-link-inventory' supplies the shared
 reconciliation snapshot; standalone server-only pulls acquire equivalent
 complete evidence themselves."
-  (unless (jaunder-inventory-member-p member)
-    (jaunder--pull-error "pull input must be a D1 inventory Member"))
-  (let* ((audience-capable
-          (jaunder--require-synchronization-audience-evidence
-           (jaunder--active-base-url) nil))
-         (response (jaunder--http-request "GET" (jaunder-inventory-member-edit-uri member))))
-    (unless (and (integerp (plist-get response :status))
-                 (<= 200 (plist-get response :status) 299))
-      (jaunder--pull-error "Member GET returned non-2xx status"))
-    (let* ((entry-xml (plist-get response :body))
-           (identity (jaunder--pull-response-identity entry-xml))
-           (instance-id (jaunder--pull-member-instance-id response))
-           (etag (jaunder--response-header response "ETag")))
-      (unless (and (equal (car identity) (jaunder-inventory-member-id member))
-                   (equal (cdr identity) (jaunder-inventory-member-slug member)))
-        (signal 'jaunder-pull-stage-identity-changed
-                (list (list :post-id (car identity) :slug (cdr identity)
-                            :etag etag :http-status (plist-get response :status)
-                            :detail "Member response identity changed since inventory"))))
-      (let* ((captured-at (current-time))
-             (pulled-member
-              (jaunder--parse-pulled-member entry-xml etag captured-at
-                                            (jaunder--current-zone-name)
-                                            audience-capable))
-             (source-body (jaunder-pulled-member-body pulled-member))
-             (inventory (and (equal (jaunder-pulled-member-format pulled-member) "org")
-                             (let ((case-fold-search t))
-                               (string-match-p "\\[\\[https?:" source-body))
-                             (or jaunder--pull-link-inventory
-                                 (jaunder--inventory-for-root root))))
-             (evidence (and inventory
-                            (jaunder--inventory-post-link-evidence inventory)))
-             (members (car evidence))
-             (locals (cadr evidence))
-             (body (if inventory
-                       (jaunder--reverse-pulled-post-links source-body root members locals)
-                     source-body))
-             (plan (jaunder--pull-media-plan
-                    (jaunder-pulled-member-format pulled-member) body
-                    (jaunder--active-base-url))))
-        ;; The Post remains the final claim.  Matched consumers retain this
-        ;; stage so the original can be proved again at their install boundary.
-        (jaunder--reconcile-pull-progress "acquiring Local Media Copies")
-        (let* ((original-proof (or original-proof jaunder--pull-original-proof))
-               ;; Keep the established server-only materialization seam intact;
-               ;; only matched consumers need transient reuse evidence.
-               (media-staged (and original-proof
-                                  (jaunder--pull-media-stage
-                                   root instance-id plan original-proof))))
-          (unless media-staged
-            (jaunder--pull-media-materialize root instance-id plan))
-          (let ((localized-body
-                 (jaunder--pull-media-apply-plan
-                  (if media-staged
-                      (jaunder-pull-media-staged-plan media-staged)
-                    plan))))
-            (list :etag etag :id (car identity) :slug (cdr identity)
-                  :audience-omitted (jaunder-pulled-member-audience-omitted pulled-member)
-                  :synced-at (format-time-string "%Y-%m-%dT%H:%M:%SZ" captured-at t)
-                  :pulled-member pulled-member :original-proof original-proof
-                  :media-staged media-staged
-                  :bytes (jaunder--render-pulled-member pulled-member localized-body))))))))
+  (jaunder--with-debug-operation "pull.stage" ()
+				 (unless (jaunder-inventory-member-p member)
+				   (jaunder--pull-error "pull input must be a D1 inventory Member"))
+				 (let* ((audience-capable
+					 (jaunder--require-synchronization-audience-evidence
+					  (jaunder--active-base-url) nil))
+					(response (jaunder--http-request "GET" (jaunder-inventory-member-edit-uri member))))
+				   (unless (and (integerp (plist-get response :status))
+						(<= 200 (plist-get response :status) 299))
+				     (jaunder--pull-error "Member GET returned non-2xx status"))
+				   (let* ((entry-xml (plist-get response :body))
+					  (identity (jaunder--pull-response-identity entry-xml))
+					  (instance-id (jaunder--pull-member-instance-id response))
+					  (etag (jaunder--response-header response "ETag")))
+				     (unless (and (equal (car identity) (jaunder-inventory-member-id member))
+						  (equal (cdr identity) (jaunder-inventory-member-slug member)))
+				       (signal 'jaunder-pull-stage-identity-changed
+					       (list (list :post-id (car identity) :slug (cdr identity)
+							   :etag etag :http-status (plist-get response :status)
+							   :detail "Member response identity changed since inventory"))))
+				     (let* ((captured-at (current-time))
+					    (pulled-member
+					     (jaunder--parse-pulled-member entry-xml etag captured-at
+									   (jaunder--current-zone-name)
+									   audience-capable))
+					    (source-body (jaunder-pulled-member-body pulled-member))
+					    (inventory (and (equal (jaunder-pulled-member-format pulled-member) "org")
+							    (let ((case-fold-search t))
+							      (string-match-p "\\[\\[https?:" source-body))
+							    (or jaunder--pull-link-inventory
+								(jaunder--inventory-for-root root))))
+					    (evidence (and inventory
+							   (jaunder--inventory-post-link-evidence inventory)))
+					    (members (car evidence))
+					    (locals (cadr evidence))
+					    (body (if inventory
+						      (jaunder--reverse-pulled-post-links source-body root members locals)
+						    source-body))
+					    (plan (jaunder--pull-media-plan
+						   (jaunder-pulled-member-format pulled-member) body
+						   (jaunder--active-base-url))))
+				       ;; The Post remains the final claim.  Matched consumers retain this
+				       ;; stage so the original can be proved again at their install boundary.
+				       (jaunder--reconcile-pull-progress "acquiring Local Media Copies")
+				       (let* ((original-proof (or original-proof jaunder--pull-original-proof))
+					      ;; Keep the established server-only materialization seam intact;
+					      ;; only matched consumers need transient reuse evidence.
+					      (media-staged (and original-proof
+								 (jaunder--pull-media-stage
+								  root instance-id plan original-proof))))
+					 (unless media-staged
+					   (jaunder--pull-media-materialize root instance-id plan))
+					 (let ((localized-body
+						(jaunder--pull-media-apply-plan
+						 (if media-staged
+						     (jaunder-pull-media-staged-plan media-staged)
+						   plan))))
+					   (list :etag etag :id (car identity) :slug (cdr identity)
+						 :audience-omitted (jaunder-pulled-member-audience-omitted pulled-member)
+						 :synced-at (format-time-string "%Y-%m-%dT%H:%M:%SZ" captured-at t)
+						 :pulled-member pulled-member :original-proof original-proof
+						 :media-staged media-staged
+						 :bytes (jaunder--render-pulled-member pulled-member localized-body)))))))))
 
 (defun jaunder--pull-member (root member)
   "Pull D1 inventory MEMBER into ROOT, returning `jaunder-pull-result'.
