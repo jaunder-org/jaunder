@@ -150,6 +150,7 @@ impl ThemePresentationCoordinator {
     ///
     /// Returns an error when the browser cannot create or load the package stylesheet.
     pub async fn adopt(self, presentation: PublishedThemePresentation) -> WebResult<ThemeAdoption> {
+        // crap:allow: This wasm-only DOM load/promotion settlement cannot execute under native coverage; real browser tests exercise supersession and append/promotion failures while preserving the active stylesheet and generation guards.
         self.begin_navigation();
         let generation = self.generation.get_untracked();
 
@@ -401,6 +402,7 @@ fn remove_stylesheet_nodes(nodes: Vec<web_sys::Node>) -> WebResult<()> {
 }
 
 fn reconcile_theme_stylesheet(presentation: &PublishedThemePresentation) -> WebResult<()> {
+    // crap:allow: Browser Document/link reconciliation has no native DOM; real browser presentation tests exercise projector-provided existing links and immutable href binding, not the missing-link creation branch.
     let document = leptos::web_sys::window()
         .and_then(|window| window.document())
         .ok_or_else(|| WebError::server_message("Unable to reconcile Theme Package stylesheet"))?;

@@ -1238,6 +1238,112 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn system_install_callback_failure_removes_only_newly_materialized_bytes(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let inventory = host::system_theme::compile_system_artifact_inventory().unwrap();
+        let manager = ThemeAssetManager::new(
+            env.themes(),
+            crate::WriteScope::mock(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+        let application = inventory.application().content_digest();
+        let existing = manager.content_path(application.as_ref());
+        std::fs::create_dir_all(existing.parent().unwrap()).unwrap();
+        std::fs::write(&existing, inventory.application().content().bytes()).unwrap();
+        assert!(matches!(
+            manager.install_system(&inventory, 100).await,
+            Err(super::ThemeAssetError::Storage(_))
+        ));
+        assert!(
+            env.themes()
+                .list_content_eligibility()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            env.themes()
+                .system_application_content()
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            std::fs::read(&existing).unwrap(),
+            inventory.application().content().bytes()
+        );
+        for package in inventory.themes() {
+            for content in package.revision().contents() {
+                assert!(
+                    !manager
+                        .content_path(
+                            common::theme::ThemeContentDigest::from_digest(content.digest())
+                                .as_ref()
+                        )
+                        .exists()
+                );
+            }
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn startup_collects_expired_system_content_and_keeps_live_release_bytes(
+        #[case] backend: Backend,
+    ) {
+        use host::system_theme::qualification::{self, Fixture};
+        let env = backend.setup().await;
+        let a = qualification::compile(Fixture::A).unwrap();
+        let b = qualification::compile(Fixture::BApplication).unwrap();
+        let manager = ThemeAssetManager::new(
+            env.themes(),
+            env.write_scope().clone(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+        let now = jiff::Timestamp::now().as_second();
+        let retention = super::THEME_CONTENT_RETENTION_SECONDS;
+        confirmed(
+            manager
+                .install_system(&a, now - 2 * retention)
+                .await
+                .unwrap(),
+        );
+        confirmed(
+            manager
+                .install_system(&b, now - retention - 1)
+                .await
+                .unwrap(),
+        );
+        manager.reconcile_startup().await.unwrap();
+        let old = a.application().content_digest();
+        assert!(
+            env.themes()
+                .content_eligibility(&old)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(!manager.content_path(old.as_ref()).exists());
+        let live = b.application().content_digest();
+        assert_eq!(
+            fs::read(manager.content_path(live.as_ref())).unwrap(),
+            b.application().content().bytes()
+        );
+        assert_eq!(
+            env.themes()
+                .system_application_content()
+                .await
+                .unwrap()
+                .unwrap()
+                .digest,
+            live
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn system_admission_callback_failure_rolls_back_the_entire_inventory(
         #[case] backend: Backend,
     ) {

@@ -99,16 +99,13 @@ empty 304 responses, retired-route 404s, Home protection and restored
 readability. Restore uses the canonical current backup-format constant and
 compares actual schema before browser admission.
 
-Sanitized JSON/Markdown is published atomically under
-`docs/evidence/styling-qualification/`; raw credentials, traces, backups, disks
-and logs stay private. The historical
-[pre-rebase qualification](evidence/styling-qualification/df860966fac563c6cdb1ba6ddac175822f19df38-1791488769470905508/summary.md)
-records backup format 3 and schema 50. The completed
-[post-recovery qualification](evidence/styling-qualification/11d459bfd85c9286b0a583cb181074f7ccdb671b-1791506451527739238/summary.md)
-records format 3 and observed schema 51 on both backends, including same-backend
-restore with deferred PostgreSQL foreign keys and the incoming Org verse
-migration preserved. These proofs complement, rather than replace, the fourteen
-refreshed full-page visual pairs and focused interaction/accessibility tests.
+Sanitized JSON/Markdown is retained atomically under
+`.xtask/review/evidence/styling-qualification/` for temporary PR review or CI
+artifacts, not committed as repository documentation. Raw credentials, traces,
+backups, disks and logs stay private. Each result binds its observations to the
+exact source and product identities tested; rerun the harness when fresh proof
+is needed. Qualification complements, rather than replaces, comparable visual
+pairs and focused interaction/accessibility tests.
 
 Chromium (or automated WebKit elsewhere) is **not actual Safari or iPhone
 qualification**. Desktop Safari and iPhone remain unqualified until separately

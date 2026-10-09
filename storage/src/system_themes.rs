@@ -38,6 +38,24 @@ struct SystemContent {
     references: i64,
 }
 
+fn add_content_reference(
+    contents: &mut BTreeMap<ThemeContentDigest, SystemContent>,
+    digest: ThemeContentDigest,
+    mime: &str,
+) -> Result<(), sqlx::Error> {
+    let entry = contents.entry(digest).or_insert_with(|| SystemContent {
+        mime: mime.to_owned(),
+        references: 0,
+    });
+    if entry.mime != mime {
+        return Err(sqlx::Error::Protocol(
+            "system content digest has conflicting MIME types".into(),
+        ));
+    }
+    entry.references += 1;
+    Ok(())
+}
+
 /// An atomic, closed release admission. There is no public constructor or
 /// mutable-field access: custom Theme mutations cannot mint application authority.
 #[derive(Debug)]
@@ -79,16 +97,7 @@ impl SystemThemeAdmission {
                 if !seen.insert(digest.clone()) {
                     continue;
                 }
-                let entry = contents.entry(digest).or_insert_with(|| SystemContent {
-                    mime: content.mime().to_owned(),
-                    references: 0,
-                });
-                if entry.mime != content.mime() {
-                    return Err(sqlx::Error::Protocol(
-                        "system content digest has conflicting MIME types".into(),
-                    ));
-                }
-                entry.references += 1;
+                add_content_reference(&mut contents, digest, content.mime())?;
             }
             revisions.push(SystemThemeRevision {
                 theme: package.theme(),
@@ -230,3 +239,26 @@ macro_rules! system_queries {
 
 system_queries!(sqlite, sqlx::SqliteConnection, sqlx::SqlitePool);
 system_queries!(postgres, sqlx::PgConnection, sqlx::PgPool);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_content_counts_references_and_rejects_mime_conflicts_without_mutation() {
+        let digest = ThemeContentDigest::from_digest([1; 32]);
+        let mut contents = BTreeMap::new();
+        add_content_reference(&mut contents, digest.clone(), "text/css").unwrap();
+        add_content_reference(&mut contents, digest.clone(), "text/css").unwrap();
+        assert!(add_content_reference(&mut contents, digest.clone(), "image/png").is_err());
+        assert_eq!(contents.len(), 1);
+        assert_eq!(contents[&digest].references, 2);
+        assert_eq!(contents[&digest].mime, "text/css");
+    }
+
+    #[test]
+    fn release_admission_rejects_retention_deadline_overflow() {
+        let inventory = host::system_theme::compile_system_artifact_inventory().unwrap();
+        assert!(SystemThemeAdmission::from_inventory(&inventory, i64::MAX).is_err());
+    }
+}

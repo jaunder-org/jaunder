@@ -38,3 +38,15 @@ impl SystemArtifactSource for EmbeddedSource {
 pub(crate) fn load() -> Result<SystemArtifactInventory, SystemArtifactLoadError> {
     host::system_theme::load_system_artifact_inventory(&EmbeddedSource)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_embedded_member_fails_closed_with_its_path() {
+        assert!(
+            matches!(EmbeddedSource.read("missing"), Err(SystemArtifactLoadError::Invalid(message)) if message == "embedded artifact is missing: missing")
+        );
+    }
+}

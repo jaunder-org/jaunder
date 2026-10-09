@@ -287,6 +287,13 @@ pub fn stage_verified_system_artifacts(
         &host::system_theme::DirectorySystemArtifactSource::new(dst),
     )
     .map_err(|error| BundleStageError(format!("invalid staged system artifacts: {error}")))?;
+    verify_staged_inventory(inventory, &staged)
+}
+
+fn verify_staged_inventory(
+    inventory: &host::system_theme::SystemArtifactInventory,
+    staged: &host::system_theme::SystemArtifactInventory,
+) -> Result<(), BundleStageError> {
     if staged.application().content().bytes() != inventory.application().content().bytes()
         || staged
             .themes()
@@ -298,6 +305,22 @@ pub fn stage_verified_system_artifacts(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod staged_identity_tests {
+    use super::*;
+
+    #[test]
+    fn staged_inventory_rejects_application_and_package_identity_changes() {
+        use host::system_theme::qualification::{self, Fixture};
+        let a = qualification::compile(Fixture::A).unwrap();
+        assert!(verify_staged_inventory(&a, &a).is_ok());
+        for fixture in [Fixture::BApplication, Fixture::BTheme] {
+            let changed = qualification::compile(fixture).unwrap();
+            assert!(verify_staged_inventory(&a, &changed).is_err());
+        }
+    }
 }
 
 fn copy_tree(src: &Path, dst: &Path) -> Result<(), BundleStageError> {

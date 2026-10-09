@@ -1147,6 +1147,65 @@ mod tests {
     }
 
     #[test]
+    fn percent_encoded_asset_paths_preserve_separators_and_escape_url_delimiters() {
+        assert_eq!(
+            percent_encode_asset_path("assets/A-z_0.~.png"),
+            "assets/A-z_0.~.png"
+        );
+        assert_eq!(
+            percent_encode_asset_path("assets/naïve ?#.png"),
+            "assets/na%C3%AFve%20%3F%23.png"
+        );
+    }
+
+    #[test]
+    fn preview_urls_preserve_public_identity_and_both_maps_must_be_complete() {
+        let manifest = br#"{"schema":1,"name":"Preview","style_contract":1,"assets":{"assets/logo.png":"image/png"},"defaults":{}}"#;
+        let assets =
+            BTreeMap::from([("assets/logo.png".to_owned(), raster(ImageFormat::Png, 1, 1))]);
+        let archive = export_theme_package(
+            manifest,
+            b"body { background: url(\"assets/logo.png\"); }",
+            &assets,
+        )
+        .unwrap();
+        let limits = ThemePackageLimits::default();
+        let served =
+            BTreeMap::from([("assets/logo.png".to_owned(), "/preview/logo.png".to_owned())]);
+        let identity = BTreeMap::from([(
+            "assets/logo.png".to_owned(),
+            "/theme/immutable-logo".to_owned(),
+        )]);
+        let expected = validate_theme_package(&archive, limits)
+            .unwrap()
+            .compile(&identity, limits)
+            .unwrap();
+        let (preview, digest) = validate_theme_package(&archive, limits)
+            .unwrap()
+            .compile_with_identity_asset_urls(&served, &identity, limits)
+            .unwrap();
+        assert_eq!(digest, expected.revision_digest());
+        assert_ne!(preview.revision_digest(), digest);
+        assert!(
+            std::str::from_utf8(preview.stylesheet_content().bytes())
+                .unwrap()
+                .contains("/preview/logo.png")
+        );
+        assert!(
+            validate_theme_package(&archive, limits)
+                .unwrap()
+                .compile_with_identity_asset_urls(&served, &BTreeMap::new(), limits)
+                .is_err()
+        );
+        assert!(
+            validate_theme_package(&archive, limits)
+                .unwrap()
+                .compile_with_identity_asset_urls(&BTreeMap::new(), &identity, limits)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn canonicalizes_closed_manifest_before_source_digesting() {
         let package = package(
             r#"{"style_contract":1,"defaults":{},"name":"Paper","assets":{},"schema":1}"#,

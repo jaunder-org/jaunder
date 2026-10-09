@@ -23,6 +23,8 @@ use crate::{
     result::{CommandResult, StepResult},
 };
 
+const QUALIFICATION_EVIDENCE_DIRECTORY: &str = ".xtask/review/evidence/styling-qualification";
+
 const CUTOVERS: [(Phase, Fixture, Transition); 4] = [
     (Phase::AppB, Fixture::BApplication, Transition::Application),
     (Phase::RollbackA, Fixture::A, Transition::Application),
@@ -553,7 +555,7 @@ pub(crate) fn run(root: &Path) -> Result<CommandResult> {
         crate::production_baseline::scan_retained("styling-summary.json", &json, &canaries)?;
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
         let destination = root
-            .join("docs/evidence/styling-qualification")
+            .join(QUALIFICATION_EVIDENCE_DIRECTORY)
             .join(format!("{}-{nonce}", source.commit()));
         fs::create_dir_all(
             destination
@@ -574,7 +576,7 @@ pub(crate) fn run(root: &Path) -> Result<CommandResult> {
         Ok(prepared) => prepared,
         Err(error) => return Err(retain_failure(lifecycle, error)),
     };
-    // A passed record becomes public only after owned processes and runtime
+    // Retain a passed review artifact only after owned processes and runtime
     // workspaces are cleaned. Failure leaves the sanitized staging private.
     lifecycle.cleanup().with_context(|| {
         format!(
@@ -617,6 +619,14 @@ fn retain_failure(lifecycle: BaselineLifecycle, primary: anyhow::Error) -> anyho
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn qualification_records_are_temporary_review_artifacts() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join(QUALIFICATION_EVIDENCE_DIRECTORY);
+        assert!(destination.starts_with(root.path().join(".xtask/review/evidence")));
+        assert!(!destination.starts_with(root.path().join("docs")));
+    }
 
     #[test]
     fn qualification_cli_admits_only_the_fixed_mode() {

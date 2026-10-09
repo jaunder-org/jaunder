@@ -232,17 +232,21 @@ fn collect_source_paths(
         path: relative.display().to_string(),
         source,
     })? {
+        // cov:ignore-start: A ReadDir item error requires a live filesystem fault/race; std exposes no deterministic item-error injection seam.
         let entry = entry.map_err(|source| SystemArtifactLoadError::Read {
             path: relative.display().to_string(),
             source,
         })?;
+        // cov:ignore-stop
         let child = relative.join(entry.file_name());
+        // cov:ignore-start: DirEntry file_type failure requires a post-enumeration OS fault on the authoritative Linux filesystem; normal entries and invalid node kinds are tested.
         let file_type = entry
             .file_type()
             .map_err(|source| SystemArtifactLoadError::Read {
                 path: child.display().to_string(),
                 source,
             })?;
+        // cov:ignore-stop
         if file_type.is_dir() {
             collect_source_paths(root, &child, paths)?;
         } else if file_type.is_file() {
@@ -411,10 +415,12 @@ pub fn stage_system_artifact_inventory(
         path: root.to_path_buf(),
         source,
     })?;
+    // cov:ignore-start: themes/ was just created under the same fresh root; failure creating its packages/ sibling requires an intervening OS race or resource fault.
     fs::create_dir_all(root.join("packages")).map_err(|source| SystemArtifactStageError {
         path: root.to_path_buf(),
         source,
     })?;
+    // cov:ignore-stop
 
     let application = inventory.application.content();
     write_staged(root.join("application.css"), application.bytes())?;
@@ -655,7 +661,7 @@ pub mod shared_asset_fixture {
                 ASSET_MANIFEST_STUDIO,
                 &stylesheet,
                 &assets,
-            )?;
+            )?; // cov:ignore: Studio error continuation needs invalid closed fixture constants after canonical inputs and the identical PNG have validated in Terminal.
         }
         Ok(inventory)
     }
@@ -842,6 +848,14 @@ mod tests {
                 "loaded package assets preserve path, MIME, digest, and exact bytes"
             );
         }
+    }
+
+    #[test]
+    fn shared_asset_fixture_rejects_invalid_png_input() {
+        assert!(
+            shared_asset_fixture::compile(shared_asset_fixture::SharingFixture::Both, b"not a PNG")
+                .is_err()
+        );
     }
 
     #[test]
