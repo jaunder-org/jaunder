@@ -635,63 +635,77 @@ report remains visibly reviewable, and the User must refresh before retrying."
                                       (jaunder--debug-fields decision (jaunder--reconcile-debug-batch-decision ,buffer ,value))
                                       ,value))))
 
+(defvar jaunder--reconcile-batch-members nil
+  "Dynamic remote Collection evidence for one matched pull or keep-remote batch.
+The plist records `unacquired', `complete', or `failed' acquisition state so an
+empty complete Collection is never mistaken for absent or failed evidence.")
+
 (defun jaunder--reconcile-execute-batch (buffer rows action operation &optional cancelled-p)
   "Run OPERATION for ROWS sequentially, retaining every terminal result in BUFFER.
 CANCELLED-P is checked only between completed items.  OPERATION receives one
 row and returns a result plist; its independent errors become failed results."
   (jaunder--with-reconcile-batch-debug action buffer
-                                       (with-current-buffer buffer
-                                         (setq-local jaunder-reconcile-last-batch-results nil)
-                                         (setq rows (cl-remove-if-not
-                                                     (lambda (displayed-row)
-                                                       (memq displayed-row rows))
-                                                     (jaunder--reconcile-displayed-rows jaunder-reconcile-report))))
-                                       (let ((total (length rows)) (completed 0) cancelled)
-                                         (dolist (row rows)
-                                           (unless cancelled
-                                             (if (or (and cancelled-p (funcall cancelled-p)) quit-flag)
-                                                 (setq cancelled t)
-                                               (setq completed (1+ completed))
-                                               (let* ((jaunder--reconcile-progress-context
-                                                       (when (eq action 'pull)
-                                                         (list completed total (or (jaunder--reconcile-row-post-id row) "unknown"))))
-                                                      (jaunder--reconcile-progress-stage nil)
-                                                      quit-requested value)
-                                                 (if jaunder--reconcile-progress-context
-                                                     (jaunder--reconcile-pull-progress "starting")
-                                                   (message "Jaunder %s: %d/%d" action completed total))
-                                                 (setq value
-                                                       (condition-case err
-                                                           (let ((inhibit-quit t))
-                                                             (prog1 (funcall operation row)
-                                                               (setq quit-requested quit-flag
-                                                                     quit-flag nil)))
-                                                         (error (list :outcome 'failed :reason 'operation-failed
-                                                                      :detail (jaunder--reconcile-pull-error-detail err)))))
-                                                 (with-current-buffer buffer
-                                                   (setq-local jaunder-reconcile-last-batch-results
-                                                               (append jaunder-reconcile-last-batch-results
-                                                                       (list (jaunder--reconcile-terminal-result action row value)))))
-                                                 (when jaunder--reconcile-progress-context
-                                                   (jaunder--reconcile-pull-progress
-                                                    (format "%s%s" (or (plist-get value :outcome) 'failed)
-                                                            (if (plist-get value :reason)
-                                                                (format " (%s)" (plist-get value :reason)) ""))))
-                                                 (when (or quit-requested
-                                                           (and cancelled-p (funcall cancelled-p)) quit-flag)
-                                                   (setq cancelled t))))))
-                                         (when cancelled (setq quit-flag nil))
-                                         (when (eq action 'pull)
-                                           (message "Jaunder pull: refreshing report after %d/%d Posts" completed total)
-                                           (redisplay))
-                                         (let* ((jaunder--reconcile-batch-refresh-progress (eq action 'pull))
-                                                (refresh (jaunder--reconcile-show-results-and-refresh buffer)))
-                                           (if (eq refresh 'refresh-failed)
-                                               'refresh-failed
-                                             (when (eq action 'pull)
-                                               (message "Jaunder pull: %s after %d/%d Posts"
-                                                        (if cancelled "cancelled" "batch complete") completed total))
-                                             (if cancelled 'cancelled 'completed))))))
+                                       (let* ((root (with-current-buffer buffer
+                                                      (jaunder-reconcile-report-root
+                                                       jaunder-reconcile-report)))
+                                              (jaunder--reconcile-batch-members
+                                               (when (memq action '(pull keep-remote))
+                                                 (list :state 'unacquired :root root))))
+                                         (with-current-buffer buffer
+                                           (setq-local jaunder-reconcile-last-batch-results nil)
+                                           (setq rows (cl-remove-if-not
+                                                       (lambda (displayed-row)
+                                                         (memq displayed-row rows))
+                                                       (jaunder--reconcile-displayed-rows jaunder-reconcile-report))))
+                                         (let ((total (length rows)) (completed 0) cancelled)
+                                           (dolist (row rows)
+                                             (unless cancelled
+                                               (if (or (and cancelled-p (funcall cancelled-p)) quit-flag)
+                                                   (setq cancelled t)
+                                                 (setq completed (1+ completed))
+                                                 (let* ((jaunder--reconcile-progress-context
+                                                         (when (eq action 'pull)
+                                                           (list completed total (or (jaunder--reconcile-row-post-id row) "unknown"))))
+                                                        (jaunder--reconcile-progress-stage nil)
+                                                        quit-requested value)
+                                                   (if jaunder--reconcile-progress-context
+                                                       (jaunder--reconcile-pull-progress "starting")
+                                                     (message "Jaunder %s: %d/%d" action completed total))
+                                                   (setq value
+                                                         (condition-case err
+                                                             (let ((inhibit-quit t))
+                                                               (prog1 (funcall operation row)
+                                                                 (setq quit-requested quit-flag
+                                                                       quit-flag nil)))
+                                                           (error (list :outcome 'failed :reason 'operation-failed
+                                                                        :detail (jaunder--reconcile-pull-error-detail err)))))
+                                                   (with-current-buffer buffer
+                                                     (setq-local jaunder-reconcile-last-batch-results
+                                                                 (append jaunder-reconcile-last-batch-results
+                                                                         (list (jaunder--reconcile-terminal-result action row value)))))
+                                                   (when jaunder--reconcile-progress-context
+                                                     (jaunder--reconcile-pull-progress
+                                                      (format "%s%s" (or (plist-get value :outcome) 'failed)
+                                                              (if (plist-get value :reason)
+                                                                  (format " (%s)" (plist-get value :reason)) ""))))
+                                                   (when (or quit-requested
+                                                             (and cancelled-p (funcall cancelled-p)) quit-flag)
+                                                     (setq cancelled t))))))
+                                           (when cancelled (setq quit-flag nil))
+                                           (when (eq action 'pull)
+                                             (message "Jaunder pull: refreshing report after %d/%d Posts" completed total)
+                                             (redisplay))
+                                           ;; Operation evidence is intentionally unavailable to the new
+                                           ;; report inventory and to callbacks it may invoke.
+                                           (setq jaunder--reconcile-batch-members nil)
+                                           (let* ((jaunder--reconcile-batch-refresh-progress (eq action 'pull))
+                                                  (refresh (jaunder--reconcile-show-results-and-refresh buffer)))
+                                             (if (eq refresh 'refresh-failed)
+                                                 'refresh-failed
+                                               (when (eq action 'pull)
+                                                 (message "Jaunder pull: %s after %d/%d Posts"
+                                                          (if cancelled "cancelled" "batch complete") completed total))
+                                               (if cancelled 'cancelled 'completed)))))))
 
 (defun jaunder--reconcile-row-post-id (row)
   "Return ROW's remote Post ID, when it has an unambiguous Member."
@@ -915,6 +929,58 @@ Return a plist suitable for a terminal result; no DELETE is sent here."
                                    (error (list :reason 'pull-revalidation-transport-error
                                                 :detail (jaunder--reconcile-pull-error-detail err))))))
 
+(defun jaunder--reconcile-batch-remote-members ()
+  "Return this batch's complete remote Members or signal its retained failure.
+Only confirmed pull and keep-remote batches bind this evidence.  Acquisition is
+lazy because batches without a matched row have no need for a Collection walk."
+  (pcase (plist-get jaunder--reconcile-batch-members :state)
+    ('complete (plist-get jaunder--reconcile-batch-members :members))
+    ('failed (signal (plist-get jaunder--reconcile-batch-members :condition)
+                     (plist-get jaunder--reconcile-batch-members :data)))
+    ('unacquired
+     (condition-case err
+         (let ((members (jaunder--fetch-collection-members)))
+           (setq jaunder--reconcile-batch-members
+                 (plist-put
+                  (plist-put jaunder--reconcile-batch-members :state 'complete)
+                  :members members))
+           members)
+       (error
+        (setq jaunder--reconcile-batch-members
+              (plist-put
+               (plist-put
+                (plist-put jaunder--reconcile-batch-members :state 'failed)
+                :condition (car err))
+               :data (cdr err)))
+        (setq jaunder--reconcile-batch-members
+              (plist-put jaunder--reconcile-batch-members
+                         :detail (error-message-string err)))
+        (signal (car err) (cdr err)))))))
+
+(defun jaunder--reconcile-batch-members-for-root (root)
+  "Return ROOT's owned batch Members, rejecting a root or blog scope mismatch."
+  (when (eq (plist-get jaunder--reconcile-batch-members :state) 'unacquired)
+    (setq jaunder--reconcile-batch-members
+          (plist-put jaunder--reconcile-batch-members
+                     :base-url (jaunder--active-base-url)))
+    (setq jaunder--reconcile-batch-members
+          (plist-put jaunder--reconcile-batch-members
+                     :username (jaunder--active-username))))
+  (unless (and (equal root (plist-get jaunder--reconcile-batch-members :root))
+               (equal (jaunder--active-base-url)
+                      (plist-get jaunder--reconcile-batch-members :base-url))
+               (equal (jaunder--active-username)
+                      (plist-get jaunder--reconcile-batch-members :username)))
+    (error "jaunder reconcile: batch Collection evidence scope mismatch"))
+  (jaunder--reconcile-batch-remote-members))
+
+(defun jaunder--reconcile-pull-inventory (root)
+  "Return current local evidence joined to batch remote evidence when bound."
+  (if jaunder--reconcile-batch-members
+      (jaunder--join-inventory (jaunder--scan-root-locals root)
+                               (jaunder--reconcile-batch-members-for-root root))
+    (jaunder--inventory-for-root root)))
+
 (defun jaunder--reconcile-pull-unique-match (row)
   "Return structured fresh-inventory evidence that ROW remains uniquely matched.
 A duplicate local or remote Post ID is an actionable blocked result, rather
@@ -930,7 +996,7 @@ than an exception flattened into a generic pull failure."
                      (format "Collection page %d complete" page))
                     (setq jaunder--reconcile-progress-stage
                           (format "verifying Collection after page %d" page)))))
-               (inventory (jaunder--inventory-for-root root))
+               (inventory (jaunder--reconcile-pull-inventory root))
                (duplicate-local
                 (cl-find-if
                  (lambda (conflict)
@@ -968,6 +1034,25 @@ than an exception flattened into a generic pull failure."
              :detail (format "fresh inventory has duplicate remote Post ID %s" id)))
       (error (list :reason 'fresh-inventory-failed
                    :detail (jaunder--reconcile-pull-error-detail err))))))
+
+(defun jaunder--reconcile-pull-final-local-unique-match (row)
+  "Return a final local-only uniqueness result for ROW before replacement."
+  (let* ((id (jaunder--reconcile-row-post-id row))
+         (path (jaunder-inventory-local-path (jaunder-reconcile-row-local row)))
+         (locals (jaunder--scan-root-locals
+                  (jaunder-reconcile-report-root jaunder-reconcile-report)))
+         (same-id (cl-remove-if-not
+                   (lambda (local) (equal (jaunder-inventory-local-id local) id)) locals)))
+    (cond ((> (length same-id) 1)
+           (list :reason 'duplicate-local-id
+                 :detail (format "final local scan has duplicate local Post ID %s" id)))
+          ((/= (length same-id) 1)
+           (list :reason 'matched-identity-changed
+                 :detail "final local scan no longer has the reviewed local Post"))
+          ((not (equal (jaunder-inventory-local-path (car same-id)) path))
+           (list :reason 'matched-identity-changed
+                 :detail "final local scan no longer has the reviewed local Post"))
+          (t (list :ok t)))))
 
 (defun jaunder--reconcile-conflict-preflight (row)
   "Return fresh evidence for reviewed conflict ROW, or a blocked result.
@@ -1163,11 +1248,18 @@ arbitrary fallback work."
                          (jaunder--reconcile-finalize-staged-media
                           (jaunder-reconcile-report-root jaunder-reconcile-report) staged)
                        staged))
-             ;; Media fallback can take time and create durable files, so repeat
-             ;; ADR-0200's local snapshot immediately before replacing the Post.
-             (after-media (jaunder--reconcile-pull-preflight row staged)))
-        (if after-media
-            (jaunder--reconcile-blocked row after-media)
+             ;; Media fallback can take time and create durable files, so a
+             ;; local-only uniqueness scan precedes the final replacement guard.
+             (final-local (jaunder--reconcile-pull-final-local-unique-match row))
+             (after-media (and (plist-get final-local :ok)
+                               (jaunder--reconcile-pull-preflight row staged))))
+        (cond
+         ((not (plist-get final-local :ok))
+          (jaunder--reconcile-blocked row (plist-get final-local :reason)
+                                      (plist-get final-local :detail)))
+         (after-media
+          (jaunder--reconcile-blocked row after-media))
+         (t
           (let* ((destination (jaunder--reconcile-pull-destination row (plist-get staged :slug)))
                  (bytes (if (plist-get staged :audience-omitted)
                             (jaunder--reconcile-preserve-legacy-audience
@@ -1182,7 +1274,7 @@ arbitrary fallback work."
                           :http-status (plist-get remote :http-status)
                           :local-effect (plist-get installed :local-effect))
                     (when committed
-                      (list :reason 'pull-rename-failed :detail (plist-get installed :detail))))))))))
+                      (list :reason 'pull-rename-failed :detail (plist-get installed :detail)))))))))))
 
 (defun jaunder--reconcile-pull-server-ahead-row (row)
   "Stage, inventory, and revalidate ROW before one final local preflight.

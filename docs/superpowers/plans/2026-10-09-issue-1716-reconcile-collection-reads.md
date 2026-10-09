@@ -15,7 +15,7 @@ push, keep-local, interactive merge, standalone pull, and publish-time links.
 
 ## Task outline
 
-- [ ] Task 1: Batch matched pull and keep-remote without repeated remote walks.
+- [x] Task 1: Batch matched pull and keep-remote without repeated remote walks.
   - Contract: the row-operation portion of `jaunder--reconcile-execute-batch`
     owns a root/blog-bound context only for pull and keep-remote. Distinguish
     unacquired, complete Members (including an empty Collection), and failed

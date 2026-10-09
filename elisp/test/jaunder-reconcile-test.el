@@ -2987,6 +2987,8 @@ The current filename supplies the local slug evidence used by matched-pull tests
                      (lambda () (date-to-time "2026-08-25T00:00:00Z")))
                     ((symbol-function 'jaunder--reconcile-pull-preflight)
                      (lambda (&rest _) nil))
+                    ((symbol-function 'jaunder--reconcile-pull-final-local-unique-match)
+                     (lambda (&rest _) '(:ok t)))
                     ((symbol-function 'jaunder--reconcile-pull-destination)
                      (lambda (&rest _) path)))
             (should (eq (plist-get
@@ -3712,6 +3714,27 @@ The current filename supplies the local slug evidence used by matched-pull tests
                          bytes)))
       (delete-directory root t))))
 
+(ert-deftest jaunder-reconcile-final-local-uniqueness-rejects-a-late-duplicate ()
+  "The last replacement guard scans local Posts without another Collection read."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-final-local-" t)))
+         (path (expand-file-name "post.org" root))
+         (duplicate (expand-file-name "duplicate.org" root))
+         (row (jaunder--make-reconcile-row
+               :local (jaunder-reconcile-test--local path "7")
+               :member (jaunder-reconcile-test--member "7" "post")))
+         (jaunder-reconcile-report (jaunder--make-reconcile-report :root root)))
+    (unwind-protect
+        (progn
+          (dolist (candidate (list path duplicate))
+            (with-temp-file candidate
+              (insert "#+PROPERTY: JAUNDER_ID 7\n")))
+          (cl-letf (((symbol-function 'jaunder--fetch-collection-members)
+                     (lambda () (ert-fail "final local guard must not fetch Collection"))))
+            (should (eq (plist-get (jaunder--reconcile-pull-final-local-unique-match row)
+                                   :reason)
+                        'duplicate-local-id))))
+      (delete-directory root t))))
+
 (ert-deftest jaunder-reconcile-pull-rechecks-local-preflight-after-media-finalization ()
   "A local Post mutation during Media work blocks replacement at the final boundary."
   (let* ((row (jaunder--make-reconcile-row
@@ -3731,6 +3754,8 @@ The current filename supplies the local slug evidence used by matched-pull tests
                  (should (= preflights 1))
                  (setq finalized t)
                  value))
+              ((symbol-function 'jaunder--reconcile-pull-final-local-unique-match)
+               (lambda (_) (should finalized) '(:ok t)))
               ((symbol-function 'jaunder--reconcile-replace-pulled-file)
                (lambda (&rest _) (ert-fail "must not replace after post-media preflight"))))
       (let ((result (jaunder--reconcile-pull-install-staged
@@ -3759,6 +3784,19 @@ The current filename supplies the local slug evidence used by matched-pull tests
           (setq-local jaunder-reconcile-merge-allow-kill t)
           (set-buffer-modified-p nil))
         (kill-buffer result)))))
+
+(ert-deftest jaunder-reconcile-batch-members-retain-scope-and-failure-evidence ()
+  "Batch Member evidence cannot cross root/blog scope or lose failure details."
+  (let ((jaunder--reconcile-batch-members
+         (list :state 'failed :root "/one" :base-url "https://one.test" :username "one"
+               :condition 'error :data '("offline") :detail "offline")))
+    (cl-letf (((symbol-function 'jaunder--active-base-url) (lambda () "https://one.test"))
+              ((symbol-function 'jaunder--active-username) (lambda () "one")))
+      (condition-case err
+          (progn (jaunder--reconcile-batch-members-for-root "/one")
+                 (ert-fail "must retain failed acquisition"))
+        (error (should (equal err '(error "offline")))))
+      (should-error (jaunder--reconcile-batch-members-for-root "/other")))))
 
 (provide 'jaunder-reconcile-test)
 ;;; jaunder-reconcile-test.el ends here

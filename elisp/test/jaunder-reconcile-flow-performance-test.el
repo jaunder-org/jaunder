@@ -16,8 +16,8 @@
 (load (expand-file-name "jaunder-reconcile-performance-fixture.el"
                         (file-name-directory (or load-file-name buffer-file-name))) nil t)
 
-(ert-deftest jaunder-reconcile-selected-pull-measures-complete-paginated-flow ()
-  "Three real matched pulls retain fresh checks through staging and refresh."
+(ert-deftest jaunder-reconcile-selected-pull-reuses-complete-paginated-flow ()
+  "Three real matched pulls use four operation and four refresh Collection reads."
   (let* ((root (make-temp-file "jaunder-pull-flow-" t))
          (jaunder-blogs
           (list (cons (file-name-as-directory root)
@@ -175,20 +175,58 @@
               :root root :rows rows :inventory (jaunder--inventory-for-root root)) buffer)
             (setq page-reads 0 member-reads 0 service-reads 0 media-reads 0)
             (clrhash times)
-            (should (eq (jaunder--call-with-blog
-                         root (lambda ()
-                                (jaunder--reconcile-execute-batch
-                                 buffer rows 'pull #'jaunder--reconcile-pull-row)))
-                        'completed))
+            (dolist (row rows)
+              (puthash (jaunder--reconcile-stable-row-key row) t jaunder-reconcile-marks))
+            (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+              (should (eq (jaunder-reconcile-pull-selected) 'completed)))
             (should (equal (mapcar #'jaunder-reconcile-result-outcome
                                    jaunder-reconcile-last-batch-results)
                            '(success success success)))
-            (should (= page-reads 16))
+            (should (= page-reads 8))
             (should (= member-reads 6))
             (should (= service-reads 3))
             (should (= media-reads 1))
+            (dolist (row rows)
+              (let ((path (jaunder-inventory-local-path (jaunder-reconcile-row-local row))))
+                (should (string-match-p "#\\+TITLE: After"
+                                        (with-temp-buffer
+                                          (insert-file-contents path)
+                                          (buffer-string))))))
+            ;; Keep-remote follows its public confirmation path with both
+            ;; Member preflights around staging while reusing the same four
+            ;; operation Collection pages.
+            (dolist (id ids)
+              (let ((slug (format "post-%03d" id)))
+                (with-temp-file (expand-file-name (concat slug ".org") root)
+                  (insert (funcall source id slug)))))
+            (delete-directory (expand-file-name "local-media" root) t)
+            (dolist (row rows)
+              (setf (jaunder-reconcile-row-state row) 'conflict))
+            (jaunder--render-reconcile-report
+             (jaunder--make-reconcile-report
+              :root root :rows rows :inventory (jaunder--inventory-for-root root)) buffer)
+            (setq page-reads 0 member-reads 0 service-reads 0 media-reads 0)
+            (clrhash times)
+            (clrhash jaunder-reconcile-marks)
+            (dolist (row rows)
+              (puthash (jaunder--reconcile-stable-row-key row) t jaunder-reconcile-marks))
+            (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+              (should (eq (jaunder-reconcile-keep-remote-selected) 'completed)))
+            (should (equal (mapcar #'jaunder-reconcile-result-outcome
+                                   jaunder-reconcile-last-batch-results)
+                           '(success success success)))
+            (should (= page-reads 8))
+            (should (= member-reads 9))
+            (should (= service-reads 3))
+            (should (= media-reads 1))
+            (dolist (row rows)
+              (let ((path (jaunder-inventory-local-path (jaunder-reconcile-row-local row))))
+                (should (string-match-p "#\\+TITLE: After"
+                                        (with-temp-buffer
+                                          (insert-file-contents path)
+                                          (buffer-string))))))
             (dolist (stage '(member-http media-http local-scan collection-pagination
-                                         staging inventory revalidation installation refresh))
+                                         staging inventory installation refresh))
               (should (numberp (gethash stage times)))))
           (dolist (arm (list (list "baseline" before-pages before-members before-service
                                    before-media before-times)
@@ -199,7 +237,7 @@
                        (nth 0 arm) (nth 1 arm) (nth 2 arm) (nth 3 arm) (nth 4 arm)
                        (gethash 'member-http clock) (gethash 'media-http clock)
                        (gethash 'local-scan clock) (gethash 'collection-pagination clock)
-                       (gethash 'revalidation clock) (gethash 'installation clock)
+                       (or (gethash 'revalidation clock) 0.0) (gethash 'installation clock)
                        (gethash 'refresh clock)))))
       (when (buffer-live-p buffer) (kill-buffer buffer))
       (delete-directory root t))))

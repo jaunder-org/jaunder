@@ -14,8 +14,8 @@
 (load (expand-file-name "jaunder-reconcile-performance-fixture.el"
                         (file-name-directory (or load-file-name buffer-file-name))) nil t)
 
-(ert-deftest jaunder-reconcile-selected-fetch-reports-every-fresh-collection-page ()
-  "Three matched Posts each verify all four fresh Collection pages before replacement."
+(ert-deftest jaunder-reconcile-selected-fetch-reuses-complete-collection-pages ()
+  "Three matched Posts share one complete four-page operation Collection read."
   (let* ((root (make-temp-file "jaunder-reconcile-scale-" t))
          (jaunder-blogs
           (list (cons (file-name-as-directory root)
@@ -79,20 +79,18 @@
             (should (= pages 12))
             (setq pages 0 scan-seconds 0.0 parse-seconds 0.0)
             (let ((start (float-time)))
-              (should (eq (jaunder--reconcile-execute-batch
-                           buffer rows 'pull
-                           (lambda (row)
-                             (should (plist-get (jaunder--reconcile-pull-unique-match row) :ok))
-                             (list :outcome 'success :local-effect 'replaced)))
-                          'completed))
+              (jaunder--call-with-blog
+               root
+               (lambda ()
+                 (let ((jaunder--reconcile-batch-members
+                        (list :state 'unacquired :root root
+                              :base-url (jaunder--active-base-url)
+                              :username (jaunder--active-username))))
+                   (dolist (row rows)
+                     (should (plist-get (jaunder--reconcile-pull-unique-match row) :ok))))))
               (setq after-total (- (float-time) start)))
-            (should (= pages 12))
-            (should (>= paints 12))
-            (should (= (cl-count-if (lambda (text)
-                                      (string-match-p "Collection page [1-4] complete" text))
-                                    progress)
-                       12)))
-          (message "Reconcile fixture 100 Members/3 Posts: before 12 pages %.3fs (local %.3fs, parse %.3fs); after 12 pages %.3fs (local %.3fs, parse %.3fs). Synthetic timings exclude network."
+            (should (= pages 4)))
+          (message "Reconcile fixture 100 Members/3 Posts: before 12 pages %.3fs (local %.3fs, parse %.3fs); after 4 pages %.3fs (local %.3fs, parse %.3fs). Synthetic timings exclude network."
                    before-total before-scan before-parse
                    after-total scan-seconds parse-seconds))
       (when (buffer-live-p buffer) (kill-buffer buffer))
