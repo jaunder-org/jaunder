@@ -87,6 +87,8 @@ let
     || relative == "csr/index.html"
     || pkgs.lib.hasPrefix "server/assets/" relative
     || pkgs.lib.hasPrefix "storage/migrations/" relative
+    || pkgs.lib.hasPrefix "host/system_theme_sources/" relative
+    || relative == "testdata/theme-repository/minimal/preview.png"
     || pkgs.lib.hasPrefix "server/tests/misc/backup_corpus/" relative;
   coverageSrc =
     # Pure source-filter negative case: excluded auxiliary assets cannot perturb
@@ -97,6 +99,10 @@ let
     assert (coverageAuxiliarySource "storage/migrations/sqlite/0001_create_site_config.sql");
     assert (coverageAuxiliarySource "server/assets/jaunder.css");
     assert (coverageAuxiliarySource "csr/index.html");
+    assert (coverageAuxiliarySource "host/system_theme_sources/studio/theme.json");
+    assert (coverageAuxiliarySource "host/system_theme_sources/studio/style.css");
+    assert (coverageAuxiliarySource "testdata/theme-repository/minimal/preview.png");
+    assert !(coverageAuxiliarySource "testdata/unrelated.png");
     assert builtins.elem "tools/csr_bundle" coverageMembers;
     assert !(builtins.elem "xtask" coverageMembers);
     assert !(builtins.elem "tools/devtool" coverageMembers);
@@ -2165,6 +2171,7 @@ static-code =
         !(pkgs.lib.hasSuffix ".md" path)
         && (
           pkgs.lib.hasSuffix ".css" path
+          || pkgs.lib.hasSuffix "/testdata/theme-repository/minimal/preview.png" path
           || (
             !isXtask
             && (
@@ -2206,6 +2213,8 @@ static-code =
         assert staticCodeSourceFilter "/source/xtask/theme.css" "regular";
         assert staticCodeSourceFilter "/source/xtask" "directory";
         assert !(staticCodeSourceFilter "/source/xtask/src/lib.rs" "regular");
+        assert (staticCodeSourceFilter "/source/testdata/theme-repository/minimal/preview.png" "regular");
+        assert !(staticCodeSourceFilter "/source/testdata/unrelated.png" "regular");
         staticCodeSourceFilter;
     };
   in
@@ -2227,6 +2236,9 @@ static-code =
         emacsForCi
       ];
       buildInputs = hostArgs.buildInputs;
+      # The server build script now links the host compiler, including native
+      # decoding dependencies. Cargo executes it before any output fixup.
+      LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ];
       # ert needs a zone DB (#160); tsc needs BOTH node-dep envs
       # (`devtool provision-node-modules`'s resolver errors on each when
       # unset).
