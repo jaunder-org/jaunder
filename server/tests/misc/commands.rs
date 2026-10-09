@@ -1,4 +1,6 @@
-use std::{fmt::Write as _, net::SocketAddr, sync::Arc};
+use std::{
+    collections::BTreeSet, fmt::Write as _, io::Read as _, net::SocketAddr, path::Path, sync::Arc,
+};
 
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -1591,6 +1593,198 @@ async fn cmd_restore_rejects_row_missing_a_column(#[case] backend: Backend) {
         Some(BackupError::InvalidBackup(_))
     ));
     assert_target_unmodified(&target_args).await;
+}
+
+fn write_runtime_backup_fixture(storage_path: &Path) {
+    let media = storage_path.join("media");
+    for (path, bytes) in [
+        (".locks/held", b"lock" as &[u8]),
+        ("tmp/partial", b"partial"),
+        ("cached/retained", b"cached"),
+        ("nested/tmp/retained", b"nested tmp"),
+        ("nested/.locks/retained", b"nested locks"),
+        ("nested/.staging/retained", b"nested staging"),
+        ("nested/ordinary.lock", b"nested lock"),
+        ("ordinary.lock", b"ordinary lock"),
+    ] {
+        let file = media.join(path);
+        std::fs::create_dir_all(file.parent().expect("fixture parent"))
+            .expect("create media fixture parent");
+        std::fs::write(file, bytes).expect("write media fixture");
+    }
+    for path in [".locks/empty", "tmp/empty", "cached/empty"] {
+        std::fs::create_dir_all(media.join(path)).expect("create empty media fixture directory");
+    }
+
+    let themes = storage_path.join("themes");
+    for (path, bytes) in [
+        (".locks/held", b"theme lock" as &[u8]),
+        (".staging/partial", b"theme partial"),
+        ("nested/.locks/retained", b"nested theme locks"),
+        ("nested/.staging/retained", b"nested theme staging"),
+        ("nested/ordinary.lock", b"nested theme lock"),
+    ] {
+        let file = themes.join(path);
+        std::fs::create_dir_all(file.parent().expect("fixture parent"))
+            .expect("create theme fixture parent");
+        std::fs::write(file, bytes).expect("write theme fixture");
+    }
+}
+
+fn assert_runtime_paths_filtered(root: &Path) {
+    for path in [
+        "media/.locks",
+        "media/tmp",
+        "themes/.locks",
+        "themes/.staging",
+    ] {
+        assert!(!root.join(path).exists(), "excluded path {path} is absent");
+    }
+    assert_durable_runtime_lookalikes(root);
+}
+
+fn assert_durable_runtime_lookalikes(root: &Path) {
+    for (path, expected) in [
+        ("media/cached/retained", b"cached" as &[u8]),
+        ("media/nested/tmp/retained", b"nested tmp"),
+        ("media/nested/.locks/retained", b"nested locks"),
+        ("media/nested/.staging/retained", b"nested staging"),
+        ("media/nested/ordinary.lock", b"nested lock"),
+        ("media/ordinary.lock", b"ordinary lock"),
+        ("themes/nested/.locks/retained", b"nested theme locks"),
+        ("themes/nested/.staging/retained", b"nested theme staging"),
+        ("themes/nested/ordinary.lock", b"nested theme lock"),
+    ] {
+        assert_eq!(
+            std::fs::read(root.join(path)).expect("read retained path"),
+            expected
+        );
+    }
+    assert!(root.join("media/cached/empty").is_dir());
+}
+
+fn archive_inventory(path: &Path) -> BTreeSet<String> {
+    let file = std::fs::File::open(path).expect("open archive");
+    let decoder = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(decoder);
+    archive
+        .entries()
+        .expect("read archive entries")
+        .map(|entry| {
+            let mut entry = entry.expect("read archive entry");
+            let mut ignored = Vec::new();
+            entry
+                .read_to_end(&mut ignored)
+                .expect("read archive entry bytes");
+            entry
+                .path()
+                .expect("read archive entry path")
+                .to_string_lossy()
+                .trim_start_matches("./")
+                .to_owned()
+        })
+        .collect()
+}
+
+fn package_archive(source: &Path, destination: &Path) {
+    let file = std::fs::File::create(destination).expect("create archive");
+    let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+    let mut archive = tar::Builder::new(encoder);
+    archive
+        .append_dir_all(".", source)
+        .expect("package backup directory");
+    archive
+        .into_inner()
+        .expect("finish archive entries")
+        .finish()
+        .expect("finish archive");
+}
+
+// ADR-0054: runtime filesystem filtering is a public backup/restore contract
+// on both backends, including archive transport and prior-backup reuse.
+#[apply(backends)]
+#[tokio::test]
+async fn cli_backup_filters_root_runtime_files_without_discarding_durable_lookalikes(
+    #[case] backend: Backend,
+) {
+    let source = InitializedCommandEnv::new(backend).await;
+    write_runtime_backup_fixture(&source.args.storage_path);
+    let first_backup = source.base.path().join("backups/2026-10-09-first");
+    cmd_backup(
+        &source.args,
+        BackupMode::Directory,
+        Some(first_backup.clone()),
+    )
+    .await
+    .expect("write initial directory backup");
+    assert_runtime_paths_filtered(&first_backup);
+
+    // A legacy sibling can contain excluded files, but reuse only links paths
+    // visited by the current root-scoped walk.
+    for path in ["media/.locks/historical", "media/tmp/historical"] {
+        let file = first_backup.join(path);
+        std::fs::create_dir_all(file.parent().expect("historical parent"))
+            .expect("create historical runtime parent");
+        std::fs::write(file, b"historical").expect("write historical runtime file");
+    }
+    let reused_backup = source.base.path().join("backups/2026-10-09-second");
+    cmd_backup(
+        &source.args,
+        BackupMode::Directory,
+        Some(reused_backup.clone()),
+    )
+    .await
+    .expect("write reused directory backup");
+    assert_runtime_paths_filtered(&reused_backup);
+
+    let archive_path = source.base.path().join("backup.tar.gz");
+    cmd_backup(
+        &source.args,
+        BackupMode::Archive,
+        Some(archive_path.clone()),
+    )
+    .await
+    .expect("write archive backup");
+    let inventory = archive_inventory(&archive_path);
+    assert!(inventory.iter().all(|path| {
+        !matches!(
+            path.as_str(),
+            "media/.locks" | "media/tmp" | "themes/.locks" | "themes/.staging"
+        ) && !path.starts_with("media/.locks/")
+            && !path.starts_with("media/tmp/")
+            && !path.starts_with("themes/.locks/")
+            && !path.starts_with("themes/.staging/")
+    }));
+    assert!(inventory.contains("media/cached/empty"));
+    assert!(inventory.contains("media/nested/tmp/retained"));
+    assert!(inventory.contains("media/nested/.locks/retained"));
+    assert!(inventory.contains("media/nested/ordinary.lock"));
+
+    let directory_target = InitializedCommandEnv::new(backend).await;
+    cmd_restore(&directory_target.args, &first_backup)
+        .await
+        .expect("restore historical directory backup");
+    assert_durable_runtime_lookalikes(&directory_target.args.storage_path);
+    for path in ["media/.locks/historical", "media/tmp/historical"] {
+        assert!(
+            !directory_target.args.storage_path.join(path).exists(),
+            "historical runtime entry {path} is not restored"
+        );
+    }
+
+    let historical_archive = source.base.path().join("historical.tar.gz");
+    package_archive(&first_backup, &historical_archive);
+    let archive_target = InitializedCommandEnv::new(backend).await;
+    cmd_restore(&archive_target.args, &historical_archive)
+        .await
+        .expect("restore historical archive backup");
+    assert_durable_runtime_lookalikes(&archive_target.args.storage_path);
+    for path in ["media/.locks/historical", "media/tmp/historical"] {
+        assert!(
+            !archive_target.args.storage_path.join(path).exists(),
+            "historical runtime entry {path} is not restored"
+        );
+    }
 }
 
 #[apply(backends)]
