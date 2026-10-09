@@ -70,6 +70,15 @@ explicit owner-history override may leave broken retained-history references; it
 does not authorize rewriting immutable revisions or overriding another User's
 ownership. Production execution needs separate approval.
 
+Implementation note (2026-10-09): the disposable rehearsal demonstrated that
+retained Post history kept original public bytes accessible after explicit owner
+Media Record deletion. The owner approved separating actual historical
+retirement into [#1714](https://github.com/jaunder-org/jaunder/issues/1714), an
+operator remediation-script follow-up with its own approved retention policy and
+execution authorization. #1702 implemented new-upload protection and truthful
+replacement/refusal proofs, not historical erasure. The current
+[replacement procedure](../../image-metadata-replacement.md) records this limit.
+
 ## Consequences
 
 Sanitization becomes a cross-protocol privacy boundary, not an optional UI

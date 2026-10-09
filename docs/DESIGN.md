@@ -285,15 +285,17 @@ User-uploaded media is served directly by the binary (see
 [ADR-0003](adr/0003-asset-management.md)). Media linked in external content can
 be optionally cached per-user to protect against link rot.
 
-The proposed
-[image metadata privacy policy](adr/drafts/image-upload-metadata-privacy.md)
-requires mandatory sanitization of new JPEG, PNG/APNG, GIF, WebP and HEIC/HEIF
-uploads across web and AtomPub. Conventional metadata editing removes ordinary
-location and personal fields while preserving source format, orientation, color
-profiles/HDR signaling and animation without lossy re-encoding. Color profiles
-remain intact; arbitrary hidden-data removal, bespoke ICC scrubbing and codec
-validation are not part of this accidental-disclosure policy. Processing or
-post-edit-check failures reject without an original-byte fallback. SVG and
-non-image Media remain outside this guarantee. Existing uploads require
-separately approved one-off remediation, not an automatic rewrite. This
-describes the proposed target; it is not a claim of current sanitization.
+New JPEG, PNG/APNG, GIF, WebP and HEIC/HEIF uploads are sanitized across web and
+AtomPub under the
+[image metadata privacy policy](adr/drafts/image-upload-metadata-privacy.md).
+Conventional metadata editing removes ordinary location and personal fields
+while preserving source format, orientation, color profiles/HDR signaling and
+animation without lossy re-encoding. Color profiles remain intact; arbitrary
+hidden-data removal, bespoke ICC scrubbing and codec validation are not part of
+this accidental-disclosure policy. Processing or post-edit-check failures reject
+without an original-byte fallback. SVG and non-image Media remain outside this
+guarantee. Existing uploads require separately approved one-off remediation, not
+an automatic rewrite. See the
+[replacement procedure](image-metadata-replacement.md): deleting a Media Record
+is not proof that old public bytes were retired. Actual historical retirement is
+deferred to [#1714](https://github.com/jaunder-org/jaunder/issues/1714).
