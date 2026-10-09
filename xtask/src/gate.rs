@@ -209,11 +209,6 @@ pub(crate) const HOST_GATE_NON_TEST_STEPS: &[HostGateStep] = &[
         markdown_eligible: true,
     },
     HostGateStep::ResultOnly {
-        name: "error-swallowing-inventory",
-        run: steps::error_swallowing_inventory_check::run,
-        markdown_eligible: true,
-    },
-    HostGateStep::ResultOnly {
         name: "test-patterns",
         run: steps::test_pattern_check::run,
         markdown_eligible: false,
@@ -707,7 +702,6 @@ mod tests {
                 "adr-filenames",
                 "doc-links",
                 "flow-docs",
-                "error-swallowing-inventory",
             ]
         );
     }

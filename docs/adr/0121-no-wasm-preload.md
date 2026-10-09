@@ -23,9 +23,10 @@ preload was reverted.
 That retained residual is **not** a direct compile or initialization
 measurement. #887 supersedes it with direct `wasmApiMs` and `wasmInitMs`
 diagnostics; neither is added to the exclusive boot decomposition. Do not re-add
-preload without reading `docs/observability.md` §"#866" and #887. If it is ever
-re-added, `crossorigin` is mandatory: without it firefox downloads the bundle
-twice.
+preload without reading
+[historical preload measurements](https://github.com/jaunder-org/jaunder/blob/150db0d178cd9a80ff5af3cf594a68ea8927686f/docs/observability.md#866--where-the-rest-of-boot-goes-2026-08-09)
+and #887. If it is ever re-added, `crossorigin` is mandatory: without it firefox
+downloads the bundle twice.
 
 ## Consequences
 

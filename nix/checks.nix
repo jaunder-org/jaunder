@@ -738,7 +738,7 @@ mkE2eCombo =
 # starvation, and with the Firefox process-slimming prefs 3 GB clears the
 # OOM that heavier VMs hit (#61). #828's full CI factorial found no
 # admissible 3-worker arm: 3 vCPU / 3 GB OOMed; the faster 4 vCPU / 4 GB
-# arm increased SQLite flakiness. See docs/observability.md #828.
+# arm increased SQLite flakiness. See https://github.com/jaunder-org/jaunder/issues/828.
 e2eGateChecks = pkgs.lib.listToAttrs (
   map (c: {
     name = "e2e-${c.identity}";
@@ -2131,9 +2131,7 @@ static-docs =
         let
           relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
           ignored =
-            relative == "docs/archive"
-            || pkgs.lib.hasPrefix "docs/archive/" relative
-            || relative == ".claude"
+            relative == ".claude"
             || pkgs.lib.hasPrefix ".claude/" relative;
         in
         !ignored

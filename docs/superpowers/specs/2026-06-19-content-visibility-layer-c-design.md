@@ -2,8 +2,9 @@
 
 Status: draft 2026-06-19 ADR:
 [ADR-0020](../../decisions/0020-content-visibility-and-subscription-model.md)
-Builds on: [Layer A design](2026-06-18-content-visibility-design.md) Beads: TBD
-(created during planning)
+Builds on:
+[Layer A design](https://github.com/jaunder-org/jaunder/blob/150db0d178cd9a80ff5af3cf594a68ea8927686f/docs/archive/2026-06-18-content-visibility-design.md)
+Beads: TBD (created during planning)
 
 ## Goal
 

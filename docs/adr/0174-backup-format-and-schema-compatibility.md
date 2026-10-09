@@ -25,7 +25,7 @@ empty-target and schema-derived backup policy of
 of [ADR-0115](0115-clear-then-load-restore.md). Typed-domain invariant
 violations also retain the diagnostic restore-and-report behavior established by
 the
-[archived #725 specification](../archive/2026-08-24-issue-725-backup-restore-typed-column-validation-spec.md).
+[archived #725 specification](https://github.com/jaunder-org/jaunder/blob/150db0d178cd9a80ff5af3cf594a68ea8927686f/docs/archive/2026-08-24-issue-725-backup-restore-typed-column-validation-spec.md).
 
 ## Decision
 

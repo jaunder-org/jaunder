@@ -50,7 +50,6 @@ impl Boundary {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Arm {
     Docs,
-    DocsArchive,
     Server,
     Web,
     Common,
@@ -59,9 +58,8 @@ pub enum Arm {
 }
 
 impl Arm {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 6] = [
         Self::Docs,
-        Self::DocsArchive,
         Self::Server,
         Self::Web,
         Self::Common,
@@ -72,7 +70,6 @@ impl Arm {
     const fn name(self) -> &'static str {
         match self {
             Self::Docs => "docs",
-            Self::DocsArchive => "docs-archive",
             Self::Server => "server",
             Self::Web => "web",
             Self::Common => "common",
@@ -84,7 +81,6 @@ impl Arm {
     const fn marker_path(self) -> &'static str {
         match self {
             Self::Docs => "docs/__nix_source_probe.md",
-            Self::DocsArchive => "docs/archive/__nix_source_probe.md",
             Self::Server => "server/src/__nix_source_probe.rs",
             Self::Web => "web/src/__nix_source_probe.rs",
             Self::Common => "common/src/__nix_source_probe.rs",
@@ -195,7 +191,7 @@ pub fn compare_arm(base: &DrvPaths, arm: Arm, changed: &DrvPaths) -> Result<(), 
 pub fn probe_source() -> StepResult {
     match run_probe() {
         Ok(()) => StepResult::ok("nix-probe-source").detail(
-            "Nix invalidation boundary contract holds (docs/docs-archive/server/web/common/macros/performance)",
+            "Nix invalidation boundary contract holds (docs/server/web/common/macros/performance)",
         ),
         Err(error) => StepResult::fail("nix-probe-source").detail(format!("{error:#}")),
     }
@@ -354,7 +350,6 @@ mod tests {
         let base = paths("docs", "code", "site", "wasm");
         for (arm, changed) in [
             (Arm::Docs, paths("docs-2", "code", "site", "wasm")),
-            (Arm::DocsArchive, paths("docs", "code", "site", "wasm")),
             (Arm::Server, paths("docs", "code-2", "site", "wasm")),
             (Arm::Web, paths("docs", "code-2", "site-2", "wasm")),
             (Arm::Common, paths("docs", "code-2", "site-2", "wasm-2")),

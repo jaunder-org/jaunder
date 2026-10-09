@@ -2741,9 +2741,9 @@ Discovery and non-release acceptance execute the shared Chromium Playwright
 behavior flow over fresh SQLite and PostgreSQL deployments, including restart,
 reboot, and all four exact-schema restore directions. Completed evidence is
 JSON-authoritative, Markdown-derived, and atomically retained only as an exact
-summary pair under `docs/evidence/production-baseline/`; raw state and generated
-secrets remain in the restricted gitignored workspace. The operator contract and
-its explicit non-claims live in
+summary pair under ignored `.xtask/production-baseline-reports/`; raw state and
+generated secrets remain in the restricted gitignored workspace. The operator
+contract and its explicit non-claims live in
 [the production baseline runbook](production-baseline.md). This is an opt-in
 qualification surface, not a public CA/DNS, performance, or release claim
 ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md),
@@ -3937,10 +3937,10 @@ coverage verification. Reproduce the measured invalidation matrix by running one
 unrecorded `devtool run -- cargo xtask --json validate --no-e2e --allow-dirty`
 warm-up, saving the next warm-baseline stdout JSON, then adding one exact marker
 at a time, saving each stdout JSON, and restoring the marker file's original
-bytes. The marker paths and contents, sidecars, and normalized results are
-recorded in
-`docs/superpowers/research/2026-09-04-issue-1289-nix-invalidation-boundaries.md`;
-the store is not purged between arms.
+bytes.
+[Measuring Nix invalidation](../CONTRIBUTING.md#measuring-nix-invalidation)
+defines the markers and sidecars. Results remain in ignored run storage or the
+PR; the store is not purged between arms.
 
 #### Sandboxed cargo-deny
 
@@ -4436,9 +4436,13 @@ as amended by
   are projections in the same sense.
 - `docs/DESIGN.md` — functional behavior and operational model;
   `docs/ROADMAP.md` — strategic vision and milestones.
-- `docs/archive/` — shipped specs, plans, and milestone documents, kept as dated
-  `YYYY-MM-DD-<slug>.md` files and kept there rather than deleted
-  (`docs/README.md:149-152`).
+- Working specs and necessary outlines are committed before implementation and
+  deleted after conformance in a final cleanup commit. Non-squash Git history
+  preserves them; maintained guides and ADRs carry enduring contracts and
+  rationale. Execution reports remain in ignored run/session storage or
+  explicitly retained external artifacts, not the source tree. Gates check
+  current invariants rather than completed-work ledgers
+  ([development artifact lifecycle](adr/drafts/development-artifact-lifecycle.md)).
 
 New ADRs are tracked, numberless `docs/adr/drafts/<slug>.md` files. A draft
 carries `# ADR-DRAFT: <title>`, remains `proposed`, and is cited only by its

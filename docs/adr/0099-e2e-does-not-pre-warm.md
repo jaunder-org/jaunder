@@ -19,8 +19,9 @@ properly: six runs of `cargo xtask traces run`, interleaved A/B/A/B/A/B on a
 quiescent host, arms differing in exactly one token at otherwise gate-identical
 settings, each run cache-busted so nix could not serve a cached suite.
 
-The result (full data in `docs/observability.md` §"#792 — the per-test warmup
-A/B", verdict at
+The result (full data in
+[historical warmup measurements](https://github.com/jaunder-org/jaunder/blob/150db0d178cd9a80ff5af3cf594a68ea8927686f/docs/observability.md#792--the-per-test-warmup-ab-findings-2026-08-04),
+verdict at
 <https://github.com/jaunder-org/jaunder/issues/792#issuecomment-5186123216>):
 
 | sqlite median suite duration | with warmup | without | Δ           |

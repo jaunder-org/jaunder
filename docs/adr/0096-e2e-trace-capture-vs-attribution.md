@@ -136,4 +136,5 @@ What that changes, and what it does not:
   span it added.
 
 See [ADR-0099](./0099-e2e-does-not-pre-warm.md) for the removal decision, and
-`docs/observability.md` §"#792 — the per-test warmup A/B" for the data.
+[historical warmup measurements](https://github.com/jaunder-org/jaunder/blob/150db0d178cd9a80ff5af3cf594a68ea8927686f/docs/observability.md#792--the-per-test-warmup-ab-findings-2026-08-04)
+for the data.
