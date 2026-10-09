@@ -3089,6 +3089,20 @@ The buffer refreshes from a new inventory after completion or cancellation while
 retaining the ordered terminal results from the last batch, so completed work
 and independent failures remain visible and safe to retry.
 
+Confirmed pull and keep-remote batches share at most one complete remote
+Collection enumeration when operation evidence is needed, independently of the
+reviewed preview. Only remote Members are reused: local identity and uniqueness
+remain freshly checked at each matched-row revalidation boundary, including a
+last local scan after Media finalization immediately before replacement,
+alongside selected-Member, strong ETag, digest, buffer, destination, and Media
+checks. Pull-time Local Post Link localization does not add per-row Collection
+walks and retains current local target proof. Partial or failed enumeration
+never supplies valid evidence and is not retried separately for every row.
+Evidence belongs to one batch/root/blog; the final report refresh reads a new
+Collection. Reuse accepts less repeated detection of newly faulty duplicate
+Collection Entries, not changed selected Posts or local bytes
+([batch-scoped pull Collection evidence](adr/drafts/emacs-batch-scoped-pull-collection-evidence.md)).
+
 A selected matched `server-ahead` Post may be pulled only after revalidating its
 report-snapshotted local path/SHA-256 and remote strong ETag
 ([revalidated matched-Post pull](adr/0200-revalidated-matched-post-pull.md)).
