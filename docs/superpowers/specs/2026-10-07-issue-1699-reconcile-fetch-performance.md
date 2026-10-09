@@ -130,9 +130,32 @@ and individual property reads inside an aggregate scan need no separate timer.
   frontend/disable retention, recreation, exact eviction accounting/line bounds,
   and non-interference even when diagnostic output or its warning fails.
 - README covers option, capture/sharing, lifecycle, retention and Collection
-  cost. Pure/live tests, gates and authoritative Emacs coverage verify the tree;
-  production replay confirms timing. After approval, an outline addresses
-  privacy, cancellation, instrumentation and diagnostic-failure risks.
+  cost. Pure/live tests, gates and authoritative Emacs coverage verify the tree.
+  Pre-merge performance confidence uses the deterministic work-count regressions
+  and recorded before/after real-filesystem measurements, as approved below. The
+  outline addresses privacy, cancellation, instrumentation and
+  diagnostic-failure risks.
+
+## Accepted production-timing deferral
+
+The operator explicitly accepted the demonstrated test improvement as sufficient
+before merge and deferred the originally required production replay:
+
+> Given the magnitude of the improvement demonstrated in testing, I'm not
+> inclined to spend the time to worry about getting this into production before
+> it's merged—I feel confident it will address the immediate issues.
+
+The diagnosed path took 3.398s for 100 Posts/10,000 target validations and
+27.359s for 300 Posts/90,000 validations before the fix. The current repaired
+path takes 0.421s for 1,000 Posts/exactly 1,000 validations. These are
+real-filesystem local measurements, not production results; portable regressions
+gate the work count, not a timing threshold.
+
+[Follow-up #1706](https://github.com/jaunder-org/jaunder/issues/1706) records
+post-deployment production timing. It requires delivery of #1699 before that
+measurement, but does not block this PR, merge or release. Production timing is
+not claimed as completed. All other acceptance requirements remain unchanged.
+This criterion decision is not approval to merge a particular PR.
 
 ## Boundaries
 

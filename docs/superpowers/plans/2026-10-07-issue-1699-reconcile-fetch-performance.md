@@ -141,7 +141,7 @@ backend behavior changes; use existing live Emacs fixtures for consumer proof.
     error/quit propagation. Buffer tests separately exercise reconciliation,
     authoring, merge scratch and Ediff-view exit without deleting retained
     diagnostics.
-- [ ] **5. Reconcile evidence, document usage, and verify the branch.**
+- [x] **5. Reconcile evidence, document usage, and verify the branch.**
   - Delivered evidence after upstream reconciliation: README maps all 52
     expanded labels to 68 actual production boundaries and named permanent
     proofs; the source-reader census reconciles both directions. The full pure
@@ -184,14 +184,18 @@ backend behavior changes; use existing live Emacs fixtures for consumer proof.
     Controlled selected-pull flows over 1,000 Posts take 1.049s for three
     selections and 2.649s for ten, retaining 160/440 Collection GETs and 6/20
     Member GETs. These use synthetic network responses, plain Org and no Media;
-    they do not substitute for the required affected-production replay.
-    Permanent pure regressions retain the work-count bound.
-  - Acceptance and delivery still pending: production timing remains absent and
-    unwaived. Final independent evidence reconciliation, archive and PR/CI
-    preparation continue; that manual acceptance gate does not stop independent
-    work. Task 5 stays incomplete until its governing acceptance criterion is
-    demonstrated or explicitly deferred by the operator. Do not archive as
-    complete, declare acceptance or merge on the strength of local timing.
+    they are not production timings. Permanent pure regressions retain the
+    work-count bound.
+  - Acceptance reconciled: all three final whole-branch reviews found no code or
+    documentation defects. The operator explicitly accepted the demonstrated
+    test speedup as sufficient before merge and deferred production timing to
+    [follow-up #1706](https://github.com/jaunder-org/jaunder/issues/1706). The
+    governing spec records the exact decision; no production result is claimed.
+    That follow-up depends on delivery of #1699 but does not block this PR,
+    merge or release. Task 5 is complete under the approved acceptance change;
+    the other requirements and all privacy/safety tests remain unchanged. Final
+    archive, intended-tree proof and PR/CI are delivery stages, and merging
+    still requires explicit per-PR approval.
   - Depends on 1–4. Add the exhaustive label-to-test/field-producer table to
     `elisp/README.md`, with option/controls, privacy, sharing, retention and
     remaining Collection cost. Each expanded spec label names an actual pure or
@@ -199,9 +203,10 @@ backend behavior changes; use existing live Emacs fixtures for consumer proof.
   - Verification: check complete label and field-producer inventories in both
     directions; run the full pure and live Emacs populations, formatting and
     byte-compilation, then applicable repository/authoritative Emacs coverage
-    gates. Compare final diagnosed-path work counts at 1,000 Posts and request
-    affected-Post production replay. Clearly distinguish local proof from that
-    manual timing confirmation. Temporary `.xtask` tools do not ship.
+    gates. Compare final diagnosed-path work counts at 1,000 Posts and retain
+    the operator-approved production-replay deferral in the governing spec and
+    #1706. Clearly distinguish local proof from any later production timing.
+    Temporary `.xtask` tools do not ship.
 
 ## Risk checks
 
