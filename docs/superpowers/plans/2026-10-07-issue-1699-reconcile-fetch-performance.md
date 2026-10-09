@@ -168,18 +168,30 @@ backend behavior changes; use existing live Emacs fixtures for consumer proof.
     governed by the closed-schema and permanent producer proofs, not claimed as
     unique runtime sentinels. Temporary reproduction and bounded result files
     are in `.xtask/issue-1699/` and do not ship.
-  - Verification still pending: the real-filesystem 1,000-Post replay observes
-    exactly 1,000 validations in 0.790s before upstream reconciliation; current
-    permanent pure regressions retain the work-count bound. This is local
-    timing, not the required affected-production replay. Whole-branch Standards,
-    Spec and independent conformance review confirm the delivered functional
-    contracts, but block shipping on production timing confirmation and the
-    final authoritative whole-tree/CI verdict. The original Rust producer's two
-    30-second SQLite timeouts are not assertion failures; the exact archived
-    instrumented suite passes 5,491/5,491 under the unchanged timeout, but does
-    not replace a fresh coverage producer/report/consumer gate. No Rust or
-    timeout source changes were made. The final tree must be reviewed, archived
-    and reconciled with upstream before its shipping proof.
+  - Fresh whole-tree verification: the operator-approved direct
+    `validate --no-e2e` run passes all 67 steps on clean `a66d645c`, including
+    current Rust coverage producer, population reconciliation, reports, gate and
+    consumer: 80,510 executable lines, zero failures, guard violations or CRAP
+    failures. The governed run passed 66/67 with a dependency failure matching
+    the session's confirmed stale offline Cargo-source configuration. A direct
+    run selecting the current flake-derived source home passes the same gate
+    without changing tools, source, offline policy or budgets. Infrastructure
+    follow-up #1705 records that mismatch; exact workflow propagation remains
+    untraced. No Rust or timeout source changes were made. The earlier archived
+    Rust replay is diagnosis history, not the current authoritative proof.
+  - Current local scale evidence: the real-filesystem 1,000-Post replay observes
+    exactly 1,000 validations in 0.421s after upstream reconciliation.
+    Controlled selected-pull flows over 1,000 Posts take 1.049s for three
+    selections and 2.649s for ten, retaining 160/440 Collection GETs and 6/20
+    Member GETs. These use synthetic network responses, plain Org and no Media;
+    they do not substitute for the required affected-production replay.
+    Permanent pure regressions retain the work-count bound.
+  - Acceptance and delivery still pending: production timing remains absent and
+    unwaived. Final independent evidence reconciliation, archive and PR/CI
+    preparation continue; that manual acceptance gate does not stop independent
+    work. Task 5 stays incomplete until its governing acceptance criterion is
+    demonstrated or explicitly deferred by the operator. Do not archive as
+    complete, declare acceptance or merge on the strength of local timing.
   - Depends on 1–4. Add the exhaustive label-to-test/field-producer table to
     `elisp/README.md`, with option/controls, privacy, sharing, retention and
     remaining Collection cost. Each expanded spec label names an actual pure or
