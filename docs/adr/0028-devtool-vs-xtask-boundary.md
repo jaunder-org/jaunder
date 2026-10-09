@@ -7,7 +7,7 @@
 ## Context and Problem Statement
 
 The coverage-pipeline Rust migration
-([archive/2026-06-24-coverage-pipeline-rust-migration-design.md](../archive/2026-06-24-coverage-pipeline-rust-migration-design.md))
+([archive/2026-06-24-coverage-pipeline-rust-migration-design.md](https://github.com/jaunder-org/jaunder/blob/150db0d178cd9a80ff5af3cf594a68ea8927686f/docs/archive/2026-06-24-coverage-pipeline-rust-migration-design.md))
 introduced three workspace pieces and split the old coverage bash between them:
 
 - **`tools/devtool`** (bin crate) — runs **inside** the Nix coverage/e2e build

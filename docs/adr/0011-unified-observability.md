@@ -66,9 +66,10 @@ often, and is the rate abnormal". As of 2026-06-18 this addendum added an
 OpenTelemetry **metrics** pipeline alongside the existing tracer for operational
 signals — auth abuse, silent email/WebSub failures, backup health, upload
 pressure, and an overall error rate. The full instrument catalog lives in the
-design spec (`docs/archive/2026-06-18-otel-metrics-pipeline-design.md`); this
-records the conventions and architecture as they stood then. Current state: see
-[ARCHITECTURE.md](../ARCHITECTURE.md).
+design spec
+([historical metrics design](https://github.com/jaunder-org/jaunder/blob/150db0d178cd9a80ff5af3cf594a68ea8927686f/docs/archive/2026-06-18-otel-metrics-pipeline-design.md));
+this records the conventions and architecture as they stood then. Current state:
+see [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ### Pipeline (as of 2026-06-18)
 

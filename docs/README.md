@@ -245,9 +245,11 @@ convention). See the Status column below for each ADR's current status.
 
 <!-- adr-table:end -->
 
-## Archive
+## Working documents and history
 
-Superseded planning docs, design specs, and dated snapshots are kept in
-[`archive/`](archive/) rather than deleted, named `YYYY-MM-DD-<topic>.md` (the
-date the work happened or shipped). They are frozen historical records — read
-them for "why we did X," not for current behavior.
+Approved specs and necessary outlines are committed before implementation, kept
+through conformance review, and deleted in the final cleanup commit. Their
+contents and evolution remain in Git history rather than an archive directory.
+Current contracts and rationale belong in maintained guides and ADRs; execution
+evidence belongs in ignored run storage or external review artifacts. See
+[Artifact lifecycle](../CONTRIBUTING.md#artifact-lifecycle).

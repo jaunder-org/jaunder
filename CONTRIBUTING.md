@@ -24,7 +24,7 @@ entries are:
 - `flake.nix`: assembly of the public Nix flake outputs
 - `nix/`: concern-owned packages, checks, development shells, NixOS modules, and
   testing VMs
-- `docs/`: guides, ADRs (`docs/adr/`), and the frozen `docs/archive/`
+- `docs/`: maintained guides, ADRs (`docs/adr/`), and in-flight planning docs
 - `.githooks/`: the `pre-commit`/`pre-push` hooks (see Git hooks below)
 - `.github/`: CI workflows
 - `public/`: static assets (the favicon), staged into the embedded asset set by
@@ -152,14 +152,14 @@ either `class=staged-markdown-only reason=isolated-staged-markdown` or
 
 For `staged-markdown-only`, the fixed ordered Markdown-sensitive surface is
 Prettier, sequence/identifier collision checks, the ADR bundle, documentation
-links, flow-document parity, and the error-swallowing inventory. It is a filter
-over the normal production host/static catalogs, not a per-path policy: Prettier
-formats global `end2end` plus `**/*.md`, ADRs project into `docs/README.md` and
-`docs/ARCHITECTURE.md`, and document links and flow documents use
-repository-wide relationships. Every other classification runs the existing
-broad host surface. `xtask/tools-only` routing is rejected because those
-workspaces define gate behavior and repository scanners that require their full
-product, documentation, CI, and e2e input populations.
+links, and flow-document parity. It is a filter over the normal production
+host/static catalogs, not a per-path policy: Prettier formats global `end2end`
+plus `**/*.md`, ADRs project into `docs/README.md` and `docs/ARCHITECTURE.md`,
+and document links and flow documents use repository-wide relationships. Every
+other classification runs the existing broad host surface. `xtask/tools-only`
+routing is rejected because those workspaces define gate behavior and repository
+scanners that require their full product, documentation, CI, and e2e input
+populations.
 
 Precommit retains Fix-mode formatting and Rust-owned Git/index reconciliation:
 it re-stages only formatter/check mutations on already-staged tracked paths
@@ -218,6 +218,35 @@ CI's hermetic authority.
   `cargo xtask precommit`. What requires explicit user approval is **landing**
   the work: merging a PR (`cargo xtask pr land` — running it _is_ the merge
   approval). Ask for review before you merge, not before every commit.
+
+### Artifact lifecycle
+
+Commit what defines, implements, explains, or continuously checks the system.
+Keep code, regression tests and their minimal maintained fixtures, actively
+compared baselines, ADRs, and current user/developer documentation in the tree.
+An old delivery ledger is not a behavioral invariant, even if a gate checks its
+format or completeness.
+
+Commit the approved spec and any necessary outline before implementation.
+Maintain them during the work and conformance review, then project enduring
+contracts and rationale into current docs/ADRs and file unresolved work as
+issues. Delete the completed spec and outline in a final cleanup commit rather
+than moving them into an archive. Jaunder's non-squash merges retain their full
+history. For a later review, recover a deleted document from an earlier commit
+into session storage; historical citations use commit-pinned URLs.
+
+Logs, traces, measurements, audit inventories, review packets and temporary
+probes belong in ignored `.xtask/` or session storage, not tracked evidence
+folders. Report the command, tested revision, outcome and relevant artifact
+reference in the PR. Local evidence may expire after review; explicitly required
+release/compliance evidence goes to its designated external artifact store with
+an owner and retention period. Sanitizing a report does not make it source.
+
+At specification and commit boundaries, distinguish proof to execute from
+artifacts to commit. For each new document or data file, identify its ongoing
+consumer and what future change requires updating it. Promote only enduring
+conclusions, current procedures, or minimal fixtures used by real regression
+tests. Do not weaken proof requirements merely to avoid retaining their outputs.
 
 ### Adding an ADR
 
@@ -637,16 +666,16 @@ arm:
 | low-stack-macros | `macros/src/lib.rs`     | `// Nix reuse measurement: low-stack-macros.` | `.xtask/measurements/post-low-stack-macros.json` |
 
 Preserve a nonzero arm's child-result JSON and its actual `ok` outcome: it is
-evidence, not a reason to rerun or suppress a failure. The expected
-identity/reuse matrix is docs → `static-docs` only; web → `static-code` +
-`.#site`; server → `static-code` only among the static/site/wasm boundaries;
-common/macros → `static-code` + `.#site` + `wasm-tests`. Unrelated Nix checks
-retain their baseline identity and reuse. Normalize every Nix row beside the
-pre-change record in
-`docs/superpowers/research/2026-09-04-issue-1289-nix-invalidation-boundaries.md`.
-`cargo xtask validate --no-e2e` remains the full non-e2e aggregate; full
-`cargo xtask validate` additionally runs the retained eight E2E lanes, performs
-Firefox evidence reconciliation, and runs server-function coverage verification.
+evidence, not a reason to rerun or suppress a failure. Keep the comparison in
+ignored `.xtask/measurements/` or the PR, not a tracked research report. The
+expected identity/reuse matrix is docs → `static-docs` only; web →
+`static-code` + `.#site`; server → `static-code` only among the static/site/wasm
+boundaries; common/macros → `static-code` + `.#site` + `wasm-tests`. Unrelated
+Nix checks retain their baseline identity and reuse. Compare every Nix row
+against the saved baseline. `cargo xtask validate --no-e2e` remains the full
+non-e2e aggregate; full `cargo xtask validate` additionally runs the retained
+eight E2E lanes, performs Firefox evidence reconciliation, and runs
+server-function coverage verification.
 
 #### Prepush parity by failure surface
 
@@ -714,15 +743,12 @@ and the
 - `prettier --check end2end`, `prettier --check '**/*.md'`, and
   `prettier --check '**/*.css'` check Playwright/frontend test assets, all
   tracked Markdown, and all tracked CSS respectively (`proseWrap: always`;
-  scoped by `.prettierignore`, which excludes `docs/archive/`).
+  scoped by `.prettierignore`).
 - `doc-links` checks that every relative Markdown link in tracked `*.md`
   resolves to tracked repository content: file targets must be tracked, and
   directory targets must contain at least one tracked path. It excludes
-  `docs/archive/` (a frozen record — its links are dead because the docs moved
-  on) and `docs/superpowers/` (transient specs and plans, which may link files
-  they will create). Note this is a **different** list from `.prettierignore`'s,
-  which excludes only `docs/archive/`; the two are maintained separately on
-  purpose.
+  `docs/superpowers/` (in-flight specs and plans may link files they will
+  create). Those planning documents still receive Markdown formatting.
 - `thin-components` fails when a Leptos `#[component]` body carries more than
   **2** units of control flow on either of two surfaces: **setup** (the body
   outside any macro) and **view** (inside `view!`). A unit is `if`, `match`,
@@ -1433,9 +1459,9 @@ To reproduce the controlled measurements, run one unrecorded
 then run it again and copy the captured child stdout at the wrapper summary's
 `stdout.path` (or `.xtask/last-result.json`) to
 `.xtask/measurements/post-warm-baseline.json`; do not save the wrapper summary.
-Add exactly one marker recorded in
-`docs/superpowers/research/2026-09-04-issue-1289-nix-invalidation-boundaries.md`,
-rerun that exact command, copy the child JSON to the corresponding named
+Add exactly one marker from
+[Measuring Nix invalidation](#measuring-nix-invalidation), rerun that exact
+command, copy the child JSON to the corresponding named
 `.xtask/measurements/post-{docs-only,web-only,high-stack-rust,low-stack-rust,low-stack-macros}.json`
 sidecar, and remove the marker to restore the source bytes before the next arm.
 `cargo xtask validate` remains the aggregate ship gate: it retains the
@@ -1526,9 +1552,8 @@ revert with `git checkout HEAD -- nix/checks.nix` **and**
 `git reset HEAD -- nix/checks.nix`, then confirm with
 `git diff HEAD -- nix/checks.nix`.
 
-For how to run a measurement with it — matched arms, interleaving, what to
-record — see the worked example in `docs/observability.md` §"#792 — the per-test
-warmup A/B".
+For matched arms, interleaving and interpretation, see
+[Controlled experiments](docs/observability.md#controlled-experiments).
 
 If you only need one of the VM-backed checks, you can run it directly:
 

@@ -64,7 +64,8 @@ remaining heavy-timeline-test flake was root-caused and fixed in #210
 (batch-seed via `test-support` instead of sequential `api.create`).
 
 The landed configuration is **`workers=2`**, chosen over `workers=4` after a
-per-VM-footprint sweep (see `docs/observability.md` → "#155 — flip landed"):
+per-VM-footprint sweep (see
+[historical worker measurements](https://github.com/jaunder-org/jaunder/blob/150db0d178cd9a80ff5af3cf594a68ea8927686f/docs/observability.md#155--flip-landed-workers2-small-vms-firefox-slimming-ac4-2026-07-03)):
 
 - **`cores` must be `≥ workers`** or the guest CPU-starves
   (`workers=4`/`cores=3` was measurably _worse_), so `workers=4` forces 4-core
@@ -88,7 +89,8 @@ re-read `JAUNDER_E2E_WORKERS` with a default that diverged from the config, so
 chromium budgets got zero contention headroom (Firefox was unaffected — its 2.2×
 browser scale dominates). Fixed by deriving the scale from
 `testInfo.config.workers`; a re-test then ran `workers=4` 71/71 green. Details
-in `docs/observability.md`.
+in the
+[historical measurement record](https://github.com/jaunder-org/jaunder/blob/150db0d178cd9a80ff5af3cf594a68ea8927686f/docs/observability.md).
 
 `workers`/`cores`/`mem` are baked into the shared `e2eWarmChecks` derivation, so
 CI's per-combo matrix uses the same values; `workers=2` gives up only ~1 min on

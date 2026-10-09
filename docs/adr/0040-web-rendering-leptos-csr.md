@@ -58,7 +58,8 @@ ran the #173 reproduction recipe (workers:4, fullyParallel, postgres+chromium,
 4-vCPU/6 GB VM) **30 times with zero `already been disposed` panics** (SSR
 baseline panicked ~12% per run, first panic ~run 7; every app-level SSR
 mitigation still panicked within ~1–12 runs). ~98% confidence the class is
-eliminated. Evidence: `docs/issue-177-csr-spike-findings.md`.
+eliminated. Evidence:
+[CSR spike findings](https://github.com/jaunder-org/jaunder/blob/150db0d178cd9a80ff5af3cf594a68ea8927686f/docs/issue-177-csr-spike-findings.md).
 
 ## Scope
 

@@ -2,13 +2,11 @@
 
 > **Status: living / durable / high-level.** This is a long-lived design
 > reference — a high-level companion to `ARCHITECTURE.md` / `DESIGN.md` /
-> `ROADMAP.md`, **not** a short-lived per-issue spec headed for `archive/`. We
-> expect to work on it for a while; edit it freely as the thinking matures. It
-> is not yet a set of accepted decisions. The short-lived
-> `spec.md`/`plan.md`→`archive/` pattern applies to the discrete implementation
-> **slices spawned from** this doc — those become dated specs and lock decisions
-> as ADRs; this doc itself persists as the reference and is updated, not
-> archived. Tracked by issue #172.
+> `ROADMAP.md`, distinct from a short-lived per-issue spec. Edit it as the
+> thinking matures; it is not yet a set of accepted decisions. Discrete
+> implementation slices use committed specs and necessary outlines, deleted
+> after conformance review. Their enduring decisions become ADRs; this living
+> reference remains maintained. Tracked by issue #172.
 >
 > Started 2026-06-29; web-surface architecture resolved-direction added
 > 2026-06-30 (§4); the web leg's core decision locked 2026-07-01 as **ADR-0040**
@@ -829,5 +827,6 @@ GitHub issue #172 ("Grinding toward a spec for inbound data handling") anchors
 this in the **Federation** project and points here; discrete open questions and
 async discussion live on the issue, the evolving substance lives in this file.
 **This file is durable** — it stays and gets updated. When a discrete **slice**
-is ready to build, _that slice_ graduates to a dated `archive/` spec+plan pair
-and its locked decisions become ADRs; this reference persists.
+is ready to build, _that slice_ gets a committed spec and any necessary outline.
+After conformance, delete those working documents while retaining their commits;
+locked decisions become ADRs and this reference persists.

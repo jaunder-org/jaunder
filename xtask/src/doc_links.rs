@@ -11,11 +11,8 @@ use std::path::{Component, Path};
 
 use anyhow::{Context, Result};
 
-/// Trees excluded from the gate. `docs/archive/` is a frozen record — its links are
-/// dead because the docs moved on, and rewriting them would falsify the record.
-/// `docs/superpowers/` holds transient specs and plans, which routinely link files
-/// they only propose to create.
-const EXCLUDED: &[&str] = &["docs/archive/", "docs/superpowers/"];
+/// In-flight specs and plans may link files they only propose to create.
+const EXCLUDED: &[&str] = &["docs/superpowers/"];
 
 /// An inline Markdown link found outside code spans and fenced blocks. Carries a
 /// byte range rather than a line number so the scanner computes only what its
@@ -554,10 +551,10 @@ mod tests {
     }
 
     #[test]
-    fn gate_skips_the_archive_tree() {
-        let d = repo("excluded-archive");
-        commit(&d, "docs/archive/old.md", "[x](gone.md)\n");
-        assert!(problems(&d).unwrap().is_empty());
+    fn arbitrary_document_directories_receive_link_checks() {
+        let d = repo("ordinary-docs");
+        commit(&d, "docs/history/old.md", "[x](gone.md)\n");
+        assert_eq!(problems(&d).unwrap().len(), 1);
     }
 
     #[test]

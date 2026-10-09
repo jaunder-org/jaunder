@@ -2,7 +2,7 @@
 //! `nix/checks.nix`.
 //!
 //! The salt exists so an e2e measurement run can be built without nix serving a cached
-//! suite result — see `docs/observability.md` §"#792 — the per-test warmup A/B". Left
+//! suite result — see `docs/observability.md` §"Controlled experiments". Left
 //! set, it is **silent**: it changes every e2e derivation hash, so CI misses cache on
 //! all four combos and rebuilds them from scratch. Nothing fails; CI just gets slower,
 //! and "CI got slow" is not a symptom anyone traces back to a one-line diff.

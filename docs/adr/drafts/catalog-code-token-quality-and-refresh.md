@@ -23,7 +23,7 @@ stored Post projections stale. The existing offline rebuild already visits
 re-render would duplicate the work without adding coverage.
 
 The approved
-[quality spec](../../archive/2026-10-03-issue-1678-code-highlighting-quality-spec.md)
+[quality spec](https://github.com/jaunder-org/jaunder/blob/150db0d178cd9a80ff5af3cf594a68ea8927686f/docs/archive/2026-10-03-issue-1678-code-highlighting-quality-spec.md)
 requires source fidelity, all existing languages and aliases, Theme Package
 compatibility, closed sanitization, and both database backends. This decision
 refines the earlier draft's token vocabulary and malformed-input behavior; it

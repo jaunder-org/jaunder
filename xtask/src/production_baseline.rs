@@ -1140,12 +1140,14 @@ fn evidence_destination(root: &Path, evidence: &Evidence) -> Result<PathBuf> {
         .target
         .as_ref()
         .map_or("none", |revision| &revision.commit[..12]);
-    Ok(root.join("docs/evidence/production-baseline").join(format!(
-        "{year:04}-{month:02}-{day:02}-{}-{}-{target}-{}",
-        evidence.operation,
-        &evidence.source.commit[..12],
-        &evidence.harness.commit[..12],
-    )))
+    Ok(root
+        .join(".xtask/production-baseline-reports")
+        .join(format!(
+            "{year:04}-{month:02}-{day:02}-{}-{}-{target}-{}",
+            evidence.operation,
+            &evidence.source.commit[..12],
+            &evidence.harness.commit[..12],
+        )))
 }
 
 fn civil_date(days: i64) -> (i64, u32, u32) {
@@ -1990,6 +1992,50 @@ mod tests {
             failure_classes: vec![FailureClass::Harness],
         }
     }
+    #[test]
+    fn qualification_reports_use_ignored_storage_outside_source_docs() {
+        let repo = repo();
+        fs::write(
+            repo.path().join(".gitignore"),
+            include_str!("../../.gitignore"),
+        )
+        .unwrap();
+        let mut evidence = evidence();
+        for operation in ["discover", "accept"] {
+            evidence.operation = operation.into();
+            evidence.target = (operation == "accept").then(|| ResolvedRevision {
+                commit: "e".repeat(40),
+                flake_ref: format!("github:jaunder-org/jaunder/{}", "e".repeat(40)),
+            });
+            let destination = evidence_destination(repo.path(), &evidence).unwrap();
+            assert_eq!(
+                destination.parent().unwrap(),
+                repo.path().join(".xtask/production-baseline-reports")
+            );
+            let target = if operation == "accept" {
+                "eeeeeeeeeeee"
+            } else {
+                "none"
+            };
+            assert!(
+                destination
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .contains(&format!("-{operation}-dddddddddddd-{target}-"))
+            );
+            assert!(
+                crate::git::at(repo.path())
+                    .args(["check-ignore", "--quiet"])
+                    .arg(destination.join("summary.json"))
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+    }
+
     #[test]
     fn evidence_validates_and_markdown_keeps_durations() {
         let evidence = evidence();

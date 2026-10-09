@@ -14,18 +14,16 @@ development environment, Nix virtualization support, Chromium/Playwright
 dependencies, and free local ports `8080` and `8443`. Do not run alongside
 another baseline command: the command holds one host lease.
 
-Run discovery against the required product source:
+Run discovery against the source revision selected for the qualification:
 
 ```bash
-cargo xtask production-baseline discover --revision f6b26c2f9e68c82504b4758778ab2bb706e7cca7
+cargo xtask production-baseline discover --revision <source-commit>
 ```
 
-Run acceptance only with distinct, resolved full commits. Before issue #1450
-completes, its target is the first pushed clean complete harness commit on
-`issue-1450-production-baseline-harness`:
+Run acceptance only with distinct, resolved full commits available upstream:
 
 ```bash
-cargo xtask production-baseline accept --source f6b26c2f9e68c82504b4758778ab2bb706e7cca7 --target <pushed-clean-harness-commit>
+cargo xtask production-baseline accept --source <source-commit> --target <target-commit>
 ```
 
 Acceptance qualification is explicitly **non-release** evidence. Issue #1419
@@ -55,7 +53,7 @@ rejection is not recovery success.
 A completed run attempts one atomic publication at:
 
 ```
-docs/evidence/production-baseline/YYYY-MM-DD-<operation>-<source12>-<target12-or-none>-<harness12>/
+.xtask/production-baseline-reports/YYYY-MM-DD-<operation>-<source12>-<target12-or-none>-<harness12>/
 ```
 
 The identity-derived dated name is collision-safe: an existing destination is
@@ -63,6 +61,10 @@ never overwritten. A retained destination contains exactly `summary.json` and
 generated `summary.md`. JSON validates against `production-baseline.schema.json`
 and is authoritative; Markdown is mechanically derived and checked for parity.
 Command output reports only the safe destination and identity/check counts.
+These are ignored run artifacts, not source deliverables. Link the tested
+revisions, result and sanitized reports from the issue/PR when review needs
+them. Explicit release evidence belongs in a designated external artifact store
+with an owner and retention period.
 
 Reports record harness and manifest identities, source/target,
 package/runtime/backup identities, lifecycle and fixed check durations,
@@ -90,8 +92,10 @@ an interrupted workspace or reuse source disks; rerun the exact command from
 clean state. Preserve the restricted workspace only long enough to diagnose a
 failed run, then remove only the exact `run-<pid>-<nonce>` directory printed or
 identified beneath `.xtask/production-baseline/`; do not delete its parent, a
-broad glob, an evidence destination, or any other `.xtask` path. Published
-evidence is immutable; no cleanup command may remove or replace it.
+broad glob or any other run's paths. Publication never overwrites a report, but
+local reports may expire after review. Once no live review needs a report (and
+any explicitly required external retention is satisfied), remove only its exact
+dated directory under `.xtask/production-baseline-reports/`.
 
 This harness demonstrates only the named revisions, local VM topology, storage
 backends, stable HTTPS routing, browser/protocol flows, and representative data.
