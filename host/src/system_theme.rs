@@ -124,7 +124,10 @@ impl SystemArtifactInventory {
         self.themes
             .iter()
             .find(|package| package.theme == theme)
-            .unwrap_or_else(|| unreachable!("the closed Theme enum has a bundled package"))
+            .unwrap_or_else(|| {
+                // Both private constructors populate every closed Theme variant.
+                unreachable!("the closed Theme enum has a bundled package")
+            })
     }
 
     pub fn themes(&self) -> impl Iterator<Item = &BundledThemePackage> {
@@ -306,18 +309,14 @@ pub fn load_system_artifact_inventory(
             "application role metadata disagrees with bytes".into(),
         ));
     }
-    let mut packages = Vec::new();
-    for theme in [Theme::Terminal, Theme::Studio, Theme::Reader] {
-        packages.push(load_staged_theme(source, theme, records.next())?);
-    }
+    let terminal = load_staged_theme(source, Theme::Terminal, records.next())?;
+    let studio = load_staged_theme(source, Theme::Studio, records.next())?;
+    let reader = load_staged_theme(source, Theme::Reader, records.next())?;
     if records.next().is_some() {
         return Err(SystemArtifactLoadError::Invalid(
             "inventory has extra roles".into(),
         ));
     }
-    let [terminal, studio, reader] = packages.try_into().map_err(|_| {
-        SystemArtifactLoadError::Invalid("inventory has an incomplete theme set".into())
-    })?;
     Ok(SystemArtifactInventory {
         application,
         themes: [terminal, studio, reader],
@@ -846,6 +845,20 @@ mod tests {
     }
 
     #[test]
+    fn qualification_fixture_tokens_round_trip_and_reject_unknown() {
+        for (token, expected) in [
+            ("a", qualification::Fixture::A),
+            ("b-app", qualification::Fixture::BApplication),
+            ("b-theme", qualification::Fixture::BTheme),
+        ] {
+            let actual = qualification::Fixture::parse(token).expect("known fixture parses");
+            assert_eq!(actual, expected);
+            assert_eq!(actual.token(), token);
+        }
+        assert!(qualification::Fixture::parse("unknown").is_err());
+    }
+
+    #[test]
     fn staged_loader_replays_a_b_application_b_theme_and_shared_assets() {
         let a = qualification::compile(qualification::Fixture::A).expect("A compiles");
         let b_application = qualification::compile(qualification::Fixture::BApplication)
@@ -887,6 +900,65 @@ mod tests {
     }
 
     #[test]
+    fn staging_failures_preserve_existing_bytes_and_report_the_destination() {
+        let inventory = compile_system_artifact_inventory().expect("closed inputs compile");
+        let root = tempfile::tempdir().expect("temporary root");
+        let file = root.path().join("file");
+        fs::write(&file, b"existing bytes").expect("write obstruction");
+        let error = stage_system_artifact_inventory(&inventory, &file)
+            .expect_err("cannot replace file as directory");
+        assert_eq!(error.path, file);
+        assert_eq!(
+            fs::read(&file).expect("original file survives"),
+            b"existing bytes"
+        );
+        let nested = file.join("nested");
+        let error = stage_system_artifact_inventory(&inventory, &nested)
+            .expect_err("cannot create beneath a file");
+        assert_eq!(error.path, nested);
+        let error = write_staged(root.path(), b"cannot overwrite directory")
+            .expect_err("writing directory fails");
+        assert_eq!(error.path, root.path());
+    }
+
+    #[test]
+    fn directory_source_reports_missing_root_and_missing_member() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let source = DirectorySystemArtifactSource::new(root.path());
+        assert!(
+            matches!(source.read("missing"), Err(SystemArtifactLoadError::Read { path, .. }) if path == "missing")
+        );
+        let missing = root.path().join("missing");
+        assert!(matches!(
+            DirectorySystemArtifactSource::new(&missing).paths(),
+            Err(SystemArtifactLoadError::Read { .. })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_source_rejects_noncanonical_non_utf8_and_symlink_members() {
+        use std::os::unix::{ffi::OsStringExt, fs::symlink};
+        for name in [
+            std::ffi::OsString::from("bad\\name"),
+            std::ffi::OsString::from_vec(vec![0xff]),
+        ] {
+            let root = tempfile::tempdir().expect("temporary root");
+            fs::write(root.path().join(name), b"invalid member").expect("write member");
+            assert!(matches!(
+                DirectorySystemArtifactSource::new(root.path()).paths(),
+                Err(SystemArtifactLoadError::Invalid(_))
+            ));
+        }
+        let root = tempfile::tempdir().expect("temporary root");
+        symlink("missing", root.path().join("link")).expect("write symlink");
+        assert!(matches!(
+            DirectorySystemArtifactSource::new(root.path()).paths(),
+            Err(SystemArtifactLoadError::Invalid(_))
+        ));
+    }
+
+    #[test]
     fn staged_loader_rejects_closed_inventory_mutation_matrix() {
         for (name, mutate) in inventory_mutation_cases() {
             assert_inventory_mutation_rejected(name, mutate.as_ref());
@@ -901,6 +973,12 @@ mod tests {
                 "missing file",
                 Box::new(|root| {
                     fs::remove_file(root.join("application.css")).expect("remove application");
+                }),
+            ),
+            (
+                "empty inventory",
+                Box::new(|root| {
+                    fs::write(root.join("inventory.txt"), b"").expect("empty inventory");
                 }),
             ),
             (
