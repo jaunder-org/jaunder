@@ -467,6 +467,14 @@ remote commit followed by failed local installation, write-back or rename is
 do not assume either side rolled back. For `r`, an atomic replacement followed
 by a failed rename leaves the ID-bearing updated Post at its old path.
 
+A successful pull checkpoints the installed local representation, after Member,
+Media and Collection verification. Its saved synchronization time and file
+modification time share that checkpoint, so slow staging or disk writes do not
+make the fetched Post appear `local-ahead`. The accepted Member ETag is
+preserved; subsequent authored edits and remote changes still use the existing
+reconciliation rules. This applies to server-only pull, server-ahead replacement
+and keep-remote, including canonical-slug rename.
+
 After an operation the report rebuilds its inventory and classification while
 retaining an ordered **Last batch** summary. If that refresh fails, the old
 report and terminal results remain visible; use `g` to refresh before deciding
