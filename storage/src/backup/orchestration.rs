@@ -54,6 +54,7 @@ fn mirror_themes(
         &content_root.join("themes"),
         &destination_root.join("themes"),
         previous_themes.as_deref(),
+        media::BackupFilesystemRoot::Themes,
     )
 }
 
@@ -123,7 +124,11 @@ async fn restore_backup_with_after_import(
     .await?;
     validate_rendered_title_presence_backup(source_path, &manifest)?;
     let content_root = media_content_root(options.media_path)?;
-    media::restore_media_directory(&source_path.join("themes"), &content_root.join("themes"))?;
+    media::restore_media_directory(
+        &source_path.join("themes"),
+        &content_root.join("themes"),
+        media::BackupFilesystemRoot::Themes,
+    )?;
     let validation_report = match manifest.mode {
         BackupMode::Directory | BackupMode::Archive => {
             restore_directory_backup(
@@ -139,7 +144,11 @@ async fn restore_backup_with_after_import(
         }
     };
     after_import();
-    media::restore_media_directory(&source_path.join("media"), options.media_path)?;
+    media::restore_media_directory(
+        &source_path.join("media"),
+        options.media_path,
+        media::BackupFilesystemRoot::Media,
+    )?;
 
     Ok(BackupRestoreOutcome {
         manifest,
@@ -191,6 +200,7 @@ async fn export_directory_backup(
         options.media_path,
         &options.destination_path.join("media"),
         previous_backup.as_deref(),
+        media::BackupFilesystemRoot::Media,
     )?;
     let content_root = media_content_root(options.media_path)?;
     let prev = previous_backup.as_deref();

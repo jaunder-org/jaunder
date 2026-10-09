@@ -1,4 +1,6 @@
-use std::{fmt::Write as _, net::SocketAddr, sync::Arc};
+use std::{
+    collections::BTreeSet, fmt::Write as _, io::Read as _, net::SocketAddr, path::Path, sync::Arc,
+};
 
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -1593,6 +1595,226 @@ async fn cmd_restore_rejects_row_missing_a_column(#[case] backend: Backend) {
     assert_target_unmodified(&target_args).await;
 }
 
+fn write_runtime_backup_fixture(storage_path: &Path) {
+    let media = storage_path.join("media");
+    for (path, bytes) in [
+        (".locks/held", b"lock" as &[u8]),
+        ("tmp/partial", b"partial"),
+        ("cached/retained", b"cached"),
+        ("nested/tmp/retained", b"nested tmp"),
+        ("nested/.locks/retained", b"nested locks"),
+        ("nested/.staging/retained", b"nested staging"),
+        ("nested/ordinary.lock", b"nested lock"),
+        ("ordinary.lock", b"ordinary lock"),
+    ] {
+        let file = media.join(path);
+        std::fs::create_dir_all(file.parent().expect("fixture parent"))
+            .expect("create media fixture parent");
+        std::fs::write(file, bytes).expect("write media fixture");
+    }
+    for path in [".locks/empty", "tmp/empty", "cached/empty"] {
+        std::fs::create_dir_all(media.join(path)).expect("create empty media fixture directory");
+    }
+
+    let themes = storage_path.join("themes");
+    for (path, bytes) in [
+        (".locks/held", b"theme lock" as &[u8]),
+        (".staging/partial", b"theme partial"),
+        ("nested/.locks/retained", b"nested theme locks"),
+        ("nested/.staging/retained", b"nested theme staging"),
+        ("nested/ordinary.lock", b"nested theme lock"),
+    ] {
+        let file = themes.join(path);
+        std::fs::create_dir_all(file.parent().expect("fixture parent"))
+            .expect("create theme fixture parent");
+        std::fs::write(file, bytes).expect("write theme fixture");
+    }
+}
+
+fn assert_runtime_paths_filtered(root: &Path) {
+    for path in [
+        "media/.locks",
+        "media/tmp",
+        "themes/.locks",
+        "themes/.staging",
+    ] {
+        assert!(!root.join(path).exists(), "excluded path {path} is absent");
+    }
+    assert_durable_runtime_lookalikes(root);
+}
+
+fn assert_durable_runtime_lookalikes(root: &Path) {
+    for (path, expected) in [
+        ("media/cached/retained", b"cached" as &[u8]),
+        ("media/nested/tmp/retained", b"nested tmp"),
+        ("media/nested/.locks/retained", b"nested locks"),
+        ("media/nested/.staging/retained", b"nested staging"),
+        ("media/nested/ordinary.lock", b"nested lock"),
+        ("media/ordinary.lock", b"ordinary lock"),
+        ("themes/nested/.locks/retained", b"nested theme locks"),
+        ("themes/nested/.staging/retained", b"nested theme staging"),
+        ("themes/nested/ordinary.lock", b"nested theme lock"),
+    ] {
+        assert_eq!(
+            std::fs::read(root.join(path)).expect("read retained path"),
+            expected
+        );
+    }
+    assert!(root.join("media/cached/empty").is_dir());
+}
+
+fn seed_theme_runtime_sentinels(storage_path: &Path) {
+    for (path, bytes) in [
+        ("themes/.locks/historical", b"target theme lock" as &[u8]),
+        ("themes/.staging/historical", b"target theme staging"),
+    ] {
+        let file = storage_path.join(path);
+        std::fs::create_dir_all(file.parent().expect("theme sentinel parent"))
+            .expect("create theme sentinel parent");
+        std::fs::write(file, bytes).expect("write theme sentinel");
+    }
+}
+
+fn assert_historical_runtime_restore_state(storage_path: &Path) {
+    for path in ["media/.locks/historical", "media/tmp/historical"] {
+        assert!(
+            !storage_path.join(path).exists(),
+            "historical runtime entry {path} is not restored"
+        );
+    }
+    for (path, expected) in [
+        ("themes/.locks/historical", b"target theme lock" as &[u8]),
+        ("themes/.staging/historical", b"target theme staging"),
+    ] {
+        assert_eq!(
+            std::fs::read(storage_path.join(path)).expect("read target theme sentinel"),
+            expected,
+            "historical runtime entry {path} does not overwrite target state"
+        );
+    }
+}
+
+fn archive_inventory(path: &Path) -> BTreeSet<String> {
+    let file = std::fs::File::open(path).expect("open archive");
+    let decoder = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(decoder);
+    archive
+        .entries()
+        .expect("read archive entries")
+        .map(|entry| {
+            let mut entry = entry.expect("read archive entry");
+            let mut ignored = Vec::new();
+            entry
+                .read_to_end(&mut ignored)
+                .expect("read archive entry bytes");
+            entry
+                .path()
+                .expect("read archive entry path")
+                .to_string_lossy()
+                .trim_start_matches("./")
+                .to_owned()
+        })
+        .collect()
+}
+
+fn package_archive(source: &Path, destination: &Path) {
+    let file = std::fs::File::create(destination).expect("create archive");
+    let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+    let mut archive = tar::Builder::new(encoder);
+    archive
+        .append_dir_all(".", source)
+        .expect("package backup directory");
+    archive
+        .into_inner()
+        .expect("finish archive entries")
+        .finish()
+        .expect("finish archive");
+}
+
+// ADR-0054: runtime filesystem filtering is a public backup/restore contract
+// on both backends, including archive transport and prior-backup reuse.
+#[apply(backends)]
+#[tokio::test]
+async fn cli_backup_filters_root_runtime_files_without_discarding_durable_lookalikes(
+    #[case] backend: Backend,
+) {
+    let source = InitializedCommandEnv::new(backend).await;
+    write_runtime_backup_fixture(&source.args.storage_path);
+    let first_backup = source.base.path().join("backups/2026-10-09-first");
+    cmd_backup(
+        &source.args,
+        BackupMode::Directory,
+        Some(first_backup.clone()),
+    )
+    .await
+    .expect("write initial directory backup");
+    assert_runtime_paths_filtered(&first_backup);
+
+    // A legacy sibling can contain excluded files, but reuse only links paths
+    // visited by the current root-scoped walk.
+    for path in [
+        "media/.locks/historical",
+        "media/tmp/historical",
+        "themes/.locks/historical",
+        "themes/.staging/historical",
+    ] {
+        let file = first_backup.join(path);
+        std::fs::create_dir_all(file.parent().expect("historical parent"))
+            .expect("create historical runtime parent");
+        std::fs::write(file, b"historical").expect("write historical runtime file");
+    }
+    let reused_backup = source.base.path().join("backups/2026-10-09-second");
+    cmd_backup(
+        &source.args,
+        BackupMode::Directory,
+        Some(reused_backup.clone()),
+    )
+    .await
+    .expect("write reused directory backup");
+    assert_runtime_paths_filtered(&reused_backup);
+
+    let archive_path = source.base.path().join("backup.tar.gz");
+    cmd_backup(
+        &source.args,
+        BackupMode::Archive,
+        Some(archive_path.clone()),
+    )
+    .await
+    .expect("write archive backup");
+    let inventory = archive_inventory(&archive_path);
+    assert!(inventory.iter().all(|path| {
+        !matches!(
+            path.as_str(),
+            "media/.locks" | "media/tmp" | "themes/.locks" | "themes/.staging"
+        ) && !path.starts_with("media/.locks/")
+            && !path.starts_with("media/tmp/")
+            && !path.starts_with("themes/.locks/")
+            && !path.starts_with("themes/.staging/")
+    }));
+    assert!(inventory.contains("media/cached/empty"));
+    assert!(inventory.contains("media/nested/tmp/retained"));
+    assert!(inventory.contains("media/nested/.locks/retained"));
+    assert!(inventory.contains("media/nested/ordinary.lock"));
+
+    let directory_target = InitializedCommandEnv::new(backend).await;
+    seed_theme_runtime_sentinels(&directory_target.args.storage_path);
+    cmd_restore(&directory_target.args, &first_backup)
+        .await
+        .expect("restore historical directory backup");
+    assert_durable_runtime_lookalikes(&directory_target.args.storage_path);
+    assert_historical_runtime_restore_state(&directory_target.args.storage_path);
+
+    let historical_archive = source.base.path().join("historical.tar.gz");
+    package_archive(&first_backup, &historical_archive);
+    let archive_target = InitializedCommandEnv::new(backend).await;
+    seed_theme_runtime_sentinels(&archive_target.args.storage_path);
+    cmd_restore(&archive_target.args, &historical_archive)
+        .await
+        .expect("restore historical archive backup");
+    assert_durable_runtime_lookalikes(&archive_target.args.storage_path);
+    assert_historical_runtime_restore_state(&archive_target.args.storage_path);
+}
+
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_backup_writes_directory_backup(#[case] backend: Backend) {
@@ -1676,18 +1898,30 @@ async fn cmd_restore_refuses_populated_database(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_restore_refuses_nonempty_media_directory(#[case] backend: Backend) {
-    let env = InitializedCommandEnv::new(backend).await;
-    let args = env.args;
-    let base = &env.base;
-    std::fs::write(args.storage_path.join("media").join("file.txt"), "media").expect("write media");
+    for (path, bytes) in [
+        ("file.txt", b"media" as &[u8]),
+        (".locks/sentinel", b"lock"),
+        ("tmp/sentinel", b"temporary"),
+    ] {
+        let env = InitializedCommandEnv::new(backend).await;
+        let file = env.args.storage_path.join("media").join(path);
+        std::fs::create_dir_all(file.parent().expect("media sentinel parent"))
+            .expect("create media sentinel parent");
+        std::fs::write(&file, bytes).expect("write media sentinel");
 
-    let backup_path = base.path().join("backup");
-    std::fs::create_dir(&backup_path).expect("backup dir");
-    let err = cmd_restore(&args, &backup_path)
-        .await
-        .expect_err("restore fails");
+        let backup_path = env.base.path().join("backup");
+        std::fs::create_dir(&backup_path).expect("backup dir");
+        let err = cmd_restore(&env.args, &backup_path)
+            .await
+            .expect_err("restore fails");
 
-    assert!(err.to_string().contains("non-empty media directory"));
+        assert!(err.to_string().contains("non-empty media directory"));
+        assert_eq!(
+            std::fs::read(&file).expect("read unchanged media sentinel"),
+            bytes,
+            "restore refusal leaves {path} unchanged"
+        );
+    }
 }
 
 // M6.3.3: an empty target passes safety checks and validates the backup layout.
@@ -1735,6 +1969,91 @@ async fn cmd_restore_restores_directory_backup(#[case] backend: Backend) {
     );
 
     assert_backup_fixture_restored(&target_args, &ids).await;
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_propagates_theme_placement_failure_before_database_import(
+    #[case] backend: Backend,
+) {
+    let source = InitializedCommandEnv::new(backend).await;
+    populate_backup_fixture(&source.args).await;
+    let backup_path = source.base.path().join("backup");
+    cmd_backup(
+        &source.args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+
+    let target = InitializedCommandEnv::new(backend).await;
+    let theme_path = target.args.storage_path.join("themes");
+    std::fs::write(&theme_path, b"target theme obstruction").expect("write theme obstruction");
+    let error = cmd_restore(&target.args, &backup_path)
+        .await
+        .expect_err("theme placement fails");
+
+    assert!(matches!(
+        error.downcast_ref::<BackupError>(),
+        Some(BackupError::Io(_))
+    ));
+    assert_eq!(
+        std::fs::read(&theme_path).expect("read unchanged theme obstruction"),
+        b"target theme obstruction"
+    );
+    assert_target_unmodified(&target.args).await;
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_propagates_media_placement_failure_after_database_import(
+    #[case] backend: Backend,
+) {
+    let source = InitializedCommandEnv::new(backend).await;
+    populate_backup_fixture(&source.args).await;
+    let backup_path = source.base.path().join("backup");
+    cmd_backup(
+        &source.args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+
+    let target = InitializedCommandEnv::new(backend).await;
+    let media_path = target.args.storage_path.join("media").join("avatar.txt");
+    std::fs::create_dir(&media_path).expect("create empty media obstruction");
+    let error = cmd_restore(&target.args, &backup_path)
+        .await
+        .expect_err("media placement fails");
+
+    assert!(matches!(
+        error.downcast_ref::<BackupError>(),
+        Some(BackupError::Io(_))
+    ));
+    assert!(media_path.is_dir(), "media obstruction remains a directory");
+    assert!(
+        std::fs::read_dir(&media_path)
+            .expect("read media obstruction")
+            .next()
+            .is_none(),
+        "media obstruction is unchanged"
+    );
+    let factory =
+        open_existing_database(&target.args.db, &storage::StorageRuntimeConfig::default())
+            .await
+            .expect("open target after media placement failure");
+    let username: Username = "backupuser".parse().expect("fixture username");
+    assert!(
+        factory
+            .users()
+            .get_user_by_username(&username)
+            .await
+            .expect("read imported user")
+            .is_some(),
+        "database import completes before Media placement"
+    );
 }
 
 // Legacy manifests predate format_version but are format 1 by definition.

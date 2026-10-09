@@ -11,29 +11,45 @@ use sha2::{Digest, Sha256};
 
 use super::error::BackupError;
 
+#[derive(Clone, Copy)]
+pub(super) enum BackupFilesystemRoot {
+    Media,
+    Themes,
+}
+
+impl BackupFilesystemRoot {
+    fn excludes_root_entry(self, relative_path: &Path, file_name: &std::ffi::OsStr) -> bool {
+        relative_path.as_os_str().is_empty()
+            && match self {
+                Self::Media => matches!(file_name.to_str(), Some(".locks" | "tmp")),
+                Self::Themes => matches!(file_name.to_str(), Some(".locks" | ".staging")),
+            }
+    }
+}
+
 pub(super) fn restore_media_directory(
     source: &Path,
     destination: &Path,
+    root: BackupFilesystemRoot,
 ) -> Result<(), BackupError> {
     fs::create_dir_all(destination)?;
     if !source.exists() {
         return Ok(());
     }
-    restore_media_entries(source, destination, Path::new(""))
+    restore_media_entries(source, destination, root, Path::new(""))
 }
 
 fn restore_media_entries(
     source_root: &Path,
     destination_root: &Path,
+    root: BackupFilesystemRoot,
     relative_path: &Path,
 ) -> Result<(), BackupError> {
     let source_dir = source_root.join(relative_path);
     for entry in fs::read_dir(source_dir)? {
         let entry = entry?;
         let file_name = entry.file_name();
-        if source_root.file_name().is_some_and(|name| name == "themes")
-            && matches!(file_name.to_str(), Some(".staging" | ".locks"))
-        {
+        if root.excludes_root_entry(relative_path, &file_name) {
             continue;
         }
         let child_relative_path = relative_path.join(&file_name);
@@ -43,7 +59,7 @@ fn restore_media_entries(
 
         if metadata.is_dir() {
             fs::create_dir_all(&destination_path)?;
-            restore_media_entries(source_root, destination_root, &child_relative_path)?;
+            restore_media_entries(source_root, destination_root, root, &child_relative_path)?;
         } else if metadata.is_file() {
             let Some(parent) = destination_path.parent() else {
                 unreachable!("a joined destination path always has a parent")
@@ -61,33 +77,31 @@ fn restore_media_entries(
 /// # Errors
 ///
 /// Returns `Err(BackupError)` if copying or removing media files fails.
-pub fn mirror_media_directory(
+pub(super) fn mirror_media_directory(
     source: &Path,
     destination: &Path,
     previous_backup: Option<&Path>,
+    root: BackupFilesystemRoot,
 ) -> Result<(), BackupError> {
     fs::create_dir_all(destination)?;
     if !source.exists() {
         return Ok(());
     }
-    mirror_media_entries(source, destination, previous_backup, Path::new(""))
+    mirror_media_entries(source, destination, previous_backup, root, Path::new(""))
 }
 
 fn mirror_media_entries(
     source_root: &Path,
     destination_root: &Path,
     previous_backup: Option<&Path>,
+    root: BackupFilesystemRoot,
     relative_path: &Path,
 ) -> Result<(), BackupError> {
     let source_dir = source_root.join(relative_path);
     for entry in fs::read_dir(source_dir)? {
         let entry = entry?;
         let file_name = entry.file_name();
-        // Theme installation staging and lock files are process-local crash
-        // recovery state, never backup payload.
-        if source_root.file_name().is_some_and(|name| name == "themes")
-            && matches!(file_name.to_str(), Some(".staging" | ".locks"))
-        {
+        if root.excludes_root_entry(relative_path, &file_name) {
             continue;
         }
         let child_relative_path = relative_path.join(&file_name);
@@ -100,6 +114,7 @@ fn mirror_media_entries(
                 source_root,
                 destination_root,
                 previous_backup,
+                root,
                 &child_relative_path,
             )?;
             continue;
@@ -209,7 +224,7 @@ mod tests {
         let source = temp.path().join("missing");
         let destination = temp.path().join("destination");
 
-        mirror_media_directory(&source, &destination, None)?;
+        mirror_media_directory(&source, &destination, None, BackupFilesystemRoot::Media)?;
 
         assert!(destination.is_dir());
         assert!(fs::read_dir(destination)?.next().is_none());
@@ -231,7 +246,13 @@ mod tests {
         )
         .expect("write previous nested media file");
 
-        mirror_media_directory(&source, &destination, Some(&previous))?;
+        mirror_media_directory(
+            &source,
+            &destination,
+            Some(&previous),
+            BackupFilesystemRoot::Media,
+        )
+        .expect("mirror unchanged previous media");
 
         assert_eq!(
             fs::read_to_string(destination.join("nested").join("image.txt"))?,
@@ -251,7 +272,13 @@ mod tests {
         fs::write(source.join("image.txt"), "new")?;
         fs::write(previous.join("media").join("image.txt"), "old")?;
 
-        mirror_media_directory(&source, &destination, Some(&previous))?;
+        mirror_media_directory(
+            &source,
+            &destination,
+            Some(&previous),
+            BackupFilesystemRoot::Media,
+        )
+        .expect("mirror changed previous media");
 
         assert_eq!(fs::read_to_string(destination.join("image.txt"))?, "new");
         assert!(
@@ -278,8 +305,9 @@ mod tests {
         // A directory sitting where the copied file must be written.
         fs::create_dir_all(destination.join("dir1").join("file.txt"))?;
 
-        let error = mirror_media_directory(&source, &destination, None)
-            .expect_err("copying onto a directory must fail");
+        let error =
+            mirror_media_directory(&source, &destination, None, BackupFilesystemRoot::Media)
+                .expect_err("copying onto a directory must fail");
         assert!(matches!(error, BackupError::Io(_)));
         Ok(())
     }
@@ -297,7 +325,7 @@ mod tests {
             std::os::unix::net::UnixListener::bind(source.join("sock")).expect("bind unix socket");
         fs::write(source.join("real.txt"), "keep")?;
 
-        restore_media_directory(&source, &destination)?;
+        restore_media_directory(&source, &destination, BackupFilesystemRoot::Media)?;
 
         assert_eq!(fs::read_to_string(destination.join("real.txt"))?, "keep");
         assert!(
@@ -336,7 +364,7 @@ mod tests {
             std::os::unix::net::UnixListener::bind(source.join("sock")).expect("bind unix socket");
         fs::write(source.join("real.txt"), "keep")?;
 
-        mirror_media_directory(&source, &destination, None)?;
+        mirror_media_directory(&source, &destination, None, BackupFilesystemRoot::Media)?;
 
         assert_eq!(fs::read_to_string(destination.join("real.txt"))?, "keep");
         assert!(
@@ -402,7 +430,12 @@ mod tests {
         let temp = TempDir::new()?;
         let destination = temp.path().join("destination");
 
-        restore_media_directory(&temp.path().join("missing"), &destination)?;
+        restore_media_directory(
+            &temp.path().join("missing"),
+            &destination,
+            BackupFilesystemRoot::Media,
+        )
+        .expect("restore missing media source");
 
         assert!(destination.is_dir());
         assert!(fs::read_dir(destination)?.next().is_none());
@@ -421,7 +454,7 @@ mod tests {
         fs::write(source.join(".locks").join("theme.lock"), "locked")?;
         fs::write(source.join("published.css"), "published")?;
 
-        restore_media_directory(&source, &destination)?;
+        restore_media_directory(&source, &destination, BackupFilesystemRoot::Themes)?;
 
         assert_eq!(
             fs::read_to_string(destination.join("published.css"))?,
@@ -440,7 +473,7 @@ mod tests {
         fs::create_dir_all(source.join("nested"))?;
         fs::write(source.join("nested").join("avatar.txt"), "image")?;
 
-        restore_media_directory(&source, &destination)?;
+        restore_media_directory(&source, &destination, BackupFilesystemRoot::Media)?;
 
         assert_eq!(
             fs::read_to_string(destination.join("nested").join("avatar.txt"))?,

@@ -370,8 +370,12 @@ auto-derived from the live schema — every table minus the explicit
 `TABLES_EXCLUDED_FROM_BACKUP` denylist (`_sqlx_migrations`, `feed_cache`;
 `storage/src/backup/format.rs`) and SQLite-internal tables, sorted for a
 reproducible manifest — so a migration that adds a table needs no backup code
-change; server contract tests pin the exact set. Consequently the complete
-`post_revisions` scalar rows, their immutable
+change; server contract tests pin the exact set. The filesystem payload excludes
+only root `media/.locks`, `media/tmp`, `themes/.locks`, and `themes/.staging`,
+on export and restore; their empty directory entries and descendants are
+omitted. Nested lookalikes, ordinary `.lock` files, and `media/cached`
+(including an empty directory) remain durable backup content. Consequently the
+complete `post_revisions` scalar rows, their immutable
 `post_revision_tags`/`post_revision_audiences` children, and revision-qualified
 `post_media` rows and durable `post_permalink_aliases` travel with every
 whole-store backup, without revision- or alias-specific export paths. Pending
