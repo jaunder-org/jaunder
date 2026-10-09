@@ -104,11 +104,11 @@ Sanitized JSON/Markdown is published atomically under
 and logs stay private. The historical
 [pre-rebase qualification](evidence/styling-qualification/df860966fac563c6cdb1ba6ddac175822f19df38-1791488769470905508/summary.md)
 records backup format 3 and schema 50. The completed
-[post-rebase qualification](evidence/styling-qualification/cf6f3c6ca78ee44a5eeaceb964636012dbd12464-1791498046680090084/summary.md)
+[post-recovery qualification](evidence/styling-qualification/11d459bfd85c9286b0a583cb181074f7ccdb671b-1791506451527739238/summary.md)
 records format 3 and observed schema 51 on both backends, including same-backend
-restore after preserving the incoming Org verse migration. These proofs
-complement, rather than replace, the fourteen refreshed full-page visual pairs
-and focused interaction/accessibility tests.
+restore with deferred PostgreSQL foreign keys and the incoming Org verse
+migration preserved. These proofs complement, rather than replace, the fourteen
+refreshed full-page visual pairs and focused interaction/accessibility tests.
 
 Chromium (or automated WebKit elsewhere) is **not actual Safari or iPhone
 qualification**. Desktop Safari and iPhone remain unqualified until separately
