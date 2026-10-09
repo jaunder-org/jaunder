@@ -1971,6 +1971,91 @@ async fn cmd_restore_restores_directory_backup(#[case] backend: Backend) {
     assert_backup_fixture_restored(&target_args, &ids).await;
 }
 
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_propagates_theme_placement_failure_before_database_import(
+    #[case] backend: Backend,
+) {
+    let source = InitializedCommandEnv::new(backend).await;
+    populate_backup_fixture(&source.args).await;
+    let backup_path = source.base.path().join("backup");
+    cmd_backup(
+        &source.args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+
+    let target = InitializedCommandEnv::new(backend).await;
+    let theme_path = target.args.storage_path.join("themes");
+    std::fs::write(&theme_path, b"target theme obstruction").expect("write theme obstruction");
+    let error = cmd_restore(&target.args, &backup_path)
+        .await
+        .expect_err("theme placement fails");
+
+    assert!(matches!(
+        error.downcast_ref::<BackupError>(),
+        Some(BackupError::Io(_))
+    ));
+    assert_eq!(
+        std::fs::read(&theme_path).expect("read unchanged theme obstruction"),
+        b"target theme obstruction"
+    );
+    assert_target_unmodified(&target.args).await;
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_propagates_media_placement_failure_after_database_import(
+    #[case] backend: Backend,
+) {
+    let source = InitializedCommandEnv::new(backend).await;
+    populate_backup_fixture(&source.args).await;
+    let backup_path = source.base.path().join("backup");
+    cmd_backup(
+        &source.args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+
+    let target = InitializedCommandEnv::new(backend).await;
+    let media_path = target.args.storage_path.join("media").join("avatar.txt");
+    std::fs::create_dir(&media_path).expect("create empty media obstruction");
+    let error = cmd_restore(&target.args, &backup_path)
+        .await
+        .expect_err("media placement fails");
+
+    assert!(matches!(
+        error.downcast_ref::<BackupError>(),
+        Some(BackupError::Io(_))
+    ));
+    assert!(media_path.is_dir(), "media obstruction remains a directory");
+    assert!(
+        std::fs::read_dir(&media_path)
+            .expect("read media obstruction")
+            .next()
+            .is_none(),
+        "media obstruction is unchanged"
+    );
+    let factory =
+        open_existing_database(&target.args.db, &storage::StorageRuntimeConfig::default())
+            .await
+            .expect("open target after media placement failure");
+    let username: Username = "backupuser".parse().expect("fixture username");
+    assert!(
+        factory
+            .users()
+            .get_user_by_username(&username)
+            .await
+            .expect("read imported user")
+            .is_some(),
+        "database import completes before Media placement"
+    );
+}
+
 // Legacy manifests predate format_version but are format 1 by definition.
 #[apply(backends)]
 #[tokio::test]

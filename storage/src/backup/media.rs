@@ -251,7 +251,8 @@ mod tests {
             &destination,
             Some(&previous),
             BackupFilesystemRoot::Media,
-        )?;
+        )
+        .expect("mirror unchanged previous media");
 
         assert_eq!(
             fs::read_to_string(destination.join("nested").join("image.txt"))?,
@@ -276,7 +277,8 @@ mod tests {
             &destination,
             Some(&previous),
             BackupFilesystemRoot::Media,
-        )?;
+        )
+        .expect("mirror changed previous media");
 
         assert_eq!(fs::read_to_string(destination.join("image.txt"))?, "new");
         assert!(
@@ -432,7 +434,8 @@ mod tests {
             &temp.path().join("missing"),
             &destination,
             BackupFilesystemRoot::Media,
-        )?;
+        )
+        .expect("restore missing media source");
 
         assert!(destination.is_dir());
         assert!(fs::read_dir(destination)?.next().is_none());
