@@ -6,6 +6,7 @@ use common::{
     feed::FeedSurface,
     pagination::PageSize,
     permalink_route::PermalinkRoute,
+    root_relative_url::RootRelativeUrl,
     seed::{PageSeed, PublicPresentation, TimelineOrder, TimelinePageRequest},
     slug::Slug,
     tag::Tag,
@@ -49,6 +50,7 @@ pub struct PublicProjector {
     users: Arc<dyn UserStorage>,
     themes: Arc<dyn ThemeStorage>,
     site_config: Arc<dyn SiteConfigStorage>,
+    application_stylesheet_url: RootRelativeUrl,
     shell: Shell,
 }
 
@@ -60,6 +62,7 @@ impl PublicProjector {
         users: Arc<dyn UserStorage>,
         themes: Arc<dyn ThemeStorage>,
         site_config: Arc<dyn SiteConfigStorage>,
+        application_stylesheet_url: RootRelativeUrl,
         shell: Shell,
     ) -> Self {
         Self {
@@ -67,6 +70,7 @@ impl PublicProjector {
             users,
             themes,
             site_config,
+            application_stylesheet_url,
             shell,
         }
     }
@@ -96,7 +100,11 @@ impl PublicProjector {
 
     fn response_for(&self, outcome: &ProjectionResult, headers: &HeaderMap) -> Response {
         match outcome {
-            Ok(presentation) => document::cacheable_presentation(headers, presentation),
+            Ok(presentation) => document::cacheable_presentation(
+                headers,
+                presentation,
+                &self.application_stylesheet_url,
+            ),
             Err(ProjectionFailure::ShellFallback) => document::shell_response(&self.shell),
             Err(ProjectionFailure::SwallowedFailure { error, context }) => {
                 error::report_swallowed(

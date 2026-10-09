@@ -30,7 +30,14 @@
       "fixture": "format-3",
       "format_version": 3,
       "support": "supported",
+      "materializable": false,
       "digest": "eaf125a7bfa4a773c6a7ade027b355f6aac4e19d8c9562ff8e84cae7276caeb6"
+    },
+    {
+      "fixture": "format-3-schema-51",
+      "format_version": 3,
+      "support": "supported",
+      "digest": "92698e8203f1aea280fd22d10415569574f79838720f106b2006c4ccfa88eec9"
     }
   ]
 }

@@ -1027,7 +1027,13 @@ mod tests {
     use common::time::UtcInstant;
 
     fn theme(theme: Theme) -> PublishedThemePresentation {
-        PublishedThemePresentation::built_in(theme)
+        PublishedThemePresentation {
+            identity: common::theme::PublishedThemeIdentity::BuiltIn(theme),
+            revision: Some("a".repeat(64).parse().unwrap()),
+            stylesheet_url: format!("/theme/{}", "b".repeat(64)).parse().unwrap(),
+            logo_url: None,
+            header_url: None,
+        }
     }
 
     fn page(has_more: bool) -> Page<RenderedPost, TimelineCursor> {

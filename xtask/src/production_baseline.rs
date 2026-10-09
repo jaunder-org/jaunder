@@ -22,6 +22,7 @@ use sha2::{Digest, Sha256};
 use crate::{
     cli::ProductionBaselineCommand,
     git,
+    qualification::{QualificationRequest, QualificationResult},
     result::{CommandResult, StepResult},
 };
 
@@ -822,6 +823,14 @@ impl BinaryProvenance for ExecutingBinaries {
     }
 }
 
+pub(crate) fn verify_styling_tool_source(source: &crate::qualification::SourcePin) -> Result<()> {
+    let identity = ExecutingBinaries.xtask()?;
+    if !identity.clean || identity.commit != source.commit() {
+        bail!("styling qualification tool was not built from the admitted clean source");
+    }
+    Ok(())
+}
+
 /// An injected Git boundary. Tests use fixture repositories without network access.
 trait Repository {
     fn output(&self, args: &[&str]) -> Result<String>;
@@ -969,7 +978,7 @@ pub struct RunLease {
     _file: std::fs::File,
 }
 impl RunLease {
-    fn acquire(_root: &Path) -> Result<Self> {
+    pub(crate) fn acquire(_root: &Path) -> Result<Self> {
         Self::acquire_at(&global_lease_path()?)
     }
 
@@ -1165,7 +1174,7 @@ fn civil_date(days: i64) -> (i64, u32, u32) {
     )
 }
 
-fn publication_workspace(root: &Path) -> Result<PathBuf> {
+pub(crate) fn publication_workspace(root: &Path) -> Result<PathBuf> {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("reading evidence staging nonce")?
@@ -1251,7 +1260,7 @@ fn validate_serialized_evidence(json: &str) -> Result<()> {
     evidence.validate()
 }
 
-fn scan_retained(name: &str, text: &str, canaries: &EvidenceCanaries) -> Result<()> {
+pub(crate) fn scan_retained(name: &str, text: &str, canaries: &EvidenceCanaries) -> Result<()> {
     for forbidden in [
         "password",
         "cookie",
@@ -1521,7 +1530,7 @@ struct BehaviorResult {
 
 /// One Playwright browser context survives every source lifecycle transition.
 /// The file protocol is deliberately private to the restricted lifecycle workspace.
-struct BehaviorSession {
+pub(crate) struct BehaviorSession {
     child: Option<Child>,
     coordinator: PathBuf,
     state: PathBuf,
@@ -1529,11 +1538,21 @@ struct BehaviorSession {
 }
 
 impl BehaviorSession {
-    fn start(
+    pub(crate) fn start(
         lifecycle: &crate::production_baseline_lifecycle::BaselineLifecycle,
         source_id: &str,
         state: &Path,
         canary_path: &Path,
+    ) -> Result<Self> {
+        Self::start_with_mode(lifecycle, source_id, state, canary_path, false)
+    }
+
+    fn start_with_mode(
+        lifecycle: &crate::production_baseline_lifecycle::BaselineLifecycle,
+        source_id: &str,
+        state: &Path,
+        canary_path: &Path,
+        qualification: bool,
     ) -> Result<Self> {
         let coordinator = lifecycle.private_path(&format!("{source_id}-browser"))?;
         fs::create_dir(&coordinator).context("creating browser coordinator workspace")?;
@@ -1554,6 +1573,11 @@ impl BehaviorSession {
             .env("JAUNDER_PRODUCTION_BASELINE_STATE", state)
             .env("JAUNDER_PRODUCTION_BASELINE_CANARY_PATH", canary_path)
             .env("JAUNDER_PRODUCTION_BASELINE_COORDINATOR", &coordinator)
+            .env_remove("JAUNDER_STYLING_QUALIFICATION");
+        if qualification {
+            command.env("JAUNDER_STYLING_QUALIFICATION", "1");
+        }
+        command
             .stdout(Stdio::from(fs::File::create(stdout)?))
             .stderr(Stdio::from(fs::File::create(stderr)?));
         let child = command
@@ -1567,6 +1591,17 @@ impl BehaviorSession {
         };
         session.wait_for_file("ready", "browser flow readiness")?;
         Ok(session)
+    }
+
+    /// Starts the same private Playwright bridge with the qualification-only
+    /// mode flag. The flag exists solely in this host harness environment.
+    pub(crate) fn start_qualification(
+        lifecycle: &crate::production_baseline_lifecycle::BaselineLifecycle,
+        source_id: &str,
+        state: &Path,
+        canary_path: &Path,
+    ) -> Result<Self> {
+        Self::start_with_mode(lifecycle, source_id, state, canary_path, true)
     }
 
     fn run(&mut self, phase: &str, seed_process: Option<&Path>) -> Result<Vec<BehaviorCheck>> {
@@ -1600,7 +1635,26 @@ impl BehaviorSession {
         Ok(result.checks)
     }
 
-    fn close(&mut self) -> Result<()> {
+    pub(crate) fn run_qualification(
+        &mut self,
+        mut request: QualificationRequest,
+    ) -> Result<QualificationResult> {
+        request.validate()?;
+        let sequence = self.next_sequence;
+        self.next_sequence += 1;
+        request.sequence = sequence;
+        self.write_json(&format!("request-{sequence}.json"), &request)?;
+        self.wait_for_file(
+            &format!("result-{sequence}.json"),
+            "qualification browser result",
+        )?;
+        crate::qualification::decode_browser_reply(
+            &fs::read(self.coordinator.join(format!("result-{sequence}.json")))?,
+            &request,
+        )
+    }
+
+    pub(crate) fn close(&mut self) -> Result<()> {
         if self.child.is_none() {
             return Ok(());
         }
@@ -1677,6 +1731,7 @@ pub fn run(command: ProductionBaselineCommand) -> Result<CommandResult> {
     let binaries = ExecutingBinaries;
     let start = Instant::now();
     let (name, preflight) = match command {
+        ProductionBaselineCommand::QualifyStyling => return crate::qualification_run::run(&root),
         ProductionBaselineCommand::Discover { revision } => (
             "production-baseline-discover",
             resolve_revision(&repo, &revision).map(|source| (source, None)),

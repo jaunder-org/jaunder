@@ -1,4 +1,3 @@
-pub mod assets;
 pub mod atompub;
 pub mod backup;
 mod bundle;
@@ -7,6 +6,7 @@ pub mod client_telemetry;
 pub mod commands;
 pub mod context;
 pub mod feed;
+mod immutable_content;
 pub mod mailer;
 mod maintenance;
 pub mod media;
@@ -20,6 +20,7 @@ mod scheduled_worker;
 mod server_fn_response;
 pub mod site;
 mod soft_path;
+mod system_artifacts;
 pub mod theme_content;
 pub mod trusted_proxy;
 
@@ -37,12 +38,11 @@ use std::sync::Arc;
 use ::storage::{InstanceId, SessionStorage, WriteScope};
 use axum::{
     Router,
-    http::{HeaderName, HeaderValue},
+    http::{HeaderName, HeaderValue, StatusCode},
     routing,
 };
-use axum_embed::ServeEmbed;
 
-use crate::{assets::StaticAssets, feed::handlers, projector::PublicProjector};
+use crate::{feed::handlers, projector::PublicProjector};
 
 async fn retire_session_cookie(
     axum::extract::State(secure): axum::extract::State<bool>,
@@ -88,7 +88,15 @@ where
     F: Fn() + Clone + Send + Sync + 'static,
 {
     let app = Router::new()
-        .nest_service("/style", ServeEmbed::<StaticAssets>::new())
+        // Retired stable stylesheet paths must not reach the SPA fallback.
+        .route(
+            "/style/jaunder.css",
+            routing::get(|| async { StatusCode::NOT_FOUND }),
+        )
+        .route(
+            "/style/jaunder-themes.css",
+            routing::get(|| async { StatusCode::NOT_FOUND }),
+        )
         .merge(crate::media::router())
         .merge(crate::atompub::router())
         .merge(crate::theme_content::router())

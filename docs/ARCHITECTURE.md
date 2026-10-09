@@ -154,7 +154,7 @@ by URL scheme: `DbConnectOptions` (`storage/src/db.rs`) parses `sqlite:` vs
 `postgres://` and `open_database`/`open_existing_database` dispatch accordingly.
 Each backend has its own migration tree under
 `storage/migrations/{sqlite,postgres}`; the two trees carry identical numbered
-filenames (currently `0001`–`0050`), and maintaining that parity — same
+filenames (currently `0001`–`0051`), and maintaining that parity — same
 migrations, same behavior — is the accepted cost of the pluggable strategy
 ([ADR-0001](adr/0001-storage-backends.md)).
 
@@ -511,17 +511,17 @@ Details in the testing section.
   ([structural write scopes and mutation outcomes](adr/0164-structural-write-scopes-and-mutation-outcomes.md)).
   Its explicit `run` boundary supplies a sealed mutable `WriteTransaction`
   capability, never storage lookup or arbitrary SQL. The closed audited
-  application surface has exactly 96 declarations: Audience (5), Email
+  application surface has exactly 98 declarations: Audience (5), Email
   Verification (2), Feed Cache (2), Feed Event (12), Invite (2), Media (2),
   Password Reset (2), Passkey (11), Post (12), Publisher (5), Session (5), Site
-  Config (11), Subscription (2), User Config (2), Theme (16), and User (5).
+  Config (11), Subscription (2), User Config (2), Theme (18), and User (5).
   Cross-store account mutations compose these capability-taking primitives as
   storage-owned functions
   ([account mutations compose storage primitives](adr/0166-account-mutations-compose-storage-primitives.md)).
   Each declaration takes `&mut WriteTransaction`; there are no pool-backed,
   auto-committing, standalone, or compatibility mutation paths. The structural
   gate derives the observed declarations, compares them with the closed
-  96-method list, rejects unknown, missing, and duplicate declarations, and
+  98-method list, rejects unknown, missing, and duplicate declarations, and
   rejects production transaction starts that bypass the
   `WriteScope`/`WriteTransaction` composition. It excludes administrative
   lifecycle work, dialect code, and internal helpers. Callback failure is
@@ -1698,6 +1698,23 @@ theme changes that representation.
 The custom-theme architecture is governed by the accepted
 [`css-package-public-themes` ADR](adr/0184-css-package-public-themes.md).
 
+#### Bundled Theme Packages and protected application styling
+
+The
+[unified styling assets decision](adr/drafts/unified-theme-and-application-assets.md)
+is implemented through the same package validation, compilation, revision, and
+presentation pipeline for system-managed bundled Studio, Terminal, and Reader.
+Existing named selections follow the installed release. Bundled packages are
+selectable but not editable/deletable through custom catalogs or charged to
+custom-theme quotas. Protected application CSS is a system-only, non-selectable
+role: it controls structure, private surfaces, and trusted controls, while
+sharing theme content's installation, digest serving, eligibility, and
+retention. Custom packages remain scoped and cannot acquire that authority. Home
+loads only protected application styling, never the selected public Theme
+Package.
+
+#### Current custom-theme lifecycle
+
 Theme authors keep the portable package source (`theme.json`, canonical
 `style.css`, and optional declared `assets/`) at a repository root; README,
 workflow, optional preprocessor sources, and committed `preview.png` remain
@@ -2510,10 +2527,12 @@ further SIGINT retains interactive forced exit. The bounded wait never escalates
 on timeout. No administration secret or network control channel exists
 ([identity-verified local shutdown](adr/0181-identity-verified-local-shutdown.md)).
 
-- `StaticAssets` (`server/src/assets.rs:3-5`, `#[folder = "assets/"]`) carries
-  the base stylesheets `jaunder.css` and `jaunder-themes.css`, mounted at
-  `/style` by `axum_embed::ServeEmbed` (`server/src/lib.rs:54,57`), which
-  supplies ETag and conditional-request handling.
+- `SystemArtifactInventory` (`host/src/system_theme.rs`) carries canonical
+  compiled bundled Theme Packages and protected application CSS. Startup
+  (`server/src/system_artifacts.rs`, `storage/src/system_themes.rs`) installs
+  and verifies their bytes and atomically advances system references before
+  serving. Stored metadata owns runtime digest URLs; missing or corrupt admitted
+  content fails closed rather than falling back to embedded stylesheets.
 - `Site` (`server/src/site.rs`, `#[folder = "$OUT_DIR/site"]`) carries the CSR
   client: full-SHA-256-named runtime assets, their precompressed `.br`/`.gz`
   siblings, and the `public/` assets flattened to the site root
@@ -2525,32 +2544,55 @@ on timeout. No administration secret or network control channel exists
   filename heuristic duplicates asset identity
   ([content-addressed CSR bundle manifest](adr/0175-content-addressed-csr-bundle-manifest.md)).
 
-Only the two base stylesheets are embedded separately. ADR-0003 also anticipated
-**user-uploadable** stylesheets served from the storage layer; that was never
-built, and nothing in `storage/` or the config-key registry handles CSS.
+[ADR-0003](adr/0003-asset-management.md) establishes single-binary asset
+provisioning. System and custom styling share persistent content eligibility;
+custom Theme Packages remain scoped rather than arbitrary global stylesheets.
 
 `ServeEmbed` does no `Accept-Encoding` negotiation, so `site::serve_site` is a
 hand-written handler: it picks Brotli, gzip, or identity bytes against the
 embedded variants and derives `Content-Type` from the logical runtime asset.
 Every manifest-backed `/pkg/` response, including `304`, carries
 `Cache-Control: public, max-age=31536000, immutable`; it also retains
-`Vary: Accept-Encoding` and a per-representation ETag. Only the data directory
-and the database live outside the binary, so **"single binary" holds without
-qualification.** This was not always true: until #237 (closed 2026-07-17) the
-WASM bundle was served from an on-disk site root by `ServeDir`. The WASM
-bundle's size is gated separately on raw bytes
+`Vary: Accept-Encoding` and a per-representation ETag. Stable non-manifest site
+assets, currently the favicon and generated index document, require `no-cache`
+revalidation on both `200` and `304`; an unmatched SPA shell is `no-store`. Only
+the data directory and the database live outside the binary, so **"single
+binary" holds without qualification.** This was not always true: until #237
+(closed 2026-07-17) the WASM bundle was served from an on-disk site root by
+`ServeDir`. The WASM bundle's size is gated separately on raw bytes
 ([ADR-0106](adr/0106-wasm-raw-size-budget.md)). Rendering architecture —
 leptos-CSR client plus the server-side public projector — is owned by the web
 section ([ADR-0040](adr/0040-web-rendering-leptos-csr.md),
 [ADR-0041](adr/0041-public-projector-and-csr-client.md)).
 
-**CLI surface.** The `jaunder` binary is also the operations tool
-(`server/src/cli.rs:233-382`): `serve` runs the server; `init` prepares the
-storage directory and database; `create-pg-db` bootstraps a PostgreSQL database;
-`user-create`, `user-invite`, and `app-password-create` manage accounts;
-`smtp-test` verifies mail configuration; `backup` (directory or archive mode)
-and `restore` round-trip the data, with the backup target auto-derived from the
-storage configuration ([ADR-0064](adr/0064-backup-target-auto-derivation.md),
+### Shared styling asset lifecycle
+
+System and custom styling assets use the same digest-addressed immutable
+responses and collector. Superseded bytes remain eligible while referenced and
+through the one-year asset lifetime plus five-minute public-HTML freshness
+window after detachment. Backup/restore preserves retained bytes and
+eligibility; rollback atomically reinstalls the older release's system
+references without removing newer retained content. All document consumers,
+including the DB-independent thumbnail transport, use generated digest
+references. The unused `StaticAssets` embed and aggregate `jaunder-themes.css`
+are removed; canonical application source remains `server/assets/jaunder.css`.
+Legacy `/style/jaunder.css` and `/style/jaunder-themes.css` return 404 without
+aliases or SPA fallback. Previously cached legacy responses cannot be evicted by
+this change; legacy documents may be unstyled until refreshed. This amends
+ADR-0003's serving mechanism while preserving single-binary provisioning and the
+independent CSR and Media contracts. The bounded inventory, cache policies,
+upgrade/restore instructions, and qualification limits are in
+[application assets](application-assets.md).
+
+### Current CLI surface
+
+The `jaunder` binary is also the operations tool (`server/src/cli.rs:233-382`):
+`serve` runs the server; `init` prepares the storage directory and database;
+`create-pg-db` bootstraps a PostgreSQL database; `user-create`, `user-invite`,
+and `app-password-create` manage accounts; `smtp-test` verifies mail
+configuration; `backup` (directory or archive mode) and `restore` round-trip the
+data, with the backup target auto-derived from the storage configuration
+([ADR-0064](adr/0064-backup-target-auto-derivation.md),
 [ADR-0054](adr/0054-backup-test-homing-and-uniform-restore-failure.md)); and
 `site-config set/get/list/unset` reads and writes site settings. The operator
 Site Settings card resolves one `SiteIdentity` aggregate: required Local title,

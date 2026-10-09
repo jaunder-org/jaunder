@@ -1,0 +1,1 @@
+{"user_id":41,"username":"legacyuser","password_hash":"$argon2id$v=19$m=19456,t=2,p=1$abc$def","display_name":null,"bio":null,"created_at":"2026-01-02T03:04:05Z","last_authenticated_at":null,"email":null,"email_verified":false,"is_operator":true}

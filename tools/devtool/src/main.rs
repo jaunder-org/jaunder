@@ -13,6 +13,7 @@ use clap::{Parser, Subcommand};
 
 mod check;
 mod coverage;
+#[cfg(feature = "system-artifacts")]
 mod csr_bundle;
 mod diagnostic_build;
 mod digest;
@@ -57,6 +58,7 @@ enum Command {
     /// Post-process a built `csr.wasm` into a verified CSR bundle root
     /// (`manifest.json`, rendered `index.html`, and content-addressed `pkg/**`).
     /// Shared by the host build and the Nix `csrWasmBundle` derivation (#236/#869).
+    #[cfg(feature = "system-artifacts")]
     CsrBundle(CsrBundleArgs),
     /// Seed the canonical e2e fixtures (users + site-config + mail-reset) by
     /// shelling out to `test-support`. The single fixture list shared by the
@@ -90,6 +92,7 @@ struct CheckArgs {
     sandbox_cargo: bool,
 }
 
+#[cfg(feature = "system-artifacts")]
 #[derive(clap::Args)]
 struct CsrBundleArgs {
     /// Path to the built `csr.wasm` (crane output or `target/.../csr.wasm`).
@@ -107,6 +110,11 @@ struct CsrBundleArgs {
     /// Number of same-named shape custom sections to append.
     #[arg(long, default_value_t = 1)]
     wasm_shape_section_count: u32,
+    /// Internal qualification-only system styling fixture (`a`, `b-app`, or
+    /// `b-theme`). This argument is absent from ordinary devtool builds.
+    #[cfg(feature = "qualification")]
+    #[arg(long)]
+    system_artifact_fixture: Option<String>,
     /// Write a truthful before/after LLVM coverage-section status for the
     /// diagnostic bundle. Requires the companion identity output and minicov pin.
     #[arg(long, requires_all = ["diagnostic_toolchain_identity", "diagnostic_minicov_version"])]
@@ -414,6 +422,7 @@ fn main() -> Result<()> {
             args.fix,
             args.sandbox_cargo,
         ),
+        #[cfg(feature = "system-artifacts")]
         Command::CsrBundle(args) => {
             let diagnostic_artifacts = match (
                 args.diagnostic_coverage_metadata.as_deref(),
@@ -432,6 +441,30 @@ fn main() -> Result<()> {
                     "diagnostic CSR bundle arguments must select metadata, toolchain identity, and minicov together"
                 ),
             };
+            #[cfg(feature = "qualification")]
+            if let Some(fixture) = args.system_artifact_fixture.as_deref() {
+                let fixture = host::system_theme::qualification::Fixture::parse(fixture)
+                    .map_err(anyhow::Error::msg)?;
+                csr_bundle::run_qualification(
+                    &args.wasm,
+                    &args.out,
+                    args.wasm_experiment_arm.as_deref(),
+                    args.wasm_shape_section.as_deref(),
+                    args.wasm_shape_section_count,
+                    diagnostic_artifacts.as_ref(),
+                    fixture,
+                )
+            } else {
+                csr_bundle::run(
+                    &args.wasm,
+                    &args.out,
+                    args.wasm_experiment_arm.as_deref(),
+                    args.wasm_shape_section.as_deref(),
+                    args.wasm_shape_section_count,
+                    diagnostic_artifacts.as_ref(),
+                )
+            }
+            #[cfg(not(feature = "qualification"))]
             csr_bundle::run(
                 &args.wasm,
                 &args.out,
@@ -462,6 +495,7 @@ mod tests {
 
     use super::*;
 
+    #[cfg(feature = "system-artifacts")]
     #[test]
     fn diagnostic_bundle_artifacts_are_an_all_or_nothing_contract() {
         assert!(
@@ -494,6 +528,43 @@ mod tests {
             ])
             .is_ok()
         );
+    }
+
+    #[cfg(all(feature = "system-artifacts", not(feature = "qualification")))]
+    #[test]
+    fn ordinary_csr_production_has_no_qualification_fixture_selector() {
+        assert!(
+            Cli::try_parse_from([
+                "devtool",
+                "csr-bundle",
+                "--wasm",
+                "csr.wasm",
+                "--out",
+                "pkg",
+                "--system-artifact-fixture",
+                "b-app",
+            ])
+            .is_err()
+        );
+    }
+
+    #[cfg(feature = "qualification")]
+    #[test]
+    fn qualification_csr_production_accepts_only_closed_fixture_tokens() {
+        assert!(
+            Cli::try_parse_from([
+                "devtool",
+                "csr-bundle",
+                "--wasm",
+                "csr.wasm",
+                "--out",
+                "pkg",
+                "--system-artifact-fixture",
+                "b-app",
+            ])
+            .is_ok()
+        );
+        assert!(host::system_theme::qualification::Fixture::parse("not-a-fixture").is_err());
     }
 
     #[test]

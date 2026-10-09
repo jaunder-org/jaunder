@@ -1097,10 +1097,15 @@ async fn list_user_posts_for_unknown_user_keeps_empty_profile_with_site_theme(
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let presentation: PublicPresentation<Page<RenderedPost, TimelineCursor>> =
         serde_json::from_str(&body).unwrap();
-    assert_eq!(
+    assert!(matches!(
         presentation.theme,
-        common::theme::PublishedThemePresentation::built_in(Theme::Studio)
-    );
+        common::theme::PublishedThemePresentation {
+            identity: common::theme::PublishedThemeIdentity::BuiltIn(Theme::Studio),
+            revision: Some(_),
+            stylesheet_url,
+            ..
+        } if stylesheet_url.as_ref().starts_with("/theme/")
+    ));
     assert!(presentation.page.posts.is_empty());
 }
 

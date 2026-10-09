@@ -106,8 +106,18 @@ pub fn FeedIndexPage() -> impl IntoView {
             Some(surface) => {
                 super::render::body(
                         &surface,
-                        &crate::app::render_theme_logo(&theme.get()),
-                        &crate::app::render_theme_header(&theme.get()),
+                        &theme
+                            .get()
+                            .map_or_else(
+                                crate::html::Markup::empty,
+                                |theme| { crate::app::render_theme_logo(&theme) },
+                            ),
+                        &theme
+                            .get()
+                            .map_or_else(
+                                crate::html::Markup::empty,
+                                |theme| { crate::app::render_theme_header(&theme) },
+                            ),
                     )
                     .inject_into(leptos::html::div().class("j-contents"))
                     .into_any()

@@ -6,14 +6,16 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Context;
+use anyhow::{Context, bail};
 use axum::Router;
+use common::MutationOutcome;
 use host::{
     error,
     metrics::{SaturationObservableGuard, SaturationSnapshot},
     telemetry::TelemetryConfig,
     theme_operations::ThemeOperationCoordinator,
 };
+use jiff::Timestamp;
 use tokio::{net::TcpListener, sync::oneshot::Receiver, task::JoinHandle};
 
 use super::support;
@@ -601,24 +603,35 @@ fn publisher_context(
     )
 }
 
-fn public_projector(dependencies: &ServeStorage) -> crate::projector::PublicProjector {
+fn public_projector(
+    dependencies: &ServeStorage,
+    application_stylesheet_url: common::root_relative_url::RootRelativeUrl,
+) -> crate::projector::PublicProjector {
     crate::projector::PublicProjector::new(
         Arc::clone(&dependencies.posts),
         Arc::clone(&dependencies.users),
         Arc::clone(&dependencies.themes),
         Arc::clone(&dependencies.site_config),
+        application_stylesheet_url,
         crate::projector::Shell(crate::site::shell_html()),
     )
 }
 
-fn compose_server_router(
-    dependencies: &ServeStorage,
-    storage_path: PathBuf,
-    instance_id: &InstanceId,
-    mailer: Arc<dyn common::mailer::MailSender>,
+/// HTTP policy data stays at the serve composition root; runtime consumers
+/// receive the individual settings that govern their own boundary.
+struct ServeHttpPolicy {
     prod: bool,
     trace_parent_enabled: bool,
     trusted_proxies: crate::trusted_proxy::TrustedProxyConfig,
+}
+
+fn compose_server_router(
+    dependencies: &ServeStorage,
+    application_stylesheet_url: common::root_relative_url::RootRelativeUrl,
+    storage_path: PathBuf,
+    instance_id: &InstanceId,
+    mailer: Arc<dyn common::mailer::MailSender>,
+    http_policy: ServeHttpPolicy,
 ) -> Router {
     let storage_path = Arc::new(storage_path);
     let locks = Arc::new(MediaContentLocks::new(Arc::clone(&storage_path)));
@@ -680,7 +693,7 @@ fn compose_server_router(
             asset_manager,
             Arc::new(ThemeOperationCoordinator::new()),
             manager_themes,
-            prod,
+            http_policy.prod,
         ),
     );
     let app = crate::application_routes(
@@ -689,7 +702,7 @@ fn compose_server_router(
             dependencies.write_scope.clone(),
         ),
         contexts,
-        public_projector(dependencies),
+        public_projector(dependencies, application_stylesheet_url),
     );
     let app = crate::context::with_media_extensions(app, ownership, manager, locks, storage_path);
     let app = crate::context::with_post_account_extensions(
@@ -716,22 +729,45 @@ fn compose_server_router(
     create_router_with_trusted_proxies(
         app,
         instance_id,
-        prod,
-        trace_parent_enabled,
-        trusted_proxies,
+        http_policy.prod,
+        http_policy.trace_parent_enabled,
+        http_policy.trusted_proxies,
     )
 }
 
-async fn reconcile_theme_assets(
+async fn install_and_reconcile_system_artifact_inventory(
+    inventory: &host::system_theme::SystemArtifactInventory,
     themes: Arc<dyn storage::ThemeStorage>,
     write_scope: WriteScope,
     storage_path: Arc<PathBuf>,
-) -> anyhow::Result<()> {
-    ThemeAssetManager::new(themes, write_scope, storage_path)
+) -> anyhow::Result<common::root_relative_url::RootRelativeUrl> {
+    let manager = ThemeAssetManager::new(themes, write_scope, storage_path);
+    match manager
+        .install_system(inventory, Timestamp::now().as_second())
+        .await
+        .context("system artifact installation failed")?
+    {
+        MutationOutcome::Confirmed(()) => {}
+        MutationOutcome::CommitIndeterminate(()) => {
+            bail!("system artifact installation commit acknowledgement was lost")
+        }
+    }
+    manager
         .reconcile_startup()
         .await
-        .context("theme immutable-content reconciliation failed")
-        .map(|_| ())
+        .context("theme immutable-content reconciliation failed")?;
+    Ok(inventory.application().content_digest().content_url())
+}
+
+async fn install_and_reconcile_system_artifacts(
+    themes: Arc<dyn storage::ThemeStorage>,
+    write_scope: WriteScope,
+    storage_path: Arc<PathBuf>,
+) -> anyhow::Result<common::root_relative_url::RootRelativeUrl> {
+    let inventory = crate::system_artifacts::load()
+        .context("embedded system-artifact inventory failed verification")?;
+    install_and_reconcile_system_artifact_inventory(&inventory, themes, write_scope, storage_path)
+        .await
 }
 
 fn prepare_background_worker_setup(
@@ -856,7 +892,7 @@ async fn prepare_server_with_trusted_proxies(
         .await
         .context("current Post projection refresh failed")?;
     let dependencies = ServeStorage::from_factory(&factory);
-    reconcile_theme_assets(
+    let application_stylesheet_url = install_and_reconcile_system_artifacts(
         Arc::clone(&dependencies.themes),
         dependencies.write_scope.clone(),
         Arc::new(storage.storage_path.clone()),
@@ -880,12 +916,15 @@ async fn prepare_server_with_trusted_proxies(
     .await?;
     let router = compose_server_router(
         &dependencies,
+        application_stylesheet_url,
         storage.storage_path.clone(),
         &instance_id,
         mailer,
-        prod,
-        otel_tracing_enabled,
-        trusted_proxies,
+        ServeHttpPolicy {
+            prod,
+            trace_parent_enabled: otel_tracing_enabled,
+            trusted_proxies,
+        },
     );
 
     let listener = tokio::net::TcpListener::bind(bind).await?;
@@ -1199,7 +1238,14 @@ pub(crate) async fn cmd_serve_with_trusted_proxies(
 mod tests {
     use super::super::test_support::{assert_command_source, sqlite_storage_args};
     use super::*;
-    use storage::{DbConnectOptions, MediaTemporaryDirectoryError, test_support::confirmed};
+    use rstest::*;
+    use rstest_reuse::*;
+    use storage::{
+        DbConnectOptions, MediaTemporaryDirectoryError,
+        test_support::{
+            Backend, backends, confirmed, write_scope_with_commit_acknowledgement_loss,
+        },
+    };
     use tempfile::TempDir;
 
     fn test_telemetry(otlp_endpoint: Option<&str>) -> host::telemetry::TelemetryConfig {
@@ -1215,6 +1261,282 @@ mod tests {
                 e2e_seed_process: Ok(None),
             },
         )
+    }
+
+    async fn assert_system_inventory_is_current_and_exact(
+        themes: Arc<dyn storage::ThemeStorage>,
+        storage_path: &Path,
+        inventory: &host::system_theme::SystemArtifactInventory,
+    ) {
+        let application = inventory.application().content();
+        let application_record = themes
+            .system_application_content()
+            .await
+            .expect("read current application")
+            .expect("current application exists");
+        assert_eq!(
+            application_record.digest,
+            inventory.application().content_digest()
+        );
+        assert_eq!(application_record.mime, application.mime());
+        let digest = application_record.digest.as_ref();
+        let bytes = tokio::fs::read(
+            storage_path
+                .join("themes")
+                .join(&digest[..2])
+                .join(&digest[2..4])
+                .join(digest),
+        )
+        .await
+        .expect("installed application content");
+        assert_eq!(bytes, application.bytes());
+        let mut expected_digests = std::collections::BTreeSet::new();
+        expected_digests.insert(inventory.application().content_digest());
+        for package in inventory.themes() {
+            let revision = themes
+                .system_theme_revision(package.theme())
+                .await
+                .expect("read current package")
+                .expect("current package exists");
+            assert_eq!(revision.digest, package.revision_digest());
+            assert_eq!(revision.source_digest, package.source_digest());
+            assert_eq!(revision.stylesheet_digest, package.stylesheet_digest());
+            for content in package.revision().contents() {
+                let digest = common::theme::ThemeContentDigest::from_digest(content.digest());
+                expected_digests.insert(digest.clone());
+                let bytes = tokio::fs::read(
+                    storage_path
+                        .join("themes")
+                        .join(&digest.as_ref()[..2])
+                        .join(&digest.as_ref()[2..4])
+                        .join(digest.as_ref()),
+                )
+                .await
+                .expect("installed package content");
+                assert_eq!(bytes, content.bytes());
+                let eligibility = themes
+                    .content_eligibility(&digest)
+                    .await
+                    .expect("read eligibility")
+                    .expect("installed content is eligible");
+                assert_eq!(eligibility.mime, content.mime());
+            }
+        }
+        for digest in expected_digests {
+            assert!(
+                themes
+                    .content_eligibility(&digest)
+                    .await
+                    .expect("read eligibility")
+                    .is_some(),
+                "current role content remains eligible"
+            );
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn system_artifact_startup_installs_repeats_and_retains_upgrade_bytes(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let a = host::system_theme::qualification::compile(
+            host::system_theme::qualification::Fixture::A,
+        )
+        .expect("compile A");
+        let b_application = host::system_theme::qualification::compile(
+            host::system_theme::qualification::Fixture::BApplication,
+        )
+        .expect("compile B application");
+        let b_theme = host::system_theme::qualification::compile(
+            host::system_theme::qualification::Fixture::BTheme,
+        )
+        .expect("compile B theme");
+        let path = Arc::new(env.base.path().to_path_buf());
+        install_and_reconcile_system_artifact_inventory(
+            &a,
+            env.themes(),
+            env.write_scope(),
+            Arc::clone(&path),
+        )
+        .await
+        .expect("initial startup inventory admission");
+        assert_system_inventory_is_current_and_exact(env.themes(), path.as_ref(), &a).await;
+        let first_references = env
+            .themes()
+            .system_content_references()
+            .await
+            .expect("initial references");
+        install_and_reconcile_system_artifact_inventory(
+            &a,
+            env.themes(),
+            env.write_scope(),
+            Arc::clone(&path),
+        )
+        .await
+        .expect("repeated startup inventory admission");
+        assert_eq!(
+            env.themes()
+                .system_content_references()
+                .await
+                .expect("repeated references"),
+            first_references,
+            "repeated startup is idempotent"
+        );
+        for inventory in [&b_application, &b_theme, &a] {
+            install_and_reconcile_system_artifact_inventory(
+                inventory,
+                env.themes(),
+                env.write_scope(),
+                Arc::clone(&path),
+            )
+            .await
+            .expect("upgrade or rollback startup inventory admission");
+            assert_system_inventory_is_current_and_exact(env.themes(), path.as_ref(), inventory)
+                .await;
+        }
+        for inventory in [&a, &b_application, &b_theme] {
+            for content in std::iter::once(inventory.application().content()).chain(
+                inventory
+                    .themes()
+                    .flat_map(|package| package.revision().contents()),
+            ) {
+                let digest = common::theme::ThemeContentDigest::from_digest(content.digest());
+                let bytes = tokio::fs::read(
+                    path.join("themes")
+                        .join(&digest.as_ref()[..2])
+                        .join(&digest.as_ref()[2..4])
+                        .join(digest.as_ref()),
+                )
+                .await
+                .expect("retained exact system content bytes");
+                assert_eq!(bytes, content.bytes());
+            }
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn system_artifact_startup_refuses_indeterminate_commit_with_recoverable_files(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let inventory = host::system_theme::qualification::compile(
+            host::system_theme::qualification::Fixture::BTheme,
+        )
+        .expect("compile inventory");
+        let path = Arc::new(env.base.path().to_path_buf());
+        let error = install_and_reconcile_system_artifact_inventory(
+            &inventory,
+            env.themes(),
+            write_scope_with_commit_acknowledgement_loss(&env.write_scope()),
+            Arc::clone(&path),
+        )
+        .await
+        .expect_err("indeterminate acknowledgement refuses readiness");
+        assert!(
+            error
+                .to_string()
+                .contains("commit acknowledgement was lost")
+        );
+        assert_system_inventory_is_current_and_exact(env.themes(), path.as_ref(), &inventory).await;
+        let before_retry_references = env
+            .themes()
+            .system_content_references()
+            .await
+            .expect("recoverable system references");
+        install_and_reconcile_system_artifact_inventory(
+            &inventory,
+            env.themes(),
+            env.write_scope(),
+            Arc::clone(&path),
+        )
+        .await
+        .expect("retry recovers from indeterminate acknowledgement");
+        assert_eq!(
+            env.themes()
+                .system_content_references()
+                .await
+                .expect("retry references"),
+            before_retry_references,
+            "retry preserves recovered role references"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn system_artifact_startup_refuses_missing_retained_content_during_reconciliation(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let a = host::system_theme::qualification::compile(
+            host::system_theme::qualification::Fixture::A,
+        )
+        .expect("compile A");
+        let b_application = host::system_theme::qualification::compile(
+            host::system_theme::qualification::Fixture::BApplication,
+        )
+        .expect("compile B application");
+        let path = Arc::new(env.base.path().to_path_buf());
+        for inventory in [&b_application, &a] {
+            install_and_reconcile_system_artifact_inventory(
+                inventory,
+                env.themes(),
+                env.write_scope(),
+                Arc::clone(&path),
+            )
+            .await
+            .expect("admit release before retained-content failure");
+        }
+        let digest = b_application.application().content_digest();
+        tokio::fs::remove_file(
+            path.join("themes")
+                .join(&digest.as_ref()[..2])
+                .join(&digest.as_ref()[2..4])
+                .join(digest.as_ref()),
+        )
+        .await
+        .expect("remove retained system content");
+        let error = install_and_reconcile_system_artifact_inventory(
+            &a,
+            env.themes(),
+            env.write_scope(),
+            Arc::clone(&path),
+        )
+        .await
+        .expect_err("reconciliation prevents startup readiness");
+        assert!(
+            error
+                .to_string()
+                .contains("theme immutable-content reconciliation failed"),
+            "the incoming A inventory does not repair absent retained B bytes"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn system_artifact_startup_refuses_installation_failure_before_readiness(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let inventory =
+            host::system_theme::compile_system_artifact_inventory().expect("compile inventory");
+        let blocked = tempfile::tempdir().expect("blocked storage root");
+        std::fs::write(blocked.path().join("themes"), b"not a directory")
+            .expect("block immutable content root");
+        let error = install_and_reconcile_system_artifact_inventory(
+            &inventory,
+            env.themes(),
+            env.write_scope(),
+            Arc::new(blocked.path().to_path_buf()),
+        )
+        .await
+        .expect_err("installation failure prevents readiness");
+        assert!(
+            error
+                .to_string()
+                .contains("system artifact installation failed")
+        );
     }
 
     #[test]

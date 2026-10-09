@@ -19,8 +19,12 @@ pub fn Topbar(
                 {move || {
                     common::theme::is_public_presentation_path(&location.pathname.get())
                         .then(|| {
-                            crate::app::render_theme_logo(&theme.get())
-                                .inject_into(leptos::html::div().class("j-contents"))
+                            theme
+                                .get()
+                                .map(|theme| {
+                                    crate::app::render_theme_logo(&theme)
+                                        .inject_into(leptos::html::div().class("j-contents"))
+                                })
                         })
                 }}
                 <h1>{move || title.get()}</h1>

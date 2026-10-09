@@ -28,6 +28,8 @@ flate2 = "1.1.10"
 tar = "0.4.46"
 brotli = "9.0.0"
 coverage = { path = "../tools/coverage" }
+host = { path = "../host" }
+common = { path = "../common" }
 csr_bundle = { path = "../tools/csr_bundle" }
 doctests = { path = "../tools/doctests" }
 tabled = "0.22.0"
@@ -59,12 +61,22 @@ tokio = { version = "1.53.1", features = ["rt-multi-thread", "signal", "time"] }
 performance = { path = "../tools/performance" }
 serde_yaml = "0.9.34"
 base64 = "0.22.1"
+# The standalone host adapter inherits version requirements, but not the root
+# workspace's patches. Keep the required forks at the exact root revisions.
+[patch.crates-io]
+orgize = { git = "https://github.com/jaunder-org/orgize", rev = "17311ba02d4317571fab04a752a479e09bef2397" }
+atom_syndication = { git = "https://github.com/jaunder-org/atom", rev = "921118c311d2117956d86e25052918e7c549ef00" }
+webauthn-rs = { git = "https://github.com/jaunder-org/webauthn-rs", rev = "6d0acc73fbf4436b1ed853fa5c8a219dac304a8e" }
+webauthn-rs-core = { git = "https://github.com/jaunder-org/webauthn-rs", rev = "6d0acc73fbf4436b1ed853fa5c8a219dac304a8e" }
+
 [target.'cfg(unix)'.dependencies]
 # Safe OS-provided lease flags and effective UID, without numeric flag tables,
 # /proc parsing for user identity, or shelling out to id.
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [dev-dependencies]
+# Closed synthetic releases are used only by canonical adapter unit fixtures.
+host = { path = "../host", features = ["qualification"] }
 # Synthesizes the fixture modules the attribution tests parse, so no binary wasm
 # blob is checked into the tree.
 wasm-encoder = "0.258.0"

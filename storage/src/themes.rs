@@ -5,14 +5,16 @@
 
 use std::collections::BTreeSet;
 
-use crate::WriteTransaction;
 use crate::write_scope;
+use crate::{
+    SystemThemeAdmission, SystemThemeContentReference, SystemThemeRevision, WriteTransaction,
+};
 use async_trait::async_trait;
 use common::{
     ids::{ThemeId, UserId},
     media::{ContentHash, Filename, MediaRef, MediaSource},
     theme::{
-        PublicThemeSelection, ThemeAssetDigest, ThemeContentDigest, ThemeImageRole,
+        PublicThemeSelection, Theme, ThemeAssetDigest, ThemeContentDigest, ThemeImageRole,
         ThemePoolRevisionDigest, ThemeRevisionDigest, ThemeSourceDigest, ThemeStylesheetDigest,
     },
 };
@@ -301,6 +303,40 @@ pub struct ThemePublicationAdmission<'a> {
 #[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
 #[async_trait]
 pub trait ThemeStorage: Send + Sync {
+    /// Advances the entire closed system release in the caller's transaction,
+    /// sharing content eligibility but never custom ownership or quota charges.
+    async fn admit_system_inventory(
+        &self,
+        transaction: &mut WriteTransaction,
+        admission: &SystemThemeAdmission,
+    ) -> Result<(), sqlx::Error>;
+    /// Reads all current and retained system content references in digest order.
+    async fn system_content_references(
+        &self,
+    ) -> Result<Vec<SystemThemeContentReference>, sqlx::Error>;
+    /// Reads only current system references for bounded filesystem lock acquisition.
+    async fn live_system_content_references(
+        &self,
+    ) -> Result<Vec<SystemThemeContentReference>, sqlx::Error>;
+    async fn system_theme_revision(
+        &self,
+        theme: Theme,
+    ) -> Result<Option<SystemThemeRevision>, sqlx::Error>;
+    async fn system_application_content(
+        &self,
+    ) -> Result<Option<ThemeContentEligibility>, sqlx::Error>;
+    /// Discovers detached system content through the same shared eligibility.
+    async fn expired_system_content(
+        &self,
+        now_unix_seconds: i64,
+    ) -> Result<Vec<ThemeContentDigest>, sqlx::Error>;
+    /// Detaches expired system-only eligibility before the common collector unlinks.
+    async fn collect_system_content(
+        &self,
+        transaction: &mut WriteTransaction,
+        digest: &ThemeContentDigest,
+        now_unix_seconds: i64,
+    ) -> Result<(), sqlx::Error>;
     /// Creates a catalog entry after admitting its active-theme quota in this
     /// transaction. Publication never changes that catalog count.
     async fn create_theme(
@@ -484,9 +520,30 @@ impl<DB: sqlx::Database> ThemeStore<DB> {
 }
 
 macro_rules! impl_theme_storage {
-    ($db:ty, $conn:path) => {
+    ($db:ty, $conn:path, $queries:ident) => {
         #[async_trait]
         impl ThemeStorage for ThemeStore<$db> {
+            async fn admit_system_inventory(&self, transaction: &mut WriteTransaction, admission: &SystemThemeAdmission) -> Result<(), sqlx::Error> {
+                crate::system_themes::$queries::admit($conn(transaction)?, admission).await
+            }
+            async fn system_content_references(&self) -> Result<Vec<SystemThemeContentReference>, sqlx::Error> {
+                crate::system_themes::$queries::references(&self.pool).await
+            }
+            async fn live_system_content_references(&self) -> Result<Vec<SystemThemeContentReference>, sqlx::Error> {
+                crate::system_themes::$queries::live_references(&self.pool).await
+            }
+            async fn system_theme_revision(&self, theme: Theme) -> Result<Option<SystemThemeRevision>, sqlx::Error> {
+                crate::system_themes::$queries::revision(&self.pool, theme).await
+            }
+            async fn system_application_content(&self) -> Result<Option<ThemeContentEligibility>, sqlx::Error> {
+                crate::system_themes::$queries::application(&self.pool).await
+            }
+            async fn expired_system_content(&self, now_unix_seconds: i64) -> Result<Vec<ThemeContentDigest>, sqlx::Error> {
+                crate::system_themes::$queries::expired(&self.pool, now_unix_seconds).await
+            }
+            async fn collect_system_content(&self, transaction: &mut WriteTransaction, digest: &ThemeContentDigest, now_unix_seconds: i64) -> Result<(), sqlx::Error> {
+                crate::system_themes::$queries::collect($conn(transaction)?, digest, now_unix_seconds).await
+            }
             async fn create_theme(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, name: &str, draft: &ThemeDraft, limits: ThemeQuotaLimits) -> Result<ThemeId, sqlx::Error> {
                 let name = validate_theme_catalog_name(name)
                     .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
@@ -938,6 +995,7 @@ macro_rules! impl_theme_storage {
                 sqlx::query("UPDATE theme_owner_quotas SET logical_bytes = logical_bytes - $1 WHERE catalog_owner_key = $2 AND logical_bytes >= $1").bind(logical_bytes).bind(&key).execute(&mut *connection).await?;
                 let remaining: (bool,) = sqlx::query_as("SELECT EXISTS (SELECT 1 FROM theme_retained_content_charges WHERE digest = $1)").bind(digest.as_ref()).fetch_one(&mut *connection).await?;
                 if !remaining.0 {
+                    sqlx::query("DELETE FROM system_theme_content_references WHERE digest = $1 AND live_references = 0 AND retained_until_unix_seconds <= $2").bind(digest.as_ref()).bind(now_unix_seconds).execute(&mut *connection).await?;
                     sqlx::query("DELETE FROM theme_content_eligibility WHERE digest = $1 AND live_references = 0 AND retained_until_unix_seconds <= $2").bind(digest.as_ref()).bind(now_unix_seconds).execute(&mut *connection).await?;
                     sqlx::query("UPDATE theme_site_quota SET physical_bytes = physical_bytes - $1 WHERE singleton = 1 AND physical_bytes >= $1").bind(physical_bytes).execute(&mut *connection).await?;
                 }
@@ -3038,5 +3096,5 @@ mod tests {
     }
 }
 
-impl_theme_storage!(sqlx::Sqlite, write_scope::sqlite_connection);
-impl_theme_storage!(sqlx::Postgres, write_scope::postgres_connection);
+impl_theme_storage!(sqlx::Sqlite, write_scope::sqlite_connection, sqlite);
+impl_theme_storage!(sqlx::Postgres, write_scope::postgres_connection, postgres);

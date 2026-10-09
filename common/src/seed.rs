@@ -372,7 +372,15 @@ mod tests {
     #[test]
     fn public_presentation_serializes_the_server_resolved_theme_with_the_page() {
         let presentation = PublicPresentation {
-            theme: crate::theme::PublishedThemePresentation::built_in(crate::theme::Theme::Reader),
+            theme: crate::theme::PublishedThemePresentation {
+                identity: crate::theme::PublishedThemeIdentity::BuiltIn(
+                    crate::theme::Theme::Reader,
+                ),
+                revision: Some("a".repeat(64).parse().unwrap()),
+                stylesheet_url: format!("/theme/{}", "b".repeat(64)).parse().unwrap(),
+                logo_url: None,
+                header_url: None,
+            },
             page: PageSeed::SiteTimeline {
                 identity: SiteIdentity {
                     title: "Jaunder".parse().unwrap(),
@@ -391,7 +399,11 @@ mod tests {
 
         assert_eq!(
             serde_json::to_string(&presentation).unwrap(),
-            r#"{"theme":{"identity":{"kind":"built_in","value":"reader"},"revision":null,"stylesheet_url":"/style/jaunder-themes.css","logo_url":null,"header_url":null},"page":{"SiteTimeline":{"identity":{"title":"Jaunder","base_url":null},"registration_policy":"open","order":"newest","page":{"posts":[],"next_cursor":null,"has_more":false}}}}"#
+            format!(
+                r#"{{"theme":{{"identity":{{"kind":"built_in","value":"reader"}},"revision":"{}","stylesheet_url":"/theme/{}","logo_url":null,"header_url":null}},"page":{{"SiteTimeline":{{"identity":{{"title":"Jaunder","base_url":null}},"registration_policy":"open","order":"newest","page":{{"posts":[],"next_cursor":null,"has_more":false}}}}}}}}"#,
+                "a".repeat(64),
+                "b".repeat(64),
+            )
         );
     }
 }

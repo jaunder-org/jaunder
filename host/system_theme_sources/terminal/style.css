@@ -1,0 +1,38 @@
+body {
+  --bg: #f4efe4;
+  --surface: #fbf8f1;
+  --surface-alt: #ece4d0;
+  --ink: #1a1713;
+  --ink-soft: #2e2821;
+  --muted: #6f665a;
+  --muted-soft: #a6998a;
+  --line: #d8cfbc;
+  --line-soft: #e8e0ce;
+  --accent: #c96a1c;
+  --accent-ink: #873d05;
+  --accent-soft: rgba(201, 106, 28, 0.12);
+  --on-accent: #fbf8f1;
+  --ok: #3d7a3a;
+  --warn: #a05d00;
+  --err: #9d2218;
+  --font-body:
+    "IBM Plex Mono", "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --font-display:
+    "IBM Plex Mono", "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  --font-meta: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  --radius-sm: 2px;
+  --radius: 2px;
+  --radius-lg: 2px;
+  --pill: 2px;
+  --fs-head: 22px;
+  --tracking-head: -0.2px;
+  --brand-tracking: 0;
+  --brand-weight: 600;
+  --post-pad-y: 12px;
+  --post-pad-x: 18px;
+  --post-gap: 12px;
+  --avatar-sz: 28px;
+  --fs-post: 13px;
+  --card-shadow: none;
+}

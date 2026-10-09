@@ -109,9 +109,19 @@ mod tests {
         registration::RegistrationPolicy,
         seed::{LocalTimelinePresentation, Page, PageSeed, PublicPresentation, TimelineOrder},
         site::SiteIdentity,
-        theme::{PublishedThemePresentation, Theme},
+        theme::{PublishedThemeIdentity, PublishedThemePresentation, Theme},
     };
     use leptos::prelude::*;
+
+    fn reader_theme() -> PublishedThemePresentation {
+        PublishedThemePresentation {
+            identity: PublishedThemeIdentity::BuiltIn(Theme::Reader),
+            revision: Some("a".repeat(64).parse().unwrap()),
+            stylesheet_url: format!("/theme/{}", "b".repeat(64)).parse().unwrap(),
+            logo_url: None,
+            header_url: None,
+        }
+    }
 
     fn identity() -> SiteIdentity {
         SiteIdentity {
@@ -131,7 +141,7 @@ mod tests {
     #[test]
     fn destination_keeps_the_server_resolved_theme_and_identity() {
         let destination = site_destination(PublicPresentation {
-            theme: PublishedThemePresentation::built_in(Theme::Reader),
+            theme: reader_theme(),
             page: LocalTimelinePresentation {
                 identity: identity(),
                 registration_policy: RegistrationPolicy::Open,
@@ -143,10 +153,7 @@ mod tests {
             },
         });
 
-        assert_eq!(
-            destination.theme,
-            PublishedThemePresentation::built_in(Theme::Reader)
-        );
+        assert_eq!(destination.theme, reader_theme());
         Owner::new().with(|| {
             let state = TimelineState::default();
             let resolved_identity = RwSignal::new(None);

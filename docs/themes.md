@@ -11,6 +11,22 @@ Theme management lives at `/themes`:
 - author and site themes never cross catalogs implicitly. Move a theme between
   catalogs or instances by exporting and importing its Theme Package.
 
+## Bundled defaults and application styling
+
+Studio, Terminal and Reader are system-managed bundled Theme Packages. Selecting
+a bundled name follows the revision shipped by the installed Jaunder release.
+They use the same package compiler, immutable digest delivery and
+retained-content lifecycle as custom packages, but cannot be edited or deleted
+through custom catalogs and do not consume their quotas. Site/author precedence
+and Studio fallback are unchanged.
+
+Protected application CSS is a separate, non-selectable system role sharing that
+delivery lifecycle. Custom CSS remains scoped to public presentation and cannot
+style trusted controls or private surfaces. Home never loads the selected public
+Theme Package. See [application asset lifecycle](application-assets.md) for the
+complete inventory, cache policy, upgrade/rollback and fresh-target restore
+rules.
+
 ## Choose a starting point
 
 The Studio page supports three starting points:
@@ -389,4 +405,5 @@ HTML is not broken by deletion.
 
 - [Theme management routes and endpoint census](flows/theme-management.md)
 - [Current custom-theme architecture](ARCHITECTURE.md#custom-public-themes)
+- [Application asset inventory and cache lifecycle](application-assets.md)
 - [Custom-theme architectural decision](adr/0184-css-package-public-themes.md)

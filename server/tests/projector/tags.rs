@@ -21,13 +21,15 @@ use storage::{
 
 use super::fixtures::{
     TEST_SHELL, assert_sanitized_internal_server_error, failing_site_theme_selection, get,
-    projector_app, projector_app_with_dependencies, seed_tagged_post,
+    install_projector_system_inventory, projector_app, projector_app_with_dependencies,
+    seed_tagged_post,
 };
 
 #[apply(backends)]
 #[tokio::test]
 async fn site_tag_projects_tagged_posts(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (_u, title) = seed_tagged_post(env.users(), env.posts(), env.write_scope()).await;
     let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/tags/rust"))
@@ -44,6 +46,7 @@ async fn site_tag_projects_tagged_posts(#[case] backend: Backend) {
 #[tokio::test]
 async fn user_tag_projects_tagged_posts(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (u, title) = seed_tagged_post(env.users(), env.posts(), env.write_scope()).await;
     let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get(&format!("/~{u}/tags/rust")))
@@ -59,6 +62,7 @@ async fn user_tag_projects_tagged_posts(#[case] backend: Backend) {
 #[tokio::test]
 async fn user_tag_projects_the_authors_override_into_initial_markup(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (username, title) = seed_tagged_post(env.users(), env.posts(), env.write_scope()).await;
     let parsed_username = username.parse().expect("seeded username");
     let author = env
@@ -113,6 +117,7 @@ async fn user_tag_projects_the_authors_override_into_initial_markup(#[case] back
 #[tokio::test]
 async fn site_tag_invalid_serves_shell(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/tags/-rust"))
         .await
@@ -126,6 +131,7 @@ async fn site_tag_invalid_serves_shell(#[case] backend: Backend) {
 #[tokio::test]
 async fn user_tag_invalid_serves_shell(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/~in.valid/tags/rust"))
         .await
@@ -143,6 +149,7 @@ async fn user_tag_invalid_serves_shell(#[case] backend: Backend) {
 #[tokio::test]
 async fn user_tag_invalid_tag_serves_shell(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/~alice/tags/-rust"))
         .await
@@ -156,6 +163,7 @@ async fn user_tag_invalid_tag_serves_shell(#[case] backend: Backend) {
 #[tokio::test]
 async fn user_tag_unknown_valid_username_serves_shell(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let resp = projector_app(env.posts(), env.users(), env.themes())
         .oneshot(get("/~ghost/tags/rust"))
         .await
@@ -180,6 +188,7 @@ async fn user_tag_listing_user_lookup_failure_keeps_no_store_shell_and_reports_o
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (username, _title) = seed_tagged_post(env.users(), env.posts(), env.write_scope()).await;
     let mut users = MockUserStorage::new();
     users
@@ -232,6 +241,7 @@ async fn user_tag_theme_owner_lookup_failure_keeps_500_and_reports_boundary_once
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     let (username, _title) = seed_tagged_post(env.users(), env.posts(), env.write_scope()).await;
     let parsed_username = username.parse().expect("seeded username");
     let author = env
@@ -283,6 +293,7 @@ async fn user_tag_theme_owner_lookup_failure_keeps_500_and_reports_boundary_once
 #[tokio::test]
 async fn site_tag_storage_failure_keeps_no_store_shell_and_reports_once(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     seed_tagged_post(env.users(), env.posts(), env.write_scope()).await;
     let app = projector_app(env.posts(), env.users(), env.themes());
     env.base.close_pool().await;
@@ -317,6 +328,7 @@ async fn site_tag_storage_failure_keeps_no_store_shell_and_reports_once(#[case] 
 #[tokio::test]
 async fn site_tag_theme_failure_keeps_500_and_reports_boundary_once(#[case] backend: Backend) {
     let env = backend.setup().await;
+    install_projector_system_inventory(&env).await;
     seed_tagged_post(env.users(), env.posts(), env.write_scope()).await;
     let app = projector_app_with_dependencies(
         env.posts(),

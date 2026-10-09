@@ -1386,8 +1386,10 @@ force-fitted with artificial tests:
   exemption are needed.
 - **WASM entry point** (`csr/src/lib.rs`): runs only in the browser WASM context
   — `cov:ignore`'d.
-- **A few PostgreSQL storage error branches** (`storage/src/postgres/*`) and
-  **asset serving** (`server/src/assets.rs`, compile-time embedded assets):
+- **Compiler-generated asset embed expansion** (`server/src/site.rs`, the
+  `RustEmbed` derive only): `cov:ignore`'d. Handwritten asset handlers are
+  measured; their pure response logic and real embedded lookups have tests.
+- **A few PostgreSQL storage error branches** (`storage/src/postgres/*`):
   unreachable or impractical to exercise host-side — `cov:ignore`'d. A
   provably-dead branch here is a candidate for `unreachable!("msg")` instead
   (self-enforcing, no marker); migrating the existing markers is tracked in

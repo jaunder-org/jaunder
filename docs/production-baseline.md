@@ -29,6 +29,18 @@ cargo xtask production-baseline accept --source <source-commit> --target <target
 Acceptance qualification is explicitly **non-release** evidence. Issue #1419
 selects and qualifies a release candidate later.
 
+## Separate styling qualification
+
+`cargo xtask production-baseline qualify-styling` is the source-pinned,
+current-format styling release-transition proof. It uses three canonical fixture
+packages, retained Chromium contexts and same-backend fresh-target restores on
+SQLite and PostgreSQL. See [application assets](application-assets.md) for its
+protocol, completed evidence and browser limits.
+
+That operation does not change ordinary discovery/acceptance's exact format-1
+admission or four-direction restore matrix. It is not actual Safari/iPhone,
+production, #1419 release-candidate or milestone acceptance.
+
 ## Topology and immutable identity
 
 The host xtask resolves upstream commits to immutable flake references and alone

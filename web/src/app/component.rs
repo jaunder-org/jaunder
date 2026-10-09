@@ -19,10 +19,13 @@ use leptos_router::{
     hooks::{use_location, use_navigate},
 };
 use wasm_bindgen::JsCast;
+/// # Panics
+///
+/// Panics when mounted outside the CSR bootstrap composition root.
 #[must_use]
-pub fn public_theme() -> RwSignal<PublishedThemePresentation> {
-    use_context::<RwSignal<PublishedThemePresentation>>()
-        .unwrap_or_else(|| RwSignal::new(PublishedThemePresentation::built_in(Theme::Studio)))
+pub fn public_theme() -> RwSignal<Option<PublishedThemePresentation>> {
+    use_context::<RwSignal<Option<PublishedThemePresentation>>>()
+        .unwrap_or_else(|| panic!("public theme context is installed by CSR bootstrap"))
 }
 
 /// The reactive twin of [`super::render::render_theme_hero`].
@@ -30,12 +33,19 @@ pub fn public_theme() -> RwSignal<PublishedThemePresentation> {
 /// Keeping the wrapper, header ordering, and semantic hook here makes every CSR
 /// route share one hero seam; route components supply only their masthead.
 #[component]
-pub fn ThemeHero(theme: RwSignal<PublishedThemePresentation>, children: Children) -> impl IntoView {
+pub fn ThemeHero(
+    theme: RwSignal<Option<PublishedThemePresentation>>,
+    children: Children,
+) -> impl IntoView {
     view! {
         <section data-jaunder-part=super::render::HERO_PART>
             {move || {
-                super::render::render_theme_header(&theme.get())
-                    .inject_into(leptos::html::div().class("j-contents"))
+                theme
+                    .get()
+                    .map(|theme| {
+                        super::render::render_theme_header(&theme)
+                            .inject_into(leptos::html::div().class("j-contents"))
+                    })
             }} {children()}
         </section>
     }
@@ -68,21 +78,25 @@ thread_local! {
 
 /// The one authority for committing a resolved public presentation in CSR.
 ///
-/// A custom theme is staged under a non-matching media query. The coordinator
-/// publishes it, its role images, and the route's page only after the browser
-/// has loaded that stylesheet.
+/// A public Theme Package is staged under a non-matching media query. The
+/// coordinator publishes it, its role images, and the route's page only after
+/// the browser has loaded that stylesheet.
 #[derive(Clone, Copy)]
 pub struct ThemePresentationCoordinator {
-    theme: RwSignal<PublishedThemePresentation>,
+    theme: RwSignal<Option<PublishedThemePresentation>>,
     generation: RwSignal<u64>,
+    failure: RwSignal<Option<(u64, WebError)>>,
+    retry: RwSignal<u64>,
 }
 
 impl ThemePresentationCoordinator {
     #[must_use]
-    fn new(theme: RwSignal<PublishedThemePresentation>) -> Self {
+    fn new(theme: RwSignal<Option<PublishedThemePresentation>>) -> Self {
         Self {
             theme,
             generation: RwSignal::new(0),
+            failure: RwSignal::new(None),
+            retry: RwSignal::new(0),
         }
     }
 
@@ -90,32 +104,63 @@ impl ThemePresentationCoordinator {
     /// presentation. Any staged stylesheet is settled and removed immediately.
     pub fn begin_navigation(self) {
         self.generation.update(|generation| *generation += 1);
+        let generation = self.generation.get_untracked();
         Self::cancel_staged();
-        remove_staged_theme_stylesheets();
+        if let Err(error) = remove_staged_theme_stylesheets() {
+            self.record_failure(generation, error);
+        }
+    }
+
+    fn record_failure(self, generation: u64, error: WebError) {
+        if self.generation.get_untracked() == generation {
+            self.failure.set(Some((generation, error)));
+        }
+    }
+
+    fn clear_failure(self, generation: u64) {
+        if self.generation.get_untracked() == generation
+            && self
+                .failure
+                .get_untracked()
+                .as_ref()
+                .is_some_and(|(failed, _)| *failed <= generation)
+        {
+            self.failure.set(None);
+        }
+    }
+
+    fn failure(self) -> RwSignal<Option<(u64, WebError)>> {
+        self.failure
+    }
+
+    fn retry_current(self) {
+        self.retry.update(|retry| *retry += 1);
+    }
+
+    fn retry_token(self) -> RwSignal<u64> {
+        self.retry
     }
 
     /// Waits for the current navigation's presentation to become safe to paint.
     ///
-    /// Built-in themes and private navigation settle synchronously. A newer
-    /// navigation settles an older custom load as [`ThemeAdoption::Superseded`].
+    /// Every public Theme Package is staged before promotion. A newer navigation
+    /// settles an older package load as [`ThemeAdoption::Superseded`].
     ///
     /// # Errors
     ///
-    /// Returns an error when the browser cannot create or load the custom stylesheet.
+    /// Returns an error when the browser cannot create or load the package stylesheet.
     pub async fn adopt(self, presentation: PublishedThemePresentation) -> WebResult<ThemeAdoption> {
+        // crap:allow: This wasm-only DOM load/promotion settlement cannot execute under native coverage; real browser tests exercise supersession and append/promotion failures while preserving the active stylesheet and generation guards.
         self.begin_navigation();
         let generation = self.generation.get_untracked();
 
-        if !matches!(
-            presentation.identity,
-            common::theme::PublishedThemeIdentity::Custom(_)
-        ) {
-            remove_theme_stylesheet();
-            self.theme.set(presentation);
-            return Ok(ThemeAdoption::Applied);
+        if let Some((failed, error)) = self.failure.get_untracked()
+            && failed == generation
+        {
+            return Err(error);
         }
 
-        let (link, receiver) = Self::stage_custom(generation, &presentation)?;
+        let (link, receiver) = Self::stage_package(generation, &presentation)?;
 
         let loaded = receiver.await.unwrap_or(false);
         if self.generation.get_untracked() != generation {
@@ -123,19 +168,44 @@ impl ThemePresentationCoordinator {
         }
         if !loaded {
             return Err(WebError::server_message(
-                "Custom theme stylesheet failed to load",
+                "Theme Package stylesheet failed to load",
             ));
         }
 
-        remove_theme_stylesheet();
-        let _ = link.remove_attribute("data-jaunder-theme-staged");
-        let _ = link.set_attribute(super::THEME_STYLESHEET_MARKER_ATTR, "");
+        let old_links = match theme_stylesheets() {
+            Ok(nodes) if nodes.len() <= 1 => nodes,
+            Ok(_) => {
+                link.remove();
+                return Err(WebError::server_message(
+                    "Multiple active Theme Package stylesheets",
+                ));
+            }
+            Err(error) => {
+                link.remove();
+                return Err(error);
+            }
+        };
+        if link.remove_attribute("data-jaunder-theme-staged").is_err()
+            || link
+                .set_attribute(super::THEME_STYLESHEET_MARKER_ATTR, "")
+                .is_err()
+        {
+            link.remove();
+            return Err(WebError::server_message(
+                "Unable to promote Theme Package stylesheet",
+            ));
+        }
+        if let Err(error) = remove_stylesheet_nodes(old_links) {
+            link.remove();
+            return Err(error);
+        }
         link.set_media("all");
-        self.theme.set(presentation);
+        self.theme.set(Some(presentation));
+        self.clear_failure(generation);
         Ok(ThemeAdoption::Applied)
     }
 
-    fn stage_custom(
+    fn stage_package(
         generation: u64,
         presentation: &PublishedThemePresentation,
     ) -> WebResult<(
@@ -144,25 +214,30 @@ impl ThemePresentationCoordinator {
     )> {
         let Some(document) = leptos::web_sys::window().and_then(|window| window.document()) else {
             return Err(WebError::server_message(
-                "Unable to stage custom theme stylesheet",
+                "Unable to stage Theme Package stylesheet",
             ));
         };
         let Ok(element) = document.create_element("link") else {
             return Err(WebError::server_message(
-                "Unable to create custom theme stylesheet",
+                "Unable to create Theme Package stylesheet",
             ));
         };
         let Ok(link) = element.dyn_into::<web_sys::HtmlLinkElement>() else {
             return Err(WebError::server_message(
-                "Unable to stage custom theme stylesheet",
+                "Unable to stage Theme Package stylesheet",
             ));
         };
-        let _ = link.set_attribute("rel", "stylesheet");
-        let _ = link.set_attribute("data-jaunder-theme-staged", "");
+        link.set_attribute("rel", "stylesheet")
+            .map_err(|_| WebError::server_message("Unable to stage Theme Package stylesheet"))?;
+        link.set_attribute("data-jaunder-theme-staged", "")
+            .map_err(|_| WebError::server_message("Unable to stage Theme Package stylesheet"))?;
         // Download without making the destination cascade part of the current
         // page. `all` is restored in the single settlement below.
         link.set_media("not all");
         link.set_href(presentation.stylesheet_url.as_ref());
+        let head = document
+            .head()
+            .ok_or_else(|| WebError::server_message("Unable to stage Theme Package stylesheet"))?;
 
         let (sender, receiver) = futures_channel::oneshot::channel();
         let sender = Rc::new(RefCell::new(Some(sender)));
@@ -185,12 +260,11 @@ impl ThemePresentationCoordinator {
                 callbacks,
             });
         });
-        if document
-            .head()
-            .and_then(|head| head.append_child(&link).ok())
-            .is_none()
-        {
+        if head.append_child(&link).is_err() {
             Self::settle_staged(generation, false);
+            return Err(WebError::server_message(
+                "Unable to stage Theme Package stylesheet",
+            ));
         }
         Ok((link, receiver))
     }
@@ -237,86 +311,136 @@ impl ThemePresentationCoordinator {
 
     fn clear_for_private_route(self) {
         self.generation.update(|generation| *generation += 1);
+        let generation = self.generation.get_untracked();
         Self::cancel_staged();
-        remove_theme_stylesheet();
-        remove_staged_theme_stylesheets();
-        self.theme
-            .set(PublishedThemePresentation::built_in(Theme::Studio));
+        if let Err(error) =
+            remove_theme_stylesheet().and_then(|()| remove_staged_theme_stylesheets())
+        {
+            self.record_failure(generation, error);
+            return;
+        }
+        self.theme.set(None);
+        self.clear_failure(generation);
+    }
+
+    fn reconcile_route(self, path: &str) {
+        if !common::theme::is_public_presentation_path(path) {
+            self.clear_for_private_route();
+        } else if self.failure.get_untracked().is_some() {
+            self.generation.update(|generation| *generation += 1);
+            let generation = self.generation.get_untracked();
+            Self::cancel_staged();
+            if let Err(error) = remove_staged_theme_stylesheets() {
+                self.record_failure(generation, error);
+                return;
+            }
+            self.adopt_initial();
+        }
     }
 
     fn adopt_initial(self) {
-        reconcile_theme_stylesheet(&self.theme.get_untracked());
+        let generation = self.generation.get_untracked();
+        if let Some(presentation) = self.theme.get_untracked()
+            && let Err(error) = reconcile_theme_stylesheet(&presentation)
+        {
+            self.record_failure(generation, error);
+        } else {
+            self.clear_failure(generation);
+        }
     }
 }
 
 /// Obtain the public-navigation presentation authority.
+///
+/// # Panics
+///
+/// Panics when called outside the `AppShell` composition root.
 #[must_use]
 pub fn theme_presentation() -> ThemePresentationCoordinator {
     use_context::<ThemePresentationCoordinator>()
-        .unwrap_or_else(|| ThemePresentationCoordinator::new(public_theme()))
+        .unwrap_or_else(|| panic!("theme presentation coordinator is installed by AppShell"))
 }
 
-fn remove_theme_stylesheet() {
-    let Some(document) = leptos::web_sys::window().and_then(|window| window.document()) else {
-        return;
-    };
-    let selector = format!("link[{}]", super::THEME_STYLESHEET_MARKER_ATTR);
-    let Ok(nodes) = document.query_selector_all(&selector) else {
-        return;
-    };
-    for index in 0..nodes.length() {
-        if let Some(node) = nodes.item(index)
-            && let Some(parent) = node.parent_node()
-        {
-            let _ = parent.remove_child(&node);
-        }
-    }
+fn theme_stylesheets() -> WebResult<Vec<web_sys::Node>> {
+    stylesheet_nodes(&format!("link[{}]", super::THEME_STYLESHEET_MARKER_ATTR))
 }
 
-fn remove_staged_theme_stylesheets() {
-    let Some(document) = leptos::web_sys::window().and_then(|window| window.document()) else {
-        return;
-    };
-    let Ok(nodes) = document.query_selector_all("link[data-jaunder-theme-staged]") else {
-        return;
-    };
-    for index in 0..nodes.length() {
-        if let Some(node) = nodes.item(index)
-            && let Some(parent) = node.parent_node()
-        {
-            let _ = parent.remove_child(&node);
-        }
-    }
+fn remove_theme_stylesheet() -> WebResult<()> {
+    remove_stylesheet_nodes(theme_stylesheets()?)
 }
 
-fn reconcile_theme_stylesheet(presentation: &PublishedThemePresentation) {
-    if !matches!(
-        presentation.identity,
-        common::theme::PublishedThemeIdentity::Custom(_)
-    ) {
-        remove_theme_stylesheet();
-        return;
+fn remove_staged_theme_stylesheets() -> WebResult<()> {
+    remove_stylesheet_nodes(stylesheet_nodes("link[data-jaunder-theme-staged]")?)
+}
+
+fn stylesheet_nodes(selector: &str) -> WebResult<Vec<web_sys::Node>> {
+    let document = leptos::web_sys::window()
+        .and_then(|window| window.document())
+        .ok_or_else(|| WebError::server_message("Unable to clean up Theme Package stylesheet"))?;
+    let nodes = document
+        .query_selector_all(selector)
+        .map_err(|_| WebError::server_message("Unable to clean up Theme Package stylesheet"))?;
+    (0..nodes.length())
+        .map(|index| {
+            nodes.item(index).ok_or_else(|| {
+                WebError::server_message("Unable to clean up Theme Package stylesheet")
+            })
+        })
+        .collect()
+}
+
+fn remove_stylesheet_nodes(nodes: Vec<web_sys::Node>) -> WebResult<()> {
+    for node in nodes {
+        let parent = node.parent_node().ok_or_else(|| {
+            WebError::server_message("Unable to clean up Theme Package stylesheet")
+        })?;
+        parent
+            .remove_child(&node)
+            .map_err(|_| WebError::server_message("Unable to clean up Theme Package stylesheet"))?;
     }
-    let Some(document) = leptos::web_sys::window().and_then(|window| window.document()) else {
-        return;
-    };
+    Ok(())
+}
+
+fn reconcile_theme_stylesheet(presentation: &PublishedThemePresentation) -> WebResult<()> {
+    // crap:allow: Browser Document/link reconciliation has no native DOM; real browser presentation tests exercise projector-provided existing links and immutable href binding, not the missing-link creation branch.
+    let document = leptos::web_sys::window()
+        .and_then(|window| window.document())
+        .ok_or_else(|| WebError::server_message("Unable to reconcile Theme Package stylesheet"))?;
     let selector = format!("link[{}]", super::THEME_STYLESHEET_MARKER_ATTR);
     let existing = document
         .query_selector(&selector)
-        .ok()
-        .flatten()
-        .or_else(|| {
-            let element = document.create_element("link").ok()?;
-            element
-                .set_attribute(super::THEME_STYLESHEET_MARKER_ATTR, "")
-                .ok()?;
-            element.set_attribute("rel", "stylesheet").ok()?;
-            document.head()?.append_child(&element).ok()?;
-            Some(element)
-        });
-    if let Some(link) = existing {
-        let _ = link.set_attribute("href", presentation.stylesheet_url.as_ref());
-    }
+        .map_err(|_| WebError::server_message("Unable to reconcile Theme Package stylesheet"))?;
+    let link = if let Some(existing) = existing {
+        existing
+            .dyn_into::<web_sys::HtmlLinkElement>()
+            .map_err(|_| WebError::server_message("Unable to reconcile Theme Package stylesheet"))?
+    } else {
+        let element = document.create_element("link").map_err(|_| {
+            WebError::server_message("Unable to reconcile Theme Package stylesheet")
+        })?;
+        element
+            .set_attribute(super::THEME_STYLESHEET_MARKER_ATTR, "")
+            .map_err(|_| {
+                WebError::server_message("Unable to reconcile Theme Package stylesheet")
+            })?;
+        element.set_attribute("rel", "stylesheet").map_err(|_| {
+            WebError::server_message("Unable to reconcile Theme Package stylesheet")
+        })?;
+        let link = element
+            .dyn_into::<web_sys::HtmlLinkElement>()
+            .map_err(|_| {
+                WebError::server_message("Unable to reconcile Theme Package stylesheet")
+            })?;
+        let head = document.head().ok_or_else(|| {
+            WebError::server_message("Unable to reconcile Theme Package stylesheet")
+        })?;
+        head.append_child(&link).map_err(|_| {
+            WebError::server_message("Unable to reconcile Theme Package stylesheet")
+        })?;
+        link
+    };
+    link.set_attribute("href", presentation.stylesheet_url.as_ref())
+        .map_err(|_| WebError::server_message("Unable to reconcile Theme Package stylesheet"))
 }
 
 #[component]
@@ -345,12 +469,13 @@ fn AppShell() -> impl IntoView {
     let location = use_location();
     let presentation = ThemePresentationCoordinator::new(theme);
     presentation.adopt_initial();
+    let coordinator_failure = presentation.failure();
+    let coordinator_retry = presentation.retry_token();
     provide_context(presentation);
     Effect::new(move |_| {
         let path = location.pathname.get();
-        if !common::theme::is_public_presentation_path(&path) {
-            presentation.clear_for_private_route();
-        }
+        coordinator_retry.track();
+        presentation.reconcile_route(&path);
         let confirmed = confirmed_user_tag.0.get_untracked();
         let retained =
             crate::feed_discovery::routes::confirmed_user_tag_on_path(confirmed.clone(), &path);
@@ -367,54 +492,76 @@ fn AppShell() -> impl IntoView {
             class="j-root"
             data-theme=move || {
                 if common::theme::is_public_presentation_path(&location.pathname.get()) {
-                    theme.get().data_theme()
+                    theme.get().map_or_else(String::new, |theme| theme.data_theme())
                 } else {
                     Theme::Studio.token().to_owned()
                 }
             }
             data-home=move || (location.pathname.get() == "/app").then_some("true")
+            data-jaunder-private=move || {
+                (!common::theme::is_public_presentation_path(&location.pathname.get()))
+                    .then_some("true")
+            }
         >
-            {move || {
-                if common::theme::is_public_presentation_path(&location.pathname.get()) {
+            <Show
+                when=move || coordinator_failure.get().is_none()
+                fallback=move || {
                     view! {
-                        <div class="j-theme-clip" data-jaunder-theme-clip>
-                            <div
-                                class="j-shell"
-                                data-jaunder-theme-surface
-                                data-jaunder-style-contract=common::theme::STYLE_CONTRACT_VERSION
-                            >
+                        <p class="error">
+                            {move || coordinator_failure.get().map(|(_, error)| error.to_string())}
+                        </p>
+                        <button
+                            type="button"
+                            class="j-btn"
+                            on:click=move |_| presentation.retry_current()
+                        >
+                            "Retry"
+                        </button>
+                    }
+                }
+            >
+                {move || {
+                    if common::theme::is_public_presentation_path(&location.pathname.get()) {
+                        view! {
+                            <div class="j-theme-clip" data-jaunder-theme-clip>
+                                <div
+                                    class="j-shell"
+                                    data-jaunder-theme-surface
+                                    data-jaunder-style-contract=common::theme::STYLE_CONTRACT_VERSION
+                                >
+                                    <Sidebar />
+                                    <div class="j-main-region">
+                                        <main class="j-main" data-jaunder-part="main">
+                                            <Outlet />
+                                        </main>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="j-trusted-post-actions" class="j-trusted-post-actions"></div>
+                            <div id="j-trusted-chrome" class="j-trusted-chrome">
+                                <BackupBanner />
+                                <SiteBaseUrlBanner />
+                            </div>
+                        }
+                            .into_any()
+                    } else {
+                        view! {
+                            <div class="j-shell">
                                 <Sidebar />
                                 <div class="j-main-region">
-                                    <main class="j-main" data-jaunder-part="main">
+                                    <BackupBanner />
+                                    <SiteBaseUrlBanner />
+                                    <main class="j-main">
                                         <Outlet />
                                     </main>
                                 </div>
                             </div>
-                        </div>
-                        <div id="j-trusted-post-actions" class="j-trusted-post-actions"></div>
-                        <div id="j-trusted-chrome" class="j-trusted-chrome">
-                            <BackupBanner />
-                            <SiteBaseUrlBanner />
-                        </div>
+                            <div id="j-trusted-post-actions" class="j-trusted-post-actions"></div>
+                        }
+                            .into_any()
                     }
-                        .into_any()
-                } else {
-                    view! {
-                        <div class="j-shell">
-                            <Sidebar />
-                            <div class="j-main-region">
-                                <BackupBanner />
-                                <SiteBaseUrlBanner />
-                                <main class="j-main">
-                                    <Outlet />
-                                </main>
-                            </div>
-                        </div>
-                        <div id="j-trusted-post-actions" class="j-trusted-post-actions"></div>
-                    }
-                        .into_any()
-                }
-            }}
+                }}
+            </Show>
         </div>
     }
 }

@@ -616,7 +616,10 @@ test("operator manages the site catalog through public selection and fallback", 
     );
     await expect(
       fallbackPage.locator("link[data-jaunder-theme-stylesheet]"),
-    ).toHaveCount(0);
+    ).toHaveCount(1);
+    await expect(
+      fallbackPage.locator("link[data-jaunder-theme-stylesheet]"),
+    ).toHaveAttribute("href", /^\/theme\/[0-9a-f]{64}$/);
   } finally {
     await fallbackContext.close();
   }

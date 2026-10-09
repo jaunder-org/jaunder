@@ -107,6 +107,9 @@ tracing-subscriber = { workspace = true }
 default = ["sqlx"]
 sqlx = []
 test-utils = ["cheap-kdf", "dep:tokio"]
+# Internal build-only A/B artifact inputs for deployment qualification. This is
+# never enabled by normal application/package outputs.
+qualification = []
 cheap-kdf = []
 test-support = ["common/test-support"]
 

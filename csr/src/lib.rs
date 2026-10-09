@@ -65,10 +65,9 @@ fn mount() {
     perf::mark(perf::BOOT_RENDER_START);
     leptos::mount::mount_to_body(move || {
         provide_context(presentation.as_ref().map(|value| value.page.clone()));
-        provide_context(RwSignal::new(presentation.as_ref().map_or_else(
-            || common::theme::PublishedThemePresentation::built_in(common::theme::Theme::Studio),
-            |value| value.theme.clone(),
-        )));
+        provide_context(RwSignal::new(
+            presentation.as_ref().map(|value| value.theme.clone()),
+        ));
         view! { <App /> }
     });
 }

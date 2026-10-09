@@ -5,13 +5,13 @@
 
 use anyhow::Context;
 use common::{
-    ids::{PostId, ThemeId},
+    ids::PostId,
     render::{PostFormat, sanitize},
     root_relative_url::RootRelativeUrl,
     seed::{Page, PageSeed, PublicPresentation, RenderedPost, TagSummary, TimelineOrder},
     site::{SiteIdentity, SiteTitle},
     tag::TagLabel,
-    theme::{PublishedThemeIdentity, PublishedThemePresentation, ThemeRevisionDigest},
+    theme::PublishedThemePresentation,
 };
 
 const FIXTURE_VERSION: u8 = 1;
@@ -27,19 +27,11 @@ const FIXTURE_VERSION: u8 = 1;
 ///
 /// Returns an error if a source-controlled fixture value violates its domain type.
 pub fn thumbnail_document(
-    logo_url: Option<RootRelativeUrl>,
-    header_url: Option<RootRelativeUrl>,
+    application_stylesheet_url: &RootRelativeUrl,
+    theme: PublishedThemePresentation,
 ) -> anyhow::Result<String> {
     let presentation = PublicPresentation {
-        theme: PublishedThemePresentation {
-            identity: PublishedThemeIdentity::Custom(ThemeId::from(0)),
-            revision: Some(fixture_revision()?),
-            stylesheet_url: "/theme.css"
-                .parse()
-                .context("thumbnail fixture stylesheet URL is valid")?,
-            logo_url,
-            header_url,
-        },
+        theme,
         page: PageSeed::SiteTimeline {
             identity: SiteIdentity {
                 title: SiteTitle::default(),
@@ -57,16 +49,10 @@ pub fn thumbnail_document(
     };
     Ok(format!(
         "<!doctype html><html lang=\"en\" data-jaunder-thumbnail-fixture=\"{FIXTURE_VERSION}\" data-jaunder-thumbnail-ready=\"0\"><head><link rel=\"icon\" href=\"data:,\">{}{}</head><body>{}<script>document.fonts.ready.then(()=>document.documentElement.dataset.jaunderThumbnailReady='1');</script></body></html>",
-        crate::app::render_head(&presentation.page, None).into_string(),
+        crate::app::render_head(&presentation.page, None, application_stylesheet_url).into_string(),
         crate::app::render_theme_stylesheet(&presentation.theme).into_string(),
         crate::app::render_shell(&presentation).into_string(),
     ))
-}
-
-fn fixture_revision() -> anyhow::Result<ThemeRevisionDigest> {
-    "0000000000000000000000000000000000000000000000000000000000000000"
-        .parse()
-        .context("thumbnail fixture digest is valid")
 }
 
 fn fixture_post() -> anyhow::Result<RenderedPost> {
@@ -120,21 +106,38 @@ fn fixture_post() -> anyhow::Result<RenderedPost> {
 
 #[cfg(test)]
 mod tests {
-    use common::root_relative_url::RootRelativeUrl;
+    use common::{
+        ids::ThemeId,
+        theme::{
+            PublishedThemeIdentity, PublishedThemePresentation, ThemeAssetDigest,
+            ThemeContentDigest, ThemeRevisionDigest, ThemeStylesheetDigest,
+        },
+    };
 
     use super::thumbnail_document;
 
-    fn root_relative_url(path: &str) -> RootRelativeUrl {
-        path.parse().expect("test URL is root-relative")
+    fn presentation() -> PublishedThemePresentation {
+        PublishedThemePresentation {
+            identity: PublishedThemeIdentity::Custom(ThemeId::from(7)),
+            revision: Some(ThemeRevisionDigest::from_digest([0x11; 32])),
+            stylesheet_url: ThemeStylesheetDigest::from_digest([0x22; 32]).content_url(),
+            logo_url: None,
+            header_url: None,
+        }
     }
 
     #[test]
     fn fixture_is_versioned_and_contains_representative_contract_hooks() {
-        let document = thumbnail_document(None, None).expect("trusted fixture");
+        let application = ThemeContentDigest::from_digest([0x55; 32]).content_url();
+        let theme = presentation();
+        let stylesheet = theme.stylesheet_url.clone();
+        let document = thumbnail_document(&application, theme).expect("trusted fixture");
         assert!(document.contains("data-jaunder-thumbnail-fixture=\"1\""));
-        assert!(document.contains("href=\"/style/jaunder.css\""));
-        assert!(document.contains("href=\"/style/jaunder-themes.css\""));
-        assert!(document.contains("href=\"/theme.css\""));
+        assert!(document.contains(&format!("href=\"{application}\"")));
+        assert!(document.contains(&format!("href=\"{stylesheet}\"")));
+        for retired in ["/style/", "/theme.css", "/theme-assets/"] {
+            assert!(!document.contains(retired));
+        }
         for part in [
             "masthead",
             "post",
@@ -154,17 +157,16 @@ mod tests {
 
     #[test]
     fn fixture_projects_supplied_theme_default_images() {
-        let document = thumbnail_document(
-            Some(root_relative_url("/theme-assets/assets%2Flogo.png")),
-            Some(root_relative_url("/theme-assets/assets%2Fheader.png")),
-        )
-        .expect("trusted fixture");
-
-        assert!(
-            document.contains("data-jaunder-part=\"logo\" src=\"/theme-assets/assets%2Flogo.png\"")
-        );
-        assert!(document.contains(
-            "data-jaunder-part=\"header-image\" src=\"/theme-assets/assets%2Fheader.png\""
-        ));
+        let application = ThemeContentDigest::from_digest([0x55; 32]).content_url();
+        let logo = ThemeAssetDigest::from_digest([0x33; 32]).content_url();
+        let header = ThemeAssetDigest::from_digest([0x44; 32]).content_url();
+        let mut theme = presentation();
+        theme.logo_url = Some(logo.clone());
+        theme.header_url = Some(header.clone());
+        let document = thumbnail_document(&application, theme).expect("trusted fixture");
+        assert!(document.contains(&format!("data-jaunder-part=\"logo\" src=\"{logo}\"")));
+        assert!(document.contains(&format!(
+            "data-jaunder-part=\"header-image\" src=\"{header}\""
+        )));
     }
 }

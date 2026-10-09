@@ -69,12 +69,20 @@ landmarks, and named concept hooks, not incidental wrapper nesting or sibling
 positions. _Avoid_: template API (themes cannot replace the document), DOM
 snapshot (incidental structure is not contractual).
 
-**Theme Package**: A portable, non-executable custom public theme containing a
+**Theme Package**: A portable, non-executable public theme containing a
 versioned manifest, one CSS entry point that Jaunder validates and scopes, and
-optional package-local font or raster-image assets. A stored Theme Package
-belongs to the operator or one author; owner Media bindings remain instance data
-and do not travel with it. _Avoid_: template, plugin, skin (the package is CSS
-and assets, not code or a viewer preference).
+optional package-local font or raster-image assets. A custom stored Theme
+Package belongs to the operator or one author; owner Media bindings remain
+instance data and do not travel with it. _Avoid_: template, plugin, skin (the
+package is CSS and assets, not code or a viewer preference).
+
+**Bundled Theme**: A system-managed Theme Package supplied with Jaunder,
+including Studio, Terminal, and Reader. It is selectable but not editable or
+deletable in an author/operator catalog; choosing its name follows the version
+supplied by the installed Jaunder release. It is distinct from application
+styling that protects private surfaces and trusted controls. _Avoid_: special
+stylesheet (a Bundled Theme is a Theme Package), owner theme (it is
+system-managed).
 
 ### Publishing
 

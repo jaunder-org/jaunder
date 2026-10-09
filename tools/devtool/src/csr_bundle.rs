@@ -440,10 +440,39 @@ fn js_sources(directory: &Path) -> anyhow::Result<Vec<PathBuf>> {
     Ok(sources)
 }
 
-fn render_shell(glue: &str, wasm: &str) -> anyhow::Result<Vec<u8>> {
+fn stage_system_artifacts(root: &Path, mode: SystemArtifactMode) -> anyhow::Result<()> {
+    let inventory = match mode {
+        SystemArtifactMode::Release => host::system_theme::compile_system_artifact_inventory(),
+        #[cfg(feature = "qualification")]
+        SystemArtifactMode::Qualification(fixture) => {
+            host::system_theme::qualification::compile(fixture)
+        }
+    }
+    .context("compiling closed system styling inventory")?;
+    host::system_theme::stage_system_artifact_inventory(&inventory, &root.join("system-artifacts"))
+        .context("staging closed system styling inventory")
+}
+
+fn render_shell(root: &Path, glue: &str, wasm: &str) -> anyhow::Result<Vec<u8>> {
+    anyhow::ensure!(
+        root.join("system-artifacts/inventory.txt").is_file(),
+        "system styling inventory must be staged before rendering the CSR shell"
+    );
+    let inventory = host::system_theme::load_system_artifact_inventory(
+        &host::system_theme::DirectorySystemArtifactSource::new(&root.join("system-artifacts")),
+    )
+    .context("loading staged system styling inventory for CSR shell")?;
     let rendered = SHELL
         .replace("{{GLUE_URL}}", glue)
-        .replace("{{WASM_URL}}", wasm);
+        .replace("{{WASM_URL}}", wasm)
+        .replace(
+            "{{APPLICATION_STYLESHEET_URL}}",
+            inventory
+                .application()
+                .content_digest()
+                .content_url()
+                .as_ref(),
+        );
     anyhow::ensure!(
         rendered.matches(glue).count() == 1,
         "shell must contain exactly one glue URL"
@@ -753,6 +782,23 @@ struct BundleTools<'a> {
     wasm_opt: &'a Path,
 }
 
+#[derive(Clone, Copy)]
+enum SystemArtifactMode {
+    Release,
+    #[cfg(feature = "qualification")]
+    Qualification(host::system_theme::qualification::Fixture),
+}
+
+/// Cohesive production controls kept together through the producer pipeline.
+#[derive(Clone, Copy)]
+struct ProductionOptions<'a> {
+    experiment_arm: Option<&'a str>,
+    shape_section: Option<&'a str>,
+    shape_section_count: u32,
+    diagnostic_artifacts: Option<&'a DiagnosticArtifacts<'a>>,
+    system_artifact_mode: SystemArtifactMode,
+}
+
 pub fn run(
     wasm: &Path,
     out: &Path,
@@ -764,25 +810,56 @@ pub fn run(
     run_with_tools(
         wasm,
         out,
-        experiment_arm,
-        shape_section,
-        shape_section_count,
         BundleTools {
             wasm_bindgen: Path::new("wasm-bindgen"),
             wasm_opt: Path::new("wasm-opt"),
         },
-        diagnostic_artifacts,
+        ProductionOptions {
+            experiment_arm,
+            shape_section,
+            shape_section_count,
+            diagnostic_artifacts,
+            system_artifact_mode: SystemArtifactMode::Release,
+        },
+    )
+}
+
+/// Runs CSR production with a closed internal styling qualification fixture.
+///
+/// This function exists only in a devtool binary compiled with the internal
+/// `qualification` feature; ordinary release tooling cannot select it.
+#[cfg(feature = "qualification")]
+pub fn run_qualification(
+    wasm: &Path,
+    out: &Path,
+    experiment_arm: Option<&str>,
+    shape_section: Option<&str>,
+    shape_section_count: u32,
+    diagnostic_artifacts: Option<&DiagnosticArtifacts<'_>>,
+    fixture: host::system_theme::qualification::Fixture,
+) -> anyhow::Result<()> {
+    run_with_tools(
+        wasm,
+        out,
+        BundleTools {
+            wasm_bindgen: Path::new("wasm-bindgen"),
+            wasm_opt: Path::new("wasm-opt"),
+        },
+        ProductionOptions {
+            experiment_arm,
+            shape_section,
+            shape_section_count,
+            diagnostic_artifacts,
+            system_artifact_mode: SystemArtifactMode::Qualification(fixture),
+        },
     )
 }
 
 fn run_with_tools(
     wasm: &Path,
     out: &Path,
-    experiment_arm: Option<&str>,
-    shape_section: Option<&str>,
-    shape_section_count: u32,
     tools: BundleTools<'_>,
-    diagnostic_artifacts: Option<&DiagnosticArtifacts<'_>>,
+    options: ProductionOptions<'_>,
 ) -> anyhow::Result<()> {
     anyhow::ensure!(
         !out.exists(),
@@ -794,6 +871,10 @@ fn run_with_tools(
         .prefix("csr-bundle-")
         .tempdir_in(parent)?;
     let root = temporary.path();
+    // The system styling inventory is deliberately outside the CSR manifest's
+    // /pkg domain. It must exist before shell rendering, but legacy shell links
+    // remain unchanged until Task 4 adopts its immutable identities.
+    stage_system_artifacts(root, options.system_artifact_mode)?;
     let generated = root.join("generated");
     fs::create_dir(&generated)?;
     let status = Command::new(tools.wasm_bindgen)
@@ -807,7 +888,7 @@ fn run_with_tools(
     }
     let wasm_source = generated.join(IN_WASM);
     let wasm_bindgen_snapshot = wasm_source.with_extension("wasm.bindgen");
-    if diagnostic_artifacts.is_some() {
+    if options.diagnostic_artifacts.is_some() {
         fs::copy(&wasm_source, &wasm_bindgen_snapshot).with_context(|| {
             format!(
                 "capturing post-wasm-bindgen diagnostic module {}",
@@ -816,11 +897,11 @@ fn run_with_tools(
         })?;
     }
     run_wasm_opt(tools.wasm_opt, &wasm_source)?;
-    if let Some(label) = shape_section {
-        append_shape_sections(&wasm_source, label, shape_section_count)?;
+    if let Some(label) = options.shape_section {
+        append_shape_sections(&wasm_source, label, options.shape_section_count)?;
     }
     let wasm_bytes = fs::read(&wasm_source)?;
-    if let Some(artifacts) = diagnostic_artifacts {
+    if let Some(artifacts) = options.diagnostic_artifacts {
         write_diagnostic_artifacts(artifacts, wasm, &wasm_bindgen_snapshot, &wasm_source)?;
         fs::remove_file(&wasm_bindgen_snapshot).with_context(|| {
             format!(
@@ -837,7 +918,7 @@ fn run_with_tools(
         &glue_source,
         append_measured_initializer(
             &glue.replace(IN_WASM, wasm_path.strip_prefix("pkg/").expect("pkg path")),
-            experiment_arm,
+            options.experiment_arm,
         ),
     )?;
     let sources = js_sources(&generated)?;
@@ -901,6 +982,7 @@ fn run_with_tools(
     fs::write(
         root.join("index.html"),
         render_shell(
+            root,
             &format!("/{}", manifest.role(Role::Glue)?.path),
             &format!("/{}", manifest.role(Role::Wasm)?.path),
         )?,
@@ -931,6 +1013,14 @@ mod tests {
     }
 
     fn produce_fixture(directory: &Path, name: &str) -> PathBuf {
+        produce_fixture_with_mode(directory, name, SystemArtifactMode::Release)
+    }
+
+    fn produce_fixture_with_mode(
+        directory: &Path,
+        name: &str,
+        system_artifact_mode: SystemArtifactMode,
+    ) -> PathBuf {
         let input = directory.join("input.wasm");
         fs::write(&input, b"\0asm\x01\0\0\0").unwrap();
         let (wasm_bindgen, wasm_opt) = fixture_tools();
@@ -938,14 +1028,17 @@ mod tests {
         run_with_tools(
             &input,
             &output,
-            None,
-            None,
-            0,
             BundleTools {
                 wasm_bindgen: &wasm_bindgen,
                 wasm_opt: &wasm_opt,
             },
-            None,
+            ProductionOptions {
+                experiment_arm: None,
+                shape_section: None,
+                shape_section_count: 0,
+                diagnostic_artifacts: None,
+                system_artifact_mode,
+            },
         )
         .unwrap();
         output
@@ -1020,6 +1113,16 @@ mod tests {
 
         let manifest = fixture_manifest(&first);
         manifest.verify_bundle(&first).unwrap();
+        let system_inventory =
+            fs::read_to_string(first.join("system-artifacts/inventory.txt")).unwrap();
+        assert!(system_inventory.contains("theme=studio"));
+        assert!(system_inventory.contains("source_path=packages/studio.zip"));
+        assert!(first.join("system-artifacts/packages/studio.zip").is_file());
+        assert!(system_inventory.contains("path=application.css"));
+        let shell = fs::read_to_string(first.join("index.html")).unwrap();
+        assert!(shell.contains(r#"<link rel="stylesheet" href="/theme/"#));
+        assert!(!shell.contains("data-jaunder-theme-stylesheet"));
+        assert!(!shell.contains("/style/"));
         for role in [Role::Glue, Role::Wasm] {
             assert_eq!(
                 manifest.role(role).unwrap().representations.len(),
@@ -1045,6 +1148,57 @@ mod tests {
                 "./{}",
                 dependency.path.strip_prefix("pkg/").unwrap()
             )]
+        );
+    }
+
+    #[cfg(feature = "qualification")]
+    #[test]
+    fn qualification_fixtures_reach_csr_production_without_changing_csr_identity() {
+        use host::system_theme::qualification::Fixture;
+
+        let directory = tempfile::tempdir().unwrap();
+        let a = produce_fixture_with_mode(
+            directory.path(),
+            "a",
+            SystemArtifactMode::Qualification(Fixture::A),
+        );
+        let b_app = produce_fixture_with_mode(
+            directory.path(),
+            "b-app",
+            SystemArtifactMode::Qualification(Fixture::BApplication),
+        );
+        let b_theme = produce_fixture_with_mode(
+            directory.path(),
+            "b-theme",
+            SystemArtifactMode::Qualification(Fixture::BTheme),
+        );
+
+        let a_inventory = fs::read_to_string(a.join("system-artifacts/inventory.txt")).unwrap();
+        let b_app_inventory =
+            fs::read_to_string(b_app.join("system-artifacts/inventory.txt")).unwrap();
+        let b_theme_inventory =
+            fs::read_to_string(b_theme.join("system-artifacts/inventory.txt")).unwrap();
+        let a_lines = a_inventory.lines().collect::<Vec<_>>();
+        let b_app_lines = b_app_inventory.lines().collect::<Vec<_>>();
+        let b_theme_lines = b_theme_inventory.lines().collect::<Vec<_>>();
+
+        assert_ne!(a_lines[0], b_app_lines[0]);
+        assert_eq!(&a_lines[1..], &b_app_lines[1..]);
+        assert_eq!(a_lines[0], b_theme_lines[0]);
+        assert_eq!(a_lines[1], b_theme_lines[1]);
+        assert_ne!(a_lines[2], b_theme_lines[2]);
+        assert_eq!(a_lines[3], b_theme_lines[3]);
+        assert_ne!(
+            fs::read(a.join("system-artifacts/packages/studio.zip")).unwrap(),
+            fs::read(b_theme.join("system-artifacts/packages/studio.zip")).unwrap(),
+        );
+        assert_eq!(
+            fs::read(a.join("manifest.json")).unwrap(),
+            fs::read(b_app.join("manifest.json")).unwrap(),
+        );
+        assert_eq!(
+            fs::read(a.join("manifest.json")).unwrap(),
+            fs::read(b_theme.join("manifest.json")).unwrap(),
         );
     }
 
@@ -1161,8 +1315,14 @@ mod tests {
     }
     #[test]
     fn shell_has_one_url_per_role_and_preserves_fetch_before_init() {
-        let shell =
-            String::from_utf8(render_shell("/pkg/glue.js", "/pkg/module.wasm").unwrap()).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let error = render_shell(root.path(), "/pkg/glue.js", "/pkg/module.wasm").unwrap_err();
+        assert!(error.to_string().contains("system styling inventory"));
+        stage_system_artifacts(root.path(), SystemArtifactMode::Release).unwrap();
+        let shell = String::from_utf8(
+            render_shell(root.path(), "/pkg/glue.js", "/pkg/module.wasm").unwrap(),
+        )
+        .unwrap();
         assert_eq!(shell.matches("/pkg/glue.js").count(), 1);
         assert_eq!(shell.matches("/pkg/module.wasm").count(), 1);
         assert!(shell.find("__jaunderWasmFetch").unwrap() < shell.find("initMeasured").unwrap());

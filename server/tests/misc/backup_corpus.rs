@@ -1366,39 +1366,48 @@ mod reader_tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn historical_corpus_entries_restore_through_each_public_input(#[case] backend: Backend) {
+    async fn historical_corpus_entries_restore_through_each_public_input(
+        #[case] backend: Backend,
+        #[values(CorpusIoMode::Directory, CorpusIoMode::Archive)] input: CorpusIoMode,
+        #[values(false, true)] materializable: bool,
+    ) {
         let corpus = compatibility_result(BackupCorpus::checked_in(), "load corpus");
-        for entry in corpus.entries() {
-            for input in CorpusIoMode::ALL {
-                let target = InitializedCommandEnv::new(backend).await;
-                let fixture = if entry.materializable {
-                    let schema_version = current_schema_version(&target).await;
-                    let materialized = target.base.path().join("materialized");
+        // Give each public input and compatibility class its own whole-test budget;
+        // enumerate the live index so adding a fixture cannot silently drop coverage.
+        for entry in corpus
+            .entries()
+            .iter()
+            .filter(|entry| entry.materializable == materializable)
+        {
+            let target = InitializedCommandEnv::new(backend).await;
+            let fixture = if entry.materializable {
+                let schema_version = current_schema_version(&target).await;
+                let materialized = target.base.path().join("materialized");
+                compatibility_result(
+                    corpus.materialize(entry, &materialized, schema_version),
+                    "materialize verified current-schema fixture",
+                );
+                assert_fixture_wire_inventory(&materialized);
+                materialized
+            } else {
+                compatibility_result(corpus.verify(entry), "verify historical schema fixture");
+                corpus.root.join(&entry.fixture)
+            };
+            let restore_path = match input {
+                CorpusIoMode::Directory => fixture,
+                CorpusIoMode::Archive => {
+                    let archive = target.base.path().join("fixture.tar.gz");
                     compatibility_result(
-                        corpus.materialize(entry, &materialized, schema_version),
-                        "materialize verified current-schema fixture",
+                        BackupCorpus::package_archive(&fixture, &archive),
+                        "independently package fixture archive",
                     );
-                    assert_fixture_wire_inventory(&materialized);
-                    materialized
-                } else {
-                    compatibility_result(corpus.verify(entry), "verify historical schema fixture");
-                    corpus.root.join(&entry.fixture)
-                };
-                let restore_path = match input {
-                    CorpusIoMode::Directory => fixture,
-                    CorpusIoMode::Archive => {
-                        let archive = target.base.path().join("fixture.tar.gz");
-                        compatibility_result(
-                            BackupCorpus::package_archive(&fixture, &archive),
-                            "independently package fixture archive",
-                        );
-                        archive
-                    }
-                };
+                    archive
+                }
+            };
 
-                match expected_restore(entry) {
-                    RestoreExpectation::Succeeds => {
-                        cmd_restore(&target.args, &restore_path)
+            match expected_restore(entry) {
+                RestoreExpectation::Succeeds => {
+                    cmd_restore(&target.args, &restore_path)
                             .await
                             .unwrap_or_else(|error| {
                                 panic!(
@@ -1410,49 +1419,46 @@ mod reader_tests {
                                     ))
                                 )
                             });
-                        assert_reader_inventory(
-                            &target.args,
-                            entry.format_version,
-                            entry.materializable,
-                        )
-                        .await;
-                    }
-                    RestoreExpectation::SchemaMismatch => {
-                        let before =
-                            snapshot_target_state(&target, "before-schema-mismatched-restore")
-                                .await;
-                        let Err(error) = cmd_restore(&target.args, &restore_path).await else {
-                            panic!(
-                                "{}",
-                                super::format_compatibility_diagnostic(
-                                    "historical schema fixture must be rejected"
-                                )
-                            );
-                        };
-                        assert!(matches!(
-                            error.downcast_ref::<BackupError>(),
-                            Some(BackupError::SchemaVersionMismatch { .. })
-                        ));
-                        assert_target_unmodified(&target, &before).await;
-                    }
-                    RestoreExpectation::TypedUnsupportedFormat => {
-                        let before =
-                            snapshot_target_state(&target, "before-rejected-restore").await;
-                        let Err(error) = cmd_restore(&target.args, &restore_path).await else {
-                            panic!(
-                                "{}",
-                                super::format_compatibility_diagnostic(
-                                    "retired format must be rejected"
-                                )
-                            );
-                        };
-                        assert!(matches!(
-                            error.downcast_ref::<BackupError>(),
-                            Some(BackupError::UnsupportedFormatVersion { backup_version, .. })
-                                if *backup_version == entry.format_version
-                        ));
-                        assert_target_unmodified(&target, &before).await;
-                    }
+                    assert_reader_inventory(
+                        &target.args,
+                        entry.format_version,
+                        entry.materializable,
+                    )
+                    .await;
+                }
+                RestoreExpectation::SchemaMismatch => {
+                    let before =
+                        snapshot_target_state(&target, "before-schema-mismatched-restore").await;
+                    let Err(error) = cmd_restore(&target.args, &restore_path).await else {
+                        panic!(
+                            "{}",
+                            super::format_compatibility_diagnostic(
+                                "historical schema fixture must be rejected"
+                            )
+                        );
+                    };
+                    assert!(matches!(
+                        error.downcast_ref::<BackupError>(),
+                        Some(BackupError::SchemaVersionMismatch { .. })
+                    ));
+                    assert_target_unmodified(&target, &before).await;
+                }
+                RestoreExpectation::TypedUnsupportedFormat => {
+                    let before = snapshot_target_state(&target, "before-rejected-restore").await;
+                    let Err(error) = cmd_restore(&target.args, &restore_path).await else {
+                        panic!(
+                            "{}",
+                            super::format_compatibility_diagnostic(
+                                "retired format must be rejected"
+                            )
+                        );
+                    };
+                    assert!(matches!(
+                        error.downcast_ref::<BackupError>(),
+                        Some(BackupError::UnsupportedFormatVersion { backup_version, .. })
+                            if *backup_version == entry.format_version
+                    ));
+                    assert_target_unmodified(&target, &before).await;
                 }
             }
         }
@@ -1535,6 +1541,7 @@ mod reader_tests {
 mod writer_tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
+        fmt::Write as _,
         fs,
         path::Path,
     };
@@ -1634,6 +1641,24 @@ mod writer_tests {
         "users",
     ];
 
+    /// Schema evolution adds tables without changing format-3 row encoding.
+    /// The independent historical inventory remains intact beside this extension.
+    fn schema_51_v3_tables() -> Vec<&'static str> {
+        let mut tables = V3_TABLES
+            .iter()
+            .copied()
+            .chain([
+                "system_application_current",
+                "system_theme_content_references",
+                "system_theme_current",
+                "system_theme_revision_assets",
+                "system_theme_revisions",
+            ])
+            .collect::<Vec<_>>();
+        tables.sort_unstable();
+        tables
+    }
+
     struct WriterRole {
         name: &'static str,
         seeded_source: &'static str,
@@ -1676,6 +1701,10 @@ mod writer_tests {
             name: "media bytes",
             seeded_source: "storage/media/avatar.txt = media",
         },
+        WriterRole {
+            name: "system metadata and immutable bytes",
+            seeded_source: "canonical A -> B-app -> B-theme installation captures current roles, binary manifests, retained references and six exact content members",
+        },
     ];
 
     /// Reader fixture roles that the current storage API cannot emit. Keeping
@@ -1694,7 +1723,9 @@ mod writer_tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn current_writer_satisfies_independent_v3_raw_wire_oracle(#[case] backend: Backend) {
+    async fn current_writer_satisfies_independent_schema_51_v3_raw_wire_oracle(
+        #[case] backend: Backend,
+    ) {
         for output in CorpusIoMode::ALL {
             let source = InitializedCommandEnv::new(backend).await;
             let ids = populate_backup_fixture(&source.args).await;
@@ -1793,10 +1824,11 @@ mod writer_tests {
             "{}",
             format_compatibility_diagnostic("manifest version must be a string")
         );
-        assert!(
-            manifest["schema_version"].is_i64() || manifest["schema_version"].is_u64(),
+        assert_eq!(
+            manifest["schema_version"],
+            Value::from(51),
             "{}",
-            format_compatibility_diagnostic("manifest schema_version must be an integer")
+            format_compatibility_diagnostic("current writer must match the schema-51 oracle")
         );
         assert!(
             manifest["schema_checksum"].is_string(),
@@ -1826,7 +1858,7 @@ mod writer_tests {
         );
         assert_eq!(
             tables,
-            &V3_TABLES
+            &schema_51_v3_tables()
                 .iter()
                 .map(|table| Value::from(*table))
                 .collect::<Vec<_>>(),
@@ -1835,10 +1867,7 @@ mod writer_tests {
         );
 
         let paths = regular_file_bytes(export);
-        let expected_paths = std::iter::once("manifest.json".to_owned())
-            .chain(V3_TABLES.iter().map(|table| format!("db/{table}.ndjson")))
-            .chain(std::iter::once("media/avatar.txt".to_owned()))
-            .collect::<BTreeSet<_>>();
+        let expected_paths = schema_51_writer_paths(ids);
         assert_eq!(
             paths.keys().cloned().collect::<BTreeSet<_>>(),
             expected_paths,
@@ -1864,7 +1893,96 @@ mod writer_tests {
 
         let rows = parse_ndjson_tables(&paths);
         assert_writer_drained_queue(&rows);
+        assert_writer_system_roles(&rows, &paths, ids);
         assert_writer_roles(&rows, ids);
+    }
+
+    fn schema_51_writer_paths(ids: &BackupFixtureIds) -> BTreeSet<String> {
+        std::iter::once("manifest.json".to_owned())
+            .chain(
+                schema_51_v3_tables()
+                    .iter()
+                    .map(|table| format!("db/{table}.ndjson")),
+            )
+            .chain(std::iter::once("media/avatar.txt".to_owned()))
+            .chain(ids.system.contents.iter().map(|content| {
+                let digest = content.eligibility.digest.as_ref();
+                format!("themes/{}/{}/{digest}", &digest[..2], &digest[2..4])
+            }))
+            .collect()
+    }
+
+    fn assert_writer_system_roles(
+        rows: &BTreeMap<String, Vec<Value>>,
+        files: &BTreeMap<String, Vec<u8>>,
+        ids: &BackupFixtureIds,
+    ) {
+        assert_eq!(table_rows(rows, "system_application_current").len(), 1);
+        let application = &table_rows(rows, "system_application_current")[0];
+        assert_eq!(application["singleton"], Value::from(1));
+        assert_eq!(
+            application["digest"],
+            ids.system.application.digest.as_ref()
+        );
+        assert_eq!(application["mime"], ids.system.application.mime);
+        assert_eq!(table_rows(rows, "system_theme_current").len(), 3);
+        assert_eq!(table_rows(rows, "system_theme_revisions").len(), 4);
+        assert!(table_rows(rows, "system_theme_revision_assets").is_empty());
+        for revision in &ids.system.revisions {
+            let token = revision.theme.to_string();
+            assert!(table_rows(rows, "system_theme_current").iter().any(|row| {
+                row["theme_token"] == token && row["revision_digest"] == revision.digest.as_ref()
+            }));
+            // Binary wire expectations are test-owned, not the backup encoder's
+            // binary helper or a serializer for its production manifest types.
+            let mut manifest_hex = String::with_capacity(revision.manifest.len() * 2);
+            for byte in &revision.manifest {
+                write!(manifest_hex, "{byte:02x}").expect("write manifest hex to String");
+            }
+            assert!(
+                table_rows(rows, "system_theme_revisions")
+                    .iter()
+                    .any(|row| {
+                        row["theme_token"] == token
+                            && row["revision_digest"] == revision.digest.as_ref()
+                            && row["source_digest"] == revision.source_digest.as_ref()
+                            && row["stylesheet_digest"] == revision.stylesheet_digest.as_ref()
+                            && row["manifest"]
+                                == serde_json::json!({"$jaunder_binary_hex": manifest_hex})
+                    })
+            );
+        }
+        assert_eq!(table_rows(rows, "system_theme_content_references").len(), 6);
+        for reference in &ids.system.references {
+            assert!(
+                table_rows(rows, "system_theme_content_references")
+                    .iter()
+                    .any(|row| {
+                        row["digest"] == reference.digest.as_ref()
+                            && row["live_references"] == reference.live_references
+                            && row["retained_until_unix_seconds"]
+                                == reference.retained_until_unix_seconds
+                    })
+            );
+        }
+        for content in &ids.system.contents {
+            let digest = content.eligibility.digest.as_ref();
+            let path = format!("themes/{}/{}/{digest}", &digest[..2], &digest[2..4]);
+            assert_eq!(
+                compatibility_option(files.get(&path), "system immutable member"),
+                &content.bytes
+            );
+            assert!(
+                table_rows(rows, "theme_content_eligibility")
+                    .iter()
+                    .any(|row| {
+                        row["digest"] == digest
+                            && row["mime"] == content.eligibility.mime
+                            && row["retained_until_unix_seconds"]
+                                == content.eligibility.retained_until_unix_seconds
+                    })
+            );
+        }
     }
 
     fn assert_writer_drained_queue(rows: &BTreeMap<String, Vec<Value>>) {
@@ -1924,7 +2042,7 @@ mod writer_tests {
     }
 
     fn parse_ndjson_tables(files: &BTreeMap<String, Vec<u8>>) -> BTreeMap<String, Vec<Value>> {
-        V3_TABLES
+        schema_51_v3_tables()
             .iter()
             .map(|table| {
                 let path = format!("db/{table}.ndjson");
@@ -2152,6 +2270,7 @@ mod writer_tests {
                 "passkey credential",
                 "passkey user handle",
                 "relationships",
+                "system metadata and immutable bytes",
                 "text",
             ]),
             "backup format compatibility: writer inventory must name every applicable seeded wire role"

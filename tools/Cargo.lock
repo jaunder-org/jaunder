@@ -900,6 +900,7 @@ dependencies = [
  "csr_bundle",
  "doctests",
  "flate2",
+ "host",
  "jiff",
  "oxc_allocator",
  "oxc_ast",

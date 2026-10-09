@@ -3108,4 +3108,51 @@ module Main where
             2,
         );
     }
+
+    /// System metadata must have no custom catalog/owner foreign key: deployed
+    /// bundled revisions are closed release input, not mutable Site themes.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn migration_0051_creates_closed_system_theme_metadata(#[case] backend: Backend) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_current().await.unwrap();
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT (SELECT COUNT(*) FROM system_theme_revisions) + \
+                     (SELECT COUNT(*) FROM system_theme_revision_assets) + \
+                     (SELECT COUNT(*) FROM system_theme_current) + \
+                     (SELECT COUNT(*) FROM system_application_current) + \
+                     (SELECT COUNT(*) FROM system_theme_content_references)",
+                )
+                .await
+                .unwrap(),
+            0,
+            "fresh system tables are empty"
+        );
+        let index_count = match backend {
+            Backend::Sqlite => db
+                .pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM pragma_index_list('system_theme_content_references') \
+                     WHERE name = 'system_theme_content_references_live_digest'",
+                )
+                .await
+                .unwrap(),
+            Backend::Postgres => db
+                .pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM pg_indexes \
+                     WHERE schemaname = 'public' \
+                       AND tablename = 'system_theme_content_references' \
+                       AND indexname = 'system_theme_content_references_live_digest'",
+                )
+                .await
+                .unwrap(),
+        };
+        assert_eq!(
+            index_count, 1,
+            "admission's live-reference read must avoid scanning retained history"
+        );
+    }
 }

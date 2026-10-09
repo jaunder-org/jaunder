@@ -1,7 +1,7 @@
-//! The backup **configuration** model, shared between the server's scheduled
+//! The backup configuration and archive-version model, shared between the server's scheduled
 //! backup worker (`server::backup`) and the web admin surface that reads and
 //! writes these values through `site_config`. This module holds only the value
-//! types plus their validation and defaults; the actual export, archiving, and
+//! types, emitted archive version, validation, and defaults; the actual export, archiving, and
 //! retention-pruning logic lives in the `storage` and `server` crates.
 
 use std::fmt::{Display, Formatter};
@@ -14,6 +14,11 @@ use thiserror::Error;
 
 use crate::UserFacingMessage;
 use crate::text;
+
+/// Archive format emitted by the canonical portable Backup producer.
+/// Pinned-source qualification consumes this same version; historical release
+/// admission remains owned by its separate compatibility policy.
+pub const CURRENT_BACKUP_FORMAT_VERSION: u32 = 3;
 
 /// How a backup is written to its destination.
 ///

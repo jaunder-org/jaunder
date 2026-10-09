@@ -169,8 +169,6 @@ export type WasmInitTiming = {
 const WASM_INIT_START = "jaunder.wasm.init_start";
 const WASM_INIT_DONE = "jaunder.wasm.init_done";
 const MODULE_BEFORE_INIT = "jaunder.module.before_init";
-const JAUNDER_CSS_PATH = "/style/jaunder.css";
-const JAUNDER_THEMES_CSS_PATH = "/style/jaunder-themes.css";
 
 function finiteShapeCount(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
@@ -456,12 +454,7 @@ export async function attachTraceCapture(
   const harvestDocument = async (page: Page, navigationId: number) => {
     try {
       const timing = await page.evaluate(
-        ({
-          prefix,
-          moduleBeforeInitMark,
-          jaunderCssPath,
-          jaunderThemesCssPath,
-        }) => {
+        ({ prefix, moduleBeforeInitMark }) => {
           const marks = performance
             .getEntriesByType("mark")
             .filter((entry) => entry.name.startsWith(prefix))
@@ -477,18 +470,21 @@ export async function attachTraceCapture(
           const resources = performance.getEntriesByType(
             "resource",
           ) as PerformanceResourceTiming[];
-          const resourceForPath = (pathname: string) =>
-            resources
-              .filter((entry) => {
-                try {
-                  return (
-                    new URL(entry.name, location.href).pathname === pathname
-                  );
-                } catch {
-                  return false;
-                }
-              })
-              .sort((left, right) => left.startTime - right.startTime)[0];
+          const stylesheetResponseEnd = (selector: string) => {
+            const links = document.querySelectorAll<HTMLLinkElement>(selector);
+            if (links.length > 1)
+              throw new Error(
+                "document has multiple stylesheet owners for one role",
+              );
+            const link = links[0];
+            if (!link) return null;
+            return (
+              resources
+                .filter((entry) => entry.name === link.href)
+                .sort((left, right) => left.startTime - right.startTime)[0]
+                ?.responseEnd ?? null
+            );
+          };
           const wasmEntry = resources
             .filter((entry) => entry.name.endsWith(".wasm"))
             .sort((left, right) => left.startTime - right.startTime)[0];
@@ -498,10 +494,14 @@ export async function attachTraceCapture(
             moduleBeforeInitMs:
               marks.find((mark) => mark.name === moduleBeforeInitMark)
                 ?.startTime ?? null,
-            jaunderCssResponseEndMs:
-              resourceForPath(jaunderCssPath)?.responseEnd ?? null,
-            jaunderThemesCssResponseEndMs:
-              resourceForPath(jaunderThemesCssPath)?.responseEnd ?? null,
+            // Preserve the serialized timing fields while attributing them to
+            // the document's actual content-addressed owners, not retired URLs.
+            jaunderCssResponseEndMs: stylesheetResponseEnd(
+              'link[rel="stylesheet"]:not([data-jaunder-theme-stylesheet]):not([data-jaunder-theme-staged])',
+            ),
+            jaunderThemesCssResponseEndMs: stylesheetResponseEnd(
+              "link[data-jaunder-theme-stylesheet]:not([data-jaunder-theme-staged])",
+            ),
             wasm: wasmEntry
               ? {
                   startTime: wasmEntry.startTime,
@@ -517,8 +517,6 @@ export async function attachTraceCapture(
         {
           prefix: MARK_PREFIX,
           moduleBeforeInitMark: MODULE_BEFORE_INIT,
-          jaunderCssPath: JAUNDER_CSS_PATH,
-          jaunderThemesCssPath: JAUNDER_THEMES_CSS_PATH,
         },
       );
       const harvested: DocumentTiming = {

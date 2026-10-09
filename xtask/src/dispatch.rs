@@ -32,7 +32,8 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         Command::Performance(command) => performance::run(command),
         Command::ProductionBaseline(
             command @ (ProductionBaselineCommand::Discover { .. }
-            | ProductionBaselineCommand::Accept { .. }),
+            | ProductionBaselineCommand::Accept { .. }
+            | ProductionBaselineCommand::QualifyStyling),
         ) => production_baseline::run(command),
         Command::Check { no_test } => {
             let policy = gate::execution_policy(&Command::Check { no_test });

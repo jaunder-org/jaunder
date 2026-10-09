@@ -10,6 +10,7 @@ import {
 import { allowSecondBoot } from "./bootBudget";
 import { goto, login, TEST_PASSWORD } from "./helpers";
 import { seedSandboxProfileViaTool } from "./seed";
+import { StylingSession, type StylingRequest } from "./styling-qualification";
 
 const statePath = process.env.JAUNDER_PRODUCTION_BASELINE_STATE;
 const canaryPath = process.env.JAUNDER_PRODUCTION_BASELINE_CANARY_PATH;
@@ -42,7 +43,11 @@ async function registerCanaries(values: readonly string[]): Promise<void> {
 
 async function publish(
   path: string,
-  value: BrowserResult | { readonly: true },
+  value:
+    | BrowserResult
+    | Awaited<ReturnType<StylingSession["run"]>>
+    | { sequence: number; phase: BrowserRequest["phase"]; error: string }
+    | { readonly: true },
 ): Promise<void> {
   const temporary = `${path}.tmp`;
   await writeFile(temporary, JSON.stringify(value));
@@ -159,39 +164,52 @@ test("production baseline host bridge preserves one browser context", async ({
   page,
   tracedContext,
 }) => {
+  setTestBudget(PRODUCTION_BASELINE_HARNESS_BUDGET_MS);
   test.skip(
     !statePath || !coordinator,
     "only xtask supplies restricted baseline coordinator",
   );
   if (!statePath || !coordinator) return;
-  setTestBudget(PRODUCTION_BASELINE_HARNESS_BUDGET_MS);
-  await writeFile(`${coordinator}/ready`, "");
-  for (let sequence = 1; ; sequence += 1) {
-    const request = await waitForRequest(sequence);
-    if (request.sequence !== sequence)
-      throw new Error(
-        `unexpected browser request sequence ${request.sequence}`,
-      );
-    if (request.phase === "close") {
-      await publish(`${coordinator}/closed`, { readonly: true });
-      return;
+  const styling =
+    process.env.JAUNDER_STYLING_QUALIFICATION === "1"
+      ? await StylingSession.start(tracedContext, registerCanaries)
+      : null;
+  try {
+    await writeFile(`${coordinator}/ready`, "");
+    for (let sequence = 1; ; sequence += 1) {
+      const request = await waitForRequest(sequence);
+      if (request.sequence !== sequence)
+        throw new Error(
+          `unexpected browser request sequence ${request.sequence}`,
+        );
+      if (request.phase === "close") {
+        await publish(`${coordinator}/closed`, { readonly: true });
+        return;
+      }
+      try {
+        await publish(
+          `${coordinator}/result-${sequence}.json`,
+          styling
+            ? await styling.run(request as unknown as StylingRequest)
+            : await runPhase(request, page, tracedContext),
+        );
+      } catch (error) {
+        const failure = {
+          sequence,
+          phase: request.phase,
+          error:
+            error instanceof Error
+              ? (error.stack ?? error.message)
+              : String(error),
+        };
+        await publish(
+          `${coordinator}/result-${sequence}.json`,
+          styling ? failure : { ...failure, checks: [] },
+        );
+        throw error;
+      }
     }
-    try {
-      await publish(
-        `${coordinator}/result-${sequence}.json`,
-        await runPhase(request, page, tracedContext),
-      );
-    } catch (error) {
-      await publish(`${coordinator}/result-${sequence}.json`, {
-        sequence,
-        phase: request.phase,
-        checks: [],
-        error:
-          error instanceof Error
-            ? (error.stack ?? error.message)
-            : String(error),
-      });
-      throw error;
-    }
+  } finally {
+    await styling?.close();
   }
 });

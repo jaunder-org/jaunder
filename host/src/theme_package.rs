@@ -43,6 +43,47 @@ use zip::ZipArchive;
 
 pub use css::{CompiledCss, compile_stylesheet};
 
+/// One exact compiler-minted immutable Theme content representation.
+///
+/// This borrowed view keeps MIME, bytes, and digest coupled for stylesheet and
+/// package-asset consumers without creating a second revision representation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompiledThemeContent<'a> {
+    mime: &'static str,
+    bytes: &'a [u8],
+    digest: [u8; 32],
+}
+
+impl<'a> CompiledThemeContent<'a> {
+    /// Mints trusted system content outside the untrusted Theme Package boundary.
+    ///
+    /// This crate-only door is reserved for the closed application-CSS role:
+    /// callers supply no digest, so MIME, exact bytes, and digest remain coupled
+    /// in the same view used by compiled package content.
+    pub(crate) fn trusted_system(mime: &'static str, bytes: &'a [u8]) -> Self {
+        Self {
+            mime,
+            bytes,
+            digest: Sha256::digest(bytes).into(),
+        }
+    }
+
+    #[must_use]
+    pub const fn mime(self) -> &'static str {
+        self.mime
+    }
+
+    #[must_use]
+    pub const fn bytes(self) -> &'a [u8] {
+        self.bytes
+    }
+
+    #[must_use]
+    pub const fn digest(self) -> [u8; 32] {
+        self.digest
+    }
+}
+
 const SOURCE_DOMAIN: &[u8] = b"jaunder-theme-source-v1";
 const REVISION_DOMAIN: &[u8] = b"jaunder-theme-revision-v1";
 /// Percent-encodes a validated package asset path for use below an HTTP route.
@@ -636,6 +677,24 @@ impl ValidatedThemePackage {
     }
 }
 impl CompiledThemeRevision {
+    /// Returns the transformed stylesheet as immutable content.
+    #[must_use]
+    pub fn stylesheet_content(&self) -> CompiledThemeContent<'_> {
+        self.css.content()
+    }
+
+    /// Returns one package asset as immutable content.
+    #[must_use]
+    pub fn asset_content(&self, path: &str) -> Option<CompiledThemeContent<'_>> {
+        self.assets.get(path).map(ThemeAsset::content)
+    }
+
+    /// Iterates the stylesheet then package assets in canonical path order.
+    pub fn contents(&self) -> impl Iterator<Item = CompiledThemeContent<'_>> {
+        std::iter::once(self.stylesheet_content())
+            .chain(self.assets.values().map(ThemeAsset::content))
+    }
+
     #[must_use]
     pub fn source_digest(&self) -> [u8; 32] {
         self.source_digest
@@ -662,20 +721,30 @@ impl CompiledThemeRevision {
     }
     #[must_use]
     pub fn asset(&self, path: &str) -> Option<(&str, &[u8], [u8; 32])> {
-        self.assets
-            .get(path)
-            .map(|asset| (asset.mime.as_str(), asset.bytes.as_slice(), asset.digest))
+        self.asset_content(path)
+            .map(|content| (content.mime(), content.bytes(), content.digest()))
     }
     /// Iterates package assets in their canonical normalized-path order.
     pub fn assets(&self) -> impl Iterator<Item = (&str, &str, &[u8], [u8; 32])> {
         self.assets.iter().map(|(path, asset)| {
+            let content = asset.content();
             (
                 path.as_str(),
-                asset.mime.as_str(),
-                asset.bytes.as_slice(),
-                asset.digest,
+                content.mime(),
+                content.bytes(),
+                content.digest(),
             )
         })
+    }
+}
+
+impl ThemeAsset {
+    fn content(&self) -> CompiledThemeContent<'_> {
+        CompiledThemeContent {
+            mime: self.mime.as_str(),
+            bytes: &self.bytes,
+            digest: self.digest,
+        }
     }
 }
 
@@ -1075,6 +1144,65 @@ mod tests {
             ("style.css", b"body {}"),
             (path, bytes),
         ])
+    }
+
+    #[test]
+    fn percent_encoded_asset_paths_preserve_separators_and_escape_url_delimiters() {
+        assert_eq!(
+            percent_encode_asset_path("assets/A-z_0.~.png"),
+            "assets/A-z_0.~.png"
+        );
+        assert_eq!(
+            percent_encode_asset_path("assets/naïve ?#.png"),
+            "assets/na%C3%AFve%20%3F%23.png"
+        );
+    }
+
+    #[test]
+    fn preview_urls_preserve_public_identity_and_both_maps_must_be_complete() {
+        let manifest = br#"{"schema":1,"name":"Preview","style_contract":1,"assets":{"assets/logo.png":"image/png"},"defaults":{}}"#;
+        let assets =
+            BTreeMap::from([("assets/logo.png".to_owned(), raster(ImageFormat::Png, 1, 1))]);
+        let archive = export_theme_package(
+            manifest,
+            b"body { background: url(\"assets/logo.png\"); }",
+            &assets,
+        )
+        .unwrap();
+        let limits = ThemePackageLimits::default();
+        let served =
+            BTreeMap::from([("assets/logo.png".to_owned(), "/preview/logo.png".to_owned())]);
+        let identity = BTreeMap::from([(
+            "assets/logo.png".to_owned(),
+            "/theme/immutable-logo".to_owned(),
+        )]);
+        let expected = validate_theme_package(&archive, limits)
+            .unwrap()
+            .compile(&identity, limits)
+            .unwrap();
+        let (preview, digest) = validate_theme_package(&archive, limits)
+            .unwrap()
+            .compile_with_identity_asset_urls(&served, &identity, limits)
+            .unwrap();
+        assert_eq!(digest, expected.revision_digest());
+        assert_ne!(preview.revision_digest(), digest);
+        assert!(
+            std::str::from_utf8(preview.stylesheet_content().bytes())
+                .unwrap()
+                .contains("/preview/logo.png")
+        );
+        assert!(
+            validate_theme_package(&archive, limits)
+                .unwrap()
+                .compile_with_identity_asset_urls(&served, &BTreeMap::new(), limits)
+                .is_err()
+        );
+        assert!(
+            validate_theme_package(&archive, limits)
+                .unwrap()
+                .compile_with_identity_asset_urls(&BTreeMap::new(), &identity, limits)
+                .is_err()
+        );
     }
 
     #[test]
@@ -1495,6 +1623,15 @@ mod tests {
                 .unwrap()
                 .contains("/theme-assets/logo")
         );
+        let stylesheet = revision.stylesheet_content();
+        assert_eq!(stylesheet.mime(), "text/css; charset=utf-8");
+        assert_eq!(stylesheet.bytes(), revision.css().bytes());
+        assert_eq!(stylesheet.digest(), revision.css().digest());
+        let logo_content = revision
+            .asset_content("assets/logo.png")
+            .expect("compiled logo asset");
+        assert_eq!(logo_content.mime(), "image/png");
+        assert_eq!(logo_content.bytes(), logo.as_slice());
         assert_eq!(
             revision
                 .asset("assets/logo.png")

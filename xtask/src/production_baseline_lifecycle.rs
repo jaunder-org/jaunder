@@ -13,12 +13,30 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use flate2::read::GzDecoder;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::production_baseline::{
     EvidenceCanaries, PackageIdentity, ResolvedRevision, RuntimeIdentity, StorageBackend,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct StoreArtifactIdentity {
+    pub derivation: String,
+    pub output_path: String,
+    pub nar_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct QualifiedPackage {
+    pub source: ResolvedRevision,
+    pub fixture: crate::qualification::QualificationFixture,
+    pub package: PackageIdentity,
+    pub csr_bundle: StoreArtifactIdentity,
+    pub inventory_root: PathBuf,
+    pub inventory: crate::qualification_inventory::QualificationInventory,
+    pub csr_payload: crate::qualification_csr::CsrPayloadSnapshot,
+}
 
 const ORIGIN: &str = "https://localhost:8443";
 const READY_TIMEOUT: Duration = Duration::from_secs(60);
@@ -32,14 +50,83 @@ fn validate_harness_commit(commit: &str) -> Result<()> {
     Ok(())
 }
 
+fn qualification_expression(
+    harness_ref: &str,
+    source: &crate::qualification::SourcePin,
+    fixture: crate::qualification::QualificationFixture,
+) -> Result<String> {
+    if harness_ref != source.locked_ref() {
+        bail!("qualification product and VM harness source identities differ");
+    }
+    let source_literal = serde_json::to_string(source.locked_ref())?;
+    let fixture_literal = serde_json::to_string(fixture.token())?;
+    Ok(format!(
+        "let sourceFlake = builtins.getFlake {source_literal}; in import \"${{sourceFlake.outPath}}/nix/system-artifact-qualification.nix\" {{ inherit sourceFlake; system = builtins.currentSystem; fixture = {fixture_literal}; }}"
+    ))
+}
+
+#[derive(Clone, Copy)]
+enum GuestBoot {
+    Fresh,
+    Persisted,
+    FreshRestore,
+    RestoredIsolated,
+}
+
+impl GuestBoot {
+    const fn reuse_disk(self) -> bool {
+        matches!(self, Self::Persisted | Self::RestoredIsolated)
+    }
+
+    const fn routes_proxy(self) -> bool {
+        matches!(self, Self::Fresh | Self::Persisted)
+    }
+
+    fn apply(self, command: &mut Command) {
+        if let Self::FreshRestore = self {
+            // Keep the ordinary VM profile, but prevent startup from acquiring
+            // runtime locks or installing content before the empty-target restore.
+            command.env("QEMU_KERNEL_PARAMS", "systemd.mask=jaunder.service");
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum BackupCompatibility {
+    ProductionBaseline,
+    CurrentQualification,
+}
+
+impl BackupCompatibility {
+    const fn format_version(self) -> u32 {
+        match self {
+            Self::ProductionBaseline => 1,
+            Self::CurrentQualification => common::backup::CURRENT_BACKUP_FORMAT_VERSION,
+        }
+    }
+
+    fn validate(self, format: u32, schema: u32) -> Result<()> {
+        if format != self.format_version() || schema == 0 {
+            bail!("unsupported backup compatibility before target mutation");
+        }
+        Ok(())
+    }
+}
+
 pub struct BaselineLifecycle {
     workspace: PathBuf,
+    backup_compatibility: BackupCompatibility,
     harness_ref: String,
     nix_cache: PathBuf,
     proxy: Option<Child>,
     proxy_log: Option<PathBuf>,
+    // The installable identifies the actual package request. A Git revision is
+    // insufficient here: qualification fixtures deliberately share one source
+    // commit while producing distinct packages.
     package_cache: BTreeMap<String, PackageIdentity>,
     proxy_cache: BTreeMap<String, PathBuf>,
+    // A VM profile embeds its package, so its identity must follow the package
+    // output rather than merely the source revision.
     vm_cache: BTreeMap<(String, String, StorageBackend), PathBuf>,
     deployments: BTreeMap<String, Deployment>,
 }
@@ -83,6 +170,17 @@ impl BaselineLifecycle {
         Self::create_with_harness(root, format!("github:jaunder-org/jaunder/{harness_commit}"))
     }
 
+    /// Qualification uses one admitted, immutable local Git source for its
+    /// harness and packages; it never falls back to a mutable path flake.
+    pub(crate) fn create_qualification(
+        root: &Path,
+        source: &crate::qualification::SourcePin,
+    ) -> Result<Self> {
+        let mut lifecycle = Self::create_with_harness(root, source.locked_ref().to_owned())?;
+        lifecycle.backup_compatibility = BackupCompatibility::CurrentQualification;
+        Ok(lifecycle)
+    }
+
     /// Construct the intentionally mutable path-flake boundary for the opt-in
     /// no-evidence lifecycle smoke only.
     pub fn create_current_checkout(root: &Path) -> Result<Self> {
@@ -104,6 +202,7 @@ impl BaselineLifecycle {
         restrict(&gcroots)?;
         Ok(Self {
             workspace,
+            backup_compatibility: BackupCompatibility::ProductionBaseline,
             harness_ref,
             nix_cache,
             proxy: None,
@@ -273,14 +372,88 @@ socket.on("end", () => {{
     }
 
     pub fn realize_package(&mut self, revision: &ResolvedRevision) -> Result<PackageIdentity> {
-        if let Some(identity) = self.package_cache.get(&revision.commit) {
+        let installable = format!("{}#jaunder", revision.flake_ref);
+        self.realize_installable(&installable, &format!("package-{}", revision.commit))
+    }
+
+    /// Realize one of the three closed system-artifact qualification packages.
+    ///
+    /// The product, producer and VM harness must share the admitted immutable
+    /// source. Keep a separate CSR GC root: embedding bytes does not necessarily
+    /// retain the producer's store output in the executable's runtime closure.
+    pub(crate) fn realize_qualification_package(
+        &mut self,
+        source: &crate::qualification::SourcePin,
+        fixture: crate::qualification::QualificationFixture,
+    ) -> Result<QualifiedPackage> {
+        let expression = qualification_expression(&self.harness_ref, source, fixture)?;
+        let token = fixture.token();
+        let installable = format!(
+            "system-artifact-qualification:{token}@{}",
+            source.locked_ref()
+        );
+        let package = self.realize_expression(
+            &installable,
+            &format!("qualification-package-{token}"),
+            &expression,
+        )?;
+        let bundle_expression = format!("({expression}).csrBundle");
+        let bundle_root = self
+            .workspace
+            .join(format!("gcroots/qualification-csr-{token}"));
+        let bundle_root = bundle_root.to_str().context("non-UTF-8 CSR GC root")?;
+        let bundle_output = store_path(&nix(
+            &self.nix_cache,
+            &[
+                "build",
+                "--impure",
+                "--out-link",
+                bundle_root,
+                "--print-out-paths",
+                "--expr",
+                &bundle_expression,
+            ],
+        )?)?;
+        let csr_bundle = self.store_identity(bundle_output)?;
+        let inventory_expression = format!("({expression}).systemArtifactInventory");
+        let inventory_root = PathBuf::from(
+            nix(
+                &self.nix_cache,
+                &["eval", "--impure", "--raw", "--expr", &inventory_expression],
+            )?
+            .trim(),
+        );
+        let inventory_root = fs::canonicalize(inventory_root)
+            .context("canonicalizing qualification inventory passthru")?;
+        let bundle_path = fs::canonicalize(&csr_bundle.output_path)?;
+        if inventory_root == bundle_path || !inventory_root.starts_with(&bundle_path) {
+            bail!("qualification inventory is outside its rooted CSR producer output");
+        }
+        let inventory =
+            crate::qualification_inventory::load_qualification_inventory(&inventory_root)?;
+        let csr_payload = crate::qualification_csr::snapshot_csr_bundle(&bundle_path)?;
+        if csr_payload.application_urls_in_index != [inventory.application.url.clone()] {
+            bail!("CSR shell does not reference exactly its compiled application stylesheet");
+        }
+        Ok(QualifiedPackage {
+            source: ResolvedRevision {
+                commit: source.commit().to_owned(),
+                flake_ref: source.locked_ref().to_owned(),
+            },
+            fixture,
+            package,
+            csr_bundle,
+            inventory_root,
+            inventory,
+            csr_payload,
+        })
+    }
+
+    fn realize_installable(&mut self, installable: &str, gc_root: &str) -> Result<PackageIdentity> {
+        if let Some(identity) = self.package_cache.get(installable) {
             return Ok(identity.clone());
         }
-        let installable = format!("{}#jaunder", revision.flake_ref);
-        let out_link = self
-            .workspace
-            .join("gcroots")
-            .join(format!("package-{}", revision.commit));
+        let out_link = self.workspace.join("gcroots").join(gc_root);
         let out_link = out_link.to_str().context("non-UTF-8 package GC root")?;
         let output_path = store_path(&nix(
             &self.nix_cache,
@@ -289,12 +462,42 @@ socket.on("end", () => {{
                 "--out-link",
                 out_link,
                 "--print-out-paths",
-                &installable,
+                installable,
             ],
         )?)?;
+        self.package_identity(installable, output_path)
+    }
+
+    fn realize_expression(
+        &mut self,
+        installable: &str,
+        gc_root: &str,
+        expression: &str,
+    ) -> Result<PackageIdentity> {
+        if let Some(identity) = self.package_cache.get(installable) {
+            return Ok(identity.clone());
+        }
+        let out_link = self.workspace.join("gcroots").join(gc_root);
+        let out_link = out_link.to_str().context("non-UTF-8 package GC root")?;
+        let output_path = store_path(&nix(
+            &self.nix_cache,
+            &[
+                "build",
+                "--impure",
+                "--out-link",
+                out_link,
+                "--print-out-paths",
+                "--expr",
+                expression,
+            ],
+        )?)?;
+        self.package_identity(installable, output_path)
+    }
+
+    fn store_identity(&self, output_path: String) -> Result<StoreArtifactIdentity> {
         let derivation = store_path(&nix(
             &self.nix_cache,
-            &["path-info", "--derivation", &installable],
+            &["path-info", "--derivation", &output_path],
         )?)?;
         let document: serde_json::Value = serde_json::from_str(&nix(
             &self.nix_cache,
@@ -311,16 +514,29 @@ socket.on("end", () => {{
             .and_then(serde_json::Value::as_str)
             .context("immutable package path info omitted narHash")?
             .to_owned();
-        let executable_sha256 = sha256_file(&Path::new(&output_path).join("bin/jaunder"))?;
-        let identity = PackageIdentity {
-            installable,
+        Ok(StoreArtifactIdentity {
             derivation,
             output_path,
             nar_hash,
+        })
+    }
+
+    fn package_identity(
+        &mut self,
+        installable: &str,
+        output_path: String,
+    ) -> Result<PackageIdentity> {
+        let artifact = self.store_identity(output_path)?;
+        let executable_sha256 = sha256_file(&Path::new(&artifact.output_path).join("bin/jaunder"))?;
+        let identity = PackageIdentity {
+            installable: installable.to_owned(),
+            derivation: artifact.derivation,
+            output_path: artifact.output_path,
+            nar_hash: artifact.nar_hash,
             executable_sha256,
         };
         self.package_cache
-            .insert(revision.commit.clone(), identity.clone());
+            .insert(installable.to_owned(), identity.clone());
         Ok(identity)
     }
 
@@ -330,7 +546,23 @@ socket.on("end", () => {{
         backend: StorageBackend,
         revision: ResolvedRevision,
     ) -> Result<RuntimeIdentity> {
-        self.launch(deployment_id, backend, revision, false)
+        // Preserve the ordinary baseline refusal before a duplicate caller can
+        // trigger package realization or any Nix mutation.
+        self.refuse_existing_deployment(deployment_id)?;
+        let package = self.realize_package(&revision)?;
+        self.launch(deployment_id, backend, revision, package, false)
+    }
+
+    /// Start a deployment from a previously realized package while retaining
+    /// the coordinator-owned source identity in runtime evidence.
+    pub fn start_package(
+        &mut self,
+        deployment_id: &str,
+        backend: StorageBackend,
+        revision: ResolvedRevision,
+        package: PackageIdentity,
+    ) -> Result<RuntimeIdentity> {
+        self.launch(deployment_id, backend, revision, package, false)
     }
 
     /// Reboot a persisted deployment disk under a newly realized immutable
@@ -348,21 +580,37 @@ socket.on("end", () => {{
             .backend;
         self.park(deployment_id)?;
         self.deployments.remove(deployment_id);
-        self.launch(deployment_id, backend, revision, true)
+        let package = self.realize_package(&revision)?;
+        self.launch(deployment_id, backend, revision, package, true)
     }
 
-    fn launch(
+    /// Reboot a persisted disk with a caller-realized package. This is the
+    /// qualification counterpart of [`Self::upgrade`], not a second VM runner.
+    pub fn upgrade_package(
         &mut self,
         deployment_id: &str,
-        backend: StorageBackend,
         revision: ResolvedRevision,
-        reuse_disk: bool,
+        package: PackageIdentity,
     ) -> Result<RuntimeIdentity> {
-        if self.deployments.contains_key(deployment_id) {
-            bail!("deployment {deployment_id} already exists");
-        }
-        let package = self.realize_package(&revision)?;
-        let vm_key = (self.harness_ref.clone(), revision.commit.clone(), backend);
+        let backend = self
+            .deployments
+            .get(deployment_id)
+            .context("unknown deployment for upgrade")?
+            .backend;
+        self.park(deployment_id)?;
+        self.deployments.remove(deployment_id);
+        self.launch(deployment_id, backend, revision, package, true)
+    }
+
+    /// Prepare the same immutable VM profile used by launch, without starting a
+    /// guest. Qualification calls this for every package/backend before opening
+    /// its retained browser session.
+    pub(crate) fn pre_realize_vm_profile(
+        &mut self,
+        package: &PackageIdentity,
+        backend: StorageBackend,
+    ) -> Result<PathBuf> {
+        let vm_key = vm_cache_key(&self.harness_ref, &package.output_path, backend);
         let vm_output = if let Some(output) = self.vm_cache.get(&vm_key) {
             output.clone()
         } else {
@@ -372,10 +620,10 @@ socket.on("end", () => {{
                 package.output_path,
                 backend_name(backend),
             );
-            let out_link = self.workspace.join("gcroots").join(format!(
-                "vm-{}-{}",
-                revision.commit,
-                backend_name(backend)
+            let out_link = self.workspace.join("gcroots").join(vm_gc_root_name(
+                &self.harness_ref,
+                &package.output_path,
+                backend,
             ));
             let out_link = out_link.to_str().context("non-UTF-8 VM GC root")?;
             let output = PathBuf::from(store_path(&nix(
@@ -400,11 +648,74 @@ socket.on("end", () => {{
         if !runner.is_file() {
             bail!("immutable VM profile omitted runner {}", runner.display());
         }
+        Ok(vm_output)
+    }
+
+    pub(crate) fn qualified_vm_identity(
+        &mut self,
+        package: &PackageIdentity,
+        backend: StorageBackend,
+    ) -> Result<StoreArtifactIdentity> {
+        let output = self.pre_realize_vm_profile(package, backend)?;
+        self.store_identity(
+            output
+                .to_str()
+                .context("non-UTF-8 VM store output")?
+                .to_owned(),
+        )
+    }
+
+    fn launch(
+        &mut self,
+        deployment_id: &str,
+        backend: StorageBackend,
+        revision: ResolvedRevision,
+        package: PackageIdentity,
+        reuse_disk: bool,
+    ) -> Result<RuntimeIdentity> {
+        let boot = if reuse_disk {
+            GuestBoot::Persisted
+        } else {
+            GuestBoot::Fresh
+        };
+        self.launch_guest(deployment_id, backend, revision, package, boot)?;
+        self.admit_started_guest(deployment_id, boot)
+    }
+
+    fn admit_started_guest(
+        &mut self,
+        deployment_id: &str,
+        boot: GuestBoot,
+    ) -> Result<RuntimeIdentity> {
+        if matches!(boot, GuestBoot::FreshRestore) {
+            bail!("restore preparation cannot admit a serving runtime");
+        }
+        self.wait_for_guest(deployment_id)?;
+        if boot.routes_proxy() {
+            self.select_proxy(deployment_id)?;
+        }
+        self.runtime_identity(deployment_id)
+    }
+
+    fn launch_guest(
+        &mut self,
+        deployment_id: &str,
+        backend: StorageBackend,
+        revision: ResolvedRevision,
+        package: PackageIdentity,
+        boot: GuestBoot,
+    ) -> Result<()> {
+        self.refuse_existing_deployment(deployment_id)?;
+        let vm_output = self.pre_realize_vm_profile(&package, backend)?;
+        let runner = vm_output.join("bin").join(format!(
+            "run-jaunder-production-baseline-{}-vm",
+            backend_name(backend)
+        ));
         let disk = self.workspace.join(format!("{deployment_id}.qcow2"));
-        if disk.exists() != reuse_disk {
+        if disk.exists() != boot.reuse_disk() {
             bail!(
                 "{} deployment disk {}",
-                if reuse_disk {
+                if boot.reuse_disk() {
                     "missing persisted"
                 } else {
                     "fresh"
@@ -417,9 +728,14 @@ socket.on("end", () => {{
             "hostfwd=tcp:127.0.0.1:{application_port}-:3000,hostfwd=tcp:127.0.0.1:{control_port}-:39000"
         );
         let vm_log = self.workspace.join(format!("{deployment_id}.vm.log"));
-        let vm_output = fs::File::create(&vm_log)?;
+        let vm_output = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&vm_log)?;
         let vm_error = vm_output.try_clone()?;
-        let vm = Command::new(&runner)
+        let mut command = Command::new(&runner);
+        boot.apply(&mut command);
+        let vm = command
             .current_dir(&self.workspace)
             .env("NIX_DISK_IMAGE", &disk)
             .env("QEMU_NET_OPTS", network)
@@ -441,9 +757,14 @@ socket.on("end", () => {{
                 vm,
             },
         );
-        self.wait_for_guest(deployment_id)?;
-        self.select_proxy(deployment_id)?;
-        self.runtime_identity(deployment_id)
+        Ok(())
+    }
+
+    fn refuse_existing_deployment(&self, deployment_id: &str) -> Result<()> {
+        if self.deployments.contains_key(deployment_id) {
+            bail!("deployment {deployment_id} already exists");
+        }
+        Ok(())
     }
 
     pub fn select_proxy(&mut self, deployment_id: &str) -> Result<()> {
@@ -646,9 +967,8 @@ socket.on("end", () => {{
         let manifest = read_backup_manifest(&path)?;
         let schema_version = u32::try_from(manifest.schema_version)
             .context("backup manifest has a negative schema version")?;
-        if manifest.format_version != 1 || schema_version == 0 {
-            bail!("unsupported backup compatibility before target mutation");
-        }
+        self.backup_compatibility
+            .validate(manifest.format_version, schema_version)?;
         Ok(BackupArtifact {
             sha256: sha256_file(&path)?,
             path,
@@ -683,9 +1003,9 @@ socket.on("end", () => {{
             let manifest = read_backup_manifest(&host_path)?;
             let schema_version = u32::try_from(manifest.schema_version)
                 .context("schema probe manifest has a negative schema version")?;
-            if manifest.format_version != 1 || schema_version == 0 {
-                bail!("schema probe reported unsupported backup compatibility");
-            }
+            self.backup_compatibility
+                .validate(manifest.format_version, schema_version)
+                .context("schema probe reported unsupported backup compatibility")?;
             Ok(schema_version)
         })();
         let guest_cleanup = self.guest(deployment_id, &format!("rm -f {guest_path}"));
@@ -712,9 +1032,63 @@ socket.on("end", () => {{
     /// The lifecycle owns the transfer and in-guest mutation so workflow code
     /// cannot reach VM disks or control channels directly.
     pub fn restore(&self, deployment_id: &str, backup: &BackupArtifact) -> Result<()> {
-        if backup.format_version != 1 || backup.schema_version == 0 {
-            bail!("unsupported backup compatibility before target mutation");
+        self.restore_with(deployment_id, backup, baseline_command)
+    }
+
+    /// Restore into a fresh, never-served guest, then boot its ordinary service.
+    /// The transient unit exposes the canonical unit's environment without
+    /// starting it; it disappears with the restore boot's runtime filesystem.
+    pub(crate) fn restore_package(
+        &mut self,
+        deployment_id: &str,
+        backend: StorageBackend,
+        revision: ResolvedRevision,
+        package: PackageIdentity,
+        backup: &BackupArtifact,
+    ) -> Result<RuntimeIdentity> {
+        if !matches!(
+            self.backup_compatibility,
+            BackupCompatibility::CurrentQualification
+        ) {
+            bail!("fresh package restore is qualification-only");
         }
+        self.backup_compatibility
+            .validate(backup.format_version, backup.schema_version)?;
+        self.launch_guest(
+            deployment_id,
+            backend,
+            revision.clone(),
+            package.clone(),
+            GuestBoot::FreshRestore,
+        )?;
+        self.wait_for_guest(deployment_id)?;
+        self.guest(
+            deployment_id,
+            &restore_preparation_command(&package, backend),
+        )?;
+        self.restore_with(deployment_id, backup, restore_service_command)?;
+        // The boot-generated mask is immutable for this boot. A normal reboot
+        // both removes it and exercises ordinary startup over the restored disk.
+        self.park(deployment_id)?;
+        self.deployments.remove(deployment_id);
+        self.launch_guest(
+            deployment_id,
+            backend,
+            revision,
+            package,
+            GuestBoot::RestoredIsolated,
+        )?;
+        self.admit_started_guest(deployment_id, GuestBoot::RestoredIsolated)
+    }
+
+    fn restore_with(
+        &self,
+        deployment_id: &str,
+        backup: &BackupArtifact,
+        invocation: fn(&PackageIdentity, &str) -> String,
+    ) -> Result<()> {
+        self.backup_compatibility
+            .validate(backup.format_version, backup.schema_version)?;
         let package = &self
             .deployments
             .get(deployment_id)
@@ -729,7 +1103,7 @@ socket.on("end", () => {{
         }
         self.guest(
             deployment_id,
-            &baseline_command(package, &format!("restore {guest_path}")),
+            &invocation(package, &format!("restore {guest_path}")),
         )
         .context("restoring compatibility-validated backup")
         .map(|_| ())
@@ -959,8 +1333,25 @@ socket.on("end", () => {{
                 Ok(0) => bail!("guest control response closed before exit-status frame"),
                 Ok(count) => {
                     output.extend_from_slice(&bytes[..count]);
-                    if let Some(body) = complete_status(&output)? {
-                        return Ok(body);
+                    match complete_status(&output) {
+                        Ok(Some(body)) => return Ok(body),
+                        Ok(None) => {}
+                        Err(error) => {
+                            return Err(match persist_guest_failure(&self.workspace, &output) {
+                                Ok(path) => error.context(format!(
+                                    "restricted guest output: {}",
+                                    path.display()
+                                )),
+                                Err(diagnostic) => {
+                                    // Preserve the primary command failure even if
+                                    // ancillary private diagnostic retention fails.
+                                    eprintln!(
+                                        "warning: retaining guest failure output failed: {diagnostic:#}"
+                                    );
+                                    error
+                                }
+                            });
+                        }
                     }
                 }
                 Err(error)
@@ -1085,6 +1476,32 @@ fn backend_name(backend: StorageBackend) -> &'static str {
         StorageBackend::Postgres => "postgres",
     }
 }
+
+fn vm_cache_key(
+    harness_ref: &str,
+    package_output_path: &str,
+    backend: StorageBackend,
+) -> (String, String, StorageBackend) {
+    (
+        harness_ref.to_owned(),
+        package_output_path.to_owned(),
+        backend,
+    )
+}
+
+fn vm_gc_root_name(
+    harness_ref: &str,
+    package_output_path: &str,
+    backend: StorageBackend,
+) -> String {
+    let mut digest = Sha256::new();
+    digest.update(harness_ref.as_bytes());
+    digest.update([0]);
+    digest.update(package_output_path.as_bytes());
+    digest.update([0]);
+    digest.update(backend_name(backend).as_bytes());
+    format!("vm-{}", crate::digest::lowercase_hex(digest.finalize()))
+}
 fn nix(cache: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("nix")
         .env("XDG_CACHE_HOME", cache)
@@ -1128,6 +1545,44 @@ fn baseline_command(package: &PackageIdentity, args: &str) -> String {
             .join("bin/jaunder")
             .display()
     )
+}
+
+fn restore_service_command(package: &PackageIdentity, args: &str) -> String {
+    // A missing environment is an infrastructure failure, not permission to
+    // let the CLI select its default database in a transient unit's directory.
+    let command = format!(
+        "set -e\nset -o pipefail\nvalues=$(systemctl show --property=Environment --value jaunder-restore-env.service | tr ' ' '\\n' | grep '^JAUNDER_')\ntest -n \"$values\"\nexport $values\n: \"${{JAUNDER_DB:?missing canonical restore database}}\"\nexport JAUNDER_STORAGE_PATH=/var/lib/jaunder/data\n{} {args}",
+        Path::new(&package.output_path)
+            .join("bin/jaunder")
+            .display(),
+    );
+    let quoted = format!("'{}'", command.replace('\'', "'\\''"));
+    format!(
+        "systemd-run --quiet --wait --pipe --collect --property=User=jaunder --property=Group=jaunder --setenv=PATH=\"$PATH\" /bin/sh -c {quoted}"
+    )
+}
+
+fn restore_preparation_command(package: &PackageIdentity, backend: StorageBackend) -> String {
+    let bootstrap = match backend {
+        StorageBackend::Sqlite => "",
+        StorageBackend::Postgres => "systemctl start jaunder-baseline-postgres-bootstrap.service\n",
+    };
+    format!(
+        "set -e\ntest \"$(systemctl show --property=LoadState --value jaunder.service)\" = masked\ntest ! -e /var/lib/jaunder/data\ncp /etc/systemd/system/jaunder.service /run/systemd/system/jaunder-restore-env.service\nsystemctl daemon-reload\ntest \"$(systemctl show --property=ActiveState --value jaunder-restore-env.service)\" = inactive\ninstall -d -m 0700 -o jaunder -g jaunder /var/lib/jaunder\n{bootstrap}{}",
+        restore_service_command(package, "init"),
+    )
+}
+
+fn persist_guest_failure(workspace: &Path, output: &[u8]) -> Result<PathBuf> {
+    let mut diagnostic = tempfile::Builder::new()
+        .prefix("guest-failure-")
+        .suffix(".log")
+        .tempfile_in(workspace)?;
+    diagnostic.write_all(output)?;
+    let (_, path) = diagnostic
+        .keep()
+        .context("retaining private guest failure output")?;
+    Ok(path)
 }
 
 fn read_backup_manifest(path: &Path) -> Result<BackupManifest> {
@@ -1285,6 +1740,168 @@ fn regular_metadata(path: &Path) -> Result<fs::Metadata> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn restore_preparation_keeps_the_canonical_environment_and_service_user() {
+        let package = PackageIdentity {
+            installable: String::new(),
+            derivation: String::new(),
+            nar_hash: String::new(),
+            executable_sha256: String::new(),
+            output_path: "/nix/store/fixture-package".into(),
+        };
+        for backend in [StorageBackend::Sqlite, StorageBackend::Postgres] {
+            let preparation = restore_preparation_command(&package, backend);
+            assert!(preparation.starts_with("set -e\ntest"));
+            assert!(preparation.contains("test ! -e /var/lib/jaunder/data"));
+            assert!(preparation.contains("cp /etc/systemd/system/jaunder.service /run/systemd/system/jaunder-restore-env.service"));
+            assert!(
+                preparation
+                    .contains("ActiveState --value jaunder-restore-env.service)\" = inactive")
+            );
+            assert_eq!(
+                preparation.contains("systemctl start jaunder-baseline-postgres-bootstrap.service"),
+                backend == StorageBackend::Postgres
+            );
+            assert!(preparation.contains("--property=User=jaunder --property=Group=jaunder"));
+            assert!(preparation.contains("--setenv=PATH=\"$PATH\""));
+            assert!(preparation.contains("set -o pipefail"));
+            assert!(preparation.contains("JAUNDER_DB:?missing canonical restore database"));
+            assert!(
+                Command::new("sh")
+                    .args(["-n", "-c", &preparation])
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let ordinary = baseline_command(&package, "backup");
+        assert!(ordinary.contains("Environment --value jaunder.service"));
+        assert!(!ordinary.contains("systemd-run"));
+        assert!(!ordinary.contains("jaunder-restore-env"));
+        let restore = restore_service_command(&package, "restore /var/lib/jaunder/fixture.tar.gz");
+        assert!(restore.contains("Environment --value jaunder-restore-env.service"));
+        assert!(restore.contains("/nix/store/fixture-package/bin/jaunder restore"));
+        assert!(
+            Command::new("sh")
+                .args(["-n", "-c", &restore])
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+
+    #[test]
+    fn restore_boot_is_fresh_and_masks_only_the_owned_service() {
+        assert!(!GuestBoot::FreshRestore.reuse_disk());
+        assert!(!GuestBoot::Fresh.reuse_disk());
+        assert!(GuestBoot::Persisted.reuse_disk());
+        assert!(GuestBoot::RestoredIsolated.reuse_disk());
+        assert!(GuestBoot::Fresh.routes_proxy());
+        assert!(GuestBoot::Persisted.routes_proxy());
+        assert!(!GuestBoot::FreshRestore.routes_proxy());
+        assert!(!GuestBoot::RestoredIsolated.routes_proxy());
+        for boot in [
+            GuestBoot::Fresh,
+            GuestBoot::Persisted,
+            GuestBoot::FreshRestore,
+            GuestBoot::RestoredIsolated,
+        ] {
+            let mut command = Command::new("runner");
+            boot.apply(&mut command);
+            let environment = command.get_envs().collect::<Vec<_>>();
+            if matches!(boot, GuestBoot::FreshRestore) {
+                assert_eq!(
+                    environment,
+                    vec![(
+                        std::ffi::OsStr::new("QEMU_KERNEL_PARAMS"),
+                        Some(std::ffi::OsStr::new("systemd.mask=jaunder.service"))
+                    )]
+                );
+            } else {
+                assert!(environment.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn private_guest_failure_retains_original_bytes_without_public_error_body() {
+        let workspace = tempfile::tempdir().unwrap();
+        let output = b"private original restore error\n__JAUNDER_BASELINE_STATUS__1\n";
+        let path = persist_guest_failure(workspace.path(), output).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), output);
+        assert!(
+            !complete_status(output)
+                .unwrap_err()
+                .to_string()
+                .contains("private original")
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[test]
+    fn qualification_backup_policy_preserves_ordinary_baseline_admission() {
+        let ordinary = BackupCompatibility::ProductionBaseline;
+        let qualification = BackupCompatibility::CurrentQualification;
+        let current = common::backup::CURRENT_BACKUP_FORMAT_VERSION;
+        assert_ne!(current, 1);
+        assert!(ordinary.validate(1, 50).is_ok());
+        assert!(ordinary.validate(current, 50).is_err());
+        assert!(qualification.validate(current, 50).is_ok());
+        assert!(qualification.validate(1, 50).is_err());
+        for policy in [ordinary, qualification] {
+            assert!(policy.validate(0, 50).is_err());
+            assert!(policy.validate(current + 1, 50).is_err());
+            assert!(policy.validate(policy.format_version(), 0).is_err());
+        }
+    }
+
+    #[test]
+    fn qualification_expression_binds_the_typed_fixture_to_the_harness_source() {
+        let repo = tempfile::Builder::new()
+            .prefix("qualified source $\"{")
+            .tempdir()
+            .unwrap();
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "fixture@example.invalid"],
+            vec!["config", "user.name", "fixture"],
+            vec!["commit", "--allow-empty", "-m", "fixture"],
+        ] {
+            assert!(
+                crate::git::at(repo.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let source = crate::qualification::SourcePin::admit_current(repo.path()).unwrap();
+        let expression = qualification_expression(
+            source.locked_ref(),
+            &source,
+            crate::qualification::QualificationFixture::BApplication,
+        )
+        .unwrap();
+        assert!(expression.contains(&serde_json::to_string(source.locked_ref()).unwrap()));
+        assert!(expression.contains("fixture = \"b-app\""));
+        assert!(source.locked_ref().contains("%22"));
+        assert!(
+            qualification_expression(
+                "github:jaunder-org/jaunder/different-source",
+                &source,
+                crate::qualification::QualificationFixture::A,
+            )
+            .is_err()
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn restriction_distinguishes_file_and_directory_modes() {
@@ -1347,6 +1964,40 @@ mod tests {
     fn complete_status_rejects_malformed_and_failed_frames() {
         assert!(complete_status(b"__JAUNDER_BASELINE_STATUS__not-a-status\n").is_err());
         assert!(complete_status(b"__JAUNDER_BASELINE_STATUS__1\n").is_err());
+    }
+
+    #[test]
+    fn vm_profile_identity_distinguishes_packages_with_same_binary() {
+        let harness = "git+file:///checkout?rev=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let first = PackageIdentity {
+            installable: "fixture-a".into(),
+            derivation: "/nix/store/first.drv".into(),
+            output_path: "/nix/store/first-jaunder".into(),
+            nar_hash: "sha256-first".into(),
+            executable_sha256: "b".repeat(64),
+        };
+        let second = PackageIdentity {
+            installable: "fixture-b-app".into(),
+            derivation: "/nix/store/second.drv".into(),
+            output_path: "/nix/store/second-jaunder".into(),
+            nar_hash: "sha256-second".into(),
+            executable_sha256: first.executable_sha256.clone(),
+        };
+        assert_eq!(first.executable_sha256, second.executable_sha256);
+
+        assert_ne!(
+            vm_cache_key(harness, &first.output_path, StorageBackend::Sqlite),
+            vm_cache_key(harness, &second.output_path, StorageBackend::Sqlite)
+        );
+        assert_ne!(
+            vm_gc_root_name(harness, &first.output_path, StorageBackend::Sqlite),
+            vm_gc_root_name(harness, &second.output_path, StorageBackend::Sqlite),
+            "different package outputs must not collide even when their executables do"
+        );
+        assert_eq!(
+            vm_gc_root_name(harness, &first.output_path, StorageBackend::Sqlite),
+            vm_gc_root_name(harness, &first.output_path, StorageBackend::Sqlite)
+        );
     }
 
     #[test]
