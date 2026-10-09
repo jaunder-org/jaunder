@@ -260,6 +260,10 @@ pkgs.runCommand "issue-1702-image-sanitizer-feasibility-witness"
     python3 -B ${helpers}/verify_heif_controls.py "$out/fixtures/heif-owned" "$out/fixtures" \
       "$out/reports/heif-rewrite" ${helpers}/rewrite_heif.py "$PWD/consume-heif" \
       "$out/fixtures/heif-owned/aux-alpha.heic" > "$out/reports/heif-rewrite-controls.txt"
+    # Additive byte-routing proof: all earlier family witness calls stay intact.
+    python3 -B ${helpers}/verify_image_routing.py "$out/fixtures" \
+      "$out/reports/image-routing" ${helpers}/route_image.py \
+      > "$out/reports/image-routing-controls.txt"
     sha256sum "$out"/fixtures/input/* "$out"/fixtures/candidate/* "$out"/fixtures/webp/input/* \
       "$out"/fixtures/webp/candidate/* "$out"/reports/*.png > "$out/reports/SHA256SUMS"
   ''
