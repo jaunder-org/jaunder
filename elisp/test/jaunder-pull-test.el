@@ -398,7 +398,7 @@
                        (push 'apply trace)
                        (if (eq failure 'apply) (error "apply") "Local body")))
                     ((symbol-function 'jaunder--install-pulled-bytes)
-                     (lambda (destination bytes)
+                     (lambda (destination bytes &optional _synced-at)
                        (push 'install trace)
                        (if (eq failure 'install) (error "install")
                          (write-region bytes nil destination nil 'silent)
@@ -420,6 +420,21 @@
                              ('apply '(plan materialize apply))
                              (_ '(plan materialize apply install))))))
         (delete-directory root t)))))
+
+(ert-deftest jaunder-pull-checkpoint-rejects-malformed-staged-headers-before-install ()
+  "A body-only or mismatched sync marker cannot checkpoint an installed Post."
+  (let* ((root (make-temp-file "jaunder-checkpoint-" t))
+         (path (expand-file-name "post.org" root))
+         (synced-at "2026-09-17T00:00:00Z"))
+    (unwind-protect
+        (dolist (bytes (list "body without a header boundary"
+                             (concat "#+PROPERTY: JAUNDER_ID 7\n\n"
+                                     "#+PROPERTY: JAUNDER_SYNCED_AT " synced-at "\n")
+                             "#+PROPERTY: JAUNDER_SYNCED_AT different\n\nBody.\n"))
+          (should-error (jaunder--install-pulled-bytes path bytes synced-at))
+          (should-not (file-exists-p path))
+          (should-not (directory-files root nil "\\`\\.jaunder-pull-")))
+      (delete-directory root t))))
 
 (ert-deftest jaunder-pull-member-requires-one-canonical-instance-header ()
   ;; The authenticated Member identity anchors every anonymous media response.
@@ -462,7 +477,7 @@
                   ((symbol-function 'jaunder--pull-media-apply-plan)
                    (lambda (&rest _) "Localized"))
                   ((symbol-function 'jaunder--install-pulled-bytes)
-                   (lambda (destination bytes)
+                   (lambda (destination bytes &optional _synced-at)
                      (setq attempt (1+ attempt))
                      (if (= attempt 1)
                          (error "final install")

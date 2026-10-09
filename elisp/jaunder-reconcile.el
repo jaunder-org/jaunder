@@ -27,6 +27,7 @@
 (declare-function jaunder--pull-destination-exists-p "jaunder-pull")
 (declare-function jaunder--pull-member "jaunder-pull")
 (declare-function jaunder--pull-stage-member "jaunder-pull")
+(declare-function jaunder--pull-write-checkpoint "jaunder-pull")
 (declare-function jaunder--pull-response-identity "jaunder-pull")
 (declare-function jaunder--render-pulled-member "jaunder-pull")
 (declare-function jaunder-pull-result-status "jaunder-pull")
@@ -1022,23 +1023,25 @@ No server or local Post mutation is authorized by the preview ETag alone."
                 (error (jaunder--reconcile-blocked
                         row 'member-transport-error (error-message-string err))))))))))))
 
-(defun jaunder--reconcile-replace-pulled-file (path destination bytes)
-  "Atomically replace PATH then rename to DESTINATION, reporting committed state."
+(defun jaunder--reconcile-replace-pulled-file (path destination bytes &optional staged-synced-at)
+  "Atomically replace PATH then rename to DESTINATION, reporting committed state.
+STAGED-SYNCED-AT renews the sync checkpoint immediately before installation."
   (jaunder--with-debug-operation "pull.install" ()
-                                 (let ((temporary nil))
+                                 (let ((temporary nil)
+                                       synced-at)
                                    (unwind-protect
                                        (progn
                                          (setq temporary (make-temp-file
                                                           (expand-file-name ".jaunder-pull-" (file-name-directory path))))
-                                         (let ((coding-system-for-write 'utf-8-unix))
-                                           (write-region bytes nil temporary nil 'silent))
+                                         (setq synced-at (jaunder--pull-write-checkpoint
+                                                          temporary bytes staged-synced-at))
                                          (rename-file temporary path t)
                                          (setq temporary nil)
                                          (let ((buffer (get-file-buffer path)))
                                            (when (buffer-live-p buffer)
                                              (with-current-buffer buffer (revert-buffer t t) (set-buffer-modified-p nil))))
                                          (if (equal path destination)
-                                             (list :path path :local-effect 'replaced)
+                                             (list :path path :local-effect 'replaced :synced-at synced-at)
                                            (condition-case err
                                                (progn
                                                  (rename-file path destination nil)
@@ -1047,8 +1050,8 @@ No server or local Post mutation is authorized by the preview ETag alone."
                                                      (with-current-buffer buffer
                                                        (set-visited-file-name destination t t)
                                                        (set-buffer-modified-p nil))))
-                                                 (list :path destination :local-effect 'renamed))
-                                             (error (list :path path :local-effect 'replaced-at-old-path
+                                                 (list :path destination :local-effect 'renamed :synced-at synced-at))
+                                             (error (list :path path :local-effect 'replaced-at-old-path :synced-at synced-at
                                                           :detail (error-message-string err))))))
                                      (when (and temporary (file-exists-p temporary)) (delete-file temporary))))))
 
@@ -1170,11 +1173,11 @@ arbitrary fallback work."
                              path (plist-get staged :bytes))
                           (plist-get staged :bytes)))
                  (installed (jaunder--reconcile-replace-pulled-file
-                             path destination bytes))
+                             path destination bytes (plist-get staged :synced-at)))
                  (committed (eq (plist-get installed :local-effect) 'replaced-at-old-path)))
             (append (list :outcome (if committed 'failed 'success)
                           :post-id (plist-get staged :id) :slug (plist-get staged :slug)
-                          :etag (plist-get staged :etag) :synced-at (plist-get staged :synced-at)
+                          :etag (plist-get staged :etag) :synced-at (plist-get installed :synced-at)
                           :http-status (plist-get remote :http-status)
                           :local-effect (plist-get installed :local-effect))
                     (when committed

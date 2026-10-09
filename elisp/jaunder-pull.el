@@ -312,24 +312,53 @@ Successful results retain server-confirmed metadata for reconciliation."
        "Member response must carry exactly one canonical X-Jaunder-Instance UUID"))
     (car instances)))
 
-(defun jaunder--install-pulled-bytes (path bytes)
+(defun jaunder--pull-write-checkpoint (path bytes &optional staged-synced-at)
+  "Write BYTES to temporary PATH, returning its installed sync timestamp.
+When STAGED-SYNCED-AT is supplied, renew that canonical header and align the
+file mtime with the same checkpoint.  Without it, write exact BYTES."
+  (let* ((checkpoint (and staged-synced-at (current-time)))
+         (synced-at (and checkpoint
+                         (format-time-string "%Y-%m-%dT%H:%M:%SZ" checkpoint t))))
+    (with-temp-buffer
+      (insert bytes)
+      (when staged-synced-at
+        (goto-char (point-min))
+        (let ((header-end (search-forward "\n\n" nil t)))
+          (unless header-end
+            (jaunder--pull-error "staged Post has no header boundary"))
+          (goto-char (point-min))
+          (unless (re-search-forward
+                   (concat "^#\\+PROPERTY: JAUNDER_SYNCED_AT "
+                           (regexp-quote staged-synced-at) "$") header-end t)
+            (jaunder--pull-error "staged Post sync timestamp does not match its header"))
+          (replace-match (concat "#+PROPERTY: JAUNDER_SYNCED_AT " synced-at) t t)))
+      (let ((coding-system-for-write 'utf-8-unix))
+        (write-region (point-min) (point-max) path nil 'silent)))
+    ;; Disk writes may themselves be slow.  Match the private temporary file to
+    ;; its checkpoint before installation, without backdating an authored edit.
+    (when checkpoint (set-file-times path checkpoint))
+    synced-at))
+
+(defun jaunder--install-pulled-bytes (path bytes &optional staged-synced-at)
   "Install BYTES at PATH without overwrite; return a pull result.
+STAGED-SYNCED-AT renews the sync checkpoint immediately before installation.
 Writes a complete same-directory temporary file, then claims PATH by hard-link
 creation, which is atomic and fails if another directory entry won the race."
   (if (jaunder--pull-destination-exists-p path)
       (jaunder--make-pull-result :status 'blocked :path path)
-    (let ((temporary nil))
+    (let ((temporary nil)
+          synced-at)
       (unwind-protect
           (progn
             (setq temporary
                   (make-temp-file
                    (expand-file-name ".jaunder-pull-" (file-name-directory path))))
-            (let ((coding-system-for-write 'utf-8-unix))
-              (write-region bytes nil temporary nil 'silent))
+            (setq synced-at (jaunder--pull-write-checkpoint
+                             temporary bytes staged-synced-at))
             (condition-case err
                 (progn
                   (add-name-to-file temporary path)
-                  (jaunder--make-pull-result :status 'pulled :path path))
+                  (jaunder--make-pull-result :status 'pulled :path path :synced-at synced-at))
               (file-already-exists
                (jaunder--make-pull-result :status 'blocked :path path))
               (file-error
@@ -427,12 +456,12 @@ localized Post is installed only after every Local Media Copy verifies."
          (let* ((staged (jaunder--pull-stage-member root member))
                 (result (progn
                           (jaunder--reconcile-pull-progress "installing local Post")
-                          (jaunder--install-pulled-bytes path (plist-get staged :bytes)))))
+                          (jaunder--install-pulled-bytes
+                           path (plist-get staged :bytes) (plist-get staged :synced-at)))))
            (when (eq (jaunder-pull-result-status result) 'pulled)
              (setf (jaunder-pull-result-id result) (plist-get staged :id)
                    (jaunder-pull-result-slug result) (plist-get staged :slug)
                    (jaunder-pull-result-etag result) (plist-get staged :etag)
-                   (jaunder-pull-result-synced-at result) (plist-get staged :synced-at)
                    (jaunder-pull-result-http-status result) 200
                    (jaunder-pull-result-local-effect result) 'created))
            result))))))

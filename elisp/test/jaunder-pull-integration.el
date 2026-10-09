@@ -273,11 +273,11 @@
                        (setq gets (1+ gets)))
                      (apply real-get arguments)))
                   ((symbol-function 'jaunder--install-pulled-bytes)
-                   (lambda (path bytes)
+                   (lambda (path bytes &optional staged-synced-at)
                      (setq install-attempts (1+ install-attempts))
                      (if (= install-attempts 1)
                          (error "injected final Post install failure")
-                       (funcall real-install path bytes)))))
+                       (funcall real-install path bytes staged-synced-at)))))
                (jaunder--call-with-blog root (lambda () (let* ((media-url (jaunder--upload-media image "image/png"))
                                                                (first
                                                                 (jaunder-pull-integration--create-server-only-member
@@ -309,7 +309,10 @@
                                                                              (jaunder-inventory-member-id first))
                                                                      t jaunder-reconcile-marks)
                                                             (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
-                                                              (jaunder-reconcile-pull-selected)))
+                                                              (jaunder-reconcile-pull-selected))
+                                                            (should (eq (jaunder-reconcile-row-state
+                                                                         (car (jaunder-reconcile-report-rows jaunder-reconcile-report)))
+                                                                        'unchanged)))
                                                           (let* ((path (expand-file-name
                                                                         (concat (jaunder-inventory-member-slug first) ".org")
                                                                         root))

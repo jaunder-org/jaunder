@@ -2907,14 +2907,17 @@ The current filename supplies the local slug evidence used by matched-pull tests
                        :audience-omitted t :synced-at "2026-08-25T00:00:00Z"
                        :bytes (concat "#+TITLE: Remote\n"
                                       "#+PROPERTY: JAUNDER_STATUS published\n"
-                                      "#+PROPERTY: JAUNDER_ID 42\n\nRemote body.\n"))))
+                                      "#+PROPERTY: JAUNDER_ID 42\n"
+                                      "#+PROPERTY: JAUNDER_SYNCED_AT 2026-08-25T00:00:00Z\n\nRemote body.\n"))))
     (unwind-protect
         (progn
           (with-temp-file path
             (insert (concat "#+TITLE: Local\n"
                             "#+PROPERTY: JAUNDER_AUDIENCE subscribers\n"
                             "#+PROPERTY: JAUNDER_ID 42\n\nLocal body.\n")))
-          (cl-letf (((symbol-function 'jaunder--reconcile-pull-preflight)
+          (cl-letf (((symbol-function 'current-time)
+                     (lambda () (date-to-time "2026-08-25T00:00:00Z")))
+                    ((symbol-function 'jaunder--reconcile-pull-preflight)
                      (lambda (&rest _) nil))
                     ((symbol-function 'jaunder--reconcile-pull-destination)
                      (lambda (&rest _) path)))
@@ -2926,7 +2929,8 @@ The current filename supplies the local slug evidence used by matched-pull tests
                          (concat "#+TITLE: Remote\n"
                                  "#+PROPERTY: JAUNDER_STATUS published\n"
                                  "#+PROPERTY: JAUNDER_AUDIENCE subscribers\n"
-                                 "#+PROPERTY: JAUNDER_ID 42\n\nRemote body.\n"))))
+                                 "#+PROPERTY: JAUNDER_ID 42\n"
+                                 "#+PROPERTY: JAUNDER_SYNCED_AT 2026-08-25T00:00:00Z\n\nRemote body.\n"))))
       (delete-file path))))
 
 (ert-deftest jaunder-reconcile-pull-malformed-remote-title-preserves-matched-post ()
@@ -3056,7 +3060,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
               (setq point (point))
               (set-window-start window (line-beginning-position) t)
               (setq window-start (window-start window)))
-            (cl-letf (((symbol-function 'jaunder--pull-stage-member)
+            (cl-letf (((symbol-function 'current-time)
+                       (lambda () (date-to-time "2026-09-17T00:00:00Z")))
+                      ((symbol-function 'jaunder--pull-stage-member)
                        (lambda (&rest _) (list :id "7" :slug "new" :etag "\"old\""
                                                :synced-at "2026-09-17T00:00:00Z" :bytes new)))
                       ((symbol-function 'jaunder--reconcile-pull-unique-match)
@@ -3092,7 +3098,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
                       'pull-destination-occupied))
           (delete-file destination)
           (let ((real-rename (symbol-function 'rename-file)) (moves 0))
-            (cl-letf (((symbol-function 'rename-file)
+            (cl-letf (((symbol-function 'current-time)
+                       (lambda () (date-to-time "2026-09-17T00:00:00Z")))
+                      ((symbol-function 'rename-file)
                        (lambda (from to &optional ok)
                          (setq moves (1+ moves))
                          (if (= moves 2) (error "injected rename failure")
@@ -3119,7 +3127,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
           (should (= (length (directory-files root t "\\.org\\'")) 1))
           (setf (jaunder-reconcile-row-local-sha256 row)
                 (jaunder--reconcile-file-sha256 path))
-          (cl-letf (((symbol-function 'jaunder--pull-stage-member)
+          (cl-letf (((symbol-function 'current-time)
+                     (lambda () (date-to-time "2026-09-17T00:00:00Z")))
+                    ((symbol-function 'jaunder--pull-stage-member)
                      (lambda (&rest _) (list :etag "\"old\"" :id "7" :slug "new"
                                              :synced-at "2026-09-17T00:00:00Z" :bytes new)))
                     ((symbol-function 'jaunder--reconcile-pull-remote-revalidation)
