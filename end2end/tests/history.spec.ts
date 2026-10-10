@@ -8,6 +8,20 @@ import { applySeededSession } from "./seed";
 
 const REVISION_PAGE_SIZE = 50;
 
+async function expectHistoryPostLinks(
+  page: Page,
+  postId: number,
+  rowCount: number,
+): Promise<void> {
+  await expect(
+    page.getByRole("columnheader", { name: "Post", exact: true }),
+  ).toBeVisible();
+  const postLinks = page
+    .locator('[data-test="history-row"]')
+    .locator(`a[href="/posts/${postId}/history"]`);
+  await expect(postLinks).toHaveText(Array(rowCount).fill(String(postId)));
+}
+
 async function updatePost(
   page: Page,
   postId: number,
@@ -86,6 +100,8 @@ test("owner inspects paginated immutable history and a Deleted Post", async ({
     REVISION_PAGE_SIZE + 1,
   );
 
+  await expectHistoryPostLinks(page, created.post_id, REVISION_PAGE_SIZE + 1);
+
   const newestDetailHref = await page
     .locator('[data-test="history-detail-link"]')
     .first()
@@ -131,6 +147,7 @@ test("owner inspects paginated immutable history and a Deleted Post", async ({
     REVISION_PAGE_SIZE + 1,
   );
   await expect(page.locator('[data-test="history-load-more"]')).toHaveCount(0);
+  await expectHistoryPostLinks(page, created.post_id, REVISION_PAGE_SIZE + 1);
 
   await withTimedAction(page, "api.posts.delete.history_subject", async () => {
     const response = await page.request.post(`${BASE_URL}/api/posts/delete`, {
@@ -157,6 +174,7 @@ test("owner inspects paginated immutable history and a Deleted Post", async ({
   await expect(
     page.locator('[data-test="history-current-lifecycle"]'),
   ).toHaveText("Deleted");
+  await expectHistoryPostLinks(page, created.post_id, REVISION_PAGE_SIZE);
 
   await navigateInApp(
     page,
