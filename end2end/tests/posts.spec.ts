@@ -974,7 +974,12 @@ test("editing an Org Post preserves, changes, and removes its title", async ({
   await click(page, SEL.publishButton("false"));
   await expectFlash(page, "Draft saved.");
   await followPermalink(page, page.locator(SEL.saveSummary));
-  await expect(page.locator("article .j-post-title")).toHaveCount(0);
+  await expect(
+    page.locator("article .j-post-title").getByRole("link", {
+      name: "Permalink",
+      exact: true,
+    }),
+  ).toHaveText("#");
   await openEditor(page);
   await expect(body).toHaveValue("Org body\n");
 });
@@ -2930,19 +2935,62 @@ test("inline composer: published post appears in timeline without page reload", 
   });
 });
 
-test("inline composer: plain body publishes titleless note", async ({
+test("inline composer: titleless Post permalink is discoverable from Home and Local", async ({
   registeredPage,
-}) => {
+  tracedContext,
+}, testInfo) => {
   const page = await registeredPage("/app");
   await waitForSelector(page, ".j-composer");
 
   await page.fill('.j-composer textarea[name="body"]', "Titleless inline note");
+  await selectComposerAudience(page, "public");
   await click(page, '.j-composer button[name="publish"][value="true"]');
   await waitForSelector(page, ".j-composer p.success");
 
   const post = page.locator("article.j-post").first();
   await expect(post).toContainText("Titleless inline note");
-  await expect(post.locator(".j-post-title")).toHaveCount(0);
+  const permalink = post.getByRole("link", {
+    name: "Permalink",
+    exact: true,
+  });
+  await expect(permalink).toHaveText("#");
+  const href = await permalink.getAttribute("href");
+  expect(href).toMatch(/^\/~/);
+  await navigateInApp(page, () => permalink.click(), {
+    url: href!,
+    ready: '.j-topbar h1:has-text("Post by ")',
+  });
+  await expect(page.locator("article.j-post")).toHaveCount(1);
+  await expect(page.locator(".j-post-body")).toHaveText(
+    "Titleless inline note",
+  );
+
+  const anonymous = await tracedContext();
+  try {
+    const local = await anonymous.newPage();
+    await goto(local, "/", {
+      timeout: slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000),
+    });
+    const publicPost = local.locator("article.j-post").filter({
+      hasText: "Titleless inline note",
+    });
+    const publicPermalink = publicPost.getByRole("link", {
+      name: "Permalink",
+      exact: true,
+    });
+    await expect(publicPermalink).toHaveText("#");
+    await expect(publicPermalink).toHaveAttribute("href", href!);
+    await navigateInApp(local, () => publicPermalink.click(), {
+      url: href!,
+      ready: '.j-topbar h1:has-text("Post by ")',
+    });
+    await expect(local.locator("article.j-post")).toHaveCount(1);
+    await expect(local.locator(".j-post-body")).toHaveText(
+      "Titleless inline note",
+    );
+  } finally {
+    await anonymous.close();
+  }
 });
 
 test("inline composer: markdown heading becomes article title", async ({

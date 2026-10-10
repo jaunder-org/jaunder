@@ -261,7 +261,7 @@ The stable hooks are:
 | `author-name`        | Author display name                                            |
 | `author-handle`      | Optional author handle                                         |
 | `published-time`     | Publication time                                               |
-| `post-title`         | Optional Post title heading                                    |
+| `post-title`         | Post title heading or `#` permalink fallback                   |
 | `post-summary`       | Optional Post summary                                          |
 | `post-body`          | Post body; its sanitized semantic descendants are styleable    |
 | `post-footer`        | A Post footer                                                  |
@@ -269,6 +269,11 @@ The stable hooks are:
 | `tag`                | One tag link                                                   |
 | `source-attribution` | Optional source attribution                                    |
 | `continuation`       | Optional pagination continuation                               |
+
+A Post with a permalink but no visible Rendered Title shows a `#` link named
+`Permalink` in the `post-title` heading. This navigation fallback also covers an
+empty sanitized title; it does not become authored title data. Posts without a
+visible title and without a permalink omit the heading.
 
 Highlighted Post-body `pre code` has fifteen closed, scoped `j-syn-*` token
 hooks. In addition to `comment`, `keyword`, `string`, `number`, `function`,

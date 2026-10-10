@@ -301,22 +301,28 @@ fn copyright_declaration(
 }
 
 /// Paints a persisted inline Rendered Title inside the existing permalink shape.
-/// Empty canonical fragments and titleless Posts deliberately omit the heading.
+/// Without a visible title, a `#` link keeps an existing permalink discoverable.
 #[must_use]
 pub(crate) fn post_heading(
     rendered_title: Option<&RenderedPostTitle>,
     permalink: Option<&RootRelativeUrl>,
 ) -> Markup {
-    let Some(rendered_title) = rendered_title.filter(|title| !title.as_ref().is_empty()) else {
+    let title = rendered_title
+        .filter(|title| !title.as_ref().is_empty())
+        .map(Markup::from_rendered_post_title);
+    if title.is_none() && permalink.is_none() {
         return Markup::empty();
-    };
-    let title = Markup::from_rendered_post_title(rendered_title);
+    }
     Markup::new(html! {
         h2 class="j-post-title" data-jaunder-part="post-title" {
-            @if let Some(permalink) = permalink {
-                a href=(&**permalink) { (title) }
-            } @else {
-                (title)
+            @if let Some(title) = title {
+                @if let Some(permalink) = permalink {
+                    a href=(&**permalink) { (title) }
+                } @else {
+                    (title)
+                }
+            } @else if let Some(permalink) = permalink {
+                a href=(&**permalink) aria-label="Permalink" { "#" }
             }
         }
     })
@@ -1050,13 +1056,21 @@ mod tests {
     }
 
     #[test]
-    fn content_free_authored_title_reaches_empty_heading_omission() {
+    fn post_heading_links_titleless_posts_to_their_permalink() {
+        assert_eq!(
+            post_heading(None, Some(&parse_root_relative_url("/~bob/x"))).into_string(),
+            "<h2 class=\"j-post-title\" data-jaunder-part=\"post-title\"><a href=\"/~bob/x\" aria-label=\"Permalink\">#</a></h2>"
+        );
+    }
+
+    #[test]
+    fn content_free_authored_title_links_to_its_permalink() {
         let authored: common::post_title::PostTitle = "<br>".parse().unwrap();
         let rendered = host::render::render_title(&authored, &common::render::PostFormat::Html);
         assert_eq!(rendered.as_ref(), "");
         assert_eq!(
             post_heading(Some(&rendered), Some(&parse_root_relative_url("/~bob/x"))).into_string(),
-            ""
+            "<h2 class=\"j-post-title\" data-jaunder-part=\"post-title\"><a href=\"/~bob/x\" aria-label=\"Permalink\">#</a></h2>"
         );
     }
 
