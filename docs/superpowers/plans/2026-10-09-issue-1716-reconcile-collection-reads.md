@@ -69,7 +69,7 @@ authority.
     and delayed checkpoint convergence. Prove empty/failed/partial discovery,
     cancellation, same-report retry, root/blog isolation and separate failed
     final refresh.
-- [ ] Task 2: Integrate writing actions and invalidate at the remote-write seam.
+- [x] Task 2: Integrate writing actions and invalidate at the remote-write seam.
   - Implement the write-observation contract around the existing conditional
     send paths and durable create orchestration. In `jaunder-publish`, observe
     accepted create/update responses before `jaunder--write-back` or rename. In

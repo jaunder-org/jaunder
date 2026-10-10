@@ -34,7 +34,8 @@
   "The actual executor records the completed row then refreshes with quit cleared."
   (dolist (enabled '(nil t))
     (jaunder-debug-boundary--with-session
-     (let* ((row (jaunder--make-reconcile-row :state 'local-draft :key "private-row"))
+     (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+            (row (jaunder--make-reconcile-row :state 'local-draft :key "private-row"))
             (buffer (generate-new-buffer " *deferred quit report*"))
             (report (jaunder--make-reconcile-report :root "/private-root" :rows (list row)))
             (quit-flag nil) refresh-saw-quit result)

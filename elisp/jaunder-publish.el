@@ -39,6 +39,7 @@
 (require 'jaunder-service)
 (require 'jaunder-media)
 (require 'jaunder-post-link)
+(require 'jaunder-reconcile-operation)
 
 (defun jaunder--validate-publish (entry status date-raw tz)
   "Signal an error if ENTRY is not publishable; return nil otherwise.
@@ -81,7 +82,8 @@ A no-op when already so named; on collision appends `-N'.  Returns the path."
                                          (setq final (expand-file-name (format "%s-%d.org" slug n) dir)
                                                n (1+ n)))
                                        (unless (equal final old)
-                                         (rename-file old final)
+                                         (jaunder--call-with-operation-local-rename
+                                          old final (lambda () (rename-file old final)))
                                          ;; ALONG-WITH-FILE=t: the file is already moved, so don't re-save it;
                                          ;; NO-QUERY=t: never prompt (publish is automated).
                                          (set-visited-file-name final t t))
@@ -159,12 +161,12 @@ send); absent it, the render falls back to the local zone via
                                    (jaunder--order-local-properties)
                                    ;; This is the create identity checkpoint.  It deliberately precedes the
                                    ;; intent cleanup below so an interruption retains a conditional baseline.
-                                   (jaunder--save-buffer-silently)
+                                   (jaunder--call-with-operation-checkpoint-save #'jaunder--save-buffer-silently)
                                    (when (jaunder--buffer-property "JAUNDER_ID")
                                      (jaunder--remove-property "JAUNDER_CREATE_KEY")
                                      (jaunder--remove-property "JAUNDER_CREATE_DIGEST")
                                      (jaunder--remove-property "JAUNDER_CREATE_ATTEMPT_AT")
-                                     (jaunder--save-buffer-silently))
+                                     (jaunder--call-with-operation-checkpoint-save #'jaunder--save-buffer-silently))
                                    slug)))
 
 (defun jaunder--new-post-in (dir now-string)
@@ -413,8 +415,8 @@ call unless KEY is supplied by durable create recovery."
                                    (while (null resp)
                                      (setq attempt (1+ attempt))
                                      (let ((r (condition-case err
-                                                  (jaunder--http-request "POST" url xml jaunder--entry-content-type
-                                                                         (list (cons "Idempotency-Key" key)))
+                                                  (jaunder--operation-send-post-write "POST" url xml jaunder--entry-content-type
+                                                                                      (list (cons "Idempotency-Key" key)))
                                                 (plz-error (if (< attempt 3) 'retry (signal (car err) (cdr err)))))))
                                        (cond
                                         ((eq r 'retry) (sleep-for (pop delays)))
@@ -475,7 +477,7 @@ its conditional PUT.  Uploaded Media can survive a later blocked Post write."
   (jaunder--with-debug-operation "publish.update" nil
                                  (unless (jaunder--strong-etag-p etag)
                                    (error "jaunder: conflict resolution requires a strong reviewed ETag"))
-                                 (jaunder--http-request
+                                 (jaunder--operation-send-post-write
                                   "PUT" edit-uri xml jaunder--entry-content-type
                                   (list (cons "If-Match" etag)))))
 
@@ -544,7 +546,7 @@ safe retry."
                                                (intent (unless id (jaunder--create-intent xml)))
                                                (resp (if id
                                                          (jaunder--with-debug-operation "publish.update" nil
-                                                                                        (jaunder--http-request
+                                                                                        (jaunder--operation-send-post-write
                                                                                          "PUT"
                                                                                          (jaunder--member-url id)
                                                                                          xml jaunder--entry-content-type

@@ -653,15 +653,8 @@ row and returns a result plist; its independent errors become failed results."
                                                          (memq displayed-row rows))
                                                        (jaunder--reconcile-displayed-rows jaunder-reconcile-report))))
                                          (let ((total (length rows)) (completed 0) cancelled)
-                                           (funcall
-                                            (lambda (work)
-                                              (if (memq action '(pull keep-remote))
-                                                  (jaunder--call-with-reconcile-operation
-                                                   root (jaunder--active-base-url)
-                                                   (jaunder--active-username) work)
-                                                ;; Writing consumers retain fresh discovery until their
-                                                ;; send seams own write observation and invalidation.
-                                                (jaunder--call-without-reconcile-operation work)))
+                                           (jaunder--call-with-reconcile-operation
+                                            root (jaunder--active-base-url) (jaunder--active-username)
                                             (lambda ()
                                               (dolist (row rows)
                                                 (unless cancelled
@@ -679,9 +672,19 @@ row and returns a result plist; its independent errors become failed results."
                                                       (setq value
                                                             (condition-case err
                                                                 (let ((inhibit-quit t))
-                                                                  (prog1 (funcall operation row)
-                                                                    (setq quit-requested quit-flag
-                                                                          quit-flag nil)))
+                                                                  (jaunder--call-with-operation-write-receipt
+                                                                   (lambda ()
+                                                                     (condition-case err
+                                                                         (prog1 (funcall operation row)
+                                                                           (setq quit-requested quit-flag quit-flag nil))
+                                                                       (error (jaunder--operation-write-failure
+                                                                               err (jaunder--reconcile-pull-error-detail err)))
+                                                                       (quit
+                                                                        (if (memq (jaunder--operation-write-phase) '(unknown confirmed))
+                                                                            (progn
+                                                                              (setq quit-requested t quit-flag nil)
+                                                                              (jaunder--operation-write-failure err))
+                                                                          (signal (car err) (cdr err))))))))
                                                               (error (list :outcome 'failed :reason 'operation-failed
                                                                            :detail (jaunder--reconcile-pull-error-detail err)))))
                                                       (with-current-buffer buffer
@@ -792,8 +795,11 @@ uncommitted."
                                              (lambda ()
                                                (let* ((published (jaunder-publish))
                                                       (destination (buffer-file-name)))
-                                                 (list :outcome 'success
-                                                       :post-id (jaunder--buffer-property "JAUNDER_ID")
+                                                 (list :outcome (if (jaunder--operation-created-identity-unresolved-p) 'partial 'success)
+                                                       :reason (when (jaunder--operation-created-identity-unresolved-p)
+                                                                 'create-identity-unresolved)
+                                                       :post-id (unless (jaunder--operation-created-identity-unresolved-p)
+                                                                  (jaunder--buffer-property "JAUNDER_ID"))
                                                        :slug (jaunder--buffer-property "JAUNDER_SLUG")
                                                        :etag (jaunder--buffer-property "JAUNDER_SYNCED")
                                                        :synced-at (jaunder--buffer-property "JAUNDER_SYNCED_AT")
@@ -813,17 +819,22 @@ Return a plist suitable for a terminal result; no DELETE is sent here."
          (id (jaunder--reconcile-row-post-id row))
          (slug (jaunder--reconcile-row-slug row)))
     (condition-case err
-        (let* ((response (jaunder--http-request
-                          "GET" (jaunder-inventory-member-edit-uri member)))
-               (status (plist-get response :status))
-               (etag (jaunder--response-header response "ETag")))
-          (if (and (integerp status) (<= 200 status 299)
-                   (jaunder--strong-etag-p etag))
-              (list :post-id id :slug slug :etag etag :http-status status)
-            (list :outcome 'blocked :post-id id :slug slug :etag etag
-                  :http-status status :local-effect 'unchanged
-                  :reason (if (and (integerp status) (<= 200 status 299))
-                              'current-etag-invalid 'member-http-error))))
+        (progn
+          (when (and (jaunder-reconcile-row-local row)
+                     (jaunder--operation-unresolved-create-path-p
+                      (jaunder-inventory-local-path (jaunder-reconcile-row-local row))))
+            (error "jaunder: Post create identity is unresolved"))
+          (let* ((response (jaunder--http-request
+                            "GET" (jaunder-inventory-member-edit-uri member)))
+                 (status (plist-get response :status))
+                 (etag (jaunder--response-header response "ETag")))
+            (if (and (integerp status) (<= 200 status 299)
+                     (jaunder--strong-etag-p etag))
+                (list :post-id id :slug slug :etag etag :http-status status)
+              (list :outcome 'blocked :post-id id :slug slug :etag etag
+                    :http-status status :local-effect 'unchanged
+                    :reason (if (and (integerp status) (<= 200 status 299))
+                                'current-etag-invalid 'member-http-error)))))
       (error (list :outcome 'blocked :post-id id :slug slug
                    :local-effect 'unchanged :reason 'member-transport-error
                    :detail (error-message-string err))))))
@@ -864,22 +875,34 @@ Return a plist suitable for a terminal result; no DELETE is sent here."
                                            (if preflight
                                                (jaunder--reconcile-blocked row preflight)
                                              (condition-case err
-                                                 (let* ((response (jaunder--http-request
+                                                 (let* ((response (jaunder--operation-send-post-write
                                                                    "DELETE" (jaunder--member-url id) nil nil
                                                                    (list (cons "If-Match" etag))) )
                                                         (status (plist-get response :status)))
                                                    (if (eq status 204)
                                                        (let ((local (jaunder--reconcile-delete-local-file row)))
-                                                         (list :outcome 'success :post-id id :slug slug :etag etag
+                                                         (list :outcome (if (and (eq (jaunder--operation-write-phase) 'confirmed)
+                                                                                 (eq (plist-get local :local-effect) 'preserved))
+                                                                            'partial 'success)
+                                                               :post-id id :slug slug :etag etag
                                                                :http-status status
                                                                :local-effect (plist-get local :local-effect)
                                                                :reason (plist-get local :reason)))
-                                                     (list :outcome 'failed :post-id id :slug slug :etag etag
+                                                     (list :outcome (pcase (jaunder--operation-write-phase)
+                                                                      ('unknown 'unknown) ('confirmed 'partial) (_ 'failed))
+                                                           :post-id id :slug slug :etag etag
                                                            :http-status status :local-effect 'unchanged
-                                                           :reason (if (eq status 412) 'etag-stale 'delete-http-error))))
-                                               (error (list :outcome 'failed :post-id id :slug slug :etag etag
-                                                            :local-effect 'unchanged :reason 'delete-transport-error
-                                                            :detail (error-message-string err))))))))))
+                                                           :reason (if (eq (jaunder--operation-write-phase) 'unknown)
+                                                                       'remote-outcome-unknown
+                                                                     (if (eq status 412) 'etag-stale 'delete-http-error))
+                                                           :detail (when (eq (jaunder--operation-write-phase) 'unknown)
+                                                                     (format "DELETE outcome unknown (HTTP %s); reconcile before retrying" status)))))
+                                               (error (if (memq (jaunder--operation-write-phase) '(confirmed unknown))
+                                                          (append (jaunder--operation-write-failure err)
+                                                                  (list :slug slug :etag etag))
+                                                        (list :outcome 'failed :post-id id :slug slug :etag etag
+                                                              :local-effect 'unchanged :reason 'delete-transport-error
+                                                              :detail (error-message-string err)))))))))))
 
 (defun jaunder--reconcile-pull-destination (_row slug)
   "Return the report root's canonical direct-root destination for server SLUG."
@@ -1283,8 +1306,11 @@ remote strong-ETag revalidation, one local preflight, then replacement."
         (buffer (current-buffer)))
     (unless rows (user-error "No reconciliation rows selected"))
     (when (jaunder--reconcile-confirm "Push %d selected Post(s)? " (length rows))
-      (jaunder--reconcile-execute-batch buffer rows 'push
-                                        #'jaunder--reconcile-push-row))))
+      (jaunder--call-with-blog
+       (jaunder-reconcile-report-root jaunder-reconcile-report)
+       (lambda ()
+         (jaunder--reconcile-execute-batch buffer rows 'push
+                                           #'jaunder--reconcile-push-row))))))
 
 (defun jaunder-reconcile-pull-selected ()
   "Explicitly pull selected safe rows after one preview confirmation."
@@ -1316,14 +1342,22 @@ bound during preparation; never install a Post before the PUT."
          (status (plist-get received :status)))
     (cond
      (lost
-      (list :outcome 'unknown :post-id (jaunder--reconcile-row-post-id row)
-            :slug (jaunder--reconcile-row-slug row) :etag etag
-            :local-effect 'unchanged :reason 'remote-outcome-unknown
-            :detail (format "PUT response lost; reconcile before retrying: %s"
-                            (error-message-string lost))))
+      (if (eq (jaunder--operation-write-phase) 'confirmed)
+          (append (jaunder--operation-write-failure lost)
+                  (list :slug (jaunder--reconcile-row-slug row) :etag etag))
+        (list :outcome 'unknown :post-id (jaunder--reconcile-row-post-id row)
+              :slug (jaunder--reconcile-row-slug row) :etag etag
+              :local-effect 'unchanged :reason 'remote-outcome-unknown
+              :detail (format "PUT response lost; reconcile before retrying: %s"
+                              (error-message-string lost)))))
      ((eq status 412)
       (append (jaunder--reconcile-blocked row 'etag-stale)
               (list :etag etag :http-status status)))
+     ((eq (jaunder--operation-write-phase) 'unknown)
+      (list :outcome 'unknown :post-id (jaunder--reconcile-row-post-id row)
+            :slug (jaunder--reconcile-row-slug row) :etag etag
+            :http-status status :local-effect 'unchanged :reason 'remote-outcome-unknown
+            :detail "PUT outcome unknown; reconcile before retrying"))
      ((not (memq status '(200 201)))
       (list :outcome 'failed :post-id (jaunder--reconcile-row-post-id row)
             :slug (jaunder--reconcile-row-slug row) :etag etag

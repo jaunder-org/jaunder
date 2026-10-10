@@ -838,7 +838,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
 
 (ert-deftest jaunder-reconcile-batch-records-progress-complete-results-and-order ()
   "The shared executor records one complete terminal result per displayed row."
-  (let* ((rows (list (jaunder--make-reconcile-row :state 'local-draft :key "one")
+  (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+         (jaunder-blogs '(("/tmp/" :base-url "https://example.test" :username "alice")))
+         (rows (list (jaunder--make-reconcile-row :state 'local-draft :key "one")
                      (jaunder--make-reconcile-row :state 'local-ahead :key "two")))
          (report (jaunder--make-reconcile-report :root "/tmp" :rows rows))
          (buffer (jaunder--render-reconcile-report report))
@@ -876,7 +878,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
 
 (ert-deftest jaunder-reconcile-batch-renders-failure-after-refresh-and-omits-delete-sync ()
   "A refreshed report retains failed terminal results and delete has no sync time."
-  (let* ((row (jaunder--make-reconcile-row :state 'server-only :key "post:7"))
+  (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+         (jaunder-blogs '(("/tmp/" :base-url "https://example.test" :username "alice")))
+         (row (jaunder--make-reconcile-row :state 'server-only :key "post:7"))
          (report (jaunder--make-reconcile-report :root "/tmp" :rows (list row)))
          (buffer (jaunder--render-reconcile-report report)))
     (unwind-protect
@@ -899,7 +903,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
 
 (ert-deftest jaunder-reconcile-batch-cancels-between-items-and-refreshes ()
   "Cancellation retains completed results and does not invoke the next operation."
-  (let* ((rows (cl-loop for index below 3
+  (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+         (jaunder-blogs '(("/tmp/" :base-url "https://example.test" :username "alice")))
+         (rows (cl-loop for index below 3
                         collect (jaunder--make-reconcile-row
                                  :state 'local-draft :key (number-to-string index))))
          (buffer (jaunder--render-reconcile-report
@@ -922,7 +928,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
 
 (ert-deftest jaunder-reconcile-batch-executes-one-thousand-items-sequentially ()
   "A large batch stays ordered, single-flight, and continues after one failure."
-  (let* ((rows (cl-loop for index below 1000
+  (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+         (jaunder-blogs '(("/tmp/" :base-url "https://example.test" :username "alice")))
+         (rows (cl-loop for index below 1000
                         collect (jaunder--make-reconcile-row
                                  :state 'local-draft :key (format "post:%04d" index))))
          (buffer (jaunder--render-reconcile-report
@@ -978,7 +986,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
 
 (ert-deftest jaunder-reconcile-rendering-and-selection-use-one-displayed-order ()
   "Interleaved inventory rows resolve and execute in the rendered section order."
-  (let* ((local-ahead (jaunder--make-reconcile-row :state 'local-ahead :key "ahead"))
+  (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+         (jaunder-blogs '(("/tmp/" :base-url "https://example.test" :username "alice")))
+         (local-ahead (jaunder--make-reconcile-row :state 'local-ahead :key "ahead"))
          (server-only (jaunder--make-reconcile-row :state 'server-only :key "server"))
          (conflict (jaunder--make-reconcile-row :state 'conflict :key "conflict"))
          (draft (jaunder--make-reconcile-row :state 'local-draft :key "draft"))
@@ -1034,7 +1044,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
 
 (ert-deftest jaunder-reconcile-batch-cancellation-is-sticky-and-clears-quit-before-refresh ()
   "One-shot cancellation and a final-operation quit stop after the completed row."
-  (let* ((rows (list (jaunder--make-reconcile-row :state 'local-draft :key "one")
+  (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+         (jaunder-blogs '(("/tmp/" :base-url "https://example.test" :username "alice")))
+         (rows (list (jaunder--make-reconcile-row :state 'local-draft :key "one")
                      (jaunder--make-reconcile-row :state 'local-draft :key "two")))
          (buffer (jaunder--render-reconcile-report
                   (jaunder--make-reconcile-report :root "/tmp" :rows rows)))
@@ -1066,7 +1078,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
 
 (ert-deftest jaunder-reconcile-batches-replace-summaries-and-append-before-next-item ()
   "The next batch replaces its summary and each next operation sees prior results."
-  (let* ((first (jaunder--make-reconcile-row :state 'local-draft :key "one"))
+  (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+         (jaunder-blogs '(("/tmp/" :base-url "https://example.test" :username "alice")))
+         (first (jaunder--make-reconcile-row :state 'local-draft :key "one"))
          (second (jaunder--make-reconcile-row :state 'local-draft :key "two"))
          (report (jaunder--make-reconcile-report :root "/tmp" :rows (list first second)))
          (buffer (jaunder--render-reconcile-report report))
@@ -2519,7 +2533,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
 
 (ert-deftest jaunder-reconcile-conflict-results-survive-failed-report-refresh ()
   "Unknown and partial terminal results stay ordered and visible on refresh failure."
-  (let* ((rows (list (jaunder--make-reconcile-row :state 'conflict :key "post:1"
+  (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+         (jaunder-blogs '(("/tmp/" :base-url "https://example.test" :username "alice")))
+         (rows (list (jaunder--make-reconcile-row :state 'conflict :key "post:1"
                                                   :member (jaunder-reconcile-test--member "1" "one"))
                      (jaunder--make-reconcile-row :state 'conflict :key "post:2"
                                                   :member (jaunder-reconcile-test--member "2" "two"))))
@@ -3367,7 +3383,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
 
 (ert-deftest jaunder-reconcile-batch-honors-cancellation-before-an-operation ()
   "Cancellation records no operation and leaves a visible empty batch result."
-  (let* ((row (jaunder--make-reconcile-row :state 'local-draft :key "local:draft"))
+  (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+         (jaunder-blogs '(("/tmp/" :base-url "https://example.test" :username "alice")))
+         (row (jaunder--make-reconcile-row :state 'local-draft :key "local:draft"))
          (report (jaunder--make-reconcile-report :root "/tmp" :rows (list row)))
          (buffer (jaunder--render-reconcile-report report))
          called)
@@ -3576,7 +3594,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
 
 (ert-deftest jaunder-reconcile-delete-selected-records-preflight-and-ineligible-reviews ()
   "Review blocks become ordered terminal results without any remote mutation."
-  (let* ((safe (jaunder--make-reconcile-row :state 'server-only :key "post:7"
+  (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+         (jaunder-blogs '(("/tmp/" :base-url "https://example.test" :username "alice")))
+         (safe (jaunder--make-reconcile-row :state 'server-only :key "post:7"
                                             :member (jaunder-reconcile-test--member "7" "post")))
          (unsafe (jaunder--make-reconcile-row :state 'conflict :key "conflict:7"))
          (buffer (jaunder--render-reconcile-report
