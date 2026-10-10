@@ -1560,6 +1560,112 @@ async fn create_normalizes_spaced_category_beside_a_valid_one(#[case] backend: B
     );
 }
 
+/// The repair client replaces only categories in a fresh Member GET. Both
+/// dialects must retain even a collision-allocated published/scheduled slug.
+#[apply(backends)]
+#[tokio::test]
+async fn category_only_fresh_member_replacement_preserves_frozen_post(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, &env.base);
+    let viewer = ViewerIdentity::local(session.user_id);
+    for (index, published) in ["2024-01-02T03:04:05Z", "2099-01-02T03:04:05Z"]
+        .into_iter()
+        .enumerate()
+    {
+        let xml = format!(
+            r#"<entry xmlns="http://www.w3.org/2005/Atom" xmlns:j="https://jaunder.org/ns/atompub"><title>Repair collision</title><content type="text/org">Remote sentinel &lt;xml&gt; &amp; body.</content><summary>Server summary</summary><published>{published}</published><j:audience>private</j:audience><category term="RUST"/></entry>"#
+        );
+        let first = app
+            .clone()
+            .oneshot(atompub_post_xml(&session, "posts", &xml))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::CREATED);
+        let created = app
+            .clone()
+            .oneshot(atompub_post_xml(&session, "posts", &xml))
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let location = atompub_location(
+            created
+                .headers()
+                .get(header::LOCATION)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+        );
+        let post_id = PostId::from(location_post_id(&created));
+        let path = format!("posts/{post_id}");
+        let before = env
+            .posts()
+            .get_post_by_id(post_id, &viewer)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            before.slug.as_ref(),
+            format!("repair-collision-{}", index * 2 + 1)
+        );
+        let audiences = env.posts().get_post_audiences(post_id).await.unwrap();
+        let get = app
+            .clone()
+            .oneshot(atompub_get(&session, &path))
+            .await
+            .unwrap();
+        let etag = etag_of(&get);
+        let member = body_string(get).await;
+        let replacement = member.replace("</entry>", "<category term=\"100 bullets\"/></entry>");
+        let put = app
+            .clone()
+            .oneshot(
+                atompub_at(&session, Method::PUT, &location)
+                    .header(header::CONTENT_TYPE, "application/atom+xml")
+                    .header(header::IF_MATCH, etag)
+                    .body(Body::from(replacement))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(put.status(), StatusCode::OK);
+        let after = env
+            .posts()
+            .get_post_by_id(post_id, &viewer)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.post_id, before.post_id);
+        assert_eq!(after.user_id, before.user_id);
+        assert_eq!(after.title, before.title);
+        assert_eq!(after.body, before.body);
+        assert_eq!(after.format, before.format);
+        assert_eq!(after.summary, before.summary);
+        assert_eq!(after.created_at, before.created_at);
+        assert_eq!(after.published_at, before.published_at);
+        assert_eq!(after.deleted_at, before.deleted_at);
+        assert_eq!(after.slug, before.slug);
+        assert_eq!(after.permalink(), before.permalink());
+        assert_eq!(
+            env.posts().get_post_audiences(post_id).await.unwrap(),
+            audiences
+        );
+        assert_eq!(
+            after
+                .tags
+                .iter()
+                .map(|tag| tag.tag_display.as_ref())
+                .collect::<Vec<_>>(),
+            ["100-bullets", "RUST"]
+        );
+    }
+}
+
 #[apply(backends)]
 #[tokio::test]
 async fn update_keeps_unchanged_category(#[case] backend: Backend) {

@@ -585,5 +585,23 @@
            ;; nevertheless fetch both the current Collection and Member.
            (when (eq change 'fresh) (should (= (length requests) 4)))))))))
 
+(ert-deftest jaunder-keyword-repair-preview-admits-server-published-control-omission ()
+  "Published and scheduled server output omits control, not lifecycle evidence."
+  (dolist (published '("2024-01-01T00:00:00Z" "2099-01-01T00:00:00Z" "" "invalid"))
+    (jaunder-keyword-repair-test--with-preview
+     "#+PROPERTY: JAUNDER_ID 42\n#+KEYWORDS: 100 bullets\n\nBody\n"
+     (replace-regexp-in-string
+      "<published>2026-01-01T00:00:00Z</published>"
+      (if (equal published "") "" (concat "<published>" published "</published>"))
+      (replace-regexp-in-string "<app:control><app:draft>no</app:draft></app:control>" ""
+                                (jaunder-keyword-repair-test--member)))
+     (let* ((report (jaunder-keyword-repair-preview root))
+            (row (car (plist-get (jaunder-keyword-repair-report-data report) :rows))))
+       (should (eq (plist-get row :status)
+                   (if (member published '("" "invalid")) 'blocked 'eligible)))
+       (unless (member published '("" "invalid"))
+         (should-not (string-match-p "app:control"
+                                     (jaunder--keyword-repair-payload member-xml (plist-get row :union)))))))))
+
 (provide 'jaunder-keyword-repair-test)
 ;;; jaunder-keyword-repair-test.el ends here

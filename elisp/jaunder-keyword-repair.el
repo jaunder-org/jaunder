@@ -137,19 +137,22 @@ labels, or substitute local source for an unrepresentable remote field."
             (jaunder--keyword-repair-reject 'unsupported-category-semantics)))))
     (let ((controls (jaunder--atom-direct-elements-in-namespace
                      dom 'control jaunder--app-ns namespaces)))
-      (unless (= (length controls) 1) (jaunder--keyword-repair-reject 'invalid-member-control))
-      (let* ((control (car controls))
-             (drafts (jaunder--atom-direct-elements-in-namespace
-                      control 'draft jaunder--app-ns
-                      (jaunder--atom-namespace-context control namespaces))))
-        (unless (and (= (length drafts) 1)
-                     (cl-every (lambda (child)
-                                 (or (eq child (car drafts))
-                                     (and (stringp child)
-                                          (string-match-p "\\`[ \t\r\n]*\\'" child))))
-                               (dom-children control))
-                     (cl-every #'stringp (dom-children (car drafts))))
-          (jaunder--keyword-repair-reject 'invalid-member-draft))))
+      ;; Published/scheduled server Members omit control.  The strict pull
+      ;; parser below still requires a valid published instant in that shape.
+      (when (> (length controls) 1) (jaunder--keyword-repair-reject 'invalid-member-control))
+      (when controls
+        (let* ((control (car controls))
+               (drafts (jaunder--atom-direct-elements-in-namespace
+                        control 'draft jaunder--app-ns
+                        (jaunder--atom-namespace-context control namespaces))))
+          (unless (and (= (length drafts) 1)
+                       (cl-every (lambda (child)
+                                   (or (eq child (car drafts))
+                                       (and (stringp child)
+                                            (string-match-p "\\`[ \t\r\n]*\\'" child))))
+                                 (dom-children control))
+                       (cl-every #'stringp (dom-children (car drafts))))
+            (jaunder--keyword-repair-reject 'invalid-member-draft)))))
     ;; An explicit audience is required: unknown legacy omission cannot prove
     ;; preservation of the current audience on a replacement.
     (jaunder--parse-pulled-member xml etag (current-time) "UTC" t)

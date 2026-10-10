@@ -58,7 +58,7 @@ Unicode tag expansion, new endpoints, schema changes, and reconciliation policy.
     dispatch with response loss, and no uncertain write automatically retries.
     Per-Post outcomes survive cancellation between Posts and failed later rows.
 
-- [ ] Task 4: Prove repair preserves newer remote Posts end to end.
+- [x] Task 4: Prove repair preserves newer remote Posts end to end.
   - Dependency: Task 3.
   - Contract: use the existing self-booting Emacs live integration harness and
     disposable synthetic Posts, never production data or credentials. Exercise
