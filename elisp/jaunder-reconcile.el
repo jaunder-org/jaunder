@@ -132,7 +132,8 @@ JAUNDER metadata is restored from the reviewed local Post on completion."
   (add-hook 'kill-buffer-hook #'jaunder--reconcile-merge-on-kill nil t))
 
 (define-derived-mode jaunder-reconcile-report-mode special-mode "Jaunder-Reconcile"
-  "Major mode for selecting rows in a Jaunder reconciliation report."
+  "Major mode for a Jaunder reconciliation report.
+Mark rows or select a region for bulk actions; `e' merges the row at point."
   (setq-local truncate-lines t)
   (define-key jaunder-reconcile-report-mode-map "m" #'jaunder-reconcile-toggle-mark)
   (define-key jaunder-reconcile-report-mode-map "p" #'jaunder-reconcile-push-selected)
@@ -1659,18 +1660,18 @@ same buffer; no local Post file is associated with that buffer."
           (kill-buffer result))))))
 
 (defun jaunder-reconcile-merge-selected ()
-  "Stage exactly one reviewed conflict and open a two-way Ediff merge.
+  "Stage the reviewed conflict at point and open a two-way Ediff merge.
+Marks and the active region do not affect which Post is merged.
 Ediff's actual merge output is the independent editable Org scratch; copy
 operations write there, never to either Post.  `C-c C-c' explicitly finishes."
   (interactive)
   (jaunder--with-debug-operation "conflict.merge" nil
-                                 (let* ((rows (jaunder-reconcile-selected-rows))
+                                 (let* ((row (get-text-property (point) 'jaunder-reconcile-row))
                                         (report-buffer (current-buffer))
                                         (root (jaunder-reconcile-report-root jaunder-reconcile-report)))
-                                   (unless (= (length rows) 1)
-                                     (user-error "Select exactly one conflict row for Ediff"))
-                                   (let* ((row (car rows))
-                                          (name (jaunder--reconcile-merge-scratch-name row root)))
+                                   (unless row
+                                     (user-error "Move point to a conflict row for Ediff"))
+                                   (let ((name (jaunder--reconcile-merge-scratch-name row root)))
                                      (when (get-buffer name)
                                        (user-error "Merge scratch %s already exists; finish or discard it first" name))
                                      (jaunder--call-with-blog

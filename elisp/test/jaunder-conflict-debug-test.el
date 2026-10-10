@@ -126,7 +126,7 @@ live-network claims. The shared checker independently verifies graph topology."
   "All command/callback owners preserve exact native conditions, without payloads."
   (dolist (case '((jaunder-reconcile-keep-local-selected jaunder-reconcile-selected-rows "conflict.local")
                   (jaunder-reconcile-keep-remote-selected jaunder-reconcile-selected-rows "conflict.remote")
-                  (jaunder-reconcile-merge-selected jaunder-reconcile-selected-rows "conflict.merge")
+                  (jaunder-reconcile-merge-selected get-text-property "conflict.merge")
                   (jaunder--reconcile-merge-stage jaunder--reconcile-conflict-preflight "merge.stage")
                   (jaunder-reconcile-merge-finish y-or-n-p "merge.finish")
                   (jaunder-reconcile-merge-cancel message "merge.cancel")
