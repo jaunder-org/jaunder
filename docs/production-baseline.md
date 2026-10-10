@@ -53,17 +53,18 @@ production, #1419 release-candidate or milestone acceptance.
 The host xtask resolves commits to immutable flake references and alone invokes
 Nix and manages lifecycle. Nix compiles the host tool but never invokes its
 orchestrator. Qualification admits and roots the selected graph before lifecycle
-effects. Playwright runs from a private writable copy of the selected browser
-package, using that copy's CLI and imports with pinned Node/browser binaries;
-the seed bridge's interpreter is the selected store Node. Source cleanliness and
-revision are rechecked around execution and publication. Each operation
-initializes fresh persistent SQLite and PostgreSQL source VMs. The harness
-supplies each VM's immutable package through the qualification-only internal
-`productionBaselineVm` construction seam; ADR-0142's supported module options
-remain unchanged. Source state is never live operator data. An external Caddy
-proxy terminates local TLS and keeps one stable `https://localhost:8443`
-browser/protocol origin while it switches among source and fresh restore
-targets. HTTP redirects to that origin.
+effects. Standard Nix GC roots protect that graph throughout execution and any
+retained lifecycle workspace; there is no checkout-local executable cache.
+Playwright runs from a private writable copy of the selected browser package,
+using that copy's CLI and imports with pinned Node/browser binaries; the seed
+bridge's interpreter is the selected store Node. Source cleanliness and revision
+are rechecked around execution and publication. Each operation initializes fresh
+persistent SQLite and PostgreSQL source VMs. The harness supplies each VM's
+immutable package through the qualification-only internal `productionBaselineVm`
+construction seam; ADR-0142's supported module options remain unchanged. Source
+state is never live operator data. An external Caddy proxy terminates local TLS
+and keeps one stable `https://localhost:8443` browser/protocol origin while it
+switches among source and fresh restore targets. HTTP redirects to that origin.
 
 Discovery restarts and reboots each source, then makes one same-schema backup
 and restores every SQLite/PostgreSQL source-to-target direction. Acceptance
