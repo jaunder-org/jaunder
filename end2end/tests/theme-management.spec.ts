@@ -51,6 +51,7 @@ test("theme management mounts as Studio without a public theme stylesheet", asyn
     "href",
     "https://github.com/jaunder-org/jaunder/blob/main/docs/themes.md",
   );
+  await expect(guide).toHaveAttribute("target", "_blank");
   await expect(
     page.getByText(
       "No themes in this catalog yet. Create a draft or import a package to start authoring.",
@@ -68,7 +69,54 @@ test("theme management mounts as Studio without a public theme stylesheet", asyn
   await expect(page.locator("link[data-jaunder-theme-stylesheet]")).toHaveCount(
     0,
   );
-  await expectAccessible(page);
+  for (const viewport of [
+    { width: 1280, height: 800 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const guidance = page.getByRole("region", {
+      name: "Author themes from a repository",
+    });
+    const scope = page.getByRole("region", { name: "Catalog scope" });
+    const guidanceBox = await guidance.boundingBox();
+    const scopeBox = await scope.boundingBox();
+    const scopeHeadingBox = await scope.getByRole("heading").boundingBox();
+    const scopeButtonBox = await scope
+      .getByRole("button", { name: "Author catalog", exact: true })
+      .boundingBox();
+    expect(guidanceBox).not.toBeNull();
+    expect(scopeBox).not.toBeNull();
+    expect(scopeHeadingBox).not.toBeNull();
+    expect(scopeButtonBox).not.toBeNull();
+    const headingInset = scopeHeadingBox!.x - scopeBox!.x;
+    const bodyInset = scopeButtonBox!.x - scopeBox!.x;
+    expect(headingInset).toBeGreaterThan(0);
+    expect(bodyInset).toBeGreaterThan(0);
+
+    for (const [content, inset] of [
+      [guidance.getByRole("heading"), headingInset],
+      [guidance.locator("p"), headingInset],
+      [guide, bodyInset],
+    ] as const) {
+      await expect(content).toBeVisible();
+      const contentBox = await content.boundingBox();
+      expect(contentBox).not.toBeNull();
+      expect(contentBox!.x - guidanceBox!.x).toBeCloseTo(inset, 0);
+      expect(contentBox!.y).toBeGreaterThan(guidanceBox!.y);
+      expect(contentBox!.x + contentBox!.width).toBeLessThanOrEqual(
+        guidanceBox!.x + guidanceBox!.width - inset,
+      );
+      expect(contentBox!.y + contentBox!.height).toBeLessThan(
+        guidanceBox!.y + guidanceBox!.height,
+      );
+    }
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+    await expectAccessible(page);
+  }
 });
 
 test("theme catalog loading does not offer the empty-catalog next action", async ({
