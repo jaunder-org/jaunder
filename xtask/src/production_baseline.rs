@@ -856,7 +856,7 @@ fn validate_harness(
     let seeded_manifest = manifest_identity(
         output.join("seed-manifest-source"),
         "seeded",
-        "pub fn sandbox_profile_manifest",
+        "fn standard_profile_manifest",
     )?;
     let operation_manifest = manifest_identity(
         output.join("browser/tests/production-baseline.ts"),
@@ -1942,7 +1942,7 @@ mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             let contents = match relative {
                 "test-support/src/lib.rs" => {
-                    "pub fn sandbox_profile_manifest() {\nSandboxSeedManifest {\nversion: 1,\n}\n}\n"
+                    "fn standard_profile_manifest() {\nSandboxSeedManifest {\nversion: 1,\n}\n}\n"
                 }
                 "end2end/tests/production-baseline.ts" => {
                     "export const OPERATION_MANIFEST = {\nversion: 1,\n};\n"
@@ -2006,6 +2006,21 @@ mod tests {
         let mut refused = binaries(repo.path());
         refused.refused = true;
         assert!(validate_harness(&repository, &refused).is_err());
+    }
+
+    #[test]
+    fn harness_admission_reads_the_real_standard_seed_manifest_authority() {
+        let repo = repo();
+        fs::write(
+            repo.path().join("test-support/src/lib.rs"),
+            include_bytes!("../../test-support/src/lib.rs"),
+        )
+        .unwrap();
+        git(repo.path(), &["add", "test-support/src/lib.rs"]);
+        git(repo.path(), &["commit", "-m", "real helper manifest"]);
+        let repository = GitRepository::new(repo.path().to_path_buf());
+        let admitted = validate_harness(&repository, &binaries(repo.path())).unwrap();
+        assert_eq!(admitted.seeded_manifest.version, 2);
     }
 
     #[test]
