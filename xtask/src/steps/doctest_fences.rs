@@ -1,13 +1,14 @@
 //! The `doctest-fences` gate: the half of the doctest population that lives
-//! outside every Nix check (#763).
+//! outside the root-workspace Nix doctest execution (#763).
 //!
 //! `xtask/` is excluded from the flake `src` filter (`nix/packages.nix`'s `cleanSourceWith`
 //! drops `/xtask/`) and `tools/` is a separate virtual workspace, so the `doctests`
 //! derivation's `cargo test --workspace --doc` reaches neither. This step runs each
-//! one's doctests directly and reconciles them against the same scanner.
+//! one's doctests directly, along with the excluded maintained local dependency,
+//! and reconciles them against the same scanner.
 //!
 //! `host_tests` covers the auxiliary workspaces' library, binary, and integration
-//! targets without `--doc`; this step owns their two captured doctest executions
+//! targets without `--doc`; this step owns the captured host doctest executions
 //! and all reconciliation. Like `host_tests` it runs in **every** mode — `--no-test`
 //! skips only the Nix half. That asymmetry is deliberate: this half needs no Nix
 //! build, so there is nothing to skip.
@@ -538,17 +539,18 @@ mod tests {
     }
 
     #[test]
-    fn host_doctest_commands_are_exactly_one_per_auxiliary_workspace() {
+    fn host_doctest_commands_are_exactly_one_per_declared_host_root() {
         let manifests = [
             Path::new("/repo/xtask/Cargo.toml"),
             Path::new("/repo/tools/Cargo.toml"),
+            Path::new("/repo/third-party/little-exif/Cargo.toml"),
         ];
         let commands: Vec<Vec<String>> = manifests
             .iter()
             .map(|manifest| doctest_args(manifest))
             .collect();
 
-        assert_eq!(commands.len(), 2);
+        assert_eq!(commands.len(), 3);
         assert!(
             commands
                 .iter()
@@ -559,7 +561,11 @@ mod tests {
                 .iter()
                 .map(|args| args[2].as_str())
                 .collect::<Vec<_>>(),
-            ["/repo/xtask/Cargo.toml", "/repo/tools/Cargo.toml"]
+            [
+                "/repo/xtask/Cargo.toml",
+                "/repo/tools/Cargo.toml",
+                "/repo/third-party/little-exif/Cargo.toml"
+            ]
         );
     }
 
@@ -570,6 +576,12 @@ mod tests {
         commit(&repo, "xtask/src/lib.rs", "");
         commit(&repo, "tools/Cargo.toml", "[workspace]\n");
         commit(&repo, "tools/devtool/src/lib.rs", "");
+        commit(
+            &repo,
+            "third-party/little-exif/Cargo.toml",
+            "[package]\nname = \"little_exif\"\nversion = \"0.6.23\"\n",
+        );
+        commit(&repo, "third-party/little-exif/src/lib.rs", "");
 
         let (top, roots) = host_roots(&repo.join("xtask/src")).expect("resolve fixture top");
 
@@ -577,7 +589,7 @@ mod tests {
             std::fs::canonicalize(&top).expect("canonical top"),
             std::fs::canonicalize(&repo).expect("canonical fixture root")
         );
-        assert_eq!(roots.len(), 2);
+        assert_eq!(roots.len(), 3);
         assert_eq!(
             std::fs::read_to_string(roots[0].source.join("src/lib.rs")).expect("absolute source"),
             ""

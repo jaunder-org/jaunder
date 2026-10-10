@@ -90,6 +90,12 @@ wuff = "=0.2.9"
 lightningcss = { version = "=1.0.0-alpha.72", default-features = false, features = ["serde", "visitor"] }
 rustix.workspace = true
 mp4parse = "=0.17.0"
+# Linked native metadata editing; the narrow HEIF extent patch is maintained
+# locally with the upstream notices (third-party/little-exif/JAUNDER.md).
+exiftool-rs = "=0.9.0"
+img-parts = "=0.4.0"
+gif = "=0.14.2"
+little_exif = { version = "=0.6.23", path = "../third-party/little-exif" }
 webauthn-rs.workspace = true
 url.workspace = true
 

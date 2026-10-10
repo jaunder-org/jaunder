@@ -1,5 +1,8 @@
 //! Private, conventional metadata editing for covered raster uploads.
 
+pub mod native;
+mod native_kernel;
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
