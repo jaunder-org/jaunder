@@ -562,7 +562,10 @@ A dedicated narrow `ammonia` policy retains only its safe inline tags without
 attributes and removes active or embedded content; it does not synthesize image
 alternatives or block-wrapper spacing. A source with no surviving visible text
 retains an empty persisted fragment and presents no web, RSS, or JSON Feed title
-rather than leaking authored markup. Host ammonia validates persisted bytes
+rather than leaking authored markup. When a Post has no visible title but has a
+permalink, shared web article rendering shows a `#` link named `Permalink` in
+the title position. It is a navigation affordance, not a source or persisted
+title; Posts without a permalink omit it. Host ammonia validates persisted bytes
 before typed database reads; invalid restored bytes remain diagnostic source
 data but fail those reads before any unescaped sink. Server-authored DTO bytes
 are trusted by CSR exactly like `RenderedHtml`, so browser clients do not ship a

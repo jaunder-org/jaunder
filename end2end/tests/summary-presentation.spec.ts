@@ -140,7 +140,12 @@ test("Post summaries retain deck hierarchy across public routes and content stat
           const titlelessPost = publicPage.locator(POST_HOOK).filter({
             hasText: "Titleless body prose.",
           });
-          await expect(titlelessPost.locator(TITLE_HOOK)).toHaveCount(0);
+          await expect(
+            titlelessPost.locator(TITLE_HOOK).getByRole("link", {
+              name: "Permalink",
+              exact: true,
+            }),
+          ).toHaveText("#");
           await expect(titlelessPost.locator(SUMMARY_HOOK)).toHaveText(
             "The titleless summary keeps the same semantic deck role.",
           );
