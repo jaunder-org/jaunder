@@ -128,6 +128,30 @@
      (should (eq (plist-get (car (plist-get (jaunder-keyword-repair-report-data
                                              (jaunder-keyword-repair-preview root)) :rows)) :status) 'blocked)))))
 
+(ert-deftest jaunder-keyword-repair-report-data-detaches-long-and-dotted-lists ()
+  "Inspection copies retain shape without stack growth along label lists."
+  (require 'jaunder-keyword-repair)
+  (let* ((labels (mapcar (lambda (n) (format "tag-%d" n)) (number-sequence 1 1024)))
+         (pair (cons (copy-sequence "name") (copy-sequence "value")))
+         (data (list :rows (list (list :existing-labels labels :detail pair))))
+         (report (jaunder--make-keyword-repair-report :data data))
+         (copy (jaunder-keyword-repair-report-data report))
+         (row (car (plist-get copy :rows)))
+         (copied-labels (plist-get row :existing-labels))
+         (copied-pair (plist-get row :detail)))
+    (should (equal copy data))
+    (should-not (eq copied-labels labels))
+    (dolist (index '(0 255 1023))
+      (should-not (eq (nth index copied-labels) (nth index labels)))
+      (aset (nth index copied-labels) 0 ?X)
+      (should (= (aref (nth index labels) 0) ?t)))
+    (should-not (eq copied-pair pair))
+    (aset (car copied-pair) 0 ?X)
+    (aset (cdr copied-pair) 0 ?X)
+    (should (equal pair '("name" . "value")))
+    (setcar copied-labels "replacement")
+    (should (equal (car labels) "tag-1"))))
+
 (ert-deftest jaunder-keyword-repair-preview-blocks-local-remote-and-cap ()
   (require 'jaunder-keyword-repair)
   (dolist (case '(invalid-term missing-id duplicate-id duplicate-local duplicate-remote missing-remote

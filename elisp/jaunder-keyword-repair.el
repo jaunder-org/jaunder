@@ -68,10 +68,16 @@ its sensitive data in ordinary `error-message-string' or telemetry output."
   (data nil :read-only t))
 
 (defun jaunder--keyword-repair-copy (value)
-  "Deep-copy inspection VALUE, including all strings."
+  "Deep-copy inspection VALUE, including all strings.
+Traverse list spines iteratively so complete label inventories do not consume
+one stack frame per cons; recurse only into nested values and dotted tails."
   (cond ((stringp value) (copy-sequence value))
-        ((consp value) (cons (jaunder--keyword-repair-copy (car value))
-                             (jaunder--keyword-repair-copy (cdr value))))
+        ((consp value)
+         (let (items)
+           (while (consp value)
+             (push (jaunder--keyword-repair-copy (car value)) items)
+             (setq value (cdr value)))
+           (nconc (nreverse items) (jaunder--keyword-repair-copy value))))
         (t value)))
 
 (defun jaunder-keyword-repair-report-data (report)
