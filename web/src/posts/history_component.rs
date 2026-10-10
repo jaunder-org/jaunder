@@ -304,7 +304,7 @@ fn history_row(revision: RevisionHistoryMetadata) -> impl IntoView {
                 <span class="j-count">{slug}</span>
             </td>
             <td>
-                <a href=post_href>{format!("Post {post_id}")}</a>
+                <a href=post_href>{post_id.to_string()}</a>
             </td>
             <td>{captured_at}</td>
             <td>{snapshot_lifecycle}</td>
