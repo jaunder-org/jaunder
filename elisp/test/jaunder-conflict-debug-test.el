@@ -50,8 +50,9 @@ live-network claims. The shared checker independently verifies graph topology."
   (dolist (case '((jaunder-reconcile-keep-local-selected . "conflict.local")
                   (jaunder-reconcile-keep-remote-selected . "conflict.remote")))
     (jaunder-debug-boundary--with-session
-     (let* ((row (jaunder--make-reconcile-row :state 'orphan :key "private-command-row"))
-            (report (jaunder--make-reconcile-report :root "/private-root" :rows (list row)))
+     (let* ((jaunder-blogs '(("/private-root/" :base-url "https://example.test" :username "alice")))
+            (row (jaunder--make-reconcile-row :state 'orphan :key "private-command-row"))
+            (report (jaunder--make-reconcile-report :root "/private-root/" :rows (list row)))
             (buffer (generate-new-buffer " *owned command report*")))
        (unwind-protect
            (with-current-buffer buffer
@@ -59,7 +60,6 @@ live-network claims. The shared checker independently verifies graph topology."
              (puthash (jaunder-reconcile-row-key row) t jaunder-reconcile-marks)
              (setq jaunder-debug t)
              (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
-                       ((symbol-function 'jaunder--call-with-blog) (lambda (_ thunk) (funcall thunk)))
                        ((symbol-function 'jaunder--reconcile-refresh-buffer)
                         (lambda (target) (jaunder--render-reconcile-report report target))))
                (should (eq (funcall (car case)) 'completed)))

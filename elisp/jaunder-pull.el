@@ -9,6 +9,8 @@
 
 ;;; Code:
 
+(require 'jaunder-reconcile-operation)
+
 (require 'cl-lib)
 (require 'dom)
 (require 'url-parse)
@@ -24,10 +26,6 @@
 
 (defvar jaunder--pull-link-inventory nil
   "Optional inventory evidence supplied by a reconciliation pull staging run.")
-
-(defvar jaunder--pull-link-inventory-provider nil
-  "Optional function returning current-local and batch-remote proof for a root.
-Reconciliation batches supply this only while executing their selected rows.")
 
 (defvar jaunder--pull-original-proof nil
   "Optional matched-local Media evidence supplied by reconciliation staging.")
@@ -377,8 +375,8 @@ creation, which is atomic and fails if another directory entry won the race."
 When ORIGINAL-PROOF is non-nil, retain its verified Media stage for the matched
 consumer's final original-file revalidation.  Ordinary server-only callers
 finalize Local Media Copies here.  The caller owns the final destination safety
-check and installation.  `jaunder--pull-link-inventory-provider' supplies fresh
-local and shared remote batch proof when bound.  Otherwise staging uses supplied
+check and installation.  An operation supplies current local and shared remote
+proof when scoped.  Otherwise staging uses supplied
 `jaunder--pull-link-inventory' evidence or acquires complete evidence itself."
   (jaunder--with-debug-operation "pull.stage" ()
 				 (unless (jaunder-inventory-member-p member)
@@ -406,18 +404,18 @@ local and shared remote batch proof when bound.  Otherwise staging uses supplied
 									   (jaunder--current-zone-name)
 									   audience-capable))
 					    (source-body (jaunder-pulled-member-body pulled-member))
-					    (inventory (and (equal (jaunder-pulled-member-format pulled-member) "org")
-							    (let ((case-fold-search t))
-							      (string-match-p "\\[\\[https?:" source-body))
-                                                            (if jaunder--pull-link-inventory-provider
-                                                                (funcall jaunder--pull-link-inventory-provider root)
-                                                              (or jaunder--pull-link-inventory
-                                                                  (jaunder--inventory-for-root root)))))
-					    (evidence (and inventory
-							   (jaunder--inventory-post-link-evidence inventory)))
+                                            (evidence
+                                             (when (and (equal (jaunder-pulled-member-format pulled-member) "org")
+                                                        (let ((case-fold-search t))
+                                                          (string-match-p "\\[\\[https?:" source-body)))
+                                               (if (jaunder--operation-active-p)
+                                                   (jaunder--operation-post-link-evidence root)
+                                                 (jaunder--inventory-post-link-evidence
+                                                  (or jaunder--pull-link-inventory
+                                                      (jaunder--inventory-for-root root))))))
 					    (members (car evidence))
 					    (locals (cadr evidence))
-					    (body (if inventory
+					    (body (if evidence
 						      (jaunder--reverse-pulled-post-links source-body root members locals)
 						    source-body))
 					    (plan (jaunder--pull-media-plan

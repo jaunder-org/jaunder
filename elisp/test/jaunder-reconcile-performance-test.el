@@ -82,12 +82,11 @@
               (jaunder--call-with-blog
                root
                (lambda ()
-                 (let ((jaunder--reconcile-batch-members
-                        (list :state 'unacquired :root root
-                              :base-url (jaunder--active-base-url)
-                              :username (jaunder--active-username))))
-                   (dolist (row rows)
-                     (should (plist-get (jaunder--reconcile-pull-unique-match row) :ok))))))
+                 (jaunder--call-with-reconcile-operation
+                  root (jaunder--active-base-url) (jaunder--active-username)
+                  (lambda ()
+                    (dolist (row rows)
+                      (should (plist-get (jaunder--reconcile-pull-unique-match row) :ok)))))))
               (setq after-total (- (float-time) start)))
             (should (= pages 4)))
           (message "Reconcile fixture 100 Members/3 Posts: before 12 pages %.3fs (local %.3fs, parse %.3fs); after 4 pages %.3fs (local %.3fs, parse %.3fs). Synthetic timings exclude network."
@@ -98,7 +97,8 @@
 
 (ert-deftest jaunder-reconcile-pull-batch-shows-stages-and-retains-timeout-context ()
   "A stalled first Post reports its stage; the next eligible Post still runs."
-  (let* ((rows (mapcar (lambda (id)
+  (let* ((jaunder-blogs '(("/tmp/" :base-url "https://example.test" :username "alice")))
+         (rows (mapcar (lambda (id)
                          (jaunder--make-reconcile-row
                           :key (format "post:%s" id) :state 'server-ahead
                           :remote-etag "\"same\""
@@ -127,8 +127,11 @@
                     ((symbol-function 'message)
                      (lambda (format-string &rest args)
                        (push (apply #'format format-string args) progress))))
-            (should (eq (jaunder--reconcile-execute-batch
-                         buffer rows 'pull #'jaunder--reconcile-pull-row) 'completed))
+            (should (eq (jaunder--call-with-blog
+                         "/tmp" (lambda ()
+                                  (jaunder--reconcile-execute-batch
+                                   buffer rows 'pull #'jaunder--reconcile-pull-row)))
+                        'completed))
             (let ((results jaunder-reconcile-last-batch-results)
                   (events (nreverse progress)))
               (should (equal (mapcar #'jaunder-reconcile-result-outcome results)

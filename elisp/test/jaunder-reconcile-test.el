@@ -3785,18 +3785,5 @@ The current filename supplies the local slug evidence used by matched-pull tests
           (set-buffer-modified-p nil))
         (kill-buffer result)))))
 
-(ert-deftest jaunder-reconcile-batch-members-retain-scope-and-failure-evidence ()
-  "Batch Member evidence cannot cross root/blog scope or lose failure details."
-  (let ((jaunder--reconcile-batch-members
-         (list :state 'failed :root "/one" :base-url "https://one.test" :username "one"
-               :condition 'error :data '("offline") :detail "offline")))
-    (cl-letf (((symbol-function 'jaunder--active-base-url) (lambda () "https://one.test"))
-              ((symbol-function 'jaunder--active-username) (lambda () "one")))
-      (condition-case err
-          (progn (jaunder--reconcile-batch-members-for-root "/one")
-                 (ert-fail "must retain failed acquisition"))
-        (error (should (equal err '(error "offline")))))
-      (should-error (jaunder--reconcile-batch-members-for-root "/other")))))
-
 (provide 'jaunder-reconcile-test)
 ;;; jaunder-reconcile-test.el ends here

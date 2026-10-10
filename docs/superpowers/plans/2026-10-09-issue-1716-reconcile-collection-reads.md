@@ -52,7 +52,7 @@ authority.
 
 ## Task outline
 
-- [ ] Task 1: Consolidate read-only operation evidence and pull/conflict
+- [x] Task 1: Consolidate read-only operation evidence and pull/conflict
       consumers.
   - Produce the module's lifecycle, inventory/matching and link-proof interface;
     migrate/remove the pull-specific batch cache/provider helpers rather than

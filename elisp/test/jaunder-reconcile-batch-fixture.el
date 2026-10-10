@@ -36,7 +36,8 @@ before cleaning up.  All reconciliation and install logic remains real."
          (paths (make-hash-table))
          (pages 0) (operation-pages 0) (refreshing nil) (active nil)
          (real-rename (symbol-function 'rename-file))
-         buffer current-id state rows)
+         (real-refresh (symbol-function 'jaunder--reconcile-refresh-buffer))
+         buffer current-id state rows status)
     (unwind-protect
         (progn
           (setq rows
@@ -72,6 +73,10 @@ before cleaning up.  All reconciliation and install logic remains real."
                        (prog1 (apply real-rename old new args)
                          (when (and active (string-prefix-p (expand-file-name "local-media/" root) new))
                            (funcall hook (list :phase 'media-installed :id current-id :path new) state)))))
+                    ((symbol-function 'jaunder--reconcile-refresh-buffer)
+                     (lambda (target)
+                       (setq refreshing t operation-pages pages)
+                       (funcall real-refresh target)))
                     ((symbol-function 'jaunder--http-request)
                      (lambda (_method url &rest _)
                        (cond
@@ -88,23 +93,24 @@ before cleaning up.  All reconciliation and install logic remains real."
                                                                     (cons "x-jaunder-instance" instance))
                                          :body (gethash id entries (jaunder-test--batch-entry id))))))
                         (t
-                         (when (and active (not refreshing)
-                                    (with-current-buffer buffer
-                                      (= (length jaunder-reconcile-last-batch-results) (length rows))))
-                           (setq refreshing t operation-pages pages))
                          (setq pages (1+ pages))
-                         (list :status 200 :body (jaunder-test--collection-page url "&quot;new&quot;")))))))
+                         (append (when active
+                                   (funcall hook (list :phase 'collection :id 0 :url url
+                                                       :page pages :refresh refreshing) state))
+                                 (list :status 200 :body (jaunder-test--collection-page url "&quot;new&quot;"))))))))
             (setq buffer (jaunder--render-reconcile-report
                           (jaunder--make-reconcile-report
-                           :root root :rows rows :inventory (jaunder--inventory-for-root root))))
+                           :root root :rows rows :inventory (jaunder--inventory-for-root root))
+                          (generate-new-buffer " *Jaunder batch proof*")))
             (setq pages 0 active t)
             (clrhash member-reads)
             (with-current-buffer buffer
               (dolist (row rows)
                 (puthash (jaunder--reconcile-stable-row-key row) t jaunder-reconcile-marks))
-              (funcall (if (eq action 'pull) #'jaunder-reconcile-pull-selected
-                         #'jaunder-reconcile-keep-remote-selected))
-              (list :results jaunder-reconcile-last-batch-results :pages pages
+              (setq status (funcall (if (eq action 'pull) #'jaunder-reconcile-pull-selected
+                                      #'jaunder-reconcile-keep-remote-selected)))
+              (funcall hook (list :phase 'completed :id 0 :status status) state)
+              (list :status status :results jaunder-reconcile-last-batch-results :pages pages
                     :operation-pages operation-pages :member-reads member-reads
                     :originals originals
                     :bytes (mapcar (lambda (id)
