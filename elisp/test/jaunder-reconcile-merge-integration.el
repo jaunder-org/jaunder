@@ -123,6 +123,7 @@
                                         (jaunder-reconcile-report-rows jaunder-reconcile-report)
                                         :key #'jaunder--reconcile-row-post-id :test #'equal)))
                       (should (eq (jaunder-reconcile-row-state row) 'conflict))
+                      (goto-char (jaunder--reconcile-row-key-position (jaunder--reconcile-stable-row-key row)))
                       (puthash (jaunder--reconcile-stable-row-key row) t jaunder-reconcile-marks))
                     (setq phase 'preparation)
                     (jaunder-reconcile-merge-selected))

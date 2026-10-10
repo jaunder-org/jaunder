@@ -1810,7 +1810,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
         (with-current-buffer report
           (puthash "post:7" t jaunder-reconcile-marks)
           (cl-letf (((symbol-function 'jaunder--call-with-blog)
-                     (lambda (_root thunk) (funcall thunk)))
+                     (lambda (_root thunk)
+                       (let ((jaunder--active-blog '(:base-url "https://example.test" :username "alice")))
+                         (funcall thunk))))
                     ((symbol-function 'jaunder--pull-stage-member)
                      (lambda (&rest _) (ert-fail "Must not stage a Member")))
                     ((symbol-function 'jaunder--http-request)

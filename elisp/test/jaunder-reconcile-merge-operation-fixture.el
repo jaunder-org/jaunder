@@ -113,6 +113,7 @@ editing it may explicitly finish additional attempts before the default finish."
             (setq phase 'prepare)
             (with-current-buffer report
               (puthash "post:1" t jaunder-reconcile-marks)
+              (goto-char (jaunder--reconcile-row-key-position "post:1"))
               (setq scratch (jaunder-reconcile-merge-selected)))
             (when (buffer-live-p scratch)
               (setq session (buffer-local-value 'jaunder-reconcile-merge-session scratch))
