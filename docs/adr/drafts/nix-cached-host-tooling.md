@@ -7,9 +7,10 @@
 ## Context
 
 Agent and developer entry points invoke `cargo xtask` before useful work can
-begin. The orchestrator's build script requires Git metadata, embeds the current
-commit/dirty state, and watches every tracked file. This makes executable
-freshness unnecessarily depend on unrelated repository edits and revisions.
+begin. Previously, the orchestrator's build script required Git metadata,
+embedded the current commit/dirty state, and watched every tracked file. This
+made executable freshness unnecessarily depend on unrelated repository edits and
+revisions.
 
 [ADR-0028](../0028-devtool-vs-xtask-boundary.md),
 [ADR-0052](../0052-devtool-unifies-static-checks.md), and
@@ -19,11 +20,11 @@ producers. Those boundaries prevent recursive orchestration and cache coupling;
 they do not require Cargo to compile every host invocation or prohibit Nix from
 building an independently packaged host executable.
 
-Qualification's exact-clean-commit executable checks provide a conservative
-proxy for compatible tool and harness inputs. They also reject an identical tool
-across commits with unrelated changes. Nix already owns source closures,
-derivations and immutable output identities; another fingerprint protocol or
-identity ledger would duplicate that authority.
+Qualification's previous exact-clean-commit executable checks provided a
+conservative proxy for compatible tool and harness inputs. They also rejected an
+identical tool across commits with unrelated changes. Nix already owns source
+closures, derivations and immutable output identities; another fingerprint
+protocol or identity ledger would duplicate that authority.
 
 ## Decision
 
@@ -71,7 +72,9 @@ because the host tool orchestrates those producers.
 
 Qualification no longer attributes an executable to a fabricated current Git
 commit. It admits the Nix-selected executable and runtime graph while recording
-the actual source/product revisions being qualified.
+the actual source/product revisions being qualified. Ordinary evidence uses
+schema v2 to require the selected harness's standard derivation, output and NAR
+identity fields alongside its source commit and manifest authorities.
 
 Nix source completeness, supported native/runtime dependency closures, local
 checkout discovery, and untracked-input refusal need regression proof. Changing

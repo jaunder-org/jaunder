@@ -41,9 +41,9 @@ impl SourcePin {
             locked_ref: format!("git+file:{file_url}?rev={commit}"),
         })
     }
-    /// The browser executes tracked TypeScript from the live checkout. Re-admit
-    /// the complete tree around execution and publication, not just its entry
-    /// point: changed imports, configuration, HEAD, or untracked inputs must all
+    /// Browser execution uses the admitted immutable package. Re-admit the live
+    /// tree around execution and publication to preserve its Git attribution:
+    /// changed imports, configuration, HEAD, or untracked inputs must still
     /// refuse evidence attributed to the original immutable source.
     pub(crate) fn verify_current(&self, root: &Path) -> Result<()> {
         if Self::admit_current(root)? != *self {
