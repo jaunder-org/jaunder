@@ -63,6 +63,14 @@ update/delete, or hide a remote commit behind a local failure. Durable keyed
 create recovery continues under
 [ADR-0199](../0199-durable-atompub-create-intent.md).
 
+Observation belongs to the actual send and response, not the eventual row
+result. Per-send ownership prevents older rejected or confirmed responses from
+replacing newer nested proof: response delivery order is not commit order.
+Checkpoint save and rename capture matching filesystem lineage before the effect
+and cannot adopt an unrelated replacement or a later configured User. Supplied
+contradictory PUT identity refuses checkpoint after confirmed commitment;
+omitted optional response metadata keeps its existing semantics.
+
 Both publish-time and pull-time Local Post Link processing participate in the
 owned scope while retaining current local target proof and their existing
 failure policies. Publish aborts visibly without required proof; pull retains
@@ -72,9 +80,15 @@ repairing authored links or searching for a target by basename.
 End operation evidence before the separate authoritative final report refresh.
 Cancellation and independent failures retain ordered terminal outcomes; refresh
 failure preserves their recovery evidence. Later, nested and other-root/blog
-operations cannot inherit the caller's discovery. Interactive merge uses
-separate short-lived preparation and completion scopes, never freshness spanning
-human editing; its scratch and terminal-refresh contracts remain unchanged.
+operations cannot inherit the caller's discovery. Nested same-origin/User writes
+invalidate affected ancestor proof even when the roots differ, without lending
+child discovery. Private state remains inside `jaunder-reconcile-operation.el`;
+callers pass scalar scope, existing proof data and narrow callbacks, not a state
+holder. Interactive merge uses separate short-lived preparation and every
+explicit completion scope, never freshness spanning human editing. Each finish
+owns a fresh write receipt; no operation evidence lives in its merge session.
+Terminal refresh is independent, including nested refresh, and no no-mutation
+refresh is added during preparation.
 
 ## Consequences
 

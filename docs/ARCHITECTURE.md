@@ -3090,16 +3090,18 @@ retaining the ordered terminal results from the last batch, so completed work
 and independent failures remain visible and safe to retry.
 
 Confirmed push, pull, keep-local, keep-remote and delete share one deep
-operation-level module owning root/blog-scoped discovery, evidence lifetime and
-invalidation. One selected Post is the same flow with batch size one. Acquire at
-most one complete Collection traversal when discovery is needed; deletes,
-link-free pushes and immediate ineligibility do not acquire unused evidence.
-Local identity and uniqueness remain freshly checked, alongside action-specific
-Member, strong ETag, digest, buffer, destination and Media safeguards. Matched
-pull and keep-remote perform their last local scan after Media finalization
-immediately before replacement. Both directions of Local Post Link processing
-participate without per-row Collection walks, retaining current local target
-proof and their existing abort/preserve policies.
+`jaunder-reconcile-operation.el` owning root/active-origin/User-scoped
+discovery, evidence lifetime and invalidation. Its state stays private behind
+scalar interfaces and narrow callbacks, not a session or dependency holder. One
+selected Post is the same flow with batch size one. Acquire at most one complete
+Collection traversal when discovery is needed; deletes, link-free pushes and
+immediate ineligibility do not acquire unused evidence. Local identity and
+uniqueness remain freshly checked, alongside action-specific Member, strong
+ETag, digest, buffer, destination and Media safeguards. Matched pull and
+keep-remote perform their last local scan after Media finalization immediately
+before replacement. Both directions of Local Post Link processing participate
+without per-row Collection walks, retaining current local target proof and their
+existing abort/preserve policies.
 
 Known remote create/update/delete invalidates or updates the affected identity's
 discovery/link evidence before later consumers, including when local completion
@@ -3109,10 +3111,16 @@ write retries. Failed or partial discovery is retained rather than retried per
 row or treated as valid empty/stale evidence. Operation scope ends before the
 separate final report refresh; independent failures, cancellation and refresh
 failure preserve ordered terminal recovery results. Interactive merge owns
-separate short-lived preparation/completion scopes, not freshness across human
-editing. Reuse accepts less repeated detection of newly faulty global duplicate
-Collection Entries, never permission to overwrite changed selected Posts or
-local bytes
+separate short-lived preparation and every explicit completion scope, not
+freshness across human editing. Each finish has an independent write receipt;
+the merge session stores no operation evidence. Preparation adds no no-mutation
+refresh. Nested same-origin/User writes invalidate affected ancestor proof even
+across roots, without sharing the child's discovery. Per-send ownership prevents
+older delivered responses from overriding newer nested effects; checkpoint save
+and rename retain exact owned filesystem lineage rather than adopting unrelated
+replacements or changed User context. Reuse accepts less repeated detection of
+newly faulty global duplicate Collection Entries, never permission to overwrite
+changed selected Posts or local bytes
 ([operation-scoped Collection evidence](adr/drafts/emacs-operation-scoped-collection-evidence.md)).
 
 A selected matched `server-ahead` Post may be pulled only after revalidating its

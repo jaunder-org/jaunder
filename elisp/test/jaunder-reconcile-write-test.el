@@ -21,6 +21,9 @@
         (should (= (plist-get proof :operation-pages) expected))
         (should (= (plist-get proof :pages) (+ expected 4)))
         (should (= (length (plist-get proof :writes)) (length ids)))
+        (dolist (id ids)
+          (should (= (gethash (number-to-string id) (plist-get proof :reads) 0)
+                     (pcase action ('keep-local 2) ('delete 1) (_ 0)))))
         (should (cl-every (lambda (result) (eq (jaunder-reconcile-result-outcome result) 'success))
                           (plist-get proof :results)))
         (dolist (write (plist-get proof :writes))
@@ -57,20 +60,6 @@
       (goto-char (point-max))
       (insert (format "[[file:./%s.org][Target]]\n" target))
       (write-region (point-min) (point-max) path nil 'silent))))
-
-(defun jaunder-test--write-selected-as-creates (state)
-  "Make selected Posts ID-less so public displayed order puts creates in sequence."
-  (dolist (row (plist-get state :rows))
-    (let* ((path (jaunder-inventory-local-path (jaunder-reconcile-row-local row))))
-      (with-temp-buffer
-        (insert-file-contents path)
-        (goto-char (point-min))
-        (while (re-search-forward "^#\\+PROPERTY: JAUNDER_\\(?:ID\\|SLUG\\|SYNCED\\) .*\n" nil t)
-          (replace-match ""))
-        (write-region (point-min) (point-max) path nil 'silent))
-      (setf (jaunder-reconcile-row-state row) 'local-draft
-            (jaunder-reconcile-row-member row) nil
-            (jaunder-inventory-local-id (jaunder-reconcile-row-local row)) nil))))
 
 (ert-deftest jaunder-reconcile-later-links-restore-only-affected-target-after-write ()
   "Missing alternate metadata and lost responses use targeted, current proof."
@@ -703,6 +692,94 @@
     (should (= (gethash "1" (plist-get proof :reads) 0) 0))
     (should (= (plist-get proof :operation-pages) 4))
     (should (= (plist-get proof :pages) 9))))
+
+(defun jaunder-test--publish-target-drift-proof (boundary kind)
+  "Run selected push with target KIND drift during remote proof BOUNDARY."
+  (let ((changed nil)
+        (target-id (if (eq boundary 'discovery) "25" "1")))
+    (let ((proof
+           (jaunder-test--confirmed-write-batch
+            'push
+            (lambda (event state)
+              (pcase (plist-get event :phase)
+                ('setup
+                 (when (eq boundary 'restoration)
+                   (jaunder-test--write-source-links state "50" "post-001")
+                   (puthash "50" (with-temp-buffer
+                                   (insert-file-contents (gethash "50" (plist-get state :paths)))
+                                   (buffer-string))
+                            (plist-get state :originals))))
+                ('write
+                 (when (and (eq boundary 'restoration) (equal (plist-get event :id) "1"))
+                   ;; Invalid returned alternate requires a targeted Member GET
+                   ;; before the later selected source may use this target.
+                   (list :body (jaunder-test--write-entry "1" "post-001"
+                                                          "https://example.test/~alice/post-001" t))))
+                ((or 'collection 'member)
+                 (when (and (not changed)
+                            (if (eq boundary 'discovery)
+                                (and (eq (plist-get event :phase) 'collection)
+                                     (not (plist-get event :refresh)))
+                              (and (eq (plist-get event :phase) 'member)
+                                   (equal (plist-get event :id) target-id))))
+                   (setq changed t)
+                   (let ((path (gethash target-id (plist-get state :paths))))
+                     (if (eq kind 'rename)
+                         (rename-file path (expand-file-name "moved.org" (plist-get state :root)))
+                       (with-temp-buffer
+                         (insert-file-contents path)
+                         (pcase kind
+                           ('body (goto-char (point-max)) (insert "Target body-only edit.\n"))
+                           (_ (goto-char (point-min))
+                              (re-search-forward (if (eq kind 'slug) "JAUNDER_SLUG [^\n]+" "JAUNDER_ID [0-9]+"))
+                              (replace-match (if (eq kind 'slug) "JAUNDER_SLUG altered" "JAUNDER_ID 99"))))
+                         (write-region (point-min) (point-max) path nil 'silent))))))))
+            (if (eq boundary 'discovery) '(1) '(1 50)) (eq boundary 'discovery))))
+      (should changed)
+      (should (= (plist-get proof :initial-pages) 4))
+      (should (= (plist-get proof :operation-pages) 4))
+      (should (= (plist-get proof :pages) 8))
+      (when (eq boundary 'restoration)
+        (should (= (gethash "1" (plist-get proof :reads) 0) 1)))
+      (if (eq kind 'body)
+          (progn
+            (should (cl-every (lambda (result) (eq (jaunder-reconcile-result-outcome result) 'success))
+                              (plist-get proof :results)))
+            (should (= (length (plist-get proof :writes)) (if (eq boundary 'discovery) 1 2)))
+            (let* ((source (if (eq boundary 'discovery) "post-001.org" "post-050.org"))
+                   (target (if (eq boundary 'discovery) "post-025" "post-001")))
+              (should (string-match-p (regexp-quote (concat "[[file:./" target ".org][Target]]"))
+                                      (cdr (assoc source (plist-get proof :files)))))))
+        (let* ((source-id (if (eq boundary 'discovery) "1" "50"))
+               (source-name (if (eq boundary 'discovery) "post-001.org" "post-050.org")))
+          (should (= (length (plist-get proof :writes)) (if (eq boundary 'discovery) 0 1)))
+          (should (eq (jaunder-reconcile-result-outcome (car (last (plist-get proof :results)))) 'failed))
+          (should (equal (gethash source-id (plist-get proof :originals))
+                         (cdr (assoc source-name (plist-get proof :files)))))
+          (should (string-match-p "Local Post Link target local identity"
+                                  (jaunder-reconcile-result-detail (car (last (plist-get proof :results)))))))))))
+
+(ert-deftest jaunder-reconcile-push-rejects-target-rename-during-discovery ()
+  "A singleton ID at a different path cannot repair the authored target."
+  (jaunder-test--publish-target-drift-proof 'discovery 'rename))
+
+(ert-deftest jaunder-reconcile-push-rejects-target-slug-drift-during-discovery ()
+  "A singleton ID at the same path still needs its current canonical slug."
+  (jaunder-test--publish-target-drift-proof 'discovery 'slug))
+
+(ert-deftest jaunder-reconcile-push-rejects-target-id-drift-during-discovery ()
+  "Changing the target ID cannot borrow the previously captured Member."
+  (jaunder-test--publish-target-drift-proof 'discovery 'id))
+
+(ert-deftest jaunder-reconcile-push-rechecks-target-after-targeted-restoration ()
+  "The last remote proof operation cannot leave target path/slug evidence stale."
+  (dolist (kind '(rename slug id))
+    (jaunder-test--publish-target-drift-proof 'restoration kind)))
+
+(ert-deftest jaunder-reconcile-push-allows-target-body-only-edits-during-proof ()
+  "Target source digest is not Local Post Link identity or write authorization."
+  (dolist (boundary '(discovery restoration))
+    (jaunder-test--publish-target-drift-proof boundary 'body)))
 
 (provide 'jaunder-reconcile-write-test)
 ;;; jaunder-reconcile-write-test.el ends here

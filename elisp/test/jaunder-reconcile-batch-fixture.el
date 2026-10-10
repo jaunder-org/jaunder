@@ -34,7 +34,7 @@ before cleaning up.  All reconciliation and install logic remains real."
          (member-reads (make-hash-table))
          (originals (make-hash-table))
          (paths (make-hash-table))
-         (pages 0) (operation-pages 0) (refreshing nil) (active nil)
+         (pages 0) (initial-pages 0) (operation-pages 0) (refreshing nil) (active nil)
          (real-rename (symbol-function 'rename-file))
          (real-refresh (symbol-function 'jaunder--reconcile-refresh-buffer))
          buffer current-id state rows status)
@@ -102,7 +102,7 @@ before cleaning up.  All reconciliation and install logic remains real."
                           (jaunder--make-reconcile-report
                            :root root :rows rows :inventory (jaunder--inventory-for-root root))
                           (generate-new-buffer " *Jaunder batch proof*")))
-            (setq pages 0 active t)
+            (setq initial-pages pages pages 0 active t)
             (clrhash member-reads)
             (with-current-buffer buffer
               (dolist (row rows)
@@ -111,7 +111,7 @@ before cleaning up.  All reconciliation and install logic remains real."
                                       #'jaunder-reconcile-keep-remote-selected)))
               (funcall hook (list :phase 'completed :id 0 :status status) state)
               (list :status status :results jaunder-reconcile-last-batch-results :pages pages
-                    :operation-pages operation-pages :member-reads member-reads
+                    :initial-pages initial-pages :operation-pages operation-pages :member-reads member-reads
                     :originals originals
                     :bytes (mapcar (lambda (id)
                                      (let ((path (gethash id paths)))

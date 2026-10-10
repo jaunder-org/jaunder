@@ -137,5 +137,19 @@ HOOK receives an event plist and state and may override an HTTP response."
       (when (buffer-live-p buffer) (kill-buffer buffer))
       (delete-directory root t))))
 
+(defun jaunder-test--write-selected-as-creates (state)
+  "Make selected Posts ID-less so public displayed order puts creates in sequence."
+  (dolist (row (plist-get state :rows))
+    (let* ((path (jaunder-inventory-local-path (jaunder-reconcile-row-local row))))
+      (with-temp-buffer
+        (insert-file-contents path)
+        (goto-char (point-min))
+        (while (re-search-forward "^#\\+PROPERTY: JAUNDER_\\(?:ID\\|SLUG\\|SYNCED\\) .*\n" nil t)
+          (replace-match ""))
+        (write-region (point-min) (point-max) path nil 'silent))
+      (setf (jaunder-reconcile-row-state row) 'local-draft
+            (jaunder-reconcile-row-member row) nil
+            (jaunder-inventory-local-id (jaunder-reconcile-row-local row)) nil))))
+
 (provide 'jaunder-reconcile-write-fixture)
 ;;; jaunder-reconcile-write-fixture.el ends here

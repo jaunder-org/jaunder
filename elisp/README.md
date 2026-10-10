@@ -31,6 +31,9 @@ deployable Jaunder server binary.
 - `jaunder.el` — the package entry point and dependency assembly.
 - `jaunder-inventory.el` — Collection and local Post identity inventory shared
   by reconciliation and Local Post Link mapping.
+- `jaunder-reconcile-operation.el` — private operation-owned remote discovery,
+  current local proof, write receipts and invalidation; scalar interfaces and
+  narrow callbacks keep evidence out of report/merge sessions.
 - `jaunder-post-link.el` — bidirectional Local Post Link mapping: exact local
   evidence joins the read-only Collection inventory; publish substitutes
   server-advertised alternate URLs only in the sent body, and pull restores
@@ -80,8 +83,8 @@ one cumulative eviction marker, is read-only, and `q` buries it. Killing it
 discards its retained evidence; the next enabled event recreates it.
 
 Diagnostics are client-local, unsaved troubleshooting evidence. Share only after
-reviewing it. They time client boundaries but do not remove the
-per-selected-Post complete Collection verification cost during pull.
+reviewing it. They time client boundaries but do not remove the operation-scoped
+Collection discovery and separate final refresh during pull.
 
 `reconcile.batch` encloses the confirmed executor, including result recording
 and report refresh. `reconcile.row` encloses the actual push, pull, delete,
@@ -412,20 +415,34 @@ transferring large Media file has no whole-request deadline. The report's **Last
 batch** section retains per-Post failure details and the stage that failed. The
 operator can cancel between Posts, refresh the inventory, and select only
 unresolved rows to resume; never assume an interrupted Post was installed. A
-matched Post must re-enumerate the complete Collection before replacement to
-prove its remote identity is still unique. On a large Collection this repeats
-for each selected Post, so stage progress does not imply a short batch or
-background execution. In a host-only fixture of 100 Members (four 25-Member
-pages) and three selected server-ahead Posts, fresh verification made 12 page
-reads and the final refresh made four more, in both a silent baseline and the
-progress-reporting arm. Each arm records six Member, three service-document, and
-one Media request. Separate timing buckets cover synthetic Member and Media
-HTTP, local scan, full Collection pagination (including XML parsing), final
-revalidation, installation, and refresh. One host run measured local scan at
-0.002 seconds in each arm and Collection pagination at 0.044/0.052 seconds
-(silent/progress). The network is mocked and one-time parser warm-up affects
-small host timings, so this does not establish a production speedup. Remote
-pagination remains a cost to measure on a real deployment.
+confirmed push, pull, keep-local, keep-remote or delete owns fresh evidence for
+one configured root, active origin and User. One selected Post uses the same
+flow as several. Discovery is lazy: at most one complete Collection traversal is
+shared across row checks and Local Post Link processing. Link-free push, delete
+and immediately ineligible rows skip unused discovery. The opening preview and
+final authoritative refresh are separate traversals; a create or delete can
+change the final page count. With 100 Members on four pages, matched pull,
+keep-remote, keep-local and link-bearing push use at most four operation page
+GETs plus the final refresh, independently of selection length. Selected Member
+checks and literal reviewed conditional validators remain unchanged. Request
+counts do not predict production latency; network and Media work still matter.
+
+Only remote discovery is shared. Local identity and uniqueness are read afresh,
+including after Media finalization before matched replacement. Ordinary push
+uses current authored source; conflict resolution retains reviewed source.
+Writes invalidate or replace affected remote/link proof at the actual send and
+response boundary, before fallible local completion. Later dependent rows use
+valid returned evidence or targeted Member reads, never another full traversal
+or a guessed ID/permalink. Failed or partial discovery is not valid empty proof
+and is not retried per row. Nested commands own independent discovery;
+same-origin/User writes invalidate affected ancestor proof even across roots.
+
+Pagination is not an atomic snapshot, discovery is not mutation permission, and
+a batch is not an HTTP/filesystem transaction. Sharing discovery accepts less
+repeated detection of newly faulty global duplicate Collection Entries;
+selected-Member validators and fresh local checks still guard mutations. Scope
+ends before the independent final refresh. See
+[operation-owned Collection evidence](../docs/adr/drafts/emacs-operation-scoped-collection-evidence.md).
 
 A selection does not bypass safety checks. Unchanged Posts are no-ops; a true
 `conflict` is a uniquely matched Post whose local source and remote Member both
@@ -458,7 +475,11 @@ fails after creating its C result, that result remains available for inspection
 or explicit discard but cannot be published; reopen a fresh reconciliation
 report and merge session after fixing Ediff. Once a two-way result is open,
 edits survive cancellation, blocked completion, an unknown remote outcome, or a
-partial commit so they can be inspected later.
+partial commit so they can be inspected later. Preparation and every explicit
+finish acquire separate short-lived scopes; no evidence spans human editing or
+is stored in the merge session. Each finish has a fresh write receipt and an
+independent final refresh. A retry cannot silently adopt a newer remote ETag.
+Preparation does not add a report refresh when no Post changed.
 
 A rejected conditional PUT changes neither Post. Uploaded Media or verified
 Local Media Copies may persist even if a later Post action blocks. If a PUT

@@ -102,7 +102,7 @@ authority.
     without lending the nested operation's cached evidence to that caller.
     Independent rows/results survive dependent failures and final refresh
     errors.
-- [ ] Task 4: Finish observable regression coverage and project delivered
+- [x] Task 4: Finish observable regression coverage and project delivered
       contracts.
   - Remove obsolete private-cache tests where operation/command tests replace
     them; retain reusable minimized HTTP/filesystem fixtures rather than timing
