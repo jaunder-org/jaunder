@@ -46,6 +46,7 @@ mod page_state;
 mod compose_state;
 mod composer_collapse;
 mod composer_disclosure;
+mod composer_format;
 mod composer_media;
 mod composer_presentation;
 mod edit_state;
@@ -80,6 +81,7 @@ pub use composer_disclosure::{
     ComposerControl, ComposerDisclosureState, audience_disclosure_value, publish_disclosure_value,
     record_media_upload, slug_disclosure_value,
 };
+pub use composer_format::{InitialFormatState, format_control_value, settle_default_format};
 pub use composer_media::{ComposerMedia, ComposerMediaState};
 pub use composer_presentation::{
     CreationComposerPresentation, creation_composer_presentation, creation_success_message,

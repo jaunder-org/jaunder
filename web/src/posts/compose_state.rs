@@ -110,6 +110,13 @@ impl CreationComposerSnapshot {
         }
     }
 
+    /// Adopt the saved authoring format without accepting in-progress content edits.
+    #[must_use]
+    pub fn with_format(mut self, format: PostFormat) -> Self {
+        self.format = format;
+        self
+    }
+
     /// Adopt an asynchronously resolved initial audience without accepting other edits.
     #[must_use]
     pub fn with_audience(mut self, audience: AudienceSelection) -> Self {
