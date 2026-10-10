@@ -3310,6 +3310,19 @@ the browse key, the dedup key, the SQL key — while `TagLabel`
 Equality and dedup on labels go by slug, never by raw casing. The pattern
 generalizes; tags are its only adopter so far.
 
+Free-form raw Org `KEYWORDS` and AtomPub category terms enter through
+`TagLabel::normalize_keyword` (`common/src/tag.rs`). Valid labels keep casing
+and hyphen sequences. Otherwise the trimmed ASCII term is lowercased,
+punctuation/whitespace runs become one hyphen, and hyphen edges are removed; the
+result must satisfy the existing label grammar. Non-ASCII or unusable terms
+reject the complete write (AtomPub `400`) before Post mutation. There is no
+transliteration, truncation, fallback label, or silent category filtering.
+Repeated leading Org keyword lines compose in source order, with each
+comma-separated term normalized independently and empty comma terms dropped;
+metadata boundaries and structured-field precedence remain unchanged. Canonical
+deduplication preserves the first resulting label and enforces the existing
+256-distinct-tag cap. Structured web tag validation remains strict.
+
 ### Closed string enums
 
 A closed string-backed enum is declared with one attribute, `#[text_enum(…)]`

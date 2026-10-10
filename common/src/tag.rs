@@ -1,3 +1,10 @@
+//! Validated tag identity, preserved labels, and bounded Post tag lists.
+//!
+//! Structured inputs use the existing strict `FromStr`/serde grammar. Free-form
+//! Org keywords and `AtomPub` categories opt into [`TagLabel::normalize_keyword`]
+//! before the shared canonical deduplication and distinct-tag cap. Invalid terms
+//! reject at ingress rather than disappearing from a successful Post write.
+
 use std::str::FromStr;
 
 use macros::StrNewtype;
@@ -78,6 +85,42 @@ impl FromStr for TagLabel {
 }
 
 impl TagLabel {
+    /// Convert a free-form Org keyword or `AtomPub` category into a validated label.
+    ///
+    /// Valid labels retain their spelling, casing, and hyphen sequences. Otherwise
+    /// ASCII punctuation/whitespace runs become hyphens and ASCII letters become
+    /// lowercase. This explicit ingress door does not widen [`FromStr`] or serde
+    /// validation for structured tags. Canonical deduplication and the Post cap
+    /// remain the responsibility of [`parse_and_validate_tags`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidTagLabel`] for otherwise-invalid non-ASCII terms, terms
+    /// without a usable letter/digit, or a result that fails the label grammar. Nothing
+    /// is truncated, transliterated, or replaced with a fallback label.
+    pub fn normalize_keyword(term: &str) -> Result<Self, InvalidTagLabel> {
+        if let Ok(label) = term.parse() {
+            return Ok(label);
+        }
+        // Preserve non-ASCII evidence in invalid terms: Unicode edge whitespace
+        // must not make a free-form term eligible for ASCII normalization.
+        if !term.is_ascii() {
+            return Err(InvalidTagLabel);
+        }
+        let term = term.trim();
+        let mut normalized = String::with_capacity(term.len());
+        for character in term.chars() {
+            if character.is_ascii_punctuation() || character.is_ascii_whitespace() {
+                if !normalized.ends_with('-') {
+                    normalized.push('-');
+                }
+            } else {
+                normalized.push(character.to_ascii_lowercase());
+            }
+        }
+        normalized.trim_matches('-').parse()
+    }
+
     /// The canonical slug. Infallible: `TagLabel`'s inner string already parses
     /// as a `Tag` (the [`FromStr`] invariant), and both types live in this
     /// module, so the canonical `Tag` is built directly from the label's
@@ -330,6 +373,60 @@ mod tests {
 
         // Invalid input is rejected at deserialize time.
         assert!(serde_json::from_str::<Tag>("\"-bad\"").is_err());
+    }
+
+    #[rstest]
+    #[case("100 bullets", "100-bullets")]
+    #[case("James S. A. Corey", "james-s-a-corey")]
+    #[case("old man's war", "old-man-s-war")]
+    #[case(" \tRust__ / Lang!? \n", "rust-lang")]
+    #[case(" Rust---Lang- ", "Rust---Lang-")]
+    #[case("\u{a0}Rust---Lang-\u{a0}", "Rust---Lang-")]
+    #[case("-Rust---Lang-", "rust-lang")]
+    fn keyword_normalization_preserves_valid_labels_and_converts_terms(
+        #[case] input: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(TagLabel::normalize_keyword(input).unwrap(), expected);
+    }
+
+    #[rstest]
+    #[case("")]
+    #[case(" \t\n")]
+    #[case("---!_ / .")]
+    #[case("café")]
+    #[case("東京 rust")]
+    #[case("rust\u{a0}lang")]
+    #[case("\u{a0}100 bullets")]
+    #[case("100 bullets\u{a0}")]
+    #[case("rust\0lang")]
+    fn keyword_normalization_rejects_unusable_terms(#[case] input: &str) {
+        assert!(
+            TagLabel::normalize_keyword(input).is_err(),
+            "accepted {input:?}"
+        );
+    }
+
+    #[test]
+    fn keyword_normalization_deduplicates_collisions_before_enforcing_the_cap() {
+        let mut terms: Vec<_> = (0..MAX_TAGS_PER_POST)
+            .map(|index| TagLabel::normalize_keyword(&format!("Tag {index}")).unwrap())
+            .collect();
+        terms.push(TagLabel::normalize_keyword("TAG_0").unwrap());
+        terms.push(TagLabel::normalize_keyword("tag-0").unwrap());
+        let labels = parse_and_validate_tags(terms.clone()).unwrap();
+        assert_eq!(labels.len(), MAX_TAGS_PER_POST);
+        assert_eq!(labels[0], "tag-0");
+        terms.push(TagLabel::normalize_keyword("extra tag").unwrap());
+        assert!(matches!(
+            parse_and_validate_tags(terms),
+            Err(TagValidationError::TooMany { .. })
+        ));
+        let long = format!("{} word", "A".repeat(1024));
+        assert_eq!(
+            TagLabel::normalize_keyword(&long).unwrap().as_ref(),
+            format!("{}-word", "a".repeat(1024))
+        );
     }
 
     #[test]

@@ -13,7 +13,7 @@ Unicode tag expansion, new endpoints, schema changes, and reconciliation policy.
 
 ## Task outline
 
-- [ ] Task 1: Normalize keyword/category ingress without silent loss.
+- [x] Task 1: Normalize keyword/category ingress without silent loss.
   - Contract: add one explicit normalization door returning validated `TagLabel`
     values in `common/src/tag.rs`; keep existing `FromStr` validation and
     structured web inputs unchanged. Route raw Org KEYWORDS and AtomPub category
