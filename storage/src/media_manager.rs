@@ -3,6 +3,7 @@
 //! deletion sequence.
 
 use std::io;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -586,7 +587,27 @@ impl MediaManager {
             )
         } else {
             fs::rename(tmp_path, target_path).await?;
-            Ok(TargetDisposition::FreshRename)
+            // Only the validated public inode becomes readable across principals;
+            // the private input keeps its owner-only permissions until placement.
+            Self::finish_public_permissions(
+                target_path,
+                fs::set_permissions(target_path, std::fs::Permissions::from_mode(0o644)).await,
+            )
+            .await
+        }
+    }
+
+    async fn finish_public_permissions(
+        target_path: &Path,
+        result: io::Result<()>,
+    ) -> anyhow::Result<TargetDisposition> {
+        match result {
+            Ok(()) => Ok(TargetDisposition::FreshRename),
+            Err(error) => Self::finish_temp_cleanup(
+                Err(error.into()),
+                fs::remove_file(target_path).await,
+                "storage.media.public_permissions_target_cleanup",
+            ),
         }
     }
 
@@ -1413,6 +1434,28 @@ mod tests {
     fn stored_path(root: &Path, media: &MediaRef) -> PathBuf {
         root.join("media")
             .join(media::path(&media.source, &media.sha256, &media.filename))
+    }
+
+    // guard:no-backend — filesystem-only public-placement cleanup after a permission fault.
+    #[tokio::test]
+    async fn public_permission_failure_removes_the_new_target() {
+        let directory = TempDir::new().unwrap();
+        let target = directory.path().join("published");
+        std_fs::write(&target, b"already sanitized public bytes").unwrap();
+        let error = MediaManager::finish_public_permissions(
+            &target,
+            Err(io::Error::from(io::ErrorKind::PermissionDenied)),
+        )
+        .await
+        .expect_err("permission failure must reject placement");
+        assert_eq!(
+            error.downcast_ref::<io::Error>().unwrap().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert!(
+            !target.exists(),
+            "failed publication must leave no durable inode"
+        );
     }
 
     // guard:no-backend — filesystem-only temporary upload cleanup.
@@ -2954,6 +2997,82 @@ else:
                     "no public output after editor growth rejection"
                 );
                 directories.push(entry.path());
+            }
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn private_spools_become_readable_only_after_public_placement(#[case] backend: Backend) {
+        use std::os::unix::fs::PermissionsExt;
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let manager = MediaManager::new(
+            env.media(),
+            env.posts(),
+            env.site_config(),
+            env.write_scope(),
+            Arc::new(MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
+            env.base.instance_id().clone(),
+            no_foreign_resolver(),
+        )
+        .with_image_sanitizer(test_image_sanitizer());
+        let private = manager.create_temp_file().await.unwrap();
+        assert_eq!(
+            private.as_file().metadata().unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        std_fs::write(private.path(), SANITIZED_PNG).unwrap();
+        let (limit, _) = manager.get_limits().await.unwrap();
+        let (edited, _, _, _) = manager
+            .sanitize_and_measure(
+                private,
+                &parse_filename("private.png"),
+                Some(&parse_content_type("image/png")),
+                limit,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            edited.as_file().metadata().unwrap().permissions().mode() & 0o777,
+            0o600,
+            "edited sanitized bytes remain private until public placement"
+        );
+        drop(edited);
+        for streaming in [false, true] {
+            for (extension, mime, bytes) in [
+                ("txt", "text/plain", b"public attachment".as_slice()),
+                ("png", "image/png", SANITIZED_PNG),
+            ] {
+                let filename = parse_filename(&format!("public-{streaming}.{extension}"));
+                let content_type = parse_content_type(mime);
+                let upload = if streaming {
+                    manager
+                        .upload(
+                            user_id,
+                            &filename,
+                            Some(content_type),
+                            stream::iter([Ok::<Bytes, io::Error>(Bytes::copy_from_slice(bytes))]),
+                        )
+                        .await
+                } else {
+                    manager
+                        .upload_bytes(user_id, &filename, content_type, bytes)
+                        .await
+                }
+                .unwrap();
+                let published = stored_path(env.base.path(), &upload_ref(&upload));
+                assert_eq!(
+                    fs::metadata(&published).await.unwrap().permissions().mode() & 0o777,
+                    0o644,
+                    "public bytes must remain readable by the serving principal after private spool placement"
+                );
+                assert_eq!(fs::read(published).await.unwrap(), bytes);
             }
         }
     }

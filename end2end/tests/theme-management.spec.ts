@@ -157,12 +157,21 @@ test("author completes the custom theme lifecycle through Studio", async ({
     headerTwoBytes,
     "image/png",
   );
-  for (let index = 0; index < 50; index += 1) {
-    await uploadMedia(
-      page,
-      `newer-${index.toString().padStart(2, "0")}.png`,
-      Buffer.from(ASSET_BYTES),
-      "image/png",
+  // Pagination needs fifty additional real images, not fifty raster-policy
+  // repetitions. SVG keeps that setup lightweight; the selected PNG bindings
+  // above still exercise raster ingestion and public-byte preservation.
+  for (let index = 0; index < 50; index += 2) {
+    await Promise.all(
+      [index, index + 1].map((entry) =>
+        uploadMedia(
+          page,
+          `newer-${entry.toString().padStart(2, "0")}.svg`,
+          Buffer.from(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="blue"/></svg>',
+          ),
+          "image/svg+xml",
+        ),
+      ),
     );
   }
   await goto(page, "/themes");

@@ -2975,7 +2975,13 @@ else:
         assert!(checks.contains(sqlite_placement));
         assert!(checks.contains(postgres_placement));
         assert!(checks.contains("${e2ePhaseTimingHelpers backend browser identity}${e2eOtelTestHelpers identity}${beforeMachineStart}"));
-        assert!(checks.contains("machine.succeed(\"cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e\")${afterPackageCopy}"));
+        assert!(checks.contains("machine.succeed(\"cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e\")\n          ${e2eImageFixtureSetup}${afterPackageCopy}"));
+        assert!(checks.contains("mkdir -p /tmp/host/src && cp -r ${../host/src/image_sanitizer_fixtures} /tmp/host/src/image_sanitizer_fixtures"));
+        assert_eq!(
+            checks.matches("${e2eImageFixtureSetup}").count(),
+            4,
+            "ordinary, performance and both wasm-diagnostic consumers need the same owned fixtures"
+        );
     }
 
     #[test]
