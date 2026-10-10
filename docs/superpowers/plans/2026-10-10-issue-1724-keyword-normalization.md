@@ -25,7 +25,7 @@ Unicode tag expansion, new endpoints, schema changes, and reconciliation policy.
     tags and no persisted changes on rejection. Focused host-native Rust proofs
     precede integration gates.
 
-- [ ] Task 2: Produce a read-only, identity-bound repair preview.
+- [x] Task 2: Produce a read-only, identity-bound repair preview.
   - Contract: keep repair orchestration in a dedicated Emacs module, composed
     with existing configuration, inventory, Org parsing, Atom, and transport
     helpers. Reuse the existing Emacs tag grammar authority; implement the same
@@ -35,9 +35,11 @@ Unicode tag expansion, new endpoints, schema changes, and reconciliation policy.
     Preview uses no local mtime/sync-marker claim as remote write authority.
   - Verification: real Org parser boundary cases and unchanged local bytes;
     invalid terms, duplicate/missing identities, modified buffers, drafts,
-    malformed remote data, and over-cap unions produce blocked rows. Inspect the
-    private corpus read-only with this parser; retain counts and full-policy
-    collision findings in ignored/session evidence, never tracked fixtures.
+    well-formed but invalid remote Members, and over-cap unions produce blocked
+    rows. File/transport/XML-decoding failure aborts preview with its contextual
+    cause retained, without granting write authority. Inspect the private corpus
+    read-only with this parser; retain counts and full-policy collision findings
+    in ignored/session evidence, never tracked fixtures.
 
 - [ ] Task 3: Apply only reviewed additions with conditional remote writes.
   - Dependency: Tasks 1 and 2; deploy the normalization fix before production

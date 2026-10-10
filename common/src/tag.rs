@@ -87,7 +87,7 @@ impl FromStr for TagLabel {
 impl TagLabel {
     /// Convert a free-form Org keyword or `AtomPub` category into a validated label.
     ///
-    /// Valid labels retain their spelling, casing, and hyphen sequences. Otherwise
+    /// Valid ASCII labels after trimming retain spelling, casing, and hyphens. Otherwise
     /// ASCII punctuation/whitespace runs become hyphens and ASCII letters become
     /// lowercase. This explicit ingress door does not widen [`FromStr`] or serde
     /// validation for structured tags. Canonical deduplication and the Post cap
@@ -95,11 +95,16 @@ impl TagLabel {
     ///
     /// # Errors
     ///
-    /// Returns [`InvalidTagLabel`] for otherwise-invalid non-ASCII terms, terms
+    /// Returns [`InvalidTagLabel`] for non-ASCII letters (even ASCII-folding ones),
+    /// otherwise-invalid non-ASCII terms, terms
     /// without a usable letter/digit, or a result that fails the label grammar. Nothing
     /// is truncated, transliterated, or replaced with a fallback label.
     pub fn normalize_keyword(term: &str) -> Result<Self, InvalidTagLabel> {
-        if let Ok(label) = term.parse() {
+        // Stored-label parsing remains unchanged, including Unicode lowercasing.
+        // This ingress door admits only ASCII labels after boundary trimming.
+        if term.trim().is_ascii()
+            && let Ok(label) = term.parse()
+        {
             return Ok(label);
         }
         // Preserve non-ASCII evidence in invalid terms: Unicode edge whitespace
@@ -381,6 +386,7 @@ mod tests {
     #[case("old man's war", "old-man-s-war")]
     #[case(" \tRust__ / Lang!? \n", "rust-lang")]
     #[case(" Rust---Lang- ", "Rust---Lang-")]
+    #[case("\u{b}Rust\u{b}", "Rust")]
     #[case("\u{a0}Rust---Lang-\u{a0}", "Rust---Lang-")]
     #[case("-Rust---Lang-", "rust-lang")]
     fn keyword_normalization_preserves_valid_labels_and_converts_terms(
@@ -395,16 +401,27 @@ mod tests {
     #[case(" \t\n")]
     #[case("---!_ / .")]
     #[case("café")]
+    #[case("\u{212a}")]
+    #[case("\u{a0}\u{212a}\u{a0}")]
     #[case("東京 rust")]
     #[case("rust\u{a0}lang")]
     #[case("\u{a0}100 bullets")]
     #[case("100 bullets\u{a0}")]
     #[case("rust\0lang")]
+    #[case("a\u{b}b")]
     fn keyword_normalization_rejects_unusable_terms(#[case] input: &str) {
         assert!(
             TagLabel::normalize_keyword(input).is_err(),
             "accepted {input:?}"
         );
+    }
+
+    #[test]
+    fn keyword_normalization_leaves_stored_label_parsing_unchanged() {
+        let stored: TagLabel = "\u{212a}".parse().unwrap();
+        assert_eq!(stored.as_ref(), "\u{212a}");
+        assert_eq!(stored.slug().as_ref(), "k");
+        assert!(TagLabel::normalize_keyword(stored.as_ref()).is_err());
     }
 
     #[test]

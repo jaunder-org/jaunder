@@ -12,8 +12,11 @@ normalized tags from local Posts without overwriting newer server content.
 
 - Retain the existing ASCII tag grammar and canonical identity rules (ADR-0068);
   this issue does not broaden stored tag identity or label validity.
-- Already-valid tag labels retain their spelling and casing. Their existing
-  canonical identity remains unchanged, including existing hyphen sequences.
+- Already-valid ASCII tag labels after boundary trimming retain their spelling
+  and casing. Their existing canonical identity remains unchanged, including
+  existing hyphen sequences. Non-ASCII letters such as the Kelvin sign reject at
+  this new ingress boundary even if Unicode lowercasing could produce ASCII;
+  strict stored-tag validation and existing data remain unchanged.
 - For an otherwise-invalid non-empty term, trim surrounding whitespace,
   lowercase ASCII letters, replace runs of ASCII punctuation/whitespace with one
   hyphen, and remove leading/trailing hyphens. The result must satisfy the
@@ -57,7 +60,10 @@ normalized tags from local Posts without overwriting newer server content.
   rendering/search state may change as part of a successful tag update.
 - Require a unique local/remote identity match, a valid current strong ETag, and
   a reviewed snapshot of local bytes plus the intended tag additions. Duplicate,
-  missing, Deleted, foreign, malformed, or ambiguous targets block.
+  missing, Deleted, foreign, ambiguous, or well-formed but invalid Member
+  targets block. File, transport, or XML-decoding failures abort the read-only
+  preview with retained contextual causes rather than masquerading as a domain
+  rejection; no report from that failed read authorizes a write.
 - Before applying, revalidate the reviewed local source and remote Member;
   modified visiting buffers, local byte changes, or remote ETag changes block
   rather than silently changing the approved operation.

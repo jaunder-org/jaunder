@@ -1282,6 +1282,8 @@ async fn keyword_normalization_rejects_complete_create_and_update(#[case] backen
         vec![" ".to_owned()],
         vec!["---!?".to_owned()],
         vec!["café".to_owned()],
+        vec!["\u{212a}".to_owned()],
+        vec!["\u{a0}\u{212a}\u{a0}".to_owned()],
         vec!["\u{a0}100 bullets".to_owned()],
         vec!["100 bullets\u{a0}".to_owned()],
     ];

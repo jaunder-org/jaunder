@@ -3311,17 +3311,23 @@ Equality and dedup on labels go by slug, never by raw casing. The pattern
 generalizes; tags are its only adopter so far.
 
 Free-form raw Org `KEYWORDS` and AtomPub category terms enter through
-`TagLabel::normalize_keyword` (`common/src/tag.rs`). Valid labels keep casing
-and hyphen sequences. Otherwise the trimmed ASCII term is lowercased,
-punctuation/whitespace runs become one hyphen, and hyphen edges are removed; the
-result must satisfy the existing label grammar. Non-ASCII or unusable terms
-reject the complete write (AtomPub `400`) before Post mutation. There is no
-transliteration, truncation, fallback label, or silent category filtering.
-Repeated leading Org keyword lines compose in source order, with each
-comma-separated term normalized independently and empty comma terms dropped;
-metadata boundaries and structured-field precedence remain unchanged. Canonical
-deduplication preserves the first resulting label and enforces the existing
-256-distinct-tag cap. Structured web tag validation remains strict.
+`TagLabel::normalize_keyword` (`common/src/tag.rs`). Valid ASCII labels after
+boundary trimming keep casing and hyphen sequences, including labels surrounded
+by Unicode whitespace such as NBSP. Non-ASCII letters, including the Kelvin sign
+whose Unicode lowercase is ASCII, reject at this new ingress boundary; stored
+`Tag`/`TagLabel::FromStr` validation and existing data remain unchanged.
+Otherwise the original term must be ASCII before trimming:
+punctuation/ASCII-whitespace runs become one hyphen, ASCII letters are
+lowercased, and hyphen edges are removed. The result must satisfy the existing
+label grammar. Thus NBSP around an otherwise-invalid spaced term rejects rather
+than disappearing during trim. Non-ASCII or unusable terms reject the complete
+write (AtomPub `400`) before Post mutation. There is no transliteration,
+truncation, fallback label, or silent category filtering. Repeated leading Org
+keyword lines compose in source order, with each comma-separated term normalized
+independently and empty comma terms dropped; metadata boundaries and
+structured-field precedence remain unchanged. Canonical deduplication preserves
+the first resulting label and enforces the existing 256-distinct-tag cap.
+Structured web tag validation remains strict.
 
 ### Closed string enums
 

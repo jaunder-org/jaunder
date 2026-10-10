@@ -33,9 +33,11 @@
 (define-error 'jaunder-pull-stage-identity-changed
               "Member response identity changed since inventory" 'error)
 
+(define-error 'jaunder-pull-validation-error "Invalid Jaunder Member" 'error)
+
 (defun jaunder--pull-error (invariant)
-  "Signal a pull mapping error naming broken INVARIANT."
-  (error "jaunder pull: %s" invariant))
+  "Signal a typed pull validation error naming broken INVARIANT."
+  (signal 'jaunder-pull-validation-error (list invariant)))
 
 (defun jaunder--pull-exactly-one (fields key description)
   "Return sole FIELDS value under KEY or signal DESCRIPTION."
@@ -198,7 +200,7 @@ This function performs no network or filesystem I/O."
                                         (audiences
                                          (condition-case err
                                              (jaunder--synchronized-response-audiences fields audience-capable)
-                                           (error (jaunder--pull-error (error-message-string err)))))
+                                           (jaunder-invalid-audiences (jaunder--pull-error (error-message-string err)))))
                                         (draft-value (jaunder--pull-at-most-one fields 'drafts "app:draft"))
                                         (published (jaunder--pull-at-most-one fields 'published-values "published"))
                                         (id (jaunder--pull-edit-id edit-uri))

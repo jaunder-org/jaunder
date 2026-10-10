@@ -44,6 +44,7 @@
 (require 'jaunder-delete)
 (require 'jaunder-pull)
 (require 'jaunder-pull-media)
+(require 'jaunder-keyword-repair)
 
 (provide 'jaunder)
 ;;; jaunder.el ends here

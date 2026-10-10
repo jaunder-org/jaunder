@@ -35,7 +35,7 @@
                 "<j:slug>untitled-note</j:slug>"
                 "<content type=\"text/org\">Body</content>"
                 "<app:control><app:draft>yes</app:draft></app:control>")))
-      (should-error (jaunder-pull-test--org xml)))))
+      (should-error (jaunder-pull-test--org xml) :type 'jaunder-pull-validation-error))))
 
 (ert-deftest jaunder-atom->org-draft-untitled-exact-bytes ()
   ;; Empty Atom title means no local title, while draft native source and sync

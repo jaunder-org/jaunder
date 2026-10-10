@@ -744,6 +744,8 @@ Body";
     fn keyword_normalization_rejects_unusable_terms_even_when_structured_tags_win() {
         for term in [
             "café",
+            "\u{212a}",
+            "\u{a0}\u{212a}\u{a0}",
             "---!?",
             ", ,",
             "\u{a0}100 bullets",
