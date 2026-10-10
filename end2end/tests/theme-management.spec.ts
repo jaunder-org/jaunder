@@ -1,3 +1,4 @@
+import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { expectAccessible } from "./accessibility";
 import {
@@ -35,6 +36,47 @@ const THEME_ENDPOINTS = {
   shuffle: "/api/themes/shuffle",
 } as const;
 type ThemeEndpoint = keyof typeof THEME_ENDPOINTS;
+
+function waitForThemeMutations(page: Page) {
+  return (endpoint: ThemeEndpoint) =>
+    page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === THEME_ENDPOINTS[endpoint] &&
+        response.request().method() === "POST",
+    );
+}
+
+async function uploadStudioBindingImages(page: Page) {
+  const uploadedLogo = await uploadMedia(
+    page,
+    "blog-logo.png",
+    Buffer.from(ASSET_BYTES),
+    "image/png",
+  );
+  const headerOneBytes = Buffer.from([
+    ...ASSET_BYTES.slice(0, -12),
+    1,
+    ...ASSET_BYTES.slice(-11),
+  ]);
+  const headerTwoBytes = Buffer.from([
+    ...ASSET_BYTES.slice(0, -12),
+    2,
+    ...ASSET_BYTES.slice(-11),
+  ]);
+  const headerOne = await uploadMedia(
+    page,
+    "header-one.png",
+    headerOneBytes,
+    "image/png",
+  );
+  const headerTwo = await uploadMedia(
+    page,
+    "header-two.png",
+    headerTwoBytes,
+    "image/png",
+  );
+  return { uploadedLogo, headerOne, headerTwo, headerOneBytes, headerTwoBytes };
+}
 
 // The Studio journey must remain a private surface: custom public presentation
 // stylesheets may only appear in the isolated preview document, never in its parent.
@@ -124,42 +166,14 @@ test("invalid authored CSS is rejected before draft persistence", async ({
   ).toHaveCount(0);
 });
 
-test("author completes the custom theme lifecycle through Studio", async ({
+test("author selects older PNG bindings through Studio image pagination", async ({
   page,
   tracedContext,
 }) => {
   const username = await signInAsNewUser(page);
-  const uploadedLogo = await uploadMedia(
-    page,
-    "blog-logo.png",
-    Buffer.from(ASSET_BYTES),
-    "image/png",
-  );
-  const headerOneBytes = Buffer.from([
-    ...ASSET_BYTES.slice(0, -12),
-    1,
-    ...ASSET_BYTES.slice(-11),
-  ]);
-  const headerTwoBytes = Buffer.from([
-    ...ASSET_BYTES.slice(0, -12),
-    2,
-    ...ASSET_BYTES.slice(-11),
-  ]);
-  const headerOne = await uploadMedia(
-    page,
-    "header-one.png",
-    headerOneBytes,
-    "image/png",
-  );
-  const headerTwo = await uploadMedia(
-    page,
-    "header-two.png",
-    headerTwoBytes,
-    "image/png",
-  );
-  // Pagination needs fifty additional real images, not fifty raster-policy
-  // repetitions. SVG keeps that setup lightweight; the selected PNG bindings
-  // above still exercise raster ingestion and public-byte preservation.
+  await uploadStudioBindingImages(page);
+  // All three PNG bindings must remain selectable beyond the first fifty real
+  // images. The lifecycle test independently proves their public bytes.
   for (let index = 0; index < 50; index += 2) {
     await Promise.all(
       [index, index + 1].map((entry) =>
@@ -175,12 +189,104 @@ test("author completes the custom theme lifecycle through Studio", async ({
     );
   }
   await goto(page, "/themes");
-  const mutation = (endpoint: ThemeEndpoint) =>
-    page.waitForResponse(
+  const mutation = waitForThemeMutations(page);
+  const cssImport = page.locator("section").filter({ hasText: "Import CSS" });
+  await cssImport.getByLabel("Theme name").fill("Pagination draft");
+  await cssImport
+    .getByLabel("Stylesheet")
+    .fill("[data-jaunder-theme-surface] { color: blue; }");
+  await Promise.all([
+    mutation("import_css"),
+    cssImport.getByRole("button", { name: "Import CSS draft" }).click(),
+  ]);
+  await page.getByRole("button", { name: /Pagination draft/ }).click();
+  await expect(page.getByRole("button", { name: "Next images" })).toBeEnabled();
+  await page.getByRole("button", { name: "Next images" }).click();
+  await expect(page.getByText("Image page 2")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Next images" }),
+  ).toBeDisabled();
+  await Promise.all([
+    mutation("replace_binding"),
+    page
+      .getByLabel("Logo image")
+      .selectOption({ label: "Media: blog-logo.png" }),
+  ]);
+  await expect(
+    page.getByLabel("Logo image").locator("option:checked"),
+  ).toHaveText("Media: blog-logo.png");
+  for (const filename of ["header-one.png", "header-two.png"]) {
+    await page.getByLabel("Media to add").selectOption({ label: filename });
+    await page.getByRole("button", { name: "Add Media" }).click();
+  }
+  await expect(
+    page.getByRole("list", { name: "Selected header Media" }),
+  ).toContainText("header-one.png");
+  await expect(
+    page.getByRole("list", { name: "Selected header Media" }),
+  ).toContainText("header-two.png");
+  await Promise.all([
+    mutation("replace_pool"),
+    page.getByRole("button", { name: "Save header pool" }).click(),
+  ]);
+  await Promise.all([
+    mutation("publish"),
+    page.getByRole("button", { name: "Publish" }).click(),
+  ]);
+  const publicSelection = page.getByLabel("Public selection");
+  const themeId = await publicSelection
+    .getByRole("option", { name: "Pagination draft" })
+    .getAttribute("value");
+  expect(themeId).not.toBeNull();
+  await Promise.all([
+    mutation("select"),
+    publicSelection.selectOption(themeId!),
+  ]);
+  await expect(publicSelection).toHaveValue(themeId!);
+
+  const freshContext = await tracedContext();
+  try {
+    const freshPage = await freshContext.newPage();
+    await signInAs(freshPage, username);
+    const releaseCatalog = await stallServerFn(freshPage, "themes/list");
+    const persistedSelection = freshPage.waitForResponse(
       (response) =>
-        new URL(response.url()).pathname === THEME_ENDPOINTS[endpoint] &&
-        response.request().method() === "POST",
+        new URL(response.url()).pathname === "/api/themes/get_selection",
     );
+    await goto(freshPage, "/themes");
+    await persistedSelection;
+    releaseCatalog();
+    await expect(freshPage.getByLabel("Public selection")).toHaveValue(
+      themeId!,
+    );
+    await freshPage.getByRole("button", { name: /Pagination draft/ }).click();
+    await expect(freshPage.getByLabel("Logo image")).toHaveValue(
+      "unavailable-media",
+    );
+    await freshPage.getByRole("button", { name: "Next images" }).click();
+    await expect(freshPage.getByLabel("Logo image")).toHaveValue(
+      /media\/upload\//,
+    );
+    await expect(
+      freshPage.getByRole("list", { name: "Selected header Media" }),
+    ).toContainText("header-one.png");
+    await expect(
+      freshPage.getByRole("list", { name: "Selected header Media" }),
+    ).toContainText("header-two.png");
+  } finally {
+    await freshContext.close();
+  }
+});
+
+test("author completes the custom theme lifecycle through Studio", async ({
+  page,
+  tracedContext,
+}) => {
+  const username = await signInAsNewUser(page);
+  const { uploadedLogo, headerOne, headerTwo, headerOneBytes, headerTwoBytes } =
+    await uploadStudioBindingImages(page);
+  await goto(page, "/themes");
+  const mutation = waitForThemeMutations(page);
 
   const cssImport = page.locator("section").filter({ hasText: "Import CSS" });
 
@@ -237,12 +343,6 @@ test("author completes the custom theme lifecycle through Studio", async ({
     page.getByRole("button", { name: "Save complete draft package" }).click(),
   ]);
 
-  await expect(page.getByRole("button", { name: "Next images" })).toBeEnabled();
-  await page.getByRole("button", { name: "Next images" }).click();
-  await expect(page.getByText("Image page 2")).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Next images" }),
-  ).toBeDisabled();
   await Promise.all([
     mutation("replace_binding"),
     page
@@ -362,34 +462,6 @@ test("author completes the custom theme lifecycle through Studio", async ({
   } finally {
     await publicContext.close();
   }
-
-  const freshContext = await tracedContext();
-  const freshPage = await freshContext.newPage();
-  await signInAs(freshPage, username);
-  const releaseCatalog = await stallServerFn(freshPage, "themes/list");
-  const persistedSelection = freshPage.waitForResponse(
-    (response) =>
-      new URL(response.url()).pathname === "/api/themes/get_selection",
-  );
-  await goto(freshPage, "/themes");
-  await persistedSelection;
-  releaseCatalog();
-  await expect(freshPage.getByLabel("Public selection")).toHaveValue(themeId!);
-  await freshPage.getByRole("button", { name: /Night round trip/ }).click();
-  await expect(freshPage.getByLabel("Logo image")).toHaveValue(
-    "unavailable-media",
-  );
-  await freshPage.getByRole("button", { name: "Next images" }).click();
-  await expect(freshPage.getByLabel("Logo image")).toHaveValue(
-    /media\/upload\//,
-  );
-  await expect(
-    freshPage.getByRole("list", { name: "Selected header Media" }),
-  ).toContainText("header-one.png");
-  await expect(
-    freshPage.getByRole("list", { name: "Selected header Media" }),
-  ).toContainText("header-two.png");
-  await freshContext.close();
 
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export ZIP" }).click();
@@ -522,12 +594,7 @@ test("operator manages the site catalog through public selection and fallback", 
 }) => {
   await signInAs(page, "testoperator");
   await goto(page, "/themes");
-  const mutation = (endpoint: ThemeEndpoint) =>
-    page.waitForResponse(
-      (response) =>
-        new URL(response.url()).pathname === THEME_ENDPOINTS[endpoint] &&
-        response.request().method() === "POST",
-    );
+  const mutation = waitForThemeMutations(page);
 
   const siteCatalog = page.getByRole("button", { name: "Site catalog" });
   await expect(siteCatalog).toBeVisible();
