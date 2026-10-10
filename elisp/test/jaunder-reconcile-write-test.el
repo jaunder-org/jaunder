@@ -478,7 +478,7 @@
   "Owned inode replacement precedes hook failure and cannot erase create provenance."
   (dolist (failure-at '(1 2))
     (dolist (drift '(nil t))
-      (let* ((saves 0) before after
+      (let* ((saves 0) before-saves after-saves
              (proof
               (jaunder-test--confirmed-write-batch
                'push
@@ -488,16 +488,16 @@
                            (jaunder-test--write-source-links state "50" "post-001"))
                    ('write
                     (when (equal (plist-get event :id) "101")
-                      (setq before (jaunder--operation-file-identity (buffer-file-name)))
                       (setq-local file-precious-flag t)
-                      (when drift
-                        (setq-local before-save-hook
-                                    (list (lambda ()
+                      (setq-local before-save-hook
+                                  (list (lambda ()
+                                          (push (jaunder--operation-file-identity (buffer-file-name)) before-saves)
+                                          (when drift
                                             (setq jaunder--active-blog '(:base-url "https://example.test" :username "bob"))))))
                       (setq-local after-save-hook
                                   (list (lambda ()
-                                          (setq saves (1+ saves)
-                                                after (jaunder--operation-file-identity (buffer-file-name)))
+                                          (setq saves (1+ saves))
+                                          (push (jaunder--operation-file-identity (buffer-file-name)) after-saves)
                                           (when (= saves failure-at) (error "failure after owned atomic save")))))
                       (list :body (jaunder-test--write-entry "101" "post-001" "https://example.test/~alice/actual-created")
                             :headers '(("etag" . "\"written\"")
@@ -506,7 +506,12 @@
         (ert-info ((format "save=%S drift=%S" failure-at drift))
           (should (= (length (plist-get proof :writes)) 2))
           (should (= saves failure-at))
-          (should-not (equal before after))
+          (should (= (length before-saves) failure-at))
+          (should (= (length after-saves) failure-at))
+          ;; An inode freed by the first replacement may be reused by the next.
+          ;; Each owned save must replace its current inode, not every past inode.
+          (cl-mapc (lambda (before after) (should-not (equal before after)))
+                   (reverse before-saves) (reverse after-saves))
           (should (equal (mapcar #'jaunder-reconcile-result-outcome (plist-get proof :results))
                          '(partial failed success)))
           (should (string-match-p "failure after owned atomic save"
