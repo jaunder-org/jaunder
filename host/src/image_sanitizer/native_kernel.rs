@@ -195,6 +195,11 @@ pub(super) fn sanitize(
             Ok(Outcome::Passthrough(data.to_vec()))
         };
     };
+    // SVG is explicitly outside raster metadata editing; byte detection wins
+    // over a misleading raster filename or MIME claim at shared ingress.
+    if kind == FileType::Svg {
+        return Ok(Outcome::Passthrough(data.to_vec()));
+    }
     if !matches!(
         kind,
         FileType::Jpeg | FileType::Png | FileType::Gif | FileType::WebP | FileType::Heif

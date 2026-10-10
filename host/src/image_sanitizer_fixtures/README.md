@@ -16,13 +16,18 @@ after editing and checks removal of the comment. This checks representative HDR
 signaling, not HDR display/device certification. It was generated with pinned
 Pillow's `PngInfo.add` and `Image.new`, without a custom image parser.
 
-`png-sanitized.png` and `jpeg-sanitized.jpg` are byte-stable golden outputs
-created from the corresponding owned originals with pinned ExifTool 13.59:
-`-config '' -overwrite_original -all= --icc_profile:all -tagsFromFile @ -Orientation`.
-Manager and HTTP tests compare the actual public bytes to these golden outputs,
-including their edited digest and size. The already-clean PNG also provides a
-small production startup probe: the editor must process it unchanged before
-serve/demo-seed roots accept the runtime.
+`png-sanitized.png` and `jpeg-sanitized.jpg` are byte-stable golden outputs from
+the linked native editing engine and their corresponding owned originals. Their
+update required independent ExifTool private-tag inspection and conventional
+decoded-rendering, orientation and full-ICC equality checks, not merely
+regenerating expected bytes. The JPEG additionally checks byte-idempotence.
+Manager and HTTP tests compare actual public bytes to these outputs, including
+edited digest and size. The native PNG SHA-256 is
+`fd0e88136fda66661f07ab7f269c9f6a28726f434cc91721ee7fd608fd481620`; the JPEG is
+`ed8b5251799b0381863da2b50ff7ee22927503f08947d3a39a98bcaccc89113c`. The owned
+original PNG also provides a small production startup probe: the same-executable
+worker must produce its canonical sanitized digest before serve/demo-seed roots
+accept the adapter.
 
 `inspect_rendering.py` is a test-only observer built on conventional Pillow and
 ImageMagick/libheif decoders. The Rust format table independently reads planted
@@ -31,9 +36,15 @@ whole-profile SHA-256/length plus decoded RGBA frame hashes, frame sizes,
 timing/disposal/blending, animation loop/default-frame state and alpha extrema.
 The animated cases must actually expose multiple frames, and the corpus must
 exercise non-opaque alpha. No custom image/container parser is used. Normal Nix
-host-test and dev/CI inputs provide pinned Pillow, ImageMagick and ExifTool.
+behavioral-test and dev/CI inputs provide pinned Pillow, ImageMagick and
+ExifTool as independent observers. Product binaries and their dependency
+preparation do not inherit those tools.
 
 Fixtures are compiled into tests (and the small startup probe) and explicitly
-admitted by the normal application and coverage source filters. Runtime tests
-use the pinned ExifTool provided by the development/CI shell or explicit
-`JAUNDER_EXIFTOOL` injection; no ignored `.xtask` fixture directory is needed.
+admitted by the normal application and coverage source filters. Editing tests
+inject a real `test-support` executable through `JAUNDER_IMAGE_WORKER_BIN`:
+`cargo xtask test-local` builds it explicitly, and hermetic coverage supplies
+its reviewed package. Libtest executables never act as production worker
+substitutes. Observers use their separate test-only tool paths; production never
+discovers an editor through PATH or environment. No ignored `.xtask` fixture
+directory is needed for maintained tests.

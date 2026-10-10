@@ -80,6 +80,35 @@ pub fn process(
     }
 }
 
+/// Runs the isolated worker with a dedicated response descriptor.
+///
+/// Redirect before calling any native library: their logging, warnings and
+/// panic hook may contain metadata. Only our safe protocol reaches the parent.
+///
+/// # Errors
+/// Returns concrete channel setup, encoding or write failures.
+pub fn execute(request: &super::worker_request::WorkerRequest) -> Result<(), WorkerExecutionError> {
+    let descriptor = rustix::io::dup(std::io::stdout()).map_err(std::io::Error::from)?;
+    let mut response = std::fs::File::from(descriptor);
+    let null = std::fs::OpenOptions::new().write(true).open("/dev/null")?;
+    rustix::stdio::dup2_stdout(&null).map_err(std::io::Error::from)?;
+    rustix::stdio::dup2_stderr(&null).map_err(std::io::Error::from)?;
+    let reply = match process(&request.path, request.claims_raster, request.max_bytes) {
+        Ok(completion) => super::worker_protocol::Reply::from(completion),
+        Err(error) => super::worker_protocol::Reply::Failed((&error).into()),
+    };
+    response.write_all(&super::worker_protocol::encode(&reply)?)?;
+    Ok(())
+}
+
+#[derive(Debug, Error)]
+pub enum WorkerExecutionError {
+    #[error("worker response channel failed")]
+    Io(#[from] std::io::Error),
+    #[error("worker response encoding failed")]
+    Protocol(#[from] super::worker_protocol::ProtocolError),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

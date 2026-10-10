@@ -7,7 +7,37 @@ use crate::sh::step_with_env;
 pub fn run(sh: &Shell, result: &mut CommandResult, nextest_args: &[String]) {
     let args = args_for(nextest_args);
     let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    let (env, cache_detail) = compile_cache::cargo_compile_env();
+    let (mut env, cache_detail) = compile_cache::cargo_compile_env();
+    // Integration/libtest executables cannot dispatch internal application modes.
+    // Prepare the real demo executable explicitly for every local product lane.
+    let build = step_with_env(
+        sh,
+        "image-worker-fixture",
+        "cargo",
+        &[
+            "build",
+            "--locked",
+            "-p",
+            "test-support",
+            "--bin",
+            "test-support",
+            "--target-dir",
+            "target",
+        ],
+        &env,
+    );
+    let built = build.ok;
+    result.push(build);
+    if !built {
+        return;
+    }
+    env.push((
+        "JAUNDER_IMAGE_WORKER_BIN".into(),
+        sh.current_dir()
+            .join("target/debug/test-support")
+            .display()
+            .to_string(),
+    ));
     let mut step = step_with_env(sh, "test-local", "cargo", &refs, &env);
     if let Some(cache_detail) = cache_detail {
         step.detail = Some(match step.detail.take() {

@@ -35,6 +35,12 @@ async fn main() -> anyhow::Result<()> {
         );
         std::process::exit(1);
     } // cov:ignore: process::exit(1) diverges before this compiler-inserted closing edge.
+    if let Some(request) =
+        host::image_sanitizer::worker_request::parse(std::env::args_os().skip(1))?
+    {
+        host::image_sanitizer::worker::execute(&request)?;
+        return Ok(());
+    }
     // cov:ignore-start: Host test binaries exit at the cheap-KDF guard before CLI parsing can run.
     let cli =
         Cli::try_parse_inherited_from(std::env::args_os()).unwrap_or_else(|error| error.exit());

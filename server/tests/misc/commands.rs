@@ -752,6 +752,7 @@ async fn after_init_server_responds_to_health_check(#[case] backend: Backend) {
         &telemetry,
         false,
         None,
+        crate::helpers::test_image_sanitizer(),
     )
     .await
     .expect("initialized database prepares a server")
@@ -783,9 +784,17 @@ async fn prepare_server_binds_and_builds_serving_router(#[case] backend: Backend
     drop(probe);
 
     let (telemetry, capture) = default_host_config();
-    let prepared = prepare_server(&args, bind, true, &telemetry, false, capture.as_ref())
-        .await
-        .expect("prepare_server should succeed after init");
+    let prepared = prepare_server(
+        &args,
+        bind,
+        true,
+        &telemetry,
+        false,
+        capture.as_ref(),
+        crate::helpers::test_image_sanitizer(),
+    )
+    .await
+    .expect("prepare_server should succeed after init");
     assert_eq!(
         prepared.listener.local_addr().unwrap(),
         bind,
@@ -815,9 +824,17 @@ async fn prepare_server_writes_then_removes_runtime_file(#[case] backend: Backen
 
     let rt_path = args.storage_path.join("runtime.json");
     let (telemetry, capture) = default_host_config();
-    let prepared = prepare_server(&args, bind, true, &telemetry, false, capture.as_ref())
-        .await
-        .expect("prepare_server should succeed after init");
+    let prepared = prepare_server(
+        &args,
+        bind,
+        true,
+        &telemetry,
+        false,
+        capture.as_ref(),
+        crate::helpers::test_image_sanitizer(),
+    )
+    .await
+    .expect("prepare_server should succeed after init");
 
     assert!(
         rt_path.exists(),

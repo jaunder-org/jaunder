@@ -289,7 +289,7 @@ mod tests {
             )
             .with_image_sanitizer(Arc::new(
                 host::image_sanitizer::ImageSanitizer::new(
-                    std::env::var_os("JAUNDER_EXIFTOOL")
+                    std::env::var_os("JAUNDER_IMAGE_WORKER_BIN")
                         .map(std::path::PathBuf::from)
                         .expect("configured image runtime"),
                 )

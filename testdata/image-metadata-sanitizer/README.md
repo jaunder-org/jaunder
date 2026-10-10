@@ -5,9 +5,11 @@ Pillow and ordinary synthetic fixture construction; they are not production
 sanitizers or shipping verification gates. They do not reconstruct every exact
 host fixture filename or metadata-editing step.
 
-The practical corpus, clean ExifTool golden outputs and conventional rendering
-observer live under `host/src/image_sanitizer_fixtures/`. Its README records the
-runtime invocation and preservation evidence.
+The practical corpus, native sanitized golden outputs and independent metadata
+and conventional rendering observers live under
+`host/src/image_sanitizer_fixtures/`. Its README records generation provenance,
+real-worker fixture preparation and preservation contracts. ExifTool is an
+independent test observer, not the production editor.
 
 The earlier custom codec/container parsers, rewriters, instrumented HEVC
 consumer, ICC scrubbing experiments and `probe.nix` campaign driver were removed

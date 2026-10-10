@@ -348,12 +348,16 @@ let
   # also builds the wasm CSR package.
   hostArgs = commonArgs // {
     buildInputs = commonArgs.buildInputs ++ [ pkgs.dav1d ];
+  };
+
+  # Independent privacy/rendering observers belong only to behavioral tests,
+  # not production binaries or their dependency preparation.
+  imageObserverArgs = {
     nativeBuildInputs = commonArgs.nativeBuildInputs ++ [
       pkgs.exiftool
       pkgs.imagemagick
       (pkgs.python3.withPackages (ps: [ ps.pillow ]))
     ];
-    JAUNDER_EXIFTOOL = "${pkgs.exiftool}/bin/exiftool";
     JAUNDER_IMAGE_MAGICK = "${pkgs.imagemagick}/bin/magick";
     JAUNDER_IMAGE_PYTHON = "${pkgs.python3.withPackages (ps: [ ps.pillow ])}/bin/python3";
   };
@@ -1149,6 +1153,7 @@ in
       craneLib
       commonArgs
       hostArgs
+      imageObserverArgs
       wasmTestSrc
       siteSrc
       siteCargoMembers

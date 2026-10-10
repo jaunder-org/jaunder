@@ -499,11 +499,30 @@ Details in the testing section.
 Shared Media ingress sanitizes new JPEG, PNG/APNG, GIF, WebP and HEIC/HEIF bytes
 before minting a public Media identity, following the
 [image metadata privacy decision](adr/drafts/image-upload-metadata-privacy.md).
-Composition roots explicitly inject a host-owned `ImageSanitizer` and validate
-its pinned ExifTool runtime before serving or seeding. Editing occurs in owned
-private spool files before hashing, quota accounting, content locks or public
-placement; a shared two-job limit and one 30-second processing deadline bound
-work. Cancellation stops and reaps the exact child before cleanup.
+Composition roots explicitly inject a host-owned `ImageSanitizer` and probe the
+native worker before serving or seeding. Production launches the same deployed
+executable in a private internal mode, linking Rust metadata readers/writers
+without an installed editor, Perl, PATH discovery or runtime download
+([single-executable deployment](adr/0008-deployment-model.md)). Editing keeps
+the supervisor's private 0600 spool inode before hashing, quota accounting,
+content locks or public placement; only `MediaManager` grants fresh public
+files 0644. Clones share two active jobs and one 30-second deadline per request,
+including queue admission, execution and reply validation.
+
+Runtime-independent supervisor threads kill and confirm reaping before releasing
+spools or capacity, including cancellation and Tokio teardown. A two-slot owner
+registry publishes handles before work starts, joins predecessors before slot
+reuse and joins all owners on final adapter drop without holding its mutex or
+requiring Tokio progress. Unconfirmed reaping retains private resources and
+reports failure rather than signaling a possibly reused PID or guessing cleanup.
+Unavoidable host SIGKILL/abort cleanup is not promised.
+
+Worker diagnostics are suppressed before native processing. Bounded 128 KiB,
+EOF-terminated replies carry only typed, metadata-free outcome/source
+projections; framing, schema, exit status, MIME, size and private inode/mode are
+checked before acceptance. Original native errors remain inside the worker.
+Independent ExifTool/Pillow/ImageMagick observers belong to tests, not the
+product package.
 
 Detected image format controls stored/served Content-Type without renaming the
 canonical filename. Sanitized bytes define hash, URL, ETag, deduplication, size

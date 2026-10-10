@@ -201,6 +201,17 @@ mod tests {
     }
 
     #[test]
+    fn byte_detected_svg_remains_passthrough_despite_a_raster_claim() {
+        let data = b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>";
+        let EditedBytes::Passthrough(actual) =
+            sanitize(data, true, 16_777_216).expect("SVG is excluded from raster editing")
+        else {
+            panic!("SVG was edited")
+        };
+        assert_eq!(actual, data);
+    }
+
+    #[test]
     fn svg_and_non_raster_attachments_remain_byte_identical() {
         for data in [
             b"ordinary attachment".as_slice(),

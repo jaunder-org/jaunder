@@ -110,7 +110,7 @@ let
 
   shellEnv = (if pkgs.stdenv.hostPlatform.isDarwin then darwinBrowserEnv else linuxBrowserEnv) // {
     RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
-    JAUNDER_EXIFTOOL = "${pkgs.exiftool}/bin/exiftool";
+    # Test-only independent rendering observers; production never discovers tools.
     JAUNDER_IMAGE_MAGICK = "${pkgs.imagemagick}/bin/magick";
     JAUNDER_IMAGE_PYTHON = "${pkgs.python3.withPackages (ps: [ ps.pillow ])}/bin/python3";
     LC_ALL = "C.UTF-8";

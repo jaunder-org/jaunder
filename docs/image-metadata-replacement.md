@@ -68,7 +68,10 @@ and original public file readable: replacement is still incomplete retirement.
 
 Focused proof:
 `devtool run -- cargo xtask test-local -- -p jaunder historical_image_replacement_rehearsal`
-(with the development shell's pinned ExifTool, or explicit test runtime path).
+The local test driver builds and injects the real native worker fixture;
+independent metadata/rendering observers come from the pinned development shell.
+The supported production path launches the same deployed Jaunder executable, not
+an externally configured editor.
 
 This demonstrates the replacement and refusal paths, **not removal of the two
 historical originals from public access**. Complete historical privacy removal

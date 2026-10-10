@@ -35,20 +35,35 @@ Mandatory shared ingestion sanitizes new JPEG, PNG/APNG, GIF, WebP and HEIC/HEIF
 uploads before public placement and Media Record creation. Identification uses
 bytes, not caller labels, and determines the stored/served Content-Type of
 covered images even when labels disagree; canonical filenames remain unchanged.
-Non-image Content-Type behavior remains unchanged. Established metadata tooling
-removes ordinary GPS/location, camera/device identifiers, capture timestamps,
-author descriptions, comments, EXIF/XMP/IPTC descriptive fields and metadata
-thumbnails/previews it supports. Rendering information needed for orientation,
-color/HDR, transparency and animation remains.
+Non-image Content-Type behavior remains unchanged. Linked Rust metadata
+readers/writers remove ordinary GPS/location, camera/device identifiers, capture
+timestamps, author descriptions, comments, EXIF/XMP/IPTC descriptive fields and
+metadata thumbnails/previews it supports. Rendering information needed for
+orientation, color/HDR, transparency and animation remains.
 
 Source formats and image/frame data are preserved without lossy re-encoding.
 Color profiles remain intact, including their descriptive text; bespoke ICC
 canonicalization is outside this ordinary-metadata policy. Processing or
 post-edit metadata-check failures reject the upload, never publish the original
 as a fallback. Runtime, input/output sizes, concurrency and child lifetime have
-ordinary application limits. A small fixture set checks actual removal and
-preserved presentation; tool exit status alone is not proof. No exhaustive
-codec/conformance or ignored-byte ownership proof is required.
+ordinary application limits. Consistent with
+[single-executable deployment](../0008-deployment-model.md), native editing runs
+in a killable private mode of the same deployed executable, never an installed
+metadata editor, Perl helper, runtime download or timed-out in-process blocking
+editor. Composition roots explicitly inject and probe this worker. Two shared
+jobs and one 30-second request deadline include queue wait, execution and reply
+validation; replies are limited to 128 KiB and expose only typed, metadata-free
+sources. Native diagnostic output is suppressed before processing.
+
+The supervisor owns the same private 0600 spool inode until confirmed child
+reaping, including cancellation, runtime teardown and normal final-adapter drop.
+A bounded owner registry joins runtime-independent supervisors; unconfirmed
+reaping retains private resources and reports failure. Public 0644 placement
+belongs to `MediaManager` only after validation. Forced host SIGKILL/abort
+cannot guarantee cleanup. A small fixture set and independent test-only
+observers check actual removal and preserved presentation; worker exit status
+alone is not proof. No exhaustive codec/conformance or ignored-byte ownership
+proof is required.
 
 SVG remains accepted unchanged and outside this guarantee, as does non-image
 Media. The policy does not promise removal of visible PII, PII in filenames,
@@ -92,8 +107,13 @@ another standards-research project.
 We reject public originals plus sanitized derivatives, metadata opt-outs, lossy
 format conversion and in-place historical rewrites. Remaining optional editing
 capabilities are intentionally subordinate to privacy and presentation. The
-chosen tool/runtime and its maintenance cost are implementation decisions
-requiring pinned packaging and license review before delivery.
+chosen linked libraries and their maintenance cost require pinned packaging,
+advisory and license review. The maintained `little_exif` dependency has a
+narrow reviewed HEIF metadata-extent boundary; its provenance and removal
+procedure live in `third-party/little-exif/JAUNDER.md`. Third-party grants and
+notices remain intact; accepting dependency GPL-3.0-or-later does not silently
+relicense first-party contributions. Independent ExifTool, Pillow and
+ImageMagick observers are test tooling, not production runtime dependencies.
 
 A one-off procedure documents shared ownership, historical link breakage, stale
 local upload sources, immutable caches and backups. Retiring current binaries

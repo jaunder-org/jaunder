@@ -687,7 +687,7 @@ async fn find_by_hash_returns_any_match(#[case] backend: Backend) {
 fn test_image_sanitizer() -> Arc<host::image_sanitizer::ImageSanitizer> {
     Arc::new(
         host::image_sanitizer::ImageSanitizer::new(
-            std::env::var_os("JAUNDER_EXIFTOOL")
+            std::env::var_os("JAUNDER_IMAGE_WORKER_BIN")
                 .map(std::path::PathBuf::from)
                 .expect("configured image runtime"),
         )

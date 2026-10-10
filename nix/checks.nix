@@ -7,6 +7,7 @@ let
     craneLib
     commonArgs
     hostArgs
+    imageObserverArgs
     wasmTestSrc
     siteSrc
     siteCargoMembers
@@ -1821,10 +1822,13 @@ mkWasmCoverageMeasurementProducer =
   coverageFinalCacheChecks = rec {
     coverage = nonSubstitutable (craneLib.mkCargoDerivation (
       hostArgs
+      // imageObserverArgs
       // {
         src = coverageSrc;
         inherit cargoArtifacts;
         pname = "jaunder-coverage";
+        # Libtest binaries cannot handle the private same-executable worker mode.
+        JAUNDER_IMAGE_WORKER_BIN = "${testSupportBin}/bin/test-support";
         # Source-based coverage uses LLVM's embedded coverage map
         # (-Cinstrument-coverage), not DWARF, so dropping debuginfo
         # shrinks the instrumented test binaries dramatically with no
@@ -1842,7 +1846,7 @@ mkWasmCoverageMeasurementProducer =
         # release `jaunderBin` uses; `build.rs` copies from these paths.
         JAUNDER_CSR_BUNDLE_DIR = "${csrWasmBundle}";
         JAUNDER_PUBLIC_DIR = "${../public}";
-        nativeBuildInputs = hostArgs.nativeBuildInputs ++ [
+        nativeBuildInputs = imageObserverArgs.nativeBuildInputs ++ [
           devtoolBin
           cargo-crap
           pkgs.cargo-llvm-cov

@@ -309,6 +309,12 @@ fn storage_runtime_config(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if let Some(request) =
+        host::image_sanitizer::worker_request::parse(std::env::args_os().skip(1))?
+    {
+        host::image_sanitizer::worker::execute(&request)?;
+        return Ok(());
+    }
     let cli = Cli::parse();
     if matches!(&cli.command, Commands::BuildCommit) {
         println!(
@@ -353,7 +359,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             storage_path,
             profile,
         } => {
-            cmd_seed_sandbox_profile(&db, &storage_path, profile.into(), configured_image_runtime)
+            cmd_seed_sandbox_profile(&db, &storage_path, profile.into(), deployed_image_worker)
                 .await
         }
         Commands::SeedTheme {
@@ -540,29 +546,17 @@ fn cmd_capture_path_for_stream(stream: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn required_image_runtime(
-    executable: Option<std::path::PathBuf>,
-    packaged: Option<&str>,
-) -> anyhow::Result<std::path::PathBuf> {
-    executable
-        .or_else(|| packaged.map(std::path::PathBuf::from))
-        .ok_or_else(|| anyhow::anyhow!("required image metadata runtime is not configured"))
-}
-
-fn configured_image_runtime() -> anyhow::Result<std::path::PathBuf> {
-    required_image_runtime(
-        std::env::var_os("JAUNDER_EXIFTOOL").map(std::path::PathBuf::from),
-        host::image_sanitizer::PACKAGED_EXIFTOOL,
-    )
+fn deployed_image_worker() -> anyhow::Result<std::path::PathBuf> {
+    Ok(std::env::current_exe()?)
 }
 
 /// Seed one complete fixed sandbox profile and report only after every phase commits.
-/// The image-runtime lookup is lazy: the Standard profile does not need images.
+/// Deployed-worker resolution is lazy: the Standard profile does not need images.
 async fn cmd_seed_sandbox_profile(
     db: &DbConnectOptions,
     storage_path: &std::path::Path,
     profile: SandboxProfile,
-    image_runtime: impl FnOnce() -> anyhow::Result<std::path::PathBuf>,
+    image_worker_executable: impl FnOnce() -> anyhow::Result<std::path::PathBuf>,
 ) -> anyhow::Result<()> {
     let runtime = storage_runtime_config(db)?;
     let opened = storage::open_existing_database_with_observer(db, &runtime).await?;
@@ -578,7 +572,7 @@ async fn cmd_seed_sandbox_profile(
         }
         SandboxProfile::Demo => {
             let storage_path = std::sync::Arc::new(storage_path.to_path_buf());
-            let executable = image_runtime()?;
+            let executable = image_worker_executable()?;
             let sanitizer =
                 std::sync::Arc::new(host::image_sanitizer::ImageSanitizer::new(executable)?);
             sanitizer.check_runtime().await?;
@@ -807,27 +801,12 @@ mod tests {
     }
 
     #[test]
-    fn demo_runtime_configuration_is_required_and_preserves_the_selected_path() {
-        let missing =
-            required_image_runtime(None, None).expect_err("missing runtime must refuse demo seed");
+    fn demo_worker_is_the_current_deployed_executable() {
+        let selected = deployed_image_worker().expect("current executable");
+        assert!(selected.is_absolute());
         assert_eq!(
-            missing.to_string(),
-            "required image metadata runtime is not configured"
-        );
-        let selected = std::path::PathBuf::from("/configured/image-editor");
-        assert_eq!(
-            required_image_runtime(Some(selected.clone()), None).expect("configured runtime"),
-            selected
-        );
-        assert_eq!(
-            required_image_runtime(None, Some("/packaged/image-editor"))
-                .expect("packaged fallback"),
-            std::path::PathBuf::from("/packaged/image-editor")
-        );
-        assert_eq!(
-            required_image_runtime(Some(selected.clone()), Some("/packaged/image-editor"))
-                .expect("explicit runtime overrides packaged fallback"),
-            selected
+            selected,
+            std::env::current_exe().expect("current executable")
         );
     }
 
@@ -1420,16 +1399,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sandbox_profile_handler_requires_image_runtime_only_for_demo() {
+    async fn sandbox_profile_handler_resolves_deployed_worker_only_for_demo() {
         let (storage, db) = temp_db().await;
-        let no_runtime = || required_image_runtime(None, None);
+        let no_runtime = || anyhow::bail!("required image worker unavailable");
         let error = cmd_seed_sandbox_profile(&db, storage.path(), SandboxProfile::Demo, no_runtime)
             .await
             .expect_err("missing runtime must reject the actual demo seed handler");
-        assert_eq!(
-            error.to_string(),
-            "required image metadata runtime is not configured"
-        );
+        assert_eq!(error.to_string(), "required image worker unavailable");
         let factory =
             storage::open_existing_database(&db, &storage::StorageRuntimeConfig::default())
                 .await
@@ -1470,13 +1446,25 @@ mod tests {
     #[tokio::test]
     async fn sandbox_profile_handler_dispatches_demo_media_and_posts() {
         let (storage, db) = temp_db().await;
-        run(cli(Commands::SeedSandboxProfile {
-            db: db.clone(),
-            storage_path: storage.path().to_owned(),
-            profile: SandboxProfileArg::Demo,
-        }))
+        // Exercise the real CLI dispatch and its current_exe worker composition;
+        // this libtest executable cannot dispatch an internal application mode.
+        let output = tokio::process::Command::new(
+            std::env::var_os("JAUNDER_IMAGE_WORKER_BIN").expect("prepared demo executable"),
+        )
+        .arg("seed-sandbox-profile")
+        .arg("--db")
+        .arg(db.expose_url())
+        .arg("--storage-path")
+        .arg(storage.path())
+        .args(["--profile", "demo"])
+        .output()
         .await
-        .expect("demo profile handler succeeds");
+        .expect("real demo seed command");
+        assert!(
+            output.status.success(),
+            "demo profile command: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
 
         let factory =
             storage::open_existing_database(&db, &storage::StorageRuntimeConfig::default())

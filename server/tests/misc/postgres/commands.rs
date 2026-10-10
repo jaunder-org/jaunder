@@ -201,10 +201,18 @@ async fn prepare_server_postgres_missing_database_preserves_3d000_guidance() {
     let bind = "127.0.0.1:0".parse().expect("bind address");
 
     let (telemetry, capture) = test_host_config();
-    let error = prepare_server(&args, bind, false, &telemetry, false, capture.as_ref())
-        .await
-        .err()
-        .expect("missing PostgreSQL database must fail");
+    let error = prepare_server(
+        &args,
+        bind,
+        false,
+        &telemetry,
+        false,
+        capture.as_ref(),
+        crate::helpers::test_image_sanitizer(),
+    )
+    .await
+    .err()
+    .expect("missing PostgreSQL database must fail");
 
     assert!(
         error

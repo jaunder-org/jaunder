@@ -1128,10 +1128,10 @@ mod tests {
     }
 
     fn test_image_sanitizer() -> Arc<ImageSanitizer> {
-        let executable = std::env::var_os("JAUNDER_EXIFTOOL")
+        let executable = std::env::var_os("JAUNDER_IMAGE_WORKER_BIN")
             .map(PathBuf::from)
-            .expect("focused media-manager tests require JAUNDER_EXIFTOOL");
-        Arc::new(ImageSanitizer::new(executable).expect("configured ExifTool runtime"))
+            .expect("focused media-manager tests require JAUNDER_IMAGE_WORKER_BIN");
+        Arc::new(ImageSanitizer::new(executable).expect("configured native worker"))
     }
 
     fn test_instance_id() -> InstanceId {
@@ -2699,19 +2699,14 @@ mod tests {
 import json,sys
 from pathlib import Path
 base=Path(__file__).parent
-p=Path(sys.argv[-1])
+p=Path(sys.argv[2])
 mode=(base/'failure').read_text()
-phase='edit' if '-overwrite_original' in sys.argv else 'verify' if '-G1' in sys.argv else 'detect'
 with (base/'calls').open('a') as log:
- log.write(json.dumps({'phase':phase,'path':str(p)})+'\n')
-if phase=='edit':
- p.write_bytes((base/'clean.png').read_bytes())
- if mode=='edit-exit': sys.exit(17)
-elif phase=='verify':
- if mode=='verify-exit': sys.exit(19)
- print(json.dumps([{'SourceFile':str(p),'EXIF:GPSLatitude':1}]))
-else:
- print(json.dumps([{'SourceFile':str(p),'MIMEType':'image/png'}]))
+ log.write(json.dumps({'phase':'worker','path':str(p)})+'\n')
+p.write_bytes((base/'clean.png').read_bytes())
+if mode=='edit-exit': sys.exit(17)
+if mode=='verify-exit': sys.exit(19)
+sys.stdout.buffer.write(b'JAUNDER-IMAGE-1\0'+json.dumps({'Failed':'InvalidImage'}).encode())
 ";
         std_fs::write(&path, format!("#!{}\n{script}", python.display())).unwrap();
         std_fs::set_permissions(&path, std_fs::Permissions::from_mode(0o700)).unwrap();
@@ -2770,11 +2765,7 @@ else:
                     .collect();
                 assert_eq!(
                     phases,
-                    if mode == "edit-exit" {
-                        vec!["detect", "edit"]
-                    } else {
-                        vec!["detect", "edit", "detect", "verify"]
-                    },
+                    vec!["worker"],
                     "prove the intended failure boundary, not an earlier rejection"
                 );
                 for call in calls {
@@ -2846,7 +2837,7 @@ else:
             .map(|path| path.join("python3"))
             .find(|path| path.is_file())
             .unwrap();
-        std_fs::write(&executable, format!("#!{}\nimport json,sys\nfrom pathlib import Path\np=Path(sys.argv[-1])\np.write_bytes(b'x'*64)\n(Path(__file__).parent/'observed').write_text(str(p))\nprint(json.dumps([{{'SourceFile':str(p),'MIMEType':'text/plain'}}]))\n", python.display())).unwrap();
+        std_fs::write(&executable, format!("#!{}\nimport json,sys\nfrom pathlib import Path\np=Path(sys.argv[2])\np.write_bytes(b'x'*64)\n(Path(__file__).parent/'observed').write_text(str(p))\nsys.stdout.buffer.write(b'JAUNDER-IMAGE-1\\0'+json.dumps({{'Passthrough':{{'size':64}}}}).encode())\n", python.display())).unwrap();
         std_fs::set_permissions(&executable, std_fs::Permissions::from_mode(0o700)).unwrap();
         let manager = MediaManager::new(
             env.media(),
@@ -2932,7 +2923,7 @@ else:
             .map(|path| path.join("python3"))
             .find(|path| path.is_file())
             .unwrap();
-        std_fs::write(&path, format!("#!{}\nimport json,sys\nfrom pathlib import Path\np=Path(sys.argv[-1])\nif '-overwrite_original' in sys.argv:\n p.write_bytes(b'x'*64)\nelse:\n print(json.dumps([{{'SourceFile':str(p),'MIMEType':'image/png'}}]))\n", python.display())).unwrap();
+        std_fs::write(&path, format!("#!{}\nimport json,sys\nfrom pathlib import Path\np=Path(sys.argv[2])\np.write_bytes(b'x'*64)\nsys.stdout.buffer.write(b'JAUNDER-IMAGE-1\\0'+json.dumps({{'Image':{{'mime':'image/png','size':64}}}}).encode())\n", python.display())).unwrap();
         std_fs::set_permissions(&path, std_fs::Permissions::from_mode(0o700)).unwrap();
         let manager = MediaManager::new(
             env.media(),
