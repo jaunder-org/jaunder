@@ -2,6 +2,7 @@
 //!
 //! The browser owns requests and retry wiring; this fold owns readiness and
 //! adoption so a delayed preference cannot erase composition or explicit choices.
+//! Failed requests retain their typed public error through presentation.
 
 use common::render::PostFormat;
 use leptos::prelude::*;
@@ -10,45 +11,35 @@ use strum::EnumMessage;
 use crate::error::WebResult;
 use crate::posts::{ComposeState, CreationComposerSnapshot};
 
-/// Only a successful preference lookup authorizes new-Post submission.
+/// Successful initialization states; failures remain on the `WebResult` error axis.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum InitialFormatState {
     #[default]
     Loading,
     Ready,
-    Failed,
 }
 
-impl InitialFormatState {
-    #[must_use]
-    pub const fn can_submit(self) -> bool {
-        matches!(self, Self::Ready)
-    }
-
-    #[must_use]
-    pub const fn failed(self) -> bool {
-        matches!(self, Self::Failed)
-    }
+/// Only a successful preference lookup authorizes new-Post submission.
+#[must_use]
+pub const fn initial_format_ready(state: &WebResult<InitialFormatState>) -> bool {
+    matches!(state, Ok(InitialFormatState::Ready))
 }
 
-/// Adopt initialization once; later responses cannot replace an author's format.
+/// Adopt initialization once; later successful responses preserve the author's format.
 pub fn settle_default_format(
-    result: &WebResult<PostFormat>,
-    initial: RwSignal<InitialFormatState>,
+    result: WebResult<PostFormat>,
+    initial: RwSignal<WebResult<InitialFormatState>>,
     state: ComposeState,
     baseline: RwSignal<CreationComposerSnapshot>,
 ) {
-    if initial.get_untracked().can_submit() {
-        return;
-    }
-    match result {
-        Ok(format) => {
-            state.format.set(*format);
-            baseline.update(|snapshot| *snapshot = snapshot.clone().with_format(*format));
-            initial.set(InitialFormatState::Ready);
+    let next = result.map(|format| {
+        if !initial.with_untracked(initial_format_ready) {
+            state.format.set(format);
+            baseline.update(|snapshot| *snapshot = snapshot.clone().with_format(format));
         }
-        Err(_) => initial.set(InitialFormatState::Failed),
-    }
+        InitialFormatState::Ready
+    });
+    initial.set(next);
 }
 
 /// Never label an unresolved preference with the internal placeholder format.
@@ -79,13 +70,12 @@ mod tests {
                 String::new(),
                 String::new(),
             ));
-            let initial = RwSignal::new(InitialFormatState::default());
-            assert_eq!(initial.get(), InitialFormatState::Loading);
-            assert!(!initial.get().can_submit());
-            assert!(!initial.get().failed());
+            let initial = RwSignal::new(Ok(InitialFormatState::default()));
+            assert_eq!(initial.get(), Ok(InitialFormatState::Loading));
+            assert!(!initial.with(initial_format_ready));
             state.body.set_value("draft in progress");
-            settle_default_format(&Ok(PostFormat::Org), initial, state, baseline);
-            assert_eq!(initial.get(), InitialFormatState::Ready);
+            settle_default_format(Ok(PostFormat::Org), initial, state, baseline);
+            assert_eq!(initial.get(), Ok(InitialFormatState::Ready));
             assert_eq!(state.format.get(), PostFormat::Org);
             assert_eq!(state.body.value(), "draft in progress");
             assert_ne!(
@@ -98,21 +88,15 @@ mod tests {
                 CreationComposerSnapshot::capture(state, slug, String::new(), String::new()),
             );
             state.switch_format(PostFormat::Markdown);
-            settle_default_format(&Ok(PostFormat::Org), initial, state, baseline);
-            settle_default_format(
-                &Err(WebError::server_message("late failure")),
-                initial,
-                state,
-                baseline,
-            );
+            settle_default_format(Ok(PostFormat::Org), initial, state, baseline);
             state.reset();
             assert_eq!(state.format.get(), PostFormat::Markdown);
-            assert!(initial.get().can_submit());
+            assert!(initial.with(initial_format_ready));
         });
     }
 
     #[test]
-    fn failed_preference_blocks_until_retry_resolves_each_supported_format() {
+    fn failed_preference_retains_typed_error_until_retry_resolves_each_format() {
         Owner::new().with(|| {
             for format in [PostFormat::Markdown, PostFormat::Org, PostFormat::Html] {
                 let state = ComposeState::new();
@@ -122,20 +106,15 @@ mod tests {
                     String::new(),
                     String::new(),
                 ));
-                let initial = RwSignal::new(InitialFormatState::Loading);
-                settle_default_format(
-                    &Err(WebError::server_message("offline")),
-                    initial,
-                    state,
-                    baseline,
-                );
-                assert!(initial.get().failed());
-                assert!(!initial.get().can_submit());
-                initial.set(InitialFormatState::Loading);
-                settle_default_format(&Ok(format), initial, state, baseline);
+                let initial = RwSignal::new(Ok(InitialFormatState::Loading));
+                let error = WebError::server_function("offline");
+                settle_default_format(Err(error.clone()), initial, state, baseline);
+                assert_eq!(initial.get(), Err(error));
+                assert!(!initial.with(initial_format_ready));
+                initial.set(Ok(InitialFormatState::Loading));
+                settle_default_format(Ok(format), initial, state, baseline);
                 assert_eq!(state.format.get(), format);
-                assert!(initial.get().can_submit());
-                assert!(!initial.get().failed());
+                assert!(initial.with(initial_format_ready));
             }
         });
     }

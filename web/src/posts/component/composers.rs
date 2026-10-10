@@ -1,7 +1,7 @@
 use leptos::prelude::*;
 
 use crate::auth;
-use crate::error::WebError;
+use crate::error::{WebError, WebResult};
 use crate::forms::{Field, ValidatedInput, ValidatedTextarea};
 use crate::icon::{IconButtonContent, Icons};
 use crate::media::MediaUpload;
@@ -444,12 +444,12 @@ pub fn PostCreateForm(
         });
     }
 
-    let initial_format = RwSignal::new(posts::InitialFormatState::default());
+    let initial_format = RwSignal::new(Ok(posts::InitialFormatState::default()));
     let load_format = Callback::new(move |()| {
-        initial_format.set(posts::InitialFormatState::Loading);
+        initial_format.set(Ok(posts::InitialFormatState::Loading));
         leptos::task::spawn_local(async move {
             posts::settle_default_format(
-                &crate::profile::get_default_post_format().await,
+                crate::profile::get_default_post_format().await,
                 initial_format,
                 state,
                 baseline,
@@ -534,7 +534,7 @@ fn CreationComposer(
     schedule: CreationSchedule,
     create_action: ServerAction<Create>,
     initial_audience: RwSignal<posts::InitialAudienceState>,
-    initial_format: RwSignal<posts::InitialFormatState>,
+    initial_format: RwSignal<WebResult<posts::InitialFormatState>>,
     load_format: Callback<()>,
     rows: u32,
     placeholder: &'static str,
@@ -547,7 +547,7 @@ fn CreationComposer(
         state.body,
         Signal::derive(move || {
             !initial_audience.get().can_submit()
-                || !initial_format.get().can_submit()
+                || !initial_format.with(posts::initial_format_ready)
                 || !slug_field.is_valid()
                 || !state.summary_field.is_valid()
                 || schedule.is_editing()
@@ -598,7 +598,9 @@ fn CreationComposer(
                     schedule_error=Signal::derive(|| None::<InvalidSchedule>)
                     creation_schedule=Some(schedule)
                     named=named
-                    format_ready=Signal::derive(move || initial_format.get().can_submit())
+                    format_ready=Signal::derive(move || {
+                        initial_format.with(posts::initial_format_ready)
+                    })
                     on_audience_edit=Callback::new(move |()| {
                         initial_audience.update(|status| *status = status.edited());
                     })
@@ -612,21 +614,29 @@ fn CreationComposer(
 /// Preference loading does not hide entered content or invent a default format.
 #[component]
 fn CreationFormatStatus(
-    initial_format: RwSignal<posts::InitialFormatState>,
+    initial_format: RwSignal<WebResult<posts::InitialFormatState>>,
     load_format: Callback<()>,
 ) -> impl IntoView {
     view! {
-        <Show when=move || initial_format.get() == posts::InitialFormatState::Loading>
-            <p role="status">"Loading Default Post Format…"</p>
-        </Show>
-        <Show when=move || initial_format.get().failed()>
-            <div role="alert">
-                <p class="error">"Could not load the Default Post Format."</p>
-                <button type="button" class="j-btn" on:click=move |_| load_format.run(())>
-                    "Retry Default Post Format"
-                </button>
-            </div>
-        </Show>
+        {move || match initial_format.get() {
+            Ok(posts::InitialFormatState::Loading) => {
+                view! { <p role="status">"Loading Default Post Format…"</p> }.into_any()
+            }
+            Ok(posts::InitialFormatState::Ready) => ().into_any(),
+            Err(error) => {
+                view! {
+                    <div role="alert">
+                        <p class="error">
+                            "Could not load the Default Post Format. "{error.to_string()}
+                        </p>
+                        <button type="button" class="j-btn" on:click=move |_| load_format.run(())>
+                            "Retry Default Post Format"
+                        </button>
+                    </div>
+                }
+                    .into_any()
+            }
+        }}
     }
 }
 
