@@ -4342,6 +4342,18 @@ claim. All three manifests pin `resolver = "3"` explicitly, because the two
 virtual manifests would otherwise default to resolver 1
 ([ADR-0104](adr/0104-edition-2024-unsafe-env-and-precise-capturing.md)).
 
+**Proposed independent host-tool packaging.** The
+[Nix-cached tooling decision](adr/drafts/nix-cached-host-tooling.md)
+distinguishes building a host executable from executing its orchestrator inside
+a derivation. It proposes a standalone Nix xtask package, without adding xtask
+to application coverage/E2E dependencies or changing the host-unit-test
+authorities above. Qualification would admit the Nix-selected executable and
+runtime harness inputs rather than demand an embedded tool Git commit equal to
+the admitted source revision. Nix owns that graph and its store identities; Git
+still identifies the clean source/product revisions under test. No custom
+fingerprint or identity ledger is introduced. Runtime checkout discovery and
+untracked-tooling-input refusal are part of the same boundary.
+
 **Workspace layering.** The root workspace's shared crates are target-scoped
 ([ADR-0058](adr/0058-host-crate-layering.md),
 [common/host target-reachability closure](adr/0159-common-host-target-closure.md)):
