@@ -16,6 +16,7 @@
 (require 'jaunder-config)
 (require 'jaunder-org)
 (require 'jaunder-inventory)
+(require 'jaunder-reconcile-operation)
 (require 'jaunder-debug)
 
 (defun jaunder--local-post-link-root ()
@@ -71,7 +72,9 @@ Member inventory."
                                             (locals (mapcar (lambda (record)
                                                               (jaunder--local-post-link-target record root))
                                                             records))
-                                            (members (jaunder--fetch-collection-members))
+                                            (members (if (jaunder--operation-active-p)
+                                                         (jaunder--operation-publish-link-members root locals)
+                                                       (jaunder--fetch-collection-members)))
                                             (urls (mapcar (lambda (local)
                                                             (jaunder-inventory-member-alternate-href
                                                              (jaunder--local-post-link-member local members)))

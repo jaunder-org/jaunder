@@ -838,7 +838,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
 
 (ert-deftest jaunder-reconcile-batch-records-progress-complete-results-and-order ()
   "The shared executor records one complete terminal result per displayed row."
-  (let* ((rows (list (jaunder--make-reconcile-row :state 'local-draft :key "one")
+  (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+         (jaunder-blogs '(("/tmp/" :base-url "https://example.test" :username "alice")))
+         (rows (list (jaunder--make-reconcile-row :state 'local-draft :key "one")
                      (jaunder--make-reconcile-row :state 'local-ahead :key "two")))
          (report (jaunder--make-reconcile-report :root "/tmp" :rows rows))
          (buffer (jaunder--render-reconcile-report report))
@@ -876,7 +878,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
 
 (ert-deftest jaunder-reconcile-batch-renders-failure-after-refresh-and-omits-delete-sync ()
   "A refreshed report retains failed terminal results and delete has no sync time."
-  (let* ((row (jaunder--make-reconcile-row :state 'server-only :key "post:7"))
+  (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+         (jaunder-blogs '(("/tmp/" :base-url "https://example.test" :username "alice")))
+         (row (jaunder--make-reconcile-row :state 'server-only :key "post:7"))
          (report (jaunder--make-reconcile-report :root "/tmp" :rows (list row)))
          (buffer (jaunder--render-reconcile-report report)))
     (unwind-protect
@@ -899,7 +903,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
 
 (ert-deftest jaunder-reconcile-batch-cancels-between-items-and-refreshes ()
   "Cancellation retains completed results and does not invoke the next operation."
-  (let* ((rows (cl-loop for index below 3
+  (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+         (jaunder-blogs '(("/tmp/" :base-url "https://example.test" :username "alice")))
+         (rows (cl-loop for index below 3
                         collect (jaunder--make-reconcile-row
                                  :state 'local-draft :key (number-to-string index))))
          (buffer (jaunder--render-reconcile-report
@@ -922,7 +928,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
 
 (ert-deftest jaunder-reconcile-batch-executes-one-thousand-items-sequentially ()
   "A large batch stays ordered, single-flight, and continues after one failure."
-  (let* ((rows (cl-loop for index below 1000
+  (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+         (jaunder-blogs '(("/tmp/" :base-url "https://example.test" :username "alice")))
+         (rows (cl-loop for index below 1000
                         collect (jaunder--make-reconcile-row
                                  :state 'local-draft :key (format "post:%04d" index))))
          (buffer (jaunder--render-reconcile-report
@@ -978,7 +986,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
 
 (ert-deftest jaunder-reconcile-rendering-and-selection-use-one-displayed-order ()
   "Interleaved inventory rows resolve and execute in the rendered section order."
-  (let* ((local-ahead (jaunder--make-reconcile-row :state 'local-ahead :key "ahead"))
+  (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+         (jaunder-blogs '(("/tmp/" :base-url "https://example.test" :username "alice")))
+         (local-ahead (jaunder--make-reconcile-row :state 'local-ahead :key "ahead"))
          (server-only (jaunder--make-reconcile-row :state 'server-only :key "server"))
          (conflict (jaunder--make-reconcile-row :state 'conflict :key "conflict"))
          (draft (jaunder--make-reconcile-row :state 'local-draft :key "draft"))
@@ -1034,7 +1044,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
 
 (ert-deftest jaunder-reconcile-batch-cancellation-is-sticky-and-clears-quit-before-refresh ()
   "One-shot cancellation and a final-operation quit stop after the completed row."
-  (let* ((rows (list (jaunder--make-reconcile-row :state 'local-draft :key "one")
+  (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+         (jaunder-blogs '(("/tmp/" :base-url "https://example.test" :username "alice")))
+         (rows (list (jaunder--make-reconcile-row :state 'local-draft :key "one")
                      (jaunder--make-reconcile-row :state 'local-draft :key "two")))
          (buffer (jaunder--render-reconcile-report
                   (jaunder--make-reconcile-report :root "/tmp" :rows rows)))
@@ -1066,7 +1078,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
 
 (ert-deftest jaunder-reconcile-batches-replace-summaries-and-append-before-next-item ()
   "The next batch replaces its summary and each next operation sees prior results."
-  (let* ((first (jaunder--make-reconcile-row :state 'local-draft :key "one"))
+  (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+         (jaunder-blogs '(("/tmp/" :base-url "https://example.test" :username "alice")))
+         (first (jaunder--make-reconcile-row :state 'local-draft :key "one"))
          (second (jaunder--make-reconcile-row :state 'local-draft :key "two"))
          (report (jaunder--make-reconcile-report :root "/tmp" :rows (list first second)))
          (buffer (jaunder--render-reconcile-report report))
@@ -1562,7 +1576,8 @@ The current filename supplies the local slug evidence used by matched-pull tests
 
 (ert-deftest jaunder-reconcile-conflict-preflight-blocks-stale-clean-visiting-buffer ()
   "Reviewed disk bytes cannot authorize stale clean in-memory authored content."
-  (let* ((root (file-name-as-directory (make-temp-file "jaunder-stale-clean-" t)))
+  (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+         (root (file-name-as-directory (make-temp-file "jaunder-stale-clean-" t)))
          (path (expand-file-name "old.org" root))
          (old (jaunder-reconcile-test--pulled-bytes "7" "old" "\"saved\""))
          (new (concat old "\nExternal authored revision.\n"))
@@ -1795,7 +1810,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
         (with-current-buffer report
           (puthash "post:7" t jaunder-reconcile-marks)
           (cl-letf (((symbol-function 'jaunder--call-with-blog)
-                     (lambda (_root thunk) (funcall thunk)))
+                     (lambda (_root thunk)
+                       (let ((jaunder--active-blog '(:base-url "https://example.test" :username "alice")))
+                         (funcall thunk))))
                     ((symbol-function 'jaunder--pull-stage-member)
                      (lambda (&rest _) (ert-fail "Must not stage a Member")))
                     ((symbol-function 'jaunder--http-request)
@@ -1884,7 +1901,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
                                        (jaunder-reconcile-selected-rows))
                                '("post:8" "post:9"))))
               (cl-letf (((symbol-function 'jaunder--call-with-blog)
-                         (lambda (_root thunk) (funcall thunk)))
+                         (lambda (_root thunk)
+                           (let ((jaunder--active-blog '(:base-url "https://example.test" :username "alice")))
+                             (funcall thunk))))
                         ((symbol-function 'jaunder--reconcile-conflict-preflight)
                          (lambda (_) '(:ok t :etag "\"old\"")))
                         ((symbol-function 'jaunder--pull-stage-member)
@@ -1944,7 +1963,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
           (with-current-buffer report-buffer
             (puthash "post:7" t jaunder-reconcile-marks)
             (cl-letf (((symbol-function 'jaunder--call-with-blog)
-                       (lambda (_root thunk) (funcall thunk)))
+                       (lambda (_root thunk)
+			 (let ((jaunder--active-blog '(:base-url "https://example.test" :username "alice")))
+			   (funcall thunk))))
                       ((symbol-function 'jaunder--reconcile-conflict-preflight)
                        (lambda (_)
                          (setq checks (1+ checks))
@@ -1988,7 +2009,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
             (puthash "post:7" t jaunder-reconcile-marks)
             (dolist (mode '(throw no-result))
               (cl-letf (((symbol-function 'jaunder--call-with-blog)
-                         (lambda (_root thunk) (funcall thunk)))
+                         (lambda (_root thunk)
+			   (let ((jaunder--active-blog '(:base-url "https://example.test" :username "alice")))
+			     (funcall thunk))))
                         ((symbol-function 'jaunder--reconcile-conflict-preflight)
                          (lambda (_) '(:ok t :etag "\"old\"")))
                         ((symbol-function 'jaunder--pull-stage-member)
@@ -2041,7 +2064,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
           (with-current-buffer report-buffer
             (puthash "post:7" t jaunder-reconcile-marks)
             (cl-letf (((symbol-function 'jaunder--call-with-blog)
-                       (lambda (_root thunk) (funcall thunk)))
+                       (lambda (_root thunk)
+			 (let ((jaunder--active-blog '(:base-url "https://example.test" :username "alice")))
+			   (funcall thunk))))
                       ((symbol-function 'jaunder--reconcile-conflict-preflight)
                        (lambda (_) '(:ok t :etag "\"old\"")))
                       ((symbol-function 'jaunder--pull-stage-member)
@@ -2082,7 +2107,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
           (with-current-buffer report-buffer
             (puthash "post:7" t jaunder-reconcile-marks)
             (cl-letf (((symbol-function 'jaunder--call-with-blog)
-                       (lambda (_root thunk) (funcall thunk)))
+                       (lambda (_root thunk)
+			 (let ((jaunder--active-blog '(:base-url "https://example.test" :username "alice")))
+			   (funcall thunk))))
                       ((symbol-function 'jaunder--reconcile-conflict-preflight)
                        (lambda (_) '(:ok t :etag "\"old\"")))
                       ((symbol-function 'jaunder--pull-stage-member)
@@ -2132,7 +2159,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
           (with-current-buffer report-buffer
             (puthash "post:7" t jaunder-reconcile-marks)
             (cl-letf (((symbol-function 'jaunder--call-with-blog)
-                       (lambda (_root thunk) (funcall thunk)))
+                       (lambda (_root thunk)
+			 (let ((jaunder--active-blog '(:base-url "https://example.test" :username "alice")))
+			   (funcall thunk))))
                       ((symbol-function 'jaunder--reconcile-conflict-preflight)
                        (lambda (_) '(:ok t :etag "\"old\"")))
                       ((symbol-function 'jaunder--pull-stage-member)
@@ -2228,7 +2257,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
             (setq-local jaunder-reconcile-merge-session session))
           (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
                     ((symbol-function 'jaunder--call-with-blog)
-                     (lambda (_root thunk) (funcall thunk)))
+                     (lambda (_root thunk)
+		       (let ((jaunder--active-blog '(:base-url "https://example.test" :username "alice")))
+			 (funcall thunk))))
                     ((symbol-function 'jaunder--reconcile-conflict-preflight)
                      (lambda (_)
                        (setq checks (1+ checks))
@@ -2247,7 +2278,7 @@ The current filename supplies the local slug evidence used by matched-pull tests
                        (should (equal headers '(("If-Match" . "\"old\""))))
                        (if (eq mode 'unknown)
                            (error "lost response")
-                         '(:status 200 :headers (("etag" . "\"new\""))))))
+                         '(:status 200 :body "<entry/>" :headers (("etag" . "\"new\""))))))
                     ((symbol-function 'jaunder--write-back)
                      (lambda (&rest _) (error "local checkpoint failed")))
                     ((symbol-function 'jaunder--reconcile-merge-record)
@@ -2293,7 +2324,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
             (setq-local jaunder-reconcile-merge-session session))
           (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
                     ((symbol-function 'jaunder--call-with-blog)
-                     (lambda (_root thunk) (funcall thunk)))
+                     (lambda (_root thunk)
+		       (let ((jaunder--active-blog '(:base-url "https://example.test" :username "alice")))
+			 (funcall thunk))))
                     ((symbol-function 'jaunder--reconcile-conflict-preflight)
                      (lambda (_) '(:ok t :etag "\"old\"")))
                     ((symbol-function 'jaunder--prepare-reviewed-update)
@@ -2349,14 +2382,16 @@ The current filename supplies the local slug evidence used by matched-pull tests
             (goto-char (point-max)) (insert "Unsaved visiting buffer change"))
           (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
                     ((symbol-function 'jaunder--call-with-blog)
-                     (lambda (_root thunk) (funcall thunk)))
+                     (lambda (_root thunk)
+		       (let ((jaunder--active-blog '(:base-url "https://example.test" :username "alice")))
+			 (funcall thunk))))
                     ((symbol-function 'jaunder--reconcile-pull-unique-match)
                      (lambda (_) '(:ok t)))
                     ((symbol-function 'jaunder--http-request)
                      (lambda (method &rest _)
                        (should (equal method "GET"))
                        (setq gets (1+ gets))
-                       '(:status 200 :headers (("etag" . "\"new\"")))))
+                       '(:status 200 :body "<entry/>" :headers (("etag" . "\"new\"")))))
                     ((symbol-function 'jaunder--reconcile-merge-record)
                      (lambda (_session _report value) (setq result value))))
             (with-current-buffer scratch (jaunder-reconcile-merge-finish))
@@ -2403,7 +2438,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
             (setq-local jaunder-reconcile-merge-session session))
           (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
                     ((symbol-function 'jaunder--call-with-blog)
-                     (lambda (_root thunk) (funcall thunk)))
+                     (lambda (_root thunk)
+		       (let ((jaunder--active-blog '(:base-url "https://example.test" :username "alice")))
+			 (funcall thunk))))
                     ((symbol-function 'jaunder--reconcile-conflict-preflight)
                      (lambda (_)
                        (setq checks (1+ checks))
@@ -2419,7 +2456,7 @@ The current filename supplies the local slug evidence used by matched-pull tests
                                         (insert-file-contents-literally path)
                                         (buffer-string)) original))
                        (setq committed t)
-                       '(:status 200 :headers (("etag" . "\"new\"")))))
+                       '(:status 200 :body "<entry/>" :headers (("etag" . "\"new\"")))))
                     ((symbol-function 'jaunder--write-back)
                      (lambda (&rest _)
                        (should committed)
@@ -2460,7 +2497,8 @@ The current filename supplies the local slug evidence used by matched-pull tests
 
 (ert-deftest jaunder-reconcile-merge-stage-blocks-staged-identity-drift ()
   "A staged mismatch or typed stage drift never opens an Ediff session."
-  (let* ((row (jaunder--make-reconcile-row
+  (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+	 (row (jaunder--make-reconcile-row
                :state 'conflict :member (jaunder-reconcile-test--member "7" "old")
                :remote-etag "\"old\""))
          (jaunder-reconcile-report (jaunder--make-reconcile-report :root "/tmp")))
@@ -2495,7 +2533,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
           (with-current-buffer report-buffer
             (puthash "post:7" t jaunder-reconcile-marks)
             (cl-letf (((symbol-function 'jaunder--call-with-blog)
-                       (lambda (_root thunk) (funcall thunk)))
+                       (lambda (_root thunk)
+			 (let ((jaunder--active-blog '(:base-url "https://example.test" :username "alice")))
+			   (funcall thunk))))
                       ((symbol-function 'jaunder--reconcile-conflict-preflight)
                        (lambda (_) '(:ok t :etag "\"old\"")))
                       ((symbol-function 'jaunder--pull-stage-member)
@@ -2519,7 +2559,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
 
 (ert-deftest jaunder-reconcile-conflict-results-survive-failed-report-refresh ()
   "Unknown and partial terminal results stay ordered and visible on refresh failure."
-  (let* ((rows (list (jaunder--make-reconcile-row :state 'conflict :key "post:1"
+  (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+         (jaunder-blogs '(("/tmp/" :base-url "https://example.test" :username "alice")))
+         (rows (list (jaunder--make-reconcile-row :state 'conflict :key "post:1"
                                                   :member (jaunder-reconcile-test--member "1" "one"))
                      (jaunder--make-reconcile-row :state 'conflict :key "post:2"
                                                   :member (jaunder-reconcile-test--member "2" "two"))))
@@ -2987,6 +3029,8 @@ The current filename supplies the local slug evidence used by matched-pull tests
                      (lambda () (date-to-time "2026-08-25T00:00:00Z")))
                     ((symbol-function 'jaunder--reconcile-pull-preflight)
                      (lambda (&rest _) nil))
+                    ((symbol-function 'jaunder--reconcile-pull-final-local-unique-match)
+                     (lambda (&rest _) '(:ok t)))
                     ((symbol-function 'jaunder--reconcile-pull-destination)
                      (lambda (&rest _) path)))
             (should (eq (plist-get
@@ -3365,7 +3409,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
 
 (ert-deftest jaunder-reconcile-batch-honors-cancellation-before-an-operation ()
   "Cancellation records no operation and leaves a visible empty batch result."
-  (let* ((row (jaunder--make-reconcile-row :state 'local-draft :key "local:draft"))
+  (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+         (jaunder-blogs '(("/tmp/" :base-url "https://example.test" :username "alice")))
+         (row (jaunder--make-reconcile-row :state 'local-draft :key "local:draft"))
          (report (jaunder--make-reconcile-report :root "/tmp" :rows (list row)))
          (buffer (jaunder--render-reconcile-report report))
          called)
@@ -3574,7 +3620,9 @@ The current filename supplies the local slug evidence used by matched-pull tests
 
 (ert-deftest jaunder-reconcile-delete-selected-records-preflight-and-ineligible-reviews ()
   "Review blocks become ordered terminal results without any remote mutation."
-  (let* ((safe (jaunder--make-reconcile-row :state 'server-only :key "post:7"
+  (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+         (jaunder-blogs '(("/tmp/" :base-url "https://example.test" :username "alice")))
+         (safe (jaunder--make-reconcile-row :state 'server-only :key "post:7"
                                             :member (jaunder-reconcile-test--member "7" "post")))
          (unsafe (jaunder--make-reconcile-row :state 'conflict :key "conflict:7"))
          (buffer (jaunder--render-reconcile-report
@@ -3712,6 +3760,27 @@ The current filename supplies the local slug evidence used by matched-pull tests
                          bytes)))
       (delete-directory root t))))
 
+(ert-deftest jaunder-reconcile-final-local-uniqueness-rejects-a-late-duplicate ()
+  "The last replacement guard scans local Posts without another Collection read."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-final-local-" t)))
+         (path (expand-file-name "post.org" root))
+         (duplicate (expand-file-name "duplicate.org" root))
+         (row (jaunder--make-reconcile-row
+               :local (jaunder-reconcile-test--local path "7")
+               :member (jaunder-reconcile-test--member "7" "post")))
+         (jaunder-reconcile-report (jaunder--make-reconcile-report :root root)))
+    (unwind-protect
+        (progn
+          (dolist (candidate (list path duplicate))
+            (with-temp-file candidate
+              (insert "#+PROPERTY: JAUNDER_ID 7\n")))
+          (cl-letf (((symbol-function 'jaunder--fetch-collection-members)
+                     (lambda () (ert-fail "final local guard must not fetch Collection"))))
+            (should (eq (plist-get (jaunder--reconcile-pull-final-local-unique-match row)
+                                   :reason)
+                        'duplicate-local-id))))
+      (delete-directory root t))))
+
 (ert-deftest jaunder-reconcile-pull-rechecks-local-preflight-after-media-finalization ()
   "A local Post mutation during Media work blocks replacement at the final boundary."
   (let* ((row (jaunder--make-reconcile-row
@@ -3731,6 +3800,8 @@ The current filename supplies the local slug evidence used by matched-pull tests
                  (should (= preflights 1))
                  (setq finalized t)
                  value))
+              ((symbol-function 'jaunder--reconcile-pull-final-local-unique-match)
+               (lambda (_) (should finalized) '(:ok t)))
               ((symbol-function 'jaunder--reconcile-replace-pulled-file)
                (lambda (&rest _) (ert-fail "must not replace after post-media preflight"))))
       (let ((result (jaunder--reconcile-pull-install-staged

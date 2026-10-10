@@ -44,7 +44,8 @@
 (defun jaunder-reconcile-debug--batch (enabled mode)
   "Run real row owners through the actual executor with ENABLED and MODE."
   (jaunder-debug-boundary--with-session
-   (let* ((first (jaunder--make-reconcile-row :state 'unchanged :key "private-one"))
+   (let* ((jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
+          (first (jaunder--make-reconcile-row :state 'unchanged :key "private-one"))
           (second (jaunder--make-reconcile-row :state 'orphan :key "private-two"))
           (foreign (jaunder--make-reconcile-row :state 'unchanged :key "private-foreign"))
           (buffer (generate-new-buffer " *batch diagnostic proof*"))
