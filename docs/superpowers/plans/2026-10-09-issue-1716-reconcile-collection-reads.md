@@ -88,7 +88,7 @@ authority.
     and unknown create identity. Required invalidated proof is refreshed
     targetedly or blocks safely, never via a full walk, guessed permalink,
     rollback or unsafe retry.
-- [ ] Task 3: Bound merge scopes and prove cross-action lifetime/outcomes.
+- [x] Task 3: Bound merge scopes and prove cross-action lifetime/outcomes.
   - Wrap `jaunder--reconcile-merge-stage` preparation and authorized finish work
     in separate operation scopes. Preserve initial/final conflict checks and
     existing `jaunder--reconcile-merge-record` terminal refresh outside the

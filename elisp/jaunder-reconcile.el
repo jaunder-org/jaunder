@@ -1461,31 +1461,35 @@ bound during preparation; never install a Post before the PUT."
   "Return reviewed staged remote data for ROW, or a terminal blocked result.
 Do not create an editable result until both before/after-staging guards pass."
   (jaunder--with-debug-operation "merge.stage" nil
-				 (let ((initial (jaunder--reconcile-conflict-preflight row)))
-				   (if (not (plist-get initial :ok))
-				       initial
-				     (condition-case err
-					 (let* ((root (jaunder-reconcile-report-root jaunder-reconcile-report))
-						(member (jaunder-reconcile-row-member row))
-						(jaunder--pull-link-inventory
-						 (jaunder-reconcile-report-inventory jaunder-reconcile-report))
-						(jaunder--pull-original-proof (jaunder--reconcile-original-proof root row))
-						(staged (jaunder--pull-stage-member root member)))
-					   (cond
-					    ((not (jaunder--reconcile-stage-matches-review-p row staged))
-					     (jaunder--reconcile-blocked row 'staged-identity-changed))
-					    (t
-					     (setq staged (jaunder--reconcile-finalize-staged-media root staged))
-					     (let ((final (jaunder--reconcile-conflict-preflight row)))
-					       (if (plist-get final :ok)
-						   (list :staged staged)
-						 final)))))
-				       (jaunder-pull-stage-identity-changed
-					(jaunder--reconcile-blocked row 'staged-identity-changed))
-				       (error
-					(list :outcome 'failed :post-id (jaunder--reconcile-row-post-id row)
-					      :slug (jaunder--reconcile-row-slug row) :local-effect 'unchanged
-					      :reason 'merge-staging-failed :detail (error-message-string err))))))))
+                                 (jaunder--call-with-reconcile-operation
+                                  (jaunder-reconcile-report-root jaunder-reconcile-report)
+                                  (jaunder--active-base-url) (jaunder--active-username)
+                                  (lambda ()
+                                    (let ((initial (jaunder--reconcile-conflict-preflight row)))
+	                              (if (not (plist-get initial :ok))
+	                                  initial
+	                                (condition-case err
+	                                    (let* ((root (jaunder-reconcile-report-root jaunder-reconcile-report))
+		                                   (member (jaunder-reconcile-row-member row))
+		                                   (jaunder--pull-link-inventory
+		                                    (jaunder-reconcile-report-inventory jaunder-reconcile-report))
+		                                   (jaunder--pull-original-proof (jaunder--reconcile-original-proof root row))
+		                                   (staged (jaunder--pull-stage-member root member)))
+		                              (cond
+		                               ((not (jaunder--reconcile-stage-matches-review-p row staged))
+		                                (jaunder--reconcile-blocked row 'staged-identity-changed))
+		                               (t
+		                                (setq staged (jaunder--reconcile-finalize-staged-media root staged))
+		                                (let ((final (jaunder--reconcile-conflict-preflight row)))
+		                                  (if (plist-get final :ok)
+			                              (list :staged staged)
+		                                    final)))))
+	                                  (jaunder-pull-stage-identity-changed
+	                                   (jaunder--reconcile-blocked row 'staged-identity-changed))
+	                                  (error
+	                                   (list :outcome 'failed :post-id (jaunder--reconcile-row-post-id row)
+		                                 :slug (jaunder--reconcile-row-slug row) :local-effect 'unchanged
+		                                 :reason 'merge-staging-failed :detail (error-message-string err))))))))))
 
 (defun jaunder--reconcile-merge-record (session-or-row report-buffer value)
   "Record VALUE for SESSION-OR-ROW in REPORT-BUFFER and refresh the report."
@@ -1495,7 +1499,8 @@ Do not create an editable result until both before/after-staging guards pass."
     (with-current-buffer report-buffer
       (setq-local jaunder-reconcile-last-batch-results
                   (list (jaunder--reconcile-terminal-result 'merge row value)))
-      (jaunder--reconcile-show-results-and-refresh report-buffer))))
+      (jaunder--call-without-reconcile-operation
+       (lambda () (jaunder--reconcile-show-results-and-refresh report-buffer))))))
 
 (defun jaunder--reconcile-merge-snapshot (name bytes)
   "Create a read-only Org snapshot named NAME of reviewed literal BYTES."
@@ -1610,34 +1615,40 @@ unknown, failed, or partial result; only confirmed success retires it."
                                                (jaunder--call-with-blog
                                                 (jaunder-reconcile-report-root jaunder-reconcile-report)
                                                 (lambda ()
-                                                  (let ((initial (jaunder--reconcile-conflict-preflight row)))
-                                                    (if (not (plist-get initial :ok))
-                                                        initial
-                                                      (let ((prepared
-                                                             (condition-case err
-                                                                 (let* ((bytes (jaunder--reconcile-merge-authorized-bytes
-                                                                                session))
-                                                                        (update (jaunder--reconcile-merge-prepared-update
-                                                                                 path bytes)))
-                                                                   (list :bytes bytes :xml (plist-get update :xml)
-                                                                         :audience-capable
-                                                                         (plist-get update :audience-capable)))
-                                                               (error (list :error err)))))
-                                                        (if (plist-get prepared :error)
-                                                            (list :outcome 'failed
-                                                                  :post-id (jaunder--reconcile-row-post-id row)
-                                                                  :slug (jaunder--reconcile-row-slug row)
-                                                                  :local-effect 'unchanged
-                                                                  :reason 'merge-preparation-failed
-                                                                  :detail (error-message-string
-                                                                           (plist-get prepared :error)))
-                                                          (let ((final (jaunder--reconcile-conflict-preflight row)))
-                                                            (if (not (plist-get final :ok))
-                                                                final
-                                                              (jaunder--reconcile-keep-local-send
-                                                               row path (plist-get prepared :xml)
-                                                               (plist-get prepared :bytes)
-                                                               (plist-get prepared :audience-capable)))))))))))))
+		                                  (jaunder--call-with-reconcile-operation
+		                                   (jaunder-reconcile-report-root jaunder-reconcile-report)
+		                                   (jaunder--active-base-url) (jaunder--active-username)
+		                                   (lambda ()
+			                             (jaunder--call-with-operation-write-receipt
+			                              (lambda ()
+                                                        (let ((initial (jaunder--reconcile-conflict-preflight row)))
+                                                          (if (not (plist-get initial :ok))
+                                                              initial
+                                                            (let ((prepared
+                                                                   (condition-case err
+                                                                       (let* ((bytes (jaunder--reconcile-merge-authorized-bytes
+                                                                                      session))
+                                                                              (update (jaunder--reconcile-merge-prepared-update
+                                                                                       path bytes)))
+                                                                         (list :bytes bytes :xml (plist-get update :xml)
+                                                                               :audience-capable
+                                                                               (plist-get update :audience-capable)))
+                                                                     (error (list :error err)))))
+                                                              (if (plist-get prepared :error)
+                                                                  (list :outcome 'failed
+                                                                        :post-id (jaunder--reconcile-row-post-id row)
+                                                                        :slug (jaunder--reconcile-row-slug row)
+                                                                        :local-effect 'unchanged
+                                                                        :reason 'merge-preparation-failed
+                                                                        :detail (error-message-string
+                                                                                 (plist-get prepared :error)))
+                                                                (let ((final (jaunder--reconcile-conflict-preflight row)))
+                                                                  (if (not (plist-get final :ok))
+                                                                      final
+                                                                    (jaunder--reconcile-keep-local-send
+                                                                     row path (plist-get prepared :xml)
+                                                                     (plist-get prepared :bytes)
+                                                                     (plist-get prepared :audience-capable)))))))))))))))))
                                        (setq-local jaunder-reconcile-merge-last-result result)
                                        (jaunder--reconcile-merge-record session report-buffer result)
                                        (if (eq (plist-get result :outcome) 'success)
@@ -1770,36 +1781,36 @@ operations write there, never to either Post.  `C-c C-c' explicitly finishes."
 (defun jaunder--reconcile-keep-remote-row (row)
   "Install ROW's reviewed remote Post, or return a structured blocked result."
   (jaunder--with-reconcile-row-debug "keep-remote"
-				     (let ((initial (jaunder--reconcile-conflict-preflight row)))
-				       (if (not (plist-get initial :ok))
-					   initial
-					 (condition-case err
-					     (let* ((root (jaunder-reconcile-report-root jaunder-reconcile-report))
-						    (member (jaunder-reconcile-row-member row))
-						    (path (jaunder-inventory-local-path (jaunder-reconcile-row-local row)))
-						    (jaunder--pull-link-inventory
-						     (jaunder-reconcile-report-inventory jaunder-reconcile-report))
-						    (jaunder--pull-original-proof (jaunder--reconcile-original-proof root row))
-						    (staged (jaunder--pull-stage-member root member)))
-					       (if (not (jaunder--reconcile-stage-matches-review-p row staged))
-						   (jaunder--reconcile-blocked row 'staged-identity-changed)
-						 (let ((final (jaunder--reconcile-conflict-preflight row)))
-						   (if (not (plist-get final :ok))
-						       final
-						     (let ((installed (jaunder--reconcile-pull-install-staged
-								       row staged final path)))
-						       (when (and (eq (plist-get installed :outcome) 'failed)
-								  (eq (plist-get installed :local-effect)
-								      'replaced-at-old-path))
-							 ;; The Post was atomically replaced; only its canonical
-							 ;; rename failed.  The old path remains recoverable.
-							 (setq installed (plist-put installed :outcome 'partial)))
-						       installed)))))
-					   (jaunder-pull-stage-identity-changed
-					    (jaunder--reconcile-blocked row 'staged-identity-changed))
-					   (error (list :outcome 'failed :post-id (jaunder--reconcile-row-post-id row)
-							:slug (jaunder--reconcile-row-slug row) :local-effect 'unchanged
-							:reason 'pull-failed :detail (error-message-string err))))))))
+                                     (let ((initial (jaunder--reconcile-conflict-preflight row)))
+                                       (if (not (plist-get initial :ok))
+	                                   initial
+	                                 (condition-case err
+	                                     (let* ((root (jaunder-reconcile-report-root jaunder-reconcile-report))
+		                                    (member (jaunder-reconcile-row-member row))
+		                                    (path (jaunder-inventory-local-path (jaunder-reconcile-row-local row)))
+		                                    (jaunder--pull-link-inventory
+		                                     (jaunder-reconcile-report-inventory jaunder-reconcile-report))
+		                                    (jaunder--pull-original-proof (jaunder--reconcile-original-proof root row))
+		                                    (staged (jaunder--pull-stage-member root member)))
+	                                       (if (not (jaunder--reconcile-stage-matches-review-p row staged))
+		                                   (jaunder--reconcile-blocked row 'staged-identity-changed)
+		                                 (let ((final (jaunder--reconcile-conflict-preflight row)))
+		                                   (if (not (plist-get final :ok))
+		                                       final
+		                                     (let ((installed (jaunder--reconcile-pull-install-staged
+				                                       row staged final path)))
+		                                       (when (and (eq (plist-get installed :outcome) 'failed)
+				                                  (eq (plist-get installed :local-effect)
+				                                      'replaced-at-old-path))
+			                                 ;; The Post was atomically replaced; only its canonical
+			                                 ;; rename failed.  The old path remains recoverable.
+			                                 (setq installed (plist-put installed :outcome 'partial)))
+		                                       installed)))))
+	                                   (jaunder-pull-stage-identity-changed
+	                                    (jaunder--reconcile-blocked row 'staged-identity-changed))
+	                                   (error (list :outcome 'failed :post-id (jaunder--reconcile-row-post-id row)
+		                                        :slug (jaunder--reconcile-row-slug row) :local-effect 'unchanged
+		                                        :reason 'pull-failed :detail (error-message-string err))))))))
 
 (defun jaunder-reconcile-keep-remote-selected ()
   "Accept the reviewed remote Post for selected conflicts after confirmation."

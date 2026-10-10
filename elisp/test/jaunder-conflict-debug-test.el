@@ -134,6 +134,8 @@ live-network claims. The shared checker independently verifies graph topology."
     (dolist (kind '(error quit))
       (jaunder-debug-boundary--with-session
        (with-temp-buffer
+	 (setq-local jaunder-reconcile-report (jaunder--make-reconcile-report :root "/tmp"))
+	 (setq-local jaunder--active-blog '(:base-url "https://example.test" :username "alice"))
          (setq-local jaunder-reconcile-merge-session
                      (jaunder--make-reconcile-merge-session
                       :row (jaunder--make-reconcile-row) :report-buffer (current-buffer) :ediff-ready t))
