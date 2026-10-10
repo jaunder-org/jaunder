@@ -52,15 +52,6 @@
         (should (eq (jaunder-reconcile-result-outcome (car (plist-get proof :results)))
                     (if (eq failure 'lost) 'unknown 'partial)))))))
 
-(defun jaunder-test--write-source-links (state id target)
-  "Replace ID's authored body in STATE with an exact TARGET file link."
-  (let ((path (gethash id (plist-get state :paths))))
-    (with-temp-buffer
-      (insert-file-contents path)
-      (goto-char (point-max))
-      (insert (format "[[file:./%s.org][Target]]\n" target))
-      (write-region (point-min) (point-max) path nil 'silent))))
-
 (ert-deftest jaunder-reconcile-later-links-restore-only-affected-target-after-write ()
   "Missing alternate metadata and lost responses use targeted, current proof."
   (dolist (action '(push keep-local))

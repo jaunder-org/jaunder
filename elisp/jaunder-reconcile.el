@@ -670,23 +670,20 @@ row and returns a result plist; its independent errors become failed results."
                                                           (jaunder--reconcile-pull-progress "starting")
                                                         (message "Jaunder %s: %d/%d" action completed total))
                                                       (setq value
-                                                            (condition-case err
-                                                                (let ((inhibit-quit t))
-                                                                  (jaunder--call-with-operation-write-receipt
-                                                                   (lambda ()
-                                                                     (condition-case err
-                                                                         (prog1 (funcall operation row)
-                                                                           (setq quit-requested quit-flag quit-flag nil))
-                                                                       (error (jaunder--operation-write-failure
-                                                                               err (jaunder--reconcile-pull-error-detail err)))
-                                                                       (quit
-                                                                        (if (memq (jaunder--operation-write-phase) '(unknown confirmed))
-                                                                            (progn
-                                                                              (setq quit-requested t quit-flag nil)
-                                                                              (jaunder--operation-write-failure err))
-                                                                          (signal (car err) (cdr err))))))))
-                                                              (error (list :outcome 'failed :reason 'operation-failed
-                                                                           :detail (jaunder--reconcile-pull-error-detail err)))))
+                                                            (let ((inhibit-quit t))
+                                                              (jaunder--call-with-operation-write-receipt
+                                                               (lambda ()
+                                                                 (condition-case err
+                                                                     (prog1 (funcall operation row)
+                                                                       (setq quit-requested quit-flag quit-flag nil))
+                                                                   (error (jaunder--operation-write-failure
+                                                                           err (jaunder--reconcile-pull-error-detail err)))
+                                                                   (quit
+                                                                    (if (memq (jaunder--operation-write-phase) '(unknown confirmed))
+                                                                        (progn
+                                                                          (setq quit-requested t quit-flag nil)
+                                                                          (jaunder--operation-write-failure err))
+                                                                      (signal (car err) (cdr err)))))))))
                                                       (with-current-buffer buffer
                                                         (setq-local jaunder-reconcile-last-batch-results
                                                                     (append jaunder-reconcile-last-batch-results

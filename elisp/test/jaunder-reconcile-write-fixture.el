@@ -151,5 +151,14 @@ HOOK receives an event plist and state and may override an HTTP response."
             (jaunder-reconcile-row-member row) nil
             (jaunder-inventory-local-id (jaunder-reconcile-row-local row)) nil))))
 
+(defun jaunder-test--write-source-links (state id target)
+  "Replace ID's authored body in STATE with an exact TARGET file link."
+  (let ((path (gethash id (plist-get state :paths))))
+    (with-temp-buffer
+      (insert-file-contents path)
+      (goto-char (point-max))
+      (insert (format "[[file:./%s.org][Target]]\n" target))
+      (write-region (point-min) (point-max) path nil 'silent))))
+
 (provide 'jaunder-reconcile-write-fixture)
 ;;; jaunder-reconcile-write-fixture.el ends here
