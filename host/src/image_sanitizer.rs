@@ -221,8 +221,8 @@ impl ImageSanitizer {
         let probe = include_bytes!("image_sanitizer_fixtures/png-sanitized.png");
         let file = NamedTempFile::new().map_err(ImageSanitizerError::Processing)?;
         std::fs::write(file.path(), probe).map_err(ImageSanitizerError::Processing)?;
-        let name = Filename::sanitized("runtime-probe.png")
-            .map_err(|_| ImageSanitizerError::InvalidImage)?;
+        let name =
+            Filename::sanitized("runtime-probe.png").or(Err(ImageSanitizerError::InvalidImage))?;
         match self
             .sanitize(file, &name, None, MaxFileSize::default())
             .await?
@@ -459,14 +459,11 @@ impl ToolOutput {
 }
 
 fn metadata_record(bytes: &[u8]) -> Result<serde_json::Map<String, Value>, ImageSanitizerError> {
-    let mut records: Vec<serde_json::Map<String, Value>> =
+    let records: Vec<serde_json::Map<String, Value>> =
         serde_json::from_slice(bytes).map_err(ImageSanitizerError::ToolResponse)?;
-    if records.len() != 1 {
-        return Err(ImageSanitizerError::InvalidToolResponse);
-    }
-    let record = records
-        .pop()
-        .ok_or(ImageSanitizerError::InvalidToolResponse)?;
+    let [record]: [serde_json::Map<String, Value>; 1] = records
+        .try_into()
+        .map_err(|_| ImageSanitizerError::InvalidToolResponse)?;
     if !matches!(record.get("SourceFile"), Some(Value::String(_))) {
         return Err(ImageSanitizerError::InvalidToolResponse);
     }
@@ -538,6 +535,86 @@ mod tests {
         "1048576".parse().expect("valid maximum")
     }
 
+    fn image_variant(result: Sanitization) -> Option<SanitizedImage> {
+        match result {
+            Sanitization::Image(image) => Some(image),
+            Sanitization::Passthrough(_) => None,
+        }
+    }
+
+    fn spawn_sanitization(
+        sanitizer: ImageSanitizer,
+        input: NamedTempFile,
+    ) -> tokio::task::JoinHandle<Result<Sanitization, ImageSanitizerError>> {
+        tokio::spawn(async move {
+            sanitizer
+                .sanitize(input, &test_filename(), None, max_file_size())
+                .await
+        })
+    }
+
+    #[tokio::test]
+    async fn passthrough_is_not_an_image_variant() {
+        let tool = script(
+            "#!/bin/sh\nprintf '[{\"SourceFile\":\"private\",\"MIMEType\":\"image/svg+xml\"}]'\n",
+        );
+        let sanitizer = ImageSanitizer::new(tool.path().join("tool.sh")).expect("runtime");
+        let input = NamedTempFile::new().expect("private input");
+        assert!(
+            image_variant(
+                sanitizer
+                    .sanitize(input, &test_filename(), None, max_file_size())
+                    .await
+                    .expect("SVG passthrough")
+            )
+            .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn cancellation_while_waiting_for_capacity_cleans_input_without_starting_tool() {
+        let tool = script("#!/bin/sh\nexit 99\n");
+        let sanitizer = ImageSanitizer::new(tool.path().join("tool.sh")).expect("runtime");
+        let held = sanitizer
+            .active_jobs
+            .acquire_many(u32::try_from(ACTIVE_JOBS).expect("bounded capacity fits u32"))
+            .await
+            .expect("hold all capacity");
+        let input = NamedTempFile::new().expect("private input");
+        let path = input.path().to_owned();
+        let (sender, receiver) = oneshot::channel();
+        sender.send(()).expect("cancel owned job");
+        assert!(matches!(
+            sanitizer
+                .sanitize_owned(input, false, max_file_size(), receiver)
+                .await,
+            Err(ImageSanitizerError::Canceled)
+        ));
+        assert!(!path.exists());
+        drop(held);
+        assert_eq!(sanitizer.active_jobs.available_permits(), ACTIVE_JOBS);
+    }
+
+    #[tokio::test]
+    async fn an_invalid_private_spool_path_is_a_typed_error_before_editor_execution() {
+        let tool = script("#!/bin/sh\nexit 99\n");
+        let sanitizer = ImageSanitizer::new(tool.path().join("tool.sh")).expect("runtime");
+        let real_input = NamedTempFile::new().expect("owned file handle");
+        // A synthetic path exercises the fallible from_parts boundary. It must
+        // never be opened, written, or removed: cleanup is disabled before use.
+        let mut path = tempfile::TempPath::try_from_path("/").expect("synthetic parentless path");
+        path.disable_cleanup(true);
+        let synthetic = NamedTempFile::from_parts(
+            real_input.as_file().try_clone().expect("clone handle"),
+            path,
+        );
+        let (_sender, mut canceled) = oneshot::channel();
+        assert!(matches!(
+            sanitizer.edit(synthetic, "image/png", max_file_size(), Instant::now() + PROCESSING_TIMEOUT, &mut canceled).await,
+            Err(ImageSanitizerError::Processing(error)) if error.kind() == std::io::ErrorKind::InvalidInput
+        ));
+    }
+
     fn script(contents: &str) -> tempfile::TempDir {
         let directory = tempfile::tempdir().expect("script directory");
         let path = directory.path().join("tool.sh");
@@ -593,17 +670,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pid_observer_waits_for_complete_bytes_and_reports_unreadable_markers() {
+        for unreadable in [false, true] {
+            let directory = tempfile::tempdir().expect("PID marker workspace");
+            let marker = directory.path().join("pid");
+            if unreadable {
+                std::fs::create_dir(&marker).expect("unreadable directory marker");
+            } else {
+                std::fs::write(&marker, "").expect("pending empty marker");
+            }
+            let path = directory.path().to_owned();
+            let observation = tokio::spawn(async move { tool_pid(&path).await });
+            if unreadable {
+                assert!(
+                    observation
+                        .await
+                        .expect_err("unreadable marker must fail the fixture")
+                        .is_panic()
+                );
+            } else {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                std::fs::write(&marker, std::process::id().to_string()).expect("complete marker");
+                assert_eq!(
+                    observation.await.expect("observed PID"),
+                    rustix::process::getpid()
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn timeout_reaps_child_and_cleans_private_input() {
         let tool = blocked_tool();
         let mut sanitizer = ImageSanitizer::new(tool.path().join("tool.sh")).expect("runtime");
         sanitizer.processing_timeout = Duration::from_secs(1);
         let input = tempfile::NamedTempFile::new().expect("input");
         let path = input.path().to_owned();
-        let job = tokio::spawn(async move {
-            sanitizer
-                .sanitize(input, &test_filename(), None, max_file_size())
-                .await
-        });
+        let job = spawn_sanitization(sanitizer, input);
         let pid = tool_pid(tool.path()).await;
         assert!(matches!(
             job.await.expect("job"),
@@ -646,11 +749,7 @@ mod tests {
         let active = sanitizer.active_jobs.clone();
         let input = tempfile::NamedTempFile::new().expect("input");
         let path = input.path().to_owned();
-        let job = tokio::spawn(async move {
-            sanitizer
-                .sanitize(input, &test_filename(), None, max_file_size())
-                .await
-        });
+        let job = spawn_sanitization(sanitizer, input);
         let pid = tool_pid(tool.path()).await;
         assert!(path.exists());
         assert_eq!(active.available_permits(), ACTIVE_JOBS - 1);
@@ -673,6 +772,141 @@ mod tests {
     fn startup_rejects_missing_and_relative_runtimes() {
         assert!(ImageSanitizer::new(PathBuf::from("exiftool")).is_err());
         assert!(ImageSanitizer::new(PathBuf::from("/definitely/missing/exiftool")).is_err());
+    }
+
+    #[test]
+    fn startup_rejects_directories_and_non_executable_files() {
+        let directory = tempfile::tempdir().expect("runtime directory");
+        assert!(matches!(
+            ImageSanitizer::new(directory.path().to_owned()),
+            Err(ImageSanitizerError::RuntimeUnavailable(_))
+        ));
+        let file = NamedTempFile::new_in(directory.path()).expect("non-executable file");
+        assert!(matches!(
+            ImageSanitizer::new(file.path().to_owned()),
+            Err(ImageSanitizerError::RuntimeUnavailable(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn oversized_tool_response_is_reaped_without_releasing_private_bytes() {
+        let tool = script(&format!(
+            "#!{}\nimport sys\nsys.stdout.write('x' * {})\nsys.stdout.flush()\n",
+            test_tool("python3").display(),
+            MAX_TOOL_RESPONSE + 1,
+        ));
+        let sanitizer = ImageSanitizer::new(tool.path().join("tool.sh")).expect("runtime");
+        let input = NamedTempFile::new_in(tool.path()).expect("private input");
+        let path = input.path().to_owned();
+        let result = sanitizer
+            .sanitize(input, &test_filename(), None, max_file_size())
+            .await;
+        assert!(
+            matches!(result, Err(ImageSanitizerError::Processing(_))),
+            "{result:?}"
+        );
+        assert!(!path.exists());
+        assert_eq!(sanitizer.active_jobs.available_permits(), ACTIVE_JOBS);
+    }
+
+    #[tokio::test]
+    async fn closed_capacity_is_a_typed_failure_and_cleans_input() {
+        let tool = script("#!/bin/sh\nexit 99\n");
+        let sanitizer = ImageSanitizer::new(tool.path().join("tool.sh")).expect("runtime");
+        sanitizer.active_jobs.close();
+        let input = NamedTempFile::new().expect("private input");
+        let path = input.path().to_owned();
+        assert!(matches!(
+            sanitizer
+                .sanitize(input, &test_filename(), None, max_file_size())
+                .await,
+            Err(ImageSanitizerError::Processing(_))
+        ));
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn detection_protocol_and_exit_failures_cannot_become_passthrough() {
+        for (response, exit, expected_exit) in [
+            (
+                r#"[{"SourceFile":"private","Error":"read failed"}]"#,
+                17,
+                true,
+            ),
+            (
+                r#"[{"SourceFile":"private","Error":"read failed"}]"#,
+                0,
+                false,
+            ),
+            (
+                r#"[{"SourceFile":"private","MIMEType":"image/png"}]"#,
+                17,
+                true,
+            ),
+            (r#"[{"MIMEType":"image/png"}]"#, 0, false),
+            (r#"[{"SourceFile":false,"MIMEType":"image/png"}]"#, 0, false),
+        ] {
+            let tool = script(&format!(
+                "#!/bin/sh\nprintf '%s' '{response}'\nexit {exit}\n"
+            ));
+            let sanitizer = ImageSanitizer::new(tool.path().join("tool.sh")).expect("runtime");
+            let input = NamedTempFile::new().expect("private input");
+            let path = input.path().to_owned();
+            let result = sanitizer
+                .sanitize(input, &test_filename(), None, max_file_size())
+                .await;
+            if expected_exit {
+                assert!(
+                    matches!(result, Err(ImageSanitizerError::ToolExited(_))),
+                    "{result:?}"
+                );
+            } else {
+                assert!(
+                    matches!(result, Err(ImageSanitizerError::InvalidToolResponse)),
+                    "{result:?}"
+                );
+            }
+            assert!(!path.exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn startup_probe_rejects_mime_drift_and_non_image_detection() {
+        for mime in ["image/jpeg", "image/svg+xml"] {
+            let tool = script(&format!(
+                "#!/bin/sh\ncase \" $* \" in *' -G1 '*) printf '[{{\"SourceFile\":\"private\"}}]';; *) printf '[{{\"SourceFile\":\"private\",\"MIMEType\":\"{mime}\"}}]';; esac\n"
+            ));
+            let sanitizer = ImageSanitizer::new(tool.path().join("tool.sh")).expect("runtime");
+            assert!(matches!(
+                sanitizer.check_runtime().await,
+                Err(ImageSanitizerError::InvalidToolResponse)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn changed_mime_after_edit_is_rejected_and_cleans_spool() {
+        let tool = script(&format!(
+            "#!{}\nimport json,sys\nfrom pathlib import Path\np=Path(sys.argv[-1])\nif '-overwrite_original' in sys.argv:\n p.write_bytes(b'edited')\nelse:\n print(json.dumps([{{'SourceFile':str(p),'MIMEType':'image/jpeg' if p.read_bytes()==b'edited' else 'image/png'}}]))\n",
+            test_tool("python3").display(),
+        ));
+        let sanitizer = ImageSanitizer::new(tool.path().join("tool.sh")).expect("runtime");
+        let spool = tempfile::tempdir().expect("spool");
+        let input = NamedTempFile::new_in(spool.path()).expect("input");
+        std::fs::write(input.path(), b"original").expect("original bytes");
+        assert!(matches!(
+            sanitizer
+                .sanitize(input, &test_filename(), None, max_file_size())
+                .await,
+            Err(ImageSanitizerError::InvalidImage)
+        ));
+        assert!(
+            std::fs::read_dir(spool.path())
+                .expect("spool")
+                .next()
+                .is_none()
+        );
+        assert_eq!(sanitizer.active_jobs.available_permits(), ACTIVE_JOBS);
     }
 
     #[tokio::test]
@@ -788,13 +1022,13 @@ mod tests {
             include_bytes!("image_sanitizer_fixtures/png-original.png"),
         )
         .expect("copy fixture");
-        let Sanitization::Image(edited) = sanitizer
-            .sanitize(input, &test_filename(), None, max_file_size())
-            .await
-            .expect("edit")
-        else {
-            panic!("PNG must be edited");
-        };
+        let edited = image_variant(
+            sanitizer
+                .sanitize(input, &test_filename(), None, max_file_size())
+                .await
+                .expect("edit"),
+        )
+        .expect("PNG must be edited");
         let mut handle = edited.file().as_file().try_clone().expect("clone handle");
         let mut handle_bytes = Vec::new();
         std::io::Read::read_to_end(&mut handle, &mut handle_bytes).expect("read handle");
@@ -837,13 +1071,13 @@ mod tests {
             .expect("tool success");
         let before = metadata_record(&before).expect("metadata");
         assert!(before.contains_key("PNG:Comment"));
-        let Sanitization::Image(edited) = sanitizer
-            .sanitize(input, &test_filename(), None, max_file_size())
-            .await
-            .expect("metadata removal")
-        else {
-            panic!("HDR-signaling PNG remains an image");
-        };
+        let edited = image_variant(
+            sanitizer
+                .sanitize(input, &test_filename(), None, max_file_size())
+                .await
+                .expect("metadata removal"),
+        )
+        .expect("HDR-signaling PNG remains an image");
         let after = sanitizer
             .run(
                 &arguments,
@@ -1008,13 +1242,13 @@ mod tests {
                 before.private_fields > 0,
                 "case {case_index} must have planted private fields"
             );
-            let Sanitization::Image(first) = sanitizer
-                .sanitize(input, &test_filename(), None, max_file_size())
-                .await
-                .unwrap_or_else(|error| panic!("case {case_index} ({expected_mime}): {error}"))
-            else {
-                panic!("owned raster must be edited");
-            };
+            let first = image_variant(
+                sanitizer
+                    .sanitize(input, &test_filename(), None, max_file_size())
+                    .await
+                    .expect("owned raster sanitization"),
+            )
+            .expect("owned raster must be edited");
             assert_eq!(first.content_type().as_ref(), *expected_mime);
             let after = observe_fixture(&sanitizer, first.file().path()).await;
             assert_eq!(
@@ -1030,13 +1264,13 @@ mod tests {
                 "case {case_index} pixels, frames, timing, transparency and intact ICC"
             );
             let edited = std::fs::read(first.file().path()).expect("edited bytes");
-            let Sanitization::Image(second) = sanitizer
-                .sanitize(first.into_file(), &test_filename(), None, max_file_size())
-                .await
-                .expect("reupload")
-            else {
-                panic!("edited raster must stay covered");
-            };
+            let second = image_variant(
+                sanitizer
+                    .sanitize(first.into_file(), &test_filename(), None, max_file_size())
+                    .await
+                    .expect("reupload"),
+            )
+            .expect("edited raster must stay covered");
             assert!(
                 edited == std::fs::read(second.file().path()).expect("second bytes"),
                 "unstable {expected_mime}"
@@ -1078,13 +1312,13 @@ mod tests {
         )
         .expect("owned fixture");
         let sanitizer = ImageSanitizer::new(editor_runtime()).expect("runtime");
-        let Sanitization::Image(image) = sanitizer
-            .sanitize(input, &test_filename(), None, max_file_size())
-            .await
-            .expect("edited image")
-        else {
-            panic!("covered image");
-        };
+        let image = image_variant(
+            sanitizer
+                .sanitize(input, &test_filename(), None, max_file_size())
+                .await
+                .expect("edited image"),
+        )
+        .expect("covered image");
         assert_eq!(
             image.file().path().parent(),
             Some(spool.path()),
@@ -1113,29 +1347,29 @@ mod tests {
         )
         .expect("copy owned fixture");
 
-        let Sanitization::Image(edited) = sanitizer
-            .sanitize(
-                input,
-                &test_filename(),
-                Some(&"image/jpeg".parse().expect("valid mime")),
-                max_file_size(),
-            )
-            .await
-            .expect("metadata removal")
-        else {
-            panic!("a PNG must be sanitized");
-        };
+        let edited = image_variant(
+            sanitizer
+                .sanitize(
+                    input,
+                    &test_filename(),
+                    Some(&"image/jpeg".parse().expect("valid mime")),
+                    max_file_size(),
+                )
+                .await
+                .expect("metadata removal"),
+        )
+        .expect("a PNG must be sanitized");
         assert_eq!(edited.content_type(), "image/png");
         let second_input = tempfile::NamedTempFile::new().expect("private input");
         std::fs::copy(edited.file().path(), second_input.path()).expect("copy edited input");
         let first = std::fs::read(edited.file().path()).expect("read edited bytes");
-        let Sanitization::Image(second) = sanitizer
-            .sanitize(second_input, &test_filename(), None, max_file_size())
-            .await
-            .expect("idempotent metadata removal")
-        else {
-            panic!("an edited PNG remains covered");
-        };
+        let second = image_variant(
+            sanitizer
+                .sanitize(second_input, &test_filename(), None, max_file_size())
+                .await
+                .expect("idempotent metadata removal"),
+        )
+        .expect("an edited PNG remains covered");
         assert_eq!(
             first,
             std::fs::read(second.file().path()).expect("read second bytes")

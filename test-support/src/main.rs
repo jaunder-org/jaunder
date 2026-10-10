@@ -537,6 +537,12 @@ fn cmd_capture_path_for_stream(stream: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn required_image_runtime(
+    executable: Option<std::path::PathBuf>,
+) -> anyhow::Result<std::path::PathBuf> {
+    executable.ok_or_else(|| anyhow::anyhow!("required image metadata runtime is not configured"))
+}
+
 /// Seed one complete fixed sandbox profile and report only after every phase commits.
 async fn cmd_seed_sandbox_profile(
     db: &DbConnectOptions,
@@ -557,12 +563,13 @@ async fn cmd_seed_sandbox_profile(
         }
         SandboxProfile::Demo => {
             let storage_path = std::sync::Arc::new(storage_path.to_path_buf());
-            let executable = std::env::var_os("JAUNDER_EXIFTOOL")
-                .map(std::path::PathBuf::from)
-                .or_else(|| host::image_sanitizer::PACKAGED_EXIFTOOL.map(std::path::PathBuf::from))
-                .ok_or_else(|| {
-                    anyhow::anyhow!("required image metadata runtime is not configured")
-                })?;
+            let executable = required_image_runtime(
+                std::env::var_os("JAUNDER_EXIFTOOL")
+                    .map(std::path::PathBuf::from)
+                    .or_else(|| {
+                        host::image_sanitizer::PACKAGED_EXIFTOOL.map(std::path::PathBuf::from)
+                    }),
+            )?;
             let sanitizer =
                 std::sync::Arc::new(host::image_sanitizer::ImageSanitizer::new(executable)?);
             sanitizer.check_runtime().await?;
@@ -788,6 +795,21 @@ mod tests {
 
     fn cli(command: Commands) -> Cli {
         Cli { command }
+    }
+
+    #[test]
+    fn demo_runtime_configuration_is_required_and_preserves_the_selected_path() {
+        let missing =
+            required_image_runtime(None).expect_err("missing runtime must refuse demo seed");
+        assert_eq!(
+            missing.to_string(),
+            "required image metadata runtime is not configured"
+        );
+        let selected = std::path::PathBuf::from("/configured/image-editor");
+        assert_eq!(
+            required_image_runtime(Some(selected.clone())).expect("configured runtime"),
+            selected
+        );
     }
 
     #[test]

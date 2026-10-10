@@ -2785,6 +2785,94 @@ else:
 
     #[apply(backends)]
     #[tokio::test]
+    async fn changed_passthrough_bytes_are_checked_before_durable_identity(
+        #[case] backend: Backend,
+    ) {
+        use std::os::unix::fs::PermissionsExt;
+        let env = backend
+            .setup()
+            .media_limits("8".parse().unwrap(), UserQuota::default())
+            .await;
+        let user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let tool = TempDir::new().unwrap();
+        let executable = tool.path().join("detector");
+        let python = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|path| path.join("python3"))
+            .find(|path| path.is_file())
+            .unwrap();
+        std_fs::write(&executable, format!("#!{}\nimport json,sys\nfrom pathlib import Path\np=Path(sys.argv[-1])\np.write_bytes(b'x'*64)\n(Path(__file__).parent/'observed').write_text(str(p))\nprint(json.dumps([{{'SourceFile':str(p),'MIMEType':'text/plain'}}]))\n", python.display())).unwrap();
+        std_fs::set_permissions(&executable, std_fs::Permissions::from_mode(0o700)).unwrap();
+        let manager = MediaManager::new(
+            env.media(),
+            env.posts(),
+            env.site_config(),
+            env.write_scope(),
+            Arc::new(MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
+            env.base.instance_id().clone(),
+            no_foreign_resolver(),
+        )
+        .with_image_sanitizer(Arc::new(ImageSanitizer::new(executable).unwrap()));
+        for streaming in [false, true] {
+            let filename = parse_filename("ordinary.txt");
+            let content_type = parse_content_type("text/plain");
+            let error = if streaming {
+                let input = stream::iter([Ok::<Bytes, io::Error>(Bytes::from_static(b"input"))]);
+                manager
+                    .upload(user_id, &filename, Some(content_type), input)
+                    .await
+                    .expect_err("changed bytes exceed current limit")
+            } else {
+                manager
+                    .upload_bytes(user_id, &filename, content_type, b"input")
+                    .await
+                    .expect_err("changed bytes exceed current limit")
+            };
+            assert!(matches!(
+                error.downcast_ref::<MediaError>(),
+                Some(MediaError::PayloadTooLarge)
+            ));
+            let observed = std_fs::read_to_string(tool.path().join("observed")).unwrap();
+            assert!(Path::new(&observed).starts_with(env.base.path().join("media/tmp")));
+            assert!(
+                !Path::new(&observed).exists(),
+                "changed private input must be removed"
+            );
+            assert_eq!(
+                env.media()
+                    .get_user_upload_usage(user_id)
+                    .await
+                    .unwrap()
+                    .value(),
+                0
+            );
+            assert!(
+                env.media()
+                    .list_media(
+                        user_id,
+                        None,
+                        common::pagination::RowLimit::at_most(100),
+                        common::pagination::PageOffset::default()
+                    )
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                std_fs::read_dir(env.base.path().join("media/tmp"))
+                    .unwrap()
+                    .next()
+                    .is_none()
+            );
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn expanded_editor_output_rejects_without_durable_mutation(#[case] backend: Backend) {
         use std::os::unix::fs::PermissionsExt;
         let env = backend

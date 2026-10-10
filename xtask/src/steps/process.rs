@@ -213,6 +213,17 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn second_signal_path_forces_cleanup_without_waiting_for_grace() {
+        assert_second_signal_cleanup(None);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn second_signal_interrupts_an_already_running_grace_period() {
+        assert_second_signal_cleanup(Some(Duration::from_millis(20)));
+    }
+
+    #[cfg(target_os = "linux")]
+    fn assert_second_signal_cleanup(escalate_after: Option<Duration>) {
         let directory = tempfile::tempdir().expect("create temporary directory");
         let ready_path = directory.path().join("ready");
         let mut process = Process::start(
@@ -238,7 +249,11 @@ mod tests {
 
         let started = Instant::now();
         let outcome = process
-            .shutdown_interruptible(Duration::from_secs(60), async {})
+            .shutdown_interruptible(Duration::from_secs(60), async {
+                if let Some(delay) = escalate_after {
+                    tokio::time::sleep(delay).await;
+                }
+            })
             .expect("force shutdown");
 
         assert_eq!(outcome, None);
@@ -247,7 +262,13 @@ mod tests {
         while !process_identity_is_stopped(pid, start_time) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert!(process_identity_is_stopped(pid, start_time));
+        assert!(
+            process_identity_is_stopped(pid, start_time),
+            "child cleanup failed: pid={pid} start_time={start_time:?} alive={:?} info={:?} stat={:?}",
+            processkit::process_is_alive(pid, start_time),
+            processkit::process_info(pid),
+            fs::read_to_string(format!("/proc/{pid}/stat")),
+        );
     }
 
     #[test]
