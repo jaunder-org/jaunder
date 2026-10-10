@@ -3089,19 +3089,31 @@ The buffer refreshes from a new inventory after completion or cancellation while
 retaining the ordered terminal results from the last batch, so completed work
 and independent failures remain visible and safe to retry.
 
-Confirmed pull and keep-remote batches share at most one complete remote
-Collection enumeration when operation evidence is needed, independently of the
-reviewed preview. Only remote Members are reused: local identity and uniqueness
-remain freshly checked at each matched-row revalidation boundary, including a
-last local scan after Media finalization immediately before replacement,
-alongside selected-Member, strong ETag, digest, buffer, destination, and Media
-checks. Pull-time Local Post Link localization does not add per-row Collection
-walks and retains current local target proof. Partial or failed enumeration
-never supplies valid evidence and is not retried separately for every row.
-Evidence belongs to one batch/root/blog; the final report refresh reads a new
-Collection. Reuse accepts less repeated detection of newly faulty duplicate
-Collection Entries, not changed selected Posts or local bytes
-([batch-scoped pull Collection evidence](adr/drafts/emacs-batch-scoped-pull-collection-evidence.md)).
+Confirmed push, pull, keep-local, keep-remote and delete share one deep
+operation-level module owning root/blog-scoped discovery, evidence lifetime and
+invalidation. One selected Post is the same flow with batch size one. Acquire at
+most one complete Collection traversal when discovery is needed; deletes,
+link-free pushes and immediate ineligibility do not acquire unused evidence.
+Local identity and uniqueness remain freshly checked, alongside action-specific
+Member, strong ETag, digest, buffer, destination and Media safeguards. Matched
+pull and keep-remote perform their last local scan after Media finalization
+immediately before replacement. Both directions of Local Post Link processing
+participate without per-row Collection walks, retaining current local target
+proof and their existing abort/preserve policies.
+
+Known remote create/update/delete invalidates or updates the affected identity's
+discovery/link evidence before later consumers, including when local completion
+fails. Unknown outcomes invalidate assumptions; authoritative responses or fresh
+targeted Member reads restore usable proof without guessed IDs/URLs or unsafe
+write retries. Failed or partial discovery is retained rather than retried per
+row or treated as valid empty/stale evidence. Operation scope ends before the
+separate final report refresh; independent failures, cancellation and refresh
+failure preserve ordered terminal recovery results. Interactive merge owns
+separate short-lived preparation/completion scopes, not freshness across human
+editing. Reuse accepts less repeated detection of newly faulty global duplicate
+Collection Entries, never permission to overwrite changed selected Posts or
+local bytes
+([operation-scoped Collection evidence](adr/drafts/emacs-operation-scoped-collection-evidence.md)).
 
 A selected matched `server-ahead` Post may be pulled only after revalidating its
 report-snapshotted local path/SHA-256 and remote strong ETag
