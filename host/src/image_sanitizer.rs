@@ -1167,10 +1167,10 @@ mod tests {
             .arg(sanitizer.executable.as_path())
             .output()
             .expect("conventional decoder");
+        let decoding_diagnostic = String::from_utf8_lossy(&decoded.stderr);
         assert!(
             decoded.status.success(),
-            "owned fixture decoding: {}",
-            String::from_utf8_lossy(&decoded.stderr)
+            "owned fixture decoding: {decoding_diagnostic}"
         );
         FixtureObservation {
             private_fields,
