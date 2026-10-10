@@ -29,6 +29,8 @@ deployable Jaunder server binary.
 ## Layout
 
 - `jaunder.el` — the package entry point and dependency assembly.
+- `jaunder-keyword-repair.el` — read-only keyword repair previews and explicitly
+  selected, confirmed, conditional add-only remote tag repairs.
 - `jaunder-inventory.el` — Collection and local Post identity inventory shared
   by reconciliation and Local Post Link mapping.
 - `jaunder-reconcile-operation.el` — private operation-owned remote discovery,
@@ -373,6 +375,178 @@ staging its remote snapshot; its editable result remains ordinary authored
 content. If a pull fails, its Post remains server-only while already verified
 Local Media Copies remain safe; rerun `jaunder-reconcile` to retry and reuse
 those copies.
+
+## Keyword normalization and missing-tag repair
+
+### Normalization contract
+
+Leading Org `CATEGORY`, `TAGS`, and `KEYWORDS` values are collected with Org's
+actual parser. Repeated lines compose in source order; commas separate terms,
+not spaces, and empty comma terms are dropped. The metadata/body boundary stays
+unchanged; examples in the body are not metadata. Raw server Org `KEYWORDS` and
+AtomPub categories share the normalization contract; local source retains its
+original terms. Structured web tag validation remains strict.
+
+An already-valid ASCII label after boundary trimming keeps spelling, casing and
+hyphen sequences. Otherwise the original term must be ASCII: trim whitespace,
+lowercase ASCII letters, replace punctuation/whitespace runs with one hyphen,
+and remove edge hyphens. For example, `100 bullets` becomes `100-bullets`,
+`James S. A. Corey` becomes `james-s-a-corey`, and `old man's war` becomes
+`old-man-s-war`. Non-ASCII letters (including Kelvin sign), or terms without a
+usable ASCII letter/digit, reject the complete write. Unicode whitespace around
+an already-valid label may trim; around an invalid spaced term it rejects. There
+is no Unicode expansion, transliteration, truncation or fallback label.
+Canonical identity deduplication keeps the first label in input order, including
+normalization collisions; no suffix is invented. The current cap is 256 distinct
+tags. Invalid AtomPub categories return HTTP 400 and save no Post changes.
+
+### Prepare and preview (read-only)
+
+1. Back up the server with the supported
+   [backup and restore procedure](../docs/application-assets.md#backup-and-restore).
+   Separately back up the **complete configured local corpus**, including all
+   Org files, metadata and durable `local-media/` content (see
+   [Pulled media](#pulled-media)). A server backup is not a local corpus backup.
+   Keep backups private and verify that they can be recovered.
+2. Deploy the server ingress normalization fix and matching Emacs package before
+   any production apply. Stop competing publishers and local edits while
+   reviewing and executing. Use the intended configured root and current
+   Protocol Client credentials; do not use direct database access.
+3. In Emacs `*scratch*`, evaluate the following forms with `C-x C-e` (or
+   evaluate each form with `M-:`). Replace the example path with your configured
+   root. Preview performs GETs only, scans only direct-root Org files (not
+   recursive subdirectories), and writes no files, buffers, Media or sync
+   markers.
+
+```elisp
+(require 'jaunder)
+(setq repair-report
+      (jaunder-keyword-repair-preview "/path/to/configured/root/"))
+;; Display only reduced, indexed review data; retain the opaque report above.
+(setq repair-review
+      (cl-loop for row in (plist-get
+                          (jaunder-keyword-repair-report-data repair-report)
+                          :rows)
+               for index from 0
+               collect (list :index index :id (plist-get row :id)
+                             :status (plist-get row :status)
+                             :reason (plist-get row :reason)
+                             :existing-labels (plist-get row :existing-labels)
+                             :additions (plist-get row :additions))))
+(pp repair-review)
+```
+
+`jaunder-keyword-repair-preview` returns an **opaque report**, not a row list or
+visual report UI. `jaunder-keyword-repair-report-data` returns detached
+inspection data, including raw remote XML, paths and digests; do not casually
+print or share that full data. Conditions' retained source data can contain
+content or credentials: inspect deliberately and privately, never automatically
+format it into logs. File, transport or XML-decoding errors abort preview with
+contextual causes; no failed preview authorizes a write. A well-formed but
+invalid Member instead produces a blocked row.
+
+Review each proposed addition and its canonical collisions against the actual
+remote Post. `eligible` means missing identities were found, **not approval**.
+`unchanged` means none are missing. Blockers include invalid local terms,
+modified visiting buffers, missing/ambiguous/duplicate local IDs, missing or
+Deleted remote targets, duplicate remote IDs/slugs, foreign Members, invalid
+strong ETags, unpreservable Member fields, drafts, and over-cap complete unions.
+Repair requires unique local/remote identity, configured root/origin/User
+binding, reviewed literal local byte digest, clean visiting buffers, and a
+current strong reviewed ETag. It validates the entire canonical union, not just
+new terms. Resolve blockers deliberately, then take and review a fresh preview.
+
+### Separately approved canary and bounded batches
+
+**Production mutation requires separate human approval. Spec or implementation
+approval is not production approval.** Obtain approval for one explicitly
+reviewed Post first. The apply function is not interactive: use Emacs Lisp, not
+`M-x jaunder-keyword-repair-apply`. Replace the illustrative index below with
+the one actually reviewed and approved; indices are zero-based in this exact
+report.
+
+```elisp
+;; Only after separate approval of this specific canary row:
+(setq repair-canary (jaunder-keyword-repair-apply repair-report '(0)))
+;; Reduced result display; do not print retained source conditions.
+(pp (list :cancelled (plist-get repair-canary :cancelled)
+          :results (cl-loop for result in (plist-get repair-canary :results)
+                            collect (list :id (plist-get result :id)
+                                          :status (plist-get result :status)
+                                          :reason (plist-get result :reason)
+                                          :http-status
+                                          (plist-get result :http-status)))))
+```
+
+Native `yes-or-no-p` confirmation remains mandatory. Do not suppress it or pass
+edited inspection plists instead of the opaque report. Apply accepts an explicit
+nonempty ordered list of distinct indices; it never automatically selects all
+eligible rows. It rechecks configuration, local bytes/identity/buffers, current
+unique remote identity, intended union and reviewed ETag before each conditional
+`If-Match` PUT. Any changed proof blocks rather than adopting new intent.
+
+The payload replaces only categories in the **current remote Member**,
+preserving its title, body, format, summary, audience, publication time/state
+and identity. Currently published and scheduled Posts retain the stored
+slug/permalink, including collision suffixes; drafts are blocked because their
+slug is mutable. Existing server labels are authoritative: repair adds missing
+identities without deleting or relabelling them. Ordinary mutation
+timestamps/versions, Post Revisions, and derived rendering/search state may
+change.
+
+After the canary, independently inspect fresh remote native fields, permalink,
+existing labels and added identities. Compare local literal bytes and
+synchronization markers with the backup: both must be untouched. Verify that a
+fresh preview has no remaining additions for the canary. Stop on unexpected
+results. Only then obtain approval for a bounded batch and review a **fresh**
+report using the preview/reduced-display forms above. For example, after
+reviewing and approving precisely rows 2 and 5 in that new report:
+
+```elisp
+(setq repair-batch (jaunder-keyword-repair-apply repair-report '(2 5)))
+```
+
+Never generate the selection by filtering `eligible` status: every selected row
+needs explicit review and approval. Verify each bounded batch before expanding.
+
+### Outcomes, interruption and reconciliation
+
+Apply returns `(:results ORDERED-RESULTS :cancelled BOOLEAN)` and checkpoints
+`jaunder-keyword-repair-last-application` after each terminal Post. Outcomes
+are:
+
+- `unchanged`: no missing identities; no PUT.
+- `blocked`: eligibility/preflight/revalidation refused, or HTTP 412 rejected
+  the conditional write.
+- `repaired`: a trustworthy HTTP 2xx confirms mutation.
+- `failed`: a definite other non-success HTTP response or a known pre-dispatch
+  construction failure. Read/preflight failures are blocked.
+- `unknown-remote-outcome`: no trustworthy response after possible PUT dispatch;
+  the server **may have committed**. This is not failure or unchanged.
+
+Declining confirmation returns `:cancelled t` with no results. Cancellation
+stops before the next Post, preserving earlier outcomes; an interrupted possible
+PUT is recorded as unknown. A later failure does not roll back earlier repairs.
+There is no batch transaction or rollback. The last-application variable is
+in-memory, not a persistent execution log or rollback record; a new apply resets
+it. Before another apply or Emacs exit, privately retain operator-reviewed,
+redacted transient results (including ordered Post identities, statuses, HTTP
+statuses and cancellation), never raw XML or credential-bearing conditions.
+
+**Never blindly retry a possible PUT.** After interruption or an unknown
+outcome, use fresh GET-only previews and inspect actual remote state. Re-review
+only remaining additions and obtain any needed approval; do not resend the stale
+report. A committed uncertain write will already have the identities on the
+server and require no further write.
+
+Repair leaves files and synchronization markers untouched, so it does **not**
+make ordinary reconciliation report `unchanged`. After a separate backup, use
+[Reconciliation batches](#reconciliation-batches) to inspect both sides and make
+an explicit reviewed choice/merge. Do not blindly fetch over original local
+`KEYWORDS`, push an older local body over newer remote content, delete markers,
+or reset timestamps to bypass reconciliation. A true conflict can use the
+single-Post two-way Ediff workflow to retain original terms while reviewing the
+newer remote authored content; exiting Ediff never publishes.
 
 ## Reconciliation batches
 

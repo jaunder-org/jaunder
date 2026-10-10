@@ -2842,6 +2842,45 @@ client diagnostics (`jaunder-debug.el`), timezone handling
 (`jaunder-inventory.el`), Local Post Link mapping (`jaunder-post-link.el`),
 media (`jaunder-media.el`), and the user commands (`jaunder-publish.el`).
 
+### Reviewed add-only keyword repair
+
+`jaunder-keyword-repair.el` separates GET-only preview from explicitly selected
+application. Org's actual leading metadata parser scans direct-root Post files;
+local source terms stay original. An opaque report binds configured root,
+origin/User, unique Post identity, literal local byte digest, current strong
+Member ETag and reviewed additions. Detached inspection data includes raw remote
+XML and is private. Infrastructure/file/XML-decoding failures abort preview with
+retained contextual causes; invalid or unpreservable Members produce blocked
+rows rather than guessed replacements.
+
+Apply accepts explicit ordered zero-based report indices and requires native
+confirmation. Each Post revalidates current local bytes, identity and clean
+visiting buffers, configuration, unique remote identity, reviewed ETag and the
+complete capped canonical union. A conditional `If-Match` replacement changes
+only current remote categories: existing server labels stay authoritative and
+missing normalized local identities are added without relabelling or deletion.
+Remote title, body, format, summary, audience, publication time/state and
+identity remain intact. Only currently published/scheduled Posts qualify,
+preserving stored slug/permalink under
+[ADR-0130](adr/0130-current-publication-state-slug-freeze.md); drafts block.
+Ordinary mutation timestamps/versions, Post Revisions and derived
+rendering/search state may change. Local files, buffers, Media and sync markers
+are never written.
+
+Ordered outcomes distinguish unchanged, blocked (including HTTP 412), confirmed
+2xx repaired, definite failure, and unknown remote outcome after possible PUT
+without a trustworthy response. No uncertain write retries automatically.
+Cancellation checkpoints completed outcomes and stops before the next Post;
+there is no batch transaction or rollback. Last-application evidence is
+volatile, not a persistent log. Recovery requires fresh preview and review, not
+reuse of stale intent. Repair does not establish an unchanged reconciliation
+baseline; later reconciliation retains the explicit reviewed choices of
+[ADR-0200](adr/0200-revalidated-matched-post-pull.md) and
+[ADR-0211](adr/0211-emacs-reconciliation-conflict-resolution.md).
+[The maintained runbook](../elisp/README.md#keyword-normalization-and-missing-tag-repair)
+owns backup, deployment, separate production approval, canary and recovery
+steps.
+
 ### Local client diagnostics
 
 `jaunder-debug.el` owns off-by-default, timestamped operation diagnostics for

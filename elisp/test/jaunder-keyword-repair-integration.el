@@ -216,7 +216,31 @@
      (with-temp-file path
        (insert "#+TITLE: Older local title\n#+PROPERTY: JAUNDER_STATUS published\n#+KEYWORDS: Rust, 100 bullets\n\nOlder local body.\n"))
      (setq buffer (find-file-noselect path))
-     (with-current-buffer buffer (jaunder-publish) (save-buffer))
+     ;; Snapshot actual leading source before publishing, independently of the
+     ;; later repair snapshot.  Publication may insert markers and rename files,
+     ;; but must not replace spaced authored terms with normalized labels.
+     (cl-labels ((keywords ()
+                   (save-restriction
+                     (narrow-to-region (point-min) (jaunder--body-start))
+                     (let ((case-fold-search t) lines)
+                       (save-excursion
+                         (goto-char (point-min))
+                         (while (re-search-forward "^#\\+KEYWORDS:.*\n" nil t)
+                           (push (match-string-no-properties 0) lines)))
+                       (list (nreverse lines)
+                             (jaunder--split-keywords
+                              (cdr (assoc "KEYWORDS" (org-collect-keywords '("KEYWORDS"))))))))))
+       (let ((original (with-current-buffer buffer (keywords))))
+         (should (equal (car original) '("#+KEYWORDS: Rust, 100 bullets\n")))
+         (should (equal (cadr original) '("Rust" "100 bullets")))
+         (with-current-buffer buffer
+           (jaunder-publish)
+           (save-buffer)
+           (should (equal original (keywords))))
+         (with-temp-buffer
+           (insert-file-contents-literally (buffer-file-name buffer))
+           (delay-mode-hooks (org-mode))
+           (should (equal original (keywords))))))
      (setq path (buffer-file-name buffer))
      (set-file-times path (time-subtract (current-time) (seconds-to-time 5)))
      (let* ((id (with-current-buffer buffer (jaunder--buffer-property "JAUNDER_ID")))
