@@ -1179,107 +1179,136 @@ mod tests {
         }
     }
 
-    const OWNED_FORMAT_CASES: &[(&[u8], &str)] = &[
-        (
-            include_bytes!("image_sanitizer_fixtures/jpeg-original.jpg"),
-            "image/jpeg",
-        ),
-        (
-            include_bytes!("image_sanitizer_fixtures/png-original.png"),
-            "image/png",
-        ),
-        (
-            include_bytes!("image_sanitizer_fixtures/apng-first-original.png"),
-            "image/png",
-        ),
-        (
-            include_bytes!("image_sanitizer_fixtures/apng-default-original.png"),
-            "image/png",
-        ),
-        (
-            include_bytes!("image_sanitizer_fixtures/gif-static-original.gif"),
-            "image/gif",
-        ),
-        (
-            include_bytes!("image_sanitizer_fixtures/gif-animation-original.gif"),
-            "image/gif",
-        ),
-        (
-            include_bytes!("image_sanitizer_fixtures/webp-static-original.webp"),
-            "image/webp",
-        ),
-        (
-            include_bytes!("image_sanitizer_fixtures/webp-animation-original.webp"),
-            "image/webp",
-        ),
-        (
-            include_bytes!("image_sanitizer_fixtures/heic-original.heic"),
-            "image/heic",
-        ),
-    ];
-    #[tokio::test]
-    async fn actual_editor_covers_owned_formats_with_stable_output() {
+    struct OwnedFormatCase {
+        name: &'static str,
+        bytes: &'static [u8],
+        mime: &'static str,
+        animated: bool,
+        non_opaque_alpha: bool,
+    }
+
+    async fn assert_owned_format_with_stable_output(case: OwnedFormatCase) {
+        let name = case.name;
+        let expected_mime = case.mime;
         let sanitizer = ImageSanitizer::new(editor_runtime()).expect("runtime");
-        let mut observed_transparency = false;
-        for (case_index, (bytes, expected_mime)) in OWNED_FORMAT_CASES.iter().enumerate() {
-            let input = tempfile::NamedTempFile::new().expect("input");
-            std::fs::write(input.path(), bytes).expect("fixture");
-            let before = observe_fixture(&sanitizer, input.path()).await;
-            if let Some(frames) = before.decoded["frames"].as_array() {
-                if matches!(case_index, 2 | 3 | 5 | 7) {
-                    assert!(
-                        frames.len() > 1,
-                        "animated fixture {case_index} must expose its frames"
-                    );
-                }
-                observed_transparency |= frames.iter().any(|frame| {
+        let input = tempfile::NamedTempFile::new().expect("input");
+        std::fs::write(input.path(), case.bytes).expect("fixture");
+        let before = observe_fixture(&sanitizer, input.path()).await;
+        let frames = before.decoded["frames"].as_array();
+        if case.animated {
+            assert!(
+                frames.is_some_and(|frames| frames.len() > 1),
+                "animated fixture {name} must expose its frames"
+            );
+        }
+        if case.non_opaque_alpha {
+            assert!(
+                frames.is_some_and(|frames| frames.iter().any(|frame| {
                     frame["alpha_extrema"][0]
                         .as_u64()
                         .is_some_and(|alpha| alpha < 255)
-                });
-            }
-            assert!(
-                before.private_fields > 0,
-                "case {case_index} must have planted private fields"
-            );
-            let first = image_variant(
-                sanitizer
-                    .sanitize(input, &test_filename(), None, max_file_size())
-                    .await
-                    .expect("owned raster sanitization"),
-            )
-            .expect("owned raster must be edited");
-            assert_eq!(first.content_type().as_ref(), *expected_mime);
-            let after = observe_fixture(&sanitizer, first.file().path()).await;
-            assert_eq!(
-                after.private_fields, 0,
-                "case {case_index} removes planted fields"
-            );
-            assert_eq!(
-                before.rendering_metadata, after.rendering_metadata,
-                "case {case_index} rendering tags"
-            );
-            assert_eq!(
-                before.decoded, after.decoded,
-                "case {case_index} pixels, frames, timing, transparency and intact ICC"
-            );
-            let edited = std::fs::read(first.file().path()).expect("edited bytes");
-            let second = image_variant(
-                sanitizer
-                    .sanitize(first.into_file(), &test_filename(), None, max_file_size())
-                    .await
-                    .expect("reupload"),
-            )
-            .expect("edited raster must stay covered");
-            assert!(
-                edited == std::fs::read(second.file().path()).expect("second bytes"),
-                "unstable {expected_mime}"
+                })),
+                "owned fixture {name} must exercise non-opaque alpha"
             );
         }
         assert!(
-            observed_transparency,
-            "owned corpus must exercise non-opaque alpha"
+            before.private_fields > 0,
+            "case {name} must have planted private fields"
         );
+        let first = image_variant(
+            sanitizer
+                .sanitize(input, &test_filename(), None, max_file_size())
+                .await
+                .expect("owned raster sanitization"),
+        )
+        .expect("owned raster must be edited");
+        assert_eq!(first.content_type().as_ref(), expected_mime);
+        let after = observe_fixture(&sanitizer, first.file().path()).await;
+        assert_eq!(
+            after.private_fields, 0,
+            "case {name} removes planted fields"
+        );
+        assert_eq!(
+            before.rendering_metadata, after.rendering_metadata,
+            "case {name} rendering tags"
+        );
+        assert_eq!(
+            before.decoded, after.decoded,
+            "case {name} pixels, frames, timing, transparency and intact ICC"
+        );
+        let edited = std::fs::read(first.file().path()).expect("edited bytes");
+        let second = image_variant(
+            sanitizer
+                .sanitize(first.into_file(), &test_filename(), None, max_file_size())
+                .await
+                .expect("reupload"),
+        )
+        .expect("edited raster must stay covered");
+        assert!(
+            edited == std::fs::read(second.file().path()).expect("second bytes"),
+            "unstable {expected_mime}"
+        );
+    }
+
+    // Each format owns the normal whole-test budget; the complete observer and
+    // reupload proof remains shared rather than bundling nine jobs into one case.
+    macro_rules! owned_format_cases {
+        ($($name:ident => {
+            fixture: $fixture:literal,
+            mime: $mime:literal,
+            animated: $animated:literal,
+            non_opaque_alpha: $alpha:literal
+        }),+ $(,)?) => {
+            const _: [&str; 9] = [$(stringify!($name)),+];
+            $(#[tokio::test]
+            async fn $name() {
+                assert_owned_format_with_stable_output(OwnedFormatCase {
+                    name: stringify!($name),
+                    bytes: include_bytes!($fixture),
+                    mime: $mime,
+                    animated: $animated,
+                    non_opaque_alpha: $alpha,
+                }).await;
+            })+
+        };
+    }
+    owned_format_cases! {
+        actual_editor_covers_owned_formats_with_stable_output_jpeg => {
+            fixture: "image_sanitizer_fixtures/jpeg-original.jpg", mime: "image/jpeg",
+            animated: false, non_opaque_alpha: false
+        },
+        actual_editor_covers_owned_formats_with_stable_output_png => {
+            fixture: "image_sanitizer_fixtures/png-original.png", mime: "image/png",
+            animated: false, non_opaque_alpha: true
+        },
+        actual_editor_covers_owned_formats_with_stable_output_apng_first => {
+            fixture: "image_sanitizer_fixtures/apng-first-original.png", mime: "image/png",
+            animated: true, non_opaque_alpha: false
+        },
+        actual_editor_covers_owned_formats_with_stable_output_apng_default => {
+            fixture: "image_sanitizer_fixtures/apng-default-original.png", mime: "image/png",
+            animated: true, non_opaque_alpha: false
+        },
+        actual_editor_covers_owned_formats_with_stable_output_gif_static => {
+            fixture: "image_sanitizer_fixtures/gif-static-original.gif", mime: "image/gif",
+            animated: false, non_opaque_alpha: false
+        },
+        actual_editor_covers_owned_formats_with_stable_output_gif_animation => {
+            fixture: "image_sanitizer_fixtures/gif-animation-original.gif", mime: "image/gif",
+            animated: true, non_opaque_alpha: false
+        },
+        actual_editor_covers_owned_formats_with_stable_output_webp_static => {
+            fixture: "image_sanitizer_fixtures/webp-static-original.webp", mime: "image/webp",
+            animated: false, non_opaque_alpha: false
+        },
+        actual_editor_covers_owned_formats_with_stable_output_webp_animation => {
+            fixture: "image_sanitizer_fixtures/webp-animation-original.webp", mime: "image/webp",
+            animated: true, non_opaque_alpha: false
+        },
+        actual_editor_covers_owned_formats_with_stable_output_heic => {
+            fixture: "image_sanitizer_fixtures/heic-original.heic", mime: "image/heic",
+            animated: false, non_opaque_alpha: false
+        },
     }
 
     #[tokio::test]
