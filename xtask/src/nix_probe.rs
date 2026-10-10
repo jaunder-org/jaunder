@@ -27,14 +27,16 @@ enum Boundary {
     StaticCode,
     Site,
     WasmTests,
+    Xtask,
 }
 
 impl Boundary {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
         Self::StaticDocs,
         Self::StaticCode,
         Self::Site,
         Self::WasmTests,
+        Self::Xtask,
     ];
 
     const fn name(self) -> &'static str {
@@ -43,6 +45,7 @@ impl Boundary {
             Self::StaticCode => "static-code",
             Self::Site => "site",
             Self::WasmTests => "wasm-tests",
+            Self::Xtask => "xtask",
         }
     }
 }
@@ -55,16 +58,32 @@ pub enum Arm {
     Common,
     Macros,
     Performance,
+    Tooling,
+    SharedHost,
+    ToolLock,
+    BuildConfig,
+    LaneCatalog,
+    QualificationSchema,
+    ThemeCss,
+    ApplicationCss,
 }
 
 impl Arm {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 14] = [
         Self::Docs,
         Self::Server,
         Self::Web,
         Self::Common,
         Self::Macros,
         Self::Performance,
+        Self::Tooling,
+        Self::SharedHost,
+        Self::ToolLock,
+        Self::BuildConfig,
+        Self::LaneCatalog,
+        Self::QualificationSchema,
+        Self::ThemeCss,
+        Self::ApplicationCss,
     ];
 
     const fn name(self) -> &'static str {
@@ -75,6 +94,14 @@ impl Arm {
             Self::Common => "common",
             Self::Macros => "macros",
             Self::Performance => "performance",
+            Self::Tooling => "tooling",
+            Self::SharedHost => "shared-host",
+            Self::ToolLock => "tool-lock",
+            Self::BuildConfig => "build-config",
+            Self::LaneCatalog => "lane-catalog",
+            Self::QualificationSchema => "qualification-schema",
+            Self::ThemeCss => "theme-css",
+            Self::ApplicationCss => "application-css",
         }
     }
 
@@ -86,6 +113,14 @@ impl Arm {
             Self::Common => "common/src/__nix_source_probe.rs",
             Self::Macros => "macros/src/__nix_source_probe.rs",
             Self::Performance => "tools/performance/src/__nix_source_probe.rs",
+            Self::Tooling => "xtask/src/__nix_source_probe.rs",
+            Self::SharedHost => "host/src/__nix_source_probe.rs",
+            Self::ToolLock => "xtask/Cargo.lock",
+            Self::BuildConfig => ".cargo/config.toml",
+            Self::LaneCatalog => "end2end/e2e-lanes.json",
+            Self::QualificationSchema => "docs/production-baseline.schema.json",
+            Self::ThemeCss => "host/system_theme_sources/studio/style.css",
+            Self::ApplicationCss => "server/assets/jaunder.css",
         }
     }
 
@@ -96,9 +131,18 @@ impl Arm {
                 | (Self::Server, Boundary::StaticCode)
                 | (Self::Web, Boundary::StaticCode | Boundary::Site)
                 | (
-                    Self::Common | Self::Macros | Self::Performance,
-                    Boundary::StaticCode | Boundary::Site | Boundary::WasmTests,
+                    Self::Common | Self::Macros | Self::Performance | Self::BuildConfig,
+                    Boundary::StaticCode | Boundary::Site | Boundary::WasmTests | Boundary::Xtask,
                 )
+                | (
+                    Self::SharedHost | Self::ThemeCss | Self::ApplicationCss,
+                    Boundary::StaticCode | Boundary::Site | Boundary::Xtask
+                )
+                | (
+                    Self::Tooling | Self::ToolLock | Self::QualificationSchema,
+                    Boundary::Xtask
+                )
+                | (Self::LaneCatalog, Boundary::StaticCode | Boundary::Xtask)
         )
     }
 }
@@ -109,6 +153,7 @@ pub struct DrvPaths {
     static_code: String,
     site: String,
     wasm_tests: String,
+    xtask: String,
 }
 
 impl DrvPaths {
@@ -118,6 +163,7 @@ impl DrvPaths {
             Boundary::StaticCode => &self.static_code,
             Boundary::Site => &self.site,
             Boundary::WasmTests => &self.wasm_tests,
+            Boundary::Xtask => &self.xtask,
         }
     }
 }
@@ -191,7 +237,7 @@ pub fn compare_arm(base: &DrvPaths, arm: Arm, changed: &DrvPaths) -> Result<(), 
 pub fn probe_source() -> StepResult {
     match run_probe() {
         Ok(()) => StepResult::ok("nix-probe-source").detail(
-            "Nix invalidation boundary contract holds (docs/server/web/common/macros/performance)",
+            "Nix invalidation boundary contract holds (product, tooling, locks/config and embedded resources)",
         ),
         Err(error) => StepResult::fail("nix-probe-source").detail(format!("{error:#}")),
     }
@@ -212,6 +258,7 @@ fn eval_paths_with(evaluate: impl FnOnce() -> Result<SourceProbeDrvPaths>) -> Re
         static_code: parse_drv_path(Boundary::StaticCode.name(), &paths.static_code)?,
         site: parse_drv_path(Boundary::Site.name(), &paths.site)?,
         wasm_tests: parse_drv_path(Boundary::WasmTests.name(), &paths.wasm_tests)?,
+        xtask: parse_drv_path(Boundary::Xtask.name(), &paths.xtask)?,
     })
 }
 
@@ -315,8 +362,15 @@ fn run_probe() -> Result<()> {
     let baseline = eval_paths(&tmp).context("evaluating baseline derivation identities")?;
     for arm in Arm::ALL {
         let marker = tmp.join(arm.marker_path());
-        fs::write(&marker, format!("// nix source probe: {}\n", arm.name()))
-            .with_context(|| format!("writing {} marker", arm.name()))?;
+        let original = if marker.try_exists().context("checking probe input")? {
+            Some(fs::read(&marker).context("reading probe input")?)
+        } else {
+            None
+        };
+        // Whitespace preserves JSON/TOML/CSS validity while changing source bytes.
+        let mut bytes = original.clone().unwrap_or_default();
+        bytes.push(b'\n');
+        fs::write(&marker, bytes).with_context(|| format!("writing {} marker", arm.name()))?;
         git_run(&tmp, &["add", arm.marker_path()])?;
         let changed = eval_paths(&tmp).with_context(|| {
             format!(
@@ -326,8 +380,12 @@ fn run_probe() -> Result<()> {
         })?;
         compare_arm(&baseline, arm, &changed)
             .with_context(|| format!("checking {} perturbation", arm.name()))?;
-        git_run(&tmp, &["rm", "--cached", "--quiet", arm.marker_path()])?;
-        fs::remove_file(marker).with_context(|| format!("removing {} marker", arm.name()))?;
+        git_run(&tmp, &["restore", "--staged", "--", arm.marker_path()])?;
+        if let Some(original) = original {
+            fs::write(marker, original).context("restoring probe input")?;
+        } else {
+            fs::remove_file(marker).with_context(|| format!("removing {} marker", arm.name()))?;
+        }
     }
     Ok(())
 }
@@ -342,6 +400,7 @@ mod tests {
             static_code: static_code.to_owned(),
             site: site.to_owned(),
             wasm_tests: wasm_tests.to_owned(),
+            xtask: "xtask".to_owned(),
         }
     }
 
@@ -359,7 +418,61 @@ mod tests {
                 paths("docs", "code-2", "site-2", "wasm-2"),
             ),
         ] {
+            let mut changed = changed;
+            if matches!(arm, Arm::Common | Arm::Macros | Arm::Performance) {
+                changed.xtask = "xtask-2".to_owned();
+            }
             assert_eq!(compare_arm(&base, arm, &changed), Ok(()));
+        }
+    }
+
+    #[test]
+    fn tooling_changes_only_invalidate_the_host_executable() {
+        let base = paths("docs", "code", "site", "wasm");
+        let mut changed = base.clone();
+        changed.xtask = "xtask-2".to_owned();
+        assert_eq!(compare_arm(&base, Arm::Tooling, &changed), Ok(()));
+        changed.site = "site-2".to_owned();
+        assert!(matches!(
+            compare_arm(&base, Arm::Tooling, &changed),
+            Err(ProbeError::UnexpectedChange {
+                boundary: "site",
+                ..
+            })
+        ));
+        assert!(matches!(
+            compare_arm(&base, Arm::Tooling, &base),
+            Err(ProbeError::MissingChange {
+                boundary: "xtask",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn tooling_closure_includes_locks_configuration_and_embedded_resources() {
+        let base = paths("docs", "code", "site", "wasm");
+        for (arm, mut changed) in [
+            (Arm::SharedHost, paths("docs", "code-2", "site-2", "wasm")),
+            (Arm::ToolLock, base.clone()),
+            (
+                Arm::BuildConfig,
+                paths("docs", "code-2", "site-2", "wasm-2"),
+            ),
+            (Arm::LaneCatalog, paths("docs", "code-2", "site", "wasm")),
+            (Arm::QualificationSchema, base.clone()),
+            (Arm::ThemeCss, paths("docs", "code-2", "site-2", "wasm")),
+            (
+                Arm::ApplicationCss,
+                paths("docs", "code-2", "site-2", "wasm"),
+            ),
+        ] {
+            changed.xtask = "xtask-2".to_owned();
+            assert_eq!(compare_arm(&base, arm, &changed), Ok(()));
+            assert!(matches!(
+                compare_arm(&base, arm, &base),
+                Err(ProbeError::MissingChange { .. })
+            ));
         }
     }
 

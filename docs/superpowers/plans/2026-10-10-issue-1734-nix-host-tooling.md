@@ -15,7 +15,7 @@ fingerprints/identity ledgers, and a separate Cargo qualification lane.
 
 ## Task outline
 
-- [ ] Task 1: Deliver the independently cached `.#xtask` executable.
+- [x] Task 1: Deliver the independently cached `.#xtask` executable.
   - Contract: Nix declares the complete standalone workspace/local dependency
     closure and native runtime dependencies, with deterministic placeholders
     where Cargo only needs excluded workspace manifests. No Git build stamp may

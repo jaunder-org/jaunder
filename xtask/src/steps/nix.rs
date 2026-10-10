@@ -1630,9 +1630,10 @@ pub(crate) struct SourceProbeDrvPaths {
     pub(crate) static_code: String,
     pub(crate) site: String,
     pub(crate) wasm_tests: String,
+    pub(crate) xtask: String,
 }
 
-/// Evaluate the four derivation identities guarded by `nix probe-source`.
+/// Evaluate the derivation identities guarded by `nix probe-source`.
 /// This deliberately performs only serial `nix eval` calls: the probe mutates
 /// one isolated worktree between arms, so concurrent evaluation would obscure
 /// which tracked perturbation produced a failed identity.
@@ -1642,6 +1643,7 @@ pub(crate) fn eval_source_probe_drvpaths(flake_dir: &Path) -> Result<SourceProbe
         static_code: nix_eval_raw(Some(flake_dir), ".#checks.x86_64-linux.static-code.drvPath")?,
         site: nix_eval_raw(Some(flake_dir), ".#site.drvPath")?,
         wasm_tests: nix_eval_raw(Some(flake_dir), ".#checks.x86_64-linux.wasm-tests.drvPath")?,
+        xtask: nix_eval_raw(Some(flake_dir), ".#xtask.drvPath")?,
     })
 }
 
