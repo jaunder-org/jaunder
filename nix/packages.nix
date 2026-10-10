@@ -1134,6 +1134,12 @@ in
     test-support = testSupportBin;
   }
   // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+    qualification-harness = import ./qualification-harness.nix {
+      inherit pkgs;
+      xtask = xtaskBin;
+      testSupport = testSupportBin;
+      browser = e2ePackage;
+    };
     theme-thumbnail-environment = themeThumbnailEnvironment;
     # The manually linked diagnostic module and its retained IR/link evidence.
     # A failed producer still exposes its durable `status.json` and `pipeline.log`

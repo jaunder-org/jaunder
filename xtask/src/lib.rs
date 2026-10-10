@@ -32,6 +32,7 @@ mod qualification;
 mod qualification_csr;
 mod qualification_inventory;
 mod qualification_run;
+pub mod qualification_tooling;
 mod result;
 mod server_fn_coverage;
 mod server_fns;
