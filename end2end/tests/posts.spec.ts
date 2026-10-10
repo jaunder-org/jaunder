@@ -974,12 +974,7 @@ test("editing an Org Post preserves, changes, and removes its title", async ({
   await click(page, SEL.publishButton("false"));
   await expectFlash(page, "Draft saved.");
   await followPermalink(page, page.locator(SEL.saveSummary));
-  await expect(
-    page.locator("article .j-post-title").getByRole("link", {
-      name: "Permalink",
-      exact: true,
-    }),
-  ).toHaveText("#");
+  await expect(page.locator("article .j-post-title")).toHaveCount(0);
   await openEditor(page);
   await expect(body).toHaveValue("Org body\n");
 });
