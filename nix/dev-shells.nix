@@ -17,12 +17,20 @@ let
     appOfflineCargoHome
     ;
 
+  # The shell caches only a thin transport, never a checkout's xtask executable.
+  xtaskLauncher = pkgs.writeShellApplication {
+    name = "cargo-xtask";
+    runtimeInputs = [ pkgs.git pkgs.nix pkgs.coreutils ];
+    text = builtins.readFile ../scripts/cargo-xtask;
+  };
+
   # Everything `cargo xtask validate` needs on the host (toolchain + the
   # static-check tools) plus what the Nix checks pull anyway — so the CI
   # shell shares those store paths rather than adding cost.
   ciInputs =
     [
       toolchain
+      xtaskLauncher
       pkgs.ast-grep
       pkgs.cachix
       cargo-crap

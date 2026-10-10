@@ -27,7 +27,7 @@ fingerprints/identity ledgers, and a separate Cargo qualification lane.
     application coverage/E2E source/dependency exclusions. Evaluate supported
     platform boundaries and report unexecuted native platforms explicitly.
   - Acceptance coverage: 1–4 and 8.
-- [ ] Task 2: Use the package safely from the active checkout.
+- [x] Task 2: Use the package safely from the active checkout.
   - Depends on Task 1. Contract: normal invocations select this checkout's flake
     and preserve arguments, exit codes, result sidecars and completion sentinel.
     Local target/root paths come from runtime checkout discovery. Missing or

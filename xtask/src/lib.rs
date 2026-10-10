@@ -16,6 +16,7 @@ pub mod elisp_coverage;
 mod files;
 mod gate;
 pub mod git;
+mod host_tooling;
 mod ids;
 pub mod issue;
 mod lifecycle;
@@ -95,5 +96,6 @@ pub use cli::{
     ServerFnCoverageCommand, TracesCommand, WasmCoverageCommand,
 };
 pub use dispatch::run;
+pub use host_tooling::prepare_checkout;
 pub use lifecycle::ensure_hooks_installed;
 pub use result::{CommandResult, Mode, StepResult};
