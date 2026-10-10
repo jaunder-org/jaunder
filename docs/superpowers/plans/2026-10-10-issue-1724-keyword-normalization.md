@@ -41,7 +41,7 @@ Unicode tag expansion, new endpoints, schema changes, and reconciliation policy.
     read-only with this parser; retain counts and full-policy collision findings
     in ignored/session evidence, never tracked fixtures.
 
-- [ ] Task 3: Apply only reviewed additions with conditional remote writes.
+- [x] Task 3: Apply only reviewed additions with conditional remote writes.
   - Dependency: Tasks 1 and 2; deploy the normalization fix before production
     use, as documented in Task 5.
   - Contract: explicit confirmation selects an ordered reviewed batch.

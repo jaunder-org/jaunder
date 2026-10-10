@@ -1,11 +1,12 @@
-;;; jaunder-keyword-repair.el --- Read-only tag repair preview -*- lexical-binding: t; -*-
+;;; jaunder-keyword-repair.el --- Reviewed conditional tag repair -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Jaunder contributors
 
 ;;; Commentary:
 ;; Preview is a separate authority seam, not reconciliation or publication.
 ;; Only configured-root inventory and fresh current Members establish targets;
-;; sync markers and mtimes are never write authority.  No apply exists here.
+;; sync markers and mtimes are never write authority.  Apply consumes only a
+;; selected, confirmed snapshot, without local publication or write-back.
 ;; The opaque report retains an immutable snapshot.  Its public data accessor
 ;; returns detached inspection data, including literal source digests and the
 ;; complete remote XML needed for later reviewed conditional application.
@@ -26,13 +27,16 @@
 (define-error 'jaunder-keyword-repair-http-error "Jaunder Member read failed" 'error)
 
 (defun jaunder-keyword-repair-error-source (condition)
-  "Return the original typed source of a preview failure CONDITION.
+  "Return the original typed source of a repair failure CONDITION.
+For an apply result plist, pass (cons \='error RESULT).
 For deliberate structured diagnostics only: never automatically format this
 source, which can contain filesystem paths, remote content or credentials."
   (let ((source (get (plist-get (cdr condition) :source) 'jaunder-source-condition)))
-    (if (eq (car source) 'jaunder-inventory-decode-error)
-        (jaunder-inventory-decode-error-source source)
-      source)))
+    (cond ((eq (car source) 'jaunder-inventory-decode-error)
+           (jaunder-inventory-decode-error-source source))
+          ((eq (car source) 'jaunder-keyword-repair-preview-error)
+           (jaunder-keyword-repair-error-source source))
+          (t source))))
 
 (defun jaunder--keyword-repair-call (stage id thunk)
   "Call THUNK at stable STAGE for Post ID, preserving unexpected failures.
@@ -250,8 +254,10 @@ COLLECTION-REASON blocks every target when enumeration did not complete."
 Only direct root Org files participate, as in the existing inventory.  All
 network requests are GETs.  No local bytes, buffers, Media or sync markers are
 written.  Inspect with `jaunder-keyword-repair-report-data'; this command does
-not create a visual UI or implement application.  Expected eligibility refusals
-become blocked rows; unexpected failures abort with a contextual
+not create a visual UI.  Apply selected indices with
+`jaunder-keyword-repair-apply' only after reviewing this exact report.
+Expected eligibility refusals become blocked rows; unexpected failures
+abort with a contextual
 `jaunder-keyword-repair-preview-error'.  Its source is available only through
 `jaunder-keyword-repair-error-source', not ordinary diagnostic formatting."
   (interactive)
@@ -279,6 +285,195 @@ become blocked rows; unexpected failures abort with a contextual
                                           'row-validate (jaunder-inventory-local-id local)
                                           (lambda () (jaunder--keyword-repair-row local members locals reason))))
                                        locals))))))))))
+
+(defvar jaunder-keyword-repair-last-application nil
+  "Last application plist with ordered :results and :cancelled.
+Updated after every terminal Post outcome, including interrupted writes.
+Inspection data contains no XML; source handles require deliberate access via
+`jaunder-keyword-repair-error-source'.  No rollback or automatic retry occurs.")
+
+(defun jaunder--keyword-repair-binding-valid-p (data path)
+  "Check DATA's reviewed configuration still governs PATH."
+  (let ((entry (jaunder--blog-entry-for path))
+        (config (jaunder--resolve-blog path)))
+    (and entry
+         (equal (file-name-as-directory (expand-file-name (car entry)))
+                (plist-get data :root))
+         (equal (plist-get config :base-url) (plist-get data :base-url))
+         (equal (plist-get config :username) (plist-get data :username)))))
+
+(defun jaunder--keyword-repair-check-local (row)
+  "Revalidate ROW's literal local proof without altering a visiting buffer."
+  (let ((path (plist-get row :path)))
+    (unless (and (file-regular-p path) (not (file-symlink-p path)))
+      (jaunder--keyword-repair-reject 'local-path-changed))
+    (when (cl-some (lambda (buffer)
+                     (and (buffer-file-name buffer)
+                          (not (file-remote-p (buffer-file-name buffer)))
+                          (equal (file-truename (buffer-file-name buffer)) (file-truename path))
+                          (buffer-modified-p buffer))) (buffer-list))
+      (jaunder--keyword-repair-reject 'modified-buffer))
+    (let ((snapshot (jaunder--keyword-repair-call
+                     'local-read (plist-get row :id)
+                     (lambda () (jaunder--keyword-repair-local-snapshot path)))))
+      (unless (and (equal (plist-get snapshot :sha256) (plist-get row :sha256))
+                   (equal (plist-get snapshot :ids) (list (plist-get row :id))))
+        (jaunder--keyword-repair-reject 'local-proof-changed)))))
+
+(defun jaunder--keyword-repair-payload (xml labels)
+  "Replace only Atom category children in remote XML with validated LABELS.
+Keep qualified names, namespace declarations, attributes and nested markup.
+Each new category declares its own namespace, independent of prefix bindings."
+  (let* ((dom (with-temp-buffer
+                (insert xml)
+                (car (xml-parse-region (point-min) (point-max)))))
+         (context (jaunder--atom-namespace-context dom nil))
+         (categories (jaunder--atom-direct-elements-in-namespace
+                      dom 'category jaunder--atom-ns context)))
+    (setcdr (cdr dom)
+            (append (cl-remove-if (lambda (child) (memq child categories))
+                                  (dom-children dom))
+                    (mapcar (lambda (label)
+                              (list 'category (list (cons 'xmlns jaunder--atom-ns)
+                                                    (cons 'term label)))) labels)))
+    (with-temp-buffer (dom-print dom) (buffer-string))))
+
+(defun jaunder--keyword-repair-apply-row (data row)
+  "Apply one reviewed ROW bound to DATA, returning a terminal result.
+Read/preflight failures block.  Once the HTTP seam is entered a thrown
+condition cannot prove non-dispatch, so conservatively report unknown."
+  ;; The executor protects the return-to-checkpoint interval, not in-flight
+  ;; work: keyboard quits during reads/PUT must still reach this handler.
+  (let ((inhibit-quit nil)
+        (id (plist-get row :id))
+        (stage 'preflight)
+        (dispatched nil)
+        (result (list :id (plist-get row :id) :path (plist-get row :path))))
+    (condition-case source
+        (progn
+          (unless (jaunder--keyword-repair-binding-valid-p data (plist-get row :path))
+            (jaunder--keyword-repair-reject 'configuration-changed))
+          (cond
+           ((eq (plist-get row :status) 'blocked)
+            (jaunder--keyword-repair-reject (plist-get row :reason)))
+           (t
+            (jaunder--call-with-blog
+             (plist-get row :path)
+             (lambda ()
+               (jaunder--keyword-repair-check-local row)
+               ;; Enumerate the complete CURRENT Collection for every Post.
+               ;; The original inventory never proves current uniqueness.
+               (let* ((locals (jaunder--keyword-repair-call
+                               'local-inventory id
+                               (lambda () (jaunder--scan-root-locals (plist-get data :root)))))
+                      (members (jaunder--keyword-repair-call
+                                'collection id #'jaunder--fetch-collection-members))
+                      (local (cl-find (plist-get row :path) locals
+                                      :key #'jaunder-inventory-local-path :test #'equal)))
+                 (unless local (jaunder--keyword-repair-reject 'local-path-changed))
+                 (let ((fresh (jaunder--keyword-repair-row local members locals nil)))
+                   (when (eq (plist-get fresh :status) 'blocked)
+                     (jaunder--keyword-repair-reject (plist-get fresh :reason)))
+                   (unless (equal (plist-get fresh :etag) (plist-get row :etag))
+                     (jaunder--keyword-repair-reject 'remote-etag-changed))
+                   (unless (and (equal (plist-get fresh :sha256) (plist-get row :sha256))
+                                (equal (plist-get fresh :union) (plist-get row :union))
+                                (equal (plist-get fresh :additions) (plist-get row :additions)))
+                     (jaunder--keyword-repair-reject 'reviewed-intent-changed))
+                   (setq stage 'payload)
+                   (let ((payload (when (plist-get row :additions)
+                                    (jaunder--keyword-repair-payload
+                                     (plist-get fresh :member-xml) (plist-get row :union)))))
+                     ;; Final local/config checks follow the network reads.
+                     (setq stage 'preflight)
+                     (let ((current-locals
+                            (jaunder--keyword-repair-call
+                             'local-inventory id
+                             (lambda () (jaunder--scan-root-locals (plist-get data :root))))))
+                       (unless (= (cl-count id current-locals :key #'jaunder-inventory-local-id
+                                            :test #'equal) 1)
+                         (jaunder--keyword-repair-reject 'duplicate-local-id)))
+                     (jaunder--keyword-repair-check-local row)
+                     (unless (jaunder--keyword-repair-binding-valid-p data (plist-get row :path))
+                       (jaunder--keyword-repair-reject 'configuration-changed))
+                     ;; A reviewed no-op shares all proof checks, but never
+                     ;; acquires write authority from newly missing identities.
+                     (if (not (plist-get row :additions))
+                         (plist-put result :status 'unchanged)
+                       (setq stage 'put dispatched t)
+                       (let* ((response (jaunder--http-request
+                                         "PUT" (jaunder--member-url id) payload "application/atom+xml"
+                                         (list (cons "If-Match" (plist-get row :etag)))))
+                              (status (plist-get response :status)))
+                         (setq result (plist-put result :http-status (and (integerp status) status)))
+                         (plist-put result :status
+                                    (cond ((not (and (integerp status) (<= 100 status 599)))
+                                           'unknown-remote-outcome)
+                                          ((<= 200 status 299) 'repaired)
+                                          ((= status 412) 'blocked)
+                                          (t 'failed)))))))))))))
+      (quit
+       (setq result (plist-put result :cancelled t))
+       (plist-put result :status (if dispatched 'unknown-remote-outcome 'blocked)))
+      ((jaunder-keyword-repair-ineligible jaunder-pull-validation-error
+                                          jaunder-inventory-duplicate-remote-id)
+       (setq result (plist-put result :reason
+                               (if (eq (car source) 'jaunder-keyword-repair-ineligible)
+                                   (cadr source) (car source))))
+       (plist-put result :status (if dispatched 'unknown-remote-outcome 'blocked)))
+      (error
+       (let ((handle (make-symbol "redacted-source")))
+         (put handle 'jaunder-source-condition source)
+         (setq result (plist-put result :source handle)
+               result (plist-put result :stage
+                                 (if (eq (car source) 'jaunder-keyword-repair-preview-error)
+                                     (plist-get (cdr source) :stage) stage)))
+         (plist-put result :status (cond (dispatched 'unknown-remote-outcome)
+                                         ((eq stage 'payload) 'failed)
+                                         (t 'blocked))))))))
+
+(defun jaunder-keyword-repair-apply (report selection)
+  "Confirm and apply exact REPORT rows at ordered zero-based SELECTION indices.
+SELECTION must be an explicit nonempty list of distinct indices into the
+public report data's :rows.  It never re-runs a selection filter or trusts
+caller-edited row data.  Ask `yes-or-no-p' before any mutation.  Return
+(:results ORDERED-TERMINAL-RESULTS :cancelled BOOLEAN), also retained in
+`jaunder-keyword-repair-last-application'.  Quit stops before the next Post;
+an interrupted possible PUT records unknown-remote-outcome, never retries.
+No local Post, synchronization marker or Media is written."
+  (unless (jaunder-keyword-repair-report-p report) (user-error "Not a repair report"))
+  (let* ((data (jaunder-keyword-repair-report-data report))
+         (rows (plist-get data :rows))
+         (selected nil)
+         (results nil)
+         (cancelled nil))
+    (unless (and (consp selection) (proper-list-p selection)
+                 (= (length selection) (length (delete-dups (copy-sequence selection))))
+                 (cl-every (lambda (index) (and (integerp index) (<= 0 index) (< index (length rows))))
+                           selection))
+      (user-error "Select distinct reviewed row indices"))
+    (setq selected (mapcar (lambda (index) (nth index rows)) selection)
+          jaunder-keyword-repair-last-application (list :results nil :cancelled nil))
+    (condition-case nil
+        (if (not (yes-or-no-p (format "Apply reviewed tag additions to %d selected Posts? " (length selected))))
+            (setq cancelled t)
+          (while (and selected (not cancelled))
+            ;; Own pending input until the completed row is checkpointed.
+            ;; The row itself enables quit, including inside its HTTP seam.
+            (let ((inhibit-quit t))
+              (let ((result (jaunder--keyword-repair-apply-row data (pop selected))))
+                (setq results (append results (list result))
+                      cancelled (or (plist-get result :cancelled) quit-flag)
+                      jaunder-keyword-repair-last-application
+                      (list :results (jaunder--keyword-repair-copy results) :cancelled cancelled))
+                ;; Honoring cancellation cannot drop the completed outcome or
+                ;; begin the next Post.  Explicit in-row quit remains unknown
+                ;; after possible PUT dispatch, as recorded by the row handler.
+                (when cancelled (setq quit-flag nil))))))
+      (quit (setq cancelled t)))
+    (setq jaunder-keyword-repair-last-application
+          (list :results (jaunder--keyword-repair-copy results) :cancelled cancelled))
+    (jaunder--keyword-repair-copy jaunder-keyword-repair-last-application)))
 
 (provide 'jaunder-keyword-repair)
 ;;; jaunder-keyword-repair.el ends here
