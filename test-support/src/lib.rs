@@ -45,9 +45,10 @@ pub mod seed_trace;
 #[cfg(test)]
 mod performance_tests;
 
-/// The rendered-body source for seeded post `i` under `prefix`. Its Markdown H1
-/// renders the text `"{prefix} {i}"`, which the heavy e2e timeline tests assert
-/// on (first/last post title after pagination).
+/// The authored source for seeded Post `i` under `prefix`. Its Markdown H1
+/// supplies the persisted Post Title and Rendered Title through the shared seed
+/// recipe while remaining part of the body. Heavy e2e timeline tests assert on
+/// the text `"{prefix} {i}"` after pagination.
 #[must_use]
 pub fn seed_body(prefix: &str, i: usize) -> String {
     format!("# {prefix} {i}\n\nBody for {prefix} {i}")

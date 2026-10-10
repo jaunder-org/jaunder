@@ -591,17 +591,78 @@ impl UpdateRawPost {
 
 #[cfg(test)]
 mod tests {
-    use super::{SeedPost, SeedRawPost, UpdateRawPost, confirmed_for};
+    use super::{SeedPost, SeedRawPost, UpdateRawPost, confirmed_for, create_posts_confirmed};
     use crate::posts::{errors::CreatePostError, models::PostFormat};
-    use crate::test_support::{Backend, SeedUser, backends};
+    use crate::test_support::{Backend, SeedUser, backends, backends_matrix};
 
     use common::post_summary::PostSummary;
-    use common::test_support::{parse_post_body, parse_post_title, parse_row_limit};
+    use common::test_support::{parse_post_body, parse_post_title, parse_row_limit, parse_slug};
     use common::time::UtcInstant;
     use common::visibility::{AudienceTarget, ViewerIdentity};
     use host::render::render;
     use rstest::*;
     use rstest_reuse::*;
+
+    #[test]
+    #[should_panic(expected = "fixture Post title derivation failed")]
+    fn shared_seed_rejects_invalid_derived_title() {
+        let _ = crate::seed_post_input(
+            common::ids::UserId::from(1),
+            parse_slug("invalid-title"),
+            parse_post_body("# Invalid\u{2028}title\n\nbody"),
+            true,
+        );
+    }
+
+    #[apply(backends_matrix)]
+    #[case(
+        "# Visual *Timeline* Post 0\n\nBody for Visual *Timeline* Post 0",
+        Some("Visual *Timeline* Post 0"),
+        Some("Visual <em>Timeline</em> Post 0")
+    )]
+    #[case("An intentionally untitled Post body", None, None)]
+    #[tokio::test]
+    async fn shared_seed_persists_title_projections_without_changing_fixture_identity(
+        backend: Backend,
+        #[case] body: &str,
+        #[case] title: Option<&str>,
+        #[case] rendered_title: Option<&str>,
+        #[values(false, true)] published: bool,
+    ) {
+        let env = backend.setup().await;
+        let user = SeedUser::new().seed(env.users(), env.write_scope()).await;
+        let ids = create_posts_confirmed(
+            env.posts(),
+            env.write_scope(),
+            vec![crate::seed_post_input(
+                user.user_id,
+                parse_slug("fixed-fixture-0"),
+                parse_post_body(body),
+                published,
+            )],
+        )
+        .await;
+        assert_eq!(ids.len(), 1);
+        let post = env
+            .posts()
+            .get_post_by_id(ids[0], &ViewerIdentity::local(user.user_id))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(post.title.as_ref().map(AsRef::as_ref), title);
+        assert_eq!(
+            post.rendered_title.as_ref().map(AsRef::as_ref),
+            rendered_title
+        );
+        assert_eq!(post.slug.as_ref(), "fixed-fixture-0");
+        assert_eq!(post.body.as_ref(), body);
+        assert_eq!(post.format, PostFormat::Markdown);
+        assert_eq!(post.published_at.is_some(), published);
+        assert_eq!(
+            env.posts().get_post_audiences(post.post_id).await.unwrap(),
+            vec![AudienceTarget::Public],
+        );
+    }
 
     #[apply(backends)]
     #[tokio::test]
@@ -618,6 +679,8 @@ mod tests {
         assert!(!post.slug.as_ref().is_empty(), "post should have a slug");
         assert!(!post.body.as_ref().is_empty(), "post should have a body");
         assert_eq!(post.format, PostFormat::Markdown);
+        assert!(post.title.is_none());
+        assert!(post.rendered_title.is_none());
         let audiences = env.posts().get_post_audiences(post.post_id).await.unwrap();
         assert_eq!(audiences, vec![AudienceTarget::Public]);
     }
