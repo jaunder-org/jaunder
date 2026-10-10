@@ -352,7 +352,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             db,
             storage_path,
             profile,
-        } => cmd_seed_sandbox_profile(&db, &storage_path, profile.into()).await,
+        } => {
+            cmd_seed_sandbox_profile(&db, &storage_path, profile.into(), configured_image_runtime)
+                .await
+        }
         Commands::SeedTheme {
             db,
             storage_path,
@@ -537,11 +540,29 @@ fn cmd_capture_path_for_stream(stream: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn required_image_runtime(
+    executable: Option<std::path::PathBuf>,
+    packaged: Option<&str>,
+) -> anyhow::Result<std::path::PathBuf> {
+    executable
+        .or_else(|| packaged.map(std::path::PathBuf::from))
+        .ok_or_else(|| anyhow::anyhow!("required image metadata runtime is not configured"))
+}
+
+fn configured_image_runtime() -> anyhow::Result<std::path::PathBuf> {
+    required_image_runtime(
+        std::env::var_os("JAUNDER_EXIFTOOL").map(std::path::PathBuf::from),
+        host::image_sanitizer::PACKAGED_EXIFTOOL,
+    )
+}
+
 /// Seed one complete fixed sandbox profile and report only after every phase commits.
+/// The image-runtime lookup is lazy: the Standard profile does not need images.
 async fn cmd_seed_sandbox_profile(
     db: &DbConnectOptions,
     storage_path: &std::path::Path,
     profile: SandboxProfile,
+    image_runtime: impl FnOnce() -> anyhow::Result<std::path::PathBuf>,
 ) -> anyhow::Result<()> {
     let runtime = storage_runtime_config(db)?;
     let opened = storage::open_existing_database_with_observer(db, &runtime).await?;
@@ -557,6 +578,10 @@ async fn cmd_seed_sandbox_profile(
         }
         SandboxProfile::Demo => {
             let storage_path = std::sync::Arc::new(storage_path.to_path_buf());
+            let executable = image_runtime()?;
+            let sanitizer =
+                std::sync::Arc::new(host::image_sanitizer::ImageSanitizer::new(executable)?);
+            sanitizer.check_runtime().await?;
             let media_manager = storage::MediaManager::new(
                 factory.media(),
                 factory.posts(),
@@ -567,7 +592,8 @@ async fn cmd_seed_sandbox_profile(
                 ))),
                 opened.instance_id,
                 std::sync::Arc::new(SandboxMediaOwnershipResolver),
-            );
+            )
+            .with_image_sanitizer(sanitizer);
             seed_demo_sandbox_profile(
                 factory.site_config(),
                 factory.users(),
@@ -778,6 +804,31 @@ mod tests {
 
     fn cli(command: Commands) -> Cli {
         Cli { command }
+    }
+
+    #[test]
+    fn demo_runtime_configuration_is_required_and_preserves_the_selected_path() {
+        let missing =
+            required_image_runtime(None, None).expect_err("missing runtime must refuse demo seed");
+        assert_eq!(
+            missing.to_string(),
+            "required image metadata runtime is not configured"
+        );
+        let selected = std::path::PathBuf::from("/configured/image-editor");
+        assert_eq!(
+            required_image_runtime(Some(selected.clone()), None).expect("configured runtime"),
+            selected
+        );
+        assert_eq!(
+            required_image_runtime(None, Some("/packaged/image-editor"))
+                .expect("packaged fallback"),
+            std::path::PathBuf::from("/packaged/image-editor")
+        );
+        assert_eq!(
+            required_image_runtime(Some(selected.clone()), Some("/packaged/image-editor"))
+                .expect("explicit runtime overrides packaged fallback"),
+            selected
+        );
     }
 
     #[test]
@@ -1366,6 +1417,54 @@ mod tests {
             .expect("PostgreSQL URL parses");
         storage_runtime_config(&postgres)
             .expect("sandbox profile uses the ordinary PostgreSQL runtime configuration");
+    }
+
+    #[tokio::test]
+    async fn sandbox_profile_handler_requires_image_runtime_only_for_demo() {
+        let (storage, db) = temp_db().await;
+        let no_runtime = || required_image_runtime(None, None);
+        let error = cmd_seed_sandbox_profile(&db, storage.path(), SandboxProfile::Demo, no_runtime)
+            .await
+            .expect_err("missing runtime must reject the actual demo seed handler");
+        assert_eq!(
+            error.to_string(),
+            "required image metadata runtime is not configured"
+        );
+        let factory =
+            storage::open_existing_database(&db, &storage::StorageRuntimeConfig::default())
+                .await
+                .expect("reopen unseeded database");
+        assert!(
+            factory
+                .users()
+                .get_user_by_username(&"user".parse().expect("seed User name"))
+                .await
+                .expect("User lookup")
+                .is_none()
+        );
+        assert!(
+            factory
+                .site_config()
+                .list()
+                .await
+                .expect("Site Configuration listing")
+                .is_empty()
+        );
+        assert!(
+            !storage.path().join("media").exists(),
+            "missing runtime must not publish or spool Media"
+        );
+        cmd_seed_sandbox_profile(&db, storage.path(), SandboxProfile::Standard, no_runtime)
+            .await
+            .expect("standard profile must not require an image runtime");
+        assert!(
+            factory
+                .users()
+                .get_user_by_username(&"user".parse().expect("seed User name"))
+                .await
+                .expect("User lookup")
+                .is_some()
+        );
     }
 
     #[tokio::test]

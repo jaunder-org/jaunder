@@ -303,6 +303,11 @@ macro_rules! make_app {
                 std::sync::Arc::clone(&content_locks),
                 instance_id.clone(),
                 resolver,
+            ).with_image_sanitizer(
+                std::sync::Arc::new(host::image_sanitizer::ImageSanitizer::new(
+                    std::env::var_os("JAUNDER_EXIFTOOL").map(std::path::PathBuf::from)
+                        .expect("configured image runtime"),
+                ).expect("image runtime")),
             ));
             let theme_asset_manager = std::sync::Arc::new(storage::ThemeAssetManager::new(
                 themes.clone(),

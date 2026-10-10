@@ -15,7 +15,7 @@
   (jaunder-test--with-live-server
    (jaunder-test--with-temp-directory (dir "jaunder-media-")
                                       (let ((img (expand-file-name "pic.png" dir)))
-                                        (with-temp-file img (insert "PNG-BYTES-abc"))
+                                        (jaunder-test--copy-image "png-sanitized.png" img)
                                         (with-temp-buffer
                                           (insert (format "#+TITLE: T\n\nHere [[file:%s]] ok.\n" img))
                                           (org-mode)
@@ -35,7 +35,7 @@ the 200 (vs 201) distinguishes the `existed' branch (media.rs)."
   (jaunder-test--with-live-server
    (jaunder-test--with-temp-directory (dir "jaunder-media-")
                                       (let ((img (expand-file-name "same.png" dir)))
-                                        (with-temp-file img (insert "IDEMPOTENT"))
+                                        (jaunder-test--copy-image "png-sanitized.png" img)
                                         (let* ((u1 (jaunder--upload-media img "image/png"))
                                                (resp2 (jaunder--http-request
                                                        "POST"
@@ -75,7 +75,7 @@ credentials, so `require_user_match' fails deterministically (403)."
                                       (let* ((attach (expand-file-name "att" dir))
                                              (img (expand-file-name "a.png" attach)))
                                         (make-directory attach t)
-                                        (with-temp-file img (insert "ATTACH"))
+                                        (jaunder-test--copy-image "png-sanitized.png" img)
                                         (with-temp-buffer
                                           (org-mode)
                                           (insert (format "* H\n:PROPERTIES:\n:DIR: %s\n:END:\n\n[[attachment:a.png]]\n"
@@ -84,6 +84,32 @@ credentials, so `require_user_match' fails deterministically (403)."
                                                       (jaunder-entry-body (jaunder--org->atom)))))
                                             (should (string-match-p "/media/upload/" out))
                                             (should (string-match-p "a.png" out))))))))
+
+(ert-deftest jaunder-media-private-images-keep-author-originals-and-serve-sanitized-identity ()
+  "PNG/JPEG uploads retain author originals but serve only sanitized bytes."
+  (jaunder-test--with-live-server
+   (jaunder-test--with-temp-directory
+    (dir "jaunder-private-media-")
+    (dolist (case '(("png-original.png" "png-sanitized.png" "image/png")
+                    ("jpeg-original.jpg" "jpeg-sanitized.jpg" "image/jpeg")))
+      (let* ((original (jaunder-test--image-bytes (car case)))
+             (sanitized (jaunder-test--image-bytes (cadr case)))
+             (image (expand-file-name (car case) dir))
+             (download (make-temp-file (expand-file-name "public-copy-" dir)))
+             (hash (secure-hash 'sha256 sanitized)))
+        (jaunder-test--copy-image (car case) image)
+        (let* ((url (jaunder--upload-media image (nth 2 case)))
+               (response (jaunder--pull-media-get url download)))
+          (should-not (equal original sanitized))
+          (should-not (string-match-p (secure-hash 'sha256 original) url))
+          (should (string-match-p hash url))
+          (should (= (plist-get response :status) 200))
+          (should (equal (jaunder--pull-media-header-values response "etag")
+                         (list (format "\"sha256-%s\"" hash))))
+          (should (equal (jaunder-test--file-bytes download) sanitized))
+          (should (equal (jaunder-test--file-bytes image) original))
+          (should (equal (jaunder--upload-media image (nth 2 case)) url))
+          (should (equal (jaunder-test--file-bytes image) original))))))))
 
 (provide 'jaunder-media-integration)
 ;;; jaunder-media-integration.el ends here

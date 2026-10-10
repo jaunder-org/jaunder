@@ -11,6 +11,12 @@ use rstest_reuse::*;
 use common::ids::UserId;
 use common::test_support::parse_content_hash;
 use host::etag::from_content_hash;
+use sha2::{Digest, Sha256};
+
+const PRIVATE_PNG: &[u8] =
+    include_bytes!("../../../host/src/image_sanitizer_fixtures/png-original.png");
+const SANITIZED_PNG: &[u8] =
+    include_bytes!("../../../host/src/image_sanitizer_fixtures/png-sanitized.png");
 use server_fn::ServerFn;
 use storage::test_support::{Backend, backends, backends_matrix};
 
@@ -46,8 +52,8 @@ async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
         <web::media::Upload as ServerFn>::PATH,
         MultipartFile {
             filename: "serve_test.png",
-            content_type: "image/png",
-            bytes: b"PNG_CONTENT_HERE",
+            content_type: "image/svg+xml",
+            bytes: PRIVATE_PNG,
         },
         Some(&cookie),
     )
@@ -56,6 +62,19 @@ async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
 
     let upload_json: serde_json::Value = confirmed_mutation(&body);
     let url = upload_json["url"].as_str().unwrap().to_owned();
+    let expected_hash =
+        common::media::ContentHash::from_digest(Sha256::digest(SANITIZED_PNG).into());
+    assert_ne!(PRIVATE_PNG, SANITIZED_PNG);
+    assert_eq!(
+        upload_json["sha256"].as_str().unwrap(),
+        expected_hash.as_ref()
+    );
+    assert_eq!(upload_json["content_type"].as_str().unwrap(), "image/png");
+    assert_eq!(upload_json["filename"].as_str().unwrap(), "serve_test.png");
+    assert_eq!(
+        upload_json["size_bytes"].as_u64().unwrap(),
+        SANITIZED_PNG.len() as u64
+    );
 
     // The same root-composed router serves the persisted file.
 
@@ -79,6 +98,23 @@ async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
     assert!(
         cache_control.contains("max-age=31536000"),
         "expected immutable cache-control, got: {cache_control}"
+    );
+    assert_eq!(
+        serve_response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "image/png"
+    );
+    let expected_etag = from_content_hash(&expected_hash);
+    assert_eq!(
+        serve_response.headers().get(header::ETAG).unwrap(),
+        expected_etag.as_ref()
+    );
+    let served = axum::body::to_bytes(serve_response.into_body(), SANITIZED_PNG.len() + 1)
+        .await
+        .unwrap();
+    assert_eq!(
+        served.as_ref(),
+        SANITIZED_PNG,
+        "public bytes contain no original metadata"
     );
 }
 
@@ -151,7 +187,7 @@ async fn serve_returns_404_when_recorded_file_disappears_after_router_setup(
         MultipartFile {
             filename: "disappearing.png",
             content_type: "image/png",
-            bytes: b"DISAPPEARING_MEDIA",
+            bytes: PRIVATE_PNG,
         },
         Some(&cookie),
     )
@@ -307,7 +343,7 @@ async fn serve_returns_304_on_if_none_match(#[case] backend: Backend) {
         MultipartFile {
             filename: "etag_test.png",
             content_type: "image/png",
-            bytes: b"PNG_DATA",
+            bytes: PRIVATE_PNG,
         },
         Some(&cookie),
     )

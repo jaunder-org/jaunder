@@ -23,6 +23,7 @@ pub mod config_key;
 pub mod error;
 pub mod etag;
 pub mod feed;
+pub mod image_sanitizer;
 pub mod invite;
 pub mod metrics;
 pub mod passkey;

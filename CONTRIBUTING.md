@@ -91,7 +91,7 @@ For host PostgreSQL testing on macOS, use `cargo xtask test-local` or
 Check platform output boundaries and native shell/package evaluation with:
 
 ```bash
-nix eval --impure --expr 'import ./nix/platform-contract.nix { flake = builtins.getFlake (toString ./.); }'
+nix eval --impure --expr 'import ./nix/platform-contract.nix { flake = builtins.getFlake ("git+file://" + toString ./. + "?shallow=1"); }'
 ```
 
 Run this on each supported native platform: Cargo source preparation uses

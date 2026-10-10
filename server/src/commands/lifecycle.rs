@@ -556,7 +556,7 @@ fn feed_worker(
     )
 }
 
-fn media_manager(
+async fn media_manager(
     media: Arc<dyn MediaStorage>,
     posts: Arc<dyn PostStorage>,
     site_config: Arc<dyn SiteConfigStorage>,
@@ -564,15 +564,30 @@ fn media_manager(
     content_locks: Arc<MediaContentLocks>,
     instance_id: InstanceId,
     ownership_resolver: Arc<dyn storage::MediaReferenceOwnershipResolver>,
-) -> Arc<MediaManager> {
-    Arc::new(MediaManager::new(
-        media,
-        posts,
-        site_config,
-        write_scope,
-        content_locks,
-        instance_id,
-        ownership_resolver,
+) -> anyhow::Result<Arc<MediaManager>> {
+    let executable = std::env::var_os("JAUNDER_EXIFTOOL")
+        .map(PathBuf::from)
+        .or_else(|| host::image_sanitizer::PACKAGED_EXIFTOOL.map(PathBuf::from))
+        .context("required image metadata runtime is not configured")?;
+    let sanitizer = Arc::new(
+        host::image_sanitizer::ImageSanitizer::new(executable)
+            .context("required image metadata runtime is unavailable")?,
+    );
+    sanitizer
+        .check_runtime()
+        .await
+        .context("required image metadata runtime failed its startup probe")?;
+    Ok(Arc::new(
+        MediaManager::new(
+            media,
+            posts,
+            site_config,
+            write_scope,
+            content_locks,
+            instance_id,
+            ownership_resolver,
+        )
+        .with_image_sanitizer(sanitizer),
     ))
 }
 fn theme_asset_manager(
@@ -625,14 +640,31 @@ struct ServeHttpPolicy {
     trusted_proxies: crate::trusted_proxy::TrustedProxyConfig,
 }
 
-fn compose_server_router(
+fn with_storage_extensions(app: Router, dependencies: &ServeStorage) -> Router {
+    let app = crate::context::with_post_account_extensions(
+        app,
+        Arc::clone(&dependencies.posts),
+        Arc::clone(&dependencies.audiences),
+        Arc::clone(&dependencies.users),
+        Arc::clone(&dependencies.user_config),
+    );
+    crate::context::with_theme_media_extensions(
+        app,
+        Arc::clone(&dependencies.themes),
+        Arc::clone(&dependencies.site_config),
+        Arc::clone(&dependencies.media),
+        Arc::clone(&dependencies.feed_cache),
+    )
+}
+
+async fn compose_server_router(
     dependencies: &ServeStorage,
     application_stylesheet_url: common::root_relative_url::RootRelativeUrl,
     storage_path: PathBuf,
     instance_id: &InstanceId,
     mailer: Arc<dyn common::mailer::MailSender>,
     http_policy: ServeHttpPolicy,
-) -> Router {
+) -> anyhow::Result<Router> {
     let storage_path = Arc::new(storage_path);
     let locks = Arc::new(MediaContentLocks::new(Arc::clone(&storage_path)));
     let (resolver, ownership) =
@@ -650,7 +682,8 @@ fn compose_server_router(
         Arc::clone(&locks),
         instance_id.clone(),
         resolver,
-    );
+    )
+    .await?;
     let asset_manager = theme_asset_manager(
         Arc::clone(&dependencies.themes),
         dependencies.write_scope.clone(),
@@ -705,20 +738,7 @@ fn compose_server_router(
         public_projector(dependencies, application_stylesheet_url),
     );
     let app = crate::context::with_media_extensions(app, ownership, manager, locks, storage_path);
-    let app = crate::context::with_post_account_extensions(
-        app,
-        Arc::clone(&dependencies.posts),
-        Arc::clone(&dependencies.audiences),
-        Arc::clone(&dependencies.users),
-        Arc::clone(&dependencies.user_config),
-    );
-    let app = crate::context::with_theme_media_extensions(
-        app,
-        Arc::clone(&dependencies.themes),
-        Arc::clone(&dependencies.site_config),
-        Arc::clone(&dependencies.media),
-        Arc::clone(&dependencies.feed_cache),
-    );
+    let app = with_storage_extensions(app, dependencies);
     let app = crate::context::with_publisher_extensions(
         app,
         publisher,
@@ -726,13 +746,13 @@ fn compose_server_router(
         Arc::clone(&dependencies.sessions),
         dependencies.write_scope.clone(),
     );
-    create_router_with_trusted_proxies(
+    Ok(create_router_with_trusted_proxies(
         app,
         instance_id,
         http_policy.prod,
         http_policy.trace_parent_enabled,
         http_policy.trusted_proxies,
-    )
+    ))
 }
 
 async fn install_and_reconcile_system_artifact_inventory(
@@ -925,7 +945,8 @@ async fn prepare_server_with_trusted_proxies(
             trace_parent_enabled: otel_tracing_enabled,
             trusted_proxies,
         },
-    );
+    )
+    .await?;
 
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let workers = BackgroundWorkers::start(worker_setup).await?;

@@ -89,7 +89,8 @@ let
     || pkgs.lib.hasPrefix "storage/migrations/" relative
     || pkgs.lib.hasPrefix "host/system_theme_sources/" relative
     || relative == "testdata/theme-repository/minimal/preview.png"
-    || pkgs.lib.hasPrefix "server/tests/misc/backup_corpus/" relative;
+    || pkgs.lib.hasPrefix "server/tests/misc/backup_corpus/" relative
+    || pkgs.lib.hasPrefix "host/src/image_sanitizer_fixtures/" relative;
   coverageSrc =
     # Pure source-filter negative case: excluded auxiliary assets cannot perturb
     # coverage source identity.
@@ -185,6 +186,12 @@ performanceGlobalTimeout = 6000;
 # fail the check only after the copies are safe. On success the copies land
 # in $out; on failure they live in the --keep-failed build dir for xtask's
 # rescue_diagnostics to recover. Shared by both backends so they can't drift.
+# Playwright consumes the host-owned fixtures through repository-relative paths.
+# Project just that shared subtree into the guest, not an entire source checkout.
+e2eImageFixtureSetup = ''
+  machine.succeed("mkdir -p /tmp/host/src && cp -r ${../host/src/image_sanitizer_fixtures} /tmp/host/src/image_sanitizer_fixtures")
+'';
+
 # VM-local OTel test glue shared by both backends. A systemd unit becomes
 # active when the collector process is spawned, before its receivers are
 # necessarily listening (#1243), so every initial start and restart probes
@@ -633,7 +640,8 @@ mkE2eCheck =
             "${backend}/${browser}: VM booted and the Jaunder HTTP readiness port opened.",
           )
 
-          machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")${afterPackageCopy}# Seed a fresh DB and run the one browser this derivation targets.
+          machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
+          ${e2eImageFixtureSetup}${afterPackageCopy}# Seed a fresh DB and run the one browser this derivation targets.
           # Browsers run as separate derivations (one VM each) so their state
           # mutations cannot interfere; that also lets CI fan them out.
           seed_db()
@@ -943,6 +951,7 @@ mkPerformanceProducer =
 
       ${pkgs.lib.optionalString (producerKind == "browser") ''
         machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
+        ${e2eImageFixtureSetup}
         browser_path = machine.succeed(
           "cd /tmp/e2e && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
           + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
@@ -1055,6 +1064,7 @@ mkWasmCoverageProducer =
       machine.wait_for_unit("jaunder.service", timeout=60)
       machine.wait_for_open_port(3000, timeout=30)
       machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
+      ${e2eImageFixtureSetup}
       if "${failure}" == "early":
         status, output = machine.execute(
           "bash -o pipefail -c '{ printf \"%s\\n\" \"injected early Playwright failure\"; exit 73; } 2>&1 | tee /var/lib/jaunder/wasm-coverage/diagnostics/playwright.log'",
@@ -1139,6 +1149,7 @@ mkWasmCoverageMeasurementProducer =
       machine.wait_for_unit("jaunder.service", timeout=60)
       machine.wait_for_open_port(3000, timeout=30)
       machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e && mkdir -p /var/lib/jaunder/wasm-coverage")
+      ${e2eImageFixtureSetup}
       status, output = machine.execute(
         "cd /tmp/e2e"
         + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
@@ -2112,6 +2123,7 @@ e2eGateChecks
       machine.succeed("mkdir -p /tmp/elisp-coverage")
       machine.succeed(
           "JAUNDER_TEST_BINARY=${jaunderBin}/bin/jaunder "
+          + "JAUNDER_TEST_IMAGE_FIXTURES=${../host/src/image_sanitizer_fixtures} "
           + "JAUNDER_ELISP_COVERAGE_DIR=/tmp/elisp-coverage "
           + "emacs --batch -Q -l ${emacsSrc}/scripts/run-coverage.el"
       )

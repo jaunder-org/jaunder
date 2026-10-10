@@ -494,6 +494,36 @@ not in the storage crate
 ([ADR-0054](adr/0054-backup-test-homing-and-uniform-restore-failure.md)).
 Details in the testing section.
 
+### Image upload privacy
+
+Shared Media ingress sanitizes new JPEG, PNG/APNG, GIF, WebP and HEIC/HEIF bytes
+before minting a public Media identity, following the
+[image metadata privacy decision](adr/drafts/image-upload-metadata-privacy.md).
+Composition roots explicitly inject a host-owned `ImageSanitizer` and validate
+its pinned ExifTool runtime before serving or seeding. Editing occurs in owned
+private spool files before hashing, quota accounting, content locks or public
+placement; a shared two-job limit and one 30-second processing deadline bound
+work. Cancellation stops and reaps the exact child before cleanup.
+
+Detected image format controls stored/served Content-Type without renaming the
+canonical filename. Sanitized bytes define hash, URL, ETag, deduplication, size
+and quota. Conventional metadata editing removes ordinary GPS/location,
+EXIF/XMP/IPTC personal fields, comments and metadata previews while retaining
+source format, image/frame data, orientation, color/HDR signaling, transparency
+and animation. Color profiles remain intact, including descriptive text; bespoke
+ICC scrubbing, compressed-stream validation and forensic ignored-byte erasure
+are outside the policy. Processing/post-edit-check failures reject without
+publishing an original fallback. SVG and non-image Media remain accepted outside
+this ordinary-metadata guarantee.
+
+Existing identities and Local Media Copies are not rewritten. The
+[replacement procedure](image-metadata-replacement.md) distinguishes per-owner
+record deletion from actual public-file retirement. Retained history or shared
+ownership can keep old bytes accessible; actual historical retirement is
+separately tracked in
+[#1714](https://github.com/jaunder-org/jaunder/issues/1714) and requires
+approved remediation policy and production execution.
+
 ### Committed direction
 
 - **Tiered storage isolation.** A shared ingestion layer (raw fetched content,

@@ -3,6 +3,7 @@
 //! deletion sequence.
 
 use std::io;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -23,6 +24,7 @@ use common::media::{
     UploadedMedia, UserQuota,
 };
 use common::time::UtcInstant;
+use host::image_sanitizer::{ImageSanitizer, ImageSanitizerError, Sanitization};
 use host::metrics::{self, UploadOutcome};
 
 use crate::media_ownership::resolve_media_reference_ownership;
@@ -193,7 +195,34 @@ impl std::fmt::Debug for ReclaimUnlinkGate {
     }
 }
 
-pub struct MediaManager {
+/// The default state can upload only after the composition root supplies its
+/// mandatory sanitizer. `MediaManager<()>` is an initialization-only state.
+///
+/// ```compile_fail
+/// # use common::{ids::UserId, media::{ContentType, Filename}};
+/// # use host::image_sanitizer::ImageSanitizer;
+/// # use std::sync::Arc;
+/// # use storage::MediaManager;
+/// # async fn upload(manager: MediaManager<()>, sanitizer: Arc<ImageSanitizer>, user: UserId, name: Filename, mime: ContentType) -> Result<(), Box<dyn std::error::Error>> {
+/// manager.upload_bytes(user, &name, mime, b"bytes").await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// The same fixture can upload after the mandatory sanitizer is supplied:
+///
+/// ```
+/// # use common::{ids::UserId, media::{ContentType, Filename}};
+/// # use host::image_sanitizer::ImageSanitizer;
+/// # use std::sync::Arc;
+/// # use storage::MediaManager;
+/// # async fn upload(manager: MediaManager<()>, sanitizer: Arc<ImageSanitizer>, user: UserId, name: Filename, mime: ContentType) -> Result<(), Box<dyn std::error::Error>> {
+/// let manager = manager.with_image_sanitizer(sanitizer);
+/// manager.upload_bytes(user, &name, mime, b"bytes").await?;
+/// # Ok(())
+/// # }
+/// ```
+pub struct MediaManager<S = Arc<ImageSanitizer>> {
     media: Arc<dyn MediaStorage>,
     posts: Arc<dyn PostStorage>,
     site_config: Arc<dyn SiteConfigStorage>,
@@ -202,6 +231,7 @@ pub struct MediaManager {
     content_locks: Arc<MediaContentLocks>,
     instance_id: InstanceId,
     ownership_resolver: Arc<dyn MediaReferenceOwnershipResolver>,
+    image_sanitizer: S,
     #[cfg(any(test, feature = "test-utils"))]
     reclaim_unlink_gate: Option<Arc<ReclaimUnlinkGate>>,
 }
@@ -233,7 +263,7 @@ impl TargetDisposition {
     }
 }
 
-impl MediaManager {
+impl MediaManager<()> {
     #[must_use]
     pub fn new(
         media: Arc<dyn MediaStorage>,
@@ -253,11 +283,32 @@ impl MediaManager {
             content_locks,
             instance_id,
             ownership_resolver,
+            image_sanitizer: (),
             #[cfg(any(test, feature = "test-utils"))]
             reclaim_unlink_gate: None,
         }
     }
 
+    /// Completes initialization; the pending state has no upload methods.
+    #[must_use]
+    pub fn with_image_sanitizer(self, image_sanitizer: Arc<ImageSanitizer>) -> MediaManager {
+        MediaManager {
+            media: self.media,
+            posts: self.posts,
+            site_config: self.site_config,
+            write_scope: self.write_scope,
+            storage_path: self.storage_path,
+            content_locks: self.content_locks,
+            instance_id: self.instance_id,
+            ownership_resolver: self.ownership_resolver,
+            image_sanitizer,
+            #[cfg(any(test, feature = "test-utils"))]
+            reclaim_unlink_gate: self.reclaim_unlink_gate,
+        }
+    }
+}
+
+impl MediaManager {
     /// Installs a per-manager test gate immediately before filesystem reclaim.
     #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
@@ -337,11 +388,11 @@ impl MediaManager {
         self.ensure_uploads_enabled().await?;
         let (max_file_size, user_quota) = self.get_limits().await?;
 
-        let content_type = content_type.unwrap_or_else(|| media::detect_content_type(filename));
-
-        let tmp_path = self.create_temp_file().await?;
-        let (sha256_hex, size_bytes) = self
-            .stream_to_temp(stream, &tmp_path, max_file_size)
+        let tmp_file = self.create_temp_file().await?;
+        self.stream_to_temp(stream, tmp_file.path(), max_file_size)
+            .await?;
+        let (tmp_path, content_type, sha256_hex, size_bytes) = self
+            .sanitize_and_measure(tmp_file, filename, content_type.as_ref(), max_file_size)
             .await?;
 
         let metadata = UploadMetadata {
@@ -351,7 +402,7 @@ impl MediaManager {
             size_bytes,
         };
 
-        self.finalize_upload(user_id, metadata, &tmp_path, user_quota)
+        self.finalize_upload(user_id, metadata, tmp_path.path(), user_quota)
             .await
     }
 
@@ -408,11 +459,50 @@ impl MediaManager {
         Ok((max_file_size, user_quota))
     }
 
-    async fn create_temp_file(&self) -> anyhow::Result<PathBuf> {
+    async fn create_temp_file(&self) -> anyhow::Result<tempfile::NamedTempFile> {
         let tmp_dir = self.storage_path.join("media").join("tmp");
         fs::create_dir_all(&tmp_dir).await?;
-        let tmp_id = uuid::Uuid::new_v4();
-        Ok(tmp_dir.join(tmp_id.to_string()))
+        tempfile::NamedTempFile::new_in(tmp_dir).map_err(Into::into)
+    }
+
+    async fn sanitize_and_measure(
+        &self,
+        tmp_file: tempfile::NamedTempFile,
+        filename: &Filename,
+        claimed_content_type: Option<&ContentType>,
+        max_file_size: MaxFileSize,
+    ) -> anyhow::Result<(tempfile::NamedTempFile, ContentType, ContentHash, ByteSize)> {
+        let (file, content_type) = match self
+            .image_sanitizer
+            .sanitize(tmp_file, filename, claimed_content_type, max_file_size)
+            .await
+        {
+            Ok(Sanitization::Image(image)) => {
+                let content_type = image.content_type().clone();
+                (image.into_file(), content_type)
+            }
+            Ok(Sanitization::Passthrough(file)) => (
+                file,
+                claimed_content_type
+                    .cloned()
+                    .unwrap_or_else(|| media::detect_content_type(filename)),
+            ),
+            Err(ImageSanitizerError::InvalidImage) => {
+                anyhow::bail!(MediaError::BadRequest("Invalid image upload".to_owned()));
+            }
+            Err(ImageSanitizerError::FileTooLarge) => {
+                anyhow::bail!(MediaError::PayloadTooLarge);
+            }
+            Err(error) => return Err(anyhow::anyhow!(MediaError::Internal(Box::new(error)))),
+        };
+        let bytes = fs::read(file.path()).await?;
+        let size = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
+        if size > max_file_size.value() {
+            anyhow::bail!(MediaError::PayloadTooLarge);
+        }
+        let size_bytes = ByteSize::try_from(size)?;
+        let sha256_hex = ContentHash::from_digest(Sha256::digest(&bytes).into());
+        Ok((file, content_type, sha256_hex, size_bytes))
     }
 
     async fn check_quota(
@@ -497,7 +587,27 @@ impl MediaManager {
             )
         } else {
             fs::rename(tmp_path, target_path).await?;
-            Ok(TargetDisposition::FreshRename)
+            // Only the validated public inode becomes readable across principals;
+            // the private input keeps its owner-only permissions until placement.
+            Self::finish_public_permissions(
+                target_path,
+                fs::set_permissions(target_path, std::fs::Permissions::from_mode(0o644)).await,
+            )
+            .await
+        }
+    }
+
+    async fn finish_public_permissions(
+        target_path: &Path,
+        result: io::Result<()>,
+    ) -> anyhow::Result<TargetDisposition> {
+        match result {
+            Ok(()) => Ok(TargetDisposition::FreshRename),
+            Err(error) => Self::finish_temp_cleanup(
+                Err(error.into()),
+                fs::remove_file(target_path).await,
+                "storage.media.public_permissions_target_cleanup",
+            ),
         }
     }
 
@@ -746,16 +856,16 @@ impl MediaManager {
         // `filename` and `content_type` were validated at their respective inbound
         // boundaries, so neither needs revalidation in the persistence seam.
 
-        let size_bytes = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
-        if size_bytes > max_file_size.value() {
+        let received_size = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
+        if received_size > max_file_size.value() {
             anyhow::bail!(MediaError::PayloadTooLarge);
         }
 
-        let size_bytes = ByteSize::try_from(size_bytes)?;
-
-        let sha256_hex = ContentHash::from_digest(Sha256::digest(bytes).into());
-        let tmp_path = self.create_temp_file().await?;
-        fs::write(&tmp_path, bytes).await?;
+        let tmp_file = self.create_temp_file().await?;
+        fs::write(tmp_file.path(), bytes).await?;
+        let (tmp_path, content_type, sha256_hex, size_bytes) = self
+            .sanitize_and_measure(tmp_file, filename, Some(&content_type), max_file_size)
+            .await?;
 
         let metadata = UploadMetadata {
             filename: filename.clone(),
@@ -763,8 +873,14 @@ impl MediaManager {
             sha256_hex,
             size_bytes,
         };
-        self.finalize_upload_with_created_at(user_id, metadata, &tmp_path, user_quota, created_at)
-            .await
+        self.finalize_upload_with_created_at(
+            user_id,
+            metadata,
+            tmp_path.path(),
+            user_quota,
+            created_at,
+        )
+        .await
     }
 
     /// Deletes a media row and, under a storage-issued reclaim lease, unlinks its
@@ -894,30 +1010,28 @@ impl MediaManager {
         mut stream: S,
         tmp_path: &Path,
         max_file_size: MaxFileSize,
-    ) -> anyhow::Result<(ContentHash, ByteSize)>
+    ) -> anyhow::Result<()>
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin,
         E: std::error::Error + Send + Sync + 'static,
     {
         let mut file = fs::File::create(tmp_path).await?;
-        let mut hasher = Sha256::new();
         let mut bytes_written: i64 = 0;
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
-            bytes_written += i64::try_from(chunk.len()).unwrap_or(i64::MAX);
+            bytes_written =
+                bytes_written.saturating_add(i64::try_from(chunk.len()).unwrap_or(i64::MAX));
             if bytes_written > max_file_size.value() {
                 anyhow::bail!(MediaError::PayloadTooLarge);
             }
-            hasher.update(&chunk);
             file.write_all(&chunk).await?;
         }
 
         file.flush().await?;
         drop(file);
 
-        let sha256_hex = ContentHash::from_digest(hasher.finalize().into());
-        Ok((sha256_hex, ByteSize::try_from(bytes_written)?))
+        Ok(())
     }
 
     async fn directory_entries(dir: &Path) -> io::Result<impl Stream<Item = io::Result<PathBuf>>> {
@@ -981,6 +1095,9 @@ mod tests {
     use rstest_reuse::*;
     use tempfile::TempDir;
 
+    const SANITIZED_PNG: &[u8] =
+        include_bytes!("../../host/src/image_sanitizer_fixtures/png-sanitized.png");
+
     struct NoForeignResolver;
 
     #[async_trait::async_trait]
@@ -1008,6 +1125,13 @@ mod tests {
 
     fn no_posts() -> Arc<dyn PostStorage> {
         Arc::new(crate::MockPostStorage::new())
+    }
+
+    fn test_image_sanitizer() -> Arc<ImageSanitizer> {
+        let executable = std::env::var_os("JAUNDER_EXIFTOOL")
+            .map(PathBuf::from)
+            .expect("focused media-manager tests require JAUNDER_EXIFTOOL");
+        Arc::new(ImageSanitizer::new(executable).expect("configured ExifTool runtime"))
     }
 
     fn test_instance_id() -> InstanceId {
@@ -1164,21 +1288,24 @@ mod tests {
         let content_locks = Arc::new(MediaContentLocks::new(Arc::new(
             env.base.path().to_path_buf(),
         )));
-        let manager = Arc::new(MediaManager::new(
-            env.media().clone(),
-            posts,
-            env.site_config().clone(),
-            env.write_scope().clone(),
-            Arc::clone(&content_locks),
-            env.base.instance_id().clone(),
-            resolver,
-        ));
+        let manager = Arc::new(
+            MediaManager::new(
+                env.media().clone(),
+                posts,
+                env.site_config().clone(),
+                env.write_scope().clone(),
+                Arc::clone(&content_locks),
+                env.base.instance_id().clone(),
+                resolver,
+            )
+            .with_image_sanitizer(test_image_sanitizer()),
+        );
         let uploaded = manager
             .upload_bytes(
                 user_id,
                 &parse_filename("ordered.jpg"),
                 "image/jpeg".parse().unwrap(),
-                b"ordered",
+                SANITIZED_PNG,
             )
             .await
             .unwrap();
@@ -1281,7 +1408,8 @@ mod tests {
             Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
             instance_id,
             Arc::new(FirstForeignResolver),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
 
         let result = manager
             .delete_media(user_id, &media_ref, false)
@@ -1306,6 +1434,28 @@ mod tests {
     fn stored_path(root: &Path, media: &MediaRef) -> PathBuf {
         root.join("media")
             .join(media::path(&media.source, &media.sha256, &media.filename))
+    }
+
+    // guard:no-backend — filesystem-only public-placement cleanup after a permission fault.
+    #[tokio::test]
+    async fn public_permission_failure_removes_the_new_target() {
+        let directory = TempDir::new().unwrap();
+        let target = directory.path().join("published");
+        std_fs::write(&target, b"already sanitized public bytes").unwrap();
+        let error = MediaManager::finish_public_permissions(
+            &target,
+            Err(io::Error::from(io::ErrorKind::PermissionDenied)),
+        )
+        .await
+        .expect_err("permission failure must reject placement");
+        assert_eq!(
+            error.downcast_ref::<io::Error>().unwrap().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert!(
+            !target.exists(),
+            "failed publication must leave no durable inode"
+        );
     }
 
     // guard:no-backend — filesystem-only temporary upload cleanup.
@@ -1535,7 +1685,8 @@ mod tests {
             Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
             test_instance_id(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
         let polls = Arc::new(AtomicUsize::new(0));
         let stream = polling_empty_stream(Arc::clone(&polls));
 
@@ -1574,7 +1725,8 @@ mod tests {
             Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
             test_instance_id(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
 
         let err = manager
             .upload_bytes(
@@ -1613,7 +1765,8 @@ mod tests {
             Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
             test_instance_id(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
 
         let err = manager
             .upload_bytes(
@@ -1648,17 +1801,20 @@ mod tests {
             )
             .await
             .user_id;
-        let manager = Arc::new(MediaManager::new(
-            env.media().clone(),
-            env.posts().clone(),
-            env.site_config().clone(),
-            env.write_scope().clone(),
-            Arc::new(MediaContentLocks::new(Arc::new(
-                env.base.path().to_path_buf(),
-            ))),
-            env.base.instance_id().clone(),
-            no_foreign_resolver(),
-        ));
+        let manager = Arc::new(
+            MediaManager::new(
+                env.media().clone(),
+                env.posts().clone(),
+                env.site_config().clone(),
+                env.write_scope().clone(),
+                Arc::new(MediaContentLocks::new(Arc::new(
+                    env.base.path().to_path_buf(),
+                ))),
+                env.base.instance_id().clone(),
+                no_foreign_resolver(),
+            )
+            .with_image_sanitizer(test_image_sanitizer()),
+        );
         let (admitted_tx, admitted_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = tokio::sync::oneshot::channel();
         let first_manager = Arc::clone(&manager);
@@ -1677,7 +1833,7 @@ mod tests {
                     Poll::Pending => Poll::Pending,
                     Poll::Ready(Ok(())) => {
                         sent = true;
-                        Poll::Ready(Some(Ok(Bytes::from_static(b"admitted"))))
+                        Poll::Ready(Some(Ok(Bytes::from_static(SANITIZED_PNG))))
                     }
                     Poll::Ready(Err(_)) => unreachable!("test must release admitted upload"),
                 }
@@ -1788,14 +1944,15 @@ mod tests {
             ))),
             env.base.instance_id().clone(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
 
         manager
             .upload_bytes(
                 user_id,
                 &parse_filename("admitted.png"),
                 parse_content_type("image/png"),
-                b"admitted",
+                SANITIZED_PNG,
             )
             .await
             .unwrap();
@@ -1876,7 +2033,8 @@ mod tests {
             Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
             test_instance_id(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
 
         assert!(
             manager
@@ -1938,7 +2096,8 @@ mod tests {
             Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
             test_instance_id(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
 
         let error = manager
             .place_and_register(
@@ -1990,7 +2149,8 @@ mod tests {
             Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
             test_instance_id(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
         let metadata = UploadMetadata {
             filename: parse_filename("failed.png"),
             content_type: parse_content_type("image/png"),
@@ -2043,7 +2203,8 @@ mod tests {
             Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
             test_instance_id(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
         let metadata = UploadMetadata {
             filename: parse_filename("begin-failed.png"),
             content_type: parse_content_type("image/png"),
@@ -2091,7 +2252,8 @@ mod tests {
             Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
             test_instance_id(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
         let metadata = UploadMetadata {
             filename: parse_filename("content-lock-failed.png"),
             content_type: parse_content_type("image/png"),
@@ -2146,7 +2308,8 @@ mod tests {
             Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
             test_instance_id(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
         let metadata = UploadMetadata {
             filename: parse_filename("lock-failed.png"),
             content_type: parse_content_type("image/png"),
@@ -2200,7 +2363,8 @@ mod tests {
             Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
             test_instance_id(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
         let metadata = UploadMetadata {
             filename: parse_filename("failed-link.png"),
             content_type: parse_content_type("image/png"),
@@ -2447,19 +2611,23 @@ mod tests {
             ))),
             env.base.instance_id().clone(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
 
-        // A tiny PNG signature + IHDR-ish bytes (content need not be a valid image).
-        let bytes: &[u8] = &[
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x01, 0x02, 0x03,
-        ];
-        let expected_sha = crate::backup::lowercase_hex(Sha256::digest(bytes));
+        let bytes = include_bytes!("../../host/src/image_sanitizer_fixtures/png-original.png");
+        let expected = include_bytes!("../../host/src/image_sanitizer_fixtures/png-sanitized.png");
+        assert_ne!(
+            bytes.as_slice(),
+            expected.as_slice(),
+            "private metadata exists in input"
+        );
+        let expected_sha = crate::backup::lowercase_hex(Sha256::digest(expected));
 
         let first = manager
             .upload_bytes_with_disposition(
                 user_id,
                 &parse_filename("pic.png"),
-                "image/png".parse().unwrap(),
+                "application/octet-stream".parse().unwrap(),
                 bytes,
             )
             .await
@@ -2470,7 +2638,30 @@ mod tests {
         assert_eq!(first.value().media.content_type, "image/png");
         assert_eq!(
             first.value().media.size_bytes,
-            ByteSize::try_from(i64::try_from(bytes.len()).unwrap()).unwrap()
+            ByteSize::try_from(i64::try_from(expected.len()).unwrap()).unwrap()
+        );
+        let reference = MediaRef {
+            source: MediaSource::Upload,
+            sha256: first.value().media.sha256.clone(),
+            filename: first.value().media.filename.clone(),
+        };
+        let served = fs::read(stored_path(env.base.path(), &reference))
+            .await
+            .unwrap();
+        assert_eq!(
+            served.as_slice(),
+            expected.as_slice(),
+            "only edited bytes are served"
+        );
+        assert_eq!(
+            env.media().get_user_upload_usage(user_id).await.unwrap(),
+            first.value().media.size_bytes
+        );
+        assert!(
+            std_fs::read_dir(env.base.path().join("media/tmp"))
+                .unwrap()
+                .next()
+                .is_none()
         );
 
         // Identical re-upload must succeed and dedup to the same record.
@@ -2486,6 +2677,482 @@ mod tests {
         assert!(second.value().already_existed);
         assert_eq!(second.value().media.sha256, first.value().media.sha256);
         assert_eq!(second.value().media.url, first.value().media.url);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn editor_verification_and_tool_failure_leave_no_durable_state(#[case] backend: Backend) {
+        use std::os::unix::fs::PermissionsExt;
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let tool = TempDir::new().unwrap();
+        let path = tool.path().join("controlled-editor");
+        let python = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|path| path.join("python3"))
+            .find(|path| path.is_file())
+            .unwrap();
+        std_fs::write(tool.path().join("clean.png"), SANITIZED_PNG).unwrap();
+        let script = r"
+import json,sys
+from pathlib import Path
+base=Path(__file__).parent
+p=Path(sys.argv[-1])
+mode=(base/'failure').read_text()
+phase='edit' if '-overwrite_original' in sys.argv else 'verify' if '-G1' in sys.argv else 'detect'
+with (base/'calls').open('a') as log:
+ log.write(json.dumps({'phase':phase,'path':str(p)})+'\n')
+if phase=='edit':
+ p.write_bytes((base/'clean.png').read_bytes())
+ if mode=='edit-exit': sys.exit(17)
+elif phase=='verify':
+ if mode=='verify-exit': sys.exit(19)
+ print(json.dumps([{'SourceFile':str(p),'EXIF:GPSLatitude':1}]))
+else:
+ print(json.dumps([{'SourceFile':str(p),'MIMEType':'image/png'}]))
+";
+        std_fs::write(&path, format!("#!{}\n{script}", python.display())).unwrap();
+        std_fs::set_permissions(&path, std_fs::Permissions::from_mode(0o700)).unwrap();
+        let manager = MediaManager::new(
+            env.media(),
+            env.posts(),
+            env.site_config(),
+            env.write_scope(),
+            Arc::new(MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
+            env.base.instance_id().clone(),
+            no_foreign_resolver(),
+        )
+        .with_image_sanitizer(Arc::new(ImageSanitizer::new(path).unwrap()));
+        let original = include_bytes!("../../host/src/image_sanitizer_fixtures/png-original.png");
+        for mode in ["private-tag", "verify-exit", "edit-exit"] {
+            for streaming in [false, true] {
+                std_fs::write(tool.path().join("failure"), mode).unwrap();
+                std_fs::write(tool.path().join("calls"), "").unwrap();
+                let filename = parse_filename("private.png");
+                let content_type = parse_content_type("image/png");
+                let error = if streaming {
+                    let input =
+                        stream::iter([Ok::<Bytes, io::Error>(Bytes::copy_from_slice(original))]);
+                    manager
+                        .upload(user_id, &filename, Some(content_type), input)
+                        .await
+                        .expect_err("post-spool editor failure must reject stream upload")
+                } else {
+                    manager
+                        .upload_bytes(user_id, &filename, content_type, original)
+                        .await
+                        .expect_err("post-spool editor failure must reject byte upload")
+                };
+                if mode == "private-tag" {
+                    assert!(
+                        matches!(error.downcast_ref::<MediaError>(), Some(MediaError::BadRequest(message))
+                        if message == "Invalid image upload")
+                    );
+                } else {
+                    assert!(matches!(
+                        error.downcast_ref::<MediaError>(),
+                        Some(MediaError::Internal(_))
+                    ));
+                }
+                let calls: Vec<serde_json::Value> =
+                    std_fs::read_to_string(tool.path().join("calls"))
+                        .unwrap()
+                        .lines()
+                        .map(|line| serde_json::from_str(line).unwrap())
+                        .collect();
+                let phases: Vec<_> = calls
+                    .iter()
+                    .map(|call| call["phase"].as_str().unwrap())
+                    .collect();
+                assert_eq!(
+                    phases,
+                    if mode == "edit-exit" {
+                        vec!["detect", "edit"]
+                    } else {
+                        vec!["detect", "edit", "detect", "verify"]
+                    },
+                    "prove the intended failure boundary, not an earlier rejection"
+                );
+                for call in calls {
+                    let private = Path::new(call["path"].as_str().unwrap());
+                    assert!(private.starts_with(env.base.path().join("media/tmp")));
+                    assert!(
+                        !private.exists(),
+                        "input and edited output must both be removed"
+                    );
+                }
+                assert_eq!(
+                    env.media()
+                        .get_user_upload_usage(user_id)
+                        .await
+                        .unwrap()
+                        .value(),
+                    0
+                );
+                assert!(
+                    env.media()
+                        .list_media(
+                            user_id,
+                            None,
+                            common::pagination::RowLimit::at_most(100),
+                            common::pagination::PageOffset::default()
+                        )
+                        .await
+                        .unwrap()
+                        .is_empty()
+                );
+                assert!(
+                    std_fs::read_dir(env.base.path().join("media/tmp"))
+                        .unwrap()
+                        .next()
+                        .is_none()
+                );
+                let mut directories = vec![env.base.path().join("media")];
+                while let Some(directory) = directories.pop() {
+                    for entry in std_fs::read_dir(directory).unwrap() {
+                        let entry = entry.unwrap();
+                        assert!(
+                            entry.file_type().unwrap().is_dir(),
+                            "no public original or edited file"
+                        );
+                        directories.push(entry.path());
+                    }
+                }
+            }
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn changed_passthrough_bytes_are_checked_before_durable_identity(
+        #[case] backend: Backend,
+    ) {
+        use std::os::unix::fs::PermissionsExt;
+        let env = backend
+            .setup()
+            .media_limits("8".parse().unwrap(), UserQuota::default())
+            .await;
+        let user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let tool = TempDir::new().unwrap();
+        let executable = tool.path().join("detector");
+        let python = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|path| path.join("python3"))
+            .find(|path| path.is_file())
+            .unwrap();
+        std_fs::write(&executable, format!("#!{}\nimport json,sys\nfrom pathlib import Path\np=Path(sys.argv[-1])\np.write_bytes(b'x'*64)\n(Path(__file__).parent/'observed').write_text(str(p))\nprint(json.dumps([{{'SourceFile':str(p),'MIMEType':'text/plain'}}]))\n", python.display())).unwrap();
+        std_fs::set_permissions(&executable, std_fs::Permissions::from_mode(0o700)).unwrap();
+        let manager = MediaManager::new(
+            env.media(),
+            env.posts(),
+            env.site_config(),
+            env.write_scope(),
+            Arc::new(MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
+            env.base.instance_id().clone(),
+            no_foreign_resolver(),
+        )
+        .with_image_sanitizer(Arc::new(ImageSanitizer::new(executable).unwrap()));
+        for streaming in [false, true] {
+            let filename = parse_filename("ordinary.txt");
+            let content_type = parse_content_type("text/plain");
+            let error = if streaming {
+                let input = stream::iter([Ok::<Bytes, io::Error>(Bytes::from_static(b"input"))]);
+                manager
+                    .upload(user_id, &filename, Some(content_type), input)
+                    .await
+                    .expect_err("changed bytes exceed current limit")
+            } else {
+                manager
+                    .upload_bytes(user_id, &filename, content_type, b"input")
+                    .await
+                    .expect_err("changed bytes exceed current limit")
+            };
+            assert!(matches!(
+                error.downcast_ref::<MediaError>(),
+                Some(MediaError::PayloadTooLarge)
+            ));
+            let observed = std_fs::read_to_string(tool.path().join("observed")).unwrap();
+            assert!(Path::new(&observed).starts_with(env.base.path().join("media/tmp")));
+            assert!(
+                !Path::new(&observed).exists(),
+                "changed private input must be removed"
+            );
+            assert_eq!(
+                env.media()
+                    .get_user_upload_usage(user_id)
+                    .await
+                    .unwrap()
+                    .value(),
+                0
+            );
+            assert!(
+                env.media()
+                    .list_media(
+                        user_id,
+                        None,
+                        common::pagination::RowLimit::at_most(100),
+                        common::pagination::PageOffset::default()
+                    )
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                std_fs::read_dir(env.base.path().join("media/tmp"))
+                    .unwrap()
+                    .next()
+                    .is_none()
+            );
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn expanded_editor_output_rejects_without_durable_mutation(#[case] backend: Backend) {
+        use std::os::unix::fs::PermissionsExt;
+        let env = backend
+            .setup()
+            .media_limits("8".parse().unwrap(), UserQuota::default())
+            .await;
+        let user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let tool = TempDir::new().unwrap();
+        let path = tool.path().join("editor");
+        let python = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|path| path.join("python3"))
+            .find(|path| path.is_file())
+            .unwrap();
+        std_fs::write(&path, format!("#!{}\nimport json,sys\nfrom pathlib import Path\np=Path(sys.argv[-1])\nif '-overwrite_original' in sys.argv:\n p.write_bytes(b'x'*64)\nelse:\n print(json.dumps([{{'SourceFile':str(p),'MIMEType':'image/png'}}]))\n", python.display())).unwrap();
+        std_fs::set_permissions(&path, std_fs::Permissions::from_mode(0o700)).unwrap();
+        let manager = MediaManager::new(
+            env.media(),
+            env.posts(),
+            env.site_config(),
+            env.write_scope(),
+            Arc::new(MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
+            env.base.instance_id().clone(),
+            no_foreign_resolver(),
+        )
+        .with_image_sanitizer(Arc::new(ImageSanitizer::new(path).unwrap()));
+        let error = manager
+            .upload_bytes(
+                user_id,
+                &parse_filename("expanded.png"),
+                parse_content_type("image/png"),
+                b"input",
+            )
+            .await
+            .expect_err("edited output exceeds current limit");
+        assert!(matches!(
+            error.downcast_ref::<MediaError>(),
+            Some(MediaError::PayloadTooLarge)
+        ));
+        assert_eq!(
+            env.media()
+                .get_user_upload_usage(user_id)
+                .await
+                .unwrap()
+                .value(),
+            0
+        );
+        assert!(
+            env.media()
+                .list_media(
+                    user_id,
+                    None,
+                    common::pagination::RowLimit::at_most(100),
+                    common::pagination::PageOffset::default()
+                )
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            std_fs::read_dir(env.base.path().join("media/tmp"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+        let mut directories = vec![env.base.path().join("media/upload")];
+        while let Some(directory) = directories.pop() {
+            if !directory.exists() {
+                continue;
+            }
+            for entry in std_fs::read_dir(directory).unwrap() {
+                let entry = entry.unwrap();
+                assert!(
+                    entry.file_type().unwrap().is_dir(),
+                    "no public output after editor growth rejection"
+                );
+                directories.push(entry.path());
+            }
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn private_spools_become_readable_only_after_public_placement(#[case] backend: Backend) {
+        use std::os::unix::fs::PermissionsExt;
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let manager = MediaManager::new(
+            env.media(),
+            env.posts(),
+            env.site_config(),
+            env.write_scope(),
+            Arc::new(MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
+            env.base.instance_id().clone(),
+            no_foreign_resolver(),
+        )
+        .with_image_sanitizer(test_image_sanitizer());
+        let private = manager.create_temp_file().await.unwrap();
+        assert_eq!(
+            private.as_file().metadata().unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        std_fs::write(private.path(), SANITIZED_PNG).unwrap();
+        let (limit, _) = manager.get_limits().await.unwrap();
+        let (edited, _, _, _) = manager
+            .sanitize_and_measure(
+                private,
+                &parse_filename("private.png"),
+                Some(&parse_content_type("image/png")),
+                limit,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            edited.as_file().metadata().unwrap().permissions().mode() & 0o777,
+            0o600,
+            "edited sanitized bytes remain private until public placement"
+        );
+        drop(edited);
+        for streaming in [false, true] {
+            for (extension, mime, bytes) in [
+                ("txt", "text/plain", b"public attachment".as_slice()),
+                ("png", "image/png", SANITIZED_PNG),
+            ] {
+                let filename = parse_filename(&format!("public-{streaming}.{extension}"));
+                let content_type = parse_content_type(mime);
+                let upload = if streaming {
+                    manager
+                        .upload(
+                            user_id,
+                            &filename,
+                            Some(content_type),
+                            stream::iter([Ok::<Bytes, io::Error>(Bytes::copy_from_slice(bytes))]),
+                        )
+                        .await
+                } else {
+                    manager
+                        .upload_bytes(user_id, &filename, content_type, bytes)
+                        .await
+                }
+                .unwrap();
+                let published = stored_path(env.base.path(), &upload_ref(&upload));
+                assert_eq!(
+                    fs::metadata(&published).await.unwrap().permissions().mode() & 0o777,
+                    0o644,
+                    "public bytes must remain readable by the serving principal after private spool placement"
+                );
+                assert_eq!(fs::read(published).await.unwrap(), bytes);
+            }
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn upload_sanitizer_rejects_raster_and_preserves_nonimages(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let manager = MediaManager::new(
+            env.media(),
+            env.posts(),
+            env.site_config(),
+            env.write_scope(),
+            Arc::new(MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
+            env.base.instance_id().clone(),
+            no_foreign_resolver(),
+        )
+        .with_image_sanitizer(test_image_sanitizer());
+        let error = manager
+            .upload_bytes(
+                user_id,
+                &parse_filename("broken.jpg"),
+                parse_content_type("application/octet-stream"),
+                b"not an image",
+            )
+            .await
+            .expect_err("raster filename cannot bypass rejection");
+        assert!(matches!(
+            error.downcast_ref::<MediaError>(),
+            Some(MediaError::BadRequest(_))
+        ));
+        assert_eq!(
+            env.media()
+                .get_user_upload_usage(user_id)
+                .await
+                .unwrap()
+                .value(),
+            0
+        );
+        assert!(
+            std_fs::read_dir(env.base.path().join("media/tmp"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+
+        let opaque: &[u8] = b"owned ordinary attachment text";
+        let svg: &[u8] = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"2\" height=\"2\"><desc>SVG is outside the raster policy</desc></svg>";
+        for (name, mime, bytes) in [
+            ("notes.bin", "application/octet-stream", opaque),
+            ("icon.svg", "image/svg+xml", svg),
+        ] {
+            let upload = manager
+                .upload_bytes(
+                    user_id,
+                    &parse_filename(name),
+                    parse_content_type(mime),
+                    bytes,
+                )
+                .await
+                .expect("non-raster attachment remains accepted");
+            assert_eq!(upload.value().content_type, mime);
+            assert_eq!(upload.value().filename, name);
+            let served = fs::read(stored_path(env.base.path(), &upload_ref(&upload)))
+                .await
+                .unwrap();
+            assert_eq!(served, bytes, "non-raster bytes unchanged");
+        }
+        assert!(
+            std_fs::read_dir(env.base.path().join("media/tmp"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
     }
 
     #[apply(backends)]
@@ -2510,14 +3177,15 @@ mod tests {
             ))),
             env.base.instance_id().clone(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
 
         let outcome = manager
             .upload_bytes(
                 user_id,
                 &parse_filename("indeterminate.png"),
                 "image/png".parse().unwrap(),
-                b"png-ish",
+                SANITIZED_PNG,
             )
             .await
             .unwrap();
@@ -2554,7 +3222,8 @@ mod tests {
             ))),
             env.base.instance_id().clone(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
 
         let err = manager
             .upload_bytes(
@@ -2595,11 +3264,12 @@ mod tests {
             ))),
             env.base.instance_id().clone(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
 
         let chunks = [
-            Bytes::from_static(&[0x89, 0x50, 0x4E, 0x47]),
-            Bytes::from_static(&[0x0D, 0x0A, 0x1A, 0x0A]),
+            Bytes::from_static(&SANITIZED_PNG[..4]),
+            Bytes::from_static(&SANITIZED_PNG[4..]),
         ];
         let mut hasher = Sha256::new();
         for chunk in &chunks {
@@ -2648,14 +3318,15 @@ mod tests {
             ))),
             env.base.instance_id().clone(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
 
         let uploaded = manager
             .upload_bytes(
                 user_id,
                 &parse_filename("photo.jpg"),
                 "image/jpeg".parse().unwrap(),
-                b"jpeg-ish",
+                SANITIZED_PNG,
             )
             .await
             .unwrap();
@@ -2704,6 +3375,7 @@ mod tests {
                 env.base.instance_id().clone(),
                 no_foreign_resolver(),
             )
+            .with_image_sanitizer(test_image_sanitizer())
             .with_reclaim_unlink_gate_for_test(Arc::clone(&gate)),
         );
         let uploaded = manager
@@ -2711,7 +3383,7 @@ mod tests {
                 user_id,
                 &parse_filename("guarded-unlink.jpg"),
                 "image/jpeg".parse().unwrap(),
-                b"jpeg-ish",
+                SANITIZED_PNG,
             )
             .await
             .unwrap();
@@ -2761,13 +3433,14 @@ mod tests {
             ))),
             env.base.instance_id().clone(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
         let uploaded = confirmed_manager
             .upload_bytes(
                 user_id,
                 &parse_filename("indeterminate.jpg"),
                 "image/jpeg".parse().unwrap(),
-                b"jpeg-ish",
+                SANITIZED_PNG,
             )
             .await
             .unwrap();
@@ -2784,7 +3457,8 @@ mod tests {
             ))),
             env.base.instance_id().clone(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
 
         let outcome = manager
             .delete_media(user_id, &media, false)
@@ -2829,13 +3503,14 @@ mod tests {
             ))),
             env.base.instance_id().clone(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
         let uploaded = manager
             .upload_bytes(
                 owner,
                 &parse_filename("retain-on-error.jpg"),
                 "image/jpeg".parse().unwrap(),
-                b"jpeg-ish",
+                SANITIZED_PNG,
             )
             .await
             .unwrap();
@@ -2878,14 +3553,15 @@ mod tests {
             ))),
             env.base.instance_id().clone(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
 
         let uploaded = manager
             .upload_bytes(
                 user_id,
                 &parse_filename("blocked.jpg"),
                 "image/jpeg".parse().unwrap(),
-                b"jpeg-ish",
+                SANITIZED_PNG,
             )
             .await
             .unwrap();
@@ -2927,14 +3603,15 @@ mod tests {
             ))),
             env.base.instance_id().clone(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
 
         let uploaded = manager
             .upload_bytes(
                 user_id,
                 &parse_filename("photo.jpg"),
                 "image/jpeg".parse().unwrap(),
-                b"jpeg-ish",
+                SANITIZED_PNG,
             )
             .await
             .unwrap();
@@ -2992,14 +3669,15 @@ mod tests {
             ))),
             env.base.instance_id().clone(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
 
         let first = manager
             .upload_bytes(
                 first_user,
                 &parse_filename("photo.jpg"),
                 "image/jpeg".parse().unwrap(),
-                b"jpeg-ish",
+                SANITIZED_PNG,
             )
             .await
             .unwrap();
@@ -3008,7 +3686,7 @@ mod tests {
                 second_user,
                 &parse_filename("photo.jpg"),
                 "image/jpeg".parse().unwrap(),
-                b"jpeg-ish",
+                SANITIZED_PNG,
             )
             .await
             .unwrap();
@@ -3056,14 +3734,15 @@ mod tests {
             ))),
             env.base.instance_id().clone(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
 
         let first = manager
             .upload_bytes(
                 user_id,
                 &parse_filename("first.jpg"),
                 "image/jpeg".parse().unwrap(),
-                b"jpeg-ish",
+                SANITIZED_PNG,
             )
             .await
             .unwrap();
@@ -3072,7 +3751,7 @@ mod tests {
                 user_id,
                 &parse_filename("second.jpg"),
                 "image/jpeg".parse().unwrap(),
-                b"jpeg-ish",
+                SANITIZED_PNG,
             )
             .await
             .unwrap();
@@ -3146,7 +3825,8 @@ mod tests {
             locks,
             env.base.instance_id().clone(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
 
         let refused = manager.delete_media(actor, &media, false).await.unwrap();
         assert!(matches!(
@@ -3240,7 +3920,8 @@ mod tests {
             locks,
             env.base.instance_id().clone(),
             no_foreign_resolver(),
-        );
+        )
+        .with_image_sanitizer(test_image_sanitizer());
 
         let (removal, deletion) = tokio::join!(
             themes.replace_role(

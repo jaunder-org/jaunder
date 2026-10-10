@@ -304,6 +304,7 @@ let
         # The CSR SPA shell the server embeds via include_str! (#239). Specific
         # (not a broad .html suffix) to keep stray HTML out of the crane src.
         || (pkgs.lib.hasSuffix "csr/index.html" path)
+        || pkgs.lib.hasInfix "/host/src/image_sanitizer_fixtures/" path
         || (builtins.match "scripts/.*" path != null)
         || (craneLib.filterCargoSources path type)
       );
@@ -356,6 +357,14 @@ let
   # also builds the wasm CSR package.
   hostArgs = commonArgs // {
     buildInputs = commonArgs.buildInputs ++ [ pkgs.dav1d ];
+    nativeBuildInputs = commonArgs.nativeBuildInputs ++ [
+      pkgs.exiftool
+      pkgs.imagemagick
+      (pkgs.python3.withPackages (ps: [ ps.pillow ]))
+    ];
+    JAUNDER_EXIFTOOL = "${pkgs.exiftool}/bin/exiftool";
+    JAUNDER_IMAGE_MAGICK = "${pkgs.imagemagick}/bin/magick";
+    JAUNDER_IMAGE_PYTHON = "${pkgs.python3.withPackages (ps: [ ps.pillow ])}/bin/python3";
   };
 
   mkOfflineCargoHome =

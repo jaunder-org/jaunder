@@ -304,6 +304,85 @@ async fn disabled_upload_is_forbidden_without_media_mutation(#[case] backend: Ba
 
 #[apply(backends)]
 #[tokio::test]
+async fn rejected_raster_upload_preserves_empty_durable_state(#[case] backend: Backend) {
+    for over_quota in [false, true] {
+        let quota = if over_quota {
+            "5".parse().unwrap()
+        } else {
+            common::media::UserQuota::default()
+        };
+        let env = backend
+            .setup()
+            .media_limits(common::media::MaxFileSize::default(), quota)
+            .await;
+        let session = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
+        let storage = TempDir::new().unwrap();
+        let app = make_app!(&env, &storage);
+        let bytes: &'static [u8] = if over_quota {
+            include_bytes!("../../../host/src/image_sanitizer_fixtures/png-original.png")
+        } else {
+            b"malformed raster"
+        };
+        let response = app
+            .oneshot(
+                atompub(&session, Method::POST, "media")
+                    .header("content-type", "application/octet-stream")
+                    .header("slug", "rejected.png")
+                    .body(Body::from(bytes))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            if over_quota {
+                StatusCode::INSUFFICIENT_STORAGE
+            } else {
+                StatusCode::BAD_REQUEST
+            }
+        );
+        assert_eq!(
+            env.media()
+                .get_user_upload_usage(session.user_id)
+                .await
+                .unwrap()
+                .value(),
+            0
+        );
+        assert!(
+            env.media()
+                .list_media(
+                    session.user_id,
+                    None,
+                    RowLimit::at_most(100),
+                    PageOffset::default()
+                )
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let mut directories = vec![storage.path().join("media")];
+        while let Some(directory) = directories.pop() {
+            for entry in std::fs::read_dir(directory).unwrap() {
+                let entry = entry.unwrap();
+                assert!(
+                    entry.file_type().unwrap().is_dir(),
+                    "no private original, output or public file may survive"
+                );
+                directories.push(entry.path());
+            }
+        }
+        assert!(
+            std::fs::read_dir(storage.path().join("media/tmp"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn upload_accepts_pdf_content_type(#[case] backend: Backend) {
     let env = backend.setup().media_uploads_enabled(true).await;
     let session = create_user_and_session(
@@ -333,7 +412,7 @@ async fn upload_accepts_pdf_content_type(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
-async fn upload_without_content_type_defaults_to_octet_stream(#[case] backend: Backend) {
+async fn upload_without_content_type_uses_detected_image_type(#[case] backend: Backend) {
     let env = backend.setup().await;
     let session = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -355,11 +434,7 @@ async fn upload_without_content_type_defaults_to_octet_stream(#[case] backend: B
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::CREATED);
-    assert!(
-        body_string(response)
-            .await
-            .contains("type=\"application/octet-stream\"")
-    );
+    assert!(body_string(response).await.contains("type=\"image/png\""));
 }
 
 #[apply(backends)]
@@ -417,6 +492,79 @@ async fn upload_rejects_opaque_present_content_type(#[case] backend: Backend) {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn private_image_upload_serves_sanitized_identity(#[case] backend: Backend) {
+    use sha2::{Digest, Sha256};
+    let private = include_bytes!("../../../host/src/image_sanitizer_fixtures/png-original.png");
+    let expected = include_bytes!("../../../host/src/image_sanitizer_fixtures/png-sanitized.png");
+    let env = backend.setup().await;
+    let session = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
+    let storage = TempDir::new().unwrap();
+    let app = make_app!(&env, &storage);
+    let response = app
+        .clone()
+        .oneshot(
+            atompub(&session, Method::POST, "media")
+                .header("content-type", "application/octet-stream")
+                .header("slug", "privacy.png")
+                .body(Body::from(private.as_slice()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let hash = common::media::ContentHash::from_digest(Sha256::digest(expected).into());
+    let url = common::media::url(
+        &common::media::MediaSource::Upload,
+        &hash,
+        &parse_filename("privacy.png"),
+    );
+    let entry = body_string(response).await;
+    assert!(
+        entry.contains(&*url),
+        "entry refers to sanitized hash: {entry}"
+    );
+    assert!(
+        entry.contains("type=\"image/png\""),
+        "detected MIME: {entry}"
+    );
+    let served = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(&*url)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(served.status(), StatusCode::OK);
+    assert_eq!(
+        served.headers().get(header::CONTENT_TYPE).unwrap(),
+        "image/png"
+    );
+    let etag = host::etag::from_content_hash(&hash);
+    assert_eq!(served.headers().get(header::ETAG).unwrap(), etag.as_ref());
+    let bytes = axum::body::to_bytes(served.into_body(), expected.len() + 1)
+        .await
+        .unwrap();
+    assert_ne!(bytes.as_ref(), private.as_slice());
+    assert_eq!(bytes.as_ref(), expected.as_slice());
+    let repeat = app
+        .oneshot(atompub_upload(&session, "privacy.png", private))
+        .await
+        .unwrap();
+    assert_eq!(repeat.status(), StatusCode::OK);
+    assert!(body_string(repeat).await.contains(&*url));
+    assert!(
+        std::fs::read_dir(storage.path().join("media/tmp"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
 }
 
 #[apply(backends)]

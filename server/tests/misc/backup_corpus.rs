@@ -914,7 +914,7 @@ mod reader_tests {
     use storage::{
         BackupError, BackupMode, PasskeyCredentialId, PasskeyLabel, PasskeyUserHandle,
         StorageRuntimeConfig, open_existing_database,
-        test_support::{Backend, backends},
+        test_support::{Backend, backends_matrix},
     };
     macro_rules! assert_eq {
         ($left:expr, $right:expr $(,)?) => {
@@ -1364,10 +1364,10 @@ mod reader_tests {
         }
     }
 
-    #[apply(backends)]
+    #[apply(backends_matrix)]
     #[tokio::test]
     async fn historical_corpus_entries_restore_through_each_public_input(
-        #[case] backend: Backend,
+        backend: Backend,
         #[values(CorpusIoMode::Directory, CorpusIoMode::Archive)] input: CorpusIoMode,
         #[values(false, true)] materializable: bool,
     ) {
