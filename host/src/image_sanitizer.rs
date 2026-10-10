@@ -2,6 +2,8 @@
 
 pub mod native;
 mod native_kernel;
+pub mod worker;
+pub mod worker_request;
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
