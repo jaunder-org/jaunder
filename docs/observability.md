@@ -34,6 +34,63 @@ processes, and end-to-end test runner.
   errored/slow traces rather than expecting Jaunder to dump buffered branch logs
   in-process.
 
+### Independent log and trace controls
+
+The server, production CLI commands and `test-support` resolve the same
+immutable telemetry policy at process startup. Ordinary logs still go to stdout;
+native OTLP log routing is separate work (#1743).
+
+| Control                               | Policy                                                                                      |
+| ------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `JAUNDER_LOG_FILTER`                  | Preferred ordinary-log filter; otherwise `RUST_LOG`, then ordinary or `--verbose` defaults  |
+| `JAUNDER_TRACE_FILTER`                | Independent OTLP trace filter; absent means INFO, unaffected by log controls or `--verbose` |
+| `JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT` | Preferred traces/metrics endpoint; otherwise `OTEL_EXPORTER_OTLP_ENDPOINT`                  |
+
+Both filters accept tracing filter grammar, including levels, target/span
+selectors and `off`. Ordinary defaults remain WARN for application targets and
+INFO for storage; `--verbose` raises application/storage targets to DEBUG and
+SQLx to INFO. A configured ordinary-log override takes precedence over those
+defaults. Invalid ordinary-log input retains its existing default fallback.
+
+Blank, malformed or unreadable `JAUNDER_TRACE_FILTER` emits exactly one fixed,
+source-free local warning and falls back to INFO:
+
+```text
+host.telemetry.trace_filter: invalid configured value; using INFO trace filter
+```
+
+An absent trace setting is normal and emits no warning. No endpoint means no
+OTLP export, even with an enabled trace filter. Trace `off` does not disable
+ordinary logs, metrics, independent WARN+ diagnostic capture or the panic hook;
+ordinary-log `off` does not disable tracing or diagnostics. Endpoint precedence,
+sampling and provider flushing are unchanged.
+
+For example, with an endpoint configured, use `JAUNDER_LOG_FILTER=warn` and
+leave `JAUNDER_TRACE_FILTER` unset for quiet logs plus INFO request/operation
+traces. Use `JAUNDER_TRACE_FILTER=debug` to investigate more spans, or
+`JAUNDER_TRACE_FILTER=off` to disable traces explicitly. A narrower target
+selector can focus collection, for example
+`JAUNDER_TRACE_FILTER=warn,jaunder::observability::http=info`.
+
+**Compatibility change:** `JAUNDER_LOG_FILTER`, `RUST_LOG` and `--verbose` are
+not trace controls. Operators who previously used a log filter to disable or
+narrow traces must set `JAUNDER_TRACE_FILTER` instead. Useful INFO traces can
+increase exported volume under quiet logs: budget Collector storage and
+retention accordingly. This does not introduce a new sampling or retention
+policy.
+
+Filtered request spans are normal absence, even when logs or diagnostic context
+keep them active. Admitted requests adopt valid W3C parents; missing/invalid
+headers remain ordinary root-context cases. Genuine assignment failures use
+local stderr with bounded reasons `otel-layer-missing`, `span-already-started`
+or `span-disabled`, never raw headers or arbitrary source text. These
+diagnostics must stay outside any native-log exporter. Error `SpanTrace` initial
+and late-recorded fields survive filtered or absent stdout in either pretty or
+JSON mode, without changing privacy or sink-specific field admission.
+
+See the
+[independent filtering decision](adr/drafts/independent-log-and-trace-filtering.md).
+
 ### Backend Saturation Gauges
 
 The backend exports these asynchronous gauge instruments through

@@ -73,7 +73,7 @@ deployment.
     while console/ErrorLayer keeps the span active; genuine missing-layer and
     already-started failures. Backend-common HTTP/storage assertions cover both
     backends through the existing harness, not hand-built pools.
-- [ ] **4. Prove executable/browser compatibility and publish the handoff.**
+- [x] **4. Prove executable/browser compatibility and publish the handoff.**
   - Depends on 1–3. Prove both executable roots use inherited policy, production
     CLI and seed flush traces, and metrics/provider shutdown/capture scope stay
     intact. Retain the deployed-binary control and rerun the original request

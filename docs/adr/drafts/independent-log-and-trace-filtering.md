@@ -6,12 +6,12 @@
 
 ## Context
 
-A shared subscriber filter currently controls both console output and OTLP
-tracing. The ordinary filter suppresses INFO request spans, but an installed
-tracer still enables inbound parent assignment. Attempting assignment to a
-filtered span produces a misleading stderr warning for each request. Enabling
-INFO eliminates that warning and restores request-parent correlation, but also
-increases console output.
+Shared subscriber filtering coupled console output and OTLP tracing. The
+ordinary filter suppressed INFO request spans, while an installed tracer enabled
+inbound parent assignment. Assignment to a globally filtered span produced a
+misleading stderr warning for each request. Enabling INFO eliminated that
+warning and restored request-parent correlation, but also increased console
+output.
 
 Quiet logs and useful distributed traces are distinct operator goals. Merely
 suppressing the warning preserves the missing request spans. Raising the shared
@@ -54,11 +54,21 @@ remain observable through the nonrecursive local fallback, with bounded reasons
 and no header, token or arbitrary source-text dump. Ordinary absent or invalid
 parent headers do not become assignment failures.
 
+`TelemetryConfig::ordinary_log_filter()` is the shared ordinary-log accessor;
+`trace_filter()` supplies the independent trace policy. The OTLP layer and the
+host-owned admission witness share one filter/lifecycle.
+`span_is_trace_admitted(&Span)` reads the span's owning Registry marker without
+starting SDK context or re-evaluating a cloned dynamic filter. Admission does
+not promise that sampling exports the span. Request-parent assignment consults
+that witness before calling the SDK.
+
 Filtering or replacing an ordinary-log sink must not remove the active span
 stack or safely formatted, late-recorded fields required for error SpanTrace
 capture. Span-field retention must not depend on the stdout formatter being an
-active log sink. The independent WARN+ `diag.log` sink and panic fallback remain
-intact. Field admission and privacy remain governed by
+active log sink. A distinct ErrorLayer field cache and late-record updater keep
+pretty/JSON stdout formatting from duplicating or suppressing diagnostic fields.
+The independent WARN+ `diag.log` sink and panic fallback remain intact. Field
+admission and privacy remain governed by
 [ADR-0011](../0011-unified-observability.md),
 [ADR-0147](../0147-decision-path-observability.md), and
 [ADR-0156](../0156-sink-specific-telemetry-interfaces.md).
@@ -70,7 +80,8 @@ stays at its established verbosity. Operators budget collector storage and
 retention accordingly; no new sampling or retention mechanism is introduced.
 Existing log-filter overrides cease to be trace controls. Operators who want
 tracing disabled or narrowed use `JAUNDER_TRACE_FILTER`, and the operator guide
-must explain that compatibility change explicitly.
+explains that compatibility change explicitly in
+[the operator guide](../../observability.md#independent-log-and-trace-controls).
 
 Proof must exercise actual subscriber composition: trace IDs/parent IDs,
 independent ordinary-log and trace admission, filtered request handling, error
