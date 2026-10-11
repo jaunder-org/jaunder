@@ -371,7 +371,7 @@ impl BaselineLifecycle {
 import net from "node:net";
 const quote = (value) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
 const args = process.argv.slice(2).map(quote).join(" ");
-const inner = `export $(systemctl show --property=Environment --value jaunder.service | tr ' ' '\\n' | grep '^JAUNDER_'); export JAUNDER_STORAGE_PATH=/var/lib/jaunder/data; test-support ${{args}}`;
+const inner = `export $(systemctl show --property=Environment --value jaunder.service | tr ' ' '\\n' | grep '^JAUNDER_'); export JAUNDER_STORAGE_PATH=/var/lib/jaunder/data; runuser -u "$(systemctl show --property=User --value jaunder.service)" -- test-support ${{args}}`;
 const command = `(
 diagnostic=/tmp/jaunder-baseline-seed-$$.err; ${{inner}} 2>"$diagnostic"; code=$?; if [ "$code" -ne 0 ]; then cat "$diagnostic"; fi; rm -f "$diagnostic"; exit "$code"
 ); code=$?; printf '\\n{STATUS}%s\\n' "$code"`;
@@ -1840,6 +1840,9 @@ mod tests {
             },
         );
         let bridge = lifecycle.seed_process("seed-fixture", &node).unwrap();
+        let script = fs::read_to_string(&bridge).unwrap();
+        assert!(script.contains("runuser -u"));
+        assert!(script.contains("systemctl show --property=User --value jaunder.service"));
         let empty_path = root.path().join("empty-path");
         fs::create_dir(&empty_path).unwrap();
         let output = Command::new(&bridge)
