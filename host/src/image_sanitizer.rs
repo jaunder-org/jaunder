@@ -444,6 +444,142 @@ mod tests {
     use std::process::Stdio;
 
     #[test]
+    fn completion_rejects_mismatched_size_and_unknown_image_identity() {
+        // A worker reply cannot certify a different byte count or an identity
+        // outside the covered raster set, even after successful child exit.
+        for reply in [
+            worker_protocol::Reply::Image {
+                mime: "image/png".to_owned(),
+                size: 1,
+            },
+            worker_protocol::Reply::Passthrough { size: 1 },
+            worker_protocol::Reply::Image {
+                mime: "image/private-invalid".to_owned(),
+                size: 0,
+            },
+        ] {
+            let input = NamedTempFile::new().expect("private spool");
+            let path = input.path().to_owned();
+            assert!(matches!(
+                ImageSanitizer::finish(input, reply, 1024, Instant::now() + PROCESSING_TIMEOUT),
+                Err(ImageSanitizerError::InvalidWorkerResponse)
+            ));
+            assert!(
+                !path.exists(),
+                "rejected completion must remove private bytes"
+            );
+        }
+        let input = NamedTempFile::new().expect("private spool");
+        let path = input.path().to_owned();
+        assert!(matches!(
+            ImageSanitizer::finish(
+                input,
+                worker_protocol::Reply::Failed(worker_protocol::Failure::FileTooLarge),
+                1024,
+                Instant::now() + PROCESSING_TIMEOUT
+            ),
+            Err(ImageSanitizerError::FileTooLarge)
+        ));
+        assert!(
+            !path.exists(),
+            "typed size rejection must remove private bytes"
+        );
+    }
+
+    #[test]
+    fn completion_rejects_exposed_or_replaced_private_spool() {
+        // The supervisor must validate mode and pathname/inode correspondence,
+        // not accept a size-consistent response for exposed or substituted data.
+        let input = NamedTempFile::new().expect("private spool");
+        let path = input.path().to_owned();
+        input
+            .as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o644))
+            .expect("inject exposed spool");
+        assert!(matches!(
+            ImageSanitizer::finish(
+                input,
+                worker_protocol::Reply::Passthrough { size: 0 },
+                1024,
+                Instant::now() + PROCESSING_TIMEOUT
+            ),
+            Err(ImageSanitizerError::InvalidWorkerResponse)
+        ));
+        assert!(!path.exists(), "exposed spool must be removed");
+
+        let input = NamedTempFile::new().expect("private spool");
+        let path = input.path().to_owned();
+        std::fs::remove_file(&path).expect("replace private pathname");
+        std::fs::write(&path, b"different inode").expect("replacement bytes");
+        assert!(matches!(
+            ImageSanitizer::finish(
+                input,
+                worker_protocol::Reply::Passthrough { size: 0 },
+                1024,
+                Instant::now() + PROCESSING_TIMEOUT
+            ),
+            Err(ImageSanitizerError::InvalidWorkerResponse)
+        ));
+        assert!(!path.exists(), "substituted pathname must be removed");
+    }
+
+    #[test]
+    fn completion_cleanup_failure_preserves_primary_rejection() {
+        // Failed unlink must retain its concrete I/O source and the primary
+        // validation error, never become successful completion or hide cleanup.
+        let directory = tempfile::tempdir().expect("isolated private directory");
+        let input = NamedTempFile::new_in(directory.path()).expect("private spool");
+        let path = input.path().to_owned();
+        std::fs::remove_file(&path).expect("replace private pathname");
+        std::fs::create_dir(&path).expect("non-file unlink failure");
+        let error = ImageSanitizer::finish(
+            input,
+            worker_protocol::Reply::Passthrough { size: 0 },
+            1024,
+            Instant::now() + PROCESSING_TIMEOUT,
+        )
+        .expect_err("non-file completion");
+        assert!(
+            matches!(error, ImageSanitizerError::Cleanup { primary, source } if matches!(*primary, ImageSanitizerError::InvalidWorkerResponse) && source.kind() == std::io::ErrorKind::IsADirectory)
+        );
+        assert!(
+            path.is_dir(),
+            "cleanup failure cannot claim successful unlink"
+        );
+    }
+
+    #[test]
+    fn queued_spool_cleanup_failure_preserves_primary_and_failed_unlink_state() {
+        // Explicit queue rejection retains its primary typed error. Neither
+        // explicit rejection nor cancellation Drop can pretend a failed unlink
+        // removed the obstructing pathname; private failure reporting is separate.
+        let directory = tempfile::tempdir().expect("isolated private directory");
+        let input = NamedTempFile::new_in(directory.path()).expect("private spool");
+        let path = input.path().to_owned();
+        std::fs::remove_file(&path).expect("replace private pathname");
+        std::fs::create_dir(&path).expect("non-file unlink failure");
+        let mut queued = QueuedSpool(Some(input));
+        assert!(
+            matches!(queued.fail(ImageSanitizerError::InvalidImage), ImageSanitizerError::Cleanup { primary, source } if matches!(*primary, ImageSanitizerError::InvalidImage) && source.kind() == std::io::ErrorKind::IsADirectory)
+        );
+        assert!(
+            queued.0.is_none(),
+            "explicit rejection transfers ownership once"
+        );
+        assert!(path.is_dir(), "failed unlink remains observable");
+
+        let input = NamedTempFile::new_in(directory.path()).expect("private spool");
+        let path = input.path().to_owned();
+        std::fs::remove_file(&path).expect("replace private pathname");
+        std::fs::create_dir(&path).expect("non-file unlink failure");
+        drop(QueuedSpool(Some(input)));
+        assert!(
+            path.is_dir(),
+            "Drop cannot falsely report successful unlink"
+        );
+    }
+
+    #[test]
     fn expired_deadline_preserves_typed_failure_and_rejects_success() {
         use worker_protocol::{Failure, MetadataFailure, Reply};
         let deadline = Instant::now();

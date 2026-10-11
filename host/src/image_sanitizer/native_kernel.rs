@@ -214,11 +214,7 @@ pub(super) fn sanitize(
     let mut before = tags(data)?;
     let sources = rendering_sources(data, kind, &mut before)?;
     let exif = rendering_exif(&before, &sources)?;
-    let mime = if kind == FileType::Heif && before.iter().any(|tag| tag.name == "CompatibleBrands"
-        && matches!(&tag.raw_value, exiftool_rs::Value::List(values) if values.iter().any(|value|
-            matches!(value, exiftool_rs::Value::String(brand) if matches!(brand.as_str(), "heic" | "heix" | "hevc" | "hevx"))))) {
-        "image/heic"
-    } else { kind.mime_type() };
+    let mime = edited_mime(kind, &before);
     let output = match kind {
         FileType::Jpeg => {
             let jpeg = Jpeg::from_bytes(data.to_vec().into())?;
@@ -265,6 +261,22 @@ pub(super) fn sanitize(
         mime,
     })
 }
+fn edited_mime(kind: FileType, before: &[Tag]) -> &'static str {
+    // HEIF container identity alone does not imply HEIC. Compatible codec
+    // brands refine the canonical MIME without overriding other raster kinds.
+    if kind == FileType::Heif
+        && before.iter().any(|tag| {
+            tag.name == "CompatibleBrands"
+                && matches!(&tag.raw_value, exiftool_rs::Value::List(values) if values.iter().any(|value|
+                    matches!(value, exiftool_rs::Value::String(brand) if matches!(brand.as_str(), "heic" | "heix" | "hevc" | "hevx"))))
+        })
+    {
+        "image/heic"
+    } else {
+        kind.mime_type()
+    }
+}
+
 fn edit_heif(source: &[u8], tiff: &[u8]) -> Result<Vec<u8>, Failure> {
     let mut exif = vec![0, 0, 0, 0];
     exif.extend_from_slice(tiff);
@@ -355,6 +367,19 @@ fn edit_gif(source: &[u8]) -> Result<Vec<u8>, Failure> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonical_mime_refinement_is_limited_to_heif_codec_brands() {
+        // Keep generic HEIF distinct from HEIC without allowing unrelated
+        // extracted metadata to override a byte-detected PNG identity.
+        let heic_tags = tags(include_bytes!(
+            "../image_sanitizer_fixtures/heic-original.heic"
+        ))
+        .expect("owned HEIC metadata");
+        assert_eq!(edited_mime(FileType::Heif, &heic_tags), "image/heic");
+        assert_eq!(edited_mime(FileType::Heif, &[]), "image/heif");
+        assert_eq!(edited_mime(FileType::Png, &heic_tags), "image/png");
+    }
 
     #[test]
     fn privacy_verification_rejects_original_private_metadata() {
