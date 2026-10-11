@@ -322,6 +322,48 @@ mod tests {
     }
 
     #[test]
+    fn recognized_non_raster_preserves_bytes_unless_claimed_as_raster() {
+        // Recognized attachment formats must not enter raster editing, but a
+        // false raster claim must still fail closed rather than pass through.
+        let pdf = b"%PDF-1.7\nattachment bytes owner@example.test\n%%EOF\n";
+        assert!(matches!(
+            sanitize(pdf, false, pdf.len()),
+            Ok(EditedBytes::Passthrough(bytes)) if bytes == pdf
+        ));
+        assert!(matches!(
+            sanitize(pdf, true, pdf.len()),
+            Err(NativeImageError::InvalidImage("unsupported raster"))
+        ));
+    }
+
+    #[test]
+    fn edited_container_expansion_respects_the_same_size_limit() {
+        // A valid received image at the limit can grow when rendering EXIF is
+        // regenerated. Expanded output must be rejected before durable identity.
+        let mut png = img_parts::png::Png::from_bytes(
+            include_bytes!("../image_sanitizer_fixtures/png-original.png")
+                .as_slice()
+                .into(),
+        )
+        .expect("owned PNG");
+        png.chunks_mut().retain(|chunk| {
+            !matches!(
+                &chunk.kind(),
+                b"eXIf" | b"tEXt" | b"zTXt" | b"iTXt" | b"tIME"
+            )
+        });
+        let input = png.encoder().bytes();
+        assert!(matches!(
+            sanitize(&input, false, input.len()),
+            Err(NativeImageError::FileTooLarge)
+        ));
+        assert!(matches!(
+            sanitize(&input, false, input.len() + 1024),
+            Ok(EditedBytes::Image { bytes, mime: "image/png" }) if bytes.len() > input.len()
+        ));
+    }
+
+    #[test]
     fn byte_detected_png_is_sanitized_without_a_raster_claim() {
         // Ingress filenames and MIME claims must not let private raster metadata
         // bypass editing. The owned fixture contains conventional private tags.

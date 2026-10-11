@@ -351,3 +351,51 @@ fn edit_gif(source: &[u8]) -> Result<Vec<u8>, Failure> {
     output.extend_from_slice(&source[start..pos]);
     Ok(output)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn privacy_verification_rejects_original_private_metadata() {
+        // Successful editing alone is insufficient: the independent post-edit
+        // verifier must reject an original image still carrying private tags.
+        assert!(matches!(
+            verify_clean(include_bytes!(
+                "../image_sanitizer_fixtures/png-original.png"
+            )),
+            Err(Failure::InvalidImage(
+                "native post-edit privacy verification failed"
+            ))
+        ));
+    }
+
+    #[test]
+    fn orientation_outside_rendering_domain_is_rejected() {
+        // A primary orientation must be a real rendering instruction, not an
+        // out-of-range value silently converted into the default orientation.
+        for value in [0_u16, 9] {
+            let tiff = exif_writer::build_exif(
+                &[IfdEntry {
+                    tag: 0x0112,
+                    format: ExifFormat::Short,
+                    data: value.to_le_bytes().to_vec(),
+                }],
+                &[],
+                &[],
+                ByteOrderMark::LittleEndian,
+            )
+            .expect("well-framed primary EXIF");
+            let before = tags(&tiff).expect("read primary orientation");
+            assert!(
+                before
+                    .iter()
+                    .any(|tag| tag.name == "Orientation" && tag.group.family1 == "IFD0")
+            );
+            assert!(matches!(
+                orientation_exif(&before),
+                Err(Failure::InvalidImage("invalid orientation"))
+            ));
+        }
+    }
+}
