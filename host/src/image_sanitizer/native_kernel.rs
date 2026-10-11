@@ -215,7 +215,14 @@ pub(super) fn sanitize(
     let sources = rendering_sources(data, kind, &mut before)?;
     let exif = rendering_exif(&before, &sources)?;
     let mime = edited_mime(kind, &before);
-    let output = match kind {
+    let output = edit_container(data, kind, exif)?;
+    checked_output(output, kind, mime, max_bytes)
+}
+
+fn edit_container(data: &[u8], kind: FileType, exif: Vec<u8>) -> Result<Vec<u8>, Failure> {
+    // Editing preserves encoded raster data; validation of the resulting
+    // identity, size and privacy remains a separate mandatory phase.
+    Ok(match kind {
         FileType::Jpeg => {
             let jpeg = Jpeg::from_bytes(data.to_vec().into())?;
             if jpeg.segment_by_marker(0xda).is_none() || !data.ends_with(&[0xff, 0xd9]) {
@@ -248,7 +255,15 @@ pub(super) fn sanitize(
         FileType::Gif => edit_gif(data)?,
         FileType::Heif => edit_heif(data, &exif)?,
         _ => return Err("unreachable covered format dispatch".into()),
-    };
+    })
+}
+
+fn checked_output(
+    output: Vec<u8>,
+    kind: FileType,
+    mime: &'static str,
+    max_bytes: usize,
+) -> Result<Outcome, Failure> {
     if output.len() > max_bytes {
         return Err(Failure::FileTooLarge);
     }
@@ -367,6 +382,29 @@ fn edit_gif(source: &[u8]) -> Result<Vec<u8>, Failure> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editing_dispatch_rejects_formats_outside_the_covered_raster_set() {
+        // The editor's own boundary must reject accidental dispatch of a
+        // passthrough format instead of rewriting or returning its bytes.
+        assert!(matches!(
+            edit_container(b"<svg/>", FileType::Svg, Vec::new()),
+            Err(Failure::InvalidImage("unreachable covered format dispatch"))
+        ));
+    }
+
+    #[test]
+    fn post_edit_validation_rejects_changed_identity_before_privacy_check() {
+        // A structurally valid PNG cannot certify a JPEG identity. Use the
+        // original private fixture so MIME rejection cannot be confused with
+        // the later, independently enforced privacy rejection.
+        let png = include_bytes!("../image_sanitizer_fixtures/png-original.png").to_vec();
+        let limit = png.len();
+        assert!(matches!(
+            checked_output(png, FileType::Jpeg, "image/jpeg", limit),
+            Err(Failure::InvalidImage("edited MIME changed"))
+        ));
+    }
 
     #[test]
     fn canonical_mime_refinement_is_limited_to_heif_codec_brands() {
