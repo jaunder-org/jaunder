@@ -243,7 +243,7 @@ impl ImageSanitizer {
         self.owners
             .spawn(move |done| {
                 let reaped = Arc::new(AtomicBool::new(true));
-                let _permit = owner_registry::PermitOwner::new(permit, done, reaped.clone());
+                let permit_owner = owner_registry::PermitOwner::new(permit, done, reaped.clone());
                 let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     supervision::run(
                         &executable,
@@ -260,6 +260,9 @@ impl ImageSanitizer {
                         payload.as_ref().into(),
                     ))),
                 };
+                // Publish completion only after releasing confirmed-reaped capacity,
+                // so a resumed caller cannot observe an unsettled resource guard.
+                drop(permit_owner);
                 // A dropped receiver means the request/runtime is gone. The child is
                 // already reaped; explicitly close any completed private output.
                 match sender.send(result) {

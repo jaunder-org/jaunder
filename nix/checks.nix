@@ -2214,6 +2214,7 @@ static-code =
                 "csr"
                 "host"
                 "test-support"
+                "third-party/little-exif"
                 "public"
                 "tools"
                 "end2end"
@@ -2231,6 +2232,8 @@ static-code =
         assert !(staticCodeSourceFilter "/source/xtask/src/lib.rs" "regular");
         assert (staticCodeSourceFilter "/source/testdata/theme-repository/minimal/preview.png" "regular");
         assert !(staticCodeSourceFilter "/source/testdata/unrelated.png" "regular");
+        assert staticCodeSourceFilter "/source/third-party/little-exif/src/lib.rs" "regular";
+        assert !(staticCodeSourceFilter "/source/third-party/unrelated/src/lib.rs" "regular");
         staticCodeSourceFilter;
     };
   in
