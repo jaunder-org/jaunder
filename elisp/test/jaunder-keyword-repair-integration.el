@@ -47,6 +47,25 @@
     (should (string-match "/\\([0-9]+\\)/?\\'" location))
     (match-string 1 location)))
 
+(defun jaunder-keyword-repair-live--failure-context (condition)
+  "Describe unexpected CONDITION without source text, credentials or URLs."
+  (let* ((source (jaunder-keyword-repair-error-source condition))
+         (pe (seq-find #'plz-error-p (cdr source)))
+         (curl (and pe (plz-error-curl-error pe))))
+    (format "repair preview: stage=%S source-type=%S numeric-detail=%S curl-code=%S"
+            (plist-get (cdr condition) :stage) (car-safe source)
+            (when (numberp (cadr source)) (cadr source))
+            (cond ((numberp curl) curl)
+                  ((and (consp curl) (numberp (car curl))) (car curl))))))
+
+(defun jaunder-keyword-repair-live--preview (root)
+  "Preview ROOT, retaining redacted source diagnostics on unexpected failure."
+  (condition-case condition
+      (jaunder-keyword-repair-preview root)
+    (jaunder-keyword-repair-preview-error
+     (ert-info ((jaunder-keyword-repair-live--failure-context condition))
+       (signal (car condition) (cdr condition))))))
+
 (defun jaunder-keyword-repair-live--read (id)
   "Read persisted Member ID through authenticated transport."
   (let ((response (jaunder--http-request "GET" (jaunder--member-url id))))
@@ -117,7 +136,7 @@
                     (lambda (method url &rest args)
                       (unless (equal method "GET") (setq writes (1+ writes)))
                       (apply real method url args))))
-           (setq report (jaunder-keyword-repair-preview root))
+           (setq report (jaunder-keyword-repair-live--preview root))
            (should (= writes 0))
            (should (equal (plist-get (car (plist-get (jaunder-keyword-repair-report-data report) :rows)) :additions)
                           '("100-bullets" "james-s-a-corey")))
@@ -131,7 +150,7 @@
                             (jaunder-keyword-repair-live--preserved after)))
              (should (equal (sort (copy-sequence (cdr (assq 'categories fields))) #'string<)
                             '("100-bullets" "RUST" "james-s-a-corey"))))
-           (let ((fresh (jaunder-keyword-repair-preview root)))
+           (let ((fresh (jaunder-keyword-repair-live--preview root)))
              (should (eq (plist-get (car (plist-get (jaunder-keyword-repair-report-data fresh) :rows)) :status) 'unchanged))
              (should (eq (plist-get (car (plist-get (jaunder-keyword-repair-live--apply fresh) :results)) :status) 'unchanged)))
            (should (= writes 1)))
@@ -146,7 +165,7 @@
             (before (jaunder-keyword-repair-live--read id))
             (buffer (jaunder-keyword-repair-live--local root id))
             (snapshot (jaunder-keyword-repair-live--snapshot buffer))
-            (report (jaunder-keyword-repair-preview root))
+            (report (jaunder-keyword-repair-live--preview root))
             (real (symbol-function 'jaunder--http-request)))
        (let ((row (car (plist-get (jaunder-keyword-repair-report-data report) :rows))))
          (should (eq (plist-get row :status) 'blocked))
@@ -166,7 +185,7 @@
      (let* ((id (jaunder-keyword-repair-live--create "Repair boundary" "text/org" "2024-01-02T03:04:05Z"))
             (buffer (jaunder-keyword-repair-live--local root id))
             (snapshot (jaunder-keyword-repair-live--snapshot buffer))
-            (report (jaunder-keyword-repair-preview root))
+            (report (jaunder-keyword-repair-live--preview root))
             (real (symbol-function 'jaunder--http-request))
             (writes 0) concurrent result)
        (cl-labels ((update ()
@@ -198,7 +217,7 @@
                (should (equal (jaunder-keyword-repair-error-source (cons 'error result))
                               '(error "Synthetic lost response after commit")))
                (should (eq (plist-get (car (plist-get (jaunder-keyword-repair-report-data
-                                                       (jaunder-keyword-repair-preview root)) :rows)) :status) 'unchanged)))
+                                                       (jaunder-keyword-repair-live--preview root)) :rows)) :status) 'unchanged)))
            (should (eq (plist-get result :status) 'blocked))
            (when (eq mode 'race) (should (= (plist-get result :http-status) 412)))
            (should (equal (plist-get concurrent :body) (plist-get (jaunder-keyword-repair-live--read id) :body))))
@@ -208,6 +227,27 @@
                       (should (equal method "GET")) (apply real method url args))))
            (should (eq (plist-get (car (plist-get (jaunder-keyword-repair-live--apply report) :results)) :status) 'blocked)))
          (should (equal snapshot (jaunder-keyword-repair-live--snapshot buffer))))))))
+
+(ert-deftest jaunder-keyword-repair-live-redacts-preview-failure-context ()
+  "Unexpected preview failures retain their type but never expose source text."
+  (dolist (source (list '(file-error "sensitive path" "sensitive password")
+                        (list 'plz-curl-error "sensitive transport"
+                              (make-plz-error :curl-error '(28 . "sensitive payload")))))
+    (let* ((handle (make-symbol "redacted-source"))
+           (condition (list 'jaunder-keyword-repair-preview-error
+                            :stage 'member-read :source handle)))
+      (put handle 'jaunder-source-condition source)
+      (let ((context (jaunder-keyword-repair-live--failure-context condition)))
+        (should (string-match-p "stage=member-read" context))
+        (should (string-match-p (format "source-type=%s" (car source)) context))
+        (should (string-match-p (if (eq (car source) 'plz-curl-error)
+                                    "curl-code=28" "curl-code=nil") context))
+        (should-not (string-match-p "sensitive" context)))
+      (cl-letf (((symbol-function 'jaunder-keyword-repair-preview)
+                 (lambda (_) (signal (car condition) (cdr condition)))))
+        (should (equal (should-error (jaunder-keyword-repair-live--preview "unused")
+                                     :type 'jaunder-keyword-repair-preview-error)
+                       condition))))))
 
 (ert-deftest jaunder-keyword-repair-live-preserves-reconciled-server-ahead ()
   "Repair never pushes the older body of a genuinely reconciled server-ahead Post."
@@ -261,7 +301,7 @@
        (let ((before (jaunder-keyword-repair-live--read id))
              (snapshot (jaunder-keyword-repair-live--snapshot buffer)))
          (should (eq (plist-get (car (plist-get (jaunder-keyword-repair-live--apply
-                                                 (jaunder-keyword-repair-preview root)) :results)) :status) 'repaired))
+                                                 (jaunder-keyword-repair-live--preview root)) :results)) :status) 'repaired))
          (should (equal (jaunder-keyword-repair-live--preserved before)
                         (jaunder-keyword-repair-live--preserved (jaunder-keyword-repair-live--read id))))
          (should (equal snapshot (jaunder-keyword-repair-live--snapshot buffer))))))))
