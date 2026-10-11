@@ -160,13 +160,21 @@
   "Selected ineligible real Members remain byte-for-byte unchanged."
   (dolist (draft '(t nil))
     (jaunder-keyword-repair-live--with-root
+     ;; A scheduled Member exercises the same non-draft cap without publishing
+     ;; hundreds of Tag feed surfaces into the shared server's background work.
      (let* ((tags (unless draft (mapcar (lambda (n) (format "tag%d" n)) (number-sequence 1 256))))
-            (id (jaunder-keyword-repair-live--create "Blocked repair" "text/org" nil draft tags))
+            (published (unless draft "2099-01-02T03:04:05Z"))
+            (id (jaunder-keyword-repair-live--create "Blocked repair" "text/org" published draft tags))
             (before (jaunder-keyword-repair-live--read id))
             (buffer (jaunder-keyword-repair-live--local root id))
             (snapshot (jaunder-keyword-repair-live--snapshot buffer))
             (report (jaunder-keyword-repair-live--preview root))
             (real (symbol-function 'jaunder--http-request)))
+       (unless draft
+         (let ((fields (jaunder--harvest-response-fields (plist-get before :body))))
+           (should (= (length (cdr (assq 'categories fields))) 256))
+           (should (equal (date-to-time (cdr (assq 'published fields)))
+                          (date-to-time published)))))
        (let ((row (car (plist-get (jaunder-keyword-repair-report-data report) :rows))))
          (should (eq (plist-get row :status) 'blocked))
          (should (eq (plist-get row :reason) (if draft 'remote-draft 'over-tag-cap))))
