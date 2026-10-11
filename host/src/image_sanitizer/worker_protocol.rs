@@ -454,6 +454,183 @@ mod tests {
     }
 
     #[test]
+    fn native_and_spool_failure_projections_preserve_safe_classifications() {
+        // Different native source types must remain distinguishable remotely,
+        // while neither diagnostic strings nor image fields enter the wire.
+        let marker = "owner@example.test GPS-private-value";
+        let cases = [
+            (
+                WorkerError::Io(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    marker,
+                )),
+                serde_json::json!({"Io": {"kind": "PermissionDenied", "os_code": null}}),
+            ),
+            (WorkerError::InvalidSpool, serde_json::json!("InvalidSpool")),
+            (WorkerError::InvalidLimit, serde_json::json!("InvalidLimit")),
+            (
+                WorkerError::Native(NativeImageError::FileTooLarge),
+                serde_json::json!("FileTooLarge"),
+            ),
+            (
+                WorkerError::Native(NativeImageError::InvalidImage(marker)),
+                serde_json::json!("InvalidImage"),
+            ),
+            (
+                WorkerError::Native(NativeImageError::Io(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    marker,
+                ))),
+                serde_json::json!({"NativeIo": {"kind": "PermissionDenied", "os_code": null}}),
+            ),
+            (
+                WorkerError::Native(NativeImageError::Container(
+                    img_parts::Error::WrongSignature,
+                )),
+                serde_json::json!({"Container": "WrongSignature"}),
+            ),
+            (
+                WorkerError::Native(NativeImageError::Container(img_parts::Error::BadCRC)),
+                serde_json::json!({"Container": "BadCrc"}),
+            ),
+            (
+                WorkerError::Native(NativeImageError::Container(img_parts::Error::Truncated)),
+                serde_json::json!({"Container": "Truncated"}),
+            ),
+            (
+                WorkerError::Native(NativeImageError::Integer(
+                    u8::try_from(256_u16).expect_err("bounded integer failure"),
+                )),
+                serde_json::json!("Integer"),
+            ),
+            (
+                WorkerError::Native(NativeImageError::Field(
+                    <[u8; 4]>::try_from(b"x".as_slice()).expect_err("truncated fixed-width field"),
+                )),
+                serde_json::json!("Field"),
+            ),
+        ];
+        for (error, expected) in cases {
+            let reply = Reply::Failed(Failure::from(&error));
+            let bytes = encode(&reply).expect("safe failure projection");
+            assert!(!String::from_utf8_lossy(&bytes).contains(marker));
+            assert!(!format!("{reply:?}").contains(marker));
+            let decoded = decode(&bytes).expect("safe failure schema");
+            assert_eq!(
+                serde_json::to_value(decoded).expect("typed failure"),
+                serde_json::json!({"Failed": expected})
+            );
+        }
+    }
+
+    #[test]
+    fn gif_failure_projection_preserves_decoder_kind_and_nested_io_only() {
+        // Error classification must not flatten GIF decoder failures or copy
+        // private library messages into the supervisor's typed source chain.
+        let marker = "owner@example.test GPS-private-value";
+        let Err(format_error) = gif::DecodeOptions::new().read_info(b"not a GIF at all".as_slice())
+        else {
+            panic!("invalid GIF header was accepted");
+        };
+        let malformed_lzw = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x7c\x01\x00;";
+        let lzw_error = gif::DecodeOptions::new()
+            .read_info(malformed_lzw.as_slice())
+            .expect("well-framed GIF header")
+            .read_next_frame()
+            .expect_err("invalid LZW dictionary code");
+        assert!(matches!(format_error, gif::DecodingError::Format(_)));
+        assert!(matches!(lzw_error, gif::DecodingError::LzwError(_)));
+        for (error, kind, io) in [
+            (
+                gif::DecodingError::OutOfMemory,
+                "OutOfMemory",
+                serde_json::Value::Null,
+            ),
+            (
+                gif::DecodingError::MemoryLimit,
+                "MemoryLimit",
+                serde_json::Value::Null,
+            ),
+            (
+                gif::DecodingError::DecoderNotFound,
+                "DecoderNotFound",
+                serde_json::Value::Null,
+            ),
+            (
+                gif::DecodingError::EndCodeNotFound,
+                "EndCodeNotFound",
+                serde_json::Value::Null,
+            ),
+            (
+                gif::DecodingError::UnexpectedEof,
+                "UnexpectedEof",
+                serde_json::Value::Null,
+            ),
+            (format_error, "Format", serde_json::Value::Null),
+            (lzw_error, "Lzw", serde_json::Value::Null),
+            (
+                gif::DecodingError::Io(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    marker,
+                )),
+                "Io",
+                serde_json::json!({"kind": "PermissionDenied", "os_code": null}),
+            ),
+        ] {
+            let reply = Reply::Failed(Failure::from(&WorkerError::Native(NativeImageError::Gif(
+                error,
+            ))));
+            let bytes = encode(&reply).expect("bounded GIF failure");
+            assert!(!String::from_utf8_lossy(&bytes).contains(marker));
+            assert!(!format!("{reply:?}").contains(marker));
+            if let Reply::Failed(failure) = &reply {
+                assert!(!failure.to_string().contains(marker));
+            }
+            let decoded = decode(&bytes).expect("consistent GIF source schema");
+            assert_eq!(
+                serde_json::to_value(decoded).expect("GIF kind"),
+                serde_json::json!({"Failed": {"Gif": {"kind": kind, "io": io}}})
+            );
+        }
+    }
+
+    #[test]
+    fn rendering_integer_failures_keep_their_concrete_kind() {
+        // Preserve empty, invalid, overflowing and zero rendering values as
+        // distinct typed sources instead of flattening them into invalid image.
+        let cases = [
+            ("".parse::<u8>().expect_err("empty"), "Empty"),
+            (
+                "private-value".parse::<u8>().expect_err("invalid digit"),
+                "InvalidDigit",
+            ),
+            (
+                "256".parse::<u8>().expect_err("positive overflow"),
+                "PosOverflow",
+            ),
+            (
+                "-129".parse::<i8>().expect_err("negative overflow"),
+                "NegOverflow",
+            ),
+            (
+                "0".parse::<std::num::NonZeroU8>().expect_err("zero"),
+                "Zero",
+            ),
+        ];
+        for (error, expected) in cases {
+            let error = WorkerError::Native(NativeImageError::Number(error));
+            let reply = Reply::Failed(Failure::from(&error));
+            let bytes = encode(&reply).expect("rendering failure projection");
+            assert!(!String::from_utf8_lossy(&bytes).contains("private-value"));
+            let decoded = decode(&bytes).expect("rendering failure schema");
+            assert_eq!(
+                serde_json::to_value(decoded).expect("rendering kind"),
+                serde_json::json!({"Failed": {"Number": expected}})
+            );
+        }
+    }
+
+    #[test]
     fn worker_completions_round_trip_mime_size_and_passthrough_identity() {
         // A successful worker cannot change the byte-accounting facts when its
         // completion is projected into the supervisor's private reply schema.
