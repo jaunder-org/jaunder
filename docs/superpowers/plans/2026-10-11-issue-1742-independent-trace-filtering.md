@@ -17,7 +17,7 @@ deployment.
 
 ## Task outline
 
-- [ ] **0. Lock down the original working-tree middleware regression.**
+- [x] **0. Lock down the original working-tree middleware regression.**
   - Prerequisite to every behavior change: exercise the current branch's real
     request middleware and original subscriber composition with OTLP enabled and
     quiet log settings. The regression expects no false assignment warning and
