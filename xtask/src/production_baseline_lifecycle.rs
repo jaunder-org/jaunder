@@ -1607,7 +1607,7 @@ fn sha256_file(path: &Path) -> Result<String> {
 }
 fn baseline_command(package: &PackageIdentity, args: &str) -> String {
     format!(
-        "export $(systemctl show --property=Environment --value jaunder.service | tr ' ' '\\n' | grep '^JAUNDER_'); export JAUNDER_STORAGE_PATH=/var/lib/jaunder/data; {} {args}",
+        "export $(systemctl show --property=Environment --value jaunder.service | tr ' ' '\\n' | grep '^JAUNDER_'); export JAUNDER_STORAGE_PATH=/var/lib/jaunder/data; runuser -u \"$(systemctl show --property=User --value jaunder.service)\" -- {} {args}",
         Path::new(&package.output_path)
             .join("bin/jaunder")
             .display()
@@ -1894,6 +1894,8 @@ mod tests {
         }
         let ordinary = baseline_command(&package, "backup");
         assert!(ordinary.contains("Environment --value jaunder.service"));
+        assert!(ordinary.contains("runuser -u"));
+        assert!(ordinary.contains("systemctl show --property=User --value jaunder.service"));
         assert!(!ordinary.contains("systemd-run"));
         assert!(!ordinary.contains("jaunder-restore-env"));
         let restore = restore_service_command(&package, "restore /var/lib/jaunder/fixture.tar.gz");
