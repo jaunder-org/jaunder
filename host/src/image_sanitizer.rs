@@ -749,6 +749,72 @@ mod tests {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).expect("executable");
         directory
     }
+    #[tokio::test]
+    async fn readiness_rejects_a_successful_worker_that_keeps_original_probe_bytes() {
+        let size = include_bytes!("image_sanitizer_fixtures/png-original.png").len();
+        let tool = script(&format!(
+            "#!/bin/sh\nprintf 'JAUNDER-IMAGE-1\\0{{\"Image\":{{\"mime\":\"image/png\",\"size\":{size}}}}}'\n"
+        ));
+        let sanitizer = ImageSanitizer::new(tool.path().join("tool.sh")).expect("test worker");
+        assert!(matches!(
+            sanitizer.check_runtime().await,
+            Err(ImageSanitizerError::InvalidWorkerResponse)
+        ));
+    }
+
+    #[tokio::test]
+    async fn image_assertion_helper_rejects_real_svg_passthrough_and_drops_private_input() {
+        let sanitizer = ImageSanitizer::new(editor_runtime()).expect("native worker");
+        let input = NamedTempFile::new().expect("private SVG input");
+        let path = input.path().to_owned();
+        std::fs::write(&path, b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>").expect("SVG bytes");
+        let result = sanitizer
+            .sanitize(input, &test_filename(), None, max_file_size())
+            .await
+            .expect("excluded SVG remains passthrough");
+        assert!(
+            image_variant(result).is_none(),
+            "passthrough cannot satisfy an image assertion"
+        );
+        assert!(
+            !path.exists(),
+            "rejected test outcome releases private input"
+        );
+    }
+
+    #[tokio::test]
+    async fn independent_observer_failure_is_not_accepted_as_success() {
+        let directory = tempfile::tempdir().expect("observer test root");
+        let output = observe_tags(&["-j"], &directory.path().join("missing-image.png"))
+            .await
+            .expect("independent observer launches");
+        assert!(
+            !output.0.status.success(),
+            "missing input must fail independently"
+        );
+        assert!(matches!(output.successful(), Err(error)
+            if error.kind() == std::io::ErrorKind::Other
+            && error.to_string() == "independent observer failed"));
+    }
+
+    #[tokio::test]
+    async fn pid_observation_rejects_unexpected_filesystem_failure() {
+        let directory = tempfile::tempdir().expect("PID observation root");
+        std::fs::create_dir(directory.path().join("pid")).expect("non-file PID obstruction");
+        let failure = tokio::spawn(async move { tool_pid(directory.path()).await })
+            .await
+            .expect_err("unexpected filesystem failure must not become a retry");
+        assert!(failure.is_panic(), "PID observation must fail closed");
+        let payload = failure.into_panic();
+        let message = payload
+            .downcast_ref::<String>()
+            .expect("formatted PID observation panic");
+        assert!(
+            message.starts_with("PID observation failed:"),
+            "unexpected filesystem errors must fail immediately, not time out: {message}"
+        );
+    }
+
     fn blocked_tool() -> tempfile::TempDir {
         let directory = script("#!/bin/sh\nexit 99\n");
         std::fs::write(
