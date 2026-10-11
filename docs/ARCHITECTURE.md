@@ -2160,7 +2160,7 @@ how-to lives in [observability.md](observability.md).
 ### Traces
 
 The backend emits spans via `tracing` + `tracing-opentelemetry`; shared
-host-process tracer/meter setup and slow-span detection live in
+host-process OTLP provider setup and slow-span detection live in
 `host::telemetry` ([ADR-0011](adr/0011-unified-observability.md),
 [ADR-0058](adr/0058-host-crate-layering.md)). The server, production CLI
 commands, and `test-support` all hold the same `host::telemetry` guard for
@@ -2169,7 +2169,8 @@ HTTP tracing and e2e diagnostics. `host::telemetry::init_tracing` installs the
 OTLP tracer and meter only when `JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT` (fallback
 `OTEL_EXPORTER_OTLP_ENDPOINT`) is set; without an endpoint neither OTLP signal
 exports, while local logs and diagnostic span context remain available.
-Exporter-setup failure is non-fatal. `with_http_observability`
+Ordinary logging currently uses stdout even with OTLP configured, and
+exporter-setup failure is non-fatal. `with_http_observability`
 (`server/src/observability/http.rs`) layers the per-request tracing span onto
 the router, together with a `tower-http` `x-request-id` that it mints when
 absent and propagates onto the response. Inbound W3C `traceparent` headers are
@@ -2386,6 +2387,40 @@ charged to the harness (`frame_skew_ms` in `xtask/src/traces/boot_phases.rs`).
 The two frames differ by cross-process, plausibly engine-asymmetric lag, so
 mixing them would charge harness IPC to the app's boot phases.
 
+### Logs
+
+Ordinary process logs currently use stdout formatting. The supported NixOS stack
+collects the `jaunder.service` journal, parses its JSON records and forwards
+them to VictoriaLogs; the application has no native OTLP log provider
+([single-host stack](adr/0196-single-host-nixos-deployment-stack.md)).
+Subscriber filtering is currently global, including its intersection with WARN+
+diagnostic capture. Independent per-sink filtering is not yet implemented.
+
+#### Proposed direction â€” native OTLP logs (not yet implemented)
+
+The [native OTLP process logs proposal](adr/drafts/native-otlp-process-logs.md)
+will route ordinary application logs through the same configured Collector as
+traces and metrics; the Collector owns routing to VictoriaLogs. Without OTLP
+they remain on stdout in the configured format. The ordinary-log policy
+(`JAUNDER_LOG_FILTER`, then `RUST_LOG`, then ordinary/verbose defaults including
+storage INFO) governs either active log sink; native logs have no separate
+filter and do not inherit `JAUNDER_TRACE_FILTER`. The independent filtering
+foundation is owned by
+[#1742](https://github.com/jaunder-org/jaunder/issues/1742); log/trace
+disablement must not disable the other signal, metrics or independent
+WARN+/panic capture. Explicit messages become human-readable record bodies;
+severity and deliberately admitted structured fields remain separate. Safe
+target and request-path context are retained, while raw span stacks and
+`error.span_trace` are excluded. Correlation follows the event's resolved
+parent, including explicit parent/root semantics; absent context does not
+acquire fabricated IDs. SDK and exporter failure events use a bounded, redacted
+local stderr path and cannot feed the OTLP log exporter, even under permissive
+user filters. CLI result output and server-scoped E2E diagnostic capture remain
+independent. The proposal will extend process-guard ownership and flushing to
+installed log providers. Its supported stack will receive logs through OTLP and
+remove Jaunder journal collection/JSON parsing. These are proposed contracts,
+not claims that either #1742 or #1743 has been implemented.
+
 ### Metrics
 
 The OTLP `MeterProvider` is installed by `host::telemetry` next to the tracer,
@@ -2398,10 +2433,10 @@ enums, or a `&'static str` drawn from a closed set the call site cannot widen â€
 `atompub_request`'s `op` comes from a matched-route-plus-method lookup
 (`server/src/atompub/router.rs:61`), not from an enum. Either way no call site
 can attach caller-supplied text as a label. `init_tracing` returns a
-`#[must_use]` `TelemetryGuard` whose `Drop` force-flushes both providers on
-every exit path, so one-shot CLI commands export buffered telemetry instead of
-silently dropping it; one binding at the `run()` dispatch boundary covers every
-command, and export failures are logged, never propagated
+`#[must_use]` `TelemetryGuard` whose `Drop` flushes both current providers on
+ordinary exit paths, so one-shot CLI commands export buffered traces and
+metrics; one binding at the `run()` dispatch boundary covers every command.
+Export failures are logged, never propagated
 ([ADR-0011](adr/0011-unified-observability.md)).
 
 Serve-only saturation gauges are registered in `host::metrics` as asynchronous
@@ -2447,10 +2482,13 @@ plus `error.disposition = boundary | swallowed` and
 does not carry `error.span_trace`. `server_boundary` (`web/src/error/server.rs`)
 calls it with `boundary/server`, then performs only the outward wire projection
 and returns the masked public error. Which fn failed is not a field: the event
-is raised inside the enclosing `web.<vertical>.<ident>` span, and both
-configured sinks render span context
+is raised inside the enclosing `web.<vertical>.<ident>` span. The stdout
+formatters render that span context
 ([ADR-0011](adr/0011-unified-observability.md),
-[ADR-0017](adr/0017-error-handling-and-the-public-boundary.md)).
+[ADR-0017](adr/0017-error-handling-and-the-public-boundary.md)). The proposed
+native OTLP log sink will use available trace/span correlation rather than
+raw-stack rendering and exclude `error.span_trace`
+([native OTLP process logs proposal](adr/drafts/native-otlp-process-logs.md)).
 
 An unexpected native failure that deliberately preserves the primary result goes
 through one `host::error` reporting interface, which couples the fixed warning,
