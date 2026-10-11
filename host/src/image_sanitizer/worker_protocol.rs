@@ -524,14 +524,23 @@ mod tests {
     }
 
     #[test]
+    fn encoding_rejects_an_oversized_typed_reply() {
+        let reply = Reply::Image {
+            mime: "x".repeat(MAX_REPLY_BYTES),
+            size: 0,
+        };
+        assert!(matches!(encode(&reply), Err(ProtocolError::TooLarge)));
+    }
+
+    #[test]
     fn gif_failure_projection_preserves_decoder_kind_and_nested_io_only() {
         // Error classification must not flatten GIF decoder failures or copy
         // private library messages into the supervisor's typed source chain.
         let marker = "owner@example.test GPS-private-value";
-        let Err(format_error) = gif::DecodeOptions::new().read_info(b"not a GIF at all".as_slice())
-        else {
-            panic!("invalid GIF header was accepted");
-        };
+        let format_error = gif::DecodeOptions::new()
+            .read_info(b"not a GIF at all".as_slice())
+            .err()
+            .expect("invalid GIF header was accepted");
         let malformed_lzw = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x7c\x01\x00;";
         let lzw_error = gif::DecodeOptions::new()
             .read_info(malformed_lzw.as_slice())

@@ -70,6 +70,34 @@ pub fn sanitize(
 mod tests {
     use super::*;
 
+    fn expect_image(outcome: EditedBytes) -> (Vec<u8>, &'static str) {
+        match outcome {
+            EditedBytes::Image { bytes, mime } => (bytes, mime),
+            EditedBytes::Passthrough(_) => panic!("expected an edited raster, not passthrough"),
+        }
+    }
+
+    fn expect_passthrough(outcome: EditedBytes) -> Vec<u8> {
+        match outcome {
+            EditedBytes::Passthrough(bytes) => bytes,
+            EditedBytes::Image { .. } => panic!("expected passthrough, not an edited raster"),
+        }
+    }
+
+    #[test]
+    fn outcome_assertions_reject_the_opposite_real_sanitization_result() {
+        let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>";
+        let passthrough = sanitize(svg, true, 16_777_216).expect("excluded SVG");
+        assert!(std::panic::catch_unwind(|| expect_image(passthrough)).is_err());
+        let image = sanitize(
+            include_bytes!("../image_sanitizer_fixtures/png-original.png"),
+            false,
+            16_777_216,
+        )
+        .expect("covered PNG");
+        assert!(std::panic::catch_unwind(|| expect_passthrough(image)).is_err());
+    }
+
     #[test]
     fn document_xmp_orientation_is_preserved_as_primary_exif() {
         use std::path::Path;
@@ -98,11 +126,8 @@ mod tests {
                 .iter()
                 .any(|tag| tag.name == "Orientation" && tag.group.family1 == "IFD0")
         );
-        let EditedBytes::Image { bytes, .. } =
-            sanitize(&input, true, 16_777_216).expect("primary XMP orientation")
-        else {
-            panic!("PNG passed through");
-        };
+        let (bytes, _) =
+            expect_image(sanitize(&input, true, 16_777_216).expect("primary XMP orientation"));
         let after = reader
             .extract_info_from_bytes(&bytes, Path::new("private"))
             .expect("edited orientation");
@@ -138,25 +163,24 @@ mod tests {
         let tags = exiftool_rs::ExifTool::new()
             .extract_info_from_bytes(&input, Path::new("private"))
             .expect("control metadata");
+        let orientation_groups = tags
+            .iter()
+            .filter(|tag| tag.name == "Orientation")
+            .map(|tag| &tag.group.family1)
+            .collect::<Vec<_>>();
         assert!(
             tags.iter()
                 .any(|tag| tag.name == "Orientation" && tag.group.family1 == "IFD1"),
-            "control orientation groups: {:?}",
-            tags.iter()
-                .filter(|tag| tag.name == "Orientation")
-                .map(|tag| &tag.group.family1)
-                .collect::<Vec<_>>()
+            "control orientation groups: {orientation_groups:?}"
         );
         assert!(
             !tags
                 .iter()
                 .any(|tag| tag.name == "Orientation" && tag.group.family1 == "IFD0")
         );
-        let EditedBytes::Image { bytes, .. } =
-            sanitize(&input, true, 16_777_216).expect("sanitize thumbnail-only orientation")
-        else {
-            panic!("JPEG passed through");
-        };
+        let (bytes, _) = expect_image(
+            sanitize(&input, true, 16_777_216).expect("sanitize thumbnail-only orientation"),
+        );
         let tags = exiftool_rs::ExifTool::new()
             .extract_info_from_bytes(&bytes, Path::new("private"))
             .expect("edited metadata");
@@ -203,11 +227,9 @@ mod tests {
     #[test]
     fn byte_detected_svg_remains_passthrough_despite_a_raster_claim() {
         let data = b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>";
-        let EditedBytes::Passthrough(actual) =
-            sanitize(data, true, 16_777_216).expect("SVG is excluded from raster editing")
-        else {
-            panic!("SVG was edited")
-        };
+        let actual = expect_passthrough(
+            sanitize(data, true, 16_777_216).expect("SVG is excluded from raster editing"),
+        );
         assert_eq!(actual, data);
     }
 
@@ -217,11 +239,9 @@ mod tests {
             b"ordinary attachment".as_slice(),
             b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>".as_slice(),
         ] {
-            let EditedBytes::Passthrough(actual) =
-                sanitize(data, false, 16_777_216).expect("non-raster attachment")
-            else {
-                panic!("non-raster attachment was edited");
-            };
+            let actual = expect_passthrough(
+                sanitize(data, false, 16_777_216).expect("non-raster attachment"),
+            );
             assert_eq!(actual, data);
         }
     }
@@ -233,14 +253,14 @@ mod tests {
             sanitize(original, true, original.len() - 1),
             Err(NativeImageError::FileTooLarge)
         ));
-        let EditedBytes::Image { bytes, .. } = sanitize(
-            include_bytes!("../image_sanitizer_fixtures/hdr-signal.png"),
-            true,
-            16_777_216,
-        )
-        .expect("HDR control") else {
-            panic!("HDR PNG passed through");
-        };
+        let (bytes, _) = expect_image(
+            sanitize(
+                include_bytes!("../image_sanitizer_fixtures/hdr-signal.png"),
+                true,
+                16_777_216,
+            )
+            .expect("HDR control"),
+        );
         let mut tiny = img_parts::png::Png::from_bytes(bytes.into()).expect("edited PNG container");
         tiny.chunks_mut().retain(|chunk| chunk.kind() != *b"eXIf");
         let tiny = tiny.encoder().bytes();
@@ -303,19 +323,11 @@ mod tests {
             ),
         ];
         for (original, expected_mime) in fixtures {
-            let EditedBytes::Image { bytes, mime } =
-                sanitize(original, false, 16_777_216).expect("owned native image")
-            else {
-                panic!("owned {expected_mime} image was not edited");
-            };
+            let (bytes, mime) =
+                expect_image(sanitize(original, false, 16_777_216).expect("owned native image"));
             assert_eq!(mime, *expected_mime);
-            let EditedBytes::Image {
-                bytes: second,
-                mime: second_mime,
-            } = sanitize(&bytes, false, 16_777_216).expect("sanitized reupload")
-            else {
-                panic!("sanitized {mime} image lost its byte-detected type");
-            };
+            let (second, second_mime) =
+                expect_image(sanitize(&bytes, false, 16_777_216).expect("sanitized reupload"));
             assert_eq!(second_mime, mime);
             assert_eq!(second, bytes, "reupload identity changed for {mime}");
         }
@@ -368,20 +380,12 @@ mod tests {
         // Ingress filenames and MIME claims must not let private raster metadata
         // bypass editing. The owned fixture contains conventional private tags.
         let original = include_bytes!("../image_sanitizer_fixtures/png-original.png");
-        let EditedBytes::Image { bytes, mime } =
-            sanitize(original, false, 1_048_576).expect("covered PNG")
-        else {
-            panic!("detected PNG must not pass through unchanged");
-        };
+        let (bytes, mime) =
+            expect_image(sanitize(original, false, 1_048_576).expect("covered PNG"));
         assert_eq!(mime, "image/png");
         assert_ne!(bytes, original);
-        let EditedBytes::Image {
-            bytes: second,
-            mime: second_mime,
-        } = sanitize(&bytes, false, 1_048_576).expect("sanitized reupload")
-        else {
-            panic!("sanitized PNG must still detect as an image");
-        };
+        let (second, second_mime) =
+            expect_image(sanitize(&bytes, false, 1_048_576).expect("sanitized reupload"));
         assert_eq!(second_mime, mime);
         assert_eq!(second, bytes);
     }
