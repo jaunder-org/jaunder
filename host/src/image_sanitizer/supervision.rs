@@ -253,6 +253,53 @@ mod tests {
     }
 
     #[test]
+    fn spawn_failure_with_failed_unlink_preserves_both_concrete_sources() {
+        // No child exists after a real executable-open failure. Failed private
+        // cleanup must still preserve that primary I/O error and its own source.
+        let directory = tempfile::tempdir().expect("owned private root");
+        let input = NamedTempFile::new_in(directory.path()).expect("private spool");
+        let path = input.path().to_owned();
+        std::fs::remove_file(&path).expect("replace private pathname");
+        std::fs::create_dir(&path).expect("non-file unlink failure");
+        let (_cancel, canceled) = oneshot::channel();
+        let reaped = Arc::new(AtomicBool::new(true));
+        let error = run(
+            &directory.path().join("missing-worker"),
+            input,
+            false,
+            1024,
+            Instant::now() + super::super::PROCESSING_TIMEOUT,
+            canceled,
+            &reaped,
+        )
+        .expect_err("missing executable and obstructed cleanup");
+        assert!(
+            matches!(error, ImageSanitizerError::Cleanup { primary, source } if matches!(primary.as_ref(), ImageSanitizerError::Processing(error) if error.kind() == std::io::ErrorKind::NotFound) && source.kind() == std::io::ErrorKind::IsADirectory)
+        );
+        assert!(
+            reaped.load(Ordering::Acquire),
+            "no spawned child can retain capacity"
+        );
+        assert!(path.is_dir(), "failed unlink cannot claim removal");
+    }
+
+    #[test]
+    fn confirmed_spool_drop_does_not_hide_failed_unlink_state() {
+        // Test-owned directory obstruction forces a real cleanup failure. Drop
+        // exercises private reporting without claiming telemetry verification.
+        let directory = tempfile::tempdir().expect("owned private root");
+        let input = NamedTempFile::new_in(directory.path()).expect("private spool");
+        let path = input.path().to_owned();
+        std::fs::remove_file(&path).expect("replace private pathname");
+        std::fs::create_dir(&path).expect("non-file unlink failure");
+        drop(Spool {
+            file: Some(input),
+            reaped: Arc::new(AtomicBool::new(true)),
+        });
+        assert!(path.is_dir(), "failed unlink remains observable");
+    }
+
+    #[test]
     fn owner_unwinding_reaps_a_real_child_before_spool_and_capacity_release() {
         let input = NamedTempFile::new().expect("private spool");
         input

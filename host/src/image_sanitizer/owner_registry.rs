@@ -272,20 +272,37 @@ mod tests {
         let owners = Arc::new(Owners::new());
         let capacity = Arc::new(Semaphore::new(2));
         let mut tails = Vec::new();
+        let mut beginnings = Vec::new();
         let (ready, released) = mpsc::channel();
         for _ in 0..2 {
             let permit = capacity.clone().try_acquire_owned().expect("capacity");
             let (end, tail) = mpsc::channel();
             tails.push(end);
+            let (begin, admitted) = mpsc::channel();
+            beginnings.push(begin);
             let ready = ready.clone();
             owners
                 .spawn(move |done| {
                     let permit = PermitOwner::new(permit, done, Arc::new(AtomicBool::new(true)));
+                    admitted.recv().expect("both predecessors admitted");
                     drop(permit);
                     ready.send(()).expect("permit released");
                     tail.recv().expect("thread tail can finish independently");
                 })
                 .expect("predecessor");
+        }
+        // Keep both initial owners live until both handles are published.
+        // Otherwise first-owner readiness can make second admission correctly
+        // join its still-blocked tail before the test reaches tail release.
+        assert_eq!(capacity.available_permits(), 0);
+        assert!(
+            owners
+                .lock()
+                .iter()
+                .all(|slot| matches!(slot, Slot::Running(_)))
+        );
+        for begin in beginnings {
+            begin.send(()).expect("release admitted predecessor");
         }
         released.recv().expect("first ready predecessor");
         released.recv().expect("second ready predecessor");
@@ -383,6 +400,56 @@ mod tests {
             .spawn(|_| panic!("intentional owner panic"))
             .expect("recover to retain the owner handle");
         drop(owners);
+    }
+
+    #[test]
+    fn abandoned_reservation_releases_only_its_unpublished_slot() {
+        // Failed admission must not strand a reserved slot or make a different
+        // pending admission disappear before its own ownership ends.
+        let owners = Owners::new();
+        let first = owners.reserve().expect("first reservation");
+        let first_index = first.index;
+        let second = owners.reserve().expect("second reservation");
+        let second_index = second.index;
+        assert_ne!(first_index, second_index);
+        assert!(matches!(owners.reserve(), Err(OwnerFailure::Capacity)));
+        drop(first);
+        assert!(matches!(owners.lock()[first_index], Slot::Vacant));
+        assert!(matches!(owners.lock()[second_index], Slot::Reserved));
+        let replacement = owners.reserve().expect("released slot is reusable");
+        assert_eq!(replacement.index, first_index);
+        drop(replacement);
+        drop(second);
+        assert!(
+            owners
+                .lock()
+                .iter()
+                .all(|slot| matches!(slot, Slot::Vacant))
+        );
+    }
+
+    #[test]
+    fn panic_projection_preserves_static_and_non_string_payload_types() {
+        // Panic sources retain their concrete payload classification without
+        // exposing static private messages or formatting arbitrary payloads.
+        for (payload, expected) in [
+            (
+                Box::new("owner@example.test private metadata") as Box<dyn std::any::Any + Send>,
+                super::PanicKind::StaticString,
+            ),
+            (
+                Box::new(404_u16) as Box<dyn std::any::Any + Send>,
+                super::PanicKind::Other,
+            ),
+        ] {
+            let source = PanicFailure::from(payload.as_ref());
+            assert_eq!(
+                std::mem::discriminant(&source.kind),
+                std::mem::discriminant(&expected)
+            );
+            assert!(!format!("{source:?} {source}").contains("owner@example.test"));
+            assert!(!format!("{source:?} {source}").contains("404"));
+        }
     }
 
     #[test]
