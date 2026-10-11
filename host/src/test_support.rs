@@ -7,6 +7,20 @@ use super::feed::{FeedMinDays, FeedMinItems};
 use super::password::Password;
 use super::smtp_password::SmtpPassword;
 
+/// Composes the actual host subscriber with an injected SDK tracer and discarded
+/// ordinary output, without installing a global subscriber or provider.
+pub fn telemetry_subscriber(
+    config: &crate::telemetry::TelemetryConfig,
+    tracer: Option<opentelemetry_sdk::trace::SdkTracer>,
+) -> impl tracing::Subscriber + Send + Sync + 'static {
+    crate::telemetry::compose_subscriber(
+        config,
+        None::<tracing_subscriber::layer::Identity>,
+        tracer,
+        Some(std::io::sink),
+    )
+}
+
 /// Parses `s` into a valid [`Password`] for tests.
 ///
 /// # Panics

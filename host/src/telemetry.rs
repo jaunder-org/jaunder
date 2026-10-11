@@ -535,7 +535,7 @@ fn span_metadata_only(metadata: &tracing::Metadata<'_>) -> bool {
     metadata.is_span()
 }
 
-fn compose_subscriber<L, W>(
+pub(crate) fn compose_subscriber<L, W>(
     config: &TelemetryConfig,
     extra_layer: Option<L>,
     tracer: Option<opentelemetry_sdk::trace::SdkTracer>,

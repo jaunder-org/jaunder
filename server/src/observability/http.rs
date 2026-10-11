@@ -66,12 +66,20 @@ fn make_request_span(request: &Request) -> Span {
         version = ?request.version(),
         trusted_proxy.outcome = ?trusted_proxy_outcome,
     );
-    if let Some(parent) = request.extensions().get::<ExtractedTraceContext>()
-        && span.set_parent(parent.0.clone()).is_err()
-    {
-        super::diagnostics::report_trace_parent_failure();
+    if let Some(parent) = request.extensions().get::<ExtractedTraceContext>() {
+        adopt_trace_parent(&span, &parent.0);
     }
     span
+}
+
+fn adopt_trace_parent(span: &Span, parent: &Context) {
+    // Overall span activity includes diagnostics/ordinary logs, not just tracing.
+    // Querying admission must not start an SDK context before parent assignment.
+    if host::telemetry::span_is_trace_admitted(span)
+        && let Err(error) = span.set_parent(parent.clone())
+    {
+        super::diagnostics::report_trace_parent_failure(&error);
+    }
 }
 
 /// Applies request IDs and tracing to `router`. Inbound W3C trace-context
@@ -287,6 +295,178 @@ mod tests {
         }
     }
 
+    fn w3c_extract(headers: &HeaderMap) -> Context {
+        use opentelemetry::propagation::TextMapPropagator as _;
+        opentelemetry_sdk::propagation::TraceContextPropagator::new()
+            .extract(&HeaderExtractor(headers))
+    }
+
+    async fn traced_operation() -> StatusCode {
+        assert!(
+            !Span::current().is_disabled(),
+            "diagnostic request context remains active"
+        );
+        let child = tracing::info_span!("operation");
+        child.in_scope(|| StatusCode::OK)
+    }
+
+    fn telemetry_config(log: &str, trace: &str) -> host::telemetry::TelemetryConfig {
+        host::telemetry::TelemetryConfig::from_raw(
+            false,
+            host::telemetry::TelemetryRawConfig {
+                log_filter: Ok(Some(log.to_owned())),
+                trace_filter: Ok(Some(trace.to_owned())),
+                rust_log: Ok(None),
+                log_format: Ok(None),
+                jaunder_otlp_endpoint: Ok(None),
+                otlp_endpoint: Ok(None),
+                slow_op_ms: Ok(None),
+                e2e_seed_process: Ok(None),
+            },
+        )
+    }
+
+    #[test]
+    fn admitted_already_started_parent_failure_is_bounded_and_nonrecursive() {
+        use opentelemetry::trace::{TraceContextExt as _, TracerProvider as _};
+        use opentelemetry_sdk::trace::SdkTracerProvider;
+        let config = telemetry_config("off", "info");
+        let provider = SdkTracerProvider::builder().build();
+        let subscriber =
+            host::test_support::telemetry_subscriber(&config, Some(provider.tracer("http-test")));
+        let ((), output) = super::super::diagnostics::capture_fallbacks(|| {
+            super::super::diagnostics::assert_zero_error_metrics(|| {
+                tracing::subscriber::with_default(subscriber, || {
+                    let span = tracing::info_span!("request");
+                    assert!(host::telemetry::span_is_trace_admitted(&span));
+                    assert!(span.context().span().span_context().is_valid());
+                    adopt_trace_parent(&span, &Context::new());
+                });
+            });
+        });
+        assert_eq!(
+            output,
+            "server.observability.trace_parent: request trace parent assignment failed: reason=span-already-started\n"
+        );
+    }
+
+    #[test]
+    fn missing_sdk_layer_has_a_bounded_diagnostic_but_expected_absence_skips_assignment() {
+        let config = telemetry_config("debug", "info");
+        let subscriber = host::test_support::telemetry_subscriber(&config, None);
+        let ((), output) = super::super::diagnostics::capture_fallbacks(|| {
+            super::super::diagnostics::assert_zero_error_metrics(|| {
+                tracing::subscriber::with_default(subscriber, || {
+                    let span = tracing::info_span!("request");
+                    assert!(!span.is_disabled());
+                    assert!(!host::telemetry::span_is_trace_admitted(&span));
+                    adopt_trace_parent(&span, &Context::new());
+                    // A genuine SDK failure, independently of the normal-absence guard.
+                    let error = span
+                        .set_parent(Context::new())
+                        .expect_err("SDK layer missing");
+                    assert!(matches!(
+                        error,
+                        tracing_opentelemetry::SetParentError::LayerNotFound
+                    ));
+                    super::super::diagnostics::report_trace_parent_failure(&error);
+                });
+            });
+        });
+        assert_eq!(
+            output,
+            "server.observability.trace_parent: request trace parent assignment failed: reason=otel-layer-missing\n"
+        );
+    }
+
+    #[test]
+    fn actual_host_subscriber_preserves_http_parent_correlation_and_quiet_filtering() {
+        use opentelemetry::trace::TracerProvider as _;
+        use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        for log in ["warn", "debug"] {
+            for trace in ["info", "warn", "off", "jaunder::observability::http=warn"] {
+                for header in [
+                    Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+                    None,
+                    Some("secret-invalid-parent"),
+                ] {
+                    let config = telemetry_config(log, trace);
+                    let exporter = InMemorySpanExporter::default();
+                    let provider = SdkTracerProvider::builder()
+                        .with_simple_exporter(exporter.clone())
+                        .build();
+                    let subscriber = host::test_support::telemetry_subscriber(
+                        &config,
+                        Some(provider.tracer("http-test")),
+                    );
+                    let (response, diagnostics) =
+                        super::super::diagnostics::capture_fallbacks(|| {
+                            tracing::subscriber::with_default(subscriber, || {
+                                runtime.block_on(async {
+                                    let mut request = Request::builder()
+                                        .uri("/")
+                                        .header("x-request-id", "known-request");
+                                    if let Some(header) = header {
+                                        request = request.header("traceparent", header);
+                                    }
+                                    with_http_observability_using(
+                                        Router::new()
+                                            .route("/", axum::routing::get(traced_operation)),
+                                        Some(w3c_extract),
+                                    )
+                                    .oneshot(request.body(Body::empty()).expect("request"))
+                                    .await
+                                    .expect("response")
+                                })
+                            })
+                        });
+                    assert_eq!(response.status(), StatusCode::OK);
+                    assert_eq!(response.headers()["x-request-id"], "known-request");
+                    assert!(diagnostics.is_empty(), "{trace}/{header:?}: {diagnostics}");
+                    // TraceLayer retains the request span in the response body until it drops.
+                    drop(response);
+                    provider.force_flush().expect("flush");
+                    let spans = exporter.get_finished_spans().expect("spans");
+                    if trace == "info" {
+                        let request = spans
+                            .iter()
+                            .find(|span| span.name == "request")
+                            .expect("request span");
+                        let operation = spans
+                            .iter()
+                            .find(|span| span.name == "operation")
+                            .expect("operation span");
+                        assert_eq!(
+                            operation.span_context.trace_id(),
+                            request.span_context.trace_id()
+                        );
+                        assert_eq!(operation.parent_span_id, request.span_context.span_id());
+                        if header.is_some_and(|header| header.starts_with("00-")) {
+                            assert_eq!(
+                                request.span_context.trace_id().to_string(),
+                                "4bf92f3577b34da6a3ce929d0e0e4736"
+                            );
+                            assert_eq!(request.parent_span_id.to_string(), "00f067aa0ba902b7");
+                        } else {
+                            assert!(request.span_context.is_valid());
+                            assert_eq!(
+                                request.parent_span_id,
+                                opentelemetry::trace::SpanId::INVALID
+                            );
+                        }
+                    } else {
+                        assert!(!spans.iter().any(|span| span.name == "request"), "{trace}");
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn trace_parent_policy_controls_full_request_path() {
         EXTRACTION_CALLS.store(0, Ordering::Relaxed);
@@ -308,9 +488,6 @@ mod tests {
         assert_eq!(disabled_calls, 0);
         assert_eq!(enabled.status(), StatusCode::OK);
         assert_eq!(EXTRACTION_CALLS.load(Ordering::Relaxed), 1);
-        assert_eq!(
-            output,
-            "server.observability.trace_parent: request trace parent assignment failed\n"
-        );
+        assert!(output.is_empty(), "expected trace absence: {output}");
     }
 }

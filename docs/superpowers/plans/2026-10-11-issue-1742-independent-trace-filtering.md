@@ -60,7 +60,7 @@ deployment.
     target/context-sensitive filters, and endpoint absence. Prove SpanTrace
     fields with stdout removed, WARN+ capture with both filters `off`, and
     unchanged panic independence.
-- [ ] **3. Adopt request parents only for trace-admitted spans.**
+- [x] **3. Adopt request parents only for trace-admitted spans.**
   - Depends on 2. Use the host-owned admission contract at actual request-span
     creation; do not obtain/start the span context merely to decide admission.
     Preserve middleware ordering, request IDs, safe fields and W3C extraction.
