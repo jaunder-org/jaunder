@@ -40,7 +40,7 @@ deployment.
     unreadable input, independent `off` and `--verbose`; update all typed config
     constructors and child-environment isolation fixtures. No runtime ambient
     reads below roots. Application statuses and endpoint policy stay unchanged.
-- [ ] **2. Compose independent sinks and preserve diagnostic span context.**
+- [x] **2. Compose independent sinks and preserve diagnostic span context.**
   - Depends on 1. Apply log policy only to ordinary stdout admission and trace
     policy only to the OTLP trace layer. Do not retain a shared global filter
     that intersects diagnostics or ErrorLayer. Keep server WARN+ capture and the

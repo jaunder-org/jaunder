@@ -52,6 +52,43 @@ mod tests {
     }
 
     #[test]
+    fn log_and_trace_off_preserve_warn_capture_and_independent_panic_hook() {
+        let config = TelemetryConfig::from_raw(
+            false,
+            host::telemetry::TelemetryRawConfig {
+                log_filter: Ok(Some("off".to_owned())),
+                trace_filter: Ok(Some("off".to_owned())),
+                rust_log: Ok(None),
+                log_format: Ok(None),
+                jaunder_otlp_endpoint: Ok(None),
+                otlp_endpoint: Ok(None),
+                slow_op_ms: Ok(None),
+                e2e_seed_process: Ok(None),
+            },
+        );
+        let dir = tempfile::TempDir::new().expect("capture directory");
+        let path = dir.path().join("diag.log");
+        with_process_globals(|| {
+            let previous = std::panic::take_hook();
+            let guard = init_server_tracing(&config, Some(path.clone()));
+            tracing::info!("ordinary info");
+            tracing::warn!("independent warning");
+            let result = std::panic::catch_unwind(|| panic!("independent panic"));
+            std::panic::set_hook(previous);
+            assert!(result.is_err());
+            drop(guard);
+        });
+        let records: Vec<serde_json::Value> = std::fs::read_to_string(path)
+            .expect("diagnostics")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("diagnostic record"))
+            .collect();
+        assert_eq!(records.len(), 2, "WARN+ and panic only: {records:?}");
+        assert!(records.iter().any(|record| record["kind"] == "panic"));
+        assert!(records.iter().any(|record| record["level"] == "WARN"));
+    }
+
+    #[test]
     fn init_tracing_impl_creates_diag_file_when_capture_is_configured() {
         let dir = tempfile::TempDir::new().expect("tempdir");
         with_process_globals(|| {

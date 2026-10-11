@@ -7,6 +7,11 @@
 //! [`TelemetryGuard`] whose drop path flushes short-lived process telemetry
 //! before exit. Server-only request diagnostics stay in `server::observability`.
 
+mod span_fields;
+mod trace_admission;
+
+pub use trace_admission::span_is_trace_admitted;
+
 use std::time::{Duration, Instant};
 
 use opentelemetry::KeyValue;
@@ -110,6 +115,7 @@ enum FallbackKind {
     OtlpEndpoint,
     LogFilter,
     TraceFilter,
+    SpanFieldFormat,
     SlowThreshold,
     LogFormat,
 }
@@ -145,6 +151,10 @@ impl FallbackKind {
             Self::TraceFilter => (
                 "host.telemetry.trace_filter",
                 "invalid configured value; using INFO trace filter",
+            ),
+            Self::SpanFieldFormat => (
+                "host.telemetry.span_fields",
+                "diagnostic span field formatting failed",
             ),
             Self::SlowThreshold => (
                 "host.telemetry.slow_threshold",
@@ -520,6 +530,56 @@ fn install_subscriber_with<E>(
     }
 }
 
+// Context-only observers must not enable ordinary events when both sinks are off.
+fn span_metadata_only(metadata: &tracing::Metadata<'_>) -> bool {
+    metadata.is_span()
+}
+
+fn compose_subscriber<L, W>(
+    config: &TelemetryConfig,
+    extra_layer: Option<L>,
+    tracer: Option<opentelemetry_sdk::trace::SdkTracer>,
+    output: Option<W>,
+) -> impl tracing::Subscriber + Send + Sync + 'static
+where
+    L: Layer<tracing_subscriber::Registry> + Send + Sync + 'static,
+    W: for<'writer> fmt::MakeWriter<'writer> + Send + Sync + 'static,
+{
+    let fmt_layer = output.map(|writer| {
+        if config.json_format {
+            fmt::layer()
+                .json()
+                .with_writer(writer)
+                .with_filter(config.ordinary_log_filter())
+                .boxed()
+        } else {
+            fmt::layer()
+                .with_writer(writer)
+                .with_filter(config.ordinary_log_filter())
+                .boxed()
+        }
+    });
+    let otel_layer = tracer.map(|tracer| {
+        tracing_opentelemetry::layer()
+            .with_tracer(tracer)
+            .and_then(trace_admission::TraceAdmissionLayer)
+            .with_filter(config.trace_filter())
+    });
+    tracing_subscriber::registry()
+        .with(extra_layer)
+        .with(
+            SlowSpanLayer::new(config.slow_op_threshold)
+                .with_filter(tracing_subscriber::filter::filter_fn(span_metadata_only)),
+        )
+        .with(
+            span_fields::SpanFieldUpdates
+                .and_then(ErrorLayer::new(span_fields::SpanTraceFields))
+                .with_filter(tracing_subscriber::filter::filter_fn(span_metadata_only)),
+        )
+        .with(fmt_layer)
+        .with(otel_layer)
+}
+
 fn init_tracing_impl_with_layer<L>(
     config: &TelemetryConfig,
     extra_layer: Option<L>,
@@ -538,17 +598,6 @@ where
         opentelemetry_sdk::propagation::TraceContextPropagator::new(),
     );
 
-    let slow_span_layer = SlowSpanLayer::new(config.slow_op_threshold);
-
-    // Box the fmt layer so the json/pretty variants share one type, and carry
-    // OTel as an `Option` layer (absent or failed setup is a no-op).
-    let env_filter = config.ordinary_log_filter();
-    let fmt_layer = if config.json_format {
-        fmt::layer().json().boxed()
-    } else {
-        fmt::layer().boxed()
-    };
-
     // Traces and metrics share the endpoint resolved at the process root.
     let endpoint = config.otlp_endpoint.clone();
     let resource = telemetry_resource(config.e2e_seed_process.clone());
@@ -562,10 +611,6 @@ where
             },
         )
     });
-    let otel_layer = tracer
-        .as_ref()
-        .map(|provider| tracing_opentelemetry::layer().with_tracer(provider.tracer("jaunder")));
-
     // Metrics share the OTLP endpoint with traces; setup failure is non-fatal.
     let meter = endpoint.as_deref().and_then(|endpoint| {
         setup_otel_meter_with(
@@ -579,15 +624,12 @@ where
 
     let subscriber_installed = install_subscriber_with(
         || {
-            tracing::subscriber::set_global_default(
-                tracing_subscriber::registry()
-                    .with(extra_layer)
-                    .with(env_filter)
-                    .with(slow_span_layer)
-                    .with(ErrorLayer::default())
-                    .with(fmt_layer)
-                    .with(otel_layer),
-            )
+            tracing::subscriber::set_global_default(compose_subscriber(
+                config,
+                extra_layer,
+                tracer.as_ref().map(|provider| provider.tracer("jaunder")),
+                Some(std::io::stdout),
+            ))
         },
         || fallback(FallbackKind::SubscriberInstall),
     );
@@ -762,6 +804,346 @@ mod tests {
         fn make_writer(&'writer self) -> Self::Writer {
             self.clone()
         }
+    }
+
+    #[test]
+    fn independent_sink_admission_exports_info_requests_with_quiet_logs() {
+        let config = configured_filters(false, Some("warn"), None, Ok(None));
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let exporter = InMemorySpanExporter::default();
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let subscriber = compose_subscriber(
+            &config,
+            None::<tracing_subscriber::layer::Identity>,
+            Some(provider.tracer("test")),
+            Some(Shared(output.clone())),
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            let request = tracing::info_span!(target: "jaunder::observability::http", "request");
+            assert!(span_is_trace_admitted(&request));
+            tracing_opentelemetry::OpenTelemetrySpanExt::set_parent(
+                &request,
+                opentelemetry::Context::new(),
+            )
+            .expect("admission lookup must not start the SDK span");
+            request.in_scope(|| {
+                tracing::info!("ordinary info");
+                tracing::warn!("ordinary warning");
+            });
+        });
+        provider.force_flush().expect("flush");
+        assert!(
+            exporter
+                .get_finished_spans()
+                .expect("spans")
+                .iter()
+                .any(|span| span.name == "request")
+        );
+        let output = String::from_utf8(output.lock().expect("output").clone()).expect("utf8");
+        assert!(output.contains("ordinary warning"));
+        assert!(!output.contains("ordinary info"));
+    }
+
+    #[test]
+    fn span_trace_keeps_initial_and_late_fields_without_stdout() {
+        let config = configured_filters(false, Some("off"), None, Ok(Some("off".to_owned())));
+        let subscriber = compose_subscriber(
+            &config,
+            None::<tracing_subscriber::layer::Identity>,
+            None,
+            None::<Shared>,
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            let span =
+                tracing::info_span!("decision", request_id = 7, allowed = tracing::field::Empty);
+            span.record("allowed", true);
+            span.in_scope(|| {
+                let trace = tracing_error::SpanTrace::capture();
+                assert_eq!(trace.status(), tracing_error::SpanTraceStatus::CAPTURED);
+                let rendered = trace.to_string();
+                assert!(rendered.contains("request_id=7"), "{rendered}");
+                assert_eq!(rendered.matches("allowed=true").count(), 1, "{rendered}");
+            });
+        });
+    }
+
+    #[test]
+    fn span_trace_records_late_fields_once_with_pretty_and_json_output() {
+        for (log, format) in [
+            ("warn", "pretty"),
+            ("warn", "json"),
+            ("debug", "pretty"),
+            ("debug", "json"),
+        ] {
+            let config = TelemetryConfig::from_raw(
+                false,
+                TelemetryRawConfig {
+                    log_filter: Ok(Some(log.to_owned())),
+                    trace_filter: Ok(Some("off".to_owned())),
+                    rust_log: Ok(None),
+                    log_format: Ok(Some(format.to_owned())),
+                    jaunder_otlp_endpoint: Ok(None),
+                    otlp_endpoint: Ok(None),
+                    slow_op_ms: Ok(None),
+                    e2e_seed_process: Ok(None),
+                },
+            );
+            let subscriber = compose_subscriber(
+                &config,
+                None::<tracing_subscriber::layer::Identity>,
+                None,
+                Some(Shared(Arc::new(Mutex::new(Vec::new())))),
+            );
+            tracing::subscriber::with_default(subscriber, || {
+                let span = tracing::info_span!(
+                    "decision",
+                    request_id = 7,
+                    allowed = tracing::field::Empty
+                );
+                span.record("allowed", true);
+                span.in_scope(|| {
+                    tracing::warn!("console record");
+                    let rendered = tracing_error::SpanTrace::capture().to_string();
+                    assert!(rendered.contains("request_id=7"), "{format}: {rendered}");
+                    assert_eq!(
+                        rendered.matches("allowed=true").count(),
+                        1,
+                        "{format}: {rendered}"
+                    );
+                });
+            });
+        }
+    }
+
+    #[test]
+    fn span_field_formatting_failure_is_local_nonrecursive_and_metric_free() {
+        struct BrokenDebug;
+        impl std::fmt::Debug for BrokenDebug {
+            fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                Err(std::fmt::Error)
+            }
+        }
+        let ((), output) = fallback_capture::capture(|| {
+            assert_zero_error_metrics(|| {
+                let config =
+                    configured_filters(false, Some("off"), None, Ok(Some("off".to_owned())));
+                let subscriber = compose_subscriber(
+                    &config,
+                    None::<tracing_subscriber::layer::Identity>,
+                    None,
+                    None::<Shared>,
+                );
+                tracing::subscriber::with_default(subscriber, || {
+                    let span = tracing::info_span!("decision", failed = tracing::field::Empty);
+                    span.record("failed", tracing::field::debug(BrokenDebug));
+                });
+            });
+        });
+        assert_eq!(
+            output,
+            "host.telemetry.span_fields: diagnostic span field formatting failed\n"
+        );
+    }
+
+    #[test]
+    fn sink_off_and_target_directives_do_not_cross_admission_policies() {
+        for (log, trace, admitted, logged) in [
+            ("debug", "off", false, true),
+            ("off", "debug", true, false),
+            ("warn", "warn", false, false),
+            ("off", "host=info", false, false),
+            ("off", "jaunder::observability::http=info", true, false),
+        ] {
+            let config = configured_filters(false, Some(log), None, Ok(Some(trace.to_owned())));
+            let output = Arc::new(Mutex::new(Vec::new()));
+            let exporter = InMemorySpanExporter::default();
+            let provider = SdkTracerProvider::builder()
+                .with_simple_exporter(exporter.clone())
+                .build();
+            let subscriber = compose_subscriber(
+                &config,
+                None::<tracing_subscriber::layer::Identity>,
+                Some(provider.tracer("test")),
+                Some(Shared(output.clone())),
+            );
+            tracing::subscriber::with_default(subscriber, || {
+                let span = tracing::info_span!(target: "jaunder::observability::http", "request");
+                assert!(
+                    !span.is_disabled(),
+                    "diagnostic span context remains available"
+                );
+                assert_eq!(span_is_trace_admitted(&span), admitted, "{log}/{trace}");
+                span.in_scope(|| tracing::info!("ordinary info"));
+            });
+            provider.force_flush().expect("flush");
+            assert_eq!(
+                exporter
+                    .get_finished_spans()
+                    .expect("spans")
+                    .iter()
+                    .any(|span| span.name == "request"),
+                admitted,
+                "{log}/{trace}"
+            );
+            let output = String::from_utf8(output.lock().expect("output").clone()).expect("utf8");
+            assert_eq!(output.contains("ordinary info"), logged, "{log}/{trace}");
+        }
+    }
+
+    #[test]
+    fn dynamic_trace_filter_admission_follows_actual_context_lifecycle() {
+        let config = configured_filters(
+            false,
+            Some("off"),
+            None,
+            Ok(Some("off,[context{allowed=true}]=info".to_owned())),
+        );
+        let exporter = InMemorySpanExporter::default();
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let subscriber = compose_subscriber(
+            &config,
+            None::<tracing_subscriber::layer::Identity>,
+            Some(provider.tracer("test")),
+            None::<Shared>,
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            let outside = tracing::info_span!(target: "jaunder::observability::http", "request");
+            assert!(!span_is_trace_admitted(&outside));
+            let context = tracing::debug_span!("context", allowed = tracing::field::Empty);
+            context.in_scope(|| {
+                let blocked =
+                    tracing::info_span!(target: "jaunder::observability::http", "request");
+                assert!(!span_is_trace_admitted(&blocked));
+            });
+            context.record("allowed", true);
+            context.in_scope(|| {
+                let inside = tracing::info_span!(target: "jaunder::observability::http", "request");
+                assert!(span_is_trace_admitted(&inside));
+            });
+        });
+        provider.force_flush().expect("flush");
+        assert_eq!(
+            exporter
+                .get_finished_spans()
+                .expect("spans")
+                .iter()
+                .filter(|span| span.name == "request")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn trace_admission_does_not_claim_sampling_or_an_absent_exporter() {
+        let config = configured_filters(false, Some("off"), None, Ok(None));
+        let exporter = InMemorySpanExporter::default();
+        let provider = SdkTracerProvider::builder()
+            .with_sampler(opentelemetry_sdk::trace::Sampler::AlwaysOff)
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let subscriber = compose_subscriber(
+            &config,
+            None::<tracing_subscriber::layer::Identity>,
+            Some(provider.tracer("test")),
+            None::<Shared>,
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!("sampled_off");
+            assert!(span_is_trace_admitted(&span));
+        });
+        provider.force_flush().expect("flush");
+        assert!(exporter.get_finished_spans().expect("spans").is_empty());
+        let subscriber = compose_subscriber(
+            &config,
+            None::<tracing_subscriber::layer::Identity>,
+            None,
+            None::<Shared>,
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!("no_exporter");
+            assert!(!span.is_disabled());
+            assert!(!span_is_trace_admitted(&span));
+        });
+        assert!(!span_is_trace_admitted(&tracing::Span::none()));
+    }
+
+    #[test]
+    fn log_and_trace_off_leave_metric_collection_active() {
+        let exporter = InMemoryMetricExporter::default();
+        let provider = SdkMeterProvider::builder()
+            .with_reader(PeriodicReader::builder(exporter.clone()).build())
+            .build();
+        opentelemetry::global::set_meter_provider(provider.clone());
+        let config = configured_filters(false, Some("off"), None, Ok(Some("off".to_owned())));
+        let subscriber = compose_subscriber(
+            &config,
+            None::<tracing_subscriber::layer::Identity>,
+            None,
+            None::<Shared>,
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            opentelemetry::global::meter("filter proof")
+                .u64_counter("independent.metric")
+                .build()
+                .add(1, &[]);
+        });
+        provider.force_flush().expect("flush");
+        let metrics = exporter.get_finished_metrics().expect("metrics");
+        let metric = metrics
+            .iter()
+            .flat_map(opentelemetry_sdk::metrics::data::ResourceMetrics::scope_metrics)
+            .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+            .find(|metric| metric.name() == "independent.metric")
+            .expect("collected counter");
+        let opentelemetry_sdk::metrics::data::AggregatedMetrics::U64(
+            opentelemetry_sdk::metrics::data::MetricData::Sum(sum),
+        ) = metric.data()
+        else {
+            panic!("counter must export a u64 sum")
+        };
+        assert_eq!(
+            sum.data_points()
+                .map(opentelemetry_sdk::metrics::data::SumDataPoint::value)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn initial_field_formatting_failure_does_not_recurse_on_late_recording() {
+        struct BrokenDebug;
+        impl std::fmt::Debug for BrokenDebug {
+            fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                Err(std::fmt::Error)
+            }
+        }
+        let ((), output) = fallback_capture::capture(|| {
+            assert_zero_error_metrics(|| {
+                let config = configured_filters(false, Some("off"), None, Ok(None));
+                let subscriber = compose_subscriber(
+                    &config,
+                    None::<tracing_subscriber::layer::Identity>,
+                    None,
+                    None::<Shared>,
+                );
+                tracing::subscriber::with_default(subscriber, || {
+                    let span = tracing::info_span!(
+                        "decision",
+                        failed = tracing::field::debug(BrokenDebug),
+                        allowed = tracing::field::Empty
+                    );
+                    span.record("allowed", true);
+                });
+            });
+        });
+        assert_eq!(
+            output,
+            "host.telemetry.span_fields: diagnostic span field formatting failed\n"
+        );
     }
 
     #[test]
