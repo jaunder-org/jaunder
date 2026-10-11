@@ -289,12 +289,15 @@ fn parse_header_keyword(line: &str, fields: &mut HeaderFields) -> Result<bool, O
 
 fn header_keyword(line: &str) -> Option<HeaderKeyword<'_>> {
     let (name, value) = keyword(line)?;
+    let trimmed = value.trim();
     match name.as_str() {
-        "title" => Some(HeaderKeyword::Title(value)),
-        "description" => Some(HeaderKeyword::Description(value)),
+        "title" => Some(HeaderKeyword::Title(trimmed)),
+        "description" => Some(HeaderKeyword::Description(trimmed)),
+        // Keyword normalization needs the original term to distinguish invalid
+        // non-ASCII input from valid labels with surrounding whitespace.
         "keywords" => Some(HeaderKeyword::Keywords(value)),
-        "date" => Some(HeaderKeyword::Date(value)),
-        "property" => Some(HeaderKeyword::Property(value)),
+        "date" => Some(HeaderKeyword::Date(trimmed)),
+        "property" => Some(HeaderKeyword::Property(trimmed)),
         _ => None,
     }
 }
@@ -302,8 +305,7 @@ fn header_keyword(line: &str) -> Option<HeaderKeyword<'_>> {
 fn parse_keywords(value: &str) -> Result<Vec<TagLabel>, OrgMetadataError> {
     let terms: Vec<_> = value
         .split(',')
-        .map(str::trim)
-        .filter(|term| !term.is_empty())
+        .filter(|term| !term.trim().is_empty())
         .collect();
     if terms.is_empty() {
         return invalid("KEYWORDS must contain a tag");
@@ -311,7 +313,7 @@ fn parse_keywords(value: &str) -> Result<Vec<TagLabel>, OrgMetadataError> {
     terms
         .into_iter()
         .map(|term| {
-            term.parse()
+            TagLabel::normalize_keyword(term)
                 .map_err(|_| OrgMetadataError::Invalid("invalid KEYWORDS tag".into()))
         })
         .collect()
@@ -339,7 +341,7 @@ fn leading_keyword_end(document: &Org) -> usize {
 fn keyword(line: &str) -> Option<(String, &str)> {
     let (key, value) = line.trim_start().split_once(':')?;
     let key = key.strip_prefix("#+")?;
-    Some((key.to_ascii_lowercase(), value.trim()))
+    Some((key.to_ascii_lowercase(), value))
 }
 
 fn property_line(value: &str) -> Result<PropertyLine<'_>, OrgMetadataError> {
@@ -718,7 +720,48 @@ Body";
             ])
         );
         invalid("#+KEYWORDS: , ,\nBody");
-        invalid("#+KEYWORDS: rust/lang\nBody");
+        invalid("#+KEYWORDS: café\nBody");
+    }
+
+    #[test]
+    fn keyword_normalization_composes_terms_without_splitting_spaces() {
+        let normalized = normalize(
+            "#+KEYWORDS: 100 bullets, , James S. A. Corey, Rust---Lang-\n#+KEYWORDS: old man's war, 100-bullets, RUST---LANG-\nBody\n#+KEYWORDS: body example\n",
+        );
+        assert_eq!(
+            normalized.metadata.tags,
+            Presence::Present(vec![
+                "100-bullets".parse().unwrap(),
+                "james-s-a-corey".parse().unwrap(),
+                "Rust---Lang-".parse().unwrap(),
+                "old-man-s-war".parse().unwrap(),
+            ])
+        );
+        assert_eq!(normalized.body, "Body\n#+KEYWORDS: body example\n");
+    }
+
+    #[test]
+    fn keyword_normalization_rejects_unusable_terms_even_when_structured_tags_win() {
+        for term in [
+            "café",
+            "\u{212a}",
+            "\u{a0}\u{212a}\u{a0}",
+            "---!?",
+            ", ,",
+            "\u{a0}100 bullets",
+            "100 bullets\u{a0}",
+        ] {
+            let result = normalize_org(
+                &format!("#+KEYWORDS: Rust\n#+KEYWORDS: {term}\nBody"),
+                OrgStructuredMetadata {
+                    tags: Presence::Present(vec!["Structured".parse().unwrap()]),
+                    ..OrgStructuredMetadata::default()
+                },
+                OrgOperation::Create,
+                clock(),
+            );
+            assert!(matches!(result, Err(OrgMetadataError::Invalid(_))));
+        }
     }
 
     #[test]

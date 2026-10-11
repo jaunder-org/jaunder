@@ -43,6 +43,8 @@ body-only content with the metadata header block stripped."
    ((equal audience "private") '(2 0))
    (t (list 3 (string-to-number (substring audience (length "named:")))))))
 
+(define-error 'jaunder-invalid-audiences "Invalid Jaunder audiences" 'error)
+
 (defun jaunder--canonical-audiences (audiences)
   "Validate and canonically order AUDIENCES, preserving nil as omission.
 Accepted values are `public', `subscribers', `private', and canonical positive
@@ -50,7 +52,7 @@ Accepted values are `public', `subscribers', `private', and canonical positive
 `private' must stand alone."
   (when audiences
     (unless (listp audiences)
-      (error "jaunder: audiences must be a list"))
+      (signal 'jaunder-invalid-audiences '(wrong-type)))
     (dolist (audience audiences)
       (unless
           (and
@@ -59,11 +61,11 @@ Accepted values are `public', `subscribers', `private', and canonical positive
                (and (string-match-p "\\`named:[1-9][0-9]*\\'" audience)
                     (<= (string-to-number (substring audience (length "named:")))
                         jaunder--max-audience-id))))
-        (error "jaunder: invalid audience value %S" audience)))
+        (signal 'jaunder-invalid-audiences '(invalid-value))))
     (when (/= (length audiences) (length (delete-dups (copy-sequence audiences))))
-      (error "jaunder: duplicate audience value"))
+      (signal 'jaunder-invalid-audiences '(duplicate)))
     (when (and (member "private" audiences) (/= (length audiences) 1))
-      (error "jaunder: private audience must stand alone"))
+      (signal 'jaunder-invalid-audiences '(private-combination)))
     (sort (copy-sequence audiences)
           (lambda (left right)
             (let ((left-key (jaunder--audience-sort-key left))
@@ -112,6 +114,31 @@ repair diagnostics."
 (defun jaunder--valid-tag-label-p (label)
   "Return non-nil when LABEL satisfies Jaunder's case-preserving Tag boundary."
   (null (jaunder--tag-label-defect label)))
+
+(define-error 'jaunder-invalid-keyword "Invalid Jaunder keyword" 'error)
+
+(defun jaunder-normalize-keyword (term)
+  "Convert free-form TERM to a strict Tag label, or signal an error.
+This explicit door matches Rust `TagLabel::normalize_keyword'; it does not
+widen the existing Tag grammar.  Valid labels retain casing and hyphens.
+Otherwise the original term must be ASCII before any trimming occurs."
+  (unless (stringp term)
+    (signal 'jaunder-invalid-keyword '(wrong-type)))
+  ;; Rust str::trim uses Unicode White_Space, not Emacs string-trim's default.
+  (let* ((whitespace "[\u0009-\u000d \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]")
+         (trimmed (string-trim term whitespace whitespace)))
+    (if (jaunder--valid-tag-label-p trimmed)
+        trimmed
+      (unless (cl-every (lambda (character) (< character 128)) term)
+        (signal 'jaunder-invalid-keyword '(non-ascii)))
+      (let ((normalized
+             (string-trim
+              (replace-regexp-in-string
+               "[!-/:-@\\[-`{-~ \t\n\r\f]+" "-" (downcase trimmed))
+              "-+" "-+")))
+        (unless (jaunder--valid-tag-label-p normalized)
+          (signal 'jaunder-invalid-keyword '(unusable)))
+        normalized))))
 
 (provide 'jaunder-entry)
 ;;; jaunder-entry.el ends here

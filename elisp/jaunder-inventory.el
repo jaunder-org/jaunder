@@ -52,21 +52,34 @@
   "Signal an inventory error naming broken INVARIANT without response details."
   (error "jaunder inventory: %s" invariant))
 
+(define-error 'jaunder-inventory-decode-error "Malformed Collection XML" 'error)
+
+(defun jaunder-inventory-decode-error-source (condition)
+  "Return CONDITION's retained XML decoder source for deliberate diagnostics.
+Never automatically display this source: it may contain remote content."
+  (get (cadr condition) 'jaunder-source-condition))
+
+(defun jaunder--inventory-decode-error (source)
+  "Signal a sanitized Collection decode error retaining typed SOURCE."
+  (let ((handle (make-symbol "redacted-source")))
+    (put handle 'jaunder-source-condition source)
+    (signal 'jaunder-inventory-decode-error (list handle))))
+
 (defun jaunder--parse-collection-xml (xml)
   "Parse Collection XML, naming malformed wire data without echoing it."
-  (condition-case nil
+  (condition-case source
       (with-temp-buffer
         (insert xml)
         (libxml-parse-xml-region (point-min) (point-max)))
-    (error (jaunder--inventory-error "malformed Collection XML"))))
+    (error (jaunder--inventory-decode-error source))))
 
 (defun jaunder--parse-collection-xml-namespaced (xml)
   "Parse Collection XML with namespace declarations retained for alternate links."
-  (condition-case nil
+  (condition-case source
       (with-temp-buffer
         (insert xml)
         (car (xml-parse-region (point-min) (point-max))))
-    (error (jaunder--inventory-error "malformed Collection XML"))))
+    (error (jaunder--inventory-decode-error source))))
 
 (defun jaunder--direct-elements (node tag)
   "Return NODE's direct child elements named TAG, in document order."

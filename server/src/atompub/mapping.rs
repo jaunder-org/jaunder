@@ -9,7 +9,7 @@ use common::org::{Presence, PublicationState};
 use common::post_body::{InvalidPostBody, PostBody};
 use common::post_summary::PostSummary;
 use common::post_title::{InvalidPostTitle, PostTitle};
-use common::tag::TagLabel;
+use common::tag::{InvalidTagLabel, TagLabel};
 use common::tagged_url::{self, BaseUrl, EditUriUrl, Permalink};
 use common::time::UtcInstant;
 use common::visibility::AudienceTarget;
@@ -26,6 +26,8 @@ pub(super) enum InvalidPostFields {
     Title(#[from] InvalidPostTitle),
     #[error("published timestamp is outside the supported range")]
     PublishedTime,
+    #[error(transparent)]
+    Category(#[from] InvalidTagLabel),
 }
 
 /// The post-shaped data carried by an incoming `AtomPub` `Entry`.
@@ -38,7 +40,7 @@ pub struct PostFields {
     /// Format/markup language of the body.
     pub format: PostFormat,
     /// Optional summary/excerpt (validated `PostSummary`; an over-cap wire value
-    /// is dropped on ingest, mirroring the lenient category handling below).
+    /// is dropped on ingest).
     pub summary: Option<PostSummary>,
     /// Categories/tags extracted from the entry, preserving whether any category
     /// elements were supplied so an explicit empty collection remains distinct
@@ -99,14 +101,15 @@ fn classify_published(published: UtcInstant, request_clock: UtcInstant) -> Publi
 /// `text/markdown`→Markdown, `html`/`xhtml`/`text/html`→Html, and bare `text`
 /// (or absent/unknown) falls back to the user's `default_format`.
 ///
-/// An unusable summary or category is still dropped on ingest, but an invalid
-/// authored title or body rejects the complete write rather than becoming
-/// absent. The handler maps these failures to `400`.
+/// An unusable summary is dropped on ingest. Categories use the shared explicit
+/// keyword normalization door; an invalid category, authored title, or body
+/// rejects the complete write. The handler maps these failures to `400`.
 ///
 /// # Errors
 ///
 /// Returns [`InvalidPostFields`] when content has no non-blank line, the authored
-/// title has a line break, or Atom's published time is outside Jiff's range.
+/// title has a line break, a category cannot normalize to a valid tag label, or
+/// Atom's published time is outside Jiff's range.
 pub(super) fn entry_to_post_fields(
     entry: &Entry,
     default_format: PostFormat,
@@ -123,23 +126,18 @@ pub(super) fn entry_to_post_fields(
     // Only genuinely blank, non-line-breaking source means no title; invalid
     // authored source must not silently become an untitled Post.
     let title = PostTitle::parse_optional(entry.title().as_str())?;
-    // The entry's `<summary>` becomes a validated `PostSummary`. Like the invalid
-    // `<category>` term below, an over-cap/blank summary is silently dropped rather
-    // than failing the whole entry (lenient ingest, R5) — `entry_to_post_fields`
-    // remains lenient for that field.
+    // Summary ingestion is intentionally lenient: an over-cap/blank summary
+    // means absence rather than rejecting the complete Entry.
     let summary = entry
         .summary()
         .and_then(|t| t.as_str().parse::<PostSummary>().ok());
-    // atom `<category term>` values are arbitrary RFC-4287 protocol strings (the
-    // atom `Entry` model holds them as `String`, not our domain tag) — this is the
-    // boundary where a conforming term becomes a `TagLabel`. `entry_to_post_fields`
-    // skips invalid terms: dropping a malformed term keeps one bad category
-    // from failing the whole entry (R5).
+    // Atom terms are arbitrary protocol strings. Reject the complete Entry if
+    // any term is unusable so a successful write cannot silently lose tags.
     let categories = entry
         .categories()
         .iter()
-        .filter_map(|c| c.term().parse::<TagLabel>().ok())
-        .collect();
+        .map(|category| TagLabel::normalize_keyword(category.term()))
+        .collect::<Result<Vec<_>, _>>()?;
     let is_draft = atompub::is_draft(entry);
     // A declared `app:draft` is an explicit Atom lifecycle source, including
     // `no`; only a genuinely absent marker leaves room for Org metadata.
@@ -546,10 +544,7 @@ mod tests {
     }
 
     #[test]
-    fn entry_to_post_fields_skips_invalid_category_terms() {
-        // One valid and one invalid `<category term>`: the invalid term is
-        // silently dropped (R5) rather than failing the whole entry, so exactly
-        // the valid label survives.
+    fn entry_to_post_fields_normalizes_category_terms() {
         let xml = r#"<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom">
   <title>Test</title>
@@ -566,7 +561,10 @@ mod tests {
 
         assert_eq!(
             fields.categories,
-            Presence::Present(vec!["rust".parse::<TagLabel>().unwrap()])
+            Presence::Present(vec![
+                "rust".parse::<TagLabel>().unwrap(),
+                "not-a-tag".parse::<TagLabel>().unwrap(),
+            ])
         );
     }
 

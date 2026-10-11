@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{fmt::Write, sync::Arc};
 
 use axum::{
     body::Body,
@@ -1148,7 +1148,7 @@ async fn create_with_blank_title_stores_an_untitled_post(#[case] backend: Backen
 
 #[apply(backends)]
 #[tokio::test]
-async fn create_skips_invalid_category(#[case] backend: Backend) {
+async fn keyword_normalization_create_update_matches_raw_org(#[case] backend: Backend) {
     let env = backend.setup().await;
     let base = &env.base;
     let session = create_user_and_session(
@@ -1159,25 +1159,191 @@ async fn create_skips_invalid_category(#[case] backend: Backend) {
     .await;
     let app = make_app!(&env, base);
 
-    let xml = r#"<?xml version="1.0"?>
-<entry xmlns="http://www.w3.org/2005/Atom">
-  <title>Cat</title>
-  <content type="text">body</content>
-  <category term="has spaces"/>
-</entry>"#;
+    let sources = [
+        r#"<content type="text/org">Body</content>
+<category term=" 100 bullets "/><category term="James S. A. Corey"/>
+<category term="old man's war"/><category term="Rust---Lang-"/>
+<category term="100-bullets"/><category term="RUST---LANG-"/>"#,
+        r#"<content type="text/org">#+KEYWORDS: 100 bullets, , James S. A. Corey
+#+KEYWORDS: old man's war, Rust---Lang-, 100-bullets, RUST---LANG-
+Body</content>"#,
+    ];
+    for source in sources {
+        let source = source.replace("Rust---Lang-", "\u{a0}Rust---Lang-\u{a0}");
+        let xml = format!(
+            r#"<entry xmlns="http://www.w3.org/2005/Atom"><title>Keywords</title>{source}</entry>"#
+        );
+        let response = app
+            .clone()
+            .oneshot(atompub_post_xml(&session, "posts", &xml))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let post_id = PostId::from(location_post_id(&response));
+        let path = format!("posts/{post_id}");
+        // Read through storage to prove persisted labels, not just response mapping.
+        let post = env
+            .posts()
+            .get_post_by_id(post_id, &ViewerIdentity::local(session.user_id))
+            .await
+            .unwrap()
+            .unwrap();
+        let mut labels: Vec<_> = post
+            .tags
+            .iter()
+            .map(|tag| tag.tag_display.as_ref())
+            .collect();
+        labels.sort_unstable();
+        assert_eq!(
+            labels,
+            [
+                "100-bullets",
+                "Rust---Lang-",
+                "james-s-a-corey",
+                "old-man-s-war"
+            ]
+        );
+        assert_eq!(post.body, "Body\n");
 
+        let xml = xml
+            .replace("100 bullets", "200 bullets")
+            .replace("100-bullets", "200-bullets");
+        let response = app
+            .clone()
+            .oneshot(atompub_put_xml(&session, &path, &xml))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let post = env
+            .posts()
+            .get_post_by_id(post_id, &ViewerIdentity::local(session.user_id))
+            .await
+            .unwrap()
+            .unwrap();
+        let mut labels: Vec<_> = post
+            .tags
+            .iter()
+            .map(|tag| tag.tag_display.as_ref())
+            .collect();
+        labels.sort_unstable();
+        assert_eq!(
+            labels,
+            [
+                "200-bullets",
+                "Rust---Lang-",
+                "james-s-a-corey",
+                "old-man-s-war"
+            ]
+        );
+    }
+}
+
+/// Invalid categories and raw Org keywords must reject before any Post state
+/// changes, even when other valid tags and authored fields are supplied.
+#[apply(backends)]
+#[tokio::test]
+async fn keyword_normalization_rejects_complete_create_and_update(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, base);
+    let original = entry_xml("Original", "text/markdown", "Original body");
     let response = app
         .clone()
-        .oneshot(atompub_post_xml(&session, "posts", xml))
+        .oneshot(atompub_post_xml(&session, "posts", &original))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
-    // The invalid term was skipped, not stored.
-    let body = body_string(response).await;
-    assert!(
-        !body.contains("has spaces"),
-        "invalid category leaked: {body}"
-    );
+    let post_id = PostId::from(location_post_id(&response));
+    let path = format!("posts/{post_id}");
+    let response = app
+        .clone()
+        .oneshot(atompub_get(&session, &path))
+        .await
+        .unwrap();
+    let original_etag = etag_of(&response);
+    let original_member = body_string(response).await;
+    let viewer = ViewerIdentity::local(session.user_id);
+    let original_post = env
+        .posts()
+        .get_post_by_id(post_id, &viewer)
+        .await
+        .unwrap()
+        .unwrap();
+    let over_cap = (0..=MAX_TAGS_PER_POST)
+        .map(|index| format!("Tag {index}"))
+        .collect::<Vec<_>>();
+    let mut term_sets = vec![
+        vec![" ".to_owned()],
+        vec!["---!?".to_owned()],
+        vec!["café".to_owned()],
+        vec!["\u{212a}".to_owned()],
+        vec!["\u{a0}\u{212a}\u{a0}".to_owned()],
+        vec!["\u{a0}100 bullets".to_owned()],
+        vec!["100 bullets\u{a0}".to_owned()],
+    ];
+    term_sets.push(over_cap);
+    for terms in term_sets {
+        let category_source = terms.iter().fold(
+            "<content type=\"text/org\">Replacement body</content><category term=\"valid\"/>"
+                .to_owned(),
+            |mut source, term| {
+                write!(source, "<category term=\"{term}\"/>").unwrap();
+                source
+            },
+        );
+        let keyword_source = format!(
+            "<content type=\"text/org\">#+KEYWORDS: valid\n#+KEYWORDS: {}\nReplacement body</content>",
+            terms.join(", "),
+        );
+        for source in [category_source, keyword_source] {
+            let xml = format!(
+                r#"<entry xmlns="http://www.w3.org/2005/Atom"><title>Replacement</title><summary>Changed summary</summary>{source}</entry>"#
+            );
+            let response = app
+                .clone()
+                .oneshot(atompub_post_xml(&session, "posts", &xml))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let response = app
+                .clone()
+                .oneshot(atompub_put_xml(&session, &path, &xml))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let response = app
+                .clone()
+                .oneshot(atompub_get(&session, &path))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(etag_of(&response), original_etag);
+            assert_eq!(body_string(response).await, original_member);
+            let post = env
+                .posts()
+                .get_post_by_id(post_id, &viewer)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(post.updated_at, original_post.updated_at);
+            assert_eq!(post.title, original_post.title);
+            assert_eq!(post.body, original_post.body);
+            assert_eq!(post.summary, original_post.summary);
+            assert_eq!(post.format, original_post.format);
+            assert_eq!(post.slug, original_post.slug);
+            assert_eq!(post.tags.len(), 1);
+            assert_eq!(post.tags[0].tag_display, "rust");
+        }
+    }
+    let response = app.oneshot(atompub_get(&session, "posts")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_string(response).await.matches("<entry").count(), 1);
 }
 
 /// #771 (D9/AC8, ADR-0092): an entry carrying more than `MAX_TAGS_PER_POST`
@@ -1350,12 +1516,10 @@ async fn create_dedupes_categories_keeping_first_casing(#[case] backend: Backend
     );
 }
 
-/// #771 (D9) narrows `AtomPub` category handling for *over-cap* entries only — a
-/// single *malformed* term is still skipped leniently rather than failing the
-/// whole entry (R5, `docs/atompub-marsedit-acceptance.md`).
+/// Free-form terms and valid labels both survive successful category ingestion.
 #[apply(backends)]
 #[tokio::test]
-async fn create_skips_malformed_category_beside_a_valid_one(#[case] backend: Backend) {
+async fn create_normalizes_spaced_category_beside_a_valid_one(#[case] backend: Backend) {
     let env = backend.setup().await;
     let base = &env.base;
     let session = create_user_and_session(
@@ -1368,7 +1532,7 @@ async fn create_skips_malformed_category_beside_a_valid_one(#[case] backend: Bac
 
     let xml = r#"<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom">
-  <title>Lenient</title>
+  <title>Categories</title>
   <content type="text">body</content>
   <category term="rust"/>
   <category term="has spaces"/>
@@ -1383,17 +1547,123 @@ async fn create_skips_malformed_category_beside_a_valid_one(#[case] backend: Bac
     let body = body_string(response).await;
     assert_eq!(
         body.matches("<category").count(),
-        1,
-        "the valid term should survive alone: {body}"
+        2,
+        "both category terms should survive: {body}"
     );
     assert!(
         body.contains("term=\"rust\""),
         "the valid term should be kept: {body}"
     );
     assert!(
-        !body.contains("has spaces"),
-        "malformed category leaked: {body}"
+        body.contains("term=\"has-spaces\""),
+        "spaced category must normalize: {body}"
     );
+}
+
+/// The repair client replaces only categories in a fresh Member GET. Both
+/// dialects must retain even a collision-allocated published/scheduled slug.
+#[apply(backends)]
+#[tokio::test]
+async fn category_only_fresh_member_replacement_preserves_frozen_post(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let session = create_user_and_session(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, &env.base);
+    let viewer = ViewerIdentity::local(session.user_id);
+    for (index, published) in ["2024-01-02T03:04:05Z", "2099-01-02T03:04:05Z"]
+        .into_iter()
+        .enumerate()
+    {
+        let xml = format!(
+            r#"<entry xmlns="http://www.w3.org/2005/Atom" xmlns:j="https://jaunder.org/ns/atompub"><title>Repair collision</title><content type="text/org">Remote sentinel &lt;xml&gt; &amp; body.</content><summary>Server summary</summary><published>{published}</published><j:audience>private</j:audience><category term="RUST"/></entry>"#
+        );
+        let first = app
+            .clone()
+            .oneshot(atompub_post_xml(&session, "posts", &xml))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::CREATED);
+        let created = app
+            .clone()
+            .oneshot(atompub_post_xml(&session, "posts", &xml))
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let location = atompub_location(
+            created
+                .headers()
+                .get(header::LOCATION)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+        );
+        let post_id = PostId::from(location_post_id(&created));
+        let path = format!("posts/{post_id}");
+        let before = env
+            .posts()
+            .get_post_by_id(post_id, &viewer)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            before.slug.as_ref(),
+            format!("repair-collision-{}", index * 2 + 1)
+        );
+        let audiences = env.posts().get_post_audiences(post_id).await.unwrap();
+        let get = app
+            .clone()
+            .oneshot(atompub_get(&session, &path))
+            .await
+            .unwrap();
+        let etag = etag_of(&get);
+        let member = body_string(get).await;
+        let replacement = member.replace("</entry>", "<category term=\"100 bullets\"/></entry>");
+        let put = app
+            .clone()
+            .oneshot(
+                atompub_at(&session, Method::PUT, &location)
+                    .header(header::CONTENT_TYPE, "application/atom+xml")
+                    .header(header::IF_MATCH, etag)
+                    .body(Body::from(replacement))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(put.status(), StatusCode::OK);
+        let after = env
+            .posts()
+            .get_post_by_id(post_id, &viewer)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.post_id, before.post_id);
+        assert_eq!(after.user_id, before.user_id);
+        assert_eq!(after.title, before.title);
+        assert_eq!(after.body, before.body);
+        assert_eq!(after.format, before.format);
+        assert_eq!(after.summary, before.summary);
+        assert_eq!(after.created_at, before.created_at);
+        assert_eq!(after.published_at, before.published_at);
+        assert_eq!(after.deleted_at, before.deleted_at);
+        assert_eq!(after.slug, before.slug);
+        assert_eq!(after.permalink(), before.permalink());
+        assert_eq!(
+            env.posts().get_post_audiences(post_id).await.unwrap(),
+            audiences
+        );
+        assert_eq!(
+            after
+                .tags
+                .iter()
+                .map(|tag| tag.tag_display.as_ref())
+                .collect::<Vec<_>>(),
+            ["100-bullets", "RUST"]
+        );
+    }
 }
 
 #[apply(backends)]

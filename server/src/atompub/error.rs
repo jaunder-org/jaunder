@@ -228,6 +228,8 @@ impl From<common::org::OrgMetadataError> for HandlerError {
 }
 
 impl From<super::mapping::InvalidPostFields> for HandlerError {
+    /// Invalid authored fields or unusable categories reject the whole Entry;
+    /// the client receives validation status without echoing authored input.
     fn from(_: super::mapping::InvalidPostFields) -> Self {
         HandlerError::BadRequest
     }

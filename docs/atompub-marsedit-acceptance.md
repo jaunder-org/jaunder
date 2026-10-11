@@ -63,8 +63,10 @@ covers real-client behaviour that the suite cannot.
 - [ ] Existing tags appear as category suggestions (from the service document's
       `app:categories`).
 - [ ] Adding categories to a post creates tags; removing them untags.
-- [ ] An invalid category term (spaces, uppercase, etc.) is silently skipped,
-      not rejected.
+- [ ] Valid category labels retain spelling and casing. Free-form ASCII terms
+      such as `100 bullets` normalize to `100-bullets`.
+- [ ] Unusable or non-ASCII category terms reject the complete create/update
+      (`400 Bad Request`), with no saved Post changes or silently missing tags.
 
 ## Media
 
