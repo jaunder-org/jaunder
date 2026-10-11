@@ -528,7 +528,6 @@ let
           config.systemd.package
           pkgs.coreutils
           pkgs.gnugrep
-          pkgs.util-linux
           self.packages.${pkgs.stdenv.hostPlatform.system}.test-support
         ];
         serviceConfig = {

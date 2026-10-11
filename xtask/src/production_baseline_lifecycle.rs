@@ -371,7 +371,7 @@ impl BaselineLifecycle {
 import net from "node:net";
 const quote = (value) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
 const args = process.argv.slice(2).map(quote).join(" ");
-const inner = `export $(systemctl show --property=Environment --value jaunder.service | tr ' ' '\\n' | grep '^JAUNDER_'); export JAUNDER_STORAGE_PATH=/var/lib/jaunder/data; runuser -u "$(systemctl show --property=User --value jaunder.service)" -- test-support ${{args}}`;
+const inner = `export $(systemctl show --property=Environment --value jaunder.service | tr ' ' '\\n' | grep '^JAUNDER_'); export JAUNDER_STORAGE_PATH=/var/lib/jaunder/data; test-support ${{args}}`;
 const command = `(
 diagnostic=/tmp/jaunder-baseline-seed-$$.err; ${{inner}} 2>"$diagnostic"; code=$?; if [ "$code" -ne 0 ]; then cat "$diagnostic"; fi; rm -f "$diagnostic"; exit "$code"
 ); code=$?; printf '\\n{STATUS}%s\\n' "$code"`;
@@ -1607,7 +1607,7 @@ fn sha256_file(path: &Path) -> Result<String> {
 }
 fn baseline_command(package: &PackageIdentity, args: &str) -> String {
     format!(
-        "export $(systemctl show --property=Environment --value jaunder.service | tr ' ' '\\n' | grep '^JAUNDER_'); export JAUNDER_STORAGE_PATH=/var/lib/jaunder/data; runuser -u \"$(systemctl show --property=User --value jaunder.service)\" -- {} {args}",
+        "export $(systemctl show --property=Environment --value jaunder.service | tr ' ' '\\n' | grep '^JAUNDER_'); export JAUNDER_STORAGE_PATH=/var/lib/jaunder/data; {} {args}",
         Path::new(&package.output_path)
             .join("bin/jaunder")
             .display()
@@ -1840,9 +1840,6 @@ mod tests {
             },
         );
         let bridge = lifecycle.seed_process("seed-fixture", &node).unwrap();
-        let script = fs::read_to_string(&bridge).unwrap();
-        assert!(script.contains("runuser -u"));
-        assert!(script.contains("systemctl show --property=User --value jaunder.service"));
         let empty_path = root.path().join("empty-path");
         fs::create_dir(&empty_path).unwrap();
         let output = Command::new(&bridge)
@@ -1894,8 +1891,6 @@ mod tests {
         }
         let ordinary = baseline_command(&package, "backup");
         assert!(ordinary.contains("Environment --value jaunder.service"));
-        assert!(ordinary.contains("runuser -u"));
-        assert!(ordinary.contains("systemctl show --property=User --value jaunder.service"));
         assert!(!ordinary.contains("systemd-run"));
         assert!(!ordinary.contains("jaunder-restore-env"));
         let restore = restore_service_command(&package, "restore /var/lib/jaunder/fixture.tar.gz");
