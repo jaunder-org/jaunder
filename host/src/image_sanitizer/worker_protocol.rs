@@ -606,15 +606,12 @@ mod tests {
                 serde_json::json!({"kind": "PermissionDenied", "os_code": null}),
             ),
         ] {
-            let reply = Reply::Failed(Failure::from(&WorkerError::Native(NativeImageError::Gif(
-                error,
-            ))));
+            let failure = Failure::from(&WorkerError::Native(NativeImageError::Gif(error)));
+            assert!(!failure.to_string().contains(marker));
+            let reply = Reply::Failed(failure);
             let bytes = encode(&reply).expect("bounded GIF failure");
             assert!(!String::from_utf8_lossy(&bytes).contains(marker));
             assert!(!format!("{reply:?}").contains(marker));
-            if let Reply::Failed(failure) = &reply {
-                assert!(!failure.to_string().contains(marker));
-            }
             let decoded = decode(&bytes).expect("consistent GIF source schema");
             assert_eq!(
                 serde_json::to_value(decoded).expect("GIF kind"),

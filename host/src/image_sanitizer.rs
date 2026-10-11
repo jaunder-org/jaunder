@@ -797,6 +797,41 @@ mod tests {
             && error.to_string() == "independent observer failed"));
     }
 
+    #[tokio::test]
+    async fn production_application_fixture_sanitizes_canonical_private_png() {
+        use std::os::unix::fs::MetadataExt;
+        let executable = std::env::var_os("JAUNDER_APPLICATION_BIN")
+            .map(PathBuf::from)
+            .expect("explicit production-feature application fixture");
+        let sanitizer = ImageSanitizer::new(executable).expect("actual application runtime");
+        let input = NamedTempFile::new().expect("private input");
+        std::fs::write(
+            input.path(),
+            include_bytes!("image_sanitizer_fixtures/png-original.png"),
+        )
+        .expect("owned PNG input");
+        let before = input.as_file().metadata().expect("private input identity");
+        let path = input.path().to_owned();
+        let result = sanitizer
+            .sanitize(
+                input,
+                &"owned.png".parse().expect("filename"),
+                Some(&"image/png".parse().expect("MIME")),
+                1_048_576_i64.try_into().expect("size limit"),
+            )
+            .await
+            .expect("production worker completion");
+        assert!(matches!(&result, Sanitization::Image(image)
+            if image.content_type().as_ref() == "image/png" && image.file().path() == path));
+        let after = std::fs::metadata(&path).expect("edited identity");
+        assert_eq!((after.dev(), after.ino()), (before.dev(), before.ino()));
+        assert_eq!(after.permissions().mode() & 0o7777, 0o600);
+        assert_eq!(
+            std::fs::read(&path).expect("edited PNG"),
+            include_bytes!("image_sanitizer_fixtures/png-sanitized.png")
+        );
+    }
+
     fn observed_pid(result: std::io::Result<String>) -> Option<rustix::process::Pid> {
         match result {
             Ok(value) if !value.is_empty() => Some(
@@ -1147,11 +1182,8 @@ mod tests {
                 .env("JAUNDER_OWNER_EXIT_RECEIPT", &receipt)
                 .output()
                 .expect("normal-return subprocess");
-        assert!(
-            output.status.success(),
-            "subprocess teardown: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "subprocess teardown: {stderr}");
         let record: serde_json::Value =
             serde_json::from_slice(&std::fs::read(receipt).expect("normal-exit receipt"))
                 .expect("receipt schema");

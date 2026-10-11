@@ -1460,11 +1460,8 @@ mod tests {
         .output()
         .await
         .expect("real demo seed command");
-        assert!(
-            output.status.success(),
-            "demo profile command: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "demo profile command: {stderr}");
 
         let factory =
             storage::open_existing_database(&db, &storage::StorageRuntimeConfig::default())

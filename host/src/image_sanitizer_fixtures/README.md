@@ -54,7 +54,12 @@ Fixtures are compiled into tests (and the small startup probe) and explicitly
 admitted by the normal application and coverage source filters. Editing tests
 inject a real `test-support` executable through `JAUNDER_IMAGE_WORKER_BIN`:
 `cargo xtask test-local` builds it explicitly, and hermetic coverage supplies
-its reviewed package. Libtest executables never act as production worker
-substitutes. Observers use their separate test-only tool paths; production never
-discovers an editor through PATH or environment. No ignored `.xtask` fixture
-directory is needed for maintained tests.
+its reviewed package. The production-entrypoint regression separately requires
+`JAUNDER_APPLICATION_BIN`: both providers build the actual Jaunder application
+with production host/storage features, retain its exact executable bytes through
+workspace test compilation, and remove their owned copy after the run/report.
+Unsettled copies cause a refusal rather than silently joining a later report.
+Libtest executables never act as production worker substitutes. Observers use
+their separate test-only tool paths; production never discovers an editor
+through PATH or environment. No ignored `.xtask` fixture directory is needed for
+maintained tests.

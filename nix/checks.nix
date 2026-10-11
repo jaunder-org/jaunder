@@ -1860,6 +1860,46 @@ mkWasmCoverageMeasurementProducer =
         buildPhaseCargoCommand = ''
           export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:''${LD_LIBRARY_PATH:-}"
           mkdir -p emit-out
+          # Keep production-feature maps separate from feature-unified libtest
+          # binaries, whose cheap-KDF guard refuses application startup.
+          (
+            environment="$(cargo llvm-cov show-env --export-prefix)" || exit
+            eval "$environment" || exit
+            cargo build --locked --package jaunder --bin jaunder --message-format=json > emit-out/application-build.json
+          )
+          application_executable="$(jq -ser --arg root "$PWD" '
+            [.[] | select(.reason == "compiler-artifact")] as $artifacts
+            | ($artifacts | map(select(.target.src_path == ($root + "/host/src/lib.rs")))) as $host
+            | ($artifacts | map(select(.target.src_path == ($root + "/storage/src/lib.rs")))) as $storage
+            | if ($host | length) == 0 or ($storage | length) == 0
+                or any($host[]; (.features | index("cheap-kdf")) != null)
+                or any($storage[]; (.features | index("test-utils")) != null)
+              then error("production application feature evidence rejected") else . end
+            | [$artifacts[] | select(.target.name == "jaunder" and .target.src_path == ($root + "/server/src/main.rs") and (.target.kind | index("bin")) != null and (.package_id | startswith("path+file://" + $root + "/server#jaunder@"))) | .executable | select(. != null)]
+            | if length == 1 then .[0] else error("expected one application executable") end
+          ' emit-out/application-build.json)"
+          application_objects="$(dirname "$application_executable")/deps"
+          unsettled="$(find "$application_objects" -maxdepth 1 -name 'jaunder-native-application-*' -print -quit)"
+          if test -n "$unsettled"; then
+            printf '%s\n' 'unsettled application fixture object exists' >&2
+            exit 1
+          fi
+          JAUNDER_APPLICATION_BIN="$(mktemp "$application_objects/jaunder-native-application-XXXXXX")"
+          export JAUNDER_APPLICATION_BIN
+          cleanup_application_fixture() {
+            status=$?
+            if ! rm -- "$JAUNDER_APPLICATION_BIN"; then
+              printf '%s\n' 'application fixture cleanup failed' >&2
+              exit 1
+            fi
+            exit "$status"
+          }
+          trap cleanup_application_fixture EXIT
+          cp "$application_executable" "$JAUNDER_APPLICATION_BIN"
+          chmod 700 "$JAUNDER_APPLICATION_BIN"
+          cmp "$application_executable" "$JAUNDER_APPLICATION_BIN"
+          application_identity="$(sha256sum "$JAUNDER_APPLICATION_BIN")"
+          printf '%s\n' "$application_identity" > emit-out/application-retained.sha256
           # Libtest cannot serve the private worker mode. Build a real executable
           # under the producer's exact instrumentation environment, not the
           # separately packaged, uninstrumented test-support binary. The producer
@@ -1880,6 +1920,8 @@ mkWasmCoverageMeasurementProducer =
           # The producer emits checked stage evidence; the Nix gate and host xtask
           # consume its status and reports as separate authoritative boundaries.
           devtool coverage emit --out emit-out
+          settled_application_identity="$(sha256sum "$JAUNDER_APPLICATION_BIN")"
+          test "$application_identity" = "$settled_application_identity"
         '';
         installPhaseCommand = ''
           mkdir -p $out
@@ -1892,6 +1934,9 @@ mkWasmCoverageMeasurementProducer =
           if test -d emit-out/diagnostics; then
             cp -r emit-out/diagnostics $out/diagnostics
           fi
+          mkdir -p $out/diagnostics/application-fixture
+          cp emit-out/application-build.json $out/diagnostics/application-fixture/build.json
+          cp emit-out/application-retained.sha256 $out/diagnostics/application-fixture/retained.sha256
           # emit-out/coverage-report.lcov is intentionally NOT copied: it is an
           # intermediate consumed only by `cargo crap`, not a gate output the host reads.
           if test -e emit-out/coverage-report.txt; then
