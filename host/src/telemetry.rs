@@ -993,6 +993,44 @@ mod tests {
     }
 
     #[test]
+    fn verbose_logs_do_not_widen_warn_trace_admission() {
+        for log in ["info", "debug"] {
+            let config = configured_filters(false, Some(log), None, Ok(Some("warn".to_owned())));
+            let output = Arc::new(Mutex::new(Vec::new()));
+            let exporter = InMemorySpanExporter::default();
+            let provider = SdkTracerProvider::builder()
+                .with_simple_exporter(exporter.clone())
+                .build();
+            let subscriber = compose_subscriber(
+                &config,
+                None::<tracing_subscriber::layer::Identity>,
+                Some(provider.tracer("test")),
+                Some(Shared(output.clone())),
+            );
+            tracing::subscriber::with_default(subscriber, || {
+                let info = tracing::info_span!("info_operation");
+                assert!(!info.is_disabled());
+                assert!(!span_is_trace_admitted(&info), "{log}");
+                info.in_scope(|| tracing::info!("ordinary info"));
+                let warning = tracing::warn_span!("warning_operation");
+                assert!(span_is_trace_admitted(&warning), "{log}");
+            });
+            provider.force_flush().expect("flush");
+            let spans = exporter.get_finished_spans().expect("spans");
+            assert!(
+                !spans.iter().any(|span| span.name == "info_operation"),
+                "{log}"
+            );
+            assert!(
+                spans.iter().any(|span| span.name == "warning_operation"),
+                "{log}"
+            );
+            let output = String::from_utf8(output.lock().expect("output").clone()).expect("utf8");
+            assert!(output.contains("ordinary info"), "{log}: {output}");
+        }
+    }
+
+    #[test]
     fn dynamic_trace_filter_admission_follows_actual_context_lifecycle() {
         let config = configured_filters(
             false,
