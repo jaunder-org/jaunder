@@ -1827,8 +1827,6 @@ mkWasmCoverageMeasurementProducer =
         src = coverageSrc;
         inherit cargoArtifacts;
         pname = "jaunder-coverage";
-        # Libtest binaries cannot handle the private same-executable worker mode.
-        JAUNDER_IMAGE_WORKER_BIN = "${testSupportBin}/bin/test-support";
         # Source-based coverage uses LLVM's embedded coverage map
         # (-Cinstrument-coverage), not DWARF, so dropping debuginfo
         # shrinks the instrumented test binaries dramatically with no
@@ -1851,6 +1849,7 @@ mkWasmCoverageMeasurementProducer =
           cargo-crap
           pkgs.cargo-llvm-cov
           pkgs.cargo-nextest
+          pkgs.jq
           # devtool runs the whole test suite under an ephemeral
           # PostgreSQL (via devtool pg) so
           # storage/src/postgres/* gets instrumented coverage. The
@@ -1861,6 +1860,23 @@ mkWasmCoverageMeasurementProducer =
         buildPhaseCargoCommand = ''
           export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:''${LD_LIBRARY_PATH:-}"
           mkdir -p emit-out
+          # Libtest cannot serve the private worker mode. Build a real executable
+          # under the producer's exact instrumentation environment, not the
+          # separately packaged, uninstrumented test-support binary. The producer
+          # cleans profraw files only, so the compiled fixture remains available.
+          (
+            environment="$(cargo llvm-cov show-env --export-prefix)" || exit
+            eval "$environment" || exit
+            cargo build --package test-support --bin test-support --message-format=json > image-worker-build.json
+          )
+          # Cargo owns the artifact path (including target/profile layout).
+          # Reject absent or ambiguous executable evidence rather than guessing.
+          JAUNDER_IMAGE_WORKER_BIN="$(jq -ser '
+            [.[] | select(.reason == "compiler-artifact" and .target.name == "test-support" and (.target.kind | index("bin")) != null) | .executable | select(. != null)]
+            | if length == 1 then .[0] else error("expected one image worker executable") end
+          ' image-worker-build.json)"
+          export JAUNDER_IMAGE_WORKER_BIN
+          test -x "$JAUNDER_IMAGE_WORKER_BIN"
           # The producer emits checked stage evidence; the Nix gate and host xtask
           # consume its status and reports as separate authoritative boundaries.
           devtool coverage emit --out emit-out

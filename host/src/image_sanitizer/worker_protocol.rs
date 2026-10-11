@@ -389,6 +389,97 @@ mod tests {
     }
 
     #[test]
+    fn metadata_failure_round_trips_preserve_variants_counts_and_not_private_messages() {
+        // Every native metadata variant must cross the process boundary with its
+        // identity intact, but never with the library's private diagnostic text.
+        use exiftool_rs::Error as E;
+        let marker = "owner@example.test GPS-private-value";
+        let cases = [
+            (
+                E::Io(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    marker,
+                )),
+                serde_json::json!({"Io": {"kind": "PermissionDenied", "os_code": null}}),
+            ),
+            (
+                E::UnsupportedFileType(marker.into()),
+                serde_json::json!("UnsupportedFileType"),
+            ),
+            (
+                E::InvalidData(marker.into()),
+                serde_json::json!("InvalidData"),
+            ),
+            (
+                E::TagNotFound(marker.into()),
+                serde_json::json!("TagNotFound"),
+            ),
+            (E::InvalidTiffHeader, serde_json::json!("InvalidTiffHeader")),
+            (
+                E::InvalidExif(marker.into()),
+                serde_json::json!("InvalidExif"),
+            ),
+            (
+                E::InvalidIptc(marker.into()),
+                serde_json::json!("InvalidIptc"),
+            ),
+            (
+                E::InvalidXmp(marker.into()),
+                serde_json::json!("InvalidXmp"),
+            ),
+            (
+                E::TruncatedData {
+                    expected: 7,
+                    actual: 3,
+                },
+                serde_json::json!({"TruncatedData": {"expected": 7, "actual": 3}}),
+            ),
+            (
+                E::ConversionError(marker.into()),
+                serde_json::json!("ConversionError"),
+            ),
+        ];
+        for (error, expected) in cases {
+            let error = WorkerError::Native(NativeImageError::Metadata(error));
+            let reply = Reply::Failed(Failure::from(&error));
+            let bytes = encode(&reply).expect("bounded metadata projection");
+            assert!(!String::from_utf8_lossy(&bytes).contains(marker));
+            assert!(!format!("{reply:?}").contains(marker));
+            let decoded = decode(&bytes).expect("valid projected metadata failure");
+            assert_eq!(
+                serde_json::to_value(decoded).expect("projected variant"),
+                serde_json::json!({"Failed": {"Metadata": expected}}),
+            );
+        }
+    }
+
+    #[test]
+    fn worker_completions_round_trip_mime_size_and_passthrough_identity() {
+        // A successful worker cannot change the byte-accounting facts when its
+        // completion is projected into the supervisor's private reply schema.
+        for (completion, expected) in [
+            (
+                Completion::Image {
+                    mime: "image/png",
+                    size: 42,
+                },
+                serde_json::json!({"Image": {"mime": "image/png", "size": 42}}),
+            ),
+            (
+                Completion::Passthrough { size: 17 },
+                serde_json::json!({"Passthrough": {"size": 17}}),
+            ),
+        ] {
+            let bytes = encode(&Reply::from(completion)).expect("completion encoding");
+            let decoded = decode(&bytes).expect("completion decoding");
+            assert_eq!(
+                serde_json::to_value(decoded).expect("completion identity"),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn projection_preserves_nested_io_and_metadata_variants_without_private_messages() {
         let marker = "owner@example.test GPS-private-value";
         let errors = [
