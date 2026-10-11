@@ -29,6 +29,16 @@ original PNG also provides a small production startup probe: the same-executable
 worker must produce its canonical sanitized digest before serve/demo-seed roots
 accept the adapter.
 
+`heic-named-original.heic` is the owned HEIC control from the native feasibility
+corpus. Its metadata item name contains the synthetic marker
+`native-private-item-name`; the earlier test-only little-exif study control
+added that name while adjusting container sizes and metadata locations. The
+maintained regression test requires the checked parser to find that actual name,
+checks blanking and preserved metadata framing, and compares every byte outside
+the checked metadata regions. It is a supplemental item-name control, not a new
+format or a replacement for the exact-nine format/rendering observer population.
+This boundary test does not independently certify decoding or device rendering.
+
 `inspect_rendering.py` is a test-only observer built on conventional Pillow and
 ImageMagick/libheif decoders. The Rust format table independently reads planted
 private tags before/after, compares orientation and rendering tags, and compares

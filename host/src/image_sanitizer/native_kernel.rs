@@ -497,6 +497,47 @@ mod tests {
     }
 
     #[test]
+    fn named_heif_metadata_is_scrubbed_without_changing_unowned_bytes() {
+        let source = include_bytes!("../image_sanitizer_fixtures/heic-named-original.heic");
+        let marker = b"native-private-item-name";
+        let regions = Metadata::heif_metadata_regions(source).expect("checked named HEIF regions");
+        let names: Vec<_> = regions
+            .iter()
+            .filter(|(role, _)| *role == HeifMetadataRole::Name)
+            .flat_map(|(_, ranges)| ranges.iter())
+            .collect();
+        assert!(
+            !names.is_empty(),
+            "the control must expose an actual item name"
+        );
+        assert!(
+            names.iter().any(|range| source[(*range).clone()]
+                .windows(marker.len())
+                .any(|bytes| bytes == marker)),
+            "the parsed name must contain the planted marker"
+        );
+        let tiff = orientation_exif(&[]).expect("empty rendering EXIF");
+        let clean = edit_heif(source, &tiff).expect("edit checked named HEIF");
+        assert_eq!(clean.len(), source.len());
+        assert!(
+            names
+                .iter()
+                .all(|range| clean[(*range).clone()].iter().all(|byte| *byte == b' '))
+        );
+        assert!(!clean.windows(marker.len()).any(|bytes| bytes == marker));
+        Metadata::heif_metadata_regions(&clean).expect("scrubbing preserves metadata framing");
+        for (index, byte) in source.iter().enumerate() {
+            if !regions
+                .iter()
+                .flat_map(|(_, ranges)| ranges.iter())
+                .any(|range| range.contains(&index))
+            {
+                assert_eq!(clean[index], *byte, "unowned HEIF byte at {index}");
+            }
+        }
+    }
+
+    #[test]
     fn heif_replacement_rejects_metadata_that_cannot_fit_owned_extents() {
         let source = include_bytes!("../image_sanitizer_fixtures/heic-original.heic");
         // A replacement larger than the entire original container cannot fit
