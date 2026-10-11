@@ -29,7 +29,7 @@ deployment.
     composition seam, with its pre-change command/revision/result captured in
     ignored evidence. Do not substitute resolver-only tests or wait until the
     post-change end-to-end task to establish this baseline.
-- [ ] **1. Resolve and expose the two immutable filter policies.**
+- [x] **1. Resolve and expose the two immutable filter policies.**
   - Depends on 0. Contract: add raw `trace_filter` input to
     `TelemetryRawConfig`, collected as `JAUNDER_TRACE_FILTER` by both executable
     roots. `TelemetryConfig` owns the resolved log and trace policies; expose

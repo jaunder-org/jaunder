@@ -276,6 +276,7 @@ fn telemetry_config() -> host::telemetry::TelemetryConfig {
         false,
         host::telemetry::TelemetryRawConfig {
             log_filter: inherited("JAUNDER_LOG_FILTER"),
+            trace_filter: inherited("JAUNDER_TRACE_FILTER"),
             rust_log: inherited("RUST_LOG"),
             log_format: inherited("JAUNDER_LOG_FORMAT"),
             jaunder_otlp_endpoint: inherited("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT"),
@@ -1011,6 +1012,76 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn subprocess_keeps_inherited_trace_and_log_filters_independent() {
+        const CHILD: &str = "JAUNDER_TEST_TRACE_POLICY_CHILD";
+        if let Some(scenario) = std::env::var_os(CHILD) {
+            let config = telemetry_config();
+            assert_eq!(config.ordinary_log_filter().to_string(), "warn");
+            assert_eq!(
+                config.trace_filter().to_string(),
+                if scenario == "override" {
+                    "debug"
+                } else {
+                    "info"
+                }
+            );
+            return;
+        }
+        for scenario in ["override", "absent", "blank", "malformed", "nonunicode"] {
+            let mut command =
+                std::process::Command::new(std::env::current_exe().expect("test binary"));
+            command.args([
+                "--exact",
+                "tests::subprocess_keeps_inherited_trace_and_log_filters_independent",
+                "--nocapture",
+            ]);
+            for name in [
+                "JAUNDER_TRACE_FILTER",
+                "JAUNDER_LOG_FORMAT",
+                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
+                "OTEL_EXPORTER_OTLP_ENDPOINT",
+                "JAUNDER_SLOW_OP_MS",
+                "JAUNDER_E2E_SEED_PROCESS",
+            ] {
+                command.env_remove(name);
+            }
+            command
+                .env(CHILD, scenario)
+                .env("JAUNDER_LOG_FILTER", "warn")
+                .env("RUST_LOG", "off");
+            match scenario {
+                "override" => {
+                    command.env("JAUNDER_TRACE_FILTER", "debug");
+                }
+                "blank" => {
+                    command.env("JAUNDER_TRACE_FILTER", "   ");
+                }
+                "malformed" => {
+                    command.env("JAUNDER_TRACE_FILTER", "raw-token==secret");
+                }
+                "nonunicode" => {
+                    command.env(
+                        "JAUNDER_TRACE_FILTER",
+                        std::ffi::OsString::from_vec(vec![0xff]),
+                    );
+                }
+                "absent" => {}
+                _ => unreachable!("closed trace policy scenario set"),
+            }
+            let output = command.output().expect("configuration child");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "{scenario}: {stderr}");
+            let expected = if matches!(scenario, "blank" | "malformed" | "nonunicode") {
+                "host.telemetry.trace_filter: invalid configured value; using INFO trace filter\n"
+            } else {
+                ""
+            };
+            assert_eq!(stderr, expected);
+        }
+    }
+
     #[test]
     fn subprocess_classifies_inherited_configuration_inputs() {
         const SCENARIO: &str = "JAUNDER_TEST_SUPPORT_CONFIG_SCENARIO";
@@ -1049,6 +1120,7 @@ mod tests {
             command.env(SCENARIO, scenario);
             for name in [
                 "JAUNDER_LOG_FILTER",
+                "JAUNDER_TRACE_FILTER",
                 "RUST_LOG",
                 "JAUNDER_LOG_FORMAT",
                 "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",

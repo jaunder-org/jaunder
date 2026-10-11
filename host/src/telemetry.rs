@@ -37,6 +37,7 @@ const E2E_SEED_PROCESS_TEST_SUPPORT: &str = "e2e.seed.test-support";
 /// Raw inherited values collected by an executable composition root.
 pub struct TelemetryRawConfig {
     pub log_filter: Result<Option<String>, std::env::VarError>,
+    pub trace_filter: Result<Option<String>, std::env::VarError>,
     pub rust_log: Result<Option<String>, std::env::VarError>,
     pub log_format: Result<Option<String>, std::env::VarError>,
     pub jaunder_otlp_endpoint: Result<Option<String>, std::env::VarError>,
@@ -48,6 +49,7 @@ pub struct TelemetryRawConfig {
 /// Immutable telemetry policy resolved before asynchronous work begins.
 pub struct TelemetryConfig {
     filter: EnvFilter,
+    trace_filter: EnvFilter,
     json_format: bool,
     otlp_endpoint: Option<String>,
     slow_op_threshold: Duration,
@@ -63,6 +65,9 @@ impl TelemetryConfig {
             filter: resolved_filter(verbose, raw.log_filter, raw.rust_log, || {
                 fallback(FallbackKind::LogFilter);
             }),
+            trace_filter: resolved_trace_filter(raw.trace_filter, || {
+                fallback(FallbackKind::TraceFilter);
+            }),
             json_format: use_json_format(raw.log_format, || fallback(FallbackKind::LogFormat)),
             otlp_endpoint: otel_exporter_otlp_endpoint(
                 raw.jaunder_otlp_endpoint,
@@ -74,6 +79,18 @@ impl TelemetryConfig {
             }),
             e2e_seed_process: e2e_seed_process(raw.e2e_seed_process),
         }
+    }
+
+    /// Ordinary-log admission, reusable by whichever physical log sink is active.
+    #[must_use]
+    pub fn ordinary_log_filter(&self) -> EnvFilter {
+        self.filter.clone()
+    }
+
+    /// Trace admission, independent of log settings and CLI verbosity.
+    #[must_use]
+    pub fn trace_filter(&self) -> EnvFilter {
+        self.trace_filter.clone()
     }
 
     /// Whether the resolved endpoint enables OTLP-dependent services.
@@ -92,6 +109,7 @@ enum FallbackKind {
     SubscriberInstall,
     OtlpEndpoint,
     LogFilter,
+    TraceFilter,
     SlowThreshold,
     LogFormat,
 }
@@ -123,6 +141,10 @@ impl FallbackKind {
             Self::LogFilter => (
                 "host.telemetry.log_filter",
                 "invalid configured value; using default filter",
+            ),
+            Self::TraceFilter => (
+                "host.telemetry.trace_filter",
+                "invalid configured value; using INFO trace filter",
             ),
             Self::SlowThreshold => (
                 "host.telemetry.slow_threshold",
@@ -222,6 +244,25 @@ fn resolved_filter(
         }
     }
     default_filter(verbose)
+}
+
+fn resolved_trace_filter(
+    value: Result<Option<String>, std::env::VarError>,
+    mut warn: impl FnMut(),
+) -> EnvFilter {
+    match value {
+        Ok(None) => return EnvFilter::new("info"),
+        Ok(Some(value)) if !value.trim().is_empty() => {
+            if let Ok(filter) = EnvFilter::try_new(value) {
+                return filter;
+            }
+        }
+        Ok(Some(_)) | Err(_) => {}
+    }
+    // A rejected setting is not intentional trace suppression; retain the safe
+    // default without exposing operator input to a diagnostic sink.
+    warn();
+    EnvFilter::new("info")
 }
 
 fn use_json_format(
@@ -501,7 +542,7 @@ where
 
     // Box the fmt layer so the json/pretty variants share one type, and carry
     // OTel as an `Option` layer (absent or failed setup is a no-op).
-    let env_filter = config.filter.clone();
+    let env_filter = config.ordinary_log_filter();
     let fmt_layer = if config.json_format {
         fmt::layer().json().boxed()
     } else {
@@ -644,6 +685,7 @@ fn default_telemetry_config() -> TelemetryConfig {
         false,
         TelemetryRawConfig {
             log_filter: Ok(None),
+            trace_filter: Ok(None),
             rust_log: Ok(None),
             log_format: Ok(None),
             jaunder_otlp_endpoint: Ok(None),
@@ -1043,6 +1085,81 @@ mod tests {
         );
     }
 
+    fn configured_filters(
+        verbose: bool,
+        log_filter: Option<&str>,
+        rust_log: Option<&str>,
+        trace_filter: Result<Option<String>, std::env::VarError>,
+    ) -> TelemetryConfig {
+        TelemetryConfig::from_raw(
+            verbose,
+            TelemetryRawConfig {
+                log_filter: Ok(log_filter.map(str::to_owned)),
+                trace_filter,
+                rust_log: Ok(rust_log.map(str::to_owned)),
+                log_format: Ok(None),
+                jaunder_otlp_endpoint: Ok(None),
+                otlp_endpoint: Ok(None),
+                slow_op_ms: Ok(None),
+                e2e_seed_process: Ok(None),
+            },
+        )
+    }
+
+    #[test]
+    fn explicit_trace_filter_does_not_change_log_precedence_or_verbose_defaults() {
+        for directive in ["debug", "warn", "off", "host=debug"] {
+            let config = configured_filters(
+                true,
+                Some("warn"),
+                Some("debug"),
+                Ok(Some(directive.to_owned())),
+            );
+            assert_eq!(config.ordinary_log_filter().to_string(), "warn");
+            assert_eq!(config.trace_filter().to_string(), directive);
+        }
+        let config = configured_filters(true, None, None, Ok(None));
+        assert_eq!(config.trace_filter().to_string(), "info");
+        assert_eq!(
+            config.ordinary_log_filter().to_string(),
+            default_filter(true).to_string()
+        );
+        let config = configured_filters(false, None, Some("off"), Ok(None));
+        assert_eq!(config.ordinary_log_filter().to_string(), "off");
+        assert_eq!(config.trace_filter().to_string(), "info");
+    }
+
+    #[test]
+    fn rejected_trace_input_has_one_fixed_local_warning_and_info_fallback() {
+        for input in [
+            Ok(Some(String::new())),
+            Ok(Some("   ".to_owned())),
+            Ok(Some("raw-token==secret".to_owned())),
+            Err(invalid_unicode_env()),
+        ] {
+            let (config, output) = fallback_capture::capture(|| {
+                assert_zero_error_metrics(|| configured_filters(false, Some("off"), None, input))
+            });
+            assert_eq!(config.trace_filter().to_string(), "info");
+            assert_eq!(config.ordinary_log_filter().to_string(), "off");
+            assert_eq!(
+                output,
+                "host.telemetry.trace_filter: invalid configured value; using INFO trace filter\n"
+            );
+            assert!(!output.contains("secret"));
+        }
+    }
+
+    #[test]
+    fn trace_filter_defaults_to_info_independently_of_log_policy() {
+        let config = default_telemetry_config();
+        assert_eq!(config.trace_filter().to_string(), "info");
+        assert_eq!(
+            config.ordinary_log_filter().to_string(),
+            default_filter(false).to_string()
+        );
+    }
+
     #[test]
     fn raw_config_applies_fallbacks_and_preserves_the_recognised_seed_process() {
         let config = assert_zero_error_metrics(|| {
@@ -1050,6 +1167,7 @@ mod tests {
                 false,
                 TelemetryRawConfig {
                     log_filter: Err(invalid_unicode_env()),
+                    trace_filter: Ok(None),
                     rust_log: Ok(None),
                     log_format: Err(invalid_unicode_env()),
                     jaunder_otlp_endpoint: Err(invalid_unicode_env()),
@@ -1180,6 +1298,7 @@ mod tests {
             false,
             TelemetryRawConfig {
                 log_filter: Ok(None),
+                trace_filter: Ok(None),
                 rust_log: Ok(None),
                 log_format: Ok(None),
                 jaunder_otlp_endpoint: Ok(Some("http://127.0.0.1:4317".to_owned())),
@@ -1197,6 +1316,7 @@ mod tests {
             false,
             TelemetryRawConfig {
                 log_filter: Ok(None),
+                trace_filter: Ok(None),
                 rust_log: Ok(None),
                 log_format: Ok(None),
                 jaunder_otlp_endpoint: Ok(Some("not a valid endpoint".to_owned())),
@@ -1215,6 +1335,7 @@ mod tests {
             false,
             TelemetryRawConfig {
                 log_filter: Ok(None),
+                trace_filter: Ok(None),
                 rust_log: Ok(None),
                 log_format: Ok(Some("json".to_owned())),
                 jaunder_otlp_endpoint: Ok(None),
