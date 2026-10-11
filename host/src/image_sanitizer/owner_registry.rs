@@ -124,22 +124,28 @@ impl Owners {
         let (start, started) = mpsc::channel();
         let handle = std::thread::Builder::new()
             .name("image-supervisor".into())
-            .spawn(move || {
-                let _finished = Finished(worker_done.clone());
-                match started.recv() {
-                    Ok(()) => work(worker_done),
-                    Err(error) => report_private_failure(
-                        &OwnerFailure::Receive(error),
-                        "image owner admission failed",
-                    ),
-                }
-            })
+            .spawn(move || run_admitted_owner(&started, worker_done, work))
             .map_err(OwnerFailure::Spawn)?;
         reservation.owners.lock()[reservation.index] = Slot::Running(Entry { handle, done });
         reservation.committed = true;
         start.send(()).map_err(OwnerFailure::StartChannel)
     }
 }
+fn run_admitted_owner(
+    started: &mpsc::Receiver<()>,
+    done: Arc<AtomicBool>,
+    work: impl FnOnce(Arc<AtomicBool>),
+) {
+    let _finished = Finished(done.clone());
+    match started.recv() {
+        Ok(()) => work(done),
+        Err(error) => report_private_failure(
+            &OwnerFailure::Receive(error),
+            "image owner admission failed",
+        ),
+    }
+}
+
 impl Drop for Owners {
     fn drop(&mut self) {
         let slots = match self.slots.get_mut() {
@@ -228,7 +234,7 @@ mod tests {
     use std::time::{Duration, Instant};
     use tokio::sync::Semaphore;
 
-    use super::{OwnerFailure, Owners, PanicFailure, PermitOwner, Slot};
+    use super::{OwnerFailure, Owners, PanicFailure, PermitOwner, Slot, run_admitted_owner};
 
     fn wait_for(mut ready: impl FnMut() -> bool) {
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -236,6 +242,37 @@ mod tests {
             assert!(Instant::now() < deadline, "owner transition must complete");
             std::thread::sleep(Duration::from_millis(1));
         }
+    }
+
+    #[test]
+    fn disconnected_admission_never_runs_work_and_releases_no_child_capacity() {
+        let capacity = Arc::new(Semaphore::new(2));
+        let done = Arc::new(AtomicBool::new(false));
+        let permit = PermitOwner::new(
+            capacity
+                .clone()
+                .try_acquire_owned()
+                .expect("reserved capacity"),
+            done.clone(),
+            Arc::new(AtomicBool::new(true)),
+        );
+        let called = Arc::new(AtomicBool::new(false));
+        let observed = called.clone();
+        let (start, started) = mpsc::channel();
+        drop(start);
+        run_admitted_owner(&started, done.clone(), move |_| {
+            observed.store(true, Ordering::Release);
+            drop(permit);
+        });
+        assert!(
+            !called.load(Ordering::Acquire),
+            "unpublished work cannot run"
+        );
+        assert!(
+            done.load(Ordering::Acquire),
+            "failed admission finishes its owner"
+        );
+        assert_eq!(capacity.available_permits(), 2, "no child retains capacity");
     }
 
     #[test]
