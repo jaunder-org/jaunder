@@ -235,7 +235,12 @@ macro_rules! io_kinds {
             fn from(kind: std::io::ErrorKind) -> Self {
                 // ErrorKind's Debug spelling is enum-owned, not an I/O message.
                 // This also projects platform kinds whose constructors are unstable.
-                match format!("{kind:?}").as_str() { $(stringify!($kind) => Self::$kind,)+ _ => Self::Unknown }
+                Self::from_name(&format!("{kind:?}"))
+            }
+        }
+        impl IoKind {
+            fn from_name(name: &str) -> Self {
+                match name { $(stringify!($kind) => Self::$kind,)+ _ => Self::Unknown }
             }
         }
         impl std::fmt::Display for IoKind {
@@ -521,6 +526,21 @@ mod tests {
                 serde_json::json!({"Failed": expected})
             );
         }
+    }
+
+    #[test]
+    fn io_kind_name_projection_discards_unknown_names_and_preserves_known_kinds() {
+        assert_eq!(
+            serde_json::to_value(IoKind::from_name("PermissionDenied")).expect("known kind"),
+            serde_json::json!("PermissionDenied"),
+        );
+        let marker = "future-kind owner@example.test GPS-private-value";
+        let unknown = IoKind::from_name(marker);
+        assert_eq!(
+            serde_json::to_value(&unknown).expect("unknown kind"),
+            serde_json::json!("Unknown")
+        );
+        assert!(!format!("{unknown:?} {unknown}").contains(marker));
     }
 
     #[test]
