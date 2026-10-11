@@ -1169,12 +1169,19 @@ mod tests {
                     None::<Shared>,
                 );
                 tracing::subscriber::with_default(subscriber, || {
-                    let failed = tracing::field::debug(BrokenDebug);
-                    let span = tracing::info_span!(
-                        "decision",
-                        failed = &failed,
-                        allowed = tracing::field::Empty
+                    // Explicit initial values isolate the formatter-failure contract
+                    // from the span macro's generated source regions.
+                    let callsite = tracing::callsite!(
+                        name: "decision",
+                        kind: tracing::metadata::Kind::SPAN,
+                        level: tracing::Level::INFO,
+                        fields: failed, allowed
                     );
+                    let metadata = tracing::Callsite::metadata(callsite);
+                    let field = metadata.fields().field("failed").expect("declared field");
+                    let failed = tracing::field::debug(BrokenDebug);
+                    let values = [(&field, Some(&failed as &dyn tracing::field::Value))];
+                    let span = tracing::Span::new(metadata, &metadata.fields().value_set(&values));
                     span.record("allowed", true);
                 });
             });
