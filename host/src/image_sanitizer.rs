@@ -244,7 +244,7 @@ impl ImageSanitizer {
             .spawn(move |done| {
                 let reaped = Arc::new(AtomicBool::new(true));
                 let permit_owner = owner_registry::PermitOwner::new(permit, done, reaped.clone());
-                let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let result = capture_owner_failure(|| {
                     supervision::run(
                         &executable,
                         input.take(),
@@ -254,28 +254,13 @@ impl ImageSanitizer {
                         cancel_receiver,
                         &reaped,
                     )
-                })) {
-                    Ok(result) => result,
-                    Err(payload) => Err(ImageSanitizerError::Owner(OwnerFailure::Panic(
-                        payload.as_ref().into(),
-                    ))),
-                };
+                });
                 // Publish completion only after releasing confirmed-reaped capacity,
                 // so a resumed caller cannot observe an unsettled resource guard.
                 drop(permit_owner);
                 // A dropped receiver means the request/runtime is gone. The child is
                 // already reaped; explicitly close any completed private output.
-                match sender.send(result) {
-                    Err(Ok((input, _))) => {
-                        if let Err(error) = input.close() {
-                            report_private_failure(&error, "abandoned image spool cleanup");
-                        }
-                    }
-                    Err(Err(error)) if !matches!(error, ImageSanitizerError::Canceled) => {
-                        report_private_failure(&error, "abandoned image owner failure");
-                    }
-                    _ => {}
-                }
+                publish_completion(sender, result);
             })
             .map_err(ImageSanitizerError::Owner)?;
         let (input, reply) = receiver.await.map_err(ImageSanitizerError::Supervisor)??;
@@ -388,6 +373,33 @@ impl ImageSanitizer {
     }
 }
 
+type OwnerResult = Result<(NamedTempFile, worker_protocol::Reply), ImageSanitizerError>;
+
+fn capture_owner_failure(work: impl FnOnce() -> OwnerResult) -> OwnerResult {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)) {
+        Ok(result) => result,
+        Err(payload) => Err(ImageSanitizerError::Owner(OwnerFailure::Panic(
+            payload.as_ref().into(),
+        ))),
+    }
+}
+
+fn publish_completion(sender: oneshot::Sender<OwnerResult>, result: OwnerResult) {
+    // The caller settles its permit/reap guard before publication. Failed
+    // delivery cannot leave a confirmed-reaped private output on disk.
+    match sender.send(result) {
+        Err(Ok((input, _))) => {
+            if let Err(error) = input.close() {
+                report_private_failure(&error, "abandoned image spool cleanup");
+            }
+        }
+        Err(Err(error)) if !matches!(error, ImageSanitizerError::Canceled) => {
+            report_private_failure(&error, "abandoned image owner failure");
+        }
+        _ => {}
+    }
+}
+
 fn claims_raster(content_type: Option<&ContentType>, filename: &Filename) -> bool {
     let decoded = filename.decoded();
     let extension = Path::new(decoded.as_ref())
@@ -442,6 +454,75 @@ mod tests {
     use super::*;
     use serde_json::Value;
     use std::process::Stdio;
+
+    #[test]
+    fn captured_owner_panic_retains_safe_payload_classification() {
+        // Owner unwinding must retain a typed source without reflecting its
+        // arbitrary numeric payload in the returning error envelope.
+        let error = capture_owner_failure(|| std::panic::panic_any(404_u16))
+            .expect_err("intentional owner panic");
+        assert!(matches!(
+            &error,
+            ImageSanitizerError::Owner(OwnerFailure::Panic(PanicFailure {
+                kind: PanicKind::Other
+            }))
+        ));
+        assert!(!format!("{error:?} {error}").contains("404"));
+    }
+
+    #[test]
+    fn abandoned_completion_removes_output_or_retains_real_unlink_failure() {
+        // A dropped request must not strand completed private bytes. A real
+        // failed unlink remains observable, not falsely treated as removal.
+        let input = NamedTempFile::new().expect("private spool");
+        let path = input.path().to_owned();
+        let (sender, receiver) = oneshot::channel();
+        drop(receiver);
+        publish_completion(
+            sender,
+            Ok((input, worker_protocol::Reply::Passthrough { size: 0 })),
+        );
+        assert!(!path.exists(), "undelivered output must be removed");
+
+        let directory = tempfile::tempdir().expect("isolated private directory");
+        let input = NamedTempFile::new_in(directory.path()).expect("private spool");
+        let path = input.path().to_owned();
+        std::fs::remove_file(&path).expect("replace private pathname");
+        std::fs::create_dir(&path).expect("non-file unlink failure");
+        let (sender, receiver) = oneshot::channel();
+        drop(receiver);
+        publish_completion(
+            sender,
+            Ok((input, worker_protocol::Reply::Passthrough { size: 0 })),
+        );
+        assert!(path.is_dir(), "failed unlink remains observable");
+    }
+
+    #[test]
+    fn completion_delivery_preserves_typed_failure_and_closed_failure_is_safe() {
+        // Connected requests retain their concrete error. Disconnection must
+        // not unwind for either typed failure or ordinary cancellation.
+        let (sender, receiver) = oneshot::channel();
+        publish_completion(sender, Err(ImageSanitizerError::InvalidImage));
+        assert!(matches!(
+            receiver.blocking_recv().expect("completion delivered"),
+            Err(ImageSanitizerError::InvalidImage)
+        ));
+        for error in [
+            ImageSanitizerError::InvalidImage,
+            ImageSanitizerError::Canceled,
+        ] {
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let (sender, receiver) = oneshot::channel();
+                    drop(receiver);
+                    publish_completion(sender, Err(error));
+                }))
+                .is_ok(),
+                "closed error delivery must not unwind"
+            );
+        }
+    }
 
     #[test]
     fn completion_rejects_mismatched_size_and_unknown_image_identity() {
