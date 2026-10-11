@@ -121,16 +121,8 @@ impl Drop for ChildOwner {
             return;
         }
         let kill = self.child.kill();
-        match self.wait() {
-            Ok(()) => {}
-            Err(error) => report_private_failure(&error, "unwinding image child reap failed"),
-        }
-        if let Err(error) = kill
-            && error.kind() != std::io::ErrorKind::InvalidInput
-        {
-            // Reaping must still be attempted after an unexpected kill failure.
-            report_private_failure(&error, "unwinding image child kill failed");
-        }
+        let wait = self.wait();
+        report_unwind_results(kill, wait);
     }
 }
 
@@ -203,13 +195,35 @@ fn process(
         return work;
     }
     let kill = child.child.kill();
-    child.wait().map_err(ImageSanitizerError::Reap)?;
+    let wait = child.wait();
+    settled_child(kill, wait)?;
+    work
+}
+
+fn settled_child(
+    kill: std::io::Result<()>,
+    wait: std::io::Result<()>,
+) -> Result<(), ImageSanitizerError> {
+    wait.map_err(ImageSanitizerError::Reap)?;
     if let Err(error) = kill
         && error.kind() != std::io::ErrorKind::InvalidInput
     {
         return Err(ImageSanitizerError::Processing(error));
     }
-    work
+    Ok(())
+}
+
+fn report_unwind_results(kill: std::io::Result<()>, wait: std::io::Result<()>) {
+    match wait {
+        Ok(()) => {}
+        Err(error) => report_private_failure(&error, "unwinding image child reap failed"),
+    }
+    if let Err(error) = kill
+        && error.kind() != std::io::ErrorKind::InvalidInput
+    {
+        // Reaping has already been attempted, even after a kill failure.
+        report_private_failure(&error, "unwinding image child kill failed");
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -302,6 +316,60 @@ mod tests {
         assert!(matches!(error, ImageSanitizerError::Processing(source)
             if source.kind() == std::io::ErrorKind::PermissionDenied
             && source.to_string() == "controlled nonblocking setup failure"));
+    }
+
+    #[test]
+    fn child_settlement_prioritizes_reap_and_preserves_unexpected_kill_source() {
+        assert!(settled_child(Ok(()), Ok(())).is_ok());
+        assert!(
+            settled_child(
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "already exited"
+                )),
+                Ok(()),
+            )
+            .is_ok()
+        );
+        assert!(matches!(settled_child(
+            Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "controlled kill failure")),
+            Ok(()),
+        ), Err(ImageSanitizerError::Processing(source))
+            if source.kind() == std::io::ErrorKind::PermissionDenied
+            && source.to_string() == "controlled kill failure"));
+        assert!(matches!(settled_child(
+            Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "controlled kill failure")),
+            Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "controlled reap failure")),
+        ), Err(ImageSanitizerError::Reap(source))
+            if source.kind() == std::io::ErrorKind::Interrupted
+            && source.to_string() == "controlled reap failure"));
+    }
+
+    #[test]
+    fn unwind_reporting_handles_both_failures_without_panicking() {
+        for kind in [
+            None,
+            Some(std::io::ErrorKind::InvalidInput),
+            Some(std::io::ErrorKind::PermissionDenied),
+        ] {
+            assert!(
+                std::panic::catch_unwind(|| {
+                    let kill = kind.map_or(Ok(()), |kind| {
+                        Err(std::io::Error::new(kind, "controlled kill failure"))
+                    });
+                    report_unwind_results(
+                        kill,
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::Interrupted,
+                            "controlled reap failure",
+                        )),
+                    );
+                })
+                .is_ok(),
+                "unwind reporting cannot interrupt cleanup"
+            );
+        }
+        assert!(std::panic::catch_unwind(|| report_unwind_results(Ok(()), Ok(()))).is_ok());
     }
 
     struct FailedRead(std::io::ErrorKind);
