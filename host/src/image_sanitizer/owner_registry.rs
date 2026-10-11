@@ -245,34 +245,40 @@ mod tests {
     }
 
     #[test]
-    fn disconnected_admission_never_runs_work_and_releases_no_child_capacity() {
-        let capacity = Arc::new(Semaphore::new(2));
-        let done = Arc::new(AtomicBool::new(false));
-        let permit = PermitOwner::new(
-            capacity
-                .clone()
-                .try_acquire_owned()
-                .expect("reserved capacity"),
-            done.clone(),
-            Arc::new(AtomicBool::new(true)),
-        );
-        let called = Arc::new(AtomicBool::new(false));
-        let observed = called.clone();
-        let (start, started) = mpsc::channel();
-        drop(start);
-        run_admitted_owner(&started, done.clone(), move |_| {
-            observed.store(true, Ordering::Release);
-            drop(permit);
-        });
-        assert!(
-            !called.load(Ordering::Acquire),
-            "unpublished work cannot run"
-        );
-        assert!(
-            done.load(Ordering::Acquire),
-            "failed admission finishes its owner"
-        );
-        assert_eq!(capacity.available_permits(), 2, "no child retains capacity");
+    fn admission_runs_work_only_after_start_and_releases_no_child_capacity() {
+        for admitted in [false, true] {
+            let capacity = Arc::new(Semaphore::new(2));
+            let done = Arc::new(AtomicBool::new(false));
+            let permit = PermitOwner::new(
+                capacity
+                    .clone()
+                    .try_acquire_owned()
+                    .expect("reserved capacity"),
+                done.clone(),
+                Arc::new(AtomicBool::new(true)),
+            );
+            let called = Arc::new(AtomicBool::new(false));
+            let observed = called.clone();
+            let (start, started) = mpsc::channel();
+            if admitted {
+                start.send(()).expect("explicit admission");
+            }
+            drop(start);
+            run_admitted_owner(&started, done.clone(), move |_| {
+                observed.store(true, Ordering::Release);
+                drop(permit);
+            });
+            assert_eq!(
+                called.load(Ordering::Acquire),
+                admitted,
+                "only explicitly admitted work may run"
+            );
+            assert!(
+                done.load(Ordering::Acquire),
+                "both admission outcomes finish their owner"
+            );
+            assert_eq!(capacity.available_permits(), 2, "no child retains capacity");
+        }
     }
 
     #[test]
