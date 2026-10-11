@@ -1,4 +1,7 @@
-//! Host-owned test fixtures for password domain values.
+//! Host-owned domain-value and executable-boundary test fixtures.
+
+#[cfg(unix)]
+pub mod telemetry;
 
 use super::feed::{FeedMinDays, FeedMinItems};
 use super::password::Password;
