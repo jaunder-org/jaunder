@@ -2197,6 +2197,32 @@ adds PII- and secret-free structured OpenTelemetry signals at transient-data
 state transitions: expiry, consumption, completion, exhaustion, and cleanup. The
 operator, rather than Jaunder, owns long-term telemetry retention.
 
+### Proposed independent ordinary-log and trace filtering
+
+The
+[independent ordinary-log and trace filtering proposal](adr/drafts/independent-log-and-trace-filtering.md)
+for #1742 separates ordinary-log admission from OTLP trace collection. This is a
+proposed change, not a description of the current implementation. Log policy
+keeps its existing `JAUNDER_LOG_FILTER` / `RUST_LOG` precedence and
+ordinary/verbose defaults. It governs whichever ordinary-log sink is active:
+#1742 leaves stdout routing unchanged; #1743 separately owns native OTLP logs,
+logger lifetime and the stack's removal of journal ingestion, consuming the same
+log policy. A separate `JAUNDER_TRACE_FILTER` defaults to INFO for configured
+tracing, independently of log verbosity; explicit trace `off` disables traces
+but not ordinary logs, metrics or scoped diagnostics. Log `off` does not disable
+traces or diagnostics. Invalid trace-filter input emits a fixed, safe local
+warning and falls back to INFO.
+
+The proposal treats intentionally filtered request spans as normal absence,
+retains valid W3C parent adoption for enabled spans, and preserves bounded,
+nonrecursive diagnostics for genuine assignment failures. Filtering or replacing
+an ordinary-log sink must not remove the span stack or formatted late-recorded
+fields required by SpanTrace; their retention must not depend on an active
+stdout formatter. Local telemetry diagnostics must not re-enter native OTLP
+logs. Existing field-admission, privacy, sampling, capture and provider-lifetime
+contracts remain in force. Existing log filters cease to control traces; the
+operator guide will name that compatibility change and the new trace control.
+
 ### Server-fn span names are macro-derived
 
 Every `#[server]` fn in `web/src` is written as `#[macros::server]`, which emits
