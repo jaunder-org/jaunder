@@ -128,6 +128,39 @@
      (should (eq (plist-get (car (plist-get (jaunder-keyword-repair-report-data
                                              (jaunder-keyword-repair-preview root)) :rows)) :status) 'blocked)))))
 
+(ert-deftest jaunder-keyword-repair-preview-rejects-nested-scalar-markup ()
+  "Metadata and native text cannot be flattened during category replacement."
+  (require 'jaunder-keyword-repair)
+  (dolist (case '(("<title>Newer server title</title>" "<title><b>Nested</b></title>" member-scalar-markup)
+                  ("<content type=\"text/org\">Newer body</content>" "<content type=\"text/org\"><b>Nested</b></content>" member-text-markup)
+                  ("<app:control><app:draft>no</app:draft></app:control>" "<app:control><app:draft>no</app:draft><other/></app:control>" invalid-member-draft)))
+    (jaunder-keyword-repair-test--with-preview
+     "#+PROPERTY: JAUNDER_ID 42\n#+KEYWORDS: two words\n\nBody\n"
+     (jaunder-keyword-repair-test--member)
+     (setq collection-xml (concat "<feed>" member-xml "</feed>"))
+     (setq member-xml (replace-regexp-in-string (regexp-quote (car case)) (cadr case) member-xml t t))
+     (let ((row (car (plist-get (jaunder-keyword-repair-report-data
+                                 (jaunder-keyword-repair-preview root)) :rows))))
+       (should (eq (plist-get row :status) 'blocked))
+       (should (eq (plist-get row :reason) (nth 2 case)))))))
+
+(ert-deftest jaunder-keyword-repair-preview-interactive-preserves-control-whitespace ()
+  "The interactive entry retains valid whitespace around lifecycle metadata."
+  (require 'jaunder-keyword-repair)
+  (jaunder-keyword-repair-test--with-preview
+   "#+PROPERTY: JAUNDER_ID 42\n#+KEYWORDS: two words\n\nBody\n"
+   (replace-regexp-in-string
+    "<app:control><app:draft>no</app:draft></app:control>"
+    "<app:control>\n  <app:draft>no</app:draft>\n</app:control>"
+    (jaunder-keyword-repair-test--member) t t)
+   (let* ((default-directory (file-name-as-directory root))
+          (report (call-interactively #'jaunder-keyword-repair-preview))
+          (row (car (plist-get (jaunder-keyword-repair-report-data report) :rows))))
+     (should (eq (plist-get row :status) 'eligible))
+     (should (equal (plist-get row :additions) '("two-words")))
+     (should (equal (plist-get row :member-xml) member-xml))
+     (should (= (length requests) 2)))))
+
 (ert-deftest jaunder-keyword-repair-report-data-detaches-long-and-dotted-lists ()
   "Inspection copies retain shape without stack growth along label lists."
   (require 'jaunder-keyword-repair)
@@ -335,6 +368,24 @@
          (let ((result (car (plist-get (jaunder-keyword-repair-apply report '(0)) :results))))
            (should (eq (plist-get result :status) 'blocked))))))))
 
+(ert-deftest jaunder-keyword-repair-apply-blocks-path-disappearing-after-local-check ()
+  "A checked file is not authority for the subsequent fresh local inventory."
+  (require 'jaunder-keyword-repair)
+  (jaunder-keyword-repair-test--with-preview
+   "#+PROPERTY: JAUNDER_ID 42\n#+KEYWORDS: two words\n\nBody\n"
+   (jaunder-keyword-repair-test--member)
+   (let ((report (jaunder-keyword-repair-preview root))
+         (check-local (symbol-function 'jaunder--keyword-repair-check-local)))
+     (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+               ((symbol-function 'jaunder--keyword-repair-check-local)
+                (lambda (row)
+                  (prog1 (funcall check-local row)
+                    (rename-file path (expand-file-name "moved.txt" root))))))
+       (let ((result (car (plist-get (jaunder-keyword-repair-apply report '(0)) :results))))
+         (should (eq (plist-get result :status) 'blocked))
+         (should (eq (plist-get result :reason) 'local-path-changed))
+         (should (= (length requests) 3)))))))
+
 (ert-deftest jaunder-keyword-repair-apply-preflight-source-is-inspectable ()
   (require 'jaunder-keyword-repair)
   (jaunder-keyword-repair-test--with-preview
@@ -480,6 +531,9 @@
    "#+PROPERTY: JAUNDER_ID 42\n#+KEYWORDS: rust\n\nBody\n"
    (jaunder-keyword-repair-test--member)
    (let ((report (jaunder-keyword-repair-preview root)))
+     (cl-letf (((symbol-function 'yes-or-no-p)
+                (lambda (&rest _) (ert-fail "Invalid report reached confirmation"))))
+       (should-error (jaunder-keyword-repair-apply nil '(0)) :type 'user-error))
      (dolist (selection '(nil (0 0) (-1) (1) ("42")))
        (should-error (jaunder-keyword-repair-apply report selection) :type 'user-error))
      (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
