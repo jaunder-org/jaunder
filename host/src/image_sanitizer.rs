@@ -797,6 +797,47 @@ mod tests {
             && error.to_string() == "independent observer failed"));
     }
 
+    fn observed_pid(result: std::io::Result<String>) -> Option<rustix::process::Pid> {
+        match result {
+            Ok(value) if !value.is_empty() => Some(
+                rustix::process::Pid::from_raw(value.parse().expect("PID")).expect("positive PID"),
+            ),
+            Ok(_) => None,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => panic!("PID observation failed: {error}"),
+        }
+    }
+
+    #[test]
+    fn pid_observation_distinguishes_actual_empty_missing_and_valid_files() {
+        let directory = tempfile::tempdir().expect("PID control directory");
+        let path = directory.path().join("pid");
+        assert_eq!(observed_pid(std::fs::read_to_string(&path)), None);
+        std::fs::write(&path, "").expect("empty PID file");
+        assert_eq!(observed_pid(std::fs::read_to_string(&path)), None);
+        let pid = rustix::process::getpid();
+        std::fs::write(&path, pid.as_raw_nonzero().get().to_string()).expect("valid PID file");
+        assert_eq!(observed_pid(std::fs::read_to_string(&path)), Some(pid));
+    }
+
+    #[test]
+    fn pid_observation_rejects_actual_malformed_and_nonpositive_files() {
+        let directory = tempfile::tempdir().expect("PID control directory");
+        let path = directory.path().join("pid");
+        for (value, prefix) in [("not-an-integer", "PID:"), ("0", "positive PID")] {
+            std::fs::write(&path, value).expect("invalid PID control");
+            let failure = std::panic::catch_unwind(|| observed_pid(std::fs::read_to_string(&path)))
+                .expect_err("invalid PID must not become a pending observation");
+            let message = failure
+                .downcast::<String>()
+                .expect("concrete PID diagnostic");
+            assert!(
+                message.starts_with(prefix),
+                "unexpected PID failure: {message}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn pid_observation_rejects_unexpected_filesystem_failure() {
         let directory = tempfile::tempdir().expect("PID observation root");
@@ -831,14 +872,10 @@ mod tests {
     async fn tool_pid(directory: &Path) -> rustix::process::Pid {
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
-                match tokio::fs::read_to_string(directory.join("pid")).await {
-                    Ok(value) if !value.is_empty() => {
-                        return rustix::process::Pid::from_raw(value.parse().expect("PID"))
-                            .expect("positive PID");
-                    }
-                    Ok(_) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => panic!("PID observation failed: {error}"),
+                if let Some(pid) =
+                    observed_pid(tokio::fs::read_to_string(directory.join("pid")).await)
+                {
+                    return pid;
                 }
                 tokio::time::sleep(Duration::from_millis(1)).await;
             }
