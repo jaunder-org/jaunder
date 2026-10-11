@@ -4,7 +4,7 @@
 { flake }:
 let
   systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
-  portable = [ "jaunder" "site" "csrWasm" "csrBundle" "devtool" "test-support" ];
+  portable = [ "jaunder" "site" "csrWasm" "csrBundle" "devtool" "xtask" "test-support" ];
   linuxOnly = [ "theme-thumbnail-environment" "wasm-coverage-csr" ];
   check = system:
     let
@@ -14,6 +14,7 @@ let
       paths = map (name: packages.${name}.drvPath) portable
         ++ map (name: shells.${name}.drvPath) [ "default" "ci" ];
     in
+    assert builtins.all (name: builtins.hasAttr name packages) portable;
     assert builtins.all (name: builtins.hasAttr name packages == linux) linuxOnly;
     assert builtins.hasAttr "theme-thumbnail" shells == linux;
     assert linux || builtins.attrNames flake.checks.${system} == [ ];

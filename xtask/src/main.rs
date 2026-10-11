@@ -3,11 +3,14 @@ use xtask::{Cli, run};
 
 fn main() {
     let cli = Cli::parse();
-    // Self-healing: wire core.hooksPath -> .githooks on every run (best-effort).
-    xtask::ensure_hooks_installed();
     let json = cli.json;
     let command = cli.command_name();
-    match run(cli) {
+    let result = xtask::prepare_checkout().and_then(|()| {
+        // Hook installation is safe only after the selected inputs are admitted.
+        xtask::ensure_hooks_installed();
+        run(cli)
+    });
+    match result {
         Ok(result) => {
             result.report(json);
             eprintln!(

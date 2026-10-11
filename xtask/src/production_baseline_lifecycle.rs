@@ -20,11 +20,32 @@ use crate::production_baseline::{
     EvidenceCanaries, PackageIdentity, ResolvedRevision, RuntimeIdentity, StorageBackend,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct StoreArtifactIdentity {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoreArtifactIdentity {
     pub derivation: String,
     pub output_path: String,
     pub nar_hash: String,
+}
+
+impl StoreArtifactIdentity {
+    /// Validate standard Nix identity fields before they become durable evidence.
+    pub(crate) fn validate(&self) -> Result<()> {
+        for value in [&self.derivation, &self.output_path] {
+            let name = value
+                .strip_prefix("/nix/store/")
+                .context("artifact identity is not a Nix store path")?;
+            if name.is_empty() || name.contains('/') || name.contains(char::is_whitespace) {
+                bail!("artifact identity is not a single Nix store output");
+            }
+        }
+        if !self.derivation.ends_with(".drv")
+            || self.output_path.ends_with(".drv")
+            || self.nar_hash.trim().is_empty()
+        {
+            bail!("artifact identity omitted its derivation, output or NAR hash");
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -117,6 +138,7 @@ pub struct BaselineLifecycle {
     workspace: PathBuf,
     backup_compatibility: BackupCompatibility,
     harness_ref: String,
+    vm_harness_output: Option<PathBuf>,
     nix_cache: PathBuf,
     proxy: Option<Child>,
     proxy_log: Option<PathBuf>,
@@ -165,9 +187,18 @@ const fn legacy_format_version() -> u32 {
 }
 impl BaselineLifecycle {
     /// Construct the immutable harness boundary used by discovery and acceptance.
-    pub fn create_immutable(root: &Path, harness_commit: &str) -> Result<Self> {
+    pub fn create_immutable(
+        root: &Path,
+        harness_commit: &str,
+        vm_harness_output: &Path,
+    ) -> Result<Self> {
         validate_harness_commit(harness_commit)?;
-        Self::create_with_harness(root, format!("github:jaunder-org/jaunder/{harness_commit}"))
+        let mut lifecycle = Self::create_with_harness(
+            root,
+            format!("github:jaunder-org/jaunder/{harness_commit}"),
+        )?;
+        lifecycle.pin_vm_harness(vm_harness_output)?;
+        Ok(lifecycle)
     }
 
     /// Qualification uses one admitted, immutable local Git source for its
@@ -175,8 +206,10 @@ impl BaselineLifecycle {
     pub(crate) fn create_qualification(
         root: &Path,
         source: &crate::qualification::SourcePin,
+        harness_output: &Path,
     ) -> Result<Self> {
         let mut lifecycle = Self::create_with_harness(root, source.locked_ref().to_owned())?;
+        lifecycle.pin_vm_harness(harness_output)?;
         lifecycle.backup_compatibility = BackupCompatibility::CurrentQualification;
         Ok(lifecycle)
     }
@@ -204,6 +237,7 @@ impl BaselineLifecycle {
             workspace,
             backup_compatibility: BackupCompatibility::ProductionBaseline,
             harness_ref,
+            vm_harness_output: None,
             nix_cache,
             proxy: None,
             proxy_log: None,
@@ -213,6 +247,24 @@ impl BaselineLifecycle {
             deployments: BTreeMap::new(),
         })
     }
+    fn pin_vm_harness(&mut self, output: &Path) -> Result<()> {
+        let out_link = self.workspace.join("gcroots/harness");
+        let expression = format!("builtins.storePath {}", serde_json::to_string(output)?);
+        nix(
+            &self.nix_cache,
+            &[
+                "build",
+                "--impure",
+                "--out-link",
+                out_link.to_str().context("non-UTF-8 harness GC root")?,
+                "--expr",
+                &expression,
+            ],
+        )?;
+        self.vm_harness_output = Some(output.to_owned());
+        Ok(())
+    }
+
     /// Allocate a private state file for an external behavior runner.
     pub fn private_path(&self, name: &str) -> Result<PathBuf> {
         if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
@@ -298,7 +350,14 @@ impl BaselineLifecycle {
     /// Write a private Node executable that forwards the existing `test-support`
     /// seed CLI to one VM's lifecycle control channel. The service never sees
     /// this tool; it runs as the isolated VM's `jaunder` account.
-    pub fn seed_process(&self, deployment_id: &str) -> Result<PathBuf> {
+    pub fn seed_process(&self, deployment_id: &str, node: &Path) -> Result<PathBuf> {
+        let node = fs::canonicalize(node).context("resolving admitted seed interpreter")?;
+        let node = node
+            .to_str()
+            .context("seed interpreter path is not UTF-8")?;
+        if !node.starts_with("/nix/store/") || node.contains(['\n', '\r']) {
+            bail!("seed interpreter must be an admitted Nix store executable");
+        }
         let port = self
             .deployments
             .get(deployment_id)
@@ -308,7 +367,7 @@ impl BaselineLifecycle {
         fs::write(
             &path,
             format!(
-                r#"#!/usr/bin/env node
+                r#"#!{node}
 import net from "node:net";
 const quote = (value) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
 const args = process.argv.slice(2).map(quote).join(" ");
@@ -614,8 +673,16 @@ socket.on("end", () => {{
         let vm_output = if let Some(output) = self.vm_cache.get(&vm_key) {
             output.clone()
         } else {
+            let binding = match &self.vm_harness_output {
+                Some(output) => format!(
+                    "assert harness.packages.${{builtins.currentSystem}}.qualification-harness.outPath == {};",
+                    serde_json::to_string(output)?,
+                ),
+                // The no-evidence smoke deliberately selects a mutable path flake.
+                None => String::new(),
+            };
             let expression = format!(
-                "let harness = builtins.getFlake \"{}\"; package = builtins.storePath \"{}\"; in (harness.lib.productionBaselineVm {{ system = builtins.currentSystem; backend = \"{}\"; inherit package; }}).config.system.build.vm",
+                "let harness = builtins.getFlake \"{}\"; package = builtins.storePath \"{}\"; in {binding} (harness.lib.productionBaselineVm {{ system = builtins.currentSystem; backend = \"{}\"; inherit package; }}).config.system.build.vm",
                 self.harness_ref,
                 package.output_path,
                 backend_name(backend),
@@ -1739,6 +1806,54 @@ fn regular_metadata(path: &Path) -> Result<fs::Metadata> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seed_bridge_runs_with_admitted_node_even_when_path_has_no_node() {
+        let root = tempfile::tempdir().unwrap();
+        let mut lifecycle = BaselineLifecycle::create_current_checkout(root.path()).unwrap();
+        let node = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|directory| directory.join("node"))
+            .find(|path| path.is_file())
+            .unwrap();
+        let mut vm = Command::new("true").spawn().unwrap();
+        assert!(vm.wait().unwrap().success());
+        lifecycle.deployments.insert(
+            "seed-fixture".into(),
+            Deployment {
+                backend: StorageBackend::Sqlite,
+                revision: ResolvedRevision {
+                    commit: "a".repeat(40),
+                    flake_ref: "fixture".into(),
+                },
+                package: PackageIdentity {
+                    installable: "fixture".into(),
+                    derivation: "fixture".into(),
+                    output_path: "fixture".into(),
+                    nar_hash: "fixture".into(),
+                    executable_sha256: "fixture".into(),
+                },
+                application_port: 0,
+                control_port: 0,
+                vm_log: root.path().join("fixture.log"),
+                running: false,
+                vm,
+            },
+        );
+        let bridge = lifecycle.seed_process("seed-fixture", &node).unwrap();
+        let empty_path = root.path().join("empty-path");
+        fs::create_dir(&empty_path).unwrap();
+        let output = Command::new(&bridge)
+            .env("PATH", empty_path)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("guest control connection failed"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        lifecycle.cleanup().unwrap();
+    }
 
     #[test]
     fn restore_preparation_keeps_the_canonical_environment_and_service_user() {

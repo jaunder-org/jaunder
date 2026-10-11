@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://jaunder.org/schemas/production-baseline/v1",
+  "$id": "https://jaunder.org/schemas/production-baseline/v2",
   "title": "Jaunder production baseline evidence",
   "type": "object",
   "additionalProperties": false,
@@ -22,7 +22,7 @@
   ],
   "properties": {
     "schema_version": {
-      "const": 1
+      "const": 2
     },
     "operation": {
       "enum": [
@@ -214,6 +214,7 @@
       "additionalProperties": false,
       "required": [
         "commit",
+        "tooling",
         "seeded_manifest",
         "operation_manifest"
       ],
@@ -221,12 +222,23 @@
         "commit": {
           "$ref": "#/$defs/commit"
         },
+        "tooling": { "$ref": "#/$defs/store_artifact" },
         "seeded_manifest": {
           "$ref": "#/$defs/manifest"
         },
         "operation_manifest": {
           "$ref": "#/$defs/manifest"
         }
+      }
+    },
+    "store_artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["derivation", "output_path", "nar_hash"],
+      "properties": {
+        "derivation": { "type": "string", "pattern": "^/nix/store/[^/]+\\.drv$" },
+        "output_path": { "type": "string", "pattern": "^/nix/store/[^/]+$" },
+        "nar_hash": { "type": "string", "minLength": 1 }
       }
     },
     "package": {

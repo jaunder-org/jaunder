@@ -16,6 +16,7 @@ pub mod elisp_coverage;
 mod files;
 mod gate;
 pub mod git;
+mod host_tooling;
 mod ids;
 pub mod issue;
 mod lifecycle;
@@ -31,6 +32,7 @@ mod qualification;
 mod qualification_csr;
 mod qualification_inventory;
 mod qualification_run;
+mod qualification_tooling;
 mod result;
 mod server_fn_coverage;
 mod server_fns;
@@ -95,5 +97,6 @@ pub use cli::{
     ServerFnCoverageCommand, TracesCommand, WasmCoverageCommand,
 };
 pub use dispatch::run;
+pub use host_tooling::prepare_checkout;
 pub use lifecycle::ensure_hooks_installed;
 pub use result::{CommandResult, Mode, StepResult};

@@ -7,12 +7,19 @@ module; it is not part of `cargo xtask check`, pre-push, CI, or
 
 ## Prerequisites
 
-Run from a clean checkout whose `origin` is `jaunder-org/jaunder`; the executing
-xtask, shared Playwright flow, test-support binary, and both manifests must all
-identify the same clean harness commit. The host needs the repository's Nix
-development environment, Nix virtualization support, Chromium/Playwright
-dependencies, and free local ports `8080` and `8443`. Do not run alongside
-another baseline command: the command holds one host lease.
+Run `cargo xtask` from the repository's Nix development environment and a clean
+checkout whose `origin` is `jaunder-org/jaunder`. Ordinary discovery/acceptance
+also require the harness and product commits to be available upstream.
+Qualification selects `packages.qualification-harness` from the admitted source:
+the actual executing xtask must match its Nix output, and browser inputs, Node,
+test-support and VM construction are bound through the same graph. Identical
+outputs may be reused across unrelated Git commits; native Cargo builds and
+copied executables cannot claim Nix provenance. A `JAUNDER_TEST_SUPPORT_BIN`
+override is accepted only if it resolves to the graph's selected helper.
+
+The host needs Nix virtualization support and free local ports `8080` and
+`8443`. The graph supplies pinned Chromium/Playwright dependencies. Do not run
+alongside another baseline command: the command holds one host lease.
 
 Run discovery against the source revision selected for the qualification:
 
@@ -43,15 +50,21 @@ production, #1419 release-candidate or milestone acceptance.
 
 ## Topology and immutable identity
 
-The host xtask resolves upstream commits to immutable flake references and alone
-invokes Nix and manages lifecycle. Nix never invokes xtask. Each operation
-initializes fresh persistent SQLite and PostgreSQL source VMs. The harness
-supplies each VM's immutable package through the qualification-only internal
-`productionBaselineVm` construction seam; ADR-0142's supported module options
-remain unchanged. Source state is never live operator data. An external Caddy
-proxy terminates local TLS and keeps one stable `https://localhost:8443`
-browser/protocol origin while it switches among source and fresh restore
-targets. HTTP redirects to that origin.
+The host xtask resolves commits to immutable flake references and alone invokes
+Nix and manages lifecycle. Nix compiles the host tool but never invokes its
+orchestrator. Qualification admits and roots the selected graph before lifecycle
+effects. Standard Nix GC roots protect that graph throughout execution and any
+retained lifecycle workspace; there is no checkout-local executable cache.
+Playwright runs from a private writable copy of the selected browser package,
+using that copy's CLI and imports with pinned Node/browser binaries; the seed
+bridge's interpreter is the selected store Node. Source cleanliness and revision
+are rechecked around execution and publication. Each operation initializes fresh
+persistent SQLite and PostgreSQL source VMs. The harness supplies each VM's
+immutable package through the qualification-only internal `productionBaselineVm`
+construction seam; ADR-0142's supported module options remain unchanged. Source
+state is never live operator data. An external Caddy proxy terminates local TLS
+and keeps one stable `https://localhost:8443` browser/protocol origin while it
+switches among source and fresh restore targets. HTTP redirects to that origin.
 
 Discovery restarts and reboots each source, then makes one same-schema backup
 and restores every SQLite/PostgreSQL source-to-target direction. Acceptance
@@ -78,7 +91,8 @@ revisions, result and sanitized reports from the issue/PR when review needs
 them. Explicit release evidence belongs in a designated external artifact store
 with an owner and retention period.
 
-Reports record harness and manifest identities, source/target,
+Schema-v2 reports record the harness source commit, selected Nix harness
+`derivation`, `output_path` and `nar_hash`, manifest identities, source/target,
 package/runtime/backup identities, lifecycle and fixed check durations,
 outcomes, gaps, findings, and failure classes. A binary change is claimed only
 when executable hashes differ; a schema migration only when observed schema

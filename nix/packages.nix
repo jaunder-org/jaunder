@@ -326,6 +326,10 @@ let
       ''
     else
       drv;
+  xtaskBin = import ./xtask.nix {
+    inherit pkgs craneLib cargoPackageClosure cargoMemberSource workspaceMembers
+      withWorkspacePlaceholders vendorPinnedFork;
+  };
   cargoVendorDir = craneLib.vendorCargoDeps {
     inherit src;
     overrideVendorGitCheckout = vendorPinnedFork "product";
@@ -1123,12 +1127,19 @@ in
     inherit csrWasm;
     csrBundle = csrWasmBundle;
     devtool = devtoolBin;
+    xtask = xtaskBin;
     # The out-of-process e2e seed helper (ADR-0046). Exposed so it is
     # directly buildable/verifiable; it is placed only on the e2e VM PATH,
     # never in the prod artifact or the NixOS module.
     test-support = testSupportBin;
   }
   // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+    qualification-harness = import ./qualification-harness.nix {
+      inherit pkgs;
+      xtask = xtaskBin;
+      testSupport = testSupportBin;
+      browser = e2ePackage;
+    };
     theme-thumbnail-environment = themeThumbnailEnvironment;
     # The manually linked diagnostic module and its retained IR/link evidence.
     # A failed producer still exposes its durable `status.json` and `pipeline.log`

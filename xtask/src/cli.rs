@@ -6,7 +6,7 @@ use crate::{issue, steps};
 const VERSION: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     " (",
-    env!("JAUNDER_BUILD_COMMIT"),
+    env!("JAUNDER_XTASK_BUILD_IDENTITY"),
     ")"
 );
 

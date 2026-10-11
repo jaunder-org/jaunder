@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Cargo supplies the subcommand token; all remaining arguments belong to xtask.
+set -euo pipefail
+if [[ "${1-}" != xtask ]]; then
+  printf '%s\n' 'cargo-xtask: invoke through cargo xtask' >&2
+  exit 2
+fi
+shift
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_NAMESPACE
+root=$(git rev-parse --show-toplevel)
+# Keep checkout names out of installable syntax (#, ? and % are delimiters).
+cd -- "$root"
+exec nix run .#xtask -- "$@"

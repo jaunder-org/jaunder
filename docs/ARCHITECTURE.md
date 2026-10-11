@@ -3913,19 +3913,21 @@ reconciliation authority. `prepush`, explicit **`cargo xtask check`** and
 and their existing authority.
 
 Enforcement is git-native ([ADR-0029](adr/0029-git-enforced-verify-gate.md)).
-`.githooks/pre-commit` calls `cargo xtask precommit`; the `xtask` Cargo alias
-uses `cargo run --locked`, so Cargo cannot rewrite `xtask/Cargo.lock` before the
-precommit snapshot. Git/index reconciliation lives in Rust rather than the shell
-hook. `.githooks/pre-push` calls `cargo xtask prepush`. `prepush` and `validate`
-both open with a `clean-tree` precheck that refuses a dirty tree unless
-explicitly bypassed (`validate --allow-dirty`, or `SKIP_PRE_PUSH=1` for the
-hook) and returns before any expensive step (`xtask/src/lib.rs`:
-`clean_tree_precheck`). The hook proves the fast local lane ran on the committed
-tip with no uncommitted files hiding; CI remains the non-bypassable hermetic
-authority. Every `cargo xtask` run self-heals `core.hooksPath` to the tracked,
-relative `.githooks` (`xtask/src/git.rs`: `ensure_hooks_path`).
-`SKIP_PRE_COMMIT=1` / `SKIP_PRE_PUSH=1` are deliberate local escapes; CI is the
-non-bypassable authority.
+`.githooks/pre-commit` calls `cargo xtask precommit`; the development-shell
+`cargo-xtask` transport selects the active checkout's `.#xtask` package. Nix
+owns its locked, standalone Cargo build, so launcher realization cannot rewrite
+`xtask/Cargo.lock` before the precommit snapshot. Git/index reconciliation lives
+in Rust rather than the shell hook. `.githooks/pre-push` calls
+`cargo xtask prepush`. `prepush` and `validate` both open with a `clean-tree`
+precheck that refuses a dirty tree unless explicitly bypassed
+(`validate --allow-dirty`, or `SKIP_PRE_PUSH=1` for the hook) and returns before
+any expensive step (`xtask/src/lib.rs`: `clean_tree_precheck`). The hook proves
+the fast local lane ran on the committed tip with no uncommitted files hiding;
+CI remains the non-bypassable hermetic authority. Every `cargo xtask` run
+self-heals `core.hooksPath` to the tracked, relative `.githooks`
+(`xtask/src/git.rs`: `ensure_hooks_path`). `SKIP_PRE_COMMIT=1` /
+`SKIP_PRE_PUSH=1` are deliberate local escapes; CI is the non-bypassable
+authority.
 
 #### Prepush parity by failure surface
 
@@ -4344,6 +4346,26 @@ test gates do not execute
 claim. All three manifests pin `resolver = "3"` explicitly, because the two
 virtual manifests would otherwise default to resolver 1
 ([ADR-0104](adr/0104-edition-2024-unsafe-env-and-precise-capturing.md)).
+
+**Independent host-tool packaging.** The
+[Nix-cached tooling decision](adr/drafts/nix-cached-host-tooling.md)
+distinguishes building a host executable from executing its orchestrator inside
+a derivation. `packages.xtask` compiles its standalone closure independently;
+application coverage/E2E dependencies and explicit host-unit-test authorities
+remain separate. Both development shells supply a thin `cargo-xtask` transport
+that discovers the active checkout and executes its selected Nix output.
+
+`packages.qualification-harness` joins the existing tool, browser, test-support,
+Node and VM input owners. Ordinary and styling qualification admit the actual
+executing tool and helper overrides against selected store outputs before leases
+or VM effects. Browser source is copied into invocation-owned writable state;
+the pinned runner executes that copy's CLI and imports, and the seed bridge uses
+the admitted Node interpreter. VM construction asserts the same admitted harness
+output. Standard derivation, output and NAR identities appear in evidence and
+remain rooted during execution. Git still identifies clean source/product
+revisions and rejects checkout drift, not content-equivalent tool revisions.
+Runtime checkout discovery and Nix-owned untracked-input admission complete the
+boundary; no custom fingerprint or identity ledger is introduced.
 
 **Workspace layering.** The root workspace's shared crates are target-scoped
 ([ADR-0058](adr/0058-host-crate-layering.md),
