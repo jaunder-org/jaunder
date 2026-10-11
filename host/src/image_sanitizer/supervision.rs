@@ -271,6 +271,39 @@ mod tests {
             .expect("positive PID")
     }
 
+    #[test]
+    fn expired_deadline_rejects_before_spawn_and_removes_private_spool() {
+        let directory = tempfile::tempdir().expect("private test root");
+        let input = NamedTempFile::new_in(directory.path()).expect("private spool");
+        let path = input.path().to_owned();
+        let (_cancel, canceled) = oneshot::channel();
+        let reaped = Arc::new(AtomicBool::new(true));
+        let error = run(
+            &directory.path().join("missing-worker"),
+            input,
+            false,
+            1024,
+            Instant::now(),
+            canceled,
+            &reaped,
+        )
+        .expect_err("expired admission cannot spawn");
+        assert!(matches!(error, ImageSanitizerError::TimedOut));
+        assert!(reaped.load(Ordering::Acquire), "no child was created");
+        assert!(!path.exists(), "no-child failure removes its private spool");
+    }
+
+    #[test]
+    fn implicit_io_conversion_preserves_concrete_source() {
+        let error = ImageSanitizerError::from(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "controlled nonblocking setup failure",
+        ));
+        assert!(matches!(error, ImageSanitizerError::Processing(source)
+            if source.kind() == std::io::ErrorKind::PermissionDenied
+            && source.to_string() == "controlled nonblocking setup failure"));
+    }
+
     struct FailedRead(std::io::ErrorKind);
     impl Read for FailedRead {
         fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {

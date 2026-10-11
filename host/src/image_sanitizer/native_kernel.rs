@@ -434,6 +434,45 @@ mod tests {
     }
 
     #[test]
+    fn malformed_primary_orientation_retains_integer_parse_failure() {
+        let tiff = exif_writer::build_exif(
+            &[IfdEntry {
+                tag: 0x0112,
+                format: ExifFormat::Short,
+                data: 1_u16.to_le_bytes().to_vec(),
+            }],
+            &[],
+            &[],
+            ByteOrderMark::LittleEndian,
+        )
+        .expect("well-framed primary EXIF");
+        let mut before = tags(&tiff).expect("primary metadata");
+        let primary = before
+            .iter_mut()
+            .find(|tag| tag.name == "Orientation" && tag.group.family1 == "IFD0")
+            .expect("parsed primary orientation");
+        primary.raw_value = exiftool_rs::Value::String("not-an-orientation".into());
+        assert!(
+            matches!(orientation_exif(&before), Err(Failure::Number(source))
+            if source.kind() == &std::num::IntErrorKind::InvalidDigit)
+        );
+    }
+
+    #[test]
+    fn heif_replacement_rejects_metadata_that_cannot_fit_owned_extents() {
+        let source = include_bytes!("../image_sanitizer_fixtures/heic-original.heic");
+        // A replacement larger than the entire original container cannot fit
+        // its metadata extent. No original file or image item is rewritten.
+        let replacement = vec![0; source.len() + 1];
+        assert!(matches!(
+            edit_heif(source, &replacement),
+            Err(Failure::InvalidImage(
+                "metadata replacement does not fit extent"
+            ))
+        ));
+    }
+
+    #[test]
     fn orientation_outside_rendering_domain_is_rejected() {
         // A primary orientation must be a real rendering instruction, not an
         // out-of-range value silently converted into the default orientation.
