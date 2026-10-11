@@ -25,6 +25,9 @@ use super::native::{EditedBytes as Outcome, NativeImageError as Failure};
 
 fn tags(bytes: &[u8]) -> Result<Vec<Tag>, Failure> {
     let tags = ExifTool::new().extract_info_from_bytes(bytes, Path::new("private"))?;
+    checked_tags(tags)
+}
+fn checked_tags(tags: Vec<Tag>) -> Result<Vec<Tag>, Failure> {
     if tags
         .iter()
         .any(|tag| matches!(tag.name.as_str(), "Warning" | "Error"))
@@ -298,10 +301,7 @@ fn edit_heif(source: &[u8], tiff: &[u8]) -> Result<Vec<u8>, Failure> {
     let packet = b"<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"/>";
     let mut output = source.to_vec();
     for (kind, group) in Metadata::heif_metadata_regions(source)? {
-        let len = group.iter().try_fold(0usize, |sum, range| {
-            sum.checked_add(range.len())
-                .ok_or("metadata length overflow")
-        })?;
+        let len = metadata_length(&group)?;
         let replacement = match kind {
             HeifMetadataRole::Exif => &exif[..],
             HeifMetadataRole::Name => &[][..],
@@ -325,6 +325,12 @@ fn edit_heif(source: &[u8], tiff: &[u8]) -> Result<Vec<u8>, Failure> {
         }
     }
     Ok(output)
+}
+fn metadata_length(ranges: &[std::ops::Range<usize>]) -> Result<usize, Failure> {
+    ranges.iter().try_fold(0usize, |sum, range| {
+        sum.checked_add(range.len())
+            .ok_or_else(|| Failure::from("metadata length overflow"))
+    })
 }
 fn edit_gif(source: &[u8]) -> Result<Vec<u8>, Failure> {
     let mut decoder = StreamingDecoder::new();
@@ -430,6 +436,38 @@ mod tests {
             Err(Failure::InvalidImage(
                 "native post-edit privacy verification failed"
             ))
+        ));
+    }
+
+    #[test]
+    fn native_diagnostic_tags_cannot_certify_clean_metadata() {
+        for name in ["Warning", "Error"] {
+            let mut before = tags(include_bytes!(
+                "../image_sanitizer_fixtures/png-original.png"
+            ))
+            .expect("owned metadata control");
+            let diagnostic = before.first_mut().expect("nonempty metadata");
+            diagnostic.name = name.to_owned();
+            diagnostic.raw_value = exiftool_rs::Value::String("private diagnostic contents".into());
+            assert!(matches!(
+                checked_tags(before),
+                Err(Failure::InvalidImage(
+                    "native metadata reader reported invalid input"
+                ))
+            ));
+        }
+    }
+
+    #[test]
+    fn metadata_extent_lengths_reject_overflow_without_allocating_extents() {
+        assert_eq!(
+            metadata_length(&[2..5, 10..14]).expect("bounded lengths"),
+            7
+        );
+        assert_eq!(metadata_length(&[]).expect("empty metadata"), 0);
+        assert!(matches!(
+            metadata_length(&[0..usize::MAX, 0..1]),
+            Err(Failure::InvalidImage("metadata length overflow"))
         ));
     }
 
