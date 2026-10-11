@@ -122,16 +122,9 @@ mod tests {
                 .command(&executable)
                 .output()
                 .expect("configuration child");
-            assert!(
-                output.status.success(),
-                "{}: {}",
-                scenario.name,
-                child_diagnostic(&output.stderr)
-            );
-            assert_eq!(
-                child_diagnostic(&output.stderr),
-                scenario.expected_diagnostic
-            );
+            let diagnostic = child_diagnostic(&output.stderr);
+            assert!(output.status.success(), "{}: {diagnostic}", scenario.name);
+            assert_eq!(diagnostic, scenario.expected_diagnostic);
         }
     }
 

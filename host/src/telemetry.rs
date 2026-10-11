@@ -1141,7 +1141,7 @@ mod tests {
             opentelemetry_sdk::metrics::data::MetricData::Sum(sum),
         ) = metric.data()
         else {
-            panic!("counter must export a u64 sum")
+            unreachable!("a u64 counter exports u64 sum data")
         };
         assert_eq!(
             sum.data_points()
@@ -1169,9 +1169,10 @@ mod tests {
                     None::<Shared>,
                 );
                 tracing::subscriber::with_default(subscriber, || {
+                    let failed = tracing::field::debug(BrokenDebug);
                     let span = tracing::info_span!(
                         "decision",
-                        failed = tracing::field::debug(BrokenDebug),
+                        failed = &failed,
                         allowed = tracing::field::Empty
                     );
                     span.record("allowed", true);

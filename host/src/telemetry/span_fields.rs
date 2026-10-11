@@ -39,13 +39,14 @@ where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
     fn on_record(&self, id: &span::Id, record: &span::Record<'_>, ctx: Context<'_, S>) {
-        if let Some(span) = ctx.span(id) {
-            let mut extensions = span.extensions_mut();
-            if let Some(fields) = extensions.get_mut::<FormattedFields<SpanTraceFields>>() {
-                // The formatter reports failures locally; retaining the primary
-                // operation must not turn a diagnostic fault into an app fault.
-                let _ = SpanTraceFields.add_fields(fields, record);
-            }
+        let Some(span) = ctx.span(id) else {
+            unreachable!("the tracing Registry guarantees the span is live in on_record")
+        };
+        let mut extensions = span.extensions_mut();
+        if let Some(fields) = extensions.get_mut::<FormattedFields<SpanTraceFields>>() {
+            // The formatter reports failures locally; retaining the primary
+            // operation must not turn a diagnostic fault into an app fault.
+            let _ = SpanTraceFields.add_fields(fields, record);
         }
     }
 }
