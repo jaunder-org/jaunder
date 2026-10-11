@@ -182,20 +182,8 @@ fn process(
             if Instant::now() >= deadline {
                 return Err(ImageSanitizerError::TimedOut);
             }
-            let mut buffer = [0; 4096];
-            match stdout.read(&mut buffer) {
-                Ok(0) => eof = true,
-                Ok(count) => {
-                    bytes.extend_from_slice(&buffer[..count]);
-                    if bytes.len() > worker_protocol::MAX_REPLY_BYTES {
-                        return Err(ImageSanitizerError::Protocol(
-                            worker_protocol::ProtocolError::TooLarge,
-                        ));
-                    }
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(error) => return Err(ImageSanitizerError::Processing(error)),
+            if read_reply_chunk(&mut stdout, &mut bytes, &mut eof)? == ReadProgress::Retry {
+                continue;
             }
             if status.is_none() {
                 status = child.try_wait().map_err(ImageSanitizerError::Processing)?;
@@ -224,6 +212,37 @@ fn process(
     work
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ReadProgress {
+    Poll,
+    Retry,
+}
+
+fn read_reply_chunk(
+    reader: &mut impl Read,
+    bytes: &mut Vec<u8>,
+    eof: &mut bool,
+) -> Result<ReadProgress, ImageSanitizerError> {
+    let mut buffer = [0; 4096];
+    match reader.read(&mut buffer) {
+        Ok(0) => *eof = true,
+        Ok(count) => {
+            bytes.extend_from_slice(&buffer[..count]);
+            if bytes.len() > worker_protocol::MAX_REPLY_BYTES {
+                return Err(ImageSanitizerError::Protocol(
+                    worker_protocol::ProtocolError::TooLarge,
+                ));
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+            return Ok(ReadProgress::Retry);
+        }
+        Err(error) => return Err(ImageSanitizerError::Processing(error)),
+    }
+    Ok(ReadProgress::Poll)
+}
+
 impl From<std::io::Error> for ImageSanitizerError {
     fn from(value: std::io::Error) -> Self {
         Self::Processing(value)
@@ -250,6 +269,82 @@ mod tests {
     fn pid(child: &Child) -> rustix::process::Pid {
         rustix::process::Pid::from_raw(i32::try_from(child.id()).expect("PID fits platform"))
             .expect("positive PID")
+    }
+
+    struct FailedRead(std::io::ErrorKind);
+    impl Read for FailedRead {
+        fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::new(self.0, "controlled reply read failure"))
+        }
+    }
+
+    #[test]
+    fn reply_read_retries_interruptions_but_polls_would_block() {
+        // Interrupted reads immediately recheck cancellation/deadline; an
+        // empty nonblocking pipe must still poll child status and then yield.
+        for (kind, expected) in [
+            (std::io::ErrorKind::Interrupted, ReadProgress::Retry),
+            (std::io::ErrorKind::WouldBlock, ReadProgress::Poll),
+        ] {
+            let mut bytes = b"existing reply prefix".to_vec();
+            let mut eof = false;
+            assert_eq!(
+                read_reply_chunk(&mut FailedRead(kind), &mut bytes, &mut eof)
+                    .expect("nonfatal read"),
+                expected
+            );
+            assert_eq!(bytes, b"existing reply prefix");
+            assert!(!eof, "transient errors cannot certify EOF");
+        }
+        let mut bytes = Vec::new();
+        let mut eof = false;
+        let error = read_reply_chunk(
+            &mut FailedRead(std::io::ErrorKind::PermissionDenied),
+            &mut bytes,
+            &mut eof,
+        )
+        .expect_err("unexpected I/O source");
+        assert!(
+            matches!(error, ImageSanitizerError::Processing(source) if source.kind() == std::io::ErrorKind::PermissionDenied && source.to_string() == "controlled reply read failure")
+        );
+        assert!(bytes.is_empty());
+        assert!(!eof);
+    }
+
+    #[test]
+    fn reply_read_accepts_exact_bound_and_rejects_first_excess_byte() {
+        // Size validation applies to accumulated bytes, not each individual
+        // read. EOF is required separately and cannot rescue oversized output.
+        for size in [
+            worker_protocol::MAX_REPLY_BYTES,
+            worker_protocol::MAX_REPLY_BYTES + 1,
+        ] {
+            let mut reader = std::io::Cursor::new(vec![b'x'; size]);
+            let mut bytes = Vec::new();
+            let mut eof = false;
+            while bytes.len() < worker_protocol::MAX_REPLY_BYTES {
+                assert_eq!(
+                    read_reply_chunk(&mut reader, &mut bytes, &mut eof).expect("bounded chunk"),
+                    ReadProgress::Poll
+                );
+            }
+            assert_eq!(bytes.len(), worker_protocol::MAX_REPLY_BYTES);
+            assert!(!eof, "a full chunk alone does not establish EOF");
+            let result = read_reply_chunk(&mut reader, &mut bytes, &mut eof);
+            if size == worker_protocol::MAX_REPLY_BYTES {
+                assert_eq!(result.expect("exact bound"), ReadProgress::Poll);
+                assert!(eof);
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(ImageSanitizerError::Protocol(
+                        worker_protocol::ProtocolError::TooLarge
+                    ))
+                ));
+                assert!(!eof);
+                assert_eq!(bytes.len(), worker_protocol::MAX_REPLY_BYTES + 1);
+            }
+        }
     }
 
     #[test]
