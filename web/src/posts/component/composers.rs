@@ -1,7 +1,7 @@
 use leptos::prelude::*;
 
 use crate::auth;
-use crate::error::WebError;
+use crate::error::{WebError, WebResult};
 use crate::forms::{Field, ValidatedInput, ValidatedTextarea};
 use crate::icon::{IconButtonContent, Icons};
 use crate::media::MediaUpload;
@@ -27,7 +27,11 @@ use super::{audience, support};
 /// (renderer-internal, #445), so it is filtered out. Adding a format is a one-attribute change
 /// on `PostFormat`, not new markup here.
 #[component]
-fn FormatToggle(format: RwSignal<PostFormat>, on_change: Callback<PostFormat>) -> impl IntoView {
+fn FormatToggle(
+    format: RwSignal<PostFormat>,
+    on_change: Callback<PostFormat>,
+    #[prop(default = Signal::derive(|| true))] ready: Signal<bool>,
+) -> impl IntoView {
     use strum::{EnumMessage, VariantArray};
     view! {
         <fieldset class="j-form-field j-composer-group">
@@ -42,11 +46,16 @@ fn FormatToggle(format: RwSignal<PostFormat>, on_change: Callback<PostFormat>) -
                             <button
                                 type="button"
                                 class=move || {
-                                    if format.get() == f { "j-btn is-selected" } else { "j-btn" }
+                                    if ready.get() && format.get() == f {
+                                        "j-btn is-selected"
+                                    } else {
+                                        "j-btn"
+                                    }
                                 }
                                 aria-pressed=move || {
-                                    if format.get() == f { "true" } else { "false" }
+                                    if ready.get() && format.get() == f { "true" } else { "false" }
                                 }
+                                prop:disabled=move || !ready.get()
                                 on:click=move |_| on_change.run(f)
                             >
                                 {label}
@@ -435,6 +444,20 @@ pub fn PostCreateForm(
         });
     }
 
+    let initial_format = RwSignal::new(Ok(posts::InitialFormatState::default()));
+    let load_format = Callback::new(move |()| {
+        initial_format.set(Ok(posts::InitialFormatState::Loading));
+        leptos::task::spawn_local(async move {
+            posts::settle_default_format(
+                crate::profile::get_default_post_format().await,
+                initial_format,
+                state,
+                baseline,
+            );
+        });
+    });
+    load_format.run(());
+
     let initial_audience = RwSignal::new(posts::InitialAudienceState::default());
     // The composer must paint and accept edits while this request is pending.
     // A tracked Resource would suspend the containing page until it settles.
@@ -474,6 +497,8 @@ pub fn PostCreateForm(
             schedule=schedule
             create_action=create_action
             initial_audience
+            initial_format
+            load_format
             rows=rows
             placeholder=placeholder
             layout_class=presentation.layout_class
@@ -509,6 +534,8 @@ fn CreationComposer(
     schedule: CreationSchedule,
     create_action: ServerAction<Create>,
     initial_audience: RwSignal<posts::InitialAudienceState>,
+    initial_format: RwSignal<WebResult<posts::InitialFormatState>>,
+    load_format: Callback<()>,
     rows: u32,
     placeholder: &'static str,
     layout_class: &'static str,
@@ -520,6 +547,7 @@ fn CreationComposer(
         state.body,
         Signal::derive(move || {
             !initial_audience.get().can_submit()
+                || !initial_format.with(posts::initial_format_ready)
                 || !slug_field.is_valid()
                 || !state.summary_field.is_valid()
                 || schedule.is_editing()
@@ -541,6 +569,7 @@ fn CreationComposer(
         }),
     );
     view! {
+        <CreationFormatStatus initial_format load_format />
         <Show when=move || initial_audience.get().failed()>
             <p class="error">"Could not load the Default Audience. Reload before saving a Post."</p>
         </Show>
@@ -569,6 +598,9 @@ fn CreationComposer(
                     schedule_error=Signal::derive(|| None::<InvalidSchedule>)
                     creation_schedule=Some(schedule)
                     named=named
+                    format_ready=Signal::derive(move || {
+                        initial_format.with(posts::initial_format_ready)
+                    })
                     on_audience_edit=Callback::new(move |()| {
                         initial_audience.update(|status| *status = status.edited());
                     })
@@ -576,6 +608,35 @@ fn CreationComposer(
             </aside>
         </div>
         <CreateErrorFlash action=create_action />
+    }
+}
+
+/// Preference loading does not hide entered content or invent a default format.
+#[component]
+fn CreationFormatStatus(
+    initial_format: RwSignal<WebResult<posts::InitialFormatState>>,
+    load_format: Callback<()>,
+) -> impl IntoView {
+    view! {
+        {move || match initial_format.get() {
+            Ok(posts::InitialFormatState::Loading) => {
+                view! { <p role="status">"Loading Default Post Format…"</p> }.into_any()
+            }
+            Ok(posts::InitialFormatState::Ready) => ().into_any(),
+            Err(error) => {
+                view! {
+                    <div role="alert">
+                        <p class="error">
+                            "Could not load the Default Post Format. "{error.to_string()}
+                        </p>
+                        <button type="button" class="j-btn" on:click=move |_| load_format.run(())>
+                            "Retry Default Post Format"
+                        </button>
+                    </div>
+                }
+                    .into_any()
+            }
+        }}
     }
 }
 
@@ -972,18 +1033,11 @@ pub(super) fn ComposerControlRail(
     creation_schedule: Option<CreationSchedule>,
     named: RwSignal<NamedAudienceState>,
     #[prop(optional)] on_audience_edit: Option<Callback<()>>,
+    #[prop(default = Signal::derive(|| true))] format_ready: Signal<bool>,
 ) -> impl IntoView {
-    use strum::EnumMessage;
-
     let disclosures = posts::ComposerDisclosureState::new();
-    let format_value = Signal::derive(move || {
-        state
-            .format
-            .get()
-            .get_message()
-            .unwrap_or("HTML")
-            .to_owned()
-    });
+    let format_value =
+        Signal::derive(move || posts::format_control_value(state.format.get(), format_ready.get()));
     view! {
         <ComposerDetails state />
         <div class="j-composer-controls">
@@ -997,6 +1051,7 @@ pub(super) fn ComposerControlRail(
             >
                 <FormatToggle
                     format=state.format
+                    ready=format_ready
                     on_change=Callback::new(move |format| state.switch_format(format))
                 />
             </ComposerDisclosure>

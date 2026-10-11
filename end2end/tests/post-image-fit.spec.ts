@@ -16,8 +16,12 @@ function imageBytes(width: number, height: number): Buffer {
   );
 }
 
-async function imageGeometry(page: Page, alt: string) {
-  const image = page.locator(`${BODY} img[alt="${alt}"]`);
+function postBody(page: Page, postId: number) {
+  return page.locator(`#j-post-${postId} ${BODY}`);
+}
+
+async function imageGeometry(page: Page, postId: number, alt: string) {
+  const image = postBody(page, postId).locator(`img[alt="${alt}"]`);
   await expect(image).toBeVisible();
   return image.evaluate(async (img: HTMLImageElement) => {
     await img.decode();
@@ -61,9 +65,11 @@ test("oversized Post images fit the Post body while small images remain natural"
     imageBytes(80, 50),
     "image/svg+xml",
   );
-  const post = await createPostViaApi(page, {
-    body: `# Image fit proof\n\n![Wide](${wide.url})\n\n![Small](${small.url})`,
-  });
+  const body = `# Image fit proof\n\n![Wide](${wide.url})\n\n![Small](${small.url})`;
+  // A retry leaves its earlier public Post behind. Exercise that duplicate
+  // image state on every attempt so unscoped locators cannot pass by luck.
+  await createPostViaApi(page, { body });
+  const post = await createPostViaApi(page, { body });
   const context = await tracedContext();
   try {
     for (const route of ["/", `/~${username}`, post.permalink]) {
@@ -72,7 +78,11 @@ test("oversized Post images fit the Post body while small images remain natural"
         try {
           await publicPage.setViewportSize({ width, height: 844 });
           await goto(publicPage, route, { timeout: firstNav });
-          const wideGeometry = await imageGeometry(publicPage, "Wide");
+          const wideGeometry = await imageGeometry(
+            publicPage,
+            post.post_id,
+            "Wide",
+          );
           expect(wideGeometry.naturalWidth).toBe(1200);
           expect(wideGeometry.width).toBeLessThanOrEqual(
             wideGeometry.bodyWidth + 1,
@@ -80,7 +90,11 @@ test("oversized Post images fit the Post body while small images remain natural"
           expect(wideGeometry.width / wideGeometry.height).toBeCloseTo(1.5, 2);
           expect(wideGeometry.postOverflow).toBeLessThanOrEqual(1);
           expect(wideGeometry.documentOverflow).toBeLessThanOrEqual(1);
-          const smallGeometry = await imageGeometry(publicPage, "Small");
+          const smallGeometry = await imageGeometry(
+            publicPage,
+            post.post_id,
+            "Small",
+          );
           expect(smallGeometry.naturalWidth).toBe(80);
           expect(smallGeometry.width).toBe(80);
         } finally {
@@ -95,7 +109,7 @@ test("oversized Post images fit the Post body while small images remain natural"
   try {
     await homePage.setViewportSize({ width: 390, height: 844 });
     await goto(homePage, "/app", { timeout: firstNav });
-    const home = await imageGeometry(homePage, "Wide");
+    const home = await imageGeometry(homePage, post.post_id, "Wide");
     expect(home.width).toBeLessThanOrEqual(home.bodyWidth + 1);
     expect(home.width / home.height).toBeCloseTo(1.5, 2);
     expect(home.documentOverflow).toBeLessThanOrEqual(1);
@@ -116,10 +130,10 @@ test("authored dimensions retain natural proportions under a custom Theme Packag
     imageBytes(1200, 800),
     "image/svg+xml",
   );
-  const post = await createPostViaApi(page, {
-    body: `<p>Authored image fit proof</p><img src="${wide.url}" alt="Authored" width="1000" height="200">`,
-    format: "html",
-  });
+  const body = `<p>Authored image fit proof</p><img src="${wide.url}" alt="Authored" width="1000" height="200">`;
+  // Match the duplicate-Post state produced when this test is retried.
+  await createPostViaApi(page, { body, format: "html" });
+  const post = await createPostViaApi(page, { body, format: "html" });
   const theme = conformanceThemePackage();
   await publishAndSelectTheme(page, theme);
 
@@ -146,10 +160,16 @@ test("authored dimensions retain natural proportions under a custom Theme Packag
             "data-theme",
             "custom",
           );
-          const image = publicPage.locator(`${BODY} img[alt="Authored"]`);
+          const image = postBody(publicPage, post.post_id).locator(
+            'img[alt="Authored"]',
+          );
           await expect(image).toHaveAttribute("width", "1000");
           await expect(image).toHaveAttribute("height", "200");
-          const geometry = await imageGeometry(publicPage, "Authored");
+          const geometry = await imageGeometry(
+            publicPage,
+            post.post_id,
+            "Authored",
+          );
           expect(geometry.width).toBeLessThanOrEqual(geometry.bodyWidth + 1);
           expect(geometry.width / geometry.height).toBeCloseTo(1.5, 2);
           expect(geometry.documentOverflow).toBeLessThanOrEqual(1);
@@ -157,7 +177,7 @@ test("authored dimensions retain natural proportions under a custom Theme Packag
       }
     }
     await atRoute("/", 390, async (publicPage) => {
-      const local = await imageGeometry(publicPage, "Authored");
+      const local = await imageGeometry(publicPage, post.post_id, "Authored");
       expect(local.width).toBeCloseTo(local.bodyWidth, 0);
     });
   } finally {
@@ -192,7 +212,11 @@ test("a site Theme Package inherits the image fit on Local and public permalinks
           "data-theme",
           "custom",
         );
-        const image = await imageGeometry(publicPage, "Site wide");
+        const image = await imageGeometry(
+          publicPage,
+          post.post_id,
+          "Site wide",
+        );
         expect(image.width).toBeLessThanOrEqual(image.bodyWidth + 1);
         expect(image.width / image.height).toBeCloseTo(1.5, 2);
         expect(image.documentOverflow).toBeLessThanOrEqual(1);
@@ -231,7 +255,9 @@ test("Markdown, Org, and HTML image rendering shares the Post-body wrapper", asy
       const publicPage = await context.newPage();
       try {
         await goto(publicPage, post.permalink, { timeout: firstNav });
-        await expect(publicPage.locator(`${BODY} img`)).toHaveCount(1);
+        await expect(
+          postBody(publicPage, post.post_id).locator("img"),
+        ).toHaveCount(1);
       } finally {
         await publicPage.close();
       }
@@ -266,7 +292,7 @@ test("a public custom Theme Package can override the Post image fit default", as
     try {
       await publicPage.setViewportSize({ width: 390, height: 844 });
       await goto(publicPage, post.permalink, { timeout: firstNav });
-      const image = await imageGeometry(publicPage, "Override");
+      const image = await imageGeometry(publicPage, post.post_id, "Override");
       expect(image.width).toBeCloseTo(image.bodyWidth / 2, 0);
       expect(image.width / image.height).toBeCloseTo(1.5, 2);
     } finally {
