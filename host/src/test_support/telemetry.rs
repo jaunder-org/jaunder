@@ -1,35 +1,33 @@
-//! Child-environment fixtures for the two executable telemetry roots.
+//! Shared inherited local-log inputs for the two executable roots.
 //!
-//! This fixture owns scenario inputs and process setup, not policy assertions.
-//! Each root still invokes its own resolver and checks its observed snapshot.
+//! Each root invokes its own resolver and asserts its observed policy; this
+//! fixture only owns inputs and isolated child process construction.
 
-use std::ffi::OsString;
-use std::os::unix::ffi::OsStringExt as _;
 use std::path::Path;
 use std::process::Command;
 
-/// Selects the child branch in each executable's policy-wiring test.
-pub const TRACE_FILTER_CHILD: &str = "JAUNDER_TEST_TRACE_POLICY_CHILD";
+/// Selects each executable's local-policy child branch.
+pub const LOCAL_LOG_CHILD: &str = "JAUNDER_TEST_LOCAL_LOG_POLICY_CHILD";
 
-/// One maintained inherited-input case and its expected local diagnostic.
-pub struct TraceFilterScenario {
+/// One local-filter precedence case shared by both executable tests.
+pub struct LocalLogScenario {
     pub name: &'static str,
-    value: Option<OsString>,
-    pub expected_diagnostic: &'static str,
+    preferred: Option<&'static str>,
+    fallback: &'static str,
 }
 
-impl TraceFilterScenario {
-    /// Builds an isolated child without changing its parent's environment.
+impl LocalLogScenario {
+    /// Builds an isolated child without changing the parent's environment.
     #[must_use]
     pub fn command(&self, executable: &Path) -> Command {
         let mut command = Command::new(executable);
         command.args([
             "--exact",
-            "tests::subprocess_keeps_inherited_trace_and_log_filters_independent",
+            "tests::subprocess_preserves_inherited_local_log_policy",
             "--nocapture",
         ]);
         for name in [
-            "JAUNDER_TRACE_FILTER",
+            "JAUNDER_LOG_FILTER",
             "JAUNDER_LOG_FORMAT",
             "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
             "OTEL_EXPORTER_OTLP_ENDPOINT",
@@ -39,41 +37,28 @@ impl TraceFilterScenario {
             command.env_remove(name);
         }
         command
-            .env(TRACE_FILTER_CHILD, self.name)
-            .env("JAUNDER_LOG_FILTER", "warn")
-            .env("RUST_LOG", "off");
-        if let Some(value) = &self.value {
-            command.env("JAUNDER_TRACE_FILTER", value);
+            .env(LOCAL_LOG_CHILD, self.name)
+            .env("RUST_LOG", self.fallback);
+        if let Some(value) = self.preferred {
+            command.env("JAUNDER_LOG_FILTER", value);
         }
         command
     }
 }
 
-/// The same inherited inputs must exercise both executable roots.
+/// Preferred and fallback inherited inputs must exercise both roots.
 #[must_use]
-pub fn trace_filter_scenarios() -> [TraceFilterScenario; 5] {
+pub fn local_log_scenarios() -> [LocalLogScenario; 2] {
     [
-        ("override", Some(OsString::from("debug")), ""),
-        ("absent", None, ""),
-        ("blank", Some(OsString::from("   ")), warning()),
-        (
-            "malformed",
-            Some(OsString::from("raw-token==secret")),
-            warning(),
-        ),
-        (
-            "nonunicode",
-            Some(OsString::from_vec(vec![0xff])),
-            warning(),
-        ),
+        LocalLogScenario {
+            name: "override",
+            preferred: Some("warn"),
+            fallback: "debug",
+        },
+        LocalLogScenario {
+            name: "fallback",
+            preferred: None,
+            fallback: "off",
+        },
     ]
-    .map(|(name, value, expected_diagnostic)| TraceFilterScenario {
-        name,
-        value,
-        expected_diagnostic,
-    })
-}
-
-fn warning() -> &'static str {
-    "host.telemetry.trace_filter: invalid configured value; using INFO trace filter\n"
 }

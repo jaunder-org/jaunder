@@ -16,7 +16,7 @@ storage/schema or UI changes.
 
 ## Task outline
 
-- [ ] **0. Establish revised regressions and settle the local-only interface.**
+- [x] **0. Establish revised regressions and settle the local-only interface.**
   - Prerequisite: current production composition/exporter fails the desired
     DEBUG/TRACE span/event export under local WARN/off and valid
     unsampled-parent recording/correlation; retain those reds and prior controls
@@ -25,7 +25,7 @@ storage/schema or UI changes.
     the unlanded active-sink accessor. #1743's native OTLP logger is unfiltered
     and must not use it. Obtain owner acknowledgment and preserve landing/rebase
     order before changing the coordinated interface.
-- [ ] **1. Remove filtering and install AlwaysOn recording.**
+- [x] **1. Remove filtering and install AlwaysOn recording.**
   - Depends on 0. Remove raw trace input, resolver/fallback/accessor, per-span
     marker/query and obsolete policy fixtures/tests; update both roots and typed
     constructors. Local formatter alone consumes the local filter. The SDK trace
@@ -35,7 +35,7 @@ storage/schema or UI changes.
     verbosity and target/context directives, DEBUG/TRACE spans and span events,
     endpoint absence and sampled/unsampled parents. Prove the actual production
     provider policy, not a test-only independently configured sampler.
-- [ ] **2. Simplify parent adoption and preserve diagnostics.**
+- [x] **2. Simplify parent adoption and preserve diagnostics.**
   - Depends on 1. Use the installed tracer/subscriber capability already owned
     by `TelemetryGuard` to enable HTTP extraction/adoption, not per-span
     inference or SDK-context lookup. Retain IDs, ordering, safe fields and

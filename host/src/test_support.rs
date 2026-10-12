@@ -1,6 +1,5 @@
 //! Host-owned domain-value and executable-boundary test fixtures.
 
-#[cfg(unix)]
 pub mod telemetry;
 
 use super::feed::{FeedMinDays, FeedMinItems};
@@ -19,6 +18,16 @@ pub fn telemetry_subscriber(
         tracer,
         Some(std::io::sink),
     )
+}
+
+/// Builds the actual host tracer policy with an injected in-memory/export seam.
+#[must_use]
+pub fn telemetry_tracer_provider(
+    exporter: impl opentelemetry_sdk::trace::SpanExporter + 'static,
+) -> opentelemetry_sdk::trace::SdkTracerProvider {
+    crate::telemetry::tracer_provider_builder()
+        .with_simple_exporter(exporter)
+        .build()
 }
 
 /// Parses `s` into a valid [`Password`] for tests.

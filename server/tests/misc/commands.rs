@@ -62,7 +62,6 @@ fn default_host_config() -> (host::telemetry::TelemetryConfig, Option<ServeCaptu
             false,
             host::telemetry::TelemetryRawConfig {
                 log_filter: Ok(None),
-                trace_filter: Ok(None),
                 rust_log: Ok(None),
                 log_format: Ok(None),
                 jaunder_otlp_endpoint: Ok(None),

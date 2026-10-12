@@ -40,7 +40,6 @@ mod tests {
             false,
             host::telemetry::TelemetryRawConfig {
                 log_filter: Ok(None),
-                trace_filter: Ok(None),
                 rust_log: Ok(None),
                 log_format: Ok(None),
                 jaunder_otlp_endpoint: Ok(None),
@@ -52,12 +51,11 @@ mod tests {
     }
 
     #[test]
-    fn log_and_trace_off_preserve_warn_capture_and_independent_panic_hook() {
+    fn local_log_off_preserves_warn_capture_and_independent_panic_hook() {
         let config = TelemetryConfig::from_raw(
             false,
             host::telemetry::TelemetryRawConfig {
                 log_filter: Ok(Some("off".to_owned())),
-                trace_filter: Ok(Some("off".to_owned())),
                 rust_log: Ok(None),
                 log_format: Ok(None),
                 jaunder_otlp_endpoint: Ok(None),

@@ -8,10 +8,6 @@
 //! before exit. Server-only request diagnostics stay in `server::observability`.
 
 mod span_fields;
-mod trace_admission;
-
-pub use trace_admission::span_is_trace_admitted;
-
 use std::time::{Duration, Instant};
 
 use opentelemetry::KeyValue;
@@ -42,7 +38,6 @@ const E2E_SEED_PROCESS_TEST_SUPPORT: &str = "e2e.seed.test-support";
 /// Raw inherited values collected by an executable composition root.
 pub struct TelemetryRawConfig {
     pub log_filter: Result<Option<String>, std::env::VarError>,
-    pub trace_filter: Result<Option<String>, std::env::VarError>,
     pub rust_log: Result<Option<String>, std::env::VarError>,
     pub log_format: Result<Option<String>, std::env::VarError>,
     pub jaunder_otlp_endpoint: Result<Option<String>, std::env::VarError>,
@@ -54,7 +49,6 @@ pub struct TelemetryRawConfig {
 /// Immutable telemetry policy resolved before asynchronous work begins.
 pub struct TelemetryConfig {
     filter: EnvFilter,
-    trace_filter: EnvFilter,
     json_format: bool,
     otlp_endpoint: Option<String>,
     slow_op_threshold: Duration,
@@ -70,9 +64,6 @@ impl TelemetryConfig {
             filter: resolved_filter(verbose, raw.log_filter, raw.rust_log, || {
                 fallback(FallbackKind::LogFilter);
             }),
-            trace_filter: resolved_trace_filter(raw.trace_filter, || {
-                fallback(FallbackKind::TraceFilter);
-            }),
             json_format: use_json_format(raw.log_format, || fallback(FallbackKind::LogFormat)),
             otlp_endpoint: otel_exporter_otlp_endpoint(
                 raw.jaunder_otlp_endpoint,
@@ -86,16 +77,10 @@ impl TelemetryConfig {
         }
     }
 
-    /// Ordinary-log admission, reusable by whichever physical log sink is active.
+    /// Local-log admission only; OTLP output must not consume this policy.
     #[must_use]
-    pub fn ordinary_log_filter(&self) -> EnvFilter {
+    pub fn local_log_filter(&self) -> EnvFilter {
         self.filter.clone()
-    }
-
-    /// Trace admission, independent of log settings and CLI verbosity.
-    #[must_use]
-    pub fn trace_filter(&self) -> EnvFilter {
-        self.trace_filter.clone()
     }
 
     /// Whether the resolved endpoint enables OTLP-dependent services.
@@ -114,7 +99,6 @@ enum FallbackKind {
     SubscriberInstall,
     OtlpEndpoint,
     LogFilter,
-    TraceFilter,
     SpanFieldFormat,
     SlowThreshold,
     LogFormat,
@@ -147,10 +131,6 @@ impl FallbackKind {
             Self::LogFilter => (
                 "host.telemetry.log_filter",
                 "invalid configured value; using default filter",
-            ),
-            Self::TraceFilter => (
-                "host.telemetry.trace_filter",
-                "invalid configured value; using INFO trace filter",
             ),
             Self::SpanFieldFormat => (
                 "host.telemetry.span_fields",
@@ -256,25 +236,6 @@ fn resolved_filter(
     default_filter(verbose)
 }
 
-fn resolved_trace_filter(
-    value: Result<Option<String>, std::env::VarError>,
-    mut warn: impl FnMut(),
-) -> EnvFilter {
-    match value {
-        Ok(None) => return EnvFilter::new("info"),
-        Ok(Some(value)) if !value.trim().is_empty() => {
-            if let Ok(filter) = EnvFilter::try_new(value) {
-                return filter;
-            }
-        }
-        Ok(Some(_)) | Err(_) => {}
-    }
-    // A rejected setting is not intentional trace suppression; retain the safe
-    // default without exposing operator input to a diagnostic sink.
-    warn();
-    EnvFilter::new("info")
-}
-
 fn use_json_format(
     value: Result<Option<String>, std::env::VarError>,
     mut warn: impl FnMut(),
@@ -357,6 +318,11 @@ fn telemetry_resource(seed_process: Option<String>) -> Resource {
     }
 }
 
+pub(crate) fn tracer_provider_builder() -> opentelemetry_sdk::trace::TracerProviderBuilder {
+    opentelemetry_sdk::trace::SdkTracerProvider::builder()
+        .with_sampler(opentelemetry_sdk::trace::Sampler::AlwaysOn)
+}
+
 fn build_otel_tracer(
     endpoint: &str,
     resource: Resource,
@@ -368,7 +334,7 @@ fn build_otel_tracer(
             .build(),
         "failed to build OTLP span exporter",
     )?;
-    let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+    let provider = tracer_provider_builder()
         .with_resource(resource)
         .with_batch_exporter(exporter)
         .build();
@@ -530,7 +496,8 @@ fn install_subscriber_with<E>(
     }
 }
 
-// Context-only observers must not enable ordinary events when both sinks are off.
+// Context observers must not enable ordinary events without an OTLP tracer
+// when local output is filtered or absent.
 fn span_metadata_only(metadata: &tracing::Metadata<'_>) -> bool {
     metadata.is_span()
 }
@@ -550,21 +517,16 @@ where
             fmt::layer()
                 .json()
                 .with_writer(writer)
-                .with_filter(config.ordinary_log_filter())
+                .with_filter(config.local_log_filter())
                 .boxed()
         } else {
             fmt::layer()
                 .with_writer(writer)
-                .with_filter(config.ordinary_log_filter())
+                .with_filter(config.local_log_filter())
                 .boxed()
         }
     });
-    let otel_layer = tracer.map(|tracer| {
-        tracing_opentelemetry::layer()
-            .with_tracer(tracer)
-            .and_then(trace_admission::TraceAdmissionLayer)
-            .with_filter(config.trace_filter())
-    });
+    let otel_layer = tracer.map(|tracer| tracing_opentelemetry::layer().with_tracer(tracer));
     tracing_subscriber::registry()
         .with(extra_layer)
         .with(
@@ -727,7 +689,6 @@ fn default_telemetry_config() -> TelemetryConfig {
         false,
         TelemetryRawConfig {
             log_filter: Ok(None),
-            trace_filter: Ok(None),
             rust_log: Ok(None),
             log_format: Ok(None),
             jaunder_otlp_endpoint: Ok(None),
@@ -807,8 +768,128 @@ mod tests {
     }
 
     #[test]
+    fn local_controls_do_not_filter_otlp_debug_trace_spans_or_events() {
+        for (verbose, log, logged) in [
+            (false, Some("warn"), false),
+            (true, Some("warn"), false),
+            (false, Some("off"), false),
+            (true, None, true),
+            (false, Some("trace"), true),
+            (false, Some("host=warn,[context{enabled=true}]=off"), false),
+        ] {
+            let config = configured_local_policy(verbose, log, None);
+            let output = Arc::new(Mutex::new(Vec::new()));
+            let exporter = InMemorySpanExporter::default();
+            let provider = tracer_provider_builder()
+                .with_simple_exporter(exporter.clone())
+                .build();
+            let subscriber = compose_subscriber(
+                &config,
+                None::<tracing_subscriber::layer::Identity>,
+                Some(provider.tracer("test")),
+                Some(Shared(output.clone())),
+            );
+            tracing::subscriber::with_default(subscriber, || {
+                let context = tracing::debug_span!("context", enabled = true);
+                context.in_scope(|| {
+                    let request = tracing::info_span!("request");
+                    request.in_scope(|| {
+                        let debug = tracing::debug_span!("debug_operation");
+                        debug.in_scope(|| tracing::trace!("trace operation detail"));
+                        let trace = tracing::trace_span!("trace_operation");
+                        trace.in_scope(|| tracing::debug!("debug operation detail"));
+                        tracing::info!("ordinary info");
+                    });
+                });
+            });
+            provider.force_flush().expect("flush");
+            let spans = exporter.get_finished_spans().expect("spans");
+            for name in ["context", "request", "debug_operation", "trace_operation"] {
+                assert!(
+                    spans.iter().any(|span| span.name == name),
+                    "{verbose}/{log:?}: missing {name}"
+                );
+            }
+            let events: Vec<_> = spans
+                .iter()
+                .flat_map(|span| span.events.events.iter())
+                .collect();
+            assert!(
+                events
+                    .iter()
+                    .any(|event| event.name == "trace operation detail"),
+                "{verbose}/{log:?}"
+            );
+            assert!(
+                events
+                    .iter()
+                    .any(|event| event.name == "debug operation detail"),
+                "{verbose}/{log:?}"
+            );
+            assert_eq!(
+                String::from_utf8(output.lock().expect("output").clone())
+                    .expect("utf8")
+                    .contains("ordinary info"),
+                logged,
+                "{verbose}/{log:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn production_provider_records_unsampled_parent_with_unchanged_ids() {
+        use opentelemetry::trace::{
+            SpanContext, SpanId, TraceContextExt as _, TraceFlags, TraceId, TraceState,
+        };
+        use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+        let config = configured_local_policy(false, Some("off"), None);
+        let exporter = InMemorySpanExporter::default();
+        let provider = tracer_provider_builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let subscriber = compose_subscriber(
+            &config,
+            None::<tracing_subscriber::layer::Identity>,
+            Some(provider.tracer("test")),
+            None::<Shared>,
+        );
+        let trace_id = TraceId::from_hex("11111111111111111111111111111111").expect("trace ID");
+        let parent_id = SpanId::from_hex("2222222222222222").expect("parent ID");
+        let parent = opentelemetry::Context::new().with_remote_span_context(SpanContext::new(
+            trace_id,
+            parent_id,
+            TraceFlags::NOT_SAMPLED,
+            true,
+            TraceState::default(),
+        ));
+        tracing::subscriber::with_default(subscriber, || {
+            let request = tracing::info_span!("request");
+            request.set_parent(parent).expect("parent before SDK start");
+            request.in_scope(|| {
+                let child = tracing::info_span!("operation");
+                drop(child);
+            });
+        });
+        provider.force_flush().expect("flush");
+        let spans = exporter.get_finished_spans().expect("spans");
+        let request = spans
+            .iter()
+            .find(|span| span.name == "request")
+            .expect("record unsampled parent's request");
+        let operation = spans
+            .iter()
+            .find(|span| span.name == "operation")
+            .expect("record unsampled parent's operation");
+        assert_eq!(request.span_context.trace_id(), trace_id);
+        assert_eq!(request.parent_span_id, parent_id);
+        assert!(request.span_context.is_sampled());
+        assert_eq!(operation.span_context.trace_id(), trace_id);
+        assert_eq!(operation.parent_span_id, request.span_context.span_id());
+    }
+
+    #[test]
     fn independent_sink_admission_exports_info_requests_with_quiet_logs() {
-        let config = configured_filters(false, Some("warn"), None, Ok(None));
+        let config = configured_local_policy(false, Some("warn"), None);
         let output = Arc::new(Mutex::new(Vec::new()));
         let exporter = InMemorySpanExporter::default();
         let provider = SdkTracerProvider::builder()
@@ -822,12 +903,11 @@ mod tests {
         );
         tracing::subscriber::with_default(subscriber, || {
             let request = tracing::info_span!(target: "jaunder::observability::http", "request");
-            assert!(span_is_trace_admitted(&request));
             tracing_opentelemetry::OpenTelemetrySpanExt::set_parent(
                 &request,
                 opentelemetry::Context::new(),
             )
-            .expect("admission lookup must not start the SDK span");
+            .expect("assign parent before SDK context starts");
             request.in_scope(|| {
                 tracing::info!("ordinary info");
                 tracing::warn!("ordinary warning");
@@ -848,7 +928,7 @@ mod tests {
 
     #[test]
     fn span_trace_keeps_initial_and_late_fields_without_stdout() {
-        let config = configured_filters(false, Some("off"), None, Ok(Some("off".to_owned())));
+        let config = configured_local_policy(false, Some("off"), None);
         let subscriber = compose_subscriber(
             &config,
             None::<tracing_subscriber::layer::Identity>,
@@ -881,7 +961,6 @@ mod tests {
                 false,
                 TelemetryRawConfig {
                     log_filter: Ok(Some(log.to_owned())),
-                    trace_filter: Ok(Some("off".to_owned())),
                     rust_log: Ok(None),
                     log_format: Ok(Some(format.to_owned())),
                     jaunder_otlp_endpoint: Ok(None),
@@ -927,8 +1006,7 @@ mod tests {
         }
         let ((), output) = fallback_capture::capture(|| {
             assert_zero_error_metrics(|| {
-                let config =
-                    configured_filters(false, Some("off"), None, Ok(Some("off".to_owned())));
+                let config = configured_local_policy(false, Some("off"), None);
                 let subscriber = compose_subscriber(
                     &config,
                     None::<tracing_subscriber::layer::Identity>,
@@ -948,153 +1026,8 @@ mod tests {
     }
 
     #[test]
-    fn sink_off_and_target_directives_do_not_cross_admission_policies() {
-        for (log, trace, admitted, logged) in [
-            ("debug", "off", false, true),
-            ("off", "debug", true, false),
-            ("warn", "warn", false, false),
-            ("off", "host=info", false, false),
-            ("off", "jaunder::observability::http=info", true, false),
-        ] {
-            let config = configured_filters(false, Some(log), None, Ok(Some(trace.to_owned())));
-            let output = Arc::new(Mutex::new(Vec::new()));
-            let exporter = InMemorySpanExporter::default();
-            let provider = SdkTracerProvider::builder()
-                .with_simple_exporter(exporter.clone())
-                .build();
-            let subscriber = compose_subscriber(
-                &config,
-                None::<tracing_subscriber::layer::Identity>,
-                Some(provider.tracer("test")),
-                Some(Shared(output.clone())),
-            );
-            tracing::subscriber::with_default(subscriber, || {
-                let span = tracing::info_span!(target: "jaunder::observability::http", "request");
-                assert!(
-                    !span.is_disabled(),
-                    "diagnostic span context remains available"
-                );
-                assert_eq!(span_is_trace_admitted(&span), admitted, "{log}/{trace}");
-                span.in_scope(|| tracing::info!("ordinary info"));
-            });
-            provider.force_flush().expect("flush");
-            assert_eq!(
-                exporter
-                    .get_finished_spans()
-                    .expect("spans")
-                    .iter()
-                    .any(|span| span.name == "request"),
-                admitted,
-                "{log}/{trace}"
-            );
-            let output = String::from_utf8(output.lock().expect("output").clone()).expect("utf8");
-            assert_eq!(output.contains("ordinary info"), logged, "{log}/{trace}");
-        }
-    }
-
-    #[test]
-    fn verbose_logs_do_not_widen_warn_trace_admission() {
-        for log in ["info", "debug"] {
-            let config = configured_filters(false, Some(log), None, Ok(Some("warn".to_owned())));
-            let output = Arc::new(Mutex::new(Vec::new()));
-            let exporter = InMemorySpanExporter::default();
-            let provider = SdkTracerProvider::builder()
-                .with_simple_exporter(exporter.clone())
-                .build();
-            let subscriber = compose_subscriber(
-                &config,
-                None::<tracing_subscriber::layer::Identity>,
-                Some(provider.tracer("test")),
-                Some(Shared(output.clone())),
-            );
-            tracing::subscriber::with_default(subscriber, || {
-                let info = tracing::info_span!("info_operation");
-                assert!(!info.is_disabled());
-                assert!(!span_is_trace_admitted(&info), "{log}");
-                info.in_scope(|| tracing::info!("ordinary info"));
-                let warning = tracing::warn_span!("warning_operation");
-                assert!(span_is_trace_admitted(&warning), "{log}");
-            });
-            provider.force_flush().expect("flush");
-            let spans = exporter.get_finished_spans().expect("spans");
-            assert!(
-                !spans.iter().any(|span| span.name == "info_operation"),
-                "{log}"
-            );
-            assert!(
-                spans.iter().any(|span| span.name == "warning_operation"),
-                "{log}"
-            );
-            let output = String::from_utf8(output.lock().expect("output").clone()).expect("utf8");
-            assert!(output.contains("ordinary info"), "{log}: {output}");
-        }
-    }
-
-    #[test]
-    fn dynamic_trace_filter_admission_follows_actual_context_lifecycle() {
-        let config = configured_filters(
-            false,
-            Some("off"),
-            None,
-            Ok(Some("off,[context{allowed=true}]=info".to_owned())),
-        );
-        let exporter = InMemorySpanExporter::default();
-        let provider = SdkTracerProvider::builder()
-            .with_simple_exporter(exporter.clone())
-            .build();
-        let subscriber = compose_subscriber(
-            &config,
-            None::<tracing_subscriber::layer::Identity>,
-            Some(provider.tracer("test")),
-            None::<Shared>,
-        );
-        tracing::subscriber::with_default(subscriber, || {
-            let outside = tracing::info_span!(target: "jaunder::observability::http", "request");
-            assert!(!span_is_trace_admitted(&outside));
-            let context = tracing::debug_span!("context", allowed = tracing::field::Empty);
-            context.in_scope(|| {
-                let blocked =
-                    tracing::info_span!(target: "jaunder::observability::http", "request");
-                assert!(!span_is_trace_admitted(&blocked));
-            });
-            context.record("allowed", true);
-            context.in_scope(|| {
-                let inside = tracing::info_span!(target: "jaunder::observability::http", "request");
-                assert!(span_is_trace_admitted(&inside));
-            });
-        });
-        provider.force_flush().expect("flush");
-        assert_eq!(
-            exporter
-                .get_finished_spans()
-                .expect("spans")
-                .iter()
-                .filter(|span| span.name == "request")
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn trace_admission_does_not_claim_sampling_or_an_absent_exporter() {
-        let config = configured_filters(false, Some("off"), None, Ok(None));
-        let exporter = InMemorySpanExporter::default();
-        let provider = SdkTracerProvider::builder()
-            .with_sampler(opentelemetry_sdk::trace::Sampler::AlwaysOff)
-            .with_simple_exporter(exporter.clone())
-            .build();
-        let subscriber = compose_subscriber(
-            &config,
-            None::<tracing_subscriber::layer::Identity>,
-            Some(provider.tracer("test")),
-            None::<Shared>,
-        );
-        tracing::subscriber::with_default(subscriber, || {
-            let span = tracing::info_span!("sampled_off");
-            assert!(span_is_trace_admitted(&span));
-        });
-        provider.force_flush().expect("flush");
-        assert!(exporter.get_finished_spans().expect("spans").is_empty());
+    fn diagnostic_span_context_remains_available_without_an_exporter() {
+        let config = configured_local_policy(false, Some("off"), None);
         let subscriber = compose_subscriber(
             &config,
             None::<tracing_subscriber::layer::Identity>,
@@ -1102,21 +1035,19 @@ mod tests {
             None::<Shared>,
         );
         tracing::subscriber::with_default(subscriber, || {
-            let span = tracing::info_span!("no_exporter");
+            let span = tracing::trace_span!("no_exporter");
             assert!(!span.is_disabled());
-            assert!(!span_is_trace_admitted(&span));
         });
-        assert!(!span_is_trace_admitted(&tracing::Span::none()));
     }
 
     #[test]
-    fn log_and_trace_off_leave_metric_collection_active() {
+    fn local_log_off_leaves_metric_collection_active() {
         let exporter = InMemoryMetricExporter::default();
         let provider = SdkMeterProvider::builder()
             .with_reader(PeriodicReader::builder(exporter.clone()).build())
             .build();
         opentelemetry::global::set_meter_provider(provider.clone());
-        let config = configured_filters(false, Some("off"), None, Ok(Some("off".to_owned())));
+        let config = configured_local_policy(false, Some("off"), None);
         let subscriber = compose_subscriber(
             &config,
             None::<tracing_subscriber::layer::Identity>,
@@ -1161,7 +1092,7 @@ mod tests {
         }
         let ((), output) = fallback_capture::capture(|| {
             assert_zero_error_metrics(|| {
-                let config = configured_filters(false, Some("off"), None, Ok(None));
+                let config = configured_local_policy(false, Some("off"), None);
                 let subscriber = compose_subscriber(
                     &config,
                     None::<tracing_subscriber::layer::Identity>,
@@ -1513,17 +1444,15 @@ mod tests {
         );
     }
 
-    fn configured_filters(
+    fn configured_local_policy(
         verbose: bool,
         log_filter: Option<&str>,
         rust_log: Option<&str>,
-        trace_filter: Result<Option<String>, std::env::VarError>,
     ) -> TelemetryConfig {
         TelemetryConfig::from_raw(
             verbose,
             TelemetryRawConfig {
                 log_filter: Ok(log_filter.map(str::to_owned)),
-                trace_filter,
                 rust_log: Ok(rust_log.map(str::to_owned)),
                 log_format: Ok(None),
                 jaunder_otlp_endpoint: Ok(None),
@@ -1535,55 +1464,27 @@ mod tests {
     }
 
     #[test]
-    fn explicit_trace_filter_does_not_change_log_precedence_or_verbose_defaults() {
-        for directive in ["debug", "warn", "off", "host=debug"] {
-            let config = configured_filters(
-                true,
-                Some("warn"),
-                Some("debug"),
-                Ok(Some(directive.to_owned())),
-            );
-            assert_eq!(config.ordinary_log_filter().to_string(), "warn");
-            assert_eq!(config.trace_filter().to_string(), directive);
-        }
-        let config = configured_filters(true, None, None, Ok(None));
-        assert_eq!(config.trace_filter().to_string(), "info");
+    fn local_filter_accessor_preserves_precedence_and_verbose_defaults() {
         assert_eq!(
-            config.ordinary_log_filter().to_string(),
+            configured_local_policy(true, Some("warn"), Some("debug"))
+                .local_log_filter()
+                .to_string(),
+            "warn"
+        );
+        assert_eq!(
+            configured_local_policy(true, None, None)
+                .local_log_filter()
+                .to_string(),
             default_filter(true).to_string()
         );
-        let config = configured_filters(false, None, Some("off"), Ok(None));
-        assert_eq!(config.ordinary_log_filter().to_string(), "off");
-        assert_eq!(config.trace_filter().to_string(), "info");
-    }
-
-    #[test]
-    fn rejected_trace_input_has_one_fixed_local_warning_and_info_fallback() {
-        for input in [
-            Ok(Some(String::new())),
-            Ok(Some("   ".to_owned())),
-            Ok(Some("raw-token==secret".to_owned())),
-            Err(invalid_unicode_env()),
-        ] {
-            let (config, output) = fallback_capture::capture(|| {
-                assert_zero_error_metrics(|| configured_filters(false, Some("off"), None, input))
-            });
-            assert_eq!(config.trace_filter().to_string(), "info");
-            assert_eq!(config.ordinary_log_filter().to_string(), "off");
-            assert_eq!(
-                output,
-                "host.telemetry.trace_filter: invalid configured value; using INFO trace filter\n"
-            );
-            assert!(!output.contains("secret"));
-        }
-    }
-
-    #[test]
-    fn trace_filter_defaults_to_info_independently_of_log_policy() {
-        let config = default_telemetry_config();
-        assert_eq!(config.trace_filter().to_string(), "info");
         assert_eq!(
-            config.ordinary_log_filter().to_string(),
+            configured_local_policy(false, None, Some("off"))
+                .local_log_filter()
+                .to_string(),
+            "off"
+        );
+        assert_eq!(
+            default_telemetry_config().local_log_filter().to_string(),
             default_filter(false).to_string()
         );
     }
@@ -1595,7 +1496,6 @@ mod tests {
                 false,
                 TelemetryRawConfig {
                     log_filter: Err(invalid_unicode_env()),
-                    trace_filter: Ok(None),
                     rust_log: Ok(None),
                     log_format: Err(invalid_unicode_env()),
                     jaunder_otlp_endpoint: Err(invalid_unicode_env()),
@@ -1726,7 +1626,6 @@ mod tests {
             false,
             TelemetryRawConfig {
                 log_filter: Ok(None),
-                trace_filter: Ok(None),
                 rust_log: Ok(None),
                 log_format: Ok(None),
                 jaunder_otlp_endpoint: Ok(Some("http://127.0.0.1:4317".to_owned())),
@@ -1744,7 +1643,6 @@ mod tests {
             false,
             TelemetryRawConfig {
                 log_filter: Ok(None),
-                trace_filter: Ok(None),
                 rust_log: Ok(None),
                 log_format: Ok(None),
                 jaunder_otlp_endpoint: Ok(Some("not a valid endpoint".to_owned())),
@@ -1763,7 +1661,6 @@ mod tests {
             false,
             TelemetryRawConfig {
                 log_filter: Ok(None),
-                trace_filter: Ok(None),
                 rust_log: Ok(None),
                 log_format: Ok(Some("json".to_owned())),
                 jaunder_otlp_endpoint: Ok(None),

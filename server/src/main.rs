@@ -14,7 +14,6 @@ fn telemetry_config(verbose: bool) -> host::telemetry::TelemetryConfig {
         verbose,
         host::telemetry::TelemetryRawConfig {
             log_filter: inherited("JAUNDER_LOG_FILTER"),
-            trace_filter: inherited("JAUNDER_TRACE_FILTER"),
             rust_log: inherited("RUST_LOG"),
             log_format: inherited("JAUNDER_LOG_FORMAT"),
             jaunder_otlp_endpoint: inherited("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT"),
@@ -98,33 +97,30 @@ mod tests {
     use std::os::unix::ffi::OsStringExt as _;
     use tempfile::TempDir;
 
-    #[cfg(unix)]
     #[test]
-    fn subprocess_keeps_inherited_trace_and_log_filters_independent() {
-        use host::test_support::telemetry::{TRACE_FILTER_CHILD, trace_filter_scenarios};
-
-        if let Some(scenario) = std::env::var_os(TRACE_FILTER_CHILD) {
+    fn subprocess_preserves_inherited_local_log_policy() {
+        use host::test_support::telemetry::{LOCAL_LOG_CHILD, local_log_scenarios};
+        if let Some(scenario) = std::env::var_os(LOCAL_LOG_CHILD) {
             let config = telemetry_config(true);
-            assert_eq!(config.ordinary_log_filter().to_string(), "warn");
             assert_eq!(
-                config.trace_filter().to_string(),
+                config.local_log_filter().to_string(),
                 if scenario == "override" {
-                    "debug"
+                    "warn"
                 } else {
-                    "info"
+                    "off"
                 }
             );
             return;
         }
         let executable = std::env::current_exe().expect("test binary");
-        for scenario in trace_filter_scenarios() {
+        for scenario in local_log_scenarios() {
             let output = scenario
                 .command(&executable)
                 .output()
                 .expect("configuration child");
             let diagnostic = child_diagnostic(&output.stderr);
             assert!(output.status.success(), "{}: {diagnostic}", scenario.name);
-            assert_eq!(diagnostic, scenario.expected_diagnostic);
+            assert!(diagnostic.is_empty(), "{diagnostic}");
         }
     }
 
