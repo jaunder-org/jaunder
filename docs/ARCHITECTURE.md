@@ -2401,25 +2401,29 @@ diagnostic capture. Independent per-sink filtering is not yet implemented.
 The [native OTLP process logs proposal](adr/drafts/native-otlp-process-logs.md)
 will route ordinary application logs through the same configured Collector as
 traces and metrics; the Collector owns routing to VictoriaLogs. Without OTLP
-they remain on stdout in the configured format. The ordinary-log policy
-(`JAUNDER_LOG_FILTER`, then `RUST_LOG`, then ordinary/verbose defaults including
-storage INFO) governs either active log sink; native logs have no separate
-filter and do not inherit `JAUNDER_TRACE_FILTER`. The independent filtering
-foundation is owned by
-[#1742](https://github.com/jaunder-org/jaunder/issues/1742); log/trace
-disablement must not disable the other signal, metrics or independent
-WARN+/panic capture. Explicit messages become human-readable record bodies;
-severity and deliberately admitted structured fields remain separate. Safe
-target and request-path context are retained, while raw span stacks and
-`error.span_trace` are excluded. Correlation follows the event's resolved
-parent, including explicit parent/root semantics; absent context does not
-acquire fabricated IDs. SDK and exporter failure events use a bounded, redacted
-local stderr path and cannot feed the OTLP log exporter, even under permissive
-user filters. CLI result output and server-scoped E2E diagnostic capture remain
-independent. The proposal will extend process-guard ownership and flushing to
-installed log providers. Its supported stack will receive logs through OTLP and
-remove Jaunder journal collection/JSON parsing. These are proposed contracts,
-not claims that either #1742 or #1743 has been implemented.
+they remain on stdout in the configured format. Under the revised proposed
+contract, `JAUNDER_LOG_FILTER`, then `RUST_LOG`, then ordinary/verbose defaults
+including storage INFO govern local output only. Native logs will offer every
+application severity without application-level severity, target or context
+filtering; the Collector owns preservation and potentially increased volume.
+[#1742](https://github.com/jaunder-org/jaunder/issues/1742) owns the unfiltered
+span/event foundation, AlwaysOn recording despite clear upstream sampled hints,
+local-only filter accessor and retained field/diagnostic context. Local
+disablement must not disable OTLP output, metrics or independent WARN+/panic
+capture. Explicit messages become human-readable record bodies; severity and
+deliberately admitted structured fields remain separate. Safe target and
+request-path context are retained, while raw span stacks and `error.span_trace`
+are excluded. Correlation follows the event's resolved parent, including
+explicit parent/root semantics; absent context does not acquire fabricated IDs.
+SDK and exporter failure events use a bounded, redacted local stderr path and
+cannot feed the OTLP log exporter. Setup/shutdown, parent-assignment and
+field-format fallback diagnostics likewise remain local; unfiltered severity
+does not relax privacy or failure-path isolation. CLI result output and
+server-scoped E2E diagnostic capture remain independent. The proposal will
+extend process-guard ownership and flushing to installed log providers. Its
+supported stack will receive logs through OTLP and remove Jaunder journal
+collection/JSON parsing. These are proposed contracts, not claims that either
+#1742 or #1743 has been implemented.
 
 ### Metrics
 

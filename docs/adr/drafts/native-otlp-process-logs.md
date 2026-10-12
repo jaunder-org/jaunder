@@ -33,18 +33,23 @@ OTLP records, without stdout mirroring or journal-based duplicate ingestion. CLI
 result output and server-scoped E2E diagnostic capture remain separate
 consumers, not alternate ways to re-export ordinary logs.
 
-Consume the independent filtering foundation to be delivered by
-[#1742](https://github.com/jaunder-org/jaunder/issues/1742):
-`JAUNDER_LOG_FILTER`, then `RUST_LOG`, then the established ordinary/verbose
-defaults (including storage INFO) govern ordinary logs regardless of their
-active sink. No separate native-log filter is added. `JAUNDER_TRACE_FILTER`
-independently governs traces, defaults to INFO, and is not changed by
-ordinary-log settings or verbose mode. Either signal can be disabled without
-disabling the other signal, metrics or independent WARN+/panic capture. Shared
-span-field retention and ErrorLayer/SpanTrace do not depend on an active stdout
-sink. Local stack availability is not OTLP admission. #1742 owns that foundation
-and lands first; native logging consumes it after rebasing rather than
-maintaining a competing subscriber-policy implementation.
+Consume the Collector-owned retention foundation to be delivered by
+[#1742](https://github.com/jaunder-org/jaunder/issues/1742). The 2026-10-12
+operator-selected revision supersedes this draft's earlier shared active-sink
+filter policy: `JAUNDER_LOG_FILTER`, then `RUST_LOG`, then established
+ordinary/verbose defaults (including storage INFO) govern local ordinary output
+only. The proposed `TelemetryConfig::local_log_filter()` accessor is local-only,
+not an OTLP logger input. Native logs offer every application severity without
+application-level severity, target or context filtering. #1742 owns unfiltered
+spans/events and AlwaysOn recording despite a clear upstream sampled hint,
+retaining valid trace/parent IDs. No separate OTLP log filter is added.
+
+The Collector owns preservation; local disablement cannot disable OTLP output,
+metrics or independent WARN+/panic capture. Shared span-field retention and
+ErrorLayer/SpanTrace do not depend on active stdout. Unfiltered severity is not
+blanket field admission. #1742 lands first; native logging consumes the
+delivered foundation after rebasing, without competing subscriber-policy
+implementation.
 
 Explicit event messages become human-readable log bodies. Severity and approved
 structured diagnostic fields remain available, including safe
@@ -61,10 +66,11 @@ The process guard owns every installed signal provider and flushes/releases them
 at ordinary shutdown, including one-shot commands. Telemetry remains best
 effort: setup, export and shutdown failure cannot change application results.
 Report failures locally to stderr using bounded redacted classifications, never
-by re-exporting SDK/exporter events through OTLP logs or restoring ordinary
-stdout mirroring. Respect ordinary event filters while keeping this
-non-recursive local failure path independent. Bounded buffering does not
-guarantee delivery during outages or hard process termination.
+by re-exporting SDK/exporter, setup/shutdown, parent-assignment or field-format
+fallback diagnostics through OTLP logs or restoring ordinary stdout mirroring.
+Local event filters must not clamp native records or this non-recursive failure
+path. Bounded buffering does not guarantee delivery during outages or hard
+process termination.
 
 The supported single-host stack consumes logs through its existing OTLP receiver
 and forwards them to VictoriaLogs. Remove its Jaunder journal receiver and
@@ -80,11 +86,13 @@ three signals. Operators must use OTLP log queries rather than depend on
 ordinary Jaunder log copies in the service journal, and failure diagnostics
 remain local.
 
-Adding logs creates lifecycle and admission responsibilities; permissive user
-filters must not create exporter recursion or disclose credentials through span
-traces. Preserve scoped test capture and existing trace/metric behavior. SDK
-version compatibility and real ingestion proof are required, not assumptions
-from the presence of a logger API.
+Adding all-severity logs creates lifecycle, privacy and volume responsibilities.
+Audit newly visible DEBUG/TRACE producers; do not serialize arbitrary payloads,
+create exporter recursion or disclose credentials through span traces. Operators
+manage preservation and potentially increased volume at the Collector, not by
+application verbosity. Preserve scoped capture and #1742's revised trace/metric
+behavior. SDK version compatibility and real ingestion proof are required, not
+assumptions from the presence of a logger API.
 
 Historical log rewriting, production rollout, runtime observability credentials,
 retention changes, browser telemetry and the underlying application errors

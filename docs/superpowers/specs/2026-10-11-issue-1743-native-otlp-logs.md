@@ -1,5 +1,10 @@
 # Issue #1743 — native OTLP logs and meaningful VictoriaLogs messages
 
+> Revision 2026-10-12: incorporates the operator-selected Collector-owned
+> retention policy communicated by #1742. Supersedes the earlier filtered-OTLP
+> contract. The revised #1743 spec and outline are approved; implementation
+> still waits for #1742 to land.
+
 ## Outcome
 
 Jaunder exports logs, traces and metrics through its configured OTLP Collector.
@@ -12,16 +17,19 @@ operation.
 
 - The existing OTLP endpoint selection and precedence apply to all three
   signals; no VictoriaLogs-specific endpoint or dependency is added to Jaunder.
-- Consume #1742's independent sink-admission contract rather than redesign it:
-  `JAUNDER_LOG_FILTER`, then `RUST_LOG`, then existing ordinary/`--verbose`
-  defaults (including storage INFO) govern whichever ordinary-log sink is
-  active. No separate native-OTLP-log filter is introduced.
-- `JAUNDER_TRACE_FILTER` independently controls traces/span events, defaulting
-  to INFO; ordinary-log settings and `--verbose` do not alter it. #1742 owns its
-  resolution, safe invalid-input fallback and per-layer wiring. Log `off` must
-  not suppress traces or scoped diagnostics; trace `off` must not suppress
-  ordinary logs, metrics or scoped diagnostics. Native records do not inherit
-  trace policy.
+- Consume #1742's local-only logging contract: `JAUNDER_LOG_FILTER`, then
+  `RUST_LOG`, then existing ordinary/`--verbose` defaults (including storage
+  INFO) govern local ordinary output only. Its proposed
+  `TelemetryConfig::local_log_filter()` accessor must not filter native OTLP
+  logs. No application-level severity, target or context filter applies to
+  application OTLP output; no separate native-log filter is introduced.
+- Native OTLP logs offer every application severity, including DEBUG/TRACE,
+  independently of local verbosity. #1742 owns unfiltered spans/events and SDK
+  AlwaysOn recording even when an upstream sampled hint is clear, preserving
+  valid trace/parent IDs. The Collector owns retention; this is not guaranteed
+  delivery during outages. Local `off` and target/context directives must not
+  suppress OTLP logs, spans, metrics or independent diagnostic/panic capture. No
+  OTLP trace-filter input or per-span admission marker is consumed.
 - With OTLP configured, ordinary application logs use native OTLP records rather
   than stdout/journald. Do not mirror them to stdout or create duplicate
   ingestion. This does not redirect or suppress CLI command results written to
@@ -45,11 +53,12 @@ operation.
   or promote arbitrary external-library fields into this operator interface.
 - Correlation follows the event's resolved tracing parent: an explicit parent
   wins over the current span; contextual events use their active parent;
-  explicit root events remain uncorrelated. Do not manufacture IDs for
-  absent/filtered context.
+  explicit root events remain uncorrelated. Do not manufacture IDs for absent
+  context or an unavailable tracer.
 - Logs share process-owned telemetry lifetime with traces and metrics. One-shot
   commands flush buffered records before exit; server shutdown releases all
-  installed providers. Respect existing logging filters in either mode.
+  installed providers. Local filters apply only to local output, never native
+  OTLP records.
 - Setup/export/flush failure remains best effort and must not change application
   results or exit status. Emit local stderr diagnostics without recursive OTLP
   reporting, stdout mirroring or unbounded buffering/retries. SDK/exporter
@@ -58,7 +67,7 @@ operation.
   credentials or raw exporter payloads. This does not promise delivery during an
   outage.
 - Keep server-scoped WARN+ E2E diagnostic capture independent of ordinary-log
-  routing and log/trace `off`, with independent panic evidence and unchanged
+  routing and local `off`, with independent panic evidence and unchanged
   zero-panic acceptance. Consume #1742's sink-independent formatted span-field
   retention and ErrorLayer/SpanTrace behavior, including late-recorded fields;
   their local availability does not authorize raw-stack OTLP export.
@@ -79,16 +88,20 @@ operation.
   fields alone are not sufficient; verify severity, retained diagnostic fields
   and available trace/span correlation as well as existing credential-exclusion
   assertions.
-- Prove provider lifecycle for one-shot flush and shutdown, filter behavior,
-  non-fatal exporter failures, bounded redacted stderr diagnostics and recursion
-  avoidance, including permissive user filters and repeated failures. Test
-  explicit event parents, contextual events and root/absent-context cases.
-  Regression coverage guards the absence of duplicate stack log ingestion.
-- Prove the combined per-sink contract using native log/export observations: log
-  WARN + trace INFO, log INFO/DEBUG + trace WARN, independent log/trace `off`,
-  and target-specific directives. Metrics and independent WARN+/panic capture
-  survive disabled log/trace admission; initial and late span fields remain
-  available locally with the stdout sink absent. Do not widen OTLP admission.
+- Prove provider lifecycle for one-shot flush and shutdown, local-only
+  filtering, non-fatal exporter failures, bounded redacted stderr diagnostics
+  and recursion avoidance, including permissive user filters and repeated
+  failures. Test explicit event parents, contextual events and
+  root/absent-context cases. Regression coverage guards the absence of duplicate
+  stack log ingestion.
+- Prove actual production subscriber/SDK native log export for every application
+  severity under local WARN, `off`, restrictive target/context directives and
+  ordinary/verbose defaults. There is no OTLP level/target/context filter or
+  replacement sampling knob. Verify correlation with sampled and unsampled
+  upstream parents using #1742's delivered AlwaysOn tracer. Metrics and
+  independent WARN+/panic capture survive local disablement; initial and late
+  span fields remain available locally with stdout absent. This broadens
+  severity visibility, not privacy or diagnostic-fallback admission.
 - Existing trace/metric export and scoped E2E diagnostic/panic capture remain
   working; preserve their verification policies and resource budgets.
 - Show comparable before/after default VictoriaLogs message presentation for a
@@ -110,11 +123,13 @@ boundary across host/stack.
 
 ## Coordinated prerequisite
 
-[#1742](https://github.com/jaunder-org/jaunder/issues/1742) owns shared
-log/trace filter resolution, per-sink admission, span-field retention and
-trace-parent failure handling. #1743 owns native log records/export,
-logger-provider lifetime, no-mirroring routing and removal of journal ingestion.
-#1742 lands first; rebase #1743 onto its delivered contract before final
-subscriber implementation and combined proof. Native logs consume that
-interface, not a parallel filter implementation or a reversal of #1742's
-independent diagnostics.
+[#1742](https://github.com/jaunder-org/jaunder/issues/1742) owns shared local
+filter resolution, unfiltered span/event export and AlwaysOn sampling,
+span-field retention and trace-parent failure handling. #1743 owns native log
+records/export, logger-provider lifetime, no-mirroring routing and removal of
+journal ingestion. #1742 lands first; rebase #1743 onto its delivered contract
+before final subscriber implementation and combined proof. Native logs consume
+that interface, not a parallel filter implementation or a reversal of #1742's
+independent diagnostics. This revision supersedes the shared active-sink
+ordinary-log filter contract; increased OTLP volume and Collector-owned
+retention must be documented, without changing retention policy or budgets.
