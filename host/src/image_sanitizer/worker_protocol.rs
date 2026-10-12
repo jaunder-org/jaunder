@@ -215,13 +215,19 @@ pub enum NumberFailure {
 }
 impl From<&std::num::IntErrorKind> for NumberFailure {
     fn from(kind: &std::num::IntErrorKind) -> Self {
-        use std::num::IntErrorKind as K;
-        match kind {
-            K::Empty => Self::Empty,
-            K::InvalidDigit => Self::InvalidDigit,
-            K::PosOverflow => Self::PosOverflow,
-            K::NegOverflow => Self::NegOverflow,
-            K::Zero => Self::Zero,
+        // IntErrorKind owns these Debug names; unlike ParseIntError's input,
+        // they contain no attachment text. Unknown future names stay bounded.
+        Self::from_name(&format!("{kind:?}"))
+    }
+}
+impl NumberFailure {
+    fn from_name(name: &str) -> Self {
+        match name {
+            "Empty" => Self::Empty,
+            "InvalidDigit" => Self::InvalidDigit,
+            "PosOverflow" => Self::PosOverflow,
+            "NegOverflow" => Self::NegOverflow,
+            "Zero" => Self::Zero,
             _ => Self::Unknown,
         }
     }
@@ -338,7 +344,7 @@ impl From<&WorkerError> for Failure {
                         E::LzwError(_) => GifFailure::Lzw,
                         E::Format(_) => GifFailure::Format,
                         E::Io(_) => GifFailure::Io,
-                        _ => GifFailure::Unknown,
+                        _ => GifFailure::Unknown, // cov:ignore: gif 0.14.2 marks DecodingError non_exhaustive but exposes only the eight handled variants; this required future-variant arm cannot be constructed with the pinned library.
                     };
                     let io = if let E::Io(e) = e {
                         Some(e.into())
@@ -356,6 +362,17 @@ impl From<&WorkerError> for Failure {
 mod tests {
     use super::*;
     use std::error::Error;
+    #[test]
+    fn future_integer_failure_names_have_a_bounded_private_projection() {
+        let failure = NumberFailure::from_name("future-private-kind-name");
+        assert!(matches!(failure, NumberFailure::Unknown));
+        assert_eq!(
+            serde_json::to_string(&failure).expect("bounded kind"),
+            "\"Unknown\""
+        );
+        assert!(!failure.to_string().contains("private"));
+    }
+
     #[test]
     fn malformed_frames_schema_and_failure_sources_are_rejected_without_values() {
         for payload in [

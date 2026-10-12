@@ -496,13 +496,23 @@ impl MediaManager {
             Err(error) => return Err(anyhow::anyhow!(MediaError::Internal(Box::new(error)))),
         };
         let bytes = fs::read(file.path()).await?;
+        let (sha256_hex, size_bytes) = Self::checked_byte_identity(&bytes, max_file_size)?;
+        Ok((file, content_type, sha256_hex, size_bytes))
+    }
+
+    // Identity and accounting describe the bytes actually read, not the prior
+    // worker reply. Keep this independent post-read limit even after sanitation.
+    fn checked_byte_identity(
+        bytes: &[u8],
+        max_file_size: MaxFileSize,
+    ) -> anyhow::Result<(ContentHash, ByteSize)> {
         let size = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
         if size > max_file_size.value() {
             anyhow::bail!(MediaError::PayloadTooLarge);
         }
         let size_bytes = ByteSize::try_from(size)?;
-        let sha256_hex = ContentHash::from_digest(Sha256::digest(&bytes).into());
-        Ok((file, content_type, sha256_hex, size_bytes))
+        let sha256_hex = ContentHash::from_digest(Sha256::digest(bytes).into());
+        Ok((sha256_hex, size_bytes))
     }
 
     async fn check_quota(
@@ -1097,6 +1107,31 @@ mod tests {
 
     const SANITIZED_PNG: &[u8] =
         include_bytes!("../../host/src/image_sanitizer_fixtures/png-sanitized.png");
+
+    #[test]
+    fn actual_read_byte_identity_enforces_current_limit_before_accounting() {
+        let limit: MaxFileSize = "4".parse().expect("current byte limit");
+        let failure = MediaManager::checked_byte_identity(b"12345", limit)
+            .expect_err("post-read excess must be rejected");
+        assert!(matches!(
+            failure.downcast_ref::<MediaError>(),
+            Some(MediaError::PayloadTooLarge)
+        ));
+        let (hash, size) =
+            MediaManager::checked_byte_identity(b"1234", limit).expect("exact limit accepted");
+        assert_eq!(size.value(), 4);
+        assert_eq!(
+            hash,
+            ContentHash::from_digest(Sha256::digest(b"1234").into())
+        );
+        assert!(
+            MediaManager::checked_byte_identity(
+                b"1234",
+                "3".parse().expect("reduced current limit")
+            )
+            .is_err()
+        );
+    }
 
     struct NoForeignResolver;
 

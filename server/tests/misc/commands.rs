@@ -56,6 +56,98 @@ use storage::test_support::{
     rewrite_media_filename_in_backup, sqlite_url, unique_postgres_url,
 };
 
+#[cfg(target_os = "linux")]
+// guard:no-backend — constructor rejection precedes any database/storage access.
+#[tokio::test]
+async fn deployed_constructor_refuses_own_non_executable_path() {
+    use std::os::unix::fs::PermissionsExt;
+    const OBSERVER: &str = "JAUNDER_CONSTRUCTOR_FAILURE_OBSERVER";
+    if std::env::var_os(OBSERVER).is_none() {
+        let directory = TempDir::new().expect("owned observer executable");
+        let copy = directory.path().join("constructor-observer");
+        std::fs::copy(
+            std::env::current_exe().expect("owner integration executable"),
+            &copy,
+        )
+        .expect("byte-identical owner copy");
+        let diagnostics = directory.path().to_owned();
+        let mut owner = super::application_workflow_owner::ApplicationOwner::new(
+            directory,
+            &diagnostics,
+            super::application_workflow_owner::workflow_deadline(),
+        );
+        let mut command = std::process::Command::new(&copy);
+        command
+            .args([
+                "--exact",
+                "misc::commands::deployed_constructor_refuses_own_non_executable_path",
+                "--nocapture",
+            ])
+            .env(OBSERVER, "1");
+        let status = owner
+            .run(command)
+            .expect("bounded isolated constructor observer");
+        let stderr = owner.stderr();
+        assert!(status.success(), "constructor observer: {stderr}");
+        assert!(
+            owner.stdout().contains("CONSTRUCTOR_FAILURE_OBSERVED"),
+            "specific constructor receipt required"
+        );
+        return;
+    }
+    // Mutate ONLY the already loaded, observer-owned executable copy. This is
+    // actual filesystem rejection at both roots, not an injected current_exe.
+    let executable = std::env::current_exe().expect("owned observer path");
+    let permissions = std::fs::metadata(&executable)
+        .expect("owned observer mode")
+        .permissions();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o600))
+        .expect("owned non-executable mode");
+    let base = TempDir::new().expect("unaccessed storage");
+    let args = StorageArgs {
+        storage_path: base.path().join("storage"),
+        db: sqlite_url(&base),
+    };
+    let (telemetry, capture) = default_host_config();
+    let failure = cmd_serve(
+        &args,
+        "127.0.0.1:0".parse().expect("bind"),
+        false,
+        &telemetry,
+        false,
+        capture.as_ref(),
+    )
+    .await
+    .expect_err("public root rejects non-executable runtime");
+    assert!(matches!(
+        failure.downcast_ref::<host::image_sanitizer::ImageSanitizerError>(),
+        Some(host::image_sanitizer::ImageSanitizerError::RuntimeUnavailable(_))
+    ));
+    let cli = Cli::try_parse_from([
+        "jaunder",
+        "serve",
+        "--storage-path",
+        args.storage_path.to_str().expect("owned path"),
+        "--db",
+        args.db.expose_url().as_str(),
+    ])
+    .expect("serve arguments");
+    let failure = execute_command(cli.command.expect("serve command"))
+        .await
+        .err()
+        .expect("CLI root rejects non-executable runtime");
+    assert!(matches!(
+        failure.downcast_ref::<host::image_sanitizer::ImageSanitizerError>(),
+        Some(host::image_sanitizer::ImageSanitizerError::RuntimeUnavailable(_))
+    ));
+    assert!(
+        !args.storage_path.exists(),
+        "constructor rejection precedes storage mutation"
+    );
+    std::fs::set_permissions(&executable, permissions).expect("restore owned observer mode");
+    println!("CONSTRUCTOR_FAILURE_OBSERVED");
+}
+
 fn default_host_config() -> (host::telemetry::TelemetryConfig, Option<ServeCapturePaths>) {
     (
         host::telemetry::TelemetryConfig::from_raw(
@@ -290,7 +382,10 @@ async fn execute_smtp_test(storage: &StorageArgs, to: &Email) -> anyhow::Result<
     .map(|_| ())
 }
 
-async fn storage_args(backend: Backend, base: &TempDir) -> (StorageArgs, Option<PostgresDbGuard>) {
+pub(super) async fn storage_args(
+    backend: Backend,
+    base: &TempDir,
+) -> (StorageArgs, Option<PostgresDbGuard>) {
     let storage_path = base.path().join("storage");
     let (db, guard) = match backend {
         Backend::Sqlite => (sqlite_url(base), None),

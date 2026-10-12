@@ -41,11 +41,9 @@ async fn main() -> anyhow::Result<()> {
         host::image_sanitizer::worker::execute(&request)?;
         return Ok(());
     }
-    // cov:ignore-start: Host test binaries exit at the cheap-KDF guard before CLI parsing can run.
     let cli =
         Cli::try_parse_inherited_from(std::env::args_os()).unwrap_or_else(|error| error.exit());
     run(cli).await
-    // cov:ignore-stop
 }
 
 /// Executes the application logic based on the provided CLI arguments.

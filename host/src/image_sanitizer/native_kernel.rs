@@ -61,12 +61,7 @@ fn orientation_exif(tags: &[Tag]) -> Result<Vec<u8>, Failure> {
             data: value.to_le_bytes().to_vec(),
         })
         .collect();
-    Ok(exif_writer::build_exif(
-        &entries,
-        &[],
-        &[],
-        ByteOrderMark::LittleEndian,
-    )?)
+    exif_writer::build_exif(&entries, &[], &[], ByteOrderMark::LittleEndian).map_err(Failure::from)
 }
 const RENDERING_EXIF: &[&str] = &[
     "Orientation",

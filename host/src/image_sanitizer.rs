@@ -832,6 +832,45 @@ mod tests {
         );
     }
 
+    // All observed worker/cleanup progress here belongs to the independent
+    // std owner, not this caller's Tokio runtime. Share the bounded observation
+    // contract across cancellation, exec handoff and runtime-teardown proofs.
+    fn wait_until_observed(
+        mut observed: impl FnMut() -> bool,
+        deadline: Instant,
+    ) -> Result<(), &'static str> {
+        while !observed() {
+            if Instant::now() >= deadline {
+                return Err("owner observation deadline exceeded");
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn bounded_owner_observation_retries_pending_and_preserves_settled_deadlines() {
+        let mut observations = 0;
+        wait_until_observed(
+            || {
+                observations += 1;
+                observations == 2
+            },
+            Instant::now() + Duration::from_secs(5),
+        )
+        .expect("pending then settled observation");
+        assert_eq!(observations, 2);
+        let expired = Instant::now();
+        assert_eq!(
+            wait_until_observed(|| false, expired),
+            Err("owner observation deadline exceeded")
+        );
+        assert!(
+            wait_until_observed(|| true, expired).is_ok(),
+            "already settled resources need no wait"
+        );
+    }
+
     fn observed_pid(result: std::io::Result<String>) -> Option<rustix::process::Pid> {
         match result {
             Ok(value) if !value.is_empty() => Some(
@@ -963,12 +1002,10 @@ mod tests {
         assert_eq!(active.available_permits(), ACTIVE_JOBS - 1);
         job.abort();
         assert!(job.await.expect_err("request canceled").is_cancelled());
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while path.exists() || active.available_permits() != ACTIVE_JOBS {
-                tokio::time::sleep(Duration::from_millis(1)).await;
-            }
-        })
-        .await
+        wait_until_observed(
+            || !path.exists() && active.available_permits() == ACTIVE_JOBS,
+            Instant::now() + Duration::from_secs(5),
+        )
         .expect("job owner must finish cleanup");
         assert_eq!(
             rustix::process::test_kill_process(pid),
@@ -1053,17 +1090,14 @@ mod tests {
                 .await
         });
         let pid = tool_pid(directory).await;
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let exe = std::fs::read_link(format!("/proc/{}/exe", pid.as_raw_nonzero()))
-                    .expect("live worker executable");
-                if exe == editor_runtime() {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(1)).await;
-            }
-        })
-        .await
+        wait_until_observed(
+            || {
+                std::fs::read_link(format!("/proc/{}/exe", pid.as_raw_nonzero()))
+                    .expect("live worker executable")
+                    == editor_runtime()
+            },
+            Instant::now() + Duration::from_secs(5),
+        )
         .expect("wrapper must exec the actual worker");
         rustix::process::kill_process(pid, rustix::process::Signal::STOP)
             .expect("stop actual native worker");
@@ -1264,12 +1298,10 @@ mod tests {
             job.abort();
             assert!(job.await.expect_err("canceled caller").is_cancelled());
         }
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while paths.iter().any(|path| path.exists()) || capacity.available_permits() != 2 {
-                tokio::time::sleep(Duration::from_millis(1)).await;
-            }
-        })
-        .await
+        wait_until_observed(
+            || paths.iter().all(|path| !path.exists()) && capacity.available_permits() == 2,
+            Instant::now() + Duration::from_secs(5),
+        )
         .expect("reap all active children and close queued spool");
         assert_eq!(
             std::fs::read_dir(directory.path())
@@ -1300,14 +1332,11 @@ mod tests {
         });
         assert!(path.exists());
         drop(runtime);
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while path.exists() || capacity.available_permits() != 2 {
-            assert!(
-                Instant::now() < deadline,
-                "runtime-independent owner must clean up"
-            );
-            std::thread::sleep(Duration::from_millis(1));
-        }
+        wait_until_observed(
+            || !path.exists() && capacity.available_permits() == 2,
+            Instant::now() + Duration::from_secs(5),
+        )
+        .expect("runtime-independent owner must clean up");
         assert_eq!(
             rustix::process::test_kill_process(pid),
             Err(rustix::io::Errno::SRCH)
