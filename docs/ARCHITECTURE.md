@@ -2198,41 +2198,31 @@ adds PII- and secret-free structured OpenTelemetry signals at transient-data
 state transitions: expiry, consumption, completion, exhaustion, and cleanup. The
 operator, rather than Jaunder, owns long-term telemetry retention.
 
-### Independent ordinary-log and trace filtering
+### Proposed local logging and Collector-owned OTLP retention
 
 The
-[independent filtering decision](adr/drafts/independent-log-and-trace-filtering.md)
-separates ordinary-log admission from OTLP trace collection (#1742).
-`TelemetryConfig` resolves immutable input at the executable periphery and
-exposes `ordinary_log_filter()` for whichever ordinary-log sink is active. The
-stdout layer consumes that policy, preserving `JAUNDER_LOG_FILTER` / `RUST_LOG`
-precedence and ordinary/verbose defaults. Native OTLP logs, logger lifetime and
-journal-ingestion removal remain separate work (#1743), using the same accessor.
+[Collector-owned retention decision](adr/drafts/independent-log-and-trace-filtering.md)
+for #1742 supersedes the unlanded independent OTLP-filter proposal. This section
+states the approved policy revision awaiting implementation, not completed
+runtime behavior. Local output retains `JAUNDER_LOG_FILTER` / `RUST_LOG`
+precedence and ordinary/verbose defaults, exposed through a local-only
+`TelemetryConfig::local_log_filter()` accessor.
 
-The OTLP layer and host-owned admission witness share one trace filter and
-lifecycle. `JAUNDER_TRACE_FILTER` defaults to INFO independently of log
-verbosity; explicit trace `off` disables traces but not ordinary logs, metrics
-or scoped diagnostics. Log `off` does not disable traces or diagnostics. Blank,
-malformed or unreadable trace input emits a fixed, safe local warning and falls
-back to INFO. The composition has no global log/trace filter intersecting all
-sinks.
+The proposed OTLP layer admits generated spans/events without severity, target
+or context filtering, and has no `JAUNDER_TRACE_FILTER` or per-span admission
+marker. `Sampler::AlwaysOn` records Jaunder spans even if an incoming W3C
+sampled hint is clear, while preserving the trace and parent IDs. Collector
+preservation is independent of local verbosity; unfiltered admission is not
+guaranteed transport delivery or recovery of data the caller discarded.
 
-`span_is_trace_admitted(&Span)` reads the owning Registry marker without
-starting SDK context or re-evaluating a cloned dynamic filter. Admission is not
-a sampling or export guarantee. HTTP parent adoption consults this witness,
-treats filtering as normal absence, and retains valid W3C correlation plus
-bounded nonrecursive local diagnostics for genuine assignment failures.
-
-Span-only context observers preserve slow-span and error-context support.
-`ErrorLayer` has a distinct formatted-field cache with late-record updates, so
-pretty/JSON stdout cannot duplicate its fields and filtering/removing stdout
-cannot remove its span stack or fields. Independent server WARN+ diagnostics and
-the panic hook remain intact. Local telemetry diagnostics must not re-enter
-native OTLP logs. Field admission, privacy, endpoint, sampling, capture and
-provider-lifetime contracts remain in force. The
-[operator guide](observability.md#independent-log-and-trace-controls) names both
-controls and the intentional compatibility change: ordinary-log settings do not
-govern traces.
+Installed tracer/subscriber capability enables HTTP extraction/adoption without
+per-span bookkeeping or starting SDK context to decide admission. Independent
+ErrorLayer initial/late field storage, local diagnostics/panic capture, privacy,
+endpoint, metrics and provider-lifetime contracts remain. #1743 owns native OTLP
+logs and routing/logger lifetime; its OTLP sink is likewise unfiltered and does
+not consume local verbosity policy. Local fallback diagnostics remain outside
+native/failing export paths. Operator guidance and this projection move to
+implemented reality with the approved revision.
 
 ### Server-fn span names are macro-derived
 
