@@ -5,13 +5,17 @@
 > lifecycle and a cross-agent prerequisite. The approved spec remains
 > authoritative.
 
+> Revision 2026-10-12: supersedes the filtered-OTLP wiring/proof plan. The
+> revised #1743 spec and this outline are approved. Execution still waits for
+> #1742 to land.
+
 ## Scope
 
 In: native process logs through the configured Collector, stdout without OTLP,
 logger lifetime/failure handling, real-stack message proof and operator
-guidance. Out: #1742's filter implementation, historical repair, deployment,
-credentials, retention, browser telemetry, unrelated errors, new log-filter
-controls.
+guidance. Out: #1742's tracer/local-policy implementation, historical repair,
+deployment, credentials, retention, browser telemetry, unrelated errors, new
+log-filter controls.
 
 Order: #1742/rebase + baseline → record projection → sink/lifecycle → real-stack
 routing → combined proof/docs. Key risks: privacy admission, explicit-root
@@ -22,8 +26,10 @@ implementation.
 
 - [ ] 1. Consume the delivered #1742 foundation and capture the before state.
   - Wait for #1742 to land; rebase this checkout, reconciling docs by intent.
-    Verify its independent admission, initial/late field retention, ErrorLayer,
-    trace-parent and capture contracts before altering subscriber composition.
+    Verify unfiltered spans/events, AlwaysOn sampled/unsampled-parent behavior,
+    local-only filter accessor, initial/late retention, ErrorLayer and
+    independent capture before altering subscriber composition. Do not consume
+    the removed per-span admission marker or old active-sink filter accessor.
   - Capture deterministic VictoriaLogs default message presentation while the
     stack still uses journal ingestion; retain query/state/viewport for task 5.
   - Verification: peer merge/contract evidence and source review; baseline
@@ -33,23 +39,28 @@ implementation.
   - Contract: explicit message → string body; tracing level → SDK severity;
     admitted fields → typed attributes; target/path use existing stack query
     names. No arbitrary field/Debug or inherited-span-map serialization.
-  - Resolve the event's explicit/contextual/root parent from actual admitted
+  - Resolve the event's explicit/contextual/root parent from actual installed
     tracing context. Prevent SDK ambient-context fallback for roots or missing
     parent context; never enter/create a synthetic span to obtain IDs.
   - Verification: in-memory SDK records for exact body/types, contextual and
-    differing explicit parents, root/filtered parents, safe field retention and
-    exclusion of credentials, request aggregates and `error.span_trace`.
+    differing explicit parents, root/no-tracer and unsampled upstream parents,
+    safe field retention and exclusion of credentials, request aggregates and
+    `error.span_trace`.
 - [ ] 3. Integrate the active log sink, logger ownership and failure isolation.
-  - Contract: consume #1742's ordinary-log policy; select stdout only without an
-    endpoint, native records only with one, independent of trace admission.
-    Logger setup failure must not restore ordinary stdout mirroring.
+  - Contract: stdout only without an endpoint, native records only with one.
+    Only local stdout consumes #1742's `local_log_filter()` policy. Native logs
+    offer all application severities with no severity/target/context filter;
+    privacy projection and local-fallback isolation remain mandatory. Logger
+    setup failure must not restore ordinary stdout mirroring.
   - Use the shared endpoint/resource and pinned SDK gRPC capability, creating
     the provider inside the existing Tokio process lifecycle. The process guard
     owns logger shutdown alongside tracer/meter; shutdown drains buffered logs.
-  - Verification: real subscriber/exporter admission matrix and target filters;
-    log/trace `off` independence, unchanged CLI result output, one-shot flush,
-    late-field/SpanTrace preservation without stdout, repeated failures and
-    nonfatal setup/export/shutdown. No SDK failure re-enters native logs.
+  - Verification: real subscriber/SDK export of all application severities under
+    local WARN/off, restrictive target/context directives and ordinary/verbose
+    defaults; no native-filter substitute. Verify sampled/unsampled-parent
+    correlation, unchanged CLI results, one-shot flush, initial/late fields and
+    SpanTrace without stdout, repeated failures and nonfatal shutdown. Metrics
+    and WARN+/panic capture stay independent. No SDK/local fallback enters logs.
 - [ ] 4. Switch stack ingestion and support isolated harness log export.
   - Contract: production Collector logs receiver becomes OTLP; remove journal
     receiver/JSON transformation, not other ingress/storage/authentication.
@@ -85,8 +96,10 @@ implementation.
   carrier/ID projections, never as a fallback for an unknown field or aggregate.
   Audit messages from newly exported CLI/seed processes as well as the server.
 - Reject SDK/exporter/self-diagnostic targets before native record emission,
-  regardless of user filters. Keep them on the agreed local failure path. Redact
-  failure payloads before SDK diagnostics can expose them; preserve a failed
+  independently of local verbosity. Include setup/shutdown, parent-assignment
+  and field-format fallback diagnostics in this exclusion, not only exporter
+  targets. Keep them on the agreed local failure path. Redact failure payloads
+  before SDK diagnostics can expose them; preserve a failed
   result/classification rather than report successful export.
 - Coalesce new logger diagnostics to at most one fixed redacted stderr line per
   failure kind per process; cap each line at 256 bytes. No endpoint, raw
@@ -101,15 +114,19 @@ implementation.
 
 ## Risk checks
 
-- Filters affect admission, not availability of local span-field/capture
-  context. Correlation cannot accidentally inherit an unrelated ambient SDK
-  context.
-- Raw span traces can be explicit event fields, not just inherited stacks.
-  Native admission and permissive filters must not expose them or self-failures.
+- Local verbosity must not clamp OTLP records, spans or events; no global,
+  target/context or per-span marker substitutes. Collector retention is outside
+  this work. Document increased volume without weakening resource/proof budgets.
+- Correlation follows actual event parents, including unsampled upstream IDs;
+  roots must not inherit unrelated ambient SDK context. Preserve local fields.
+- Newly visible DEBUG/TRACE messages/fields require a producer/privacy audit.
+  Raw span traces can be explicit event fields, not just inherited stacks;
+  unfiltered severity must not expose them or local fallback/self-failures.
 - Log-provider creation/export/shutdown must be valid under the pinned runtime
   and must not panic, block indefinitely or alter the application's outcome.
 - Test-only log capture is separate from trace capture; existing metrics
   behavior, backend parity, panic rules, retries, timeouts and VM budgets remain
   intact.
 - One writer in this checkout; do not edit the #1742 checkout or implement its
-  owned filtering foundation. New uncertainty returns to coordination/review.
+  owned local-policy/AlwaysOn tracer foundation. New uncertainty returns to
+  coordination/review.
