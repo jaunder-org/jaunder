@@ -496,7 +496,8 @@ mod tests {
     fn actual_process_ownership_loss_retains_reap_authority_and_never_signals_again() {
         const OBSERVER: &str = "JAUNDER_PROCESS_OWNERSHIP_OBSERVER";
         if std::env::var_os(OBSERVER).is_none() {
-            let mut command = Command::new("/bin/sh");
+            // Bash preserves ignored SIGCHLD across exec; BusyBox sh's CHLD trap does not.
+            let mut command = Command::new("bash");
             command
                 .args(["-c", "trap '' CHLD; exec \"$1\" --exact image_sanitizer::supervision::tests::actual_process_ownership_loss_retains_reap_authority_and_never_signals_again --nocapture", "owned-observer"])
                 .arg(std::env::current_exe().expect("owner libtest executable"))
