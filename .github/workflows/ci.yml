@@ -35,6 +35,41 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      # Upload the post-cache baseline before heavy work: a runner-level
+      # ENOSPC crash can prevent even always() post-validation steps executing.
+      - name: Capture host resource baseline
+        id: host-resource-baseline
+        run: |
+          mkdir -p .xtask
+          report=.xtask/host-resource-baseline.txt
+          printf 'Post-cache, pre-validation resource baseline\n' > "$report"
+          probe() {
+            printf '\n%s\n' "$1" >> "$report"
+            shift
+            if "$@" >> "$report" 2>&1; then
+              printf 'capture_exit=0\n' >> "$report"
+            else
+              code=$?
+              printf 'capture_exit=%s missing_evidence=true\n' "$code" >> "$report"
+            fi
+          }
+          probe timestamp date --utc +%FT%TZ
+          for path in . xtask/target tools/target /tmp /nix; do
+            probe "filesystem bytes: $path" df -B1 --output=size,used,avail -- "$path"
+            probe "filesystem inodes: $path" df --output=itotal,iused,iavail -- "$path"
+          done
+          for path in xtask/target tools/target; do
+            probe "native target allocated bytes: $path" du -s -B1 -- "$path"
+          done
+          probe memory-and-swap free -b
+      - name: Upload host resource baseline
+        if: always() && steps.host-resource-baseline.outcome != 'skipped'
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: validate-host-resource-baseline
+          path: .xtask/host-resource-baseline.txt
+          if-no-files-found: error
+          retention-days: 14
       - name: Validate host lane (via xtask)
         run:
           nix develop .#ci --accept-flake-config -c cargo xtask ci-validate host

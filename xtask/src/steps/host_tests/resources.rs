@@ -1,5 +1,6 @@
-//! Best-effort boundary evidence for native auxiliary test links. No probe
-//! changes Cargo's environment, arguments, or verdict. Snapshots are not peak
+//! Best-effort boundary evidence for native auxiliary test links. Resource
+//! probes do not change Cargo's arguments or verdict; the owning runner applies
+//! only the approved test-debug capacity experiment. Snapshots are not peak
 //! measurements; missing tools/files are recorded rather than inferred healthy.
 
 use std::path::{Path, PathBuf};
@@ -9,7 +10,7 @@ use serde_json::{Value, json};
 use xshell::Shell;
 
 use crate::result::StepResult;
-use crate::sh::step;
+use crate::sh::step_with_env;
 
 /// Persist each boundary separately, so a failed/killed child cannot discard
 /// its pre-snapshot. The existing always-uploaded diagnostics path owns these.
@@ -20,7 +21,11 @@ pub(super) fn run(sh: &Shell, name: &str, program: &str, args: &[&str]) -> StepR
         .join(".xtask/diagnostics/auxiliary-host-tests")
         .join(id);
     let before = capture_warning(sh, &directory, name, "pre");
-    let mut result = step(sh, name, program, args);
+    // cargo test selects the test profile (default debug=true). Reduce only
+    // this child's debug bytes; do not change dev defaults, jobs or cache policy.
+    // This is a capacity experiment, not an established SIGBUS remedy.
+    let env = [("CARGO_PROFILE_TEST_DEBUG".to_owned(), "0".to_owned())];
+    let mut result = step_with_env(sh, name, program, args, &env);
     let after = capture_warning(sh, &directory, name, "post");
     for warning in [before, after].into_iter().flatten() {
         result.detail = Some(match result.detail {
@@ -160,6 +165,27 @@ fn snapshot(sh: &Shell) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn child_only_test_debug_override_preserves_other_inherited_settings() {
+        let directory = tempfile::tempdir().unwrap();
+        let sh = Shell::new().unwrap();
+        sh.change_dir(directory.path());
+        let _test_debug = sh.push_env("CARGO_PROFILE_TEST_DEBUG", "2");
+        let _dev_debug = sh.push_env("CARGO_PROFILE_DEV_DEBUG", "2");
+        let _jobs = sh.push_env("CARGO_BUILD_JOBS", "7");
+        let result = run(
+            &sh,
+            "env-fixture",
+            "sh",
+            &[
+                "-c",
+                "test \"$CARGO_PROFILE_TEST_DEBUG\" = 0 && test \"$CARGO_PROFILE_DEV_DEBUG\" = 2 && test \"$CARGO_BUILD_JOBS\" = 7",
+            ],
+        );
+        assert!(result.ok, "{:?}", result.detail);
+        assert_eq!(sh.var("CARGO_PROFILE_TEST_DEBUG").unwrap(), "2");
+    }
 
     #[test]
     fn probe_records_actual_failure_exit_and_missing_executable() {
