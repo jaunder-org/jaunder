@@ -177,59 +177,13 @@ fn verify_staged_bundle(
     let wasm = manifest
         .role(Role::Wasm)
         .map_err(|error| BundleStageError(format!("verified WASM role missing: {error}")))?;
-    validate_shell(
+    csr_bundle::validate_rendered_shell(
         &shell,
         &format!("/{}", glue.path),
         &format!("/{}", wasm.path),
         application_stylesheet_url,
     )
-}
-
-fn validate_shell(
-    shell: &str,
-    glue: &str,
-    wasm: &str,
-    application_stylesheet_url: &str,
-) -> Result<(), BundleStageError> {
-    for (role, url) in [("glue", glue), ("WASM", wasm)] {
-        if shell.matches(url).count() != 1 {
-            return Err(BundleStageError(format!(
-                "staged shell must contain exactly one {role} URL"
-            )));
-        }
-    }
-    let early_fetch = shell
-        .find("window.__jaunderWasmFetch = fetch")
-        .ok_or_else(|| BundleStageError("staged shell is missing the early WASM fetch".into()))?;
-    let application_stylesheet =
-        format!(r#"<link rel="stylesheet" href="{application_stylesheet_url}" />"#);
-    let (Some(stylesheet), 1) = (
-        shell.find(&application_stylesheet),
-        shell.matches(&application_stylesheet).count(),
-    ) else {
-        return Err(BundleStageError(
-            "staged shell must contain exactly one verified application stylesheet URL".into(),
-        ));
-    };
-    let import = shell
-        .find("import {initMeasured}")
-        .ok_or_else(|| BundleStageError("staged shell is missing the glue import".into()))?;
-    let mark = shell.find("performance.mark").ok_or_else(|| {
-        BundleStageError("staged shell is missing the initialization mark".into())
-    })?;
-    let init = shell
-        .find("initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl)")
-        .ok_or_else(|| {
-            BundleStageError("staged shell is missing the WASM fallback initializer".into())
-        })?;
-    if early_fetch < stylesheet && stylesheet < import && import < mark && mark < init {
-        Ok(())
-    } else {
-        Err(BundleStageError(
-            "staged shell does not preserve early-fetch, fallback, and initialization ordering"
-                .into(),
-        ))
-    }
+    .map_err(|error| BundleStageError(error.to_string()))
 }
 
 fn copy_file(src: &Path, dst: &Path) -> Result<(), BundleStageError> {
@@ -358,7 +312,7 @@ mod tests {
 
     use super::{
         copy_file, prepare_staging_with, reject_public_collisions, reject_public_collisions_below,
-        stage_bundle, stage_public_tree, stage_system_artifacts, validate_shell,
+        stage_bundle, stage_public_tree, stage_system_artifacts,
     };
 
     fn application_url() -> String {
@@ -557,41 +511,22 @@ mod tests {
     }
 
     #[test]
-    fn shell_requires_unique_urls_and_required_order() {
-        let glue = "/pkg/glue.js";
-        let wasm = "/pkg/module.wasm";
-        validate_shell(&shell(glue, wasm), glue, wasm, &application_url()).expect("valid shell");
+    fn staging_rejects_mismatched_application_stylesheet_url() {
+        let bundle = tempfile::tempdir().expect("bundle root");
+        let site = tempfile::tempdir().expect("site root");
+        let manifest = write_bundle(bundle.path());
         let wrong_application_url = format!("/theme/{}", "b".repeat(64));
-        assert!(
-            validate_shell(&shell(glue, wasm), glue, wasm, &wrong_application_url)
-                .expect_err("wrong application digest")
-                .to_string()
-                .contains("verified application stylesheet URL")
-        );
-        let retired = shell(glue, wasm).replace(&application_url(), "/style/jaunder.css");
-        assert!(
-            validate_shell(&retired, glue, wasm, &application_url())
-                .expect_err("retired stylesheet URL")
-                .to_string()
-                .contains("verified application stylesheet URL")
-        );
-
-        let duplicate = format!("{}\n{glue}", shell(glue, wasm));
-        assert!(
-            validate_shell(&duplicate, glue, wasm, &application_url())
-                .expect_err("duplicate glue URL")
-                .to_string()
-                .contains("exactly one glue URL")
-        );
-        let misordered = format!(
-            r#"<link rel="stylesheet" href="{}" />window.__jaunderWasmFetch = fetch import {{initMeasured}} performance.mark initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl) {glue} {wasm}"#,
-            application_url()
-        );
-        assert!(
-            validate_shell(&misordered, glue, wasm, &application_url())
-                .expect_err("misordered shell")
-                .to_string()
-                .contains("does not preserve")
+        let error = stage_bundle(
+            bundle.path(),
+            site.path(),
+            &bundle.path().join("missing-public"),
+            &manifest,
+            &wrong_application_url,
+        )
+        .expect_err("staging must use the shared shell validator");
+        assert_eq!(
+            error.to_string(),
+            "staged shell must contain exactly one verified application stylesheet URL"
         );
     }
 
@@ -669,7 +604,7 @@ mod tests {
     }
 
     #[test]
-    fn staging_handles_missing_public_tree_and_missing_shell_positions() {
+    fn staging_handles_missing_public_tree() {
         let bundle = tempfile::tempdir().expect("bundle");
         let site = tempfile::tempdir().expect("site");
         let manifest = write_bundle(bundle.path());
@@ -681,36 +616,6 @@ mod tests {
             &application_url(),
         )
         .expect("missing public tree is permitted");
-
-        for required in [
-            "window.__jaunderWasmFetch = fetch",
-            r#"<link rel="stylesheet" href="/theme/"#,
-            "import {initMeasured}",
-            "performance.mark",
-            "initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl)",
-        ] {
-            let error = validate_shell(required, "glue", "wasm", &application_url())
-                .expect_err("missing required position");
-            assert!(
-                error.to_string().contains("missing") || error.to_string().contains("exactly one")
-            );
-        }
-
-        let shell_with_unique_urls = shell("/pkg/glue.js", "/pkg/module.wasm");
-        for required in [
-            "performance.mark",
-            "initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl)",
-        ] {
-            let incomplete = shell_with_unique_urls.replacen(required, "", 1);
-            let error = validate_shell(
-                &incomplete,
-                "/pkg/glue.js",
-                "/pkg/module.wasm",
-                &application_url(),
-            )
-            .expect_err("unique URLs do not excuse a missing required shell marker");
-            assert!(error.to_string().contains("missing"));
-        }
     }
     #[test]
     fn staging_reports_missing_tree_and_public_collision() {
