@@ -1789,9 +1789,8 @@ fn decode_base64(encoded: &str) -> Result<Vec<u8>> {
 const SERVICE_STATE_COMMAND: &str = r#"set -eu
 user=$(systemctl show --property=User --value jaunder.service)
 group=$(systemctl show --property=Group --value jaunder.service)
-uid=$(id -u "$user")
-group_record=$(getent group "$group")
-gid=$(printf '%s' "$group_record" | cut -d: -f3)
+uid=$(runuser --user "$user" --group "$group" -- id -u)
+gid=$(runuser --user "$user" --group "$group" -- id -g)
 pid=$(systemctl show --property=MainPID --value jaunder.service)
 exec_start=$(systemctl show --property=ExecStart --value jaunder.service)
 exe=$(readlink -f /proc/"$pid"/exe)
@@ -2041,15 +2040,15 @@ mod tests {
         for (name, script) in [
             (
                 "systemctl",
-                "#!/bin/sh\ncase \"$*\" in\n*property=User*) echo jaunder;;\n*property=Group*) echo jaunder;;\n*property=MainPID*) echo 321;;\n*property=ExecStart*) echo '{ path=/nix/store/fixture-package/bin/jaunder ; argv[]=serve ; }';;\n*) exit 91;;\nesac\n",
+                "#!/bin/sh\ncase \"$*\" in\n*property=User*) echo jaunder;;\n*property=Group*) echo \"$FIXTURE_GROUP\";;\n*property=MainPID*) echo 321;;\n*property=ExecStart*) echo '{ path=/nix/store/fixture-package/bin/jaunder ; argv[]=serve ; }';;\n*) exit 91;;\nesac\n",
+            ),
+            (
+                "runuser",
+                "#!/bin/sh\n[ \"$1\" = --user ] && [ \"$2\" = jaunder ] && [ \"$3\" = --group ] && [ \"$4\" = \"$FIXTURE_GROUP\" ] && [ \"$5\" = -- ] || exit 92\n[ \"$FIXTURE_LOCK\" != identity-failure ] || exit 24\nshift 5\nexport FIXTURE_IDENTITY=\"jaunder:$FIXTURE_GROUP\"\nexec \"$@\"\n",
             ),
             (
                 "id",
-                "#!/bin/sh\n[ \"$*\" = '-u jaunder' ] || exit 92\necho 123\n",
-            ),
-            (
-                "getent",
-                "#!/bin/sh\n[ \"$*\" = 'group jaunder' ] || exit 93\necho jaunder:x:456:\n",
+                "#!/bin/sh\n[ \"$FIXTURE_IDENTITY\" = \"jaunder:$FIXTURE_GROUP\" ] && [ \"$#\" = 1 ] || exit 93\ncase \"$1\" in\n-u) echo 123;;\n-g) echo 456;;\n*) exit 93;;\nesac\n",
             ),
             (
                 "readlink",
@@ -2068,30 +2067,62 @@ mod tests {
             fs::write(&path, script).unwrap();
             restrict_executable(&path).unwrap();
         }
-        let path = std::env::join_paths(
-            std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        // Only the declared observation utilities are reachable: an ambient
+        // getent must not conceal a missing guest-control dependency.
+        let grep = Command::new("sh")
+            .args(["-c", "command -v grep"])
+            .output()
+            .unwrap();
+        assert!(grep.status.success());
+        let shell = Command::new("sh")
+            .args(["-c", "command -v sh"])
+            .output()
+            .unwrap();
+        assert!(shell.status.success());
+        let shell = String::from_utf8(shell.stdout).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            String::from_utf8(grep.stdout).unwrap().trim(),
+            bin.join("grep"),
         )
         .unwrap();
-        for lock in ["present", "missing"] {
-            let output = Command::new("sh")
-                .args(["-c", &framed_guest_command(SERVICE_STATE_COMMAND)])
-                .env("PATH", &path)
-                .env("FIXTURE_LOCK", lock)
-                .output()
-                .unwrap();
-            // The outer frame exits normally even when the observed command fails.
-            assert!(output.status.success());
-            if lock == "present" {
-                let body = complete_status(&output.stdout).unwrap().unwrap();
-                assert_eq!(body, service_state_output());
-                parse_service_state("/nix/store/fixture-package", &body).unwrap();
-            } else {
-                assert!(
-                    complete_status(&output.stdout)
-                        .unwrap_err()
-                        .to_string()
-                        .contains("23")
-                );
+        for group in ["jaunder", "publishers"] {
+            for (lock, code) in [("present", 0), ("missing", 23), ("identity-failure", 24)] {
+                let output = Command::new(shell.trim())
+                    .args(["-c", &framed_guest_command(SERVICE_STATE_COMMAND)])
+                    .env("PATH", &bin)
+                    .env("FIXTURE_GROUP", group)
+                    .env("FIXTURE_LOCK", lock)
+                    .env_remove("FIXTURE_IDENTITY")
+                    .output()
+                    .unwrap();
+                // The outer frame exits normally even when the observed command fails.
+                assert!(output.status.success());
+                if code == 0 {
+                    let body = complete_status(&output.stdout).unwrap().unwrap();
+                    assert_eq!(
+                        body,
+                        service_state_output().replacen(
+                            "jaunder\njaunder\n",
+                            &format!("jaunder\n{group}\n"),
+                            1,
+                        )
+                    );
+                    // Different names test configured-Group resolution only;
+                    // the ordinary qualification still requires canonical names.
+                    if group == "jaunder" {
+                        parse_service_state("/nix/store/fixture-package", &body).unwrap();
+                    } else {
+                        assert!(parse_service_state("/nix/store/fixture-package", &body).is_err());
+                    }
+                } else {
+                    assert!(
+                        complete_status(&output.stdout)
+                            .unwrap_err()
+                            .to_string()
+                            .contains(&code.to_string())
+                    );
+                }
             }
         }
     }
