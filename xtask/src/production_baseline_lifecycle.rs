@@ -388,7 +388,7 @@ impl BaselineLifecycle {
 import net from "node:net";
 const quote = (value) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
 const args = process.argv.slice(2).map(quote).join(" ");
-const inner = `export $(systemctl show --property=Environment --value jaunder.service | tr ' ' '\\n' | grep '^JAUNDER_'); export JAUNDER_STORAGE_PATH=/var/lib/jaunder/data; test-support ${{args}}`;
+const inner = `export $(systemctl show --property=Environment --value jaunder.service | tr ' ' '\\n' | grep '^JAUNDER_'); export JAUNDER_STORAGE_PATH=/var/lib/jaunder/data; runuser -u "$(systemctl show --property=User --value jaunder.service)" -g "$(systemctl show --property=Group --value jaunder.service)" -- test-support ${{args}}`;
 const command = `(
 diagnostic=/tmp/jaunder-baseline-seed-$$.err; ${{inner}} 2>"$diagnostic"; code=$?; if [ "$code" -ne 0 ]; then cat "$diagnostic"; fi; rm -f "$diagnostic"; exit "$code"
 ); code=$?; printf '\\n{STATUS}%s\\n' "$code"`;
@@ -1632,7 +1632,7 @@ fn sha256_file(path: &Path) -> Result<String> {
 }
 fn baseline_command(package: &PackageIdentity, args: &str) -> String {
     format!(
-        "export $(systemctl show --property=Environment --value jaunder.service | tr ' ' '\\n' | grep '^JAUNDER_'); export JAUNDER_STORAGE_PATH=/var/lib/jaunder/data; {} {args}",
+        "export $(systemctl show --property=Environment --value jaunder.service | tr ' ' '\\n' | grep '^JAUNDER_'); export JAUNDER_STORAGE_PATH=/var/lib/jaunder/data; runuser -u \"$(systemctl show --property=User --value jaunder.service)\" -g \"$(systemctl show --property=Group --value jaunder.service)\" -- {} {args}",
         Path::new(&package.output_path)
             .join("bin/jaunder")
             .display()
@@ -1832,6 +1832,76 @@ fn regular_metadata(path: &Path) -> Result<fs::Metadata> {
 mod tests {
     use super::*;
 
+    // Exercise constructed commands without requiring root or a VM. The
+    // stand-in records identity selection; real UID/GID proof stays in discovery.
+    fn guest_identity_fixture(root: &Path) -> PathBuf {
+        let bin = root.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        for (name, script) in [
+            (
+                "systemctl",
+                "#!/bin/sh\ncase \"$*\" in\n*property=User*) echo jaunder;;\n*property=Group*) echo jaunder;;\n*property=Environment*) echo \"JAUNDER_DB=$FIXTURE_DB JAUNDER_DB_PASSWORD_FILE=/fixture/secret\";;\n*) exit 91;;\nesac\n",
+            ),
+            (
+                "runuser",
+                "#!/bin/sh\n[ \"$1\" = -u ] && [ \"$2\" = jaunder ] && [ \"$3\" = -g ] && [ \"$4\" = jaunder ] && [ \"$5\" = -- ] || exit 92\nshift 5\nexport FIXTURE_IDENTITY=jaunder:jaunder\nexec \"$@\"\n",
+            ),
+            (
+                "test-support",
+                "#!/bin/sh\n[ \"$FIXTURE_IDENTITY\" = jaunder:jaunder ] || { echo 'application child lacks service identity' >&2; exit 93; }\nprintf '%s\\n' \"$FIXTURE_IDENTITY\" \"$JAUNDER_DB\" \"$JAUNDER_STORAGE_PATH\" \"$JAUNDER_DB_PASSWORD_FILE\"\nprintf '<%s>\\n' \"$@\"\n[ \"$1\" != fail ] || { echo 'fixture failure' >&2; exit 23; }\n",
+            ),
+        ] {
+            let path = bin.join(name);
+            fs::write(&path, script).unwrap();
+            restrict_executable(&path).unwrap();
+        }
+        fs::copy(bin.join("test-support"), bin.join("jaunder")).unwrap();
+        bin
+    }
+
+    #[test]
+    fn ordinary_command_selects_service_identity_and_preserves_arguments_and_status() {
+        let root = tempfile::tempdir().unwrap();
+        let bin = guest_identity_fixture(root.path());
+        let path = std::env::join_paths(
+            std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        let package = PackageIdentity {
+            installable: String::new(),
+            derivation: String::new(),
+            nar_hash: String::new(),
+            executable_sha256: String::new(),
+            output_path: root.path().display().to_string(),
+        };
+        for database in [
+            "sqlite:/var/lib/jaunder/data/jaunder.db",
+            "postgres://jaunder@127.0.0.1/jaunder",
+        ] {
+            for mode in ["probe", "fail"] {
+                let command =
+                    baseline_command(&package, &format!("{mode} 'space ; $HOME' 'it'\\''s'"));
+                assert!(!command.contains("jaunder-restore-env"));
+                let framed = framed_guest_command(&command);
+                let output = Command::new("sh")
+                    .args(["-c", &framed])
+                    .env("PATH", &path)
+                    .env("FIXTURE_DB", database)
+                    .env_remove("FIXTURE_IDENTITY")
+                    .output()
+                    .unwrap();
+                let body = String::from_utf8(output.stdout).unwrap();
+                assert!(body.contains(&format!("jaunder:jaunder\n{database}\n/var/lib/jaunder/data\n/fixture/secret\n<{mode}>\n<space ; $HOME>\n<it's>\n")), "{body}; {}", String::from_utf8_lossy(&output.stderr));
+                if mode == "probe" {
+                    assert!(complete_status(body.as_bytes()).unwrap().is_some());
+                } else {
+                    assert!(body.contains("__JAUNDER_BASELINE_STATUS__23\n"));
+                    assert!(complete_status(body.as_bytes()).is_err());
+                }
+            }
+        }
+    }
+
     #[test]
     fn seed_bridge_runs_with_admitted_node_even_when_path_has_no_node() {
         let root = tempfile::tempdir().unwrap();
@@ -1877,6 +1947,75 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+        let bin = guest_identity_fixture(root.path());
+        let path = std::env::join_paths(
+            std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        for database in [
+            "sqlite:/var/lib/jaunder/data/jaunder.db",
+            "postgres://jaunder@127.0.0.1/jaunder",
+        ] {
+            for mode in ["probe", "fail"] {
+                let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                lifecycle
+                    .deployments
+                    .get_mut("seed-fixture")
+                    .unwrap()
+                    .control_port = listener.local_addr().unwrap().port();
+                fs::remove_file(&bridge).unwrap();
+                let bridge = lifecycle.seed_process("seed-fixture", &node).unwrap();
+                let path = path.clone();
+                let guest = std::thread::spawn(move || {
+                    let (mut socket, _) = listener.accept().unwrap();
+                    socket
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut command = String::new();
+                    let mut reader = std::io::BufReader::new(socket.try_clone().unwrap());
+                    loop {
+                        let mut line = String::new();
+                        assert!(std::io::BufRead::read_line(&mut reader, &mut line).unwrap() > 0);
+                        command.push_str(&line);
+                        if line == "exit\n" {
+                            break;
+                        }
+                    }
+                    let output = Command::new("sh")
+                        .args(["-c", &command])
+                        .env("PATH", path)
+                        .env("FIXTURE_DB", database)
+                        .env_remove("FIXTURE_IDENTITY")
+                        .output()
+                        .unwrap();
+                    socket.write_all(&output.stdout).unwrap();
+                    command
+                });
+                let output = Command::new(&bridge)
+                    .args([mode, "space ; $HOME", "it's"])
+                    .output()
+                    .unwrap();
+                let command = guest.join().unwrap();
+                assert!(command.contains("runuser -u \"$(systemctl show --property=User --value jaunder.service)\" -g \"$(systemctl show --property=Group --value jaunder.service)\" -- test-support"), "{command}");
+                let expected = format!(
+                    "jaunder:jaunder\n{database}\n/var/lib/jaunder/data\n/fixture/secret\n<{mode}>\n<space ; $HOME>\n<it's>"
+                );
+                if mode == "probe" {
+                    assert!(
+                        output.status.success(),
+                        "{}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    assert_eq!(String::from_utf8(output.stdout).unwrap(), expected);
+                } else {
+                    assert!(!output.status.success());
+                    let error = String::from_utf8(output.stderr).unwrap();
+                    assert!(error.contains(&expected), "{error}");
+                    assert!(error.contains("fixture failure"), "{error}");
+                    assert!(error.contains("failed with status 23"), "{error}");
+                }
+            }
+        }
         lifecycle.cleanup().unwrap();
     }
 

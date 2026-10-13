@@ -531,6 +531,7 @@ let
           config.systemd.package
           pkgs.coreutils
           pkgs.gnugrep
+          pkgs.util-linux
           seedHelper
         ];
         serviceConfig = {
