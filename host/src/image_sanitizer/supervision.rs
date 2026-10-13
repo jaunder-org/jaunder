@@ -188,21 +188,21 @@ fn supervise(
             // Interrupted reads immediately begin the next supervision turn,
             // including its cancellation/deadline checks. Only completed reads
             // advance child-status observation or incur the poll interval.
-            if read_reply_chunk(&mut stdout, &mut bytes, &mut eof)? == ReadProgress::Poll {
-                if status.is_none() {
-                    status = child.try_wait().map_err(ImageSanitizerError::Processing)?;
-                }
-                if let Some(status) = status {
-                    if !status.success() {
-                        return Err(ImageSanitizerError::WorkerExited(status));
-                    }
-                    if eof {
-                        return worker_protocol::decode(&bytes)
-                            .map_err(ImageSanitizerError::Protocol);
-                    }
-                }
-                std::thread::sleep(Duration::from_millis(2));
+            if read_reply_chunk(&mut stdout, &mut bytes, &mut eof)? == ReadProgress::Retry {
+                continue;
             }
+            if status.is_none() {
+                status = child.try_wait().map_err(ImageSanitizerError::Processing)?;
+            }
+            if let Some(status) = status {
+                if !status.success() {
+                    return Err(ImageSanitizerError::WorkerExited(status));
+                }
+                if eof {
+                    return worker_protocol::decode(&bytes).map_err(ImageSanitizerError::Protocol);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(2));
         }
     })();
     if child.ownership_lost {
@@ -387,6 +387,43 @@ mod tests {
     }
 
     #[test]
+    fn already_exited_observer_settles_before_private_capture_release() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "exit 0"]);
+        let mut owner = ObserverOwner::spawn(command).expect("owned exiting observer");
+        let stdout = owner.stdout.file().path().to_owned();
+        let stderr = owner.stderr.file().path().to_owned();
+        let child = owner.child.as_mut().expect("owned observer");
+        let pid = pid(&child.child);
+        let reaped = child.reaped.clone();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(status) = child.try_wait().expect("owned observer wait") {
+                assert!(status.success());
+                break;
+            }
+            assert!(Instant::now() < deadline, "owned observer reap deadline");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(reaped.load(Ordering::Acquire));
+        assert!(
+            owner.child.is_some(),
+            "settlement retains the owned cached status"
+        );
+        owner.settle().expect("already-exited observer settlement");
+        assert!(owner.child.is_none());
+        assert!(reaped.load(Ordering::Acquire));
+        assert_eq!(
+            rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::NOHANG).err(),
+            Some(rustix::io::Errno::CHILD),
+            "the owned wait already reaped this observer"
+        );
+        assert!(stdout.exists() && stderr.exists());
+        drop(owner);
+        assert!(!stdout.exists() && !stderr.exists());
+    }
+
+    #[test]
     fn observer_deadline_cleanup_reaps_before_private_capture_release() {
         let mut command = Command::new("/bin/sh");
         command.args(["-c", "kill -STOP $$"]);
@@ -538,20 +575,14 @@ mod tests {
             &mut canceled,
             &reaped,
         );
-        let io = match &outcome {
-            Err(ImageSanitizerError::Processing(error) | ImageSanitizerError::Reap(error)) => {
-                Some((error.kind(), error.raw_os_error()))
-            }
-            _ => None,
-        };
         let confirmed_reaped = reaped.load(Ordering::Acquire);
         eprintln!(
-            "ownership observer process-return: outcome={outcome:?} io_kind_errno={io:?} reaped={confirmed_reaped}"
+            "ownership observer process-return: outcome={outcome:?} reaped={confirmed_reaped}"
         );
         assert!(
             matches!(outcome, Err(ImageSanitizerError::Processing(ref error))
             if error.raw_os_error() == Some(rustix::io::Errno::CHILD.raw_os_error())),
-            "expected Processing(ECHILD): outcome={outcome:?} io_kind_errno={io:?} reaped={confirmed_reaped}"
+            "expected Processing(ECHILD): outcome={outcome:?} reaped={confirmed_reaped}"
         );
         assert!(
             !reaped.load(Ordering::Acquire),

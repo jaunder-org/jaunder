@@ -64,7 +64,8 @@ export const OPERATION_MANIFEST = {
   },
   media: {
     filename: "baseline-atompub.png",
-    sha256: "ebf4f635a17d10d6eb46ba680b70142419aa3220f228001a036d311a22ee9d2a",
+    // Stored native-sanitized PNG identity, including clean rendering EXIF.
+    sha256: "60e2423082fe81554b0634b242e8e94fa4e647fe032d7890ce60b4a3db9e80a3",
   },
 } as const;
 
@@ -81,6 +82,8 @@ const SEEDED_MEDIA_SHA256: Readonly<Record<string, string>> = {
     "2e8d0525784fb6a8b04b82131e9d82cddca52445e21c1faa0baccbc7ad44290c",
 };
 
+const PNG_INPUT_SHA256 =
+  "ebf4f635a17d10d6eb46ba680b70142419aa3220f228001a036d311a22ee9d2a";
 const PNG = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49,
   0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06,
@@ -624,7 +627,7 @@ export async function createProductionBaseline(
       expect(updated.status()).toBe(200);
     }
     expect(createHash("sha256").update(new Uint8Array(PNG)).digest("hex")).toBe(
-      OPERATION_MANIFEST.media.sha256,
+      PNG_INPUT_SHA256,
     );
     const media = await atom.post(state.mediaCollectionUrl, {
       headers: {

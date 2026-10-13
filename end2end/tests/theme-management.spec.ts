@@ -22,6 +22,20 @@ const ASSET_BYTES = [
   1, 1, 4, 0, 251, 255, 0, 18, 52, 86, 0, 248, 0, 157, 248, 215, 100, 140, 0, 0,
   0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
 ];
+// Fixed native-sanitized Media goldens preserve the encoded pixels and carry
+// only empty rendering EXIF. Theme Package assets retain ASSET_BYTES unchanged.
+const SANITIZED_LOGO_BYTES = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAEGVYSWZJSSoACAAAAAAAAAAAAAAAnDy5KAAAAA9JREFUeAEBBAD7/wASNFYA+ACd+NdkjAAAAABJRU5ErkJggg==",
+  "base64",
+);
+const SANITIZED_HEADER_ONE_BYTES = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAEGVYSWZJSSoACAAAAAAAAAAAAAAAnDy5KAAAAAxJREFUeJxjEDYJAwAA+wCe02/AYQAAAABJRU5ErkJggg==",
+  "base64",
+);
+const SANITIZED_HEADER_TWO_BYTES = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAEGVYSWZJSSoACAAAAAAAAAAAAAAAnDy5KAAAAAxJREFUeJxjEDEJAwAA/gCfqGY7BQAAAABJRU5ErkJggg==",
+  "base64",
+);
 const THEME_ENDPOINTS = {
   import_css: "/api/themes/import_css",
   import_package: "/api/themes/import_package",
@@ -53,15 +67,18 @@ async function uploadStudioBindingImages(page: Page) {
     Buffer.from(ASSET_BYTES),
     "image/png",
   );
+  // Distinct RGB pixels (13/34/56 and 14/34/56 hex), with valid PNG chunks.
   const headerOneBytes = Buffer.from([
-    ...ASSET_BYTES.slice(0, -12),
-    1,
-    ...ASSET_BYTES.slice(-11),
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0,
+    0, 0, 1, 8, 2, 0, 0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 120,
+    156, 99, 16, 54, 9, 3, 0, 0, 251, 0, 158, 211, 111, 192, 97, 0, 0, 0, 0, 73,
+    69, 78, 68, 174, 66, 96, 130,
   ]);
   const headerTwoBytes = Buffer.from([
-    ...ASSET_BYTES.slice(0, -12),
-    2,
-    ...ASSET_BYTES.slice(-11),
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0,
+    0, 0, 1, 8, 2, 0, 0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 120,
+    156, 99, 16, 49, 9, 3, 0, 0, 254, 0, 159, 168, 102, 59, 5, 0, 0, 0, 0, 73,
+    69, 78, 68, 174, 66, 96, 130,
   ]);
   const headerOne = await uploadMedia(
     page,
@@ -75,7 +92,7 @@ async function uploadStudioBindingImages(page: Page) {
     headerTwoBytes,
     "image/png",
   );
-  return { uploadedLogo, headerOne, headerTwo, headerOneBytes, headerTwoBytes };
+  return { uploadedLogo, headerOne, headerTwo };
 }
 
 // The Studio journey must remain a private surface: custom public presentation
@@ -331,7 +348,7 @@ test("author completes the custom theme lifecycle through Studio", async ({
   tracedContext,
 }) => {
   const username = await signInAsNewUser(page);
-  const { uploadedLogo, headerOne, headerTwo, headerOneBytes, headerTwoBytes } =
+  const { uploadedLogo, headerOne, headerTwo } =
     await uploadStudioBindingImages(page);
   await goto(page, "/themes");
   const mutation = waitForThemeMutations(page);
@@ -488,15 +505,21 @@ test("author completes the custom theme lifecycle through Studio", async ({
       new URL(logoUrl!, publicPage.url()).toString(),
     );
     expect(publicLogo.status()).toBe(200);
-    expect(await publicLogo.body()).toEqual(Buffer.from(ASSET_BYTES));
+    expect(await publicLogo.body()).toEqual(SANITIZED_LOGO_BYTES);
     const header = publicPage.locator('[data-jaunder-part="header-image"]');
     await expect(header).toBeVisible();
     const headerUrl = await header.getAttribute("src");
     expect(headerUrl).not.toBeNull();
     const headerPath = new URL(headerUrl!, publicPage.url()).pathname;
     const ownedHeaderBytes = new Map([
-      [new URL(headerOne.url, publicPage.url()).pathname, headerOneBytes],
-      [new URL(headerTwo.url, publicPage.url()).pathname, headerTwoBytes],
+      [
+        new URL(headerOne.url, publicPage.url()).pathname,
+        SANITIZED_HEADER_ONE_BYTES,
+      ],
+      [
+        new URL(headerTwo.url, publicPage.url()).pathname,
+        SANITIZED_HEADER_TWO_BYTES,
+      ],
     ]);
     const expectedHeaderBytes = headerPath.startsWith("/theme/")
       ? Buffer.from(ASSET_BYTES)
