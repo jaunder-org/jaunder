@@ -1100,10 +1100,13 @@ mod tests {
     #[cfg(feature = "sanitize")]
     #[test]
     fn sanitize_removes_active_markup() {
-        let html = sanitize(r#"<p>safe</p><script>alert(1)</script><img src="x" onerror="x">"#);
+        let html = sanitize(
+            r#"<p style="color:red">safe</p><script>alert(1)</script><img src="x" onerror="x" style="background:url(https://example.test/image)">"#,
+        );
         assert!(!html.contains("<script"), "{html}");
         assert!(!html.contains("alert(1)"), "{html}");
         assert!(!html.contains("onerror"), "{html}");
+        assert!(!html.contains("style="), "{html}");
         assert!(html.contains("<p>safe</p>"), "{html}");
     }
 

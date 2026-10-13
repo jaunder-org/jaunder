@@ -1049,6 +1049,78 @@ mod tests {
     }
 
     #[test]
+    fn host_resource_baseline_runs_and_uploads_before_heavy_validation() {
+        let workflow: serde_yaml::Value =
+            serde_yaml::from_str(include_str!("../../.github/workflows/ci.yml")).unwrap();
+        let steps = workflow["jobs"]["validate-host"]["steps"]
+            .as_sequence()
+            .unwrap();
+        let position = |name: &str| {
+            steps
+                .iter()
+                .position(|step| step["name"].as_str() == Some(name))
+                .unwrap()
+        };
+        let capture = position("Capture host resource baseline");
+        let upload = position("Upload host resource baseline");
+        let validate = position("Validate host lane (via xtask)");
+        let setup = steps
+            .iter()
+            .position(|step| step["uses"].as_str() == Some("./.github/actions/setup-ci"))
+            .unwrap();
+        assert!(setup < capture && capture < upload && upload < validate);
+        assert_eq!(
+            steps[upload]["uses"].as_str(),
+            Some("actions/upload-artifact@v7.0.1")
+        );
+        assert_eq!(
+            steps[upload]["with"]["path"].as_str(),
+            Some(".xtask/host-resource-baseline.txt")
+        );
+        assert_eq!(
+            steps[upload]["with"]["if-no-files-found"].as_str(),
+            Some("error")
+        );
+
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(directory.path().join("xtask/target")).unwrap();
+        std::fs::write(
+            directory.path().join("xtask/target/fixture"),
+            "native output",
+        )
+        .unwrap();
+        // Exercise the real script with only its fixed external store path
+        // substituted; unit tests must not walk the machine's actual store.
+        let script = steps[capture]["run"].as_str().unwrap();
+        assert!(script.contains("for path in target /nix/store; do"));
+        assert!(script.contains("timeout 30s du -s -x -B1"));
+        let script = script.replace("/nix/store", "fixture-nix-store");
+        std::fs::create_dir_all(directory.path().join("fixture-nix-store")).unwrap();
+        std::fs::write(
+            directory.path().join("fixture-nix-store/output"),
+            "store output",
+        )
+        .unwrap();
+        let output = ProcessCommand::new("bash")
+            .args(["-eu", "-c", &script])
+            .current_dir(directory.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{:?}", output);
+        let report =
+            std::fs::read_to_string(directory.path().join(".xtask/host-resource-baseline.txt"))
+                .unwrap();
+        assert!(report.contains("native target allocated bytes: xtask/target"));
+        assert!(report.contains("native target allocated bytes: tools/target"));
+        assert!(report.contains("capture_exit=0"));
+        assert!(report.contains("capture_exit=1 missing_evidence=true"));
+        assert!(report.contains("filesystem inodes:"));
+        assert!(report.contains("memory-and-swap"));
+        assert!(report.contains("owned storage allocated bytes: target"));
+        assert!(report.contains("owned storage allocated bytes: fixture-nix-store"));
+    }
+
+    #[test]
     fn validation_aggregate_fails_for_each_lane_result() {
         let workflow = parse_ci_workflow(include_str!("../../.github/workflows/ci.yml"));
         let script = workflow
