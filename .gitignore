@@ -42,6 +42,7 @@ mutants.out.old/
 
 # Subagent-driven-development scratch (briefs, ledger, review packages)
 /.superpowers/
+/.pi-herdsman/
 
 # ADR drafts are tracked Markdown; keep non-Markdown scratch files out while
 # retaining the explainer and numberless drafts in the repository.

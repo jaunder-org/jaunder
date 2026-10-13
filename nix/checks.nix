@@ -448,14 +448,7 @@ mkE2eCheck =
     backend,
     checkName,
     browser,
-    identity,
-    partition,
-    shardIndex ? null,
-    shardCount ? null,
-    projectArgs,
-    shardArg,
-    expectedCensusProjectArgs ? "",
-    expectedCensusTopology ? "${backend}-${browser}-experimental",
+    lane ? null,
     traceId,
     traceParent,
     extraEnv ? "",
@@ -465,6 +458,7 @@ mkE2eCheck =
     extraNodeConfig ? (_: { }),
     vmGlobalTimeout ? e2eGlobalTimeout,
   }:
+  assert (producer == null) != (lane == null);
   let
     backendPolicy =
       if backend == "sqlite" then
@@ -617,6 +611,20 @@ mkE2eCheck =
 
     testScript =
       if producer == null then
+        let
+          # Lane metadata belongs only to the ordinary E2E script; custom
+          # measurement producers share the VM lifecycle, not that contract.
+          inherit (lane)
+            identity
+            partition
+            shardIndex
+            shardCount
+            projectArgs
+            shardArg
+            expectedCensusProjectArgs
+            expectedCensusTopology
+            ;
+        in
         ''
           ${e2ePhaseTimingHelpers backend browser identity}${e2eOtelTestHelpers identity}${beforeMachineStart}vm_startup_started_at = time.monotonic()
           machine.start()
@@ -726,22 +734,19 @@ mkE2eCombo =
     # JAUNDER_E2E_SALT. Changing the hash is its whole job. Spliced here
     # rather than per-family so every combo salts alike.
     extraEnv = extraEnv + pkgs.lib.optionalString (e2eSalt != "") " JAUNDER_E2E_SALT=${e2eSalt}";
-    inherit backend;
-    inherit
-      browser
-      identity
-      partition
-      shardIndex
-      shardCount
-      projectArgs
-      shardArg
-      expectedCensusProjectArgs
-      expectedCensusTopology
-      traceId
-      traceParent
-      vmMemory
-      vmCores
-      ;
+    inherit backend browser traceId traceParent vmMemory vmCores;
+    lane = {
+      inherit
+        identity
+        partition
+        shardIndex
+        shardCount
+        projectArgs
+        shardArg
+        expectedCensusProjectArgs
+        expectedCensusTopology
+        ;
+    };
   };
 
 # attr name -> gate check, e.g. { "e2e-sqlite-chromium" = <drv>; ... }
@@ -2171,6 +2176,9 @@ static-docs =
       touch $out
     '';
 static-code =
+  # Force the optional performance surface in the existing static gate so
+  # shared VM-wrapper changes cannot silently leave measurement producers stale.
+  assert import ./performance-contract.nix { inherit mkPerformanceProducer; };
   let
     staticCodeSourceFilter =
       path: type:
