@@ -79,6 +79,7 @@ csr_bundle = { path = "../tools/csr_bundle" }
 host = { path = "../host" }
 
 [dev-dependencies]
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 axum = { workspace = true }
 base64 = { workspace = true }
 # `test-support` is declared explicitly rather than inherited: it reached this

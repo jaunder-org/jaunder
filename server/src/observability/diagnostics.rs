@@ -20,7 +20,9 @@ use tracing_subscriber::registry::LookupSpan;
 enum FallbackKind {
     DiagLogOpen,
     PanicDiagWrite,
-    TraceParent,
+    TraceParentLayerMissing,
+    TraceParentAlreadyStarted,
+    TraceParentSpanDisabled,
 }
 
 impl FallbackKind {
@@ -34,9 +36,17 @@ impl FallbackKind {
                 "server.observability.panic_diag_write",
                 "diagnostic write failed",
             ),
-            Self::TraceParent => (
+            Self::TraceParentLayerMissing => (
                 "server.observability.trace_parent",
-                "request trace parent assignment failed",
+                "request trace parent assignment failed: reason=otel-layer-missing",
+            ),
+            Self::TraceParentAlreadyStarted => (
+                "server.observability.trace_parent",
+                "request trace parent assignment failed: reason=span-already-started",
+            ),
+            Self::TraceParentSpanDisabled => (
+                "server.observability.trace_parent",
+                "request trace parent assignment failed: reason=span-disabled",
             ),
         }
     }
@@ -111,8 +121,13 @@ fn fallback(kind: FallbackKind) {
     let _ = write_fallback(io::stderr().lock(), kind);
 }
 
-pub(super) fn report_trace_parent_failure() {
-    fallback(FallbackKind::TraceParent);
+pub(super) fn report_trace_parent_failure(error: &tracing_opentelemetry::SetParentError) {
+    use tracing_opentelemetry::SetParentError;
+    fallback(match error {
+        SetParentError::LayerNotFound => FallbackKind::TraceParentLayerMissing,
+        SetParentError::AlreadyStarted => FallbackKind::TraceParentAlreadyStarted,
+        SetParentError::SpanDisabled => FallbackKind::TraceParentSpanDisabled,
+    });
 }
 
 fn open_diag_file(path: &Path) -> Result<File> {
@@ -138,9 +153,9 @@ fn open_diag_file_with<T>(
 /// The `.with_filter(LevelFilter::WARN)` is load-bearing and must stay a *per-layer*
 /// filter (`Filtered`), never a second global `.with(LevelFilter::WARN)` on the
 /// registry: a global level would clamp the whole subscriber to WARN+, silencing INFO
-/// to the fmt/OTel sinks. As a per-layer filter it narrows only this sink, so the diag
-/// file captures `WARN+ ∩ global-filter` while the other layers keep their own levels
-/// (issue #144).
+/// to the fmt/OTel sinks. Host composition has no shared global log/trace filter, so
+/// this sink captures WARN+ independently even when ordinary logs and traces are off
+/// (issue #144, #1742).
 pub(super) fn diag_layer<S, W>(make_writer: W) -> impl Layer<S>
 where
     S: tracing::Subscriber + for<'span> LookupSpan<'span>,
@@ -382,8 +397,26 @@ mod tests {
 
     #[test]
     fn trace_parent_failure_uses_nonrecursive_fixed_fallback() {
-        let ((), output) = capture_fallbacks(report_trace_parent_failure);
-        assert_fixed_fallback(&output, FallbackKind::TraceParent);
+        use tracing_opentelemetry::SetParentError;
+        for (error, expected) in [
+            (
+                SetParentError::LayerNotFound,
+                FallbackKind::TraceParentLayerMissing,
+            ),
+            (
+                SetParentError::AlreadyStarted,
+                FallbackKind::TraceParentAlreadyStarted,
+            ),
+            (
+                SetParentError::SpanDisabled,
+                FallbackKind::TraceParentSpanDisabled,
+            ),
+        ] {
+            let ((), output) = capture_fallbacks(|| {
+                assert_zero_error_metrics(|| report_trace_parent_failure(&error));
+            });
+            assert_fixed_fallback(&output, expected);
+        }
     }
 
     #[test]
