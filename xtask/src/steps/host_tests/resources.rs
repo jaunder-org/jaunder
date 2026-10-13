@@ -12,21 +12,35 @@ use xshell::Shell;
 use crate::result::StepResult;
 use crate::sh::step_with_env;
 
+const OWNED_STORAGE_PATHS: &[&str] = &["target", "/nix/store"];
+
 /// Persist each boundary separately, so a failed/killed child cannot discard
 /// its pre-snapshot. The existing always-uploaded diagnostics path owns these.
 pub(super) fn run(sh: &Shell, name: &str, program: &str, args: &[&str]) -> StepResult {
+    run_with_storage(sh, name, program, args, OWNED_STORAGE_PATHS)
+}
+
+// The private path seam keeps unit fixtures local; production always supplies
+// exactly OWNED_STORAGE_PATHS, never discovered/user-supplied roots.
+fn run_with_storage(
+    sh: &Shell,
+    name: &str,
+    program: &str,
+    args: &[&str],
+    storage_paths: &[&str],
+) -> StepResult {
     let id = format!("{}-{}", timestamp(), std::process::id());
     let directory = sh
         .current_dir()
         .join(".xtask/diagnostics/auxiliary-host-tests")
         .join(id);
-    let before = capture_warning(sh, &directory, name, "pre");
+    let before = capture_warning(sh, &directory, name, "pre", storage_paths);
     // cargo test selects the test profile (default debug=true). Reduce only
     // this child's debug bytes; do not change dev defaults, jobs or cache policy.
     // This is a capacity experiment, not an established SIGBUS remedy.
     let env = [("CARGO_PROFILE_TEST_DEBUG".to_owned(), "0".to_owned())];
     let mut result = step_with_env(sh, name, program, args, &env);
-    let after = capture_warning(sh, &directory, name, "post");
+    let after = capture_warning(sh, &directory, name, "post", storage_paths);
     for warning in [before, after].into_iter().flatten() {
         result.detail = Some(match result.detail {
             Some(detail) => format!("{detail}\n{warning}"),
@@ -36,16 +50,24 @@ pub(super) fn run(sh: &Shell, name: &str, program: &str, args: &[&str]) -> StepR
     result
 }
 
-fn capture_warning(sh: &Shell, directory: &Path, name: &str, phase: &str) -> Option<String> {
-    capture(sh, directory, name, phase).err().map(|error| {
-        let warning = format!(
-            "missing resource evidence ({phase}, {}): {error}",
-            directory.display()
-        );
-        // Report immediately, including a failed pre-write before Cargo starts.
-        eprintln!("{name}: {warning}");
-        warning
-    })
+fn capture_warning(
+    sh: &Shell,
+    directory: &Path,
+    name: &str,
+    phase: &str,
+    storage_paths: &[&str],
+) -> Option<String> {
+    capture(sh, directory, name, phase, storage_paths)
+        .err()
+        .map(|error| {
+            let warning = format!(
+                "missing resource evidence ({phase}, {}): {error}",
+                directory.display()
+            );
+            // Report immediately, including a failed pre-write before Cargo starts.
+            eprintln!("{name}: {warning}");
+            warning
+        })
 }
 
 fn timestamp() -> u128 {
@@ -55,8 +77,14 @@ fn timestamp() -> u128 {
         .as_nanos()
 }
 
-fn capture(sh: &Shell, directory: &Path, name: &str, phase: &str) -> std::io::Result<()> {
-    let snapshot = snapshot(sh);
+fn capture(
+    sh: &Shell,
+    directory: &Path,
+    name: &str,
+    phase: &str,
+    storage_paths: &[&str],
+) -> std::io::Result<()> {
+    let snapshot = snapshot(sh, storage_paths);
     std::fs::create_dir_all(directory)?;
     let path = directory.join(format!("{name}-{phase}.json"));
     // One small file per boundary, closed before continuing to the child.
@@ -123,7 +151,7 @@ fn cgroup_directory(membership: &str) -> Option<PathBuf> {
     Some(Path::new("/sys/fs/cgroup").join(relative))
 }
 
-fn snapshot(sh: &Shell) -> Value {
+fn snapshot(sh: &Shell, storage_paths: &[&str]) -> Value {
     let filesystems: Vec<_> = [".", "xtask/target", "tools/target", "/tmp", "/nix"]
         .into_iter()
         .map(|path| {
@@ -133,10 +161,16 @@ fn snapshot(sh: &Shell) -> Value {
             })
         })
         .collect();
-    // Only these two native output trees are traversed, never caches/store/root.
+    // Retain the original auxiliary totals alongside the approved fixed-path
+    // root-target/store totals. No path discovery, contents or inventory.
     let targets: Vec<_> = ["xtask/target", "tools/target"]
         .into_iter()
         .map(|path| probe(sh, "du", &["-s", "-B1", "--", path]))
+        .collect();
+    let owned_storage: Vec<_> = storage_paths
+        .iter()
+        .copied()
+        .map(|path| probe(sh, "timeout", &["30s", "du", "-s", "-x", "-B1", "--", path]))
         .collect();
     let memory = match std::fs::read_to_string("/proc/meminfo") {
         Ok(text) => memory(&text),
@@ -158,13 +192,22 @@ fn snapshot(sh: &Shell) -> Value {
         Err(error) => json!({"ok": false, "missing_evidence": true, "error": error.to_string()}),
     };
     json!({"timestamp": time, "filesystems": filesystems,
-        "native_target_allocated_bytes": targets, "memory": memory, "cgroup": cgroup,
-        "limitations": "pre/post only, not child peak RSS; GNU df/du and Linux proc/cgroup expected; target overrides are not traversed"})
+        "native_target_allocated_bytes": targets, "owned_storage_allocated_bytes": owned_storage,
+        "memory": memory, "cgroup": cgroup,
+        "limitations": "pre/post only, not child peak RSS; GNU df/du/timeout and Linux proc/cgroup expected; fixed root target/store totals bounded to 30s each; target overrides and build scratch are not traversed"})
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fixture_run(sh: &Shell, name: &str, program: &str, args: &[&str]) -> StepResult {
+        assert_eq!(OWNED_STORAGE_PATHS, ["target", "/nix/store"]);
+        let store = sh.current_dir().join("fixture-nix-store");
+        std::fs::create_dir_all(&store).unwrap();
+        std::fs::write(store.join("fixture"), "store output").unwrap();
+        run_with_storage(sh, name, program, args, &["target", "fixture-nix-store"])
+    }
 
     #[test]
     fn child_only_test_debug_override_preserves_other_inherited_settings() {
@@ -174,7 +217,7 @@ mod tests {
         let _test_debug = sh.push_env("CARGO_PROFILE_TEST_DEBUG", "2");
         let _dev_debug = sh.push_env("CARGO_PROFILE_DEV_DEBUG", "2");
         let _jobs = sh.push_env("CARGO_BUILD_JOBS", "7");
-        let result = run(
+        let result = fixture_run(
             &sh,
             "env-fixture",
             "sh",
@@ -185,6 +228,15 @@ mod tests {
         );
         assert!(result.ok, "{:?}", result.detail);
         assert_eq!(sh.var("CARGO_PROFILE_TEST_DEBUG").unwrap(), "2");
+    }
+
+    #[test]
+    fn bounded_probe_timeout_is_explicit_missing_evidence() {
+        let sh = Shell::new().unwrap();
+        let timed_out = probe(&sh, "timeout", &["0.01s", "sleep", "1"]);
+        assert_eq!(timed_out["exit_code"], 124);
+        assert_eq!(timed_out["ok"], false);
+        assert_eq!(timed_out["missing_evidence"], true);
     }
 
     #[test]
@@ -225,8 +277,8 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let sh = Shell::new().unwrap();
         sh.change_dir(directory.path());
-        assert!(!run(&sh, "failed", "false", &[]).ok);
-        assert!(run(&sh, "passed", "true", &[]).ok);
+        assert!(!fixture_run(&sh, "failed", "false", &[]).ok);
+        assert!(fixture_run(&sh, "passed", "true", &[]).ok);
         let root = directory
             .path()
             .join(".xtask/diagnostics/auxiliary-host-tests");
@@ -239,6 +291,15 @@ mod tests {
                     snapshot["native_target_allocated_bytes"][0]["missing_evidence"],
                     true
                 );
+                let totals = snapshot["owned_storage_allocated_bytes"]
+                    .as_array()
+                    .unwrap();
+                assert_eq!(totals.len(), 2);
+                for (total, path) in totals.iter().zip(["target", "fixture-nix-store"]) {
+                    assert_eq!(total["program"], "timeout");
+                    assert_eq!(total["args"][0], "30s");
+                    assert_eq!(total["args"][6], path);
+                }
                 snapshots += 1;
             }
         }
@@ -251,8 +312,8 @@ mod tests {
         std::fs::write(directory.path().join(".xtask"), "not a directory").unwrap();
         let sh = Shell::new().unwrap();
         sh.change_dir(directory.path());
-        let passed = run(&sh, "passed", "true", &[]);
-        let failed = run(&sh, "failed", "false", &[]);
+        let passed = fixture_run(&sh, "passed", "true", &[]);
+        let failed = fixture_run(&sh, "failed", "false", &[]);
         assert!(passed.ok);
         assert!(!failed.ok);
         assert!(passed.detail.unwrap().contains("missing resource evidence"));

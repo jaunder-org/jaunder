@@ -1089,8 +1089,20 @@ mod tests {
             "native output",
         )
         .unwrap();
+        // Exercise the real script with only its fixed external store path
+        // substituted; unit tests must not walk the machine's actual store.
+        let script = steps[capture]["run"].as_str().unwrap();
+        assert!(script.contains("for path in target /nix/store; do"));
+        assert!(script.contains("timeout 30s du -s -x -B1"));
+        let script = script.replace("/nix/store", "fixture-nix-store");
+        std::fs::create_dir_all(directory.path().join("fixture-nix-store")).unwrap();
+        std::fs::write(
+            directory.path().join("fixture-nix-store/output"),
+            "store output",
+        )
+        .unwrap();
         let output = ProcessCommand::new("bash")
-            .args(["-eu", "-c", steps[capture]["run"].as_str().unwrap()])
+            .args(["-eu", "-c", &script])
             .current_dir(directory.path())
             .output()
             .unwrap();
@@ -1104,6 +1116,8 @@ mod tests {
         assert!(report.contains("capture_exit=1 missing_evidence=true"));
         assert!(report.contains("filesystem inodes:"));
         assert!(report.contains("memory-and-swap"));
+        assert!(report.contains("owned storage allocated bytes: target"));
+        assert!(report.contains("owned storage allocated bytes: fixture-nix-store"));
     }
 
     #[test]

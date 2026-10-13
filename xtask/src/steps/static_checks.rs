@@ -149,19 +149,26 @@ fn cargo_compile_check(name: &'static str, args: Vec<&'static str>) -> StepSpec 
 }
 
 pub(crate) fn run_spec(sh: &Shell, spec: &StepSpec) -> StepResult {
-    if spec.cache_rustc {
-        let (env, cache_detail) = compile_cache::cargo_compile_env();
-        let mut result = sh::step_with_env(sh, spec.name, spec.program, &spec.args, &env);
-        if let Some(cache_detail) = cache_detail {
-            result.detail = Some(match result.detail.take() {
-                Some(command_detail) => format!("{command_detail}\n{cache_detail}"),
-                None => cache_detail,
-            });
-        }
-        result
+    let (mut env, cache_detail) = if spec.cache_rustc {
+        compile_cache::cargo_compile_env()
     } else {
-        sh::step(sh, spec.name, spec.program, &spec.args)
+        (Vec::new(), None)
+    };
+    // Reduce newly generated native debug bytes, including the devtool launcher
+    // and its compiling children. Keep the shared cache adapter and Cargo args
+    // unchanged; format-only Cargo commands do not need a profile override.
+    // This is a capacity experiment, not attribution of the unmeasured footprint.
+    if spec.program == "cargo" && (spec.cache_rustc || spec.args.first() == Some(&"run")) {
+        env.push(("CARGO_PROFILE_DEV_DEBUG".to_owned(), "0".to_owned()));
     }
+    let mut result = sh::step_with_env(sh, spec.name, spec.program, &spec.args, &env);
+    if let Some(cache_detail) = cache_detail {
+        result.detail = Some(match result.detail.take() {
+            Some(command_detail) => format!("{command_detail}\n{cache_detail}"),
+            None => cache_detail,
+        });
+    }
+    result
 }
 
 #[cfg(test)]
@@ -170,6 +177,51 @@ mod tests {
 
     fn find<'a>(specs: &'a [StepSpec], name: &str) -> &'a StepSpec {
         specs.iter().find(|s| s.name == name).expect("step present")
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_spec_scopes_dev_debug_to_native_cargo_without_changing_cache_or_verdict() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let script = "#!/bin/sh\nset -eu\ntest \"$CARGO_PROFILE_DEV_DEBUG\" = \"$EXPECTED_DEBUG\"\ntest \"$CARGO_PROFILE_TEST_DEBUG\" = 2\ntest \"$CARGO_BUILD_JOBS\" = 7\nif [ \"$1\" = clippy ]; then\n test \"$RUSTC_WRAPPER\" = sccache\n test \"$CARGO_INCREMENTAL\" = 0\nelse\n test \"$RUSTC_WRAPPER\" = fixture-wrapper\n test \"$CARGO_INCREMENTAL\" = 1\nfi\nif [ \"${2:-}\" = --fail ]; then exit 17; fi\n";
+        for program in ["cargo", "fixture-tool"] {
+            let path = directory.path().join(program);
+            std::fs::write(&path, script).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let sh = Shell::new().unwrap();
+        sh.change_dir(directory.path());
+        let path = format!("{}:{}", directory.path().display(), sh.var("PATH").unwrap());
+        let _path = sh.push_env("PATH", path);
+        let _dev = sh.push_env("CARGO_PROFILE_DEV_DEBUG", "2");
+        let _test = sh.push_env("CARGO_PROFILE_TEST_DEBUG", "2");
+        let _jobs = sh.push_env("CARGO_BUILD_JOBS", "7");
+        let _wrapper = sh.push_env("RUSTC_WRAPPER", "fixture-wrapper");
+        let _incremental = sh.push_env("CARGO_INCREMENTAL", "1");
+        for (program, command, cache_rustc, expected) in [
+            ("cargo", "run", false, "0"),
+            ("cargo", "clippy", true, "0"),
+            ("cargo", "fmt", false, "2"),
+            ("fixture-tool", "run", false, "2"),
+        ] {
+            let _expected = sh.push_env("EXPECTED_DEBUG", expected);
+            let mut spec = StepSpec {
+                name: "env-fixture",
+                program,
+                args: vec![command],
+                cache_rustc,
+                markdown_eligible: false,
+            };
+            let result = run_spec(&sh, &spec);
+            assert!(result.ok, "{:?}", result.detail);
+            spec.args.push("--fail");
+            let failed = run_spec(&sh, &spec);
+            assert!(!failed.ok);
+            assert!(failed.detail.unwrap().contains("exited with status 17"));
+        }
+        assert_eq!(sh.var("CARGO_PROFILE_DEV_DEBUG").unwrap(), "2");
     }
 
     #[test]
