@@ -541,9 +541,28 @@ async function discoverAtomPub(
   };
 }
 
+/** Ordinary controls follow the source-selected fixture, never the DOM. */
+export async function mintBaselineAppPassword(
+  page: Page,
+  fixture: OrdinaryFixture,
+  label: string,
+): Promise<string> {
+  parseOrdinaryFixture(fixture);
+  if (fixture === "modern") return mintAppPassword(page, label);
+  if (new URL(page.url()).pathname !== "/sessions") {
+    await goto(page, "/sessions");
+  }
+  await page.fill('input[name="label"]', label);
+  await click(page, '.j-app-passwords button:has-text("Create app password")');
+  const token = page.locator(".j-app-password-token code");
+  await token.waitFor({ state: "visible", timeout: 15_000 });
+  return ((await token.textContent()) ?? "").trim();
+}
+
 async function createAuthorAccess(
   tracedContext: NewTracedContext,
   username: string,
+  fixture: OrdinaryFixture,
 ): Promise<AuthorAccess> {
   const session = await createSessionViaTool(
     username,
@@ -555,8 +574,9 @@ async function createAuthorAccess(
     const page = await context.newPage();
     try {
       await goto(page, "/sessions");
-      const appPassword = await mintAppPassword(
+      const appPassword = await mintBaselineAppPassword(
         page,
+        fixture,
         `Production baseline manifest ${username}`,
       );
       const authorization = `Basic ${Buffer.from(`${username}:${appPassword}`).toString("base64")}`;
@@ -610,8 +630,9 @@ export async function createProductionBaseline(
     "the real login cold render is part of the baseline, and App Password management has no in-app navigation control",
   );
   await goto(page, "/sessions");
-  const appPassword = await mintAppPassword(
+  const appPassword = await mintBaselineAppPassword(
     page,
+    fixture,
     "Production baseline primary",
   );
   await openBaselineComposer(page, fixture);
@@ -661,7 +682,7 @@ export async function createProductionBaseline(
     .map((post) => post.author)
     .filter((author, index, all) => all.indexOf(author) === index);
   const authorAccess = await Promise.all(
-    authors.map((author) => createAuthorAccess(tracedContext, author)),
+    authors.map((author) => createAuthorAccess(tracedContext, author, fixture)),
   );
   const state: BaselineState = {
     ...bindOrdinarySeedState(fixture, seededManifest),
@@ -1092,7 +1113,11 @@ export async function verifyFreshAppPasswordLifecycle(
   state: BaselineState,
   tracedContext: NewTracedContext,
 ): Promise<string> {
-  const fresh = await mintAppPassword(page, "Production baseline revocable");
+  const fresh = await mintBaselineAppPassword(
+    page,
+    state.fixture,
+    "Production baseline revocable",
+  );
   const authorization = `Basic ${Buffer.from(`${state.username}:${fresh}`).toString("base64")}`;
   const atomContext = await isolatedRequest(tracedContext);
   try {

@@ -1413,9 +1413,15 @@ fn run_source_matrix(
     )?;
     let seed_process = lifecycle.seed_process(source_id, &harness_output.join("bin/node"))?;
     recorder.behavior(|| browser.run("create", Some(&seed_process)))?;
+    recorder.lifecycle(format!("{source_id}-post-create-service-state"), || {
+        lifecycle.observe_service_state(source_id, "post-create")
+    })?;
     recorder.check("service-restart", || lifecycle.restart_service(source_id))?;
     lifecycle.select_proxy(source_id)?;
     recorder.behavior(|| browser.run("read-only", None))?;
+    recorder.lifecycle(format!("{source_id}-post-restart-service-state"), || {
+        lifecycle.observe_service_state(source_id, "post-restart")
+    })?;
     recorder.check("vm-reboot", || lifecycle.reboot(source_id))?;
     lifecycle.select_proxy(source_id)?;
     recorder.behavior(|| browser.run("read-only", None))?;

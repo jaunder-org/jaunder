@@ -7,6 +7,7 @@ import {
 } from "./fixtures";
 import {
   createProductionBaseline,
+  mintBaselineAppPassword,
   verifyFreshAppPasswordLifecycle,
   verifyProductionBaseline,
   type BaselineState,
@@ -471,6 +472,181 @@ contractTest(
         publish_at: "2035-01-01T00:00:00Z",
       },
     });
+  },
+);
+
+contractTest("App Password mint controls are fixture-owned", async () => {
+  for (const fixture of ["legacy1419", "modern"] as const) {
+    const actions: unknown[] = [];
+    let failure: "click" | "wait" | "read" | undefined;
+    const create =
+      fixture === "legacy1419"
+        ? '.j-app-passwords button:has-text("Create app password")'
+        : '[data-app-passwords] button:has-text("Create app password")';
+    const token =
+      fixture === "legacy1419"
+        ? ".j-app-password-token code"
+        : "[data-app-password-token] code";
+    const page = {
+      url: () => "https://localhost/sessions",
+      fill: async (selector: string, value: string) => {
+        actions.push(["fill", selector, value]);
+      },
+      click: async (selector: string) => {
+        expect(selector).toBe(create);
+        actions.push(["click", selector]);
+        if (failure === "click") throw new Error("creation failed");
+      },
+      locator: (selector: string) => {
+        expect(selector).toBe(token);
+        return {
+          waitFor: async (options: unknown) => {
+            actions.push(["wait", selector, options]);
+            if (failure === "wait") throw new Error("token wait failed");
+          },
+          textContent: async () => {
+            actions.push(["read", selector]);
+            if (failure === "read") throw new Error("token read failed");
+            return "  synthetic-not-a-credential  ";
+          },
+        };
+      },
+    } as unknown as Parameters<typeof mintBaselineAppPassword>[0];
+    expect(await mintBaselineAppPassword(page, fixture, "Contract label")).toBe(
+      "synthetic-not-a-credential",
+    );
+    expect(actions).toEqual([
+      ["fill", 'input[name="label"]', "Contract label"],
+      ["click", create],
+      ["wait", token, { state: "visible", timeout: 15_000 }],
+      ["read", token],
+    ]);
+    await expect(
+      mintBaselineAppPassword(
+        page,
+        fixture === "modern" ? "legacy1419" : "modern",
+        "Contract label",
+      ),
+    ).rejects.toThrow();
+    for (const stage of ["click", "wait", "read"] as const) {
+      failure = stage;
+      await expect(
+        mintBaselineAppPassword(page, fixture, "Contract label"),
+      ).rejects.toThrow(
+        stage === "click" ? "creation failed" : `token ${stage} failed`,
+      );
+    }
+  }
+});
+
+contractTest(
+  "historical App Password DOM has no modern hooks",
+  async ({ page }) => {
+    await page.setContent(`<h1>Sessions</h1><section class="j-app-passwords">
+    <h2>App passwords</h2><label>Label <input name="label"></label>
+    <button>Create app password</button></section>
+    <p class="j-app-password-token"><code>synthetic-not-a-credential</code></p>`);
+    expect(await page.locator("[data-app-passwords]").count()).toBe(0);
+    expect(await page.locator("[data-app-password-token]").count()).toBe(0);
+    const sessionsPage = {
+      url: () => "https://localhost/sessions",
+      fill: page.fill.bind(page),
+      click: page.click.bind(page),
+      locator: page.locator.bind(page),
+    } as Parameters<typeof mintBaselineAppPassword>[0];
+    expect(
+      await mintBaselineAppPassword(
+        sessionsPage,
+        "legacy1419",
+        "Contract label",
+      ),
+    ).toBe("synthetic-not-a-credential");
+    await expect(page.locator('input[name="label"]')).toHaveValue(
+      "Contract label",
+    );
+  },
+);
+
+contractTest(
+  "ordinary fixture reaches all three App Password consumers",
+  async () => {
+    // Wiring proof complements actual control execution without seeding a product
+    // or claiming a synthetic session is a real guest/browser lifecycle.
+    const source = (
+      await readFile(`${__dirname}/production-baseline.ts`, "utf8")
+    ).replace(/\s+/g, " ");
+    for (const call of [
+      'mintBaselineAppPassword( page, fixture, "Production baseline primary", )',
+      "mintBaselineAppPassword( page, fixture, `Production baseline manifest ${username}`, )",
+      "createAuthorAccess(tracedContext, author, fixture)",
+    ])
+      expect(source).toContain(call);
+    expect(source.match(/await mintBaselineAppPassword\(/g)).toHaveLength(3);
+  },
+);
+
+contractTest(
+  "fresh App Password mint use revoke retains the selected fixture",
+  async ({ page: dom }) => {
+    for (const fixture of ["legacy1419", "modern"] as const) {
+      let revoked = false;
+      let created = false;
+      let closed = 0;
+      const controls =
+        fixture === "legacy1419" ? ".j-app-passwords" : "[data-app-passwords]";
+      await dom.setContent(`<section ${fixture === "legacy1419" ? 'class="j-app-passwords"' : "data-app-passwords"}>
+      <input name="label"><button>Create app password</button></section>
+      <p ${fixture === "legacy1419" ? 'class="j-app-password-token"' : "data-app-password-token"}><code>synthetic-not-a-credential</code></p>
+      <li>Production baseline revocable<button onclick="this.parentElement.remove()">Revoke</button></li>`);
+      const page = {
+        url: () => "https://localhost/sessions",
+        fill: async (selector: string, value: string) => {
+          expect(selector).toBe('input[name="label"]');
+          expect(value).toBe("Production baseline revocable");
+          await dom.fill(selector, value);
+        },
+        click: async (selector: string) => {
+          if (!created) {
+            expect(selector).toBe(
+              `${controls} button:has-text("Create app password")`,
+            );
+            created = true;
+          } else {
+            expect(selector).toBe(
+              'li:has-text("Production baseline revocable") button:has-text("Revoke")',
+            );
+            revoked = true;
+          }
+          await dom.click(selector);
+        },
+        locator: dom.locator.bind(dom),
+      } as unknown as Parameters<typeof verifyFreshAppPasswordLifecycle>[0];
+      const tracedContext = (async () => ({
+        request: {
+          get: async (
+            _url: string,
+            options: { headers: { authorization: string } },
+          ) => {
+            expect(options.headers.authorization).toBe(
+              `Basic ${Buffer.from("contract-user:synthetic-not-a-credential").toString("base64")}`,
+            );
+            return { status: () => (revoked ? 401 : 200) };
+          },
+        },
+        close: async () => {
+          closed += 1;
+        },
+      })) as unknown as Parameters<typeof verifyFreshAppPasswordLifecycle>[2];
+      expect(
+        await verifyFreshAppPasswordLifecycle(
+          page,
+          { fixture, username: "contract-user" } as BaselineState,
+          tracedContext,
+        ),
+      ).toBe("synthetic-not-a-credential");
+      expect(revoked).toBe(true);
+      expect(closed).toBe(2);
+    }
   },
 );
 

@@ -1255,6 +1255,34 @@ socket.on("end", () => {{
         }
     }
 
+    /// Observe the running service, not an already-exited seed/CLI child.
+    /// PID stability is local to this observation; restart may select a new PID.
+    pub(crate) fn observe_service_state(&self, deployment_id: &str, boundary: &str) -> Result<()> {
+        let deployment = self
+            .deployments
+            .get(deployment_id)
+            .context("unknown deployment")?;
+        let output = self.guest(deployment_id, SERVICE_STATE_COMMAND)?;
+        let observation = parse_service_state(&deployment.package.output_path, &output)?;
+        let path = self.private_path(&format!("{deployment_id}-{boundary}-service-state.json"))?;
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        restrict(&path)?;
+        serde_json::to_writer_pretty(file, &observation)?;
+        eprintln!(
+            "guest service state: backend={} boundary={boundary} pid={} uid={} gid={} lock_uid={} lock_gid={}",
+            backend_name(deployment.backend),
+            observation.pid,
+            observation.uid,
+            observation.gid,
+            observation.lock_uid,
+            observation.lock_gid,
+        );
+        Ok(())
+    }
+
     pub fn runtime_identity(&mut self, deployment_id: &str) -> Result<RuntimeIdentity> {
         let deadline = Instant::now() + READY_TIMEOUT;
         loop {
@@ -1756,6 +1784,96 @@ fn decode_base64(encoded: &str) -> Result<Vec<u8>> {
     }
     Ok(out)
 }
+// Output is deliberately limited to service identity, process credentials and
+// lock ownership. Environment and application data are not captured.
+const SERVICE_STATE_COMMAND: &str = r#"set -eu
+user=$(systemctl show --property=User --value jaunder.service)
+group=$(systemctl show --property=Group --value jaunder.service)
+uid=$(id -u "$user")
+group_record=$(getent group "$group")
+gid=$(printf '%s' "$group_record" | cut -d: -f3)
+pid=$(systemctl show --property=MainPID --value jaunder.service)
+exec_start=$(systemctl show --property=ExecStart --value jaunder.service)
+exe=$(readlink -f /proc/"$pid"/exe)
+status=$(cat /proc/"$pid"/status)
+uids=$(printf '%s\n' "$status" | grep '^Uid:')
+gids=$(printf '%s\n' "$status" | grep '^Gid:')
+lock=$(stat -c '%u %g' /var/lib/jaunder/data/publisher.lock)
+after=$(systemctl show --property=MainPID --value jaunder.service)
+printf '%s\n' "$user" "$group" "$uid" "$gid" "$pid" "$exec_start" "$exe" "$uids" "$gids" "$lock" "$after""#;
+
+#[derive(Debug, Serialize)]
+struct ServiceStateObservation {
+    user: String,
+    group: String,
+    uid: u32,
+    gid: u32,
+    pid: u32,
+    exec_start: String,
+    executable: String,
+    process_uids: [u32; 4],
+    process_gids: [u32; 4],
+    lock_uid: u32,
+    lock_gid: u32,
+}
+
+fn parse_service_state(output_path: &str, output: &str) -> Result<ServiceStateObservation> {
+    let lines: Vec<_> = output.lines().collect();
+    if lines.len() != 11 || lines[0] != "jaunder" || lines[1] != "jaunder" {
+        bail!("service observation omitted fields or canonical User/Group");
+    }
+    let number = |value: &str| -> Result<u32> {
+        if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+            bail!("service observation has malformed numeric identity");
+        }
+        let value: u32 = value.parse()?;
+        if value == 0 {
+            bail!("service observation has root or missing numeric identity");
+        }
+        Ok(value)
+    };
+    let credentials = |value: &str, tag: &str| -> Result<[u32; 4]> {
+        let values = value
+            .strip_prefix(tag)
+            .context("service observation omitted process credentials")?
+            .split_whitespace()
+            .map(number)
+            .collect::<Result<Vec<_>>>()?;
+        values.try_into().map_err(|_| {
+            anyhow::anyhow!("service observation requires four process credential fields")
+        })
+    };
+    let uid = number(lines[2])?;
+    let gid = number(lines[3])?;
+    let pid = number(lines[4])?;
+    if number(lines[10])? != pid {
+        bail!("service MainPID changed within observation");
+    }
+    verify_runtime_paths(output_path, lines[5], lines[6])?;
+    let process_uids = credentials(lines[7], "Uid:")?;
+    let process_gids = credentials(lines[8], "Gid:")?;
+    let lock = lines[9]
+        .split_whitespace()
+        .map(number)
+        .collect::<Result<Vec<_>>>()?;
+    if process_uids != [uid; 4] || process_gids != [gid; 4] || lock != [uid, gid] {
+        bail!("service process credentials or publisher lock differ from service account");
+    }
+    Ok(ServiceStateObservation {
+        user: lines[0].into(),
+        group: lines[1].into(),
+        uid,
+        gid,
+        pid,
+        exec_start: lines[5].into(),
+        executable: lines[6].into(),
+        process_uids,
+        process_gids,
+        lock_uid: uid,
+        lock_gid: gid,
+    })
+}
+
 fn verify_runtime_paths(output: &str, exec_start: &str, executable: &str) -> Result<()> {
     let expected = format!("{output}/bin/jaunder");
     if !exec_start.contains(&expected) || executable != expected {
@@ -1857,6 +1975,216 @@ mod tests {
         }
         fs::copy(bin.join("test-support"), bin.join("jaunder")).unwrap();
         bin
+    }
+
+    fn service_state_output() -> String {
+        "jaunder\njaunder\n123\n456\n321\n{ path=/nix/store/fixture-package/bin/jaunder ; argv[]=serve ; }\n/nix/store/fixture-package/bin/jaunder\nUid:\t123\t123\t123\t123\nGid:\t456\t456\t456\t456\n123 456\n321".into()
+    }
+
+    #[test]
+    fn service_state_parser_rejects_incomplete_root_mismatched_and_unstable_observations() {
+        let output = service_state_output();
+        let observed = parse_service_state("/nix/store/fixture-package", &output).unwrap();
+        assert_eq!(observed.process_uids, [123; 4]);
+        assert_eq!(observed.process_gids, [456; 4]);
+        for (index, wrong) in [
+            (0, "root"),
+            (1, "root"),
+            (2, "0"),
+            (3, "0"),
+            (4, "0"),
+            (4, "missing"),
+            (4, "-1"),
+            (4, "4294967296"),
+            (5, "{ path=/nix/store/wrong/bin/jaunder ; }"),
+            (6, "/nix/store/wrong/bin/jaunder"),
+            (7, "Uid: 0 123 123 123"),
+            (7, "Uid: 123 999 123 123"),
+            (7, "Uid: 123 123 123"),
+            (7, "Uid: 123 123 123 123 123"),
+            (7, "Uid: unknown 123 123 123"),
+            (7, "Gid: 123 123 123 123"),
+            (8, "Gid: 456 456 0 456"),
+            (8, "Gid: 456 456 456 789"),
+            (8, "Gid: 456 456 456"),
+            (9, "0 456"),
+            (9, "123 0"),
+            (9, "123 999"),
+            (9, "123"),
+            (9, "123 456 789"),
+            (10, "0"),
+            (10, "322"),
+        ] {
+            let mut lines: Vec<_> = output.lines().collect();
+            lines[index] = wrong;
+            assert!(
+                parse_service_state("/nix/store/fixture-package", &lines.join("\n")).is_err(),
+                "field {index}: {wrong}"
+            );
+        }
+        for index in 0..11 {
+            let mut lines: Vec<_> = output.lines().collect();
+            lines.remove(index);
+            assert!(parse_service_state("/nix/store/fixture-package", &lines.join("\n")).is_err());
+        }
+        // Separate successful observations may have different PIDs after restart.
+        assert!(
+            parse_service_state("/nix/store/fixture-package", &output.replace("321", "654"))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn service_state_command_observes_process_credentials_and_preserves_guest_status() {
+        let root = tempfile::tempdir().unwrap();
+        let bin = guest_identity_fixture(root.path());
+        for (name, script) in [
+            (
+                "systemctl",
+                "#!/bin/sh\ncase \"$*\" in\n*property=User*) echo jaunder;;\n*property=Group*) echo jaunder;;\n*property=MainPID*) echo 321;;\n*property=ExecStart*) echo '{ path=/nix/store/fixture-package/bin/jaunder ; argv[]=serve ; }';;\n*) exit 91;;\nesac\n",
+            ),
+            (
+                "id",
+                "#!/bin/sh\n[ \"$*\" = '-u jaunder' ] || exit 92\necho 123\n",
+            ),
+            (
+                "getent",
+                "#!/bin/sh\n[ \"$*\" = 'group jaunder' ] || exit 93\necho jaunder:x:456:\n",
+            ),
+            (
+                "readlink",
+                "#!/bin/sh\n[ \"$*\" = '-f /proc/321/exe' ] || exit 94\necho /nix/store/fixture-package/bin/jaunder\n",
+            ),
+            (
+                "cat",
+                "#!/bin/sh\n[ \"$*\" = /proc/321/status ] || exit 95\nprintf 'Name: synthetic\\nUid:\\t123\\t123\\t123\\t123\\nGid:\\t456\\t456\\t456\\t456\\n'\n",
+            ),
+            (
+                "stat",
+                "#!/bin/sh\n[ \"$1\" = -c ] && [ \"$2\" = '%u %g' ] && [ \"$3\" = /var/lib/jaunder/data/publisher.lock ] || exit 96\n[ \"$FIXTURE_LOCK\" != missing ] || exit 23\necho '123 456'\n",
+            ),
+        ] {
+            let path = bin.join(name);
+            fs::write(&path, script).unwrap();
+            restrict_executable(&path).unwrap();
+        }
+        let path = std::env::join_paths(
+            std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        for lock in ["present", "missing"] {
+            let output = Command::new("sh")
+                .args(["-c", &framed_guest_command(SERVICE_STATE_COMMAND)])
+                .env("PATH", &path)
+                .env("FIXTURE_LOCK", lock)
+                .output()
+                .unwrap();
+            // The outer frame exits normally even when the observed command fails.
+            assert!(output.status.success());
+            if lock == "present" {
+                let body = complete_status(&output.stdout).unwrap().unwrap();
+                assert_eq!(body, service_state_output());
+                parse_service_state("/nix/store/fixture-package", &body).unwrap();
+            } else {
+                assert!(
+                    complete_status(&output.stdout)
+                        .unwrap_err()
+                        .to_string()
+                        .contains("23")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn service_state_guest_observation_retains_restricted_records_for_both_backends() {
+        for backend in [StorageBackend::Sqlite, StorageBackend::Postgres] {
+            let root = tempfile::tempdir().unwrap();
+            let mut lifecycle = BaselineLifecycle::create_current_checkout(root.path()).unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let control_port = listener.local_addr().unwrap().port();
+            let mut vm = Command::new("true").spawn().unwrap();
+            vm.wait().unwrap();
+            let id = format!("observe-{}", backend_name(backend));
+            lifecycle.deployments.insert(
+                id.clone(),
+                Deployment {
+                    backend,
+                    revision: ResolvedRevision {
+                        commit: "a".repeat(40),
+                        flake_ref: "fixture".into(),
+                    },
+                    package: PackageIdentity {
+                        installable: "fixture".into(),
+                        derivation: "fixture".into(),
+                        output_path: "/nix/store/fixture-package".into(),
+                        nar_hash: "fixture".into(),
+                        executable_sha256: "fixture".into(),
+                    },
+                    application_port: 0,
+                    control_port,
+                    vm_log: root.path().join("fixture.log"),
+                    running: false,
+                    vm,
+                },
+            );
+            let guest = thread::spawn(move || {
+                for code in [0, 0, 23] {
+                    let (mut socket, _) = listener.accept().unwrap();
+                    let mut reader = std::io::BufReader::new(socket.try_clone().unwrap());
+                    let mut command = String::new();
+                    loop {
+                        let mut line = String::new();
+                        assert!(std::io::BufRead::read_line(&mut reader, &mut line).unwrap() > 0);
+                        command.push_str(&line);
+                        if line == "exit\n" {
+                            break;
+                        }
+                    }
+                    assert_eq!(command, framed_guest_command(SERVICE_STATE_COMMAND));
+                    socket
+                        .write_all(
+                            format!("{}\n{STATUS}{code}\n", service_state_output()).as_bytes(),
+                        )
+                        .unwrap();
+                }
+            });
+            for boundary in ["post-create", "post-restart"] {
+                lifecycle.observe_service_state(&id, boundary).unwrap();
+                let path = lifecycle
+                    .workspace
+                    .join(format!("{id}-{boundary}-service-state.json"));
+                let record: serde_json::Value =
+                    serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                assert_eq!(record["pid"], 321);
+                assert_eq!(record["uid"], record["lock_uid"]);
+                assert_eq!(record["gid"], record["lock_gid"]);
+                assert!(record.get("environment").is_none());
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    assert_eq!(
+                        fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                        0o600
+                    );
+                }
+            }
+            assert!(lifecycle.observe_service_state(&id, "failed").is_err());
+            assert!(
+                !lifecycle
+                    .workspace
+                    .join(format!("{id}-failed-service-state.json"))
+                    .exists()
+            );
+            assert!(fs::read_dir(&lifecycle.workspace).unwrap().any(|entry| {
+                entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("guest-failure-")
+            }));
+            guest.join().unwrap();
+        }
     }
 
     #[test]

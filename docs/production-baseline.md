@@ -49,9 +49,13 @@ historical authority-file digest is checked before lifecycle work.
 The historical fixture retains all 73 native Posts, seeded text Media, uploaded
 PNG, authentication and all three Syndication Feed formats. Its exact v1 wire
 and historical composer/Post-create contracts are explicit, not inferred from
-replies. All other ordinary sources and live e2e retain strict modern v2,
-five-Media and Rendered Title obligations. Incompatible upgrade targets fail;
-there is no adapter, retry, selector option or ambient fixture flag.
+replies. Ordinary App Password creation/token controls also belong to that fixed
+fixture: `.j-app-passwords` and `.j-app-password-token code` for the historical
+source, unchanged modern Sessions controls otherwise. The same selection reaches
+primary creation, manifest-author access and fresh mint/use/revoke. All other
+ordinary sources and live e2e retain strict modern v2, five-Media and Rendered
+Title obligations. Incompatible upgrade targets fail; there is no adapter,
+retry, selector option or ambient fixture flag.
 
 Historical discovery evidence remains schema1. New evidence attributes the
 actual selected graph and current executing harness/verifier, not historical
@@ -95,6 +99,17 @@ repeats that work, declaratively activates its target package, proves the target
 runtime identity, and restores target-schema backups in all four directions.
 Backup format and exact schema version are compatibility authorities; a
 rejection is not recovery success.
+
+For each ordinary source backend, lifecycle work observes service identity and
+publisher-lock ownership after browser/Media creation and after restart plus
+read-only Syndication Feed checks. Canonical service User/Group and resolved
+non-root IDs must match the running service's MainPID, verified executable, all
+four `/proc` UID/GID fields and numeric publisher-lock owner. MainPID must stay
+stable within each observation; a restart may change it. Numeric-only summaries
+are emitted to stderr; structured observations stay restricted in the owned run
+workspace without changing the published evidence schema. These observations
+prove the running service/lock boundary, not the identity of already-exited
+seed/CLI children. Host command/parser stand-ins are not actual VM proof.
 
 ## Evidence
 

@@ -97,8 +97,12 @@ Focused request/response, browser-control and native-body compatibility proof
 precedes positive qualification. The same closed selection owns historical
 composer controls inside the shared baseline workflow: direct Format buttons,
 Slug input and `#audience-base`, without modern disclosure controls. Modern
-creation retains shared `composePost` unchanged. No DOM probing, retry or
-fallback selects a control contract.
+creation retains shared `composePost` unchanged. Ordinary App Password minting
+uses the same fixed fixture: modern delegates to unchanged `sessions.ts`;
+historical creation uses `.j-app-passwords` and reads
+`.j-app-password-token code`. Primary creation, manifest-author access and fresh
+mint/use/revoke all retain that selection. No DOM probing, retry or fallback
+selects a control contract.
 
 ## Provenance, guest bindings and evidence
 
@@ -115,6 +119,18 @@ module wiring, graph/VM GC roots, drift/source rechecks and #1747 service
 identity, environment, quoting and exit behavior intact. Do not reintroduce Git
 build-revision equality: unchanged Nix outputs across clean commits remain
 admissible.
+
+For each ordinary source backend, observe service identity and publisher-lock
+ownership after browser/Media creation and after restart plus read-only
+Syndication Feed verification. Use existing guest control and lifecycle records;
+retain one restricted structured observation per boundary and emit a
+numeric-only sanitized summary. Require canonical service User/Group, resolved
+non-root IDs, actual service MainPID/executable, all four `/proc` UID/GID fields
+and lock owner to agree. MainPID must be stable within one observation, not
+across restart. This observes the running service and lock, not an
+already-exited seed/CLI child. Host stand-ins prove command/parsing/retention
+only; actual VM proof remains required. No evidence-schema or observer framework
+change is permitted.
 
 Evidence schema v2 stays truthful: fixed product source, new current clean
 harness commit, actual selected graph derivation/output/NAR identities, actual
