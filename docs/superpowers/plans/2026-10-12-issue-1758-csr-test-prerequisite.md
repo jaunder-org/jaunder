@@ -3,7 +3,11 @@
 > Execute with jaunder-iterate; use jaunder-dispatch for a bounded task only
 > when useful. Trigger: artifact concurrency and the future multi-agent provider
 > contract. Spec is authoritative; final independent review has no findings and
-> HUMAN outline approval is recorded. Current assignment: planning commit only.
+> HUMAN outline approval is recorded. Planning commit `dbbb24be` is complete.
+> Current assignment: routine shipping after full landed-main integration.
+> Independent source and positive-proof conformance accepted without findings;
+> normal commits/hooks/push/PR observation authorized. Merge remains unapproved.
+> Earlier planning/preparation restrictions below are historical.
 
 ## Scope
 
@@ -13,12 +17,18 @@ and CONTRIBUTING provenance/cost documentation.
 
 Out: copying #1702's application provider/native changes, verifier relaxation,
 provenance caching, changed populations/parity/deadlines, launcher/config
-repairs, resource cleanup, implementation, producer/startup proof, push or PR.
-Only the normal hook-backed planning commit is currently authorized.
+repairs, resource cleanup, additional producer/startup proof, broad gates,
+source commit, push or PR in this preparation assignment. Reviewed source stays
+unchanged.
 
 ## Task outline
 
-- [ ] Shared prerequisite and ownership deliverable.
+- [x] Shared prerequisite and ownership deliverable.
+  - Implemented the exact accepted source paths. Focused offline/locked
+    regressions pass: 11 xtask orchestration/prerequisite/producer tests, two
+    migrated shell tests and 15 server staging/caller tests. Independent source
+    conformance accepted with no findings; these remain focused regression
+    proofs.
   - Acquire checkout-local artifact ownership before automatic production or
     explicit-root validation; retain it through all current consumer
     compilation. Coordinate with HostArtifacts' existing
@@ -46,7 +56,15 @@ Only the normal hook-backed planning commit is currently authorized.
     ordering, early failure/no fallback and identical-root propagation;
     controlled collaborators stand in for subprocesses only, not canonical
     validators or startup correctness.
-- [ ] Smallest complete consumer proof and documentation deliverable.
+- [x] Smallest complete consumer proof and documentation deliverable.
+  - CONTRIBUTING provisioning/provenance/stability/cost documentation is
+    implemented. One coordinated automatic producer/complete validation/real
+    startup invocation passed: exit 0, no signal, 1043 seconds within the
+    1800-second ceiling. Independent positive-proof conformance accepted with no
+    findings. Evidence is retained in ignored
+    `.xtask/issue1758-positive-proof/`; successful output suppression prevents a
+    fresh executed census, coverage or backend-matrix claim. Source/index
+    identities and bounded ownership settlement were preserved.
   - Before harness expansion, run one coordinated real existing startup test via
     the corrected shared lane, using its automatic producer once (no duplicate
     build). Keep actual source/bundle identity and selected/executed evidence,
@@ -108,7 +126,7 @@ provider/native paths. Existing server/xtask csr_bundle dependencies and xtask
 host dependency already support this reuse; no dependency edge or cycle is
 introduced.
 
-## Proposed bounded diagnostics — NOT EXECUTED
+## Bounded diagnostic plan — completed under separate assignments
 
 Every invocation has an explicit 1800-second runtime ceiling; stop on
 dependency, capacity, timeout or signal failure without retries. Use the normal
@@ -119,7 +137,9 @@ launcher fallback.
 - Auxiliary orchestration regression filter (extend filter only to the named new
   prerequisite module if its tests are not under test_local):
   `devtool run -- env CARGO_NET_OFFLINE=true CARGO_BUILD_JOBS=1 RUSTC_WRAPPER=sccache CARGO_INCREMENTAL=0 cargo test --offline --locked -j 1 --manifest-path xtask/Cargo.toml --target-dir /home/mdorman/src/jaunder/herdsman-work-e01e49cc/target/issue-1758-xtask test_local`
-- ONE real startup proof after producer/capacity coordination with #1701/#1702:
+- Real startup proof shape (completed separately with explicit ambient-input
+  scrub, `--json`, normal owned targets and exact identity/settlement capture;
+  no rerun):
   `devtool run -- env CARGO_NET_OFFLINE=true CARGO_BUILD_JOBS=1 cargo xtask test-local -- -p jaunder --offline --locked -E 'test(/^commands::lifecycle::tests::prepare_server_auto_initializes_in_dev_mode$/)' --no-fail-fast --failure-output immediate-final`
   Use this checkout's owned default `target` with producer/consumer
   serialization; obtain consent before any shared compatible target instead. The

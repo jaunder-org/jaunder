@@ -379,7 +379,7 @@ fn start_process(command: Command, stderr: File) -> anyhow::Result<Process> {
     )
 }
 
-fn host_artifact_build_lock() -> anyhow::Result<File> {
+pub(crate) fn host_artifact_build_lock() -> anyhow::Result<File> {
     let path = Path::new(".xtask/host-artifacts.lock");
     fs::create_dir_all(path.parent().expect("artifact lock has a parent"))?;
     let file = OpenOptions::new()

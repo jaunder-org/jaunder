@@ -3,8 +3,17 @@
 - Issue: https://github.com/jaunder-org/jaunder/issues/1758
 - Status: spec and outline HUMAN-APPROVED; independent final review has no
   findings.
-- Authorization: hook-backed planning commit only; implementation not yet
-  assigned.
+- Authorization: routine shipping granted after full landed-main integration;
+  normal commits/hooks/push/PR observation allowed. Merge remains unapproved.
+  Original planning commit `dbbb24be` remains recoverable; its replay is on
+  main.
+- Execution state: independent source and positive-proof conformance accepted
+  with no findings. Focused regressions passed (11 xtask, 2 shell, 15 staging
+  tests). One automatic producer/validation/real startup command passed: exit 0,
+  no signal, 1043 seconds within 1800 seconds. Successful output suppression
+  prevents a fresh executed-census claim; no coverage or backend-matrix
+  certification is claimed. Planning-phase paragraphs below are historical
+  authorization records.
 - Base: current main `28fb72fed89fdd074cb7cf0493bdbe4408bf203b`.
 - Branch: `herdsman/work-e01e49cc` (explicitly approved naming exception).
 
