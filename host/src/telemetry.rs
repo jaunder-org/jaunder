@@ -1739,14 +1739,23 @@ mod tests {
 
     #[test]
     fn exporter_runtime_setup_requires_endpoint_and_preserves_success() {
-        let absent = setup_exporter_runtime_with(None, || -> std::io::Result<()> {
-            panic!("no endpoint must not construct an exporter runtime")
-        });
+        let calls = std::cell::Cell::new(0);
+        let build = || -> std::io::Result<_> {
+            calls.set(calls.get() + 1);
+            Ok(42)
+        };
+        let absent = setup_exporter_runtime_with(None, build);
         assert!(absent.is_none());
+        assert_eq!(calls.get(), 0, "no endpoint must not construct a runtime");
         let (runtime, output) = fallback_capture::capture(|| {
-            setup_exporter_runtime_with(Some("http://127.0.0.1:4317"), || Ok(42))
+            setup_exporter_runtime_with(Some("http://127.0.0.1:4317"), build)
         });
         assert_eq!(runtime, Some(42));
+        assert_eq!(
+            calls.get(),
+            1,
+            "configured endpoint constructs exactly once"
+        );
         assert!(output.is_empty());
     }
 
