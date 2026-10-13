@@ -29,8 +29,13 @@ deployable Jaunder server binary.
 ## Layout
 
 - `jaunder.el` — the package entry point and dependency assembly.
+- `jaunder-keyword-repair.el` — read-only keyword repair previews and explicitly
+  selected, confirmed, conditional add-only remote tag repairs.
 - `jaunder-inventory.el` — Collection and local Post identity inventory shared
   by reconciliation and Local Post Link mapping.
+- `jaunder-reconcile-operation.el` — private operation-owned remote discovery,
+  current local proof, write receipts and invalidation; scalar interfaces and
+  narrow callbacks keep evidence out of report/merge sessions.
 - `jaunder-post-link.el` — bidirectional Local Post Link mapping: exact local
   evidence joins the read-only Collection inventory; publish substitutes
   server-advertised alternate URLs only in the sent body, and pull restores
@@ -80,8 +85,8 @@ one cumulative eviction marker, is read-only, and `q` buries it. Killing it
 discards its retained evidence; the next enabled event recreates it.
 
 Diagnostics are client-local, unsaved troubleshooting evidence. Share only after
-reviewing it. They time client boundaries but do not remove the
-per-selected-Post complete Collection verification cost during pull.
+reviewing it. They time client boundaries but do not remove the operation-scoped
+Collection discovery and separate final refresh during pull.
 
 `reconcile.batch` encloses the confirmed executor, including result recording
 and report refresh. `reconcile.row` encloses the actual push, pull, delete,
@@ -371,6 +376,178 @@ content. If a pull fails, its Post remains server-only while already verified
 Local Media Copies remain safe; rerun `jaunder-reconcile` to retry and reuse
 those copies.
 
+## Keyword normalization and missing-tag repair
+
+### Normalization contract
+
+Leading Org `CATEGORY`, `TAGS`, and `KEYWORDS` values are collected with Org's
+actual parser. Repeated lines compose in source order; commas separate terms,
+not spaces, and empty comma terms are dropped. The metadata/body boundary stays
+unchanged; examples in the body are not metadata. Raw server Org `KEYWORDS` and
+AtomPub categories share the normalization contract; local source retains its
+original terms. Structured web tag validation remains strict.
+
+An already-valid ASCII label after boundary trimming keeps spelling, casing and
+hyphen sequences. Otherwise the original term must be ASCII: trim whitespace,
+lowercase ASCII letters, replace punctuation/whitespace runs with one hyphen,
+and remove edge hyphens. For example, `100 bullets` becomes `100-bullets`,
+`James S. A. Corey` becomes `james-s-a-corey`, and `old man's war` becomes
+`old-man-s-war`. Non-ASCII letters (including Kelvin sign), or terms without a
+usable ASCII letter/digit, reject the complete write. Unicode whitespace around
+an already-valid label may trim; around an invalid spaced term it rejects. There
+is no Unicode expansion, transliteration, truncation or fallback label.
+Canonical identity deduplication keeps the first label in input order, including
+normalization collisions; no suffix is invented. The current cap is 256 distinct
+tags. Invalid AtomPub categories return HTTP 400 and save no Post changes.
+
+### Prepare and preview (read-only)
+
+1. Back up the server with the supported
+   [backup and restore procedure](../docs/application-assets.md#backup-and-restore).
+   Separately back up the **complete configured local corpus**, including all
+   Org files, metadata and durable `local-media/` content (see
+   [Pulled media](#pulled-media)). A server backup is not a local corpus backup.
+   Keep backups private and verify that they can be recovered.
+2. Deploy the server ingress normalization fix and matching Emacs package before
+   any production apply. Stop competing publishers and local edits while
+   reviewing and executing. Use the intended configured root and current
+   Protocol Client credentials; do not use direct database access.
+3. In Emacs `*scratch*`, evaluate the following forms with `C-x C-e` (or
+   evaluate each form with `M-:`). Replace the example path with your configured
+   root. Preview performs GETs only, scans only direct-root Org files (not
+   recursive subdirectories), and writes no files, buffers, Media or sync
+   markers.
+
+```elisp
+(require 'jaunder)
+(setq repair-report
+      (jaunder-keyword-repair-preview "/path/to/configured/root/"))
+;; Display only reduced, indexed review data; retain the opaque report above.
+(setq repair-review
+      (cl-loop for row in (plist-get
+                          (jaunder-keyword-repair-report-data repair-report)
+                          :rows)
+               for index from 0
+               collect (list :index index :id (plist-get row :id)
+                             :status (plist-get row :status)
+                             :reason (plist-get row :reason)
+                             :existing-labels (plist-get row :existing-labels)
+                             :additions (plist-get row :additions))))
+(pp repair-review)
+```
+
+`jaunder-keyword-repair-preview` returns an **opaque report**, not a row list or
+visual report UI. `jaunder-keyword-repair-report-data` returns detached
+inspection data, including raw remote XML, paths and digests; do not casually
+print or share that full data. Conditions' retained source data can contain
+content or credentials: inspect deliberately and privately, never automatically
+format it into logs. File, transport or XML-decoding errors abort preview with
+contextual causes; no failed preview authorizes a write. A well-formed but
+invalid Member instead produces a blocked row.
+
+Review each proposed addition and its canonical collisions against the actual
+remote Post. `eligible` means missing identities were found, **not approval**.
+`unchanged` means none are missing. Blockers include invalid local terms,
+modified visiting buffers, missing/ambiguous/duplicate local IDs, missing or
+Deleted remote targets, duplicate remote IDs/slugs, foreign Members, invalid
+strong ETags, unpreservable Member fields, drafts, and over-cap complete unions.
+Repair requires unique local/remote identity, configured root/origin/User
+binding, reviewed literal local byte digest, clean visiting buffers, and a
+current strong reviewed ETag. It validates the entire canonical union, not just
+new terms. Resolve blockers deliberately, then take and review a fresh preview.
+
+### Separately approved canary and bounded batches
+
+**Production mutation requires separate human approval. Spec or implementation
+approval is not production approval.** Obtain approval for one explicitly
+reviewed Post first. The apply function is not interactive: use Emacs Lisp, not
+`M-x jaunder-keyword-repair-apply`. Replace the illustrative index below with
+the one actually reviewed and approved; indices are zero-based in this exact
+report.
+
+```elisp
+;; Only after separate approval of this specific canary row:
+(setq repair-canary (jaunder-keyword-repair-apply repair-report '(0)))
+;; Reduced result display; do not print retained source conditions.
+(pp (list :cancelled (plist-get repair-canary :cancelled)
+          :results (cl-loop for result in (plist-get repair-canary :results)
+                            collect (list :id (plist-get result :id)
+                                          :status (plist-get result :status)
+                                          :reason (plist-get result :reason)
+                                          :http-status
+                                          (plist-get result :http-status)))))
+```
+
+Native `yes-or-no-p` confirmation remains mandatory. Do not suppress it or pass
+edited inspection plists instead of the opaque report. Apply accepts an explicit
+nonempty ordered list of distinct indices; it never automatically selects all
+eligible rows. It rechecks configuration, local bytes/identity/buffers, current
+unique remote identity, intended union and reviewed ETag before each conditional
+`If-Match` PUT. Any changed proof blocks rather than adopting new intent.
+
+The payload replaces only categories in the **current remote Member**,
+preserving its title, body, format, summary, audience, publication time/state
+and identity. Currently published and scheduled Posts retain the stored
+slug/permalink, including collision suffixes; drafts are blocked because their
+slug is mutable. Existing server labels are authoritative: repair adds missing
+identities without deleting or relabelling them. Ordinary mutation
+timestamps/versions, Post Revisions, and derived rendering/search state may
+change.
+
+After the canary, independently inspect fresh remote native fields, permalink,
+existing labels and added identities. Compare local literal bytes and
+synchronization markers with the backup: both must be untouched. Verify that a
+fresh preview has no remaining additions for the canary. Stop on unexpected
+results. Only then obtain approval for a bounded batch and review a **fresh**
+report using the preview/reduced-display forms above. For example, after
+reviewing and approving precisely rows 2 and 5 in that new report:
+
+```elisp
+(setq repair-batch (jaunder-keyword-repair-apply repair-report '(2 5)))
+```
+
+Never generate the selection by filtering `eligible` status: every selected row
+needs explicit review and approval. Verify each bounded batch before expanding.
+
+### Outcomes, interruption and reconciliation
+
+Apply returns `(:results ORDERED-RESULTS :cancelled BOOLEAN)` and checkpoints
+`jaunder-keyword-repair-last-application` after each terminal Post. Outcomes
+are:
+
+- `unchanged`: no missing identities; no PUT.
+- `blocked`: eligibility/preflight/revalidation refused, or HTTP 412 rejected
+  the conditional write.
+- `repaired`: a trustworthy HTTP 2xx confirms mutation.
+- `failed`: a definite other non-success HTTP response or a known pre-dispatch
+  construction failure. Read/preflight failures are blocked.
+- `unknown-remote-outcome`: no trustworthy response after possible PUT dispatch;
+  the server **may have committed**. This is not failure or unchanged.
+
+Declining confirmation returns `:cancelled t` with no results. Cancellation
+stops before the next Post, preserving earlier outcomes; an interrupted possible
+PUT is recorded as unknown. A later failure does not roll back earlier repairs.
+There is no batch transaction or rollback. The last-application variable is
+in-memory, not a persistent execution log or rollback record; a new apply resets
+it. Before another apply or Emacs exit, privately retain operator-reviewed,
+redacted transient results (including ordered Post identities, statuses, HTTP
+statuses and cancellation), never raw XML or credential-bearing conditions.
+
+**Never blindly retry a possible PUT.** After interruption or an unknown
+outcome, use fresh GET-only previews and inspect actual remote state. Re-review
+only remaining additions and obtain any needed approval; do not resend the stale
+report. A committed uncertain write will already have the identities on the
+server and require no further write.
+
+Repair leaves files and synchronization markers untouched, so it does **not**
+make ordinary reconciliation report `unchanged`. After a separate backup, use
+[Reconciliation batches](#reconciliation-batches) to inspect both sides and make
+an explicit reviewed choice/merge. Do not blindly fetch over original local
+`KEYWORDS`, push an older local body over newer remote content, delete markers,
+or reset timestamps to bypass reconciliation. A true conflict can use the
+single-Post two-way Ediff workflow to retain original terms while reviewing the
+newer remote authored content; exiting Ediff never publishes.
+
 ## Reconciliation batches
 
 `M-x jaunder-reconcile` opens a persistent inventory report for the configured
@@ -412,20 +589,34 @@ transferring large Media file has no whole-request deadline. The report's **Last
 batch** section retains per-Post failure details and the stage that failed. The
 operator can cancel between Posts, refresh the inventory, and select only
 unresolved rows to resume; never assume an interrupted Post was installed. A
-matched Post must re-enumerate the complete Collection before replacement to
-prove its remote identity is still unique. On a large Collection this repeats
-for each selected Post, so stage progress does not imply a short batch or
-background execution. In a host-only fixture of 100 Members (four 25-Member
-pages) and three selected server-ahead Posts, fresh verification made 12 page
-reads and the final refresh made four more, in both a silent baseline and the
-progress-reporting arm. Each arm records six Member, three service-document, and
-one Media request. Separate timing buckets cover synthetic Member and Media
-HTTP, local scan, full Collection pagination (including XML parsing), final
-revalidation, installation, and refresh. One host run measured local scan at
-0.002 seconds in each arm and Collection pagination at 0.044/0.052 seconds
-(silent/progress). The network is mocked and one-time parser warm-up affects
-small host timings, so this does not establish a production speedup. Remote
-pagination remains a cost to measure on a real deployment.
+confirmed push, pull, keep-local, keep-remote or delete owns fresh evidence for
+one configured root, active origin and User. One selected Post uses the same
+flow as several. Discovery is lazy: at most one complete Collection traversal is
+shared across row checks and Local Post Link processing. Link-free push, delete
+and immediately ineligible rows skip unused discovery. The opening preview and
+final authoritative refresh are separate traversals; a create or delete can
+change the final page count. With 100 Members on four pages, matched pull,
+keep-remote, keep-local and link-bearing push use at most four operation page
+GETs plus the final refresh, independently of selection length. Selected Member
+checks and literal reviewed conditional validators remain unchanged. Request
+counts do not predict production latency; network and Media work still matter.
+
+Only remote discovery is shared. Local identity and uniqueness are read afresh,
+including after Media finalization before matched replacement. Ordinary push
+uses current authored source; conflict resolution retains reviewed source.
+Writes invalidate or replace affected remote/link proof at the actual send and
+response boundary, before fallible local completion. Later dependent rows use
+valid returned evidence or targeted Member reads, never another full traversal
+or a guessed ID/permalink. Failed or partial discovery is not valid empty proof
+and is not retried per row. Nested commands own independent discovery;
+same-origin/User writes invalidate affected ancestor proof even across roots.
+
+Pagination is not an atomic snapshot, discovery is not mutation permission, and
+a batch is not an HTTP/filesystem transaction. Sharing discovery accepts less
+repeated detection of newly faulty global duplicate Collection Entries;
+selected-Member validators and fresh local checks still guard mutations. Scope
+ends before the independent final refresh. See
+[operation-owned Collection evidence](../docs/adr/drafts/emacs-operation-scoped-collection-evidence.md).
 
 A selection does not bypass safety checks. Unchanged Posts are no-ops; a true
 `conflict` is a uniquely matched Post whose local source and remote Member both
@@ -458,7 +649,11 @@ fails after creating its C result, that result remains available for inspection
 or explicit discard but cannot be published; reopen a fresh reconciliation
 report and merge session after fixing Ediff. Once a two-way result is open,
 edits survive cancellation, blocked completion, an unknown remote outcome, or a
-partial commit so they can be inspected later.
+partial commit so they can be inspected later. Preparation and every explicit
+finish acquire separate short-lived scopes; no evidence spans human editing or
+is stored in the merge session. Each finish has a fresh write receipt and an
+independent final refresh. A retry cannot silently adopt a newer remote ETag.
+Preparation does not add a report refresh when no Post changed.
 
 A rejected conditional PUT changes neither Post. Uploaded Media or verified
 Local Media Copies may persist even if a later Post action blocks. If a PUT

@@ -3,7 +3,7 @@
 
 use std::io::Read;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -154,9 +154,20 @@ fn process(
         reaped: reaped.clone(),
         ownership_lost: false,
     };
-    let Some(mut stdout) = child.child.stdout.take() else {
+    let Some(stdout) = child.child.stdout.take() else {
         unreachable!("spawned child owns configured stdout");
     };
+    supervise(&mut child, stdout, deadline, canceled)
+}
+
+// Keep status observation and settlement together: lost wait authority must
+// return before either normal settlement or Drop can signal a reused PID.
+fn supervise(
+    child: &mut ChildOwner,
+    mut stdout: ChildStdout,
+    deadline: Instant,
+    canceled: &mut oneshot::Receiver<()>,
+) -> Result<worker_protocol::Reply, ImageSanitizerError> {
     let work = (|| {
         let flags = rustix::fs::fcntl_getfl(&stdout).map_err(std::io::Error::from)?;
         rustix::fs::fcntl_setfl(&stdout, flags | rustix::fs::OFlags::NONBLOCK)
@@ -437,6 +448,50 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    fn observe_sigchld_disposition(phase: &str) {
+        // Procfs exposes dispositions without installing a handler; it does not
+        // expose sigaction flags such as SA_NOCLDWAIT.
+        let status = std::fs::read_to_string("/proc/self/status")
+            .expect("read-only observer signal disposition");
+        let mask = |name: &str| {
+            u64::from_str_radix(
+                status
+                    .lines()
+                    .find_map(|line| line.strip_prefix(name))
+                    .expect("procfs signal mask")
+                    .trim(),
+                16,
+            )
+            .expect("hexadecimal procfs signal mask")
+        };
+        let ignored = mask("SigIgn:");
+        let caught = mask("SigCgt:");
+        let chld = 1_u64 << (rustix::process::Signal::CHILD.as_raw() - 1);
+        eprintln!(
+            "ownership observer {phase}: SigIgn={ignored:016x} SigCgt={caught:016x} SIGCHLD_ignored={} SIGCHLD_caught={} sigaction_flags=unavailable",
+            ignored & chld != 0,
+            caught & chld != 0,
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    fn bounded_observer_capture(file: &NamedTempFile) -> String {
+        const LIMIT: usize = 8192;
+        let mut bytes = Vec::new();
+        file.reopen()
+            .expect("private observer capture")
+            .take((LIMIT + 1) as u64)
+            .read_to_end(&mut bytes)
+            .expect("bounded private observer capture read");
+        let truncated = bytes.len() > LIMIT;
+        bytes.truncate(LIMIT);
+        format!(
+            "{}\n[capture truncated={truncated}; byte_limit={LIMIT}]",
+            String::from_utf8_lossy(&bytes)
+        )
+    }
+
+    #[cfg(target_os = "linux")]
     #[test]
     fn actual_process_ownership_loss_retains_reap_authority_and_never_signals_again() {
         const OBSERVER: &str = "JAUNDER_PROCESS_OWNERSHIP_OBSERVER";
@@ -447,22 +502,24 @@ mod tests {
                 .arg(std::env::current_exe().expect("owner libtest executable"))
                 .env(OBSERVER, "1");
             let mut owner = ObserverOwner::spawn(command).expect("isolated SIGCHLD observer");
-            let status = owner
-                .wait_until(Instant::now() + Duration::from_secs(10))
-                .expect("bounded SIGCHLD ownership observer");
-            let diagnostics = std::fs::read_to_string(owner.stderr.file().path())
-                .expect("private observer diagnostics");
-            assert!(status.success(), "ownership observer: {diagnostics}");
+            let status = owner.wait_until(Instant::now() + Duration::from_secs(10));
+            // The isolated exact-filtered test uses only synthetic input. Read
+            // both captures even on a wait error, without dumping ambient env.
+            let stdout = bounded_observer_capture(owner.stdout.file());
+            let stderr = bounded_observer_capture(owner.stderr.file());
             assert!(
-                std::fs::read_to_string(owner.stdout.file().path())
-                    .expect("private observer receipt")
-                    .contains("PROCESS_OWNERSHIP_LOSS_OBSERVED"),
-                "specific process-path receipt required"
+                status.as_ref().is_ok_and(std::process::ExitStatus::success),
+                "ownership observer: status={status:?}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            );
+            assert!(
+                stdout.contains("PROCESS_OWNERSHIP_LOSS_OBSERVED"),
+                "specific process-path receipt required\nstdout:\n{stdout}\nstderr:\n{stderr}"
             );
             return;
         }
-        // Ignored SIGCHLD is inherited across exec; this synchronous owner
-        // libtest (not a worker substitute) observes actual kernel auto-reaping.
+        observe_sigchld_disposition("inner-entry");
+        // This synchronous libtest is an observer, not a worker substitute.
+        // Observe whether ignored SIGCHLD survives the isolated exec path.
         let input = NamedTempFile::new().expect("owned input");
         std::fs::write(input.path(), b"ordinary attachment").expect("input bytes");
         let (_cancel, mut canceled) = oneshot::channel();
@@ -470,6 +527,7 @@ mod tests {
         let executable = std::path::PathBuf::from(
             std::env::var_os("JAUNDER_IMAGE_WORKER_BIN").expect("actual worker fixture"),
         );
+        observe_sigchld_disposition("pre-process-spawn");
         let outcome = process(
             &executable,
             input.path(),
@@ -479,9 +537,20 @@ mod tests {
             &mut canceled,
             &reaped,
         );
+        let io = match &outcome {
+            Err(ImageSanitizerError::Processing(error) | ImageSanitizerError::Reap(error)) => {
+                Some((error.kind(), error.raw_os_error()))
+            }
+            _ => None,
+        };
+        let confirmed_reaped = reaped.load(Ordering::Acquire);
+        eprintln!(
+            "ownership observer process-return: outcome={outcome:?} io_kind_errno={io:?} reaped={confirmed_reaped}"
+        );
         assert!(
             matches!(outcome, Err(ImageSanitizerError::Processing(ref error))
-            if error.raw_os_error() == Some(rustix::io::Errno::CHILD.raw_os_error()))
+            if error.raw_os_error() == Some(rustix::io::Errno::CHILD.raw_os_error())),
+            "expected Processing(ECHILD): outcome={outcome:?} io_kind_errno={io:?} reaped={confirmed_reaped}"
         );
         assert!(
             !reaped.load(Ordering::Acquire),
@@ -748,44 +817,77 @@ mod tests {
     fn an_external_reap_is_not_guessed_as_confirmed_and_resources_remain_retained() {
         let directory = tempfile::tempdir().expect("owned private root");
         let input = NamedTempFile::new_in(directory.path()).expect("private spool");
+        // A tiny passthrough reply cannot fill stdout while the independent
+        // reaper waits. All real guards own their resources before observation.
+        std::fs::write(input.path(), b"ordinary attachment").expect("input bytes");
         let path = input.path().to_owned();
-        let child = worker(&input);
-        let pid = pid(&child);
-        rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::empty())
-            .expect("controlled external reap")
-            .expect("child reaped");
-        let reaped = Arc::new(AtomicBool::new(false));
+        let reaped = Arc::new(AtomicBool::new(true));
+        let spool = Spool {
+            file: Some(input),
+            reaped: reaped.clone(),
+        };
         let capacity = Arc::new(Semaphore::new(2));
         let permit = PermitOwner::new(
             capacity.clone().try_acquire_owned().expect("permit"),
             Arc::new(AtomicBool::new(false)),
             reaped.clone(),
         );
+        let native_child = worker(spool.file());
+        reaped.store(false, Ordering::Release);
         let mut child = ChildOwner {
-            child,
+            child: native_child,
             reaped: reaped.clone(),
             ownership_lost: false,
         };
-        let error = child.wait().expect_err("owner has no confirmed status");
-        assert_eq!(
-            error.raw_os_error(),
-            Some(rustix::io::Errno::CHILD.raw_os_error())
+        let pid = pid(&child.child);
+        let stdout = child.child.stdout.take().expect("real worker reply pipe");
+        let reap_deadline = Instant::now() + Duration::from_secs(10);
+        let independently_reaped = loop {
+            if let Some(record) =
+                rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::NOHANG)
+                    .expect("controlled external reap")
+            {
+                break record;
+            }
+            assert!(
+                Instant::now() < reap_deadline,
+                "independent worker reap deadline"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        let (cancel, mut canceled) = oneshot::channel();
+        let outcome = supervise(
+            &mut child,
+            stdout,
+            Instant::now() + Duration::from_secs(5),
+            &mut canceled,
         );
+        assert!(
+            matches!(outcome, Err(ImageSanitizerError::Processing(ref error))
+                if error.raw_os_error() == Some(rustix::io::Errno::CHILD.raw_os_error())),
+            "expected shared supervision Processing(ECHILD): {outcome:?}"
+        );
+        assert!(
+            child.ownership_lost,
+            "shared loop records lost wait authority"
+        );
+        assert!(
+            !reaped.load(Ordering::Acquire),
+            "no owned reap confirmation"
+        );
+        assert_eq!(
+            independently_reaped.0, pid,
+            "exact worker independently reaped"
+        );
+        drop(cancel);
         drop(child);
-        drop(Spool {
-            file: Some(input),
-            reaped: reaped.clone(),
-        });
+        drop(spool);
         drop(permit);
         assert!(!reaped.load(Ordering::Acquire));
         assert!(path.exists(), "unconfirmed owner cannot release its spool");
         assert_eq!(capacity.available_permits(), 1);
-        assert_eq!(
-            rustix::process::test_kill_process(pid),
-            Err(rustix::io::Errno::SRCH)
-        );
-        // Only this test's external waitpid proved termination; the production
-        // owner correctly retained resources instead of assuming that proof.
+        // Only the independent exact-PID reap record authorizes test cleanup;
+        // it never grants the production guards their own reap confirmation.
         std::fs::remove_file(path).expect("cleanup after independently confirmed external reap");
     }
 }

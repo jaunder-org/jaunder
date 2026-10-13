@@ -611,7 +611,10 @@ A dedicated narrow `ammonia` policy retains only its safe inline tags without
 attributes and removes active or embedded content; it does not synthesize image
 alternatives or block-wrapper spacing. A source with no surviving visible text
 retains an empty persisted fragment and presents no web, RSS, or JSON Feed title
-rather than leaking authored markup. Host ammonia validates persisted bytes
+rather than leaking authored markup. When a Post has no visible title but has a
+permalink, shared web article rendering shows a `#` link named `Permalink` in
+the title position. It is a navigation affordance, not a source or persisted
+title; Posts without a permalink omit it. Host ammonia validates persisted bytes
 before typed database reads; invalid restored bytes remain diagnostic source
 data but fail those reads before any unescaped sink. Server-authored DTO bytes
 are trusted by CSR exactly like `RenderedHtml`, so browser clients do not ship a
@@ -2888,6 +2891,45 @@ client diagnostics (`jaunder-debug.el`), timezone handling
 (`jaunder-inventory.el`), Local Post Link mapping (`jaunder-post-link.el`),
 media (`jaunder-media.el`), and the user commands (`jaunder-publish.el`).
 
+### Reviewed add-only keyword repair
+
+`jaunder-keyword-repair.el` separates GET-only preview from explicitly selected
+application. Org's actual leading metadata parser scans direct-root Post files;
+local source terms stay original. An opaque report binds configured root,
+origin/User, unique Post identity, literal local byte digest, current strong
+Member ETag and reviewed additions. Detached inspection data includes raw remote
+XML and is private. Infrastructure/file/XML-decoding failures abort preview with
+retained contextual causes; invalid or unpreservable Members produce blocked
+rows rather than guessed replacements.
+
+Apply accepts explicit ordered zero-based report indices and requires native
+confirmation. Each Post revalidates current local bytes, identity and clean
+visiting buffers, configuration, unique remote identity, reviewed ETag and the
+complete capped canonical union. A conditional `If-Match` replacement changes
+only current remote categories: existing server labels stay authoritative and
+missing normalized local identities are added without relabelling or deletion.
+Remote title, body, format, summary, audience, publication time/state and
+identity remain intact. Only currently published/scheduled Posts qualify,
+preserving stored slug/permalink under
+[ADR-0130](adr/0130-current-publication-state-slug-freeze.md); drafts block.
+Ordinary mutation timestamps/versions, Post Revisions and derived
+rendering/search state may change. Local files, buffers, Media and sync markers
+are never written.
+
+Ordered outcomes distinguish unchanged, blocked (including HTTP 412), confirmed
+2xx repaired, definite failure, and unknown remote outcome after possible PUT
+without a trustworthy response. No uncertain write retries automatically.
+Cancellation checkpoints completed outcomes and stops before the next Post;
+there is no batch transaction or rollback. Last-application evidence is
+volatile, not a persistent log. Recovery requires fresh preview and review, not
+reuse of stale intent. Repair does not establish an unchanged reconciliation
+baseline; later reconciliation retains the explicit reviewed choices of
+[ADR-0200](adr/0200-revalidated-matched-post-pull.md) and
+[ADR-0211](adr/0211-emacs-reconciliation-conflict-resolution.md).
+[The maintained runbook](../elisp/README.md#keyword-normalization-and-missing-tag-repair)
+owns backup, deployment, separate production approval, canary and recovery
+steps.
+
 ### Local client diagnostics
 
 `jaunder-debug.el` owns off-by-default, timestamped operation diagnostics for
@@ -3138,6 +3180,40 @@ The buffer refreshes from a new inventory after completion or cancellation while
 retaining the ordered terminal results from the last batch, so completed work
 and independent failures remain visible and safe to retry.
 
+Confirmed push, pull, keep-local, keep-remote and delete share one deep
+`jaunder-reconcile-operation.el` owning root/active-origin/User-scoped
+discovery, evidence lifetime and invalidation. Its state stays private behind
+scalar interfaces and narrow callbacks, not a session or dependency holder. One
+selected Post is the same flow with batch size one. Acquire at most one complete
+Collection traversal when discovery is needed; deletes, link-free pushes and
+immediate ineligibility do not acquire unused evidence. Local identity and
+uniqueness remain freshly checked, alongside action-specific Member, strong
+ETag, digest, buffer, destination and Media safeguards. Matched pull and
+keep-remote perform their last local scan after Media finalization immediately
+before replacement. Both directions of Local Post Link processing participate
+without per-row Collection walks, retaining current local target proof and their
+existing abort/preserve policies.
+
+Known remote create/update/delete invalidates or updates the affected identity's
+discovery/link evidence before later consumers, including when local completion
+fails. Unknown outcomes invalidate assumptions; authoritative responses or fresh
+targeted Member reads restore usable proof without guessed IDs/URLs or unsafe
+write retries. Failed or partial discovery is retained rather than retried per
+row or treated as valid empty/stale evidence. Operation scope ends before the
+separate final report refresh; independent failures, cancellation and refresh
+failure preserve ordered terminal recovery results. Interactive merge owns
+separate short-lived preparation and every explicit completion scope, not
+freshness across human editing. Each finish has an independent write receipt;
+the merge session stores no operation evidence. Preparation adds no no-mutation
+refresh. Nested same-origin/User writes invalidate affected ancestor proof even
+across roots, without sharing the child's discovery. Per-send ownership prevents
+older delivered responses from overriding newer nested effects; checkpoint save
+and rename retain exact owned filesystem lineage rather than adopting unrelated
+replacements or changed User context. Reuse accepts less repeated detection of
+newly faulty global duplicate Collection Entries, never permission to overwrite
+changed selected Posts or local bytes
+([operation-scoped Collection evidence](adr/drafts/emacs-operation-scoped-collection-evidence.md)).
+
 A selected matched `server-ahead` Post may be pulled only after revalidating its
 report-snapshotted local path/SHA-256 and remote strong ETag
 ([revalidated matched-Post pull](adr/0200-revalidated-matched-post-pull.md)).
@@ -3321,6 +3397,25 @@ the browse key, the dedup key, the SQL key — while `TagLabel`
 (`TagValidationError`, `common/src/tag.rs:105`), no re-implemented validator.
 Equality and dedup on labels go by slug, never by raw casing. The pattern
 generalizes; tags are its only adopter so far.
+
+Free-form raw Org `KEYWORDS` and AtomPub category terms enter through
+`TagLabel::normalize_keyword` (`common/src/tag.rs`). Valid ASCII labels after
+boundary trimming keep casing and hyphen sequences, including labels surrounded
+by Unicode whitespace such as NBSP. Non-ASCII letters, including the Kelvin sign
+whose Unicode lowercase is ASCII, reject at this new ingress boundary; stored
+`Tag`/`TagLabel::FromStr` validation and existing data remain unchanged.
+Otherwise the original term must be ASCII before trimming:
+punctuation/ASCII-whitespace runs become one hyphen, ASCII letters are
+lowercased, and hyphen edges are removed. The result must satisfy the existing
+label grammar. Thus NBSP around an otherwise-invalid spaced term rejects rather
+than disappearing during trim. Non-ASCII or unusable terms reject the complete
+write (AtomPub `400`) before Post mutation. There is no transliteration,
+truncation, fallback label, or silent category filtering. Repeated leading Org
+keyword lines compose in source order, with each comma-separated term normalized
+independently and empty comma terms dropped; metadata boundaries and
+structured-field precedence remain unchanged. Canonical deduplication preserves
+the first resulting label and enforces the existing 256-distinct-tag cap.
+Structured web tag validation remains strict.
 
 ### Closed string enums
 
@@ -3925,19 +4020,21 @@ reconciliation authority. `prepush`, explicit **`cargo xtask check`** and
 and their existing authority.
 
 Enforcement is git-native ([ADR-0029](adr/0029-git-enforced-verify-gate.md)).
-`.githooks/pre-commit` calls `cargo xtask precommit`; the `xtask` Cargo alias
-uses `cargo run --locked`, so Cargo cannot rewrite `xtask/Cargo.lock` before the
-precommit snapshot. Git/index reconciliation lives in Rust rather than the shell
-hook. `.githooks/pre-push` calls `cargo xtask prepush`. `prepush` and `validate`
-both open with a `clean-tree` precheck that refuses a dirty tree unless
-explicitly bypassed (`validate --allow-dirty`, or `SKIP_PRE_PUSH=1` for the
-hook) and returns before any expensive step (`xtask/src/lib.rs`:
-`clean_tree_precheck`). The hook proves the fast local lane ran on the committed
-tip with no uncommitted files hiding; CI remains the non-bypassable hermetic
-authority. Every `cargo xtask` run self-heals `core.hooksPath` to the tracked,
-relative `.githooks` (`xtask/src/git.rs`: `ensure_hooks_path`).
-`SKIP_PRE_COMMIT=1` / `SKIP_PRE_PUSH=1` are deliberate local escapes; CI is the
-non-bypassable authority.
+`.githooks/pre-commit` calls `cargo xtask precommit`; the development-shell
+`cargo-xtask` transport selects the active checkout's `.#xtask` package. Nix
+owns its locked, standalone Cargo build, so launcher realization cannot rewrite
+`xtask/Cargo.lock` before the precommit snapshot. Git/index reconciliation lives
+in Rust rather than the shell hook. `.githooks/pre-push` calls
+`cargo xtask prepush`. `prepush` and `validate` both open with a `clean-tree`
+precheck that refuses a dirty tree unless explicitly bypassed
+(`validate --allow-dirty`, or `SKIP_PRE_PUSH=1` for the hook) and returns before
+any expensive step (`xtask/src/lib.rs`: `clean_tree_precheck`). The hook proves
+the fast local lane ran on the committed tip with no uncommitted files hiding;
+CI remains the non-bypassable hermetic authority. Every `cargo xtask` run
+self-heals `core.hooksPath` to the tracked, relative `.githooks`
+(`xtask/src/git.rs`: `ensure_hooks_path`). `SKIP_PRE_COMMIT=1` /
+`SKIP_PRE_PUSH=1` are deliberate local escapes; CI is the non-bypassable
+authority.
 
 #### Prepush parity by failure surface
 
@@ -4356,6 +4453,26 @@ test gates do not execute
 claim. All three manifests pin `resolver = "3"` explicitly, because the two
 virtual manifests would otherwise default to resolver 1
 ([ADR-0104](adr/0104-edition-2024-unsafe-env-and-precise-capturing.md)).
+
+**Independent host-tool packaging.** The
+[Nix-cached tooling decision](adr/drafts/nix-cached-host-tooling.md)
+distinguishes building a host executable from executing its orchestrator inside
+a derivation. `packages.xtask` compiles its standalone closure independently;
+application coverage/E2E dependencies and explicit host-unit-test authorities
+remain separate. Both development shells supply a thin `cargo-xtask` transport
+that discovers the active checkout and executes its selected Nix output.
+
+`packages.qualification-harness` joins the existing tool, browser, test-support,
+Node and VM input owners. Ordinary and styling qualification admit the actual
+executing tool and helper overrides against selected store outputs before leases
+or VM effects. Browser source is copied into invocation-owned writable state;
+the pinned runner executes that copy's CLI and imports, and the seed bridge uses
+the admitted Node interpreter. VM construction asserts the same admitted harness
+output. Standard derivation, output and NAR identities appear in evidence and
+remain rooted during execution. Git still identifies clean source/product
+revisions and rejects checkout drift, not content-equivalent tool revisions.
+Runtime checkout discovery and Nix-owned untracked-input admission complete the
+boundary; no custom fingerprint or identity ledger is introduced.
 
 **Workspace layering.** The root workspace's shared crates are target-scoped
 ([ADR-0058](adr/0058-host-crate-layering.md),

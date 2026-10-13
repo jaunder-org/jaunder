@@ -57,6 +57,7 @@ struct PreparedProfile {
 #[derive(Debug, Serialize)]
 struct Evidence {
     source: crate::production_baseline::ResolvedRevision,
+    harness: crate::production_baseline_lifecycle::StoreArtifactIdentity,
     packages: Vec<QualifiedPackage>,
     profiles: Vec<PreparedProfile>,
     backends: Vec<BackendEvidence>,
@@ -210,6 +211,7 @@ fn backend(
     packages: &[QualifiedPackage],
     backend: StorageBackend,
     canary_path: &Path,
+    harness_output: &Path,
 ) -> Result<BackendEvidence> {
     let id = match backend {
         StorageBackend::Sqlite => "styling-sqlite",
@@ -219,11 +221,18 @@ fn backend(
     let runtime = lifecycle.start_package(id, backend, a.source.clone(), a.package.clone())?;
     lifecycle.configure_base_url(id)?;
     let state = lifecycle.private_path(&format!("{id}-state.json"))?;
-    let seed = lifecycle.seed_process(id)?;
+    let seed = lifecycle.seed_process(id, &harness_output.join("bin/node"))?;
     source
         .verify_current(root)
         .context("checking harness source before browser execution")?;
-    let mut browser = BehaviorSession::start_qualification(lifecycle, id, &state, canary_path)?;
+    let mut browser = BehaviorSession::start_qualification(
+        lifecycle,
+        id,
+        &state,
+        canary_path,
+        &harness_output.join("browser"),
+        &harness_output.join("bin/playwright"),
+    )?;
     let run = (|| -> Result<BackendEvidence> {
         let mut initial = request(
             a,
@@ -338,6 +347,7 @@ fn backend(
 
 impl Evidence {
     fn validate(&self) -> Result<()> {
+        self.harness.validate()?;
         if self
             .packages
             .iter()
@@ -472,9 +482,15 @@ impl Evidence {
 pub(crate) fn run(root: &Path) -> Result<CommandResult> {
     let started = Instant::now();
     let source = SourcePin::admit_current(root)?;
-    crate::production_baseline::verify_styling_tool_source(&source)?;
+    let tooling_roots = tempfile::tempdir().context("allocating private tooling admission root")?;
+    let harness = crate::production_baseline::verify_styling_tool_source(
+        &source,
+        &tooling_roots.path().join("harness"),
+    )?;
+    source.verify_current(root)?;
     let _lease = RunLease::acquire(root)?;
-    let mut lifecycle = BaselineLifecycle::create_qualification(root, &source)?;
+    let mut lifecycle =
+        BaselineLifecycle::create_qualification(root, &source, Path::new(&harness.output_path))?;
     let canary_path = lifecycle.private_path("styling-canaries.jsonl")?;
     fs::File::create(&canary_path)?;
     let workflow = (|| -> Result<Evidence> {
@@ -529,11 +545,13 @@ pub(crate) fn run(root: &Path) -> Result<CommandResult> {
                     &packages,
                     storage,
                     &canary_path,
+                    Path::new(&harness.output_path),
                 )
             })
             .collect::<Result<Vec<_>>>()?;
         let evidence = Evidence {
             source: packages[0].source.clone(),
+            harness,
             packages,
             profiles,
             backends,

@@ -38,29 +38,6 @@ const UPSTREAM_URLS: [&str; 4] = [
     "git@github.com:jaunder-org/jaunder.git",
     "ssh://git@github.com/jaunder-org/jaunder.git",
 ];
-const HARNESS_PATHS: [&str; 21] = [
-    "docs/production-baseline.schema.json",
-    "xtask/Cargo.toml",
-    "xtask/build.rs",
-    "xtask/src/main.rs",
-    "xtask/src/lib.rs",
-    "xtask/src/cli.rs",
-    "xtask/src/dispatch.rs",
-    "xtask/src/production_baseline.rs",
-    "xtask/src/production_baseline/platform/mod.rs",
-    "xtask/src/production_baseline/platform/unix.rs",
-    "xtask/src/production_baseline/platform/non_unix.rs",
-    "xtask/src/production_baseline/platform/procfs.rs",
-    "xtask/src/production_baseline/platform/process_identity.rs",
-    "xtask/src/production_baseline_lifecycle.rs",
-    "end2end/tests/production-baseline-flow.spec.ts",
-    "end2end/tests/production-baseline-harness.spec.ts",
-    "end2end/tests/production-baseline.ts",
-    "test-support/Cargo.toml",
-    "test-support/build.rs",
-    "test-support/src/lib.rs",
-    "test-support/src/main.rs",
-];
 
 /// An immutable product source accepted by the baseline harness.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,6 +50,7 @@ pub struct ResolvedRevision {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HarnessIdentity {
     pub commit: String,
+    pub tooling: crate::production_baseline_lifecycle::StoreArtifactIdentity,
     pub seeded_manifest: ManifestIdentity,
     pub operation_manifest: ManifestIdentity,
 }
@@ -205,7 +183,7 @@ pub enum FindingDisposition {
     Deferred,
 }
 
-/// Schema-v1 evidence. JSON is authoritative; Markdown is generated solely by [`render_markdown`].
+/// Schema-v2 evidence. JSON is authoritative; Markdown is generated solely by [`render_markdown`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Evidence {
     pub schema_version: u32,
@@ -240,9 +218,9 @@ pub const CHECK_IDS: [&str; 12] = [
 ];
 
 impl Evidence {
-    /// Enforces the semantic subset of schema v1 before any bytes may be published.
+    /// Enforces the semantic subset of schema v2 before any bytes may be published.
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != 1 {
+        if self.schema_version != 2 {
             bail!(
                 "unsupported production-baseline evidence schema {}",
                 self.schema_version
@@ -261,6 +239,7 @@ impl Evidence {
             bail!("failed evidence must classify its failure");
         }
         validate_commit(&self.harness.commit, "harness commit")?;
+        self.harness.tooling.validate()?;
         validate_revision(&self.source)?;
         if let Some(target) = &self.target {
             validate_revision(target)?;
@@ -475,7 +454,7 @@ impl DiscoveryResult {
     /// Materializes discovery evidence without choosing a durable destination.
     pub fn into_evidence(self, harness: HarnessIdentity, source: ResolvedRevision) -> Evidence {
         Evidence {
-            schema_version: 1,
+            schema_version: 2,
             operation: "discover".into(),
             outcome: self.outcome,
             harness,
@@ -499,7 +478,7 @@ impl DiscoveryResult {
         target: ResolvedRevision,
     ) -> Evidence {
         Evidence {
-            schema_version: 1,
+            schema_version: 2,
             operation: "accept".into(),
             outcome: self.outcome,
             harness,
@@ -777,64 +756,37 @@ impl Origin for GitOrigin {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
-struct BinaryBuildIdentity {
-    commit: String,
-    clean: bool,
-}
-
-/// Binary provenance is injected so stale, dirty, or mixed executable rejection is testable
-/// without compiling or spawning fixture binaries.
+/// Nix is the external executable-admission authority; fixture repositories can
+/// exercise source/publication rules without realizing the full host graph.
 trait BinaryProvenance {
-    fn xtask(&self) -> Result<BinaryBuildIdentity>;
-    fn test_support(&self, root: &Path) -> Result<BinaryBuildIdentity>;
+    fn admit(
+        &self,
+        source: &crate::qualification::SourcePin,
+    ) -> Result<crate::production_baseline_lifecycle::StoreArtifactIdentity>;
 }
 
-struct ExecutingBinaries;
-
+struct ExecutingBinaries {
+    gc_root: PathBuf,
+}
 impl BinaryProvenance for ExecutingBinaries {
-    fn xtask(&self) -> Result<BinaryBuildIdentity> {
-        Ok(BinaryBuildIdentity {
-            commit: env!("JAUNDER_BUILD_COMMIT").to_owned(),
-            clean: env!("JAUNDER_BUILD_DIRTY") == "0",
-        })
-    }
-
-    fn test_support(&self, root: &Path) -> Result<BinaryBuildIdentity> {
-        let binary = std::env::var_os("JAUNDER_TEST_SUPPORT_BIN")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| root.join("target/debug/test-support"));
-        let output = Command::new(&binary)
-            .arg("build-commit")
-            .output()
-            .with_context(|| {
-                format!(
-                    "reading test-support build provenance from {}",
-                    binary.display()
-                )
-            })?;
-        if !output.status.success() {
-            bail!(
-                "test-support build-commit failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
-        }
-        serde_json::from_slice(&output.stdout).context("parsing test-support build provenance")
+    fn admit(
+        &self,
+        source: &crate::qualification::SourcePin,
+    ) -> Result<crate::production_baseline_lifecycle::StoreArtifactIdentity> {
+        crate::qualification_tooling::admit_harness(source, &self.gc_root)
     }
 }
 
-pub(crate) fn verify_styling_tool_source(source: &crate::qualification::SourcePin) -> Result<()> {
-    let identity = ExecutingBinaries.xtask()?;
-    if !identity.clean || identity.commit != source.commit() {
-        bail!("styling qualification tool was not built from the admitted clean source");
-    }
-    Ok(())
+pub(crate) fn verify_styling_tool_source(
+    source: &crate::qualification::SourcePin,
+    gc_root: &Path,
+) -> Result<crate::production_baseline_lifecycle::StoreArtifactIdentity> {
+    crate::qualification_tooling::admit_harness(source, gc_root)
 }
 
 /// An injected Git boundary. Tests use fixture repositories without network access.
 trait Repository {
     fn output(&self, args: &[&str]) -> Result<String>;
-    fn status(&self, args: &[&str]) -> Result<bool>;
     fn root(&self) -> &Path;
 }
 
@@ -859,13 +811,6 @@ impl Repository for GitRepository {
             );
         }
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
-    }
-    fn status(&self, args: &[&str]) -> Result<bool> {
-        Ok(git::at(&self.root)
-            .args(args)
-            .status()
-            .context("running git for production baseline")?
-            .success())
     }
     fn root(&self) -> &Path {
         &self.root
@@ -904,40 +849,25 @@ fn validate_harness(
     }
     let commit = repo.output(&["rev-parse", "HEAD"])?;
     validate_commit(&commit, "harness commit")?;
-    let xtask = binaries.xtask()?;
-    let test_support = binaries.test_support(repo.root())?;
-    validate_commit(&xtask.commit, "executing xtask build commit")?;
-    validate_commit(&test_support.commit, "test-support build commit")?;
-    if !xtask.clean || !test_support.clean {
-        bail!("production-baseline binaries were built from a dirty harness tree");
-    }
-    if xtask.commit != commit || test_support.commit != commit {
-        bail!(
-            "executing harness binaries are stale or mixed: harness={commit} xtask={} test-support={}",
-            xtask.commit,
-            test_support.commit
-        );
-    }
-    for path in HARNESS_PATHS {
-        if !repo.root().join(path).is_file() {
-            bail!("required harness input {path} is absent");
-        }
-        if !repo.status(&["cat-file", "-e", &format!("HEAD:{path}")])? {
-            bail!("required harness input {path} is not present in harness commit {commit}");
-        }
-    }
+    let source = crate::qualification::SourcePin::admit_current(repo.root())?;
+    let tooling = binaries.admit(&source)?;
+    source.verify_current(repo.root())?;
+    let output = Path::new(&tooling.output_path);
+    let seeded_manifest = manifest_identity(
+        output.join("seed-manifest-source"),
+        "seeded",
+        "fn standard_profile_manifest",
+    )?;
+    let operation_manifest = manifest_identity(
+        output.join("browser/tests/production-baseline.ts"),
+        "operation",
+        "export const OPERATION_MANIFEST",
+    )?;
     Ok(HarnessIdentity {
         commit,
-        seeded_manifest: manifest_identity(
-            repo.root().join("test-support/src/lib.rs"),
-            "seeded",
-            "pub fn sandbox_profile_manifest",
-        )?,
-        operation_manifest: manifest_identity(
-            repo.root().join("end2end/tests/production-baseline.ts"),
-            "operation",
-            "export const OPERATION_MANIFEST",
-        )?,
+        tooling,
+        seeded_manifest,
+        operation_manifest,
     })
 }
 
@@ -1026,6 +956,12 @@ pub fn render_markdown(evidence: &Evidence) -> Result<String> {
         evidence.outcome, evidence.harness.commit, evidence.source.commit,
         evidence.harness.seeded_manifest.version, evidence.harness.seeded_manifest.sha256,
         evidence.harness.operation_manifest.version, evidence.harness.operation_manifest.sha256,
+    ));
+    out.push_str(&format!(
+        "- Nix harness: derivation `{}`; output `{}`; NAR `{}`\n",
+        evidence.harness.tooling.derivation,
+        evidence.harness.tooling.output_path,
+        evidence.harness.tooling.nar_hash,
     ));
     if let Some(target) = &evidence.target {
         out.push_str(&format!("- Target: `{}`\n", target.commit));
@@ -1322,10 +1258,10 @@ fn run_discovery(
                 lifecycle,
                 recorder,
                 canary_path,
-                source_id,
-                source_backend,
+                (source_id, source_backend),
                 &source,
                 None,
+                Path::new(&harness.tooling.output_path),
             )?;
         }
         recorder.checks.push(TimedOutcome {
@@ -1352,10 +1288,10 @@ fn run_acceptance(
                 lifecycle,
                 recorder,
                 canary_path,
-                source_id,
-                source_backend,
+                (source_id, source_backend),
                 &source,
                 Some(&target),
+                Path::new(&harness.tooling.output_path),
             )?;
         }
         Ok(())
@@ -1377,12 +1313,21 @@ fn run_workflow(
     let mut retained_workspace = None;
     let mut recorder = DiscoveryRecorder::default();
     let workflow = (|| -> Result<EvidenceCanaries> {
+        let source_pin = crate::qualification::SourcePin::admit_current(root)?;
+        if source_pin.commit() != harness.commit {
+            bail!("baseline harness source drifted before lifecycle creation");
+        }
         let mut lifecycle = recorder.lifecycle("workspace-create", || {
-            BaselineLifecycle::create_immutable(root, &harness.commit)
+            BaselineLifecycle::create_immutable(
+                root,
+                &harness.commit,
+                Path::new(&harness.tooling.output_path),
+            )
         })?;
         let canary_path = lifecycle.private_path("run-canaries.jsonl")?;
         fs::File::create(&canary_path)?;
-        let result = graph(&mut lifecycle, &mut recorder, &canary_path);
+        let result = graph(&mut lifecycle, &mut recorder, &canary_path)
+            .and_then(|()| source_pin.verify_current(root));
         let canaries = lifecycle.evidence_canaries(&[&canary_path]);
         if let Err(error) = &result {
             let _ = persist_workflow_error(&lifecycle, error);
@@ -1404,11 +1349,12 @@ fn run_source_matrix(
     lifecycle: &mut crate::production_baseline_lifecycle::BaselineLifecycle,
     recorder: &mut DiscoveryRecorder,
     canary_path: &Path,
-    source_id: &str,
-    source_backend: StorageBackend,
+    deployment: (&str, StorageBackend),
     source: &ResolvedRevision,
     target: Option<&ResolvedRevision>,
+    harness_output: &Path,
 ) -> Result<()> {
+    let (source_id, source_backend) = deployment;
     let acceptance = target.is_some();
     let mut source_runtime = recorder.lifecycle(format!("{source_id}-start"), || {
         lifecycle.start(source_id, source_backend, source.clone())
@@ -1425,8 +1371,15 @@ fn run_source_matrix(
     })?;
 
     let state = lifecycle.private_path(&format!("{source_id}.json"))?;
-    let mut browser = BehaviorSession::start(lifecycle, source_id, &state, canary_path)?;
-    let seed_process = lifecycle.seed_process(source_id)?;
+    let mut browser = BehaviorSession::start(
+        lifecycle,
+        source_id,
+        &state,
+        canary_path,
+        &harness_output.join("browser"),
+        &harness_output.join("bin/playwright"),
+    )?;
+    let seed_process = lifecycle.seed_process(source_id, &harness_output.join("bin/node"))?;
     recorder.behavior(|| browser.run("create", Some(&seed_process)))?;
     recorder.check("service-restart", || lifecycle.restart_service(source_id))?;
     lifecycle.select_proxy(source_id)?;
@@ -1543,8 +1496,18 @@ impl BehaviorSession {
         source_id: &str,
         state: &Path,
         canary_path: &Path,
+        browser_source: &Path,
+        browser_runner: &Path,
     ) -> Result<Self> {
-        Self::start_with_mode(lifecycle, source_id, state, canary_path, false)
+        Self::start_with_mode(
+            lifecycle,
+            source_id,
+            state,
+            canary_path,
+            browser_source,
+            browser_runner,
+            false,
+        )
     }
 
     fn start_with_mode(
@@ -1552,13 +1515,44 @@ impl BehaviorSession {
         source_id: &str,
         state: &Path,
         canary_path: &Path,
+        browser_source: &Path,
+        browser_runner: &Path,
         qualification: bool,
     ) -> Result<Self> {
         let coordinator = lifecycle.private_path(&format!("{source_id}-browser"))?;
         fs::create_dir(&coordinator).context("creating browser coordinator workspace")?;
         let stdout = coordinator.join("playwright.stdout");
         let stderr = coordinator.join("playwright.stderr");
-        let mut command = Command::new("playwright");
+        // Playwright owns writable reports, never writes into its store inputs.
+        // Resolve the outer link before copying so chmod cannot reach the store.
+        let browser_source = fs::canonicalize(browser_source)?;
+        let browser = coordinator.join("browser");
+        for (program, args) in [
+            (
+                "cp",
+                vec![
+                    "-R".into(),
+                    browser_source.into_os_string(),
+                    browser.clone().into_os_string(),
+                ],
+            ),
+            (
+                "chmod",
+                vec!["-R".into(), "u+w".into(), browser.clone().into_os_string()],
+            ),
+        ] {
+            let output = Command::new(program)
+                .args(args)
+                .output()
+                .with_context(|| format!("preparing admitted browser inputs with {program}"))?;
+            if !output.status.success() {
+                bail!(
+                    "preparing admitted browser inputs failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+        let mut command = Command::new(browser_runner);
         command
             .args([
                 "test",
@@ -1567,7 +1561,7 @@ impl BehaviorSession {
                 "--workers=1",
                 "--no-deps",
             ])
-            .current_dir("end2end")
+            .current_dir(&browser)
             .env("JAUNDER_E2E_BASE_URL", "https://localhost:8443")
             .env("JAUNDER_PRODUCTION_BASELINE_TLS", "1")
             .env("JAUNDER_PRODUCTION_BASELINE_STATE", state)
@@ -1600,8 +1594,18 @@ impl BehaviorSession {
         source_id: &str,
         state: &Path,
         canary_path: &Path,
+        browser_source: &Path,
+        browser_runner: &Path,
     ) -> Result<Self> {
-        Self::start_with_mode(lifecycle, source_id, state, canary_path, true)
+        Self::start_with_mode(
+            lifecycle,
+            source_id,
+            state,
+            canary_path,
+            browser_source,
+            browser_runner,
+            true,
+        )
     }
 
     fn run(&mut self, phase: &str, seed_process: Option<&Path>) -> Result<Vec<BehaviorCheck>> {
@@ -1728,7 +1732,10 @@ pub fn run(command: ProductionBaselineCommand) -> Result<CommandResult> {
     let root = PathBuf::from(git::toplevel(Path::new("."))?);
     let repo = GitRepository::new(root.clone());
     let origin = GitOrigin;
-    let binaries = ExecutingBinaries;
+    let tooling_roots = tempfile::tempdir().context("allocating private tooling admission root")?;
+    let binaries = ExecutingBinaries {
+        gc_root: tooling_roots.path().join("harness"),
+    };
     let start = Instant::now();
     let (name, preflight) = match command {
         ProductionBaselineCommand::QualifyStyling => return crate::qualification_run::run(&root),
@@ -1784,6 +1791,10 @@ pub fn run(command: ProductionBaselineCommand) -> Result<CommandResult> {
         raw.checks.len()
     );
     let publication = raw.validate().and_then(|()| {
+        let current = crate::qualification::SourcePin::admit_current(&root)?;
+        if current.commit() != raw.harness.commit {
+            bail!("baseline harness source drifted before evidence publication");
+        }
         let workspace = publication_workspace(&root)?;
         let canaries = canaries?;
         publish_with_workspace_cleanup(&workspace, &destination, &raw, &canaries, |workspace| {
@@ -1868,40 +1879,42 @@ mod tests {
     }
 
     struct FixtureBinaries {
-        xtask: BinaryBuildIdentity,
-        test_support: BinaryBuildIdentity,
+        output: tempfile::TempDir,
+        refused: bool,
     }
-
     impl BinaryProvenance for FixtureBinaries {
-        fn xtask(&self) -> Result<BinaryBuildIdentity> {
-            Ok(self.xtask.clone())
-        }
-
-        fn test_support(&self, _: &Path) -> Result<BinaryBuildIdentity> {
-            Ok(self.test_support.clone())
+        fn admit(
+            &self,
+            _: &crate::qualification::SourcePin,
+        ) -> Result<crate::production_baseline_lifecycle::StoreArtifactIdentity> {
+            if self.refused {
+                bail!("fixture Nix output admission refused");
+            }
+            Ok(
+                crate::production_baseline_lifecycle::StoreArtifactIdentity {
+                    derivation: "/nix/store/fixture-harness.drv".into(),
+                    output_path: self.output.path().display().to_string(),
+                    nar_hash: "sha256-fixture".into(),
+                },
+            )
         }
     }
-
     fn binaries(root: &Path) -> FixtureBinaries {
-        let commit = crate::git::at(root)
-            .args(["rev-parse", "HEAD"])
-            .output()
-            .unwrap()
-            .stdout
-            .into_iter()
-            .map(char::from)
-            .collect::<String>()
-            .trim()
-            .to_owned();
+        let output = tempdir().unwrap();
+        fs::create_dir_all(output.path().join("browser/tests")).unwrap();
+        fs::copy(
+            root.join("test-support/src/lib.rs"),
+            output.path().join("seed-manifest-source"),
+        )
+        .unwrap();
+        fs::copy(
+            root.join("end2end/tests/production-baseline.ts"),
+            output.path().join("browser/tests/production-baseline.ts"),
+        )
+        .unwrap();
         FixtureBinaries {
-            xtask: BinaryBuildIdentity {
-                commit: commit.clone(),
-                clean: true,
-            },
-            test_support: BinaryBuildIdentity {
-                commit,
-                clean: true,
-            },
+            output,
+            refused: false,
         }
     }
 
@@ -1920,12 +1933,16 @@ mod tests {
         git(root, &["config", "user.email", "test@example.test"]);
         git(root, &["config", "user.name", "Test"]);
         git(root, &["remote", "add", "origin", UPSTREAM_URLS[0]]);
-        for relative in HARNESS_PATHS {
+        for relative in [
+            "xtask/src/main.rs",
+            "test-support/src/lib.rs",
+            "end2end/tests/production-baseline.ts",
+        ] {
             let path = root.join(relative);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             let contents = match relative {
                 "test-support/src/lib.rs" => {
-                    "pub fn sandbox_profile_manifest() {\nSandboxSeedManifest {\nversion: 1,\n}\n}\n"
+                    "fn standard_profile_manifest() {\nSandboxSeedManifest {\nversion: 1,\n}\n}\n"
                 }
                 "end2end/tests/production-baseline.ts" => {
                     "export const OPERATION_MANIFEST = {\nversion: 1,\n};\n"
@@ -1983,20 +2000,42 @@ mod tests {
     }
 
     #[test]
-    fn rejects_stale_dirty_or_mixed_binary_provenance() {
+    fn rejects_refused_nix_output_admission() {
         let repo = repo();
         let repository = GitRepository::new(repo.path().to_path_buf());
-        let mut stale = binaries(repo.path());
-        stale.xtask.commit = "0".repeat(40);
-        assert!(validate_harness(&repository, &stale).is_err());
+        let mut refused = binaries(repo.path());
+        refused.refused = true;
+        assert!(validate_harness(&repository, &refused).is_err());
+    }
 
-        let mut mixed = binaries(repo.path());
-        mixed.test_support.commit.push('0');
-        assert!(validate_harness(&repository, &mixed).is_err());
+    #[test]
+    fn harness_admission_reads_the_real_standard_seed_manifest_authority() {
+        let repo = repo();
+        fs::write(
+            repo.path().join("test-support/src/lib.rs"),
+            include_bytes!("../../test-support/src/lib.rs"),
+        )
+        .unwrap();
+        git(repo.path(), &["add", "test-support/src/lib.rs"]);
+        git(repo.path(), &["commit", "-m", "real helper manifest"]);
+        let repository = GitRepository::new(repo.path().to_path_buf());
+        let admitted = validate_harness(&repository, &binaries(repo.path())).unwrap();
+        assert_eq!(admitted.seeded_manifest.version, 2);
+    }
 
-        let mut dirty_at_build = binaries(repo.path());
-        dirty_at_build.xtask.clean = false;
-        assert!(validate_harness(&repository, &dirty_at_build).is_err());
+    #[test]
+    fn distinct_clean_commits_can_select_the_same_tooling_output() {
+        let repo = repo();
+        let repository = GitRepository::new(repo.path().to_path_buf());
+        let outputs = binaries(repo.path());
+        let first = validate_harness(&repository, &outputs).unwrap();
+        git(
+            repo.path(),
+            &["commit", "--allow-empty", "-m", "unrelated revision"],
+        );
+        let second = validate_harness(&repository, &outputs).unwrap();
+        assert_ne!(first.commit, second.commit);
+        assert_eq!(first.tooling, second.tooling);
     }
     #[test]
     fn host_global_lease_excludes_live_owner_without_unlinking() {
@@ -2010,11 +2049,16 @@ mod tests {
 
     fn evidence() -> Evidence {
         Evidence {
-            schema_version: 1,
+            schema_version: 2,
             operation: "discover".into(),
             outcome: Outcome::Failed,
             harness: HarnessIdentity {
                 commit: "a".repeat(40),
+                tooling: crate::production_baseline_lifecycle::StoreArtifactIdentity {
+                    derivation: "/nix/store/fixture-harness.drv".into(),
+                    output_path: "/nix/store/fixture-harness".into(),
+                    nar_hash: "sha256-fixture".into(),
+                },
                 seeded_manifest: ManifestIdentity {
                     version: 1,
                     sha256: "b".repeat(64),
@@ -2137,7 +2181,7 @@ mod tests {
         let schema: serde_json::Value =
             serde_json::from_str(include_str!("../../docs/production-baseline.schema.json"))
                 .unwrap();
-        assert_eq!(schema["properties"]["schema_version"]["const"], 1);
+        assert_eq!(schema["properties"]["schema_version"]["const"], 2);
         let check_ids = schema["$defs"]["check"]["allOf"][1]["properties"]["id"]["enum"]
             .as_array()
             .unwrap();

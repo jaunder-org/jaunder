@@ -4,6 +4,22 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
+    // Cargo-run propagates rustc-env metadata to children; build inputs must use
+    // a distinct name so a parent tool's identity cannot qualify a host rebuild.
+    println!("cargo:rerun-if-env-changed=JAUNDER_XTASK_BUILD_NIX_OUTPUT");
+    if let Ok(output) = env::var("JAUNDER_XTASK_BUILD_NIX_OUTPUT") {
+        assert!(
+            output.starts_with("/nix/store/"),
+            "xtask output must be a Nix store path"
+        );
+        println!("cargo:rustc-env=JAUNDER_XTASK_NIX_OUTPUT={output}");
+        println!("cargo:rustc-env=JAUNDER_XTASK_BUILD_IDENTITY={output}");
+        // Git qualification remains unavailable for a Git-free Nix build.
+        println!("cargo:rustc-env=JAUNDER_BUILD_COMMIT=unavailable");
+        println!("cargo:rustc-env=JAUNDER_BUILD_DIRTY=1");
+        return;
+    }
+    println!("cargo:rustc-env=JAUNDER_XTASK_NIX_OUTPUT=");
     let manifest_dir = PathBuf::from(
         env::var_os("CARGO_MANIFEST_DIR")
             .unwrap_or_else(|| panic!("cargo sets CARGO_MANIFEST_DIR")),
@@ -39,6 +55,7 @@ fn main() {
     watch_tracked_inputs(workspace);
     let commit = git_commit(workspace);
     println!("cargo:rustc-env=JAUNDER_BUILD_COMMIT={commit}");
+    println!("cargo:rustc-env=JAUNDER_XTASK_BUILD_IDENTITY={commit}");
     println!(
         "cargo:rustc-env=JAUNDER_BUILD_DIRTY={}",
         if git_dirty(workspace) { "1" } else { "0" }

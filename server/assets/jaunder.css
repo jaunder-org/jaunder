@@ -1668,8 +1668,12 @@
 }
 
 /* ─── generic forms (login, register, settings-style forms) ─── */
-.j-form-body {
+.j-form-body,
+.j-theme-authoring-guidance {
   padding: 18px;
+}
+
+.j-form-body {
   display: flex;
   flex-direction: column;
   gap: 14px;

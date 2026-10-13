@@ -2516,6 +2516,8 @@ async fn seed_backup_revision(
     );
 }
 
+// Give independent structural mismatches their own budget on disk-backed,
+// instrumented runs without relaxing the restore assertions or durability.
 #[apply(backends_matrix)]
 #[case::post_title("posts", "title")]
 #[case::post_rendered_title("posts", "rendered_title")]

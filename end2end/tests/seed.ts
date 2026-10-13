@@ -186,9 +186,10 @@ export async function applySeededSession(
 
 /**
  * Seed `count` published posts for `username` via the `test-support` binary
- * (ADR-0046): one in-process storage write per post, no HTTP round-trip. Post
- * `i` renders an article H1 of `"${bodyPrefix} ${i}"`, so the timeline
- * assertions that key on post titles still hold. Runs synchronously; the tool
+ * (ADR-0046): one batched storage transaction, no HTTP round-trip. Post `i`
+ * derives its persisted title from the Markdown H1 `"${bodyPrefix} ${i}"`
+ * through ordinary publishing's naming rules, retaining the authored body and
+ * deterministic fixture slug. Runs synchronously; the tool
  * reads the target database from `JAUNDER_DB` in the environment (set by the nix
  * e2e harness, pointing at the same DB the server uses).
  *

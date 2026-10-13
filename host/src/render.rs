@@ -2256,6 +2256,21 @@ mod tests {
                 r#"<div>one</div><a href="/">two</a><img alt="three"><br><!-- gone --><script>lost</script>"#,
                 "onetwo<br>",
             ),
+            (
+                PostFormat::Markdown,
+                r#"<strong style="color:red">styled</strong>"#,
+                "<strong>styled</strong>",
+            ),
+            (
+                PostFormat::Org,
+                r#"@@html:<strong style="color:red">styled</strong>@@"#,
+                "<strong>styled</strong>",
+            ),
+            (
+                PostFormat::Html,
+                r#"<strong style="color:red">styled</strong>"#,
+                "<strong>styled</strong>",
+            ),
         ];
         for (format, source, expected) in cases {
             let title: PostTitle = source.parse().unwrap();

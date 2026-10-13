@@ -44,16 +44,15 @@ explicit PR-specific approval. No format or fidelity requirement is dropped.
     worker isolation is not an advisory waiver.
   - Keep any required dependency patch narrow, licensed, pinned and reviewable.
     Do not publish a fork or change another repository without owner approval.
-    The owner accepts moving Jaunder to `GPL-3.0-or-later`. Audit the project's
-    grants, contribution provenance and first-party declarations before making
-    that change; preserve third-party grants and notices. Align the license
-    policy with the approved direction, rather than skipping checks. A copied
-    policy allowing that expression passes the study's license/advisory/source
-    checks after the XML upgrade; the repository policy and license declarations
-    remain unchanged. A patch cannot silently accept parser errors or retain
-    original private metadata. If a library gap cannot be closed within this
-    scope, report it rather than introduce an external fallback or another codec
-    project.
+    Keep Jaunder's first-party grant at `GPL-3.0-only`; no first-party
+    relicensing or additional contributor grants are implied. The linked
+    `exiftool-rs` dependency is granted `GPL-3.0-or-later`, which permits use
+    under GPL version 3 compatibility; `deny.toml` allows that dependency grant.
+    Preserve third-party grants and notices, and keep the license policy aligned
+    with the implemented choice rather than skipping checks. A patch cannot
+    silently accept parser errors or retain original private metadata. If a
+    library gap cannot be closed within this scope, report it rather than
+    introduce an external fallback or another codec project.
   - Verification: complete owned nine-format corpus plus representative HDR;
     independent metadata and rendering observers; full ICC bytes, orientation,
     all frames/timing/transparency, deterministic/idempotent output. Exercise

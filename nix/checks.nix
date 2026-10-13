@@ -714,6 +714,7 @@ mkE2eCombo =
     extraEnv ? "",
     vmMemory ? 2048,
     vmCores ? null,
+    vmDiskSize ? null,
   }:
   let
     traceId = pkgs.lib.concatStrings (pkgs.lib.genList (_: traceDigit) 32);
@@ -723,6 +724,11 @@ mkE2eCombo =
   in
   mkE2eCheck {
     checkName = "jaunder-e2e-${identity}${nameSuffix}";
+    # Leave the NixOS disk default untouched unless this caller needs runtime
+    # capacity beyond it. Measurement controls retain their existing inputs.
+    extraNodeConfig = _: pkgs.lib.optionalAttrs (vmDiskSize != null) {
+      virtualisation.diskSize = vmDiskSize;
+    };
     # The salt rides the combo's generic extra-env string, which is
     # interpolated into the VM testScript above — so it reaches the
     # derivation hash. The variable itself is inert: nothing reads
@@ -748,12 +754,14 @@ mkE2eCombo =
   };
 
 # attr name -> gate check, e.g. { "e2e-sqlite-chromium" = <drv>; ... }
-# The gate runs at workers=2 (#155, see playwright.config.ts), so the
-# VMs are sized 3 GB / 2 vCPU: cores >= workers avoids in-guest CPU
-# starvation, and with the Firefox process-slimming prefs 3 GB clears the
-# OOM that heavier VMs hit (#61). #828's full CI factorial found no
-# admissible 3-worker arm: 3 vCPU / 3 GB OOMed; the faster 4 vCPU / 4 GB
-# arm increased SQLite flakiness. See https://github.com/jaunder-org/jaunder/issues/828.
+# The gate retains workers=2 (#155) and 2 vCPU: cores >= workers avoids
+# in-guest CPU starvation. Ordinary Firefox lanes get 4 GiB RAM and a 2 GiB
+# root for concurrent browsers and temporary tracing: both backends exhausted
+# 3 GiB RAM, and a RAM-only repair then exhausted the 1 GiB root. Other lanes
+# retain their existing resources. This changes capacity, not concurrency:
+# #828 found no admissible 3-worker arm (3 vCPU / 3 GB OOMed; the faster
+# 4 vCPU / 4 GB arm increased SQLite flakiness).
+# See https://github.com/jaunder-org/jaunder/issues/828.
 e2eGateChecks = pkgs.lib.listToAttrs (
   map (c: {
     name = "e2e-${c.identity}";
@@ -766,6 +774,9 @@ e2eGateChecks = pkgs.lib.listToAttrs (
       expectedCensusTopology = "${c.backend}-${c.browser}-split";
       vmMemory = 3072;
       vmCores = 2;
+    } // pkgs.lib.optionalAttrs (c.browser == "firefox" && c.partition == "ordinary") {
+      vmMemory = 4096;
+      vmDiskSize = 2048;
     });
   }) e2eCombos
 );

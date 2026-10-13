@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { goto, signInAsNewUser } from "./helpers";
+import { BASE_URL, goto, signInAsNewUser } from "./helpers";
 import {
   applySeededSession,
   resetThemeViaTool,
@@ -53,6 +53,49 @@ test(
     await expect(secondPost).toContainText("Body for Visual Timeline Post 1");
     await expect(firstPost).toContainText("visualauthor");
     await expect(secondPost).toContainText("visualauthor");
+    for (const [index, article] of [
+      [0, firstPost],
+      [1, secondPost],
+    ] as const) {
+      const heading = article.getByRole("heading", {
+        level: 2,
+        name: `Visual Timeline Post ${index}`,
+        exact: true,
+      });
+      await expect(heading.getByRole("link")).toHaveAttribute(
+        "href",
+        new RegExp(`/visual-timeline-post-${index}$`),
+      );
+      await expect(heading.locator("em")).toHaveText("Timeline");
+      await expect(
+        article.getByRole("link", { name: "Permalink", exact: true }),
+      ).toHaveCount(0);
+
+      // A body heading alone cannot establish persisted fixture title semantics.
+      const id = await article.getAttribute("id");
+      expect(id).toMatch(/^j-post-\d+$/);
+      const response = await page.request.post(
+        `${BASE_URL}/api/posts/get_preview`,
+        {
+          form: { post_id: id!.replace("j-post-", "") },
+        },
+      );
+      expect(response.ok(), await response.text()).toBeTruthy();
+      const preview = (await response.json()) as {
+        post: {
+          title: string | null;
+          body: string;
+          post: { rendered_title: string | null };
+        };
+      };
+      expect(preview.post.title).toBe(`Visual *Timeline* Post ${index}`);
+      expect(preview.post.post.rendered_title).toBe(
+        `Visual <em>Timeline</em> Post ${index}`,
+      );
+      expect(preview.post.body).toBe(
+        `# Visual *Timeline* Post ${index}\n\nBody for Visual *Timeline* Post ${index}`,
+      );
+    }
     await expect(page.getByRole("button", { name: "Actions" })).toHaveCount(2);
     await expectVisual(page, "home-timeline.png", {
       mask: [page.locator(".j-post-time")],

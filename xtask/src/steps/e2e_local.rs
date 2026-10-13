@@ -875,12 +875,10 @@ pub fn run(
     }
     // Resolve the whole Playwright environment before any subprocess. Missing
     // PATH is a configuration failure, not a late empty command search.
-    let env_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("xtask manifest directory has a workspace parent");
+    let env_root = sh.current_dir();
     let Some((workers, path)) = resolve_e2e_env_for_run(
         result,
-        env_root,
+        &env_root,
         env::var("JAUNDER_E2E_WORKERS"),
         env::var_os("PATH"),
         &mut std::io::stderr(),

@@ -462,10 +462,11 @@ fn render_post_input_with_identity(
 /// in one batched transaction via [`PostStorage::create_posts`]. Gated so a
 /// normal `storage` build never compiles it, yet the `test-support` binary
 /// reaches it via the lightweight `seed-posts` feature (no
-/// `tempfile`/`rstest_reuse`).
+/// `tempfile`/`rstest_reuse`). Title projections follow ordinary publishing's
+/// derivation; the caller owns deterministic fixture slugs and authored bodies.
 ///
 /// # Panics
-/// Panics when a test fixture's Post body fails to render.
+/// Panics when a test fixture's Post title is invalid or its body fails to render.
 #[cfg(any(test, feature = "seed-posts"))]
 #[must_use]
 pub fn seed_post_input(
@@ -474,9 +475,11 @@ pub fn seed_post_input(
     body: PostBody,
     published: bool,
 ) -> CreatePostInput {
+    let (title, _) = common::render::derive_post_naming(None, &body, &PostFormat::Markdown)
+        .unwrap_or_else(|error| panic!("fixture Post title derivation failed: {error}"));
     render_post_input(RenderedPostContent {
         user_id,
-        title: None,
+        title,
         slug,
         body,
         format: PostFormat::Markdown,

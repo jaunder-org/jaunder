@@ -80,6 +80,8 @@
                         (lambda (_)
                           (jaunder--parse-service-document
                            "<service xmlns=\"http://www.w3.org/2007/app\" xmlns:atom=\"http://www.w3.org/2005/Atom\"><workspace><atom:title>x</atom:title></workspace></service>")))
+                       ((symbol-function 'jaunder--fetch-collection-members)
+			(lambda () (setq inventories (1+ inventories)) (list member)))
                        ((symbol-function 'jaunder--inventory-for-root)
                         (lambda (_)
                           (setq inventories (1+ inventories))
@@ -111,7 +113,7 @@
                  (setq rendered (with-temp-buffer (insert-file-contents path) (buffer-string)))))
              (should (= media-requests 1))
              (should (= member-requests (if (eq action 'pull) 2 3)))
-             (should (= inventories (if (eq action 'pull) 1 2)))
+             (should (= inventories (if (memq action '(pull merge)) 1 2)))
              (should (string-match-p "private remote edits" rendered))
              (should (string-match-p
                       (regexp-quote

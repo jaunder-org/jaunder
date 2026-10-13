@@ -174,9 +174,9 @@ host/static surface, existing auxiliary `xtask`/`tools` non-doc tests,
 host-native product Rust tests, and `workspace-doctests` after the product
 tests. `workspace-doctests` executes `cargo test --workspace --doc` and the same
 bidirectional root-workspace fence reconciliation as the Nix doctest gate. The
-hook has the same clean-tree refusal as `validate` and invokes no Nix
-derivation. Hermetic Nix proof remains CI/explicit-`validate` work. Bypass with
-`SKIP_PRE_PUSH=1 git push` for WIP.
+hook has the same clean-tree refusal as `validate`. After launcher realization,
+its gate invokes no hermetic check derivations. Hermetic check proof remains
+CI/explicit-`validate` work. Bypass with `SKIP_PRE_PUSH=1 git push` for WIP.
 
 Both local hook commands use fail-fast execution: at every ordered boundary
 (individual static checks, host-gate steps, and prepush phases), the first
@@ -567,12 +567,28 @@ consumes fails the test.
 
 ### Local checks: `cargo xtask`
 
-The driver for all checks is `cargo xtask`. Host-side steps cover static checks,
-clippy, the standalone `xtask`/`tools` workspaces, and day-to-day root-workspace
-Rust tests. `prepush` adds the host `workspace-doctests` verdict; it remains a
-fast local gate rather than an alias for hermetic `validate --no-e2e`. Nix
-static proof, coverage/CRAP, wasm browser tests, Elisp coverage, the wasm
-budget, and e2e retain their stated hermetic or full-validate authorities.
+The driver for all checks is `cargo xtask`. Both development shells provide a
+thin `cargo-xtask` launcher: it discovers the active Git checkout, enters its
+root and selects `nix run .#xtask`. Nix compiles the standalone host tool;
+unchanged tooling inputs reuse its immutable output across unrelated commits.
+The orchestrator still runs only on the host, never inside derivations. Runtime
+paths belong to the active checkout, not the tool's store build directory.
+
+New, nonignored tooling inputs must be included in the Git-backed flake snapshot
+(`git add` or `git add -N`) before normal invocation. The Nix source declaration
+owns this admission; a missing input or failed realization is a refusal, not a
+fallback to an older tool. Explicit
+`cargo test --manifest-path xtask/Cargo.toml` and native Cargo builds remain
+source-development diagnostics. Native builds do not qualify production-baseline
+evidence: that requires the Nix-selected executable and harness described in
+[production baseline](docs/production-baseline.md).
+
+Host-side steps cover static checks, clippy, the standalone `xtask`/`tools`
+workspaces, and day-to-day root-workspace Rust tests. `prepush` adds the host
+`workspace-doctests` verdict; it remains a fast local gate rather than an alias
+for hermetic `validate --no-e2e`. Nix static proof, coverage/CRAP, wasm browser
+tests, Elisp coverage, the wasm budget, and e2e retain their stated hermetic or
+full-validate authorities.
 
 #### Hermetic Rust coverage evidence
 
@@ -619,14 +635,14 @@ a hook failure or mutation. Use `cargo xtask check --no-test` or
 hermetic confidence is the question. Focused `test-local` is an accelerator, not
 a certification gate.
 
-| Command                         | Runs                                                                                                                                                                                                                                           | Formatting    |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| `cargo xtask check --no-test`   | host static checks + clippy + repo-shape/type-safety gates + host tests — the precommit host surface                                                                                                                                           | auto-fixes    |
-| `cargo xtask check`             | + `test-local` for root-workspace Rust tests, plus the Nix `wasm-tests` and `doctests`/`doctests-gate` checks                                                                                                                                  | auto-fixes    |
-| `cargo xtask precommit`         | host surface from `cargo xtask check --no-test`, then safe-staging reconciliation — the `.githooks/pre-commit` hook runs this path                                                                                                             | auto-fixes    |
-| `cargo xtask prepush`           | verify-only host/static surface + auxiliary `xtask`/`tools` non-doc tests + `test-local` + `workspace-doctests`, with clean-tree refusal and no Nix — the `.githooks/pre-push` hook runs this path                                             | never mutates |
-| `cargo xtask validate --no-e2e` | verify-only host/static surface plus Nix static proof, `wasm-budget`, Nix `wasm-tests`, Rust `coverage`/`coverage-gate`, Nix `doctests`/`doctests-gate`, and authoritative `elisp-coverage-producer` plus host consumer                        | never mutates |
-| `cargo xtask validate`          | inherits the authoritative Emacs verdict, then adds the retained two unsplit Chromium and six split Firefox E2E lanes with host reconciliation, plus authoritative SQLite/Chromium server-function coverage verification — the full local gate | never mutates |
+| Command                         | Runs                                                                                                                                                                                                                                                 | Formatting    |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| `cargo xtask check --no-test`   | host static checks + clippy + repo-shape/type-safety gates + host tests — the precommit host surface                                                                                                                                                 | auto-fixes    |
+| `cargo xtask check`             | + `test-local` for root-workspace Rust tests, plus the Nix `wasm-tests` and `doctests`/`doctests-gate` checks                                                                                                                                        | auto-fixes    |
+| `cargo xtask precommit`         | host surface from `cargo xtask check --no-test`, then safe-staging reconciliation — the `.githooks/pre-commit` hook runs this path                                                                                                                   | auto-fixes    |
+| `cargo xtask prepush`           | verify-only host/static surface + auxiliary `xtask`/`tools` non-doc tests + `test-local` + `workspace-doctests`, with clean-tree refusal and no hermetic check derivations after launcher realization — the `.githooks/pre-push` hook runs this path | never mutates |
+| `cargo xtask validate --no-e2e` | verify-only host/static surface plus Nix static proof, `wasm-budget`, Nix `wasm-tests`, Rust `coverage`/`coverage-gate`, Nix `doctests`/`doctests-gate`, and authoritative `elisp-coverage-producer` plus host consumer                              | never mutates |
+| `cargo xtask validate`          | inherits the authoritative Emacs verdict, then adds the retained two unsplit Chromium and six split Firefox E2E lanes with host reconciliation, plus authoritative SQLite/Chromium server-function coverage verification — the full local gate       | never mutates |
 
 #### Measuring Nix invalidation
 

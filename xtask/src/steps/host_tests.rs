@@ -1,7 +1,7 @@
 use xshell::Shell;
 
 use crate::result::CommandResult;
-use crate::sh::step;
+mod resources;
 
 const XTASK_TEST_ARGS: &[&str] = &[
     "test",
@@ -35,7 +35,7 @@ pub fn run(sh: &Shell, result: &mut CommandResult) {
     // Doctests run only in `doctest-fences`, where captured output can be
     // reconciled with the source population rather than discarded.
     for (name, args) in auxiliary_test_commands() {
-        result.push(step(sh, name, "cargo", args));
+        result.push(resources::run(sh, name, "cargo", args));
     }
 }
 

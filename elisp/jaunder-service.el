@@ -181,7 +181,7 @@ operation.  An advertised extension must never yield an audience-less Entry:
 that would falsely checkpoint a local file as synchronized with unknown scope."
   (let ((audiences (cdr (assq 'audiences fields))))
     (when (and audience-capable (null audiences))
-      (error "jaunder: audience-capable server omitted Post audience"))
+      (signal 'jaunder-invalid-audiences '(advertised-audience-omitted)))
     (jaunder--canonical-audiences audiences)))
 
 (defun jaunder--fetch-service-tags (base-url)
