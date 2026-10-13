@@ -107,40 +107,60 @@ pub(super) struct ExporterRuntime {
     owner: Option<std::thread::JoinHandle<()>>,
 }
 
+fn build_runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .thread_name("otel-transport")
+        .on_thread_start(|| {
+            let guard = OtelContext::enter_telemetry_suppressed_scope();
+            WORKER_SCOPE.with(|scope| *scope.borrow_mut() = Some(guard));
+        })
+        .on_thread_stop(|| {
+            let guard = WORKER_SCOPE.with(|scope| scope.borrow_mut().take());
+            drop(guard);
+        })
+        .enable_all()
+        .build()
+}
+
+fn run_owner(
+    build: impl FnOnce() -> std::io::Result<tokio::runtime::Runtime>,
+    ready: &std::sync::mpsc::SyncSender<std::io::Result<tokio::runtime::Handle>>,
+    stopped: &std::sync::mpsc::Receiver<()>,
+) {
+    match build() {
+        Ok(runtime) => {
+            if ready.send(Ok(runtime.handle().clone())).is_ok() {
+                let _ = stopped.recv();
+            }
+            // Tokio can leave uncancellable blocking work alive after
+            // this returns; the accepted policy is bounded best effort.
+            runtime.shutdown_timeout(EXPORTER_RUNTIME_SHUTDOWN_BUDGET);
+        }
+        Err(error) => {
+            let _ = ready.send(Err(error));
+        }
+    }
+}
+
 impl ExporterRuntime {
     pub(super) fn new() -> std::io::Result<Self> {
+        Self::with_owner(|ready, stopped| run_owner(build_runtime, &ready, &stopped))
+    }
+
+    // Inject only the owned startup operation; channel and join policy stay here.
+    fn with_owner(
+        operation: impl FnOnce(
+            std::sync::mpsc::SyncSender<std::io::Result<tokio::runtime::Handle>>,
+            std::sync::mpsc::Receiver<()>,
+        ) + Send
+        + 'static,
+    ) -> std::io::Result<Self> {
         let (ready, receiver) = std::sync::mpsc::sync_channel(1);
         let (stop, stopped) = std::sync::mpsc::channel();
         let owner = std::thread::Builder::new()
             .name("otel-runtime-owner".into())
-            .spawn(move || {
-                let runtime = tokio::runtime::Builder::new_multi_thread()
-                    .worker_threads(2)
-                    .thread_name("otel-transport")
-                    .on_thread_start(|| {
-                        let guard = OtelContext::enter_telemetry_suppressed_scope();
-                        WORKER_SCOPE.with(|scope| *scope.borrow_mut() = Some(guard));
-                    })
-                    .on_thread_stop(|| {
-                        let guard = WORKER_SCOPE.with(|scope| scope.borrow_mut().take());
-                        drop(guard);
-                    })
-                    .enable_all()
-                    .build();
-                match runtime {
-                    Ok(runtime) => {
-                        if ready.send(Ok(runtime.handle().clone())).is_ok() {
-                            let _ = stopped.recv();
-                        }
-                        // Tokio can leave uncancellable blocking work alive after
-                        // this returns; the accepted policy is bounded best effort.
-                        runtime.shutdown_timeout(EXPORTER_RUNTIME_SHUTDOWN_BUDGET);
-                    }
-                    Err(error) => {
-                        let _ = ready.send(Err(error));
-                    }
-                }
-            })?;
+            .spawn(move || operation(ready, stopped))?;
         match receiver.recv() {
             Ok(Ok(handle)) => Ok(Self {
                 handle,
@@ -180,6 +200,83 @@ impl Drop for ExporterRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exporter_runtime_builder_failure_preserves_io_error_and_joins_owner() {
+        let (result, output) = super::super::fallback_capture::capture(|| {
+            ExporterRuntime::with_owner(|ready, stopped| {
+                run_owner(
+                    || {
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            "synthetic-secret",
+                        ))
+                    },
+                    &ready,
+                    &stopped,
+                );
+            })
+        });
+        let error = result.err().expect("runtime build must fail");
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(error.to_string(), "synthetic-secret");
+        assert!(output.is_empty(), "a build error is not an owner panic");
+    }
+
+    #[test]
+    fn exporter_runtime_closed_ready_channel_is_unavailable_without_shutdown_warning() {
+        let (result, output) = super::super::fallback_capture::capture(|| {
+            ExporterRuntime::with_owner(|_ready, _stopped| {})
+        });
+        assert_eq!(
+            result.err().expect("closed readiness").to_string(),
+            "exporter runtime owner unavailable"
+        );
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn exporter_runtime_startup_panic_joins_and_reports_fixed_shutdown_fallback() {
+        let (result, output) = super::super::tests::assert_runtime_fallback_is_nonrecursive(|| {
+            super::super::fallback_capture::capture(|| {
+                ExporterRuntime::with_owner(|_ready, _stopped| {
+                    panic!("injected owner startup failure")
+                })
+            })
+        });
+        assert_eq!(
+            result.err().expect("owner panic").to_string(),
+            "exporter runtime owner unavailable"
+        );
+        assert_eq!(
+            output,
+            "host.telemetry.exporter_runtime_shutdown: telemetry shutdown failed\n"
+        );
+    }
+
+    #[test]
+    fn exporter_runtime_drop_joins_panicking_owner_with_nonrecursive_fallback() {
+        let ((), output) = super::super::tests::assert_runtime_fallback_is_nonrecursive(|| {
+            super::super::fallback_capture::capture(|| {
+                let runtime = ExporterRuntime::with_owner(|ready, stopped| {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .build()
+                        .expect("runtime");
+                    ready.send(Ok(runtime.handle().clone())).expect("ready");
+                    let _ = stopped.recv();
+                    drop(runtime);
+                    panic!("injected owner shutdown failure");
+                })
+                .expect("startup");
+                drop(runtime);
+            })
+        });
+        assert_eq!(
+            output,
+            "host.telemetry.exporter_runtime_shutdown: telemetry shutdown failed\n"
+        );
+        assert!(!OtelContext::is_current_telemetry_suppressed());
+    }
 
     #[test]
     fn exporter_runtime_descendants_are_suppressed_without_application_leakage() {

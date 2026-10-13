@@ -224,6 +224,10 @@ fn write_exporter_fallback(
 }
 
 fn exporter_fallback(kind: FallbackKind, error: &anyhow::Error) {
+    #[cfg(test)]
+    if fallback_capture::try_capture(kind) {
+        return;
+    }
     let _ = write_exporter_fallback(std::io::stderr().lock(), kind, error);
 }
 
@@ -567,6 +571,19 @@ where
         )
 }
 
+fn setup_exporter_runtime_with<T>(
+    endpoint: Option<&str>,
+    build: impl FnOnce() -> std::io::Result<T>,
+) -> Option<T> {
+    endpoint.and_then(|_| match build() {
+        Ok(runtime) => Some(runtime),
+        Err(error) => {
+            exporter_fallback(FallbackKind::ExporterRuntimeSetup, &error.into());
+            None
+        }
+    })
+}
+
 fn init_tracing_impl_with_layer<L>(
     config: &TelemetryConfig,
     extra_layer: Option<L>,
@@ -590,15 +607,7 @@ where
     let resource = telemetry_resource(config.e2e_seed_process.clone());
 
     let exporter_runtime =
-        endpoint
-            .as_ref()
-            .and_then(|_| match sdk_boundary::ExporterRuntime::new() {
-                Ok(runtime) => Some(runtime),
-                Err(error) => {
-                    exporter_fallback(FallbackKind::ExporterRuntimeSetup, &error.into());
-                    None
-                }
-            });
+        setup_exporter_runtime_with(endpoint.as_deref(), sdk_boundary::ExporterRuntime::new);
     let tracer =
         endpoint
             .as_deref()
@@ -883,6 +892,27 @@ mod tests {
         }
     }
 
+    fn span_names(spans: &[SpanData]) -> Vec<&str> {
+        spans.iter().map(|span| span.name.as_ref()).collect()
+    }
+
+    #[test]
+    fn span_names_preserve_exported_operation_order() {
+        use opentelemetry::trace::Tracer as _;
+        let exporter = InMemorySpanExporter::default();
+        let provider = tracer_provider_builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let tracer = provider.tracer("names");
+        drop(tracer.start("first_operation"));
+        drop(tracer.start("second_operation"));
+        provider.force_flush().expect("flush");
+        assert_eq!(
+            span_names(&exporter.get_finished_spans().expect("spans")),
+            ["first_operation", "second_operation"]
+        );
+    }
+
     #[test]
     fn sdk_suppressed_export_work_does_not_generate_otlp_spans() {
         use opentelemetry::trace::Tracer as _;
@@ -905,10 +935,10 @@ mod tests {
         });
         provider.force_flush().expect("flush");
         let spans = exporter.get_finished_spans().expect("spans");
+        let names = span_names(&spans);
         assert!(
-            spans.is_empty(),
-            "SDK suppression must also cover tracing's explicit-root transport work: {:?}",
-            spans.iter().map(|s| s.name.as_ref()).collect::<Vec<_>>()
+            names.is_empty(),
+            "SDK suppression must also cover tracing's explicit-root transport work: {names:?}"
         );
     }
 
@@ -1253,6 +1283,7 @@ mod tests {
             handle: tokio::runtime::Handle::current(),
             output,
         });
+        PushMetricExporter::force_flush(&probe).expect("metric exporter flush");
         let tracer = tracer_provider_builder()
             .with_batch_exporter(probe.clone())
             .build();
@@ -1657,6 +1688,66 @@ mod tests {
 
     fn push_fallback(output: &mut Vec<u8>, kind: FallbackKind) {
         write_fallback(output, kind).expect("write fallback");
+    }
+
+    pub(super) fn assert_runtime_fallback_is_nonrecursive<R>(operation: impl FnOnce() -> R) -> R {
+        let exporter = InMemorySpanExporter::default();
+        let provider = tracer_provider_builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = compose_subscriber(
+            &configured_local_policy(false, Some("trace"), None),
+            None::<tracing_subscriber::layer::Identity>,
+            Some(provider.tracer("runtime-fallback")),
+            Some(Shared(output.clone())),
+        );
+        // Metric-observer setup/flush is not the operation under test; keep its
+        // SDK instrumentation outside the application subscriber observation.
+        let result = assert_zero_error_metrics(|| {
+            tracing::subscriber::with_default(subscriber, || {
+                let observer = tracing::info_span!("runtime_fallback_observer");
+                observer.in_scope(operation)
+            })
+        });
+        provider.force_flush().expect("flush fallback observer");
+        let spans = exporter.get_finished_spans().expect("spans");
+        assert_eq!(span_names(&spans), ["runtime_fallback_observer"]);
+        assert!(spans[0].events.events.is_empty());
+        assert!(output.lock().expect("local output").is_empty());
+        result
+    }
+
+    #[test]
+    fn exporter_runtime_setup_failure_disables_export_with_redacted_nonrecursive_fallback() {
+        let (runtime, output) = assert_runtime_fallback_is_nonrecursive(|| {
+            fallback_capture::capture(|| {
+                setup_exporter_runtime_with(Some("http://127.0.0.1:4317"), || {
+                    Err::<(), _>(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "synthetic-secret",
+                    ))
+                })
+            })
+        });
+        assert!(runtime.is_none());
+        assert_eq!(
+            output,
+            "host.telemetry.exporter_runtime_setup: telemetry export disabled\n"
+        );
+    }
+
+    #[test]
+    fn exporter_runtime_setup_requires_endpoint_and_preserves_success() {
+        let absent = setup_exporter_runtime_with(None, || -> std::io::Result<()> {
+            panic!("no endpoint must not construct an exporter runtime")
+        });
+        assert!(absent.is_none());
+        let (runtime, output) = fallback_capture::capture(|| {
+            setup_exporter_runtime_with(Some("http://127.0.0.1:4317"), || Ok(42))
+        });
+        assert_eq!(runtime, Some(42));
+        assert!(output.is_empty());
     }
 
     #[test]
