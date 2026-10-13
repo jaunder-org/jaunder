@@ -106,7 +106,8 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
 /// corresponding devtool check groups from the prebuilt `devtoolBin`. Fix mode
 /// appends `--fix`.
 fn devtool_check(name: &'static str, mode: Mode) -> StepSpec {
-    devtool_check_with_cache(name, mode, false)
+    // Bootstrapping devtool compiles Rust even when the selected check does not.
+    devtool_check_with_cache(name, mode, true)
 }
 
 fn devtool_compile_check(name: &'static str, mode: Mode) -> StepSpec {
@@ -149,8 +150,21 @@ fn cargo_compile_check(name: &'static str, args: Vec<&'static str>) -> StepSpec 
 }
 
 pub(crate) fn run_spec(sh: &Shell, spec: &StepSpec) -> StepResult {
+    run_spec_with(
+        spec,
+        compile_cache::cargo_compile_env,
+        |name, program, args, env| sh::step_with_env(sh, name, program, args, env),
+    )
+}
+
+/// Keep cache policy and command execution observable without spawning test children.
+fn run_spec_with(
+    spec: &StepSpec,
+    cache_env: impl FnOnce() -> (Vec<(String, String)>, Option<String>),
+    run: impl FnOnce(&str, &str, &[&str], &[(String, String)]) -> StepResult,
+) -> StepResult {
     let (mut env, cache_detail) = if spec.cache_rustc {
-        compile_cache::cargo_compile_env()
+        cache_env()
     } else {
         (Vec::new(), None)
     };
@@ -161,7 +175,7 @@ pub(crate) fn run_spec(sh: &Shell, spec: &StepSpec) -> StepResult {
     if spec.program == "cargo" && (spec.cache_rustc || spec.args.first() == Some(&"run")) {
         env.push(("CARGO_PROFILE_DEV_DEBUG".to_owned(), "0".to_owned()));
     }
-    let mut result = sh::step_with_env(sh, spec.name, spec.program, &spec.args, &env);
+    let mut result = run(spec.name, spec.program, &spec.args, &env);
     if let Some(cache_detail) = cache_detail {
         result.detail = Some(match result.detail.take() {
             Some(command_detail) => format!("{command_detail}\n{cache_detail}"),
@@ -174,6 +188,125 @@ pub(crate) fn run_spec(sh: &Shell, spec: &StepSpec) -> StepResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn devtool_bootstrap_receives_compile_cache_environment() {
+        let provider_env = vec![
+            ("RUSTC_WRAPPER".to_string(), "sccache".to_string()),
+            ("CARGO_INCREMENTAL".to_string(), "0".to_string()),
+            ("SCCACHE_BASEDIRS".to_string(), "/worktree".to_string()),
+        ];
+        let mut expected_env = provider_env.clone();
+        expected_env.push(("CARGO_PROFILE_DEV_DEBUG".to_string(), "0".to_string()));
+        for mode in [Mode::Check, Mode::Fix] {
+            for spec in specs(mode)
+                .into_iter()
+                .filter(|s| s.args.first() == Some(&"run"))
+            {
+                let mut provider_calls = 0;
+                let mut recorded = None;
+                let result = run_spec_with(
+                    &spec,
+                    || {
+                        provider_calls += 1;
+                        (provider_env.clone(), None)
+                    },
+                    |name, program, args, env| {
+                        recorded = Some((
+                            name.to_string(),
+                            program.to_string(),
+                            args.iter()
+                                .map(|arg| (*arg).to_string())
+                                .collect::<Vec<_>>(),
+                            env.to_vec(),
+                        ));
+                        StepResult::ok(name)
+                    },
+                );
+                let (name, program, args, env) = recorded.expect("runner called");
+                assert_eq!(env, expected_env, "{} bootstrap environment", spec.name);
+                assert_eq!(provider_calls, 1);
+                assert_eq!(name, spec.name);
+                assert_eq!(program, "cargo");
+                let mut expected_args = vec![
+                    "run",
+                    "--locked",
+                    "--quiet",
+                    "--manifest-path",
+                    "tools/Cargo.toml",
+                    "-p",
+                    "devtool",
+                    "--",
+                    "check",
+                    spec.name,
+                ];
+                if matches!(mode, Mode::Fix) {
+                    expected_args.push("--fix");
+                }
+                assert_eq!(args, expected_args);
+                assert!(result.ok);
+            }
+        }
+    }
+
+    #[test]
+    fn direct_formatting_does_not_request_cache_environment() {
+        for mode in [Mode::Check, Mode::Fix] {
+            let catalog = specs(mode);
+            let spec = find(&catalog, "xtask-fmt");
+            let result = run_spec_with(
+                spec,
+                || panic!("direct formatting needs no cache"),
+                |name, program, args, env| {
+                    assert_eq!(name, "xtask-fmt");
+                    assert_eq!(program, "cargo");
+                    assert_eq!(args, spec.args);
+                    assert!(env.is_empty());
+                    StepResult::fail(name).detail("formatter failure")
+                },
+            );
+            assert!(!result.ok);
+            assert_eq!(result.detail.as_deref(), Some("formatter failure"));
+        }
+    }
+
+    #[test]
+    fn cache_warning_preserves_runner_outcome_and_detail() {
+        let catalog = specs(Mode::Check);
+        let spec = find(&catalog, "clippy");
+        for ok in [true, false] {
+            for detail in [None, Some("command detail")] {
+                for warning in [None, Some("cache warning")] {
+                    let result = run_spec_with(
+                        spec,
+                        || (vec![], warning.map(str::to_string)),
+                        |name, _, _, env| {
+                            assert_eq!(
+                                env,
+                                &[("CARGO_PROFILE_DEV_DEBUG".to_string(), "0".to_string())]
+                            );
+                            let mut result = if ok {
+                                StepResult::ok(name)
+                            } else {
+                                StepResult::fail(name)
+                            };
+                            result.detail = detail.map(str::to_string);
+                            result
+                        },
+                    );
+                    assert_eq!(result.ok, ok);
+                    assert_eq!(result.name, spec.name);
+                    let expected = match (detail, warning) {
+                        (Some(d), Some(w)) => Some(format!("{d}\n{w}")),
+                        (Some(d), None) => Some(d.to_string()),
+                        (None, Some(w)) => Some(w.to_string()),
+                        (None, None) => None,
+                    };
+                    assert_eq!(result.detail, expected);
+                }
+            }
+        }
+    }
 
     fn find<'a>(specs: &'a [StepSpec], name: &str) -> &'a StepSpec {
         specs.iter().find(|s| s.name == name).expect("step present")
@@ -288,7 +421,7 @@ mod tests {
                 "fmt"
             ]
         );
-        assert!(!fmt.cache_rustc);
+        assert!(fmt.cache_rustc);
         let ast_grep_tests = find(&s, "ast-grep-tests");
         assert_eq!(ast_grep_tests.program, "cargo");
         assert_eq!(
@@ -306,7 +439,7 @@ mod tests {
                 "ast-grep-tests"
             ]
         );
-        assert!(!ast_grep_tests.cache_rustc);
+        assert!(ast_grep_tests.cache_rustc);
         let no_full_reload = find(&s, "no-full-reload");
         assert_eq!(no_full_reload.program, "cargo");
         assert_eq!(
@@ -324,7 +457,7 @@ mod tests {
                 "no-full-reload"
             ]
         );
-        assert!(!no_full_reload.cache_rustc);
+        assert!(no_full_reload.cache_rustc);
         let fix_specs = specs(Mode::Fix);
         let prettier_fix = find(&fix_specs, "prettier-markdown");
         assert_eq!(
@@ -390,7 +523,7 @@ mod tests {
             );
         }
 
-        assert!(!find(&s, "cargo-deny").cache_rustc);
+        assert!(find(&s, "cargo-deny").cache_rustc);
         assert!(find(&s, "clippy").cache_rustc);
         assert!(find(&s, "web-server-clippy").cache_rustc);
         assert!(find(&s, "web-no-server-clippy").cache_rustc);
