@@ -9,18 +9,22 @@ import type { NewTracedContext } from "./fixtures";
 import {
   BASE_URL,
   click,
-  confirmedMutation,
   goto,
   login,
   subscribeTo,
   TEST_PASSWORD,
-  type MutationOutcome,
 } from "./helpers";
 import {
   applySeededSession,
   createSessionViaTool,
   seedUserViaTool,
-  type SandboxSeedManifest,
+  SEEDED_MEDIA_SHA256,
+  parseOrdinaryFixture,
+  parseOrdinarySeedManifest,
+  type OrdinarySeedManifest,
+  type OrdinaryFixture,
+  type OrdinarySeedState,
+  bindOrdinarySeedState,
   type SeedRecord,
 } from "./seed";
 import {
@@ -31,6 +35,7 @@ import {
 } from "./posts";
 import { mintAppPassword } from "./sessions";
 import { SEL } from "./selectors";
+import { navigateInApp } from "./navigate";
 
 export const OPERATION_MANIFEST = {
   version: 1,
@@ -68,19 +73,6 @@ export const OPERATION_MANIFEST = {
   },
 } as const;
 
-const SEEDED_MEDIA_SHA256: Readonly<Record<string, string>> = {
-  "baseline-seeded.txt":
-    "958e3ce706b2891ab01e58e0f180af8ef646dc9d6368f3a2ba6d6cbff3321c5e",
-  "blue-horizon.svg":
-    "81aa7378e6c8ef6a707e281d5a92c646a1ba3c01de428131ecf677763a8cddd9",
-  "warm-workshop.svg":
-    "92c501114a2d5f3b82f50a4ac01ab2c1eeb1223cbc46e7840347adb3e6aa8847",
-  "green-field.svg":
-    "bb2cd32aaa8d6b4bd87af8980a5bb220753bdfafdd953bc4c9b4a861d1e4c233",
-  "violet-night.svg":
-    "2e8d0525784fb6a8b04b82131e9d82cddca52445e21c1faa0baccbc7ad44290c",
-};
-
 const PNG = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49,
   0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06,
@@ -100,10 +92,9 @@ type AuthorAccess = {
   appPassword: string;
   postsCollectionUrl: string;
 };
-export type BaselineState = {
+export type BaselineState = OrdinarySeedState & {
   username: string;
   appPassword: string;
-  seededManifest: SandboxSeedManifest;
   aliceSession: SeedRecord;
   authorAccess: AuthorAccess[];
   subscriberSession: SeedRecord;
@@ -128,48 +119,169 @@ const onServer = (url: string) => {
   const parsed = new URL(url, BASE_URL);
   return `${BASE_URL}${parsed.pathname}${parsed.search}`;
 };
-type LegacySavedPost = { post_id: number; permalink: string };
+type SavedPost = {
+  post_id: number;
+  slug: string;
+  published_at: string | null;
+  permalink: string;
+};
+
+/** Each fixture owns exactly one response contract, independent of replies. */
+export function parseCreatedPost(
+  fixture: OrdinaryFixture,
+  raw: unknown,
+): SavedPost {
+  parseOrdinaryFixture(fixture);
+  const object = (value: unknown): Record<string, unknown> => {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      throw new Error("invalid Post create object");
+    return value as Record<string, unknown>;
+  };
+  const envelope = object(raw);
+  if (Object.keys(envelope).join() !== "Confirmed")
+    throw new Error("Post creation was not confirmed");
+  const confirmed = object(envelope.Confirmed);
+  if (
+    fixture === "modern" &&
+    (!Object.keys(confirmed).every((key) =>
+      ["post", "publication"].includes(key),
+    ) ||
+      typeof confirmed.publication !== "string" ||
+      !["draft", "published", "scheduled"].includes(confirmed.publication))
+  )
+    throw new Error("invalid modern Post publication");
+  const saved = fixture === "legacy1419" ? confirmed : object(confirmed.post);
+  if (
+    Object.keys(saved).length !== 4 ||
+    !["post_id", "slug", "published_at", "permalink"].every(
+      (key) => key in saved,
+    ) ||
+    !Number.isSafeInteger(saved.post_id) ||
+    Number(saved.post_id) <= 0 ||
+    typeof saved.slug !== "string" ||
+    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(saved.slug) ||
+    !(
+      saved.published_at === null ||
+      (typeof saved.published_at === "string" &&
+        Number.isFinite(Date.parse(saved.published_at)))
+    ) ||
+    typeof saved.permalink !== "string" ||
+    !saved.permalink.startsWith("/") ||
+    saved.permalink.startsWith("//")
+  )
+    throw new Error("invalid selected SavedPost");
+  return saved as SavedPost;
+}
+
+export function baselineAudience(
+  fixture: OrdinaryFixture,
+  audience: "public" | "subscribers" | "private",
+) {
+  parseOrdinaryFixture(fixture);
+  return fixture === "legacy1419"
+    ? { base: audience, named: [] }
+    : audienceForWire(audience);
+}
+
+/** Only the host-selected fixture can bind retained state. */
+export function validateBaselineState(
+  state: BaselineState,
+  fixture: OrdinaryFixture,
+): void {
+  parseOrdinaryFixture(fixture);
+  if (state.fixture !== fixture)
+    throw new Error("persisted ordinary fixture changed");
+  parseOrdinarySeedManifest(fixture, state.seededManifest);
+}
+
+type BaselinePostInputs = {
+  body: string;
+  format?: "markdown" | "org" | "html";
+  audience?: "public" | "subscribers" | "private";
+  slug?: string;
+  publishAt?: string;
+};
+
+export function baselinePostRequest(
+  fixture: OrdinaryFixture,
+  opts: BaselinePostInputs,
+) {
+  parseOrdinaryFixture(fixture);
+  return {
+    post: {
+      body: opts.body,
+      format: opts.format ?? "markdown",
+      slug_override: opts.slug ?? null,
+      publish: true,
+      ...(opts.publishAt ? { publish_at: opts.publishAt } : {}),
+      ...(opts.audience
+        ? { audience: baselineAudience(fixture, opts.audience) }
+        : {}),
+    },
+  };
+}
+
 async function createLegacyPostViaApi(
   page: Page,
-  opts: {
-    body: string;
-    format?: "markdown" | "org" | "html";
-    audience?: "public" | "subscribers" | "private";
-    slug?: string;
-    publishAt?: string;
-  },
-): Promise<LegacySavedPost> {
+  fixture: OrdinaryFixture,
+  opts: BaselinePostInputs,
+): Promise<SavedPost> {
   const response = await withTimedAction(page, "api.posts.create", () =>
     page.request.post(`${BASE_URL}/api/posts/create`, {
-      data: {
-        post: {
-          body: opts.body,
-          format: opts.format ?? "markdown",
-          slug_override: opts.slug ?? null,
-          publish: true,
-          ...(opts.publishAt ? { publish_at: opts.publishAt } : {}),
-          ...(opts.audience
-            ? {
-                audience: audienceForWire(opts.audience),
-              }
-            : {}),
-        },
-      },
+      data: baselinePostRequest(fixture, opts),
     }),
   );
   expect(
     response.ok(),
     `posts::create failed (${response.status()}): ${await response.text()}`,
   ).toBeTruthy();
-  const saved = confirmedMutation(
-    (await response.json()) as MutationOutcome<
-      LegacySavedPost | { post: LegacySavedPost }
-    >,
-    "cross-version posts::create",
-  );
-  return "post" in saved ? saved.post : saved;
+  return parseCreatedPost(fixture, await response.json());
 }
-type SeededPost = SandboxSeedManifest["posts"][number];
+type SeededPost = OrdinarySeedManifest["posts"][number];
+
+export const HISTORICAL_COMPOSER = {
+  body: SEL.postBody,
+  slug: SEL.postSlug,
+  audience: "#audience-base",
+  format: SEL.formatButton("Org"),
+  publish: SEL.publishButton("true"),
+  summary: SEL.saveSummary,
+} as const;
+
+async function openBaselineComposer(
+  page: Page,
+  fixture: OrdinaryFixture,
+): Promise<void> {
+  if (fixture === "modern") return openComposerFromSidebar(page);
+  await navigateInApp(page, () => click(page, '.j-nav a[href="/posts/new"]'), {
+    url: "/posts/new",
+    ready: HISTORICAL_COMPOSER.audience,
+  });
+}
+
+export async function composeBaselinePost(
+  page: Page,
+  fixture: OrdinaryFixture,
+  opts: Parameters<typeof composePost>[1],
+) {
+  parseOrdinaryFixture(fixture);
+  if (fixture === "modern") return composePost(page, opts);
+  return withTimedAction(page, "flow.compose_post", async () => {
+    await page.locator(HISTORICAL_COMPOSER.body).waitFor();
+    await page.fill(HISTORICAL_COMPOSER.body, opts.body);
+    if (opts.format)
+      await click(
+        page,
+        SEL.formatButton(opts.format === "org" ? "Org" : "Markdown"),
+      );
+    if (opts.slug) await page.fill(HISTORICAL_COMPOSER.slug, opts.slug);
+    if (opts.audience)
+      await page.selectOption(HISTORICAL_COMPOSER.audience, opts.audience);
+    await click(page, SEL.publishButton(opts.publish ? "true" : "false"));
+    await page.locator(HISTORICAL_COMPOSER.summary).waitFor();
+    return page.locator(HISTORICAL_COMPOSER.summary);
+  });
+}
 
 type FormattedTitleExpectation = {
   slug: string;
@@ -298,7 +410,7 @@ async function atomCollectionEntries(
   return entries;
 }
 
-async function verifySeededManifest(
+export async function verifySeededManifest(
   state: BaselineState,
   tracedContext: NewTracedContext,
 ): Promise<void> {
@@ -341,7 +453,9 @@ async function verifySeededManifest(
           },
         );
         expect(audience.status()).toBe(200);
-        expect(await audience.json()).toEqual(audienceForWire(post.visibility));
+        expect(await audience.json()).toEqual(
+          baselineAudience(state.fixture, post.visibility),
+        );
         if (post.publishedAt === null) {
           expect(entry!).toMatch(/<app:draft>yes<\/app:draft>/i);
         } else {
@@ -472,8 +586,10 @@ async function createAuthorAccess(
 export async function createProductionBaseline(
   page: Page,
   tracedContext: NewTracedContext,
-  seededManifest: SandboxSeedManifest,
+  seededManifest: OrdinarySeedManifest,
+  fixture: OrdinaryFixture = "modern",
 ): Promise<BaselineState> {
+  parseOrdinarySeedManifest(fixture, seededManifest);
   const aliceSession = await createSessionViaTool(
     "alice",
     "Production baseline read-only",
@@ -498,31 +614,31 @@ export async function createProductionBaseline(
     page,
     "Production baseline primary",
   );
-  await openComposerFromSidebar(page);
-  const markdown = await composePost(page, {
+  await openBaselineComposer(page, fixture);
+  const markdown = await composeBaselinePost(page, fixture, {
     ...OPERATION_MANIFEST.browserMarkdown,
     publish: true,
   });
   const browserMarkdownPermalink = await followPermalink(page, markdown);
-  await openComposerFromSidebar(page);
-  const org = await composePost(page, {
+  await openBaselineComposer(page, fixture);
+  const org = await composeBaselinePost(page, fixture, {
     ...OPERATION_MANIFEST.browserOrg,
     format: "org",
     publish: true,
   });
   const browserOrgPermalink = await followPermalink(page, org);
-  await openComposerFromSidebar(page);
-  const subscribers = await composePost(page, {
+  await openBaselineComposer(page, fixture);
+  const subscribers = await composeBaselinePost(page, fixture, {
     ...OPERATION_MANIFEST.subscribers,
     audience: "subscribers",
     publish: true,
   });
   const subscriberPermalink = await followPermalink(page, subscribers);
-  const webHtml = await createLegacyPostViaApi(page, {
+  const webHtml = await createLegacyPostViaApi(page, fixture, {
     ...OPERATION_MANIFEST.webHtml,
     format: "html",
   });
-  const scheduled = await createLegacyPostViaApi(page, {
+  const scheduled = await createLegacyPostViaApi(page, fixture, {
     ...OPERATION_MANIFEST.scheduledMarkdown,
     publishAt: "2035-01-01T00:00:00Z",
   });
@@ -548,9 +664,9 @@ export async function createProductionBaseline(
     authors.map((author) => createAuthorAccess(tracedContext, author)),
   );
   const state: BaselineState = {
+    ...bindOrdinarySeedState(fixture, seededManifest),
     username,
     appPassword,
-    seededManifest,
     aliceSession,
     authorAccess,
     subscriberSession,
@@ -653,6 +769,7 @@ export async function verifyProductionBaseline(
   state: BaselineState,
   tracedContext: NewTracedContext,
 ): Promise<void> {
+  validateBaselineState(state, state.fixture);
   const authorization = auth(state);
   await goto(page, "/sessions");
   await expect(
@@ -677,50 +794,52 @@ export async function verifyProductionBaseline(
   }
   await verifySeededManifest(state, tracedContext);
 
-  const formattedPosts = FORMATTED_TITLE_EXPECTATIONS.map((expected) => {
-    const post = state.seededManifest.posts.find(
-      (candidate) => candidate.slug === expected.slug,
-    );
-    expect(post, `sandbox manifest contains ${expected.slug}`).toBeDefined();
-    expect(post!.visibility, `${expected.slug} is public`).toBe("public");
-    expect(post!.publishedAt, `${expected.slug} is published`).not.toBeNull();
-    return { expected, post: post! };
-  });
-  const formattedContext = await tracedContext();
-  try {
-    const timeline = await formattedContext.newPage();
+  if (state.fixture === "modern") {
+    const formattedPosts = FORMATTED_TITLE_EXPECTATIONS.map((expected) => {
+      const post = state.seededManifest.posts.find(
+        (candidate) => candidate.slug === expected.slug,
+      );
+      expect(post, `sandbox manifest contains ${expected.slug}`).toBeDefined();
+      expect(post!.visibility, `${expected.slug} is public`).toBe("public");
+      expect(post!.publishedAt, `${expected.slug} is published`).not.toBeNull();
+      return { expected, post: post! };
+    });
+    const formattedContext = await tracedContext();
     try {
-      await goto(timeline, "/~alice");
+      const timeline = await formattedContext.newPage();
+      try {
+        await goto(timeline, "/~alice");
+        for (const { expected, post } of formattedPosts) {
+          const article = timeline
+            .locator("article.j-post")
+            .filter({ hasText: expected.visibleText });
+          await expect(article).toHaveCount(1);
+          await expectSafeRenderedTitle(article, expected);
+          await expect(article.locator(".j-post-title a")).toHaveAttribute(
+            "href",
+            new RegExp(`/${post.slug}$`),
+          );
+        }
+      } finally {
+        await timeline.close();
+      }
+
       for (const { expected, post } of formattedPosts) {
-        const article = timeline
-          .locator("article.j-post")
-          .filter({ hasText: expected.visibleText });
-        await expect(article).toHaveCount(1);
-        await expectSafeRenderedTitle(article, expected);
-        await expect(article.locator(".j-post-title a")).toHaveAttribute(
-          "href",
-          new RegExp(`/${post.slug}$`),
-        );
+        const permalink = await formattedContext.newPage();
+        try {
+          await goto(permalink, seededPostPath(post));
+          expect(new URL(permalink.url()).pathname).toBe(seededPostPath(post));
+          await expectSafeRenderedTitle(
+            permalink.locator("article.j-post"),
+            expected,
+          );
+        } finally {
+          await permalink.close();
+        }
       }
     } finally {
-      await timeline.close();
+      await formattedContext.close();
     }
-
-    for (const { expected, post } of formattedPosts) {
-      const permalink = await formattedContext.newPage();
-      try {
-        await goto(permalink, seededPostPath(post));
-        expect(new URL(permalink.url()).pathname).toBe(seededPostPath(post));
-        await expectSafeRenderedTitle(
-          permalink.locator("article.j-post"),
-          expected,
-        );
-      } finally {
-        await permalink.close();
-      }
-    }
-  } finally {
-    await formattedContext.close();
   }
 
   for (const viewer of [
@@ -881,9 +1000,11 @@ export async function verifyProductionBaseline(
   }
   const anonymousContext = await isolatedRequest(tracedContext);
   try {
-    expect(state.seededManifest.version).toBe(2);
-    expect(state.seededManifest.media).toHaveLength(5);
-    for (const seededMedia of state.seededManifest.media) {
+    const seededMediaRecords =
+      state.fixture === "modern"
+        ? state.seededManifest.media
+        : [state.seededManifest.media!];
+    for (const seededMedia of seededMediaRecords) {
       const expectedSha256 = SEEDED_MEDIA_SHA256[seededMedia.filename];
       expect(expectedSha256, seededMedia.filename).toBeDefined();
       expect(seededMedia.sha256).toBe(expectedSha256);

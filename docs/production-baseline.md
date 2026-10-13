@@ -10,7 +10,7 @@ module; it is not part of `cargo xtask check`, pre-push, CI, or
 Run `cargo xtask` from the repository's Nix development environment and a clean
 checkout whose `origin` is `jaunder-org/jaunder`. Ordinary discovery/acceptance
 also require the harness and product commits to be available upstream.
-Qualification selects `packages.qualification-harness` from the admitted source:
+Qualification selects its fixture-owned harness graph from the admitted source:
 the actual executing xtask must match its Nix output, and browser inputs, Node,
 test-support and VM construction are bound through the same graph. Identical
 outputs may be reused across unrelated Git commits; native Cargo builds and
@@ -35,6 +35,29 @@ cargo xtask production-baseline accept --source <source-commit> --target <target
 
 Acceptance qualification is explicitly **non-release** evidence. Issue #1419
 selects and qualifies a release candidate later.
+
+## Ordinary fixture applicability
+
+Only the resolved source `520034ed6f778a854cd5f8708419c1b2b700ad9f` selects
+`qualification-harness-legacy-1419`. Acceptance never selects from its target,
+and the selection remains fixed through upgrade and every restore. This graph
+uses current host/browser/VM tooling with the immutable historical helper
+`78d201e6969ed17b8a54b87d3de24be6afa1f5ee` and its own dependency locks. Its
+executable, seed authority and both guest helper bindings agree; the complete
+historical authority-file digest is checked before lifecycle work.
+
+The historical fixture retains all 73 native Posts, seeded text Media, uploaded
+PNG, authentication and all three Syndication Feed formats. Its exact v1 wire
+and historical composer/Post-create contracts are explicit, not inferred from
+replies. All other ordinary sources and live e2e retain strict modern v2,
+five-Media and Rendered Title obligations. Incompatible upgrade targets fail;
+there is no adapter, retry, selector option or ambient fixture flag.
+
+Historical discovery evidence remains schema1. New evidence attributes the
+actual selected graph and current executing harness/verifier, not historical
+execution. This applicability correction alone does not establish helper Nix
+output admission, backend/browser compatibility or a suitable distinct format-1
+target; those require separately executed proofs before positive qualification.
 
 ## Separate styling qualification
 

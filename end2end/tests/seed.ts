@@ -46,6 +46,160 @@ export type SandboxSeedManifest = {
   }>;
 };
 
+export const SEEDED_MEDIA_SHA256: Readonly<Record<string, string>> = {
+  "baseline-seeded.txt":
+    "958e3ce706b2891ab01e58e0f180af8ef646dc9d6368f3a2ba6d6cbff3321c5e",
+  "blue-horizon.svg":
+    "81aa7378e6c8ef6a707e281d5a92c646a1ba3c01de428131ecf677763a8cddd9",
+  "warm-workshop.svg":
+    "92c501114a2d5f3b82f50a4ac01ab2c1eeb1223cbc46e7840347adb3e6aa8847",
+  "green-field.svg":
+    "bb2cd32aaa8d6b4bd87af8980a5bb220753bdfafdd953bc4c9b4a861d1e4c233",
+  "violet-night.svg":
+    "2e8d0525784fb6a8b04b82131e9d82cddca52445e21c1faa0baccbc7ad44290c",
+};
+
+export type OrdinaryFixture = "modern" | "legacy1419";
+export type HistoricalSeedManifest = Omit<
+  SandboxSeedManifest,
+  "version" | "media"
+> & {
+  version: 1;
+  media: SandboxSeedManifest["media"][number] | null;
+};
+export type OrdinarySeedManifest = SandboxSeedManifest | HistoricalSeedManifest;
+export type OrdinarySeedState =
+  | { fixture: "modern"; seededManifest: SandboxSeedManifest }
+  | { fixture: "legacy1419"; seededManifest: HistoricalSeedManifest };
+
+export function bindOrdinarySeedState(
+  fixture: OrdinaryFixture,
+  raw: unknown,
+): OrdinarySeedState {
+  const manifest = parseOrdinarySeedManifest(fixture, raw);
+  return fixture === "modern"
+    ? { fixture, seededManifest: manifest as SandboxSeedManifest }
+    : { fixture, seededManifest: manifest as HistoricalSeedManifest };
+}
+
+export function parseOrdinaryFixture(raw: unknown): OrdinaryFixture {
+  if (raw !== "modern" && raw !== "legacy1419")
+    throw new Error("unknown ordinary fixture");
+  return raw;
+}
+
+function record(raw: unknown): Record<string, unknown> {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw))
+    throw new Error("manifest requires an object");
+  return raw as Record<string, unknown>;
+}
+
+/** Selection precedes parsing; the wire representation cannot select policy. */
+export function parseOrdinarySeedManifest(
+  fixture: OrdinaryFixture,
+  raw: unknown,
+): OrdinarySeedManifest {
+  parseOrdinaryFixture(fixture);
+  const manifest = record(raw);
+  const historical = fixture === "legacy1419";
+  if (
+    manifest.version !== (historical ? 1 : 2) ||
+    Object.keys(manifest).length !== 3 ||
+    !Array.isArray(manifest.posts)
+  )
+    throw new Error("manifest does not match selected fixture");
+  const expected = new Set<string>();
+  for (const [author, markdown, org] of [
+    ["user", "horizon-worth-keeping", "calm-field-note"],
+    ["operator", "workshop-checks", "workshop-rhythm"],
+    ["alice", "field-paths", "field-margins"],
+    ["bob", "night-signals", "night-watch"],
+  ]) {
+    for (const slug of [
+      markdown,
+      org,
+      "sandbox-markdown-draft",
+      "sandbox-org-draft",
+      ...Array.from(
+        { length: 12 },
+        (_, i) => `sandbox-post-${String(i + 2).padStart(2, "0")}`,
+      ).filter((slug) => slug !== "sandbox-post-13"),
+    ])
+      expected.add(`${author}/${slug}`);
+    expected.add(`${author}/sandbox-post-14`);
+    expected.add(`${author}/sandbox-post-15`);
+  }
+  for (const slug of [
+    historical ? "baseline-seeded-html" : "formatted-html-title",
+    ...(!historical ? ["formatted-markdown-title", "formatted-org-title"] : []),
+    "baseline-seeded-scheduled",
+    "baseline-seeded-subscribers",
+    "baseline-seeded-private",
+    "baseline-seeded-media-reference",
+  ])
+    expected.add(`alice/${slug}`);
+  if (manifest.posts.length !== expected.size)
+    throw new Error("manifest omitted or added Posts");
+  for (const value of manifest.posts) {
+    const post = record(value);
+    if (
+      Object.keys(post).length !== 7 ||
+      !["author", "title", "slug", "body"].every(
+        (key) => typeof post[key] === "string",
+      ) ||
+      typeof post.format !== "string" ||
+      !["markdown", "org", "html"].includes(post.format) ||
+      typeof post.visibility !== "string" ||
+      !["public", "subscribers", "private"].includes(post.visibility) ||
+      !(
+        post.publishedAt === null ||
+        (typeof post.publishedAt === "string" &&
+          Number.isFinite(Date.parse(post.publishedAt)))
+      ) ||
+      !expected.delete(`${post.author}/${post.slug}`)
+    )
+      throw new Error("malformed or duplicate seeded Post");
+  }
+  const media = historical ? [manifest.media] : manifest.media;
+  if (!Array.isArray(media) || media.length !== (historical ? 1 : 5))
+    throw new Error("manifest omitted Media");
+  const owners = new Map<string, string>([
+    ["baseline-seeded.txt", "alice"],
+    ...(!historical
+      ? ([
+          ["blue-horizon.svg", "user"],
+          ["warm-workshop.svg", "operator"],
+          ["green-field.svg", "alice"],
+          ["violet-night.svg", "bob"],
+        ] as const)
+      : []),
+  ]);
+  for (const value of media) {
+    const item = record(value);
+    if (
+      Object.keys(item).length !== 5 ||
+      typeof item.filename !== "string" ||
+      item.author !== owners.get(item.filename) ||
+      !owners.delete(item.filename) ||
+      typeof item.sha256 !== "string" ||
+      item.sha256 !== SEEDED_MEDIA_SHA256[item.filename] ||
+      item.contentUrl !==
+        `/media/upload/${item.sha256.slice(0, 2)}/${item.sha256.slice(2, 4)}/${item.sha256}/${item.filename}` ||
+      !Number.isSafeInteger(item.sizeBytes) ||
+      Number(item.sizeBytes) <= 0
+    )
+      throw new Error("malformed seeded Media identity");
+    if (
+      item.filename === "baseline-seeded.txt" &&
+      (item.sha256 !==
+        "958e3ce706b2891ab01e58e0f180af8ef646dc9d6368f3a2ba6d6cbff3321c5e" ||
+        item.sizeBytes !== 22)
+    )
+      throw new Error("wrong seeded text Media");
+  }
+  return raw as OrdinarySeedManifest;
+}
+
 /** The subset `applySeededSession` needs — `fixtures.ts`'s `TestUser` also
  *  satisfies it. */
 export type SeededSession = Pick<
@@ -86,19 +240,23 @@ function runSeedTool(args: string[]): SeedRecord {
 }
 
 /** Seed a sandbox profile once and return its exact Rust-owned manifest. */
+export function seedSandboxProfileViaTool(
+  profile: "standard" | "demo",
+): Promise<SandboxSeedManifest>;
+export function seedSandboxProfileViaTool(
+  profile: "demo",
+  fixture: OrdinaryFixture,
+): Promise<OrdinarySeedManifest>;
 export async function seedSandboxProfileViaTool(
   profile: "standard" | "demo",
-): Promise<SandboxSeedManifest> {
-  return withTimedAction(
-    null,
-    "tool.sandbox.seed",
-    async () =>
-      runSeedToolJson([
-        "seed-sandbox-profile",
-        "--profile",
-        profile,
-      ]) as unknown as SandboxSeedManifest,
-  );
+  fixture: OrdinaryFixture = "modern",
+): Promise<OrdinarySeedManifest> {
+  return withTimedAction(null, "tool.sandbox.seed", async () => {
+    const raw = runSeedToolJson(["seed-sandbox-profile", "--profile", profile]);
+    return profile === "demo"
+      ? parseOrdinarySeedManifest(fixture, raw)
+      : (raw as unknown as SandboxSeedManifest);
+  });
 }
 
 /** Create a fresh account + session out-of-band (real storage path, genuinely

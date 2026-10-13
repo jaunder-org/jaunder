@@ -139,6 +139,7 @@ pub struct BaselineLifecycle {
     backup_compatibility: BackupCompatibility,
     harness_ref: String,
     vm_harness_output: Option<PathBuf>,
+    ordinary_fixture: crate::qualification_tooling::OrdinaryFixture,
     nix_cache: PathBuf,
     proxy: Option<Child>,
     proxy_log: Option<PathBuf>,
@@ -238,6 +239,7 @@ impl BaselineLifecycle {
             backup_compatibility: BackupCompatibility::ProductionBaseline,
             harness_ref,
             vm_harness_output: None,
+            ordinary_fixture: crate::qualification_tooling::OrdinaryFixture::Modern,
             nix_cache,
             proxy: None,
             proxy_log: None,
@@ -262,6 +264,21 @@ impl BaselineLifecycle {
             ],
         )?;
         self.vm_harness_output = Some(output.to_owned());
+        Ok(())
+    }
+
+    pub(crate) fn ordinary_fixture(&self) -> crate::qualification_tooling::OrdinaryFixture {
+        self.ordinary_fixture
+    }
+
+    pub(crate) fn select_ordinary_fixture(
+        &mut self,
+        fixture: crate::qualification_tooling::OrdinaryFixture,
+    ) -> Result<()> {
+        if !self.deployments.is_empty() || !self.vm_cache.is_empty() {
+            bail!("ordinary fixture cannot switch after VM preparation");
+        }
+        self.ordinary_fixture = fixture;
         Ok(())
     }
 
@@ -675,14 +692,22 @@ socket.on("end", () => {{
         } else {
             let binding = match &self.vm_harness_output {
                 Some(output) => format!(
-                    "assert harness.packages.${{builtins.currentSystem}}.qualification-harness.outPath == {};",
+                    "assert harness.packages.${{builtins.currentSystem}}.{}.outPath == {};",
+                    self.ordinary_fixture.graph(),
                     serde_json::to_string(output)?,
                 ),
                 // The no-evidence smoke deliberately selects a mutable path flake.
                 None => String::new(),
             };
+            let helper_binding = match &self.vm_harness_output {
+                Some(output) => format!(
+                    "testSupport = builtins.storePath {};",
+                    serde_json::to_string(&crate::qualification_tooling::helper_package(output)?)?
+                ),
+                None => String::new(),
+            };
             let expression = format!(
-                "let harness = builtins.getFlake \"{}\"; package = builtins.storePath \"{}\"; in {binding} (harness.lib.productionBaselineVm {{ system = builtins.currentSystem; backend = \"{}\"; inherit package; }}).config.system.build.vm",
+                "let harness = builtins.getFlake \"{}\"; package = builtins.storePath \"{}\"; in {binding} (harness.lib.productionBaselineVm {{ system = builtins.currentSystem; backend = \"{}\"; inherit package; {helper_binding} }}).config.system.build.vm",
                 self.harness_ref,
                 package.output_path,
                 backend_name(backend),

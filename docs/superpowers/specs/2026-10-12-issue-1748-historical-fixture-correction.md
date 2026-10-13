@@ -1,8 +1,9 @@
 # #1748: Historical ordinary fixture applicability correction
 
-Status: Manager-approved bounded correction; commit this spec through the normal
-hook before implementation. #1760 must first land and be integrated through the
-supported path. No hook waiver or unmerged dependency copy is authorized.
+Status: Manager-approved bounded correction; spec committed through the normal
+hook before implementation. Source implementation and pure focused tests may
+proceed without #1760. Normal Rust commit/push advisory may require legitimate
+landed integration. No hook waiver or unmerged dependency copy is authorized.
 
 ## Purpose and scope
 
@@ -93,7 +94,11 @@ at the same boundary too. Never infer compatibility from returned shape,
 catch/retry with another request, or retain the direct-or-nested payload
 adapter. An incompatible upgrade target fails rather than switching contracts.
 Focused request/response, browser-control and native-body compatibility proof
-precedes positive qualification.
+precedes positive qualification. The same closed selection owns historical
+composer controls inside the shared baseline workflow: direct Format buttons,
+Slug input and `#audience-base`, without modern disclosure controls. Modern
+creation retains shared `composePost` unchanged. No DOM probing, retry or
+fallback selects a control contract.
 
 ## Provenance, guest bindings and evidence
 

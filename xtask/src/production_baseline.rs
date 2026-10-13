@@ -762,6 +762,7 @@ trait BinaryProvenance {
     fn admit(
         &self,
         source: &crate::qualification::SourcePin,
+        fixture: crate::qualification_tooling::OrdinaryFixture,
     ) -> Result<crate::production_baseline_lifecycle::StoreArtifactIdentity>;
 }
 
@@ -772,8 +773,9 @@ impl BinaryProvenance for ExecutingBinaries {
     fn admit(
         &self,
         source: &crate::qualification::SourcePin,
+        fixture: crate::qualification_tooling::OrdinaryFixture,
     ) -> Result<crate::production_baseline_lifecycle::StoreArtifactIdentity> {
-        crate::qualification_tooling::admit_harness(source, &self.gc_root)
+        crate::qualification_tooling::admit_harness(source, &self.gc_root, fixture)
     }
 }
 
@@ -781,7 +783,11 @@ pub(crate) fn verify_styling_tool_source(
     source: &crate::qualification::SourcePin,
     gc_root: &Path,
 ) -> Result<crate::production_baseline_lifecycle::StoreArtifactIdentity> {
-    crate::qualification_tooling::admit_harness(source, gc_root)
+    crate::qualification_tooling::admit_harness(
+        source,
+        gc_root,
+        crate::qualification_tooling::OrdinaryFixture::Modern,
+    )
 }
 
 /// An injected Git boundary. Tests use fixture repositories without network access.
@@ -839,9 +845,22 @@ fn resolve_pair(
     Ok((source, target))
 }
 
+#[cfg(test)]
 fn validate_harness(
     repo: &impl Repository,
     binaries: &impl BinaryProvenance,
+) -> Result<HarnessIdentity> {
+    validate_selected_harness(
+        repo,
+        binaries,
+        crate::qualification_tooling::OrdinaryFixture::Modern,
+    )
+}
+
+fn validate_selected_harness(
+    repo: &impl Repository,
+    binaries: &impl BinaryProvenance,
+    fixture: crate::qualification_tooling::OrdinaryFixture,
 ) -> Result<HarnessIdentity> {
     let dirty = repo.output(&["status", "--porcelain"])?;
     if !dirty.is_empty() {
@@ -850,14 +869,15 @@ fn validate_harness(
     let commit = repo.output(&["rev-parse", "HEAD"])?;
     validate_commit(&commit, "harness commit")?;
     let source = crate::qualification::SourcePin::admit_current(repo.root())?;
-    let tooling = binaries.admit(&source)?;
+    let tooling = binaries.admit(&source, fixture)?;
     source.verify_current(repo.root())?;
     let output = Path::new(&tooling.output_path);
     let seeded_manifest = manifest_identity(
         output.join("seed-manifest-source"),
         "seeded",
-        "fn standard_profile_manifest",
+        fixture.seed_authority(),
     )?;
+    fixture.verify_seed_identity(seeded_manifest.version, &seeded_manifest.sha256)?;
     let operation_manifest = manifest_identity(
         output.join("browser/tests/production-baseline.ts"),
         "operation",
@@ -1249,28 +1269,33 @@ fn run_discovery(
     harness: &HarnessIdentity,
     source: ResolvedRevision,
 ) -> (DiscoveryResult, Result<EvidenceCanaries>, Option<PathBuf>) {
-    run_workflow(root, harness, |lifecycle, recorder, canary_path| {
-        for (source_id, source_backend) in [
-            ("discover-source-sqlite", StorageBackend::Sqlite),
-            ("discover-source-postgres", StorageBackend::Postgres),
-        ] {
-            run_source_matrix(
-                lifecycle,
-                recorder,
-                canary_path,
-                (source_id, source_backend),
-                &source,
-                None,
-                Path::new(&harness.tooling.output_path),
-            )?;
-        }
-        recorder.checks.push(TimedOutcome {
-            id: "upgrade".into(),
-            outcome: TimedOutcomeStatus::Skipped,
-            duration_ms: 0,
-        });
-        Ok(())
-    })
+    run_workflow(
+        root,
+        harness,
+        crate::qualification_tooling::OrdinaryFixture::for_source(&source.commit),
+        |lifecycle, recorder, canary_path| {
+            for (source_id, source_backend) in [
+                ("discover-source-sqlite", StorageBackend::Sqlite),
+                ("discover-source-postgres", StorageBackend::Postgres),
+            ] {
+                run_source_matrix(
+                    lifecycle,
+                    recorder,
+                    canary_path,
+                    (source_id, source_backend),
+                    &source,
+                    None,
+                    Path::new(&harness.tooling.output_path),
+                )?;
+            }
+            recorder.checks.push(TimedOutcome {
+                id: "upgrade".into(),
+                outcome: TimedOutcomeStatus::Skipped,
+                duration_ms: 0,
+            });
+            Ok(())
+        },
+    )
 }
 
 fn run_acceptance(
@@ -1279,28 +1304,34 @@ fn run_acceptance(
     source: ResolvedRevision,
     target: ResolvedRevision,
 ) -> (DiscoveryResult, Result<EvidenceCanaries>, Option<PathBuf>) {
-    run_workflow(root, harness, |lifecycle, recorder, canary_path| {
-        for (source_id, source_backend) in [
-            ("accept-source-sqlite", StorageBackend::Sqlite),
-            ("accept-source-postgres", StorageBackend::Postgres),
-        ] {
-            run_source_matrix(
-                lifecycle,
-                recorder,
-                canary_path,
-                (source_id, source_backend),
-                &source,
-                Some(&target),
-                Path::new(&harness.tooling.output_path),
-            )?;
-        }
-        Ok(())
-    })
+    run_workflow(
+        root,
+        harness,
+        crate::qualification_tooling::OrdinaryFixture::for_source(&source.commit),
+        |lifecycle, recorder, canary_path| {
+            for (source_id, source_backend) in [
+                ("accept-source-sqlite", StorageBackend::Sqlite),
+                ("accept-source-postgres", StorageBackend::Postgres),
+            ] {
+                run_source_matrix(
+                    lifecycle,
+                    recorder,
+                    canary_path,
+                    (source_id, source_backend),
+                    &source,
+                    Some(&target),
+                    Path::new(&harness.tooling.output_path),
+                )?;
+            }
+            Ok(())
+        },
+    )
 }
 
 fn run_workflow(
     root: &Path,
     harness: &HarnessIdentity,
+    fixture: crate::qualification_tooling::OrdinaryFixture,
     graph: impl FnOnce(
         &mut crate::production_baseline_lifecycle::BaselineLifecycle,
         &mut DiscoveryRecorder,
@@ -1324,6 +1355,7 @@ fn run_workflow(
                 Path::new(&harness.tooling.output_path),
             )
         })?;
+        lifecycle.select_ordinary_fixture(fixture)?;
         let canary_path = lifecycle.private_path("run-canaries.jsonl")?;
         fs::File::create(&canary_path)?;
         let result = graph(&mut lifecycle, &mut recorder, &canary_path)
@@ -1471,6 +1503,7 @@ struct BehaviorRequest<'a> {
     phase: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     seed_process: Option<&'a Path>,
+    fixture: crate::qualification_tooling::OrdinaryFixture,
 }
 
 #[derive(Deserialize)]
@@ -1488,6 +1521,7 @@ pub(crate) struct BehaviorSession {
     coordinator: PathBuf,
     state: PathBuf,
     next_sequence: u32,
+    fixture: crate::qualification_tooling::OrdinaryFixture,
 }
 
 impl BehaviorSession {
@@ -1582,6 +1616,7 @@ impl BehaviorSession {
             coordinator,
             state: state.to_owned(),
             next_sequence: 1,
+            fixture: lifecycle.ordinary_fixture(),
         };
         session.wait_for_file("ready", "browser flow readiness")?;
         Ok(session)
@@ -1617,6 +1652,7 @@ impl BehaviorSession {
                 sequence,
                 phase,
                 seed_process,
+                fixture: self.fixture,
             },
         )?;
         self.wait_for_file(
@@ -1670,6 +1706,7 @@ impl BehaviorSession {
                 sequence,
                 phase: "close",
                 seed_process: None,
+                fixture: self.fixture,
             },
         )?;
         self.wait_for_file("closed", "browser flow shutdown")?;
@@ -1749,7 +1786,8 @@ pub fn run(command: ProductionBaselineCommand) -> Result<CommandResult> {
         ),
     };
     let (source, target) = preflight?;
-    let harness = validate_harness(&repo, &binaries)?;
+    let fixture = crate::qualification_tooling::OrdinaryFixture::for_source(&source.commit);
+    let harness = validate_selected_harness(&repo, &binaries, fixture)?;
     let mut commits = vec![harness.commit.as_str(), source.commit.as_str()];
     if let Some(target) = &target {
         commits.push(target.commit.as_str());
@@ -1886,6 +1924,7 @@ mod tests {
         fn admit(
             &self,
             _: &crate::qualification::SourcePin,
+            _: crate::qualification_tooling::OrdinaryFixture,
         ) -> Result<crate::production_baseline_lifecycle::StoreArtifactIdentity> {
             if self.refused {
                 bail!("fixture Nix output admission refused");
@@ -1942,7 +1981,7 @@ mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             let contents = match relative {
                 "test-support/src/lib.rs" => {
-                    "fn standard_profile_manifest() {\nSandboxSeedManifest {\nversion: 1,\n}\n}\n"
+                    "fn standard_profile_manifest() {\nSandboxSeedManifest {\nversion: 2,\n}\n}\n"
                 }
                 "end2end/tests/production-baseline.ts" => {
                     "export const OPERATION_MANIFEST = {\nversion: 1,\n};\n"
@@ -2021,6 +2060,26 @@ mod tests {
         let repository = GitRepository::new(repo.path().to_path_buf());
         let admitted = validate_harness(&repository, &binaries(repo.path())).unwrap();
         assert_eq!(admitted.seeded_manifest.version, 2);
+    }
+
+    #[test]
+    fn historical_admission_rejects_modern_or_wrong_authority_source() {
+        use crate::qualification_tooling::OrdinaryFixture;
+        let repo = repo();
+        let repository = GitRepository::new(repo.path().to_path_buf());
+        let outputs = binaries(repo.path());
+        assert!(
+            validate_selected_harness(&repository, &outputs, OrdinaryFixture::Legacy1419).is_err()
+        );
+        fs::write(
+            outputs.output.path().join("seed-manifest-source"),
+            "pub fn sandbox_profile_manifest() {\nversion: 1,\n}\n",
+        )
+        .unwrap();
+        let error = validate_selected_harness(&repository, &outputs, OrdinaryFixture::Legacy1419)
+            .unwrap_err();
+        assert!(error.to_string().contains("historical seed authority"));
+        assert!(validate_selected_harness(&repository, &outputs, OrdinaryFixture::Modern).is_err());
     }
 
     #[test]
