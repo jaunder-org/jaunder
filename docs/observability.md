@@ -34,6 +34,68 @@ processes, and end-to-end test runner.
   errored/slow traces rather than expecting Jaunder to dump buffered branch logs
   in-process.
 
+### Independent log and trace controls
+
+The server, production CLI commands and `test-support` resolve the same
+immutable telemetry policy at process startup. Ordinary logs still go to stdout;
+native OTLP log routing is separate work (#1743).
+
+| Control                               | Policy                                                                                           |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `JAUNDER_LOG_FILTER`                  | Preferred local ordinary-log filter; otherwise `RUST_LOG`, then ordinary or `--verbose` defaults |
+| `JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT` | Preferred traces/metrics endpoint; otherwise `OTEL_EXPORTER_OTLP_ENDPOINT`                       |
+
+The local filter accepts tracing filter grammar, including levels, target/span
+selectors and `off`. Ordinary defaults remain WARN for application targets and
+INFO for storage; `--verbose` raises application/storage targets to DEBUG and
+SQLx to INFO. A configured local override takes precedence over those defaults.
+Invalid local input retains its existing default fallback. Pretty and JSON
+formats retain the same local-output policy.
+
+With an endpoint configured, the OTLP trace layer admits generated application
+spans and permitted span events at every level, including DEBUG and TRACE,
+without application-level severity, target or context filtering. For example,
+`JAUNDER_LOG_FILTER=warn` keeps local logs quiet while OTLP spans remain
+available; local `off` does not disable OTLP spans, metrics, independent WARN+
+diagnostic capture or the panic hook. No endpoint means no OTLP provider/export;
+local logs and diagnostic context remain available without a Collector.
+
+The SDK uses `Sampler::AlwaysOn` for Jaunder's spans, even when a valid incoming
+W3C parent's sampled flag is clear. Its trace ID and parent span ID are
+preserved; Jaunder does not recover upstream spans the caller discarded.
+Endpoint precedence and provider flushing remain intact. Export is best-effort:
+bounded buffering, Collector outages, exporter failures or abrupt process death
+can lose data. Unfiltered admission covers instrumentation present in the
+binary, not instrumentation a compiler or dependency never generated.
+
+**Compatibility change:** `JAUNDER_LOG_FILTER`, `RUST_LOG` and `--verbose`
+control local output only, not OTLP retention. There is no application trace
+filter or sampling knob. Quiet local logs can accompany increased Collector
+volume, including DEBUG/TRACE spans and events. Budget Collector storage and
+configure Collector-side sampling, filtering and retention there.
+
+HTTP parent extraction/adoption follows the installed tracer/subscriber
+capability. Without a tracer, requests do not attempt assignment. With the
+unfiltered tracer, requests adopt valid W3C parents before SDK context starts;
+missing/invalid headers remain ordinary root-context cases. HTTP `x-request-id`
+values are preserved or generated and propagated in response headers, not
+exported as span attributes. OTLP correlation uses the top-level trace ID, span
+ID and parent span ID, including same-trace child operations.
+
+Genuine assignment failures use local stderr with bounded reasons
+`otel-layer-missing`, `span-already-started` or `span-disabled`, never raw
+headers or arbitrary source text. SDK/exporter, configuration, formatter and
+shutdown fallbacks likewise remain local and outside failing/native export paths
+to avoid recursion. Error `SpanTrace` initial and late-recorded fields survive
+filtered or absent stdout in either pretty or JSON mode. Unfiltered output does
+not broaden privacy, redaction or sink-specific field admission: HTTP fields
+remain method, path-only URI, version and bounded trusted-proxy outcome, never
+queries, whole headers or raw parent input. Independent diagnostics are not OTLP
+logs; native OTLP logs and their lifetime/no-mirroring proof remain #1743 work.
+
+See the
+[Collector-owned retention decision](adr/drafts/independent-log-and-trace-filtering.md).
+
 ### Backend Saturation Gauges
 
 The backend exports these asynchronous gauge instruments through

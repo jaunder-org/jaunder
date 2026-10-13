@@ -26,6 +26,21 @@ fn devtool_csr_bundle_args() -> [&'static str; 6] {
     ]
 }
 
+fn wasm_cargo_args(release: bool) -> Vec<&'static str> {
+    let mut args = vec![
+        "build",
+        "--locked",
+        "-p",
+        "csr",
+        "--target",
+        "wasm32-unknown-unknown",
+    ];
+    if release {
+        args.push("--release");
+    }
+    args
+}
+
 /// Build `csr` to wasm and post-process it into the served bundle. `release`
 /// selects the optimized profile (CI parity); the default debug build is faster
 /// for the dev loop.
@@ -42,10 +57,7 @@ pub fn run(sh: &Shell, result: &mut CommandResult, release: bool) {
     sh.change_dir(&root);
 
     let profile = if release { "release" } else { "debug" };
-    let mut cargo_args = vec!["build", "-p", "csr", "--target", "wasm32-unknown-unknown"];
-    if release {
-        cargo_args.push("--release");
-    }
+    let cargo_args = wasm_cargo_args(release);
     let wasm_start = Instant::now();
     if cmd!(sh, "cargo").args(cargo_args).run().is_err() {
         result.push(
@@ -107,6 +119,33 @@ pub fn run(sh: &Shell, result: &mut CommandResult, release: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wasm_launch_locks_debug_and_release_inputs() {
+        assert_eq!(
+            wasm_cargo_args(false),
+            [
+                "build",
+                "--locked",
+                "-p",
+                "csr",
+                "--target",
+                "wasm32-unknown-unknown"
+            ]
+        );
+        assert_eq!(
+            wasm_cargo_args(true),
+            [
+                "build",
+                "--locked",
+                "-p",
+                "csr",
+                "--target",
+                "wasm32-unknown-unknown",
+                "--release"
+            ]
+        );
+    }
 
     #[test]
     fn csr_bundle_launch_locks_the_tools_workspace() {

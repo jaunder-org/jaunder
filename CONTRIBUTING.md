@@ -1203,6 +1203,29 @@ cargo xtask test-local -- -p jaunder
 cargo xtask test-local -- -p storage site_config_primitives_round_trip
 ```
 
+Before compiling or running product tests, `test-local` owns the checkout-local
+`.xtask/host-artifacts.lock` through consumer compilation and resolves one
+absolute `JAUNDER_CSR_BUNDLE_DIR`. Without an explicit input it runs the
+checked-out, locked `build-csr` producer in debug mode and validates the
+complete result, rather than accepting a possibly stale `target/site`. A
+historical local producer took about 620 seconds; this roughly ten-minute
+prerequisite cost also applies to the shared product-test lane in `check` and
+`prepush`. After launcher realization, the product-test work remains host-native
+and does not invoke Nix check derivations.
+
+An explicit `JAUNDER_CSR_BUNDLE_DIR` is intentional input: missing or invalid
+CSR manifest/representations, rendered shell, or system-artifact inventory fails
+before test compilation, with no fallback production. Supply it only from
+matching resolved producer source inputs, toolchain and profile, or
+independently verified equivalent inputs. The validators establish internal
+integrity, **not source provenance**; bundle hashes, existence or matching HEAD
+alone do not establish source equivalence. Arbitrary cross-source reuse is not
+supported. The input's owner must consent to keeping it stable throughout
+compilation; checkout-local advisory locking cannot protect a foreign root or an
+uncooperative direct producer. Cooperating host artifact preparation uses the
+same lock. Bare/dependency compilation may still produce an empty non-production
+embed; that permission does not make a runnable test fixture deployable.
+
 To use a persistent instance instead (e.g. the dev VM), set the env yourself:
 
 ```bash

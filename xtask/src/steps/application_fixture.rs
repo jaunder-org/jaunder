@@ -15,8 +15,9 @@ pub(super) struct PreparedApplication {
 }
 
 impl PreparedApplication {
-    pub(super) fn prepare(root: &Path, env: &[(String, String)]) -> Result<Self> {
-        let output = std::process::Command::new("cargo")
+    pub(super) fn prepare(sh: &xshell::Shell, env: &[(String, String)]) -> Result<Self> {
+        let mut command = sh
+            .cmd("cargo")
             .args([
                 "build",
                 "--locked",
@@ -26,8 +27,12 @@ impl PreparedApplication {
                 "jaunder",
                 "--message-format=json",
             ])
-            .current_dir(root)
-            .envs(env.iter().map(|(key, value)| (key, value)))
+            .quiet()
+            .ignore_status();
+        for (key, value) in env {
+            command = command.env(key, value);
+        }
+        let output = command
             .output()
             .context("build production application fixture")?;
         if !output.status.success() {
@@ -38,7 +43,7 @@ impl PreparedApplication {
         }
         let artifacts =
             std::str::from_utf8(&output.stdout).context("application artifact encoding")?;
-        let executable = executable_from_artifacts(root, artifacts)?;
+        let executable = executable_from_artifacts(&sh.current_dir(), artifacts)?;
         Self::retain(&executable)
     }
 

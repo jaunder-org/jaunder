@@ -2216,8 +2216,9 @@ commands, and `test-support` all hold the same `host::telemetry` guard for
 process-wide OTLP setup and shutdown. `server::observability` owns server-scoped
 HTTP tracing and e2e diagnostics. `host::telemetry::init_tracing` installs the
 OTLP tracer and meter only when `JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT` (fallback
-`OTEL_EXPORTER_OTLP_ENDPOINT`) is set; with no endpoint every emit is a no-op,
-and exporter-setup failure is non-fatal. `with_http_observability`
+`OTEL_EXPORTER_OTLP_ENDPOINT`) is set; without an endpoint neither OTLP signal
+exports, while local logs and diagnostic span context remain available.
+Exporter-setup failure is non-fatal. `with_http_observability`
 (`server/src/observability/http.rs`) layers the per-request tracing span onto
 the router, together with a `tower-http` `x-request-id` that it mints when
 absent and propagates onto the response. Inbound W3C `traceparent` headers are
@@ -2245,6 +2246,44 @@ The
 adds PII- and secret-free structured OpenTelemetry signals at transient-data
 state transitions: expiry, consumption, completion, exhaustion, and cleanup. The
 operator, rather than Jaunder, owns long-term telemetry retention.
+
+### Local logging and Collector-owned OTLP retention
+
+The
+[Collector-owned retention decision](adr/drafts/independent-log-and-trace-filtering.md)
+for #1742 governs the implemented host telemetry policy. Local output retains
+`JAUNDER_LOG_FILTER` / `RUST_LOG` precedence and ordinary/verbose defaults,
+exposed through a local-only `TelemetryConfig::local_log_filter()` accessor.
+
+The OTLP layer admits generated application spans/events without severity,
+target or context filtering and requires no per-span admission marker or
+application retention knob. `Sampler::AlwaysOn` records Jaunder spans even if an
+incoming W3C sampled hint is clear, while preserving the trace and parent IDs.
+Collector preservation is independent of local verbosity; unfiltered admission
+is not guaranteed transport delivery or recovery of data the caller discarded.
+Increased span/event volume requires Collector-side capacity and retention
+decisions.
+
+A fixed, non-configurable per-OTLP-layer SDK-context guard isolates SDK
+self-observation only, not application retention. Public context activation
+preserves suppression when SDK work enters admitted application spans. An owned
+private exporter-only runtime keeps transport workers and their connection and
+reconnect descendants suppressed, using ordinary trace/metric SDK builders. The
+telemetry guard shuts down the metric provider, then the trace provider, then
+that runtime with a fixed five-second best-effort runtime budget. Residual
+blocking work can outlive runtime shutdown; joining its owner does not prove all
+work stopped. Repeated same-span entries exited out of order have the
+external-context/suppression limitation documented in the decision; no arbitrary
+entry-instance restoration is promised.
+
+Installed tracer/subscriber capability enables HTTP extraction/adoption without
+per-span bookkeeping or starting SDK context to decide admission. HTTP request
+IDs remain request/response headers, distinct from OTLP trace/span/parent
+identities. Independent ErrorLayer initial/late field storage, local
+diagnostics/panic capture, privacy, endpoint and metrics contracts remain. Local
+fallback diagnostics stay outside native/failing export paths. Native OTLP logs
+are future #1743 work, including routing, no mirroring and logger lifetime; that
+sink's unfiltered contract does not consume local verbosity policy.
 
 ### Server-fn span names are macro-derived
 
