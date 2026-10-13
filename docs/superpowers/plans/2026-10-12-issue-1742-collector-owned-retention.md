@@ -46,7 +46,17 @@ storage/schema or UI changes.
     missing/invalid headers, no-tracer silence and real lifecycle failure;
     existing field/formatter/diagnostic/panic/metric controls remain green.
 - [ ] **3. Re-prove delivery boundaries and publish the handoff.**
-  - Depends on 1–2. Update operator guidance and project the approved numberless
+  - Depends on 1–2. First prove the approved bounded patch-free SDK isolation
+    candidate: fixed dynamic OTLP-layer SDK-context guard, public
+    suppression-preserving activation, and exporter-only runtime with ordinary
+    trace/metric builders. Use the accepted fixed five-second runtime shutdown
+    budget after both providers; characterize possible residual blocking work
+    with an owned-release proof. Document the repeated same-span out-of-order
+    external-context/suppression limitation without adding API restrictions;
+    prove distinguishable-context LIFO restoration and compare the pinned
+    bridge's ordinary latest-ID behavior. Focused tests do not certify transport
+    delivery or Collector feedback; keep this task incomplete until its full
+    proof succeeds. Update operator guidance and project the approved numberless
     decision from proposal to implemented reality. Confirm #1743's unfiltered
     native-log/local-only contract; its
     all-severity/no-mirroring/logger-lifetime proofs remain with its owner.

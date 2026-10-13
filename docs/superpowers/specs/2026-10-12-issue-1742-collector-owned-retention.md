@@ -36,7 +36,12 @@ outcome.
   shutdown and transport behavior remain. "Unfiltered" is not a guarantee of
   delivery when the Collector is unavailable or the process dies. It applies to
   instrumentation present in the binary, not instrumentation the compiler or a
-  dependency never produced.
+  dependency never produced. Exporter-only runtime shutdown follows both
+  provider shutdowns with a fixed five-second best-effort budget, without a
+  configuration knob. Unfinished blocking work may remain until it returns or
+  the process exits, including when the telemetry guard is dropped while the
+  process continues. Joining the runtime owner does not prove that work stopped;
+  Tokio's shutdown API reports no timeout outcome.
 - No endpoint means no OTLP provider/export. Continue local logging, independent
   WARN+ diagnostics, panic capture and error span context. Parent extraction and
   adoption follow the actual installed tracer/subscriber capability; with no
@@ -57,9 +62,19 @@ outcome.
   do not introduce a second OTLP log filter. This supersedes the earlier shared
   ordinary-log policy for whichever physical sink is active.
 - Unfiltered output does not bypass privacy/redaction/sink-specific field rules
-  or turn independent local diagnostic transports into OTLP logs. Keep SDK,
-  exporter, configuration, shutdown, field-format and parent-assignment local
-  fallbacks outside the failing/native export pipeline to avoid recursion.
+  or turn independent local diagnostic transports into OTLP logs. A fixed,
+  non-configurable per-OTLP-layer SDK-context suppression guard is permitted
+  solely for SDK self-observation isolation, not application retention. Preserve
+  suppression through application-span activation and exporter-only transport
+  execution; ordinary application telemetry remains unfiltered. Known activation
+  limitation: repeated entries of the same tracing span exited out of order can
+  expose an interleaved external OpenTelemetry context early, and can lose
+  suppression after that external scope exits. Callbacks have no entry-instance
+  identity; the pinned bridge has the same latest-span-ID exit behavior. This is
+  documentation, not an API restriction or enforcement rule; no arbitrary
+  entry-instance restoration is promised. Keep SDK, exporter, configuration,
+  shutdown, field-format and parent-assignment local fallbacks outside the
+  failing/native export pipeline to avoid recursion.
 - Update the unlanded numberless ADR and architecture projection to the selected
   policy, and document local versus OTLP behavior, explicit AlwaysOn semantics,
   endpoint enablement, compatibility and Collector volume/retention ownership.

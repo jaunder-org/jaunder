@@ -1449,6 +1449,7 @@ dependencies = [
  "strum 0.28.0",
  "syntastica-queries",
  "thiserror 2.0.20",
+ "tokio",
  "tracing",
  "tracing-error",
  "tracing-log",

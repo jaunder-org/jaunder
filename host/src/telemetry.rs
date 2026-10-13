@@ -7,6 +7,7 @@
 //! [`TelemetryGuard`] whose drop path flushes short-lived process telemetry
 //! before exit. Server-only request diagnostics stay in `server::observability`.
 
+mod sdk_boundary;
 mod span_fields;
 use std::time::{Duration, Instant};
 
@@ -92,6 +93,8 @@ impl TelemetryConfig {
 
 #[derive(Clone, Copy)]
 enum FallbackKind {
+    ExporterRuntimeSetup,
+    ExporterRuntimeShutdown,
     TracerExporterSetup,
     MeterExporterSetup,
     MeterShutdown,
@@ -107,6 +110,14 @@ enum FallbackKind {
 impl FallbackKind {
     fn parts(self) -> (&'static str, &'static str) {
         match self {
+            Self::ExporterRuntimeSetup => (
+                "host.telemetry.exporter_runtime_setup",
+                "telemetry export disabled",
+            ),
+            Self::ExporterRuntimeShutdown => (
+                "host.telemetry.exporter_runtime_shutdown",
+                "telemetry shutdown failed",
+            ),
             Self::TracerExporterSetup => (
                 "host.telemetry.tracer_exporter_setup",
                 "tracing export disabled",
@@ -526,7 +537,15 @@ where
                 .boxed()
         }
     });
-    let otel_layer = tracer.map(|tracer| tracing_opentelemetry::layer().with_tracer(tracer));
+    let otel_layer = tracer.map(|tracer| {
+        tracing_opentelemetry::layer()
+            .with_tracer(tracer)
+            .with_context_activation(false)
+            // SDK-owned suppression is fixed isolation, never a local verbosity policy.
+            .with_filter(tracing_subscriber::filter::dynamic_filter_fn(|_, _| {
+                !opentelemetry::Context::is_current_telemetry_suppressed()
+            }))
+    });
     tracing_subscriber::registry()
         .with(extra_layer)
         .with(
@@ -540,6 +559,12 @@ where
         )
         .with(fmt_layer)
         .with(otel_layer)
+        // Option<Layer> does not forward dispatch registration; keep activation
+        // outside that adapter so it receives the owning weak dispatch.
+        .with(
+            sdk_boundary::Activation::new()
+                .with_filter(tracing_subscriber::filter::filter_fn(span_metadata_only)),
+        )
 }
 
 fn init_tracing_impl_with_layer<L>(
@@ -564,25 +589,43 @@ where
     let endpoint = config.otlp_endpoint.clone();
     let resource = telemetry_resource(config.e2e_seed_process.clone());
 
-    let tracer = endpoint.as_deref().and_then(|endpoint| {
-        setup_otel_tracer_with(
-            endpoint,
-            |endpoint| build_otel_tracer(endpoint, resource.clone()),
-            |error| {
-                exporter_fallback(FallbackKind::TracerExporterSetup, error);
-            },
-        )
-    });
+    let exporter_runtime =
+        endpoint
+            .as_ref()
+            .and_then(|_| match sdk_boundary::ExporterRuntime::new() {
+                Ok(runtime) => Some(runtime),
+                Err(error) => {
+                    exporter_fallback(FallbackKind::ExporterRuntimeSetup, &error.into());
+                    None
+                }
+            });
+    let tracer =
+        endpoint
+            .as_deref()
+            .zip(exporter_runtime.as_ref())
+            .and_then(|(endpoint, runtime)| {
+                setup_otel_tracer_with(
+                    endpoint,
+                    |endpoint| runtime.in_scope(|| build_otel_tracer(endpoint, resource.clone())),
+                    |error| {
+                        exporter_fallback(FallbackKind::TracerExporterSetup, error);
+                    },
+                )
+            });
     // Metrics share the OTLP endpoint with traces; setup failure is non-fatal.
-    let meter = endpoint.as_deref().and_then(|endpoint| {
-        setup_otel_meter_with(
-            endpoint,
-            |endpoint| build_otel_meter(endpoint, resource),
-            |error| {
-                exporter_fallback(FallbackKind::MeterExporterSetup, error);
-            },
-        )
-    });
+    let meter =
+        endpoint
+            .as_deref()
+            .zip(exporter_runtime.as_ref())
+            .and_then(|(endpoint, runtime)| {
+                setup_otel_meter_with(
+                    endpoint,
+                    |endpoint| runtime.in_scope(|| build_otel_meter(endpoint, resource)),
+                    |error| {
+                        exporter_fallback(FallbackKind::MeterExporterSetup, error);
+                    },
+                )
+            });
 
     let subscriber_installed = install_subscriber_with(
         || {
@@ -597,6 +640,7 @@ where
     );
 
     TelemetryGuard {
+        exporter_runtime,
         meter,
         tracer,
         subscriber_installed,
@@ -646,6 +690,7 @@ type TracerShutdownOperation =
 /// Both fields are `None` when no OTLP endpoint is configured, making the guard
 /// an inert no-op (the common dev/test case).
 pub struct TelemetryGuard {
+    exporter_runtime: Option<sdk_boundary::ExporterRuntime>,
     meter: Option<opentelemetry_sdk::metrics::SdkMeterProvider>,
     tracer: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
     subscriber_installed: bool,
@@ -715,6 +760,8 @@ impl Drop for TelemetryGuard {
         if let Some(tracer) = self.tracer.as_ref() {
             finish_tracer_shutdown(tracer, self.tracer_shutdown);
         }
+        // Both SDK workers can flush via transport until shutdown finishes.
+        drop(self.exporter_runtime.take());
     }
 }
 
@@ -834,6 +881,452 @@ mod tests {
                 "{verbose}/{log:?}"
             );
         }
+    }
+
+    #[test]
+    fn sdk_suppressed_export_work_does_not_generate_otlp_spans() {
+        use opentelemetry::trace::Tracer as _;
+        let exporter = InMemorySpanExporter::default();
+        let provider = tracer_provider_builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let tracer = provider.tracer("suppression-proof");
+        let subscriber = compose_subscriber(
+            &configured_local_policy(false, Some("off"), None),
+            None::<tracing_subscriber::layer::Identity>,
+            Some(tracer.clone()),
+            None::<Shared>,
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            let _sdk_scope = opentelemetry::Context::enter_telemetry_suppressed_scope();
+            drop(tracer.start("direct_sdk_control"));
+            let export_work = tracing::trace_span!(parent: None, "export_transport");
+            drop(export_work);
+        });
+        provider.force_flush().expect("flush");
+        let spans = exporter.get_finished_spans().expect("spans");
+        assert!(
+            spans.is_empty(),
+            "SDK suppression must also cover tracing's explicit-root transport work: {:?}",
+            spans.iter().map(|s| s.name.as_ref()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn sdk_boundary_span_and_event_admission_is_dynamic_and_birth_scoped() {
+        use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+        fn same_callsite() -> tracing::Span {
+            tracing::trace_span!(parent: None, "same_callsite")
+        }
+        let exporter = InMemorySpanExporter::default();
+        let provider = tracer_provider_builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let subscriber = compose_subscriber(
+            &configured_local_policy(false, Some("trace"), None),
+            None::<tracing_subscriber::layer::Identity>,
+            Some(provider.tracer("boundary")),
+            Some(Shared(Arc::new(Mutex::new(Vec::new())))),
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            let app = tracing::info_span!("application");
+            let late = {
+                let _scope = opentelemetry::Context::enter_telemetry_suppressed_scope();
+                let root = same_callsite();
+                let explicit = tracing::trace_span!(parent: &app, "sdk_explicit");
+                app.in_scope(|| {
+                    let contextual = tracing::trace_span!("sdk_contextual");
+                    tracing::error!("sdk_contextual_event");
+                    drop(contextual);
+                });
+                tracing::error!(parent: &app, "sdk_explicit_event");
+                drop(explicit);
+                root
+            };
+            // A filtered birth cannot be resurrected by a late parent or close.
+            // The public extension returns Ok even when no bridge data exists;
+            // exported absence below, not its return value, proves no resurrection.
+            let _result = late.set_parent(opentelemetry::Context::new());
+            drop(late);
+            drop(same_callsite());
+            app.in_scope(|| tracing::info!("application_event"));
+            // Closing an admitted application span inside SDK work must still export it.
+            let _scope = opentelemetry::Context::enter_telemetry_suppressed_scope();
+            drop(app);
+        });
+        provider.force_flush().expect("flush");
+        let spans = exporter.get_finished_spans().expect("spans");
+        let names: Vec<_> = spans.iter().map(|s| s.name.as_ref()).collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+        assert!(names.contains(&"application"));
+        assert!(names.contains(&"same_callsite"));
+        let app = spans.iter().find(|s| s.name == "application").expect("app");
+        assert_eq!(app.events.events.len(), 1);
+        assert_eq!(app.events.events[0].name, "application_event");
+        assert_eq!(app.status, opentelemetry::trace::Status::Unset);
+    }
+
+    #[test]
+    fn sdk_boundary_activation_preserves_suppression_and_direct_sdk_parent() {
+        use opentelemetry::trace::{TraceContextExt as _, Tracer as _};
+        let exporter = InMemorySpanExporter::default();
+        let provider = tracer_provider_builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let tracer = provider.tracer("activation");
+        let subscriber = compose_subscriber(
+            &configured_local_policy(false, Some("off"), None),
+            None::<tracing_subscriber::layer::Identity>,
+            Some(tracer.clone()),
+            None::<Shared>,
+        );
+        let original = opentelemetry::Context::current()
+            .span()
+            .span_context()
+            .clone();
+        tracing::subscriber::with_default(subscriber, || {
+            let app = tracing::info_span!("application");
+            let first = app.enter();
+            let parent = opentelemetry::Context::current()
+                .span()
+                .span_context()
+                .clone();
+            assert!(parent.is_valid());
+            drop(tracer.start("direct_child"));
+            let repeated = app.enter();
+            // Equivalent contexts cannot distinguish repeated entry identities;
+            // interleaved external-context behavior has separate characterization.
+            drop(first);
+            assert_eq!(
+                opentelemetry::Context::current().span().span_context(),
+                &parent
+            );
+            drop(repeated);
+            assert_eq!(
+                opentelemetry::Context::current().span().span_context(),
+                &original
+            );
+            {
+                let _scope = opentelemetry::Context::enter_telemetry_suppressed_scope();
+                app.in_scope(|| {
+                    assert!(opentelemetry::Context::is_current_telemetry_suppressed());
+                    drop(tracer.start("suppressed_direct_child"));
+                    drop(tracing::trace_span!(parent: None, "suppressed_root"));
+                    let nested = tracing::trace_span!("suppressed_nested");
+                    nested.in_scope(|| {
+                        assert!(opentelemetry::Context::is_current_telemetry_suppressed());
+                    });
+                });
+                assert!(opentelemetry::Context::is_current_telemetry_suppressed());
+            }
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _entered = app.enter();
+                let nested = tracing::info_span!("nested_application");
+                let _nested = nested.enter();
+                panic!("activation unwind proof");
+            }));
+            assert!(panic.is_err());
+            assert!(!opentelemetry::Context::is_current_telemetry_suppressed());
+            assert_eq!(
+                opentelemetry::Context::current().span().span_context(),
+                &original
+            );
+        });
+        provider.force_flush().expect("flush");
+        let spans = exporter.get_finished_spans().expect("spans");
+        let app = spans.iter().find(|s| s.name == "application").expect("app");
+        let child = spans
+            .iter()
+            .find(|s| s.name == "direct_child")
+            .expect("child");
+        assert_eq!(child.parent_span_id, app.span_context.span_id());
+        assert_eq!(child.span_context.trace_id(), app.span_context.trace_id());
+        assert_eq!(spans.len(), 3, "{spans:?}");
+    }
+
+    #[test]
+    fn sdk_boundary_repeated_entry_known_out_of_order_external_context_limitation() {
+        assert_repeated_entry_interleaving(false, false, false);
+    }
+
+    #[test]
+    fn sdk_boundary_repeated_entry_known_out_of_order_suppression_limitation() {
+        assert_repeated_entry_interleaving(true, false, false);
+    }
+
+    #[test]
+    fn sdk_boundary_repeated_entry_lifo_restores_distinguishable_external_context() {
+        assert_repeated_entry_interleaving(false, true, false);
+    }
+
+    #[test]
+    fn sdk_boundary_repeated_entry_lifo_restores_interleaved_suppression() {
+        assert_repeated_entry_interleaving(true, true, false);
+    }
+
+    #[test]
+    fn sdk_boundary_repeated_entry_pinned_bridge_has_same_ordinary_limitation() {
+        assert_repeated_entry_interleaving(false, false, true);
+    }
+
+    fn assert_repeated_entry_interleaving(suppressed: bool, lifo: bool, pinned_bridge: bool) {
+        use opentelemetry::trace::TraceContextExt as _;
+        #[derive(Debug, PartialEq)]
+        struct ExternalMarker;
+        {
+            let provider = tracer_provider_builder()
+                .with_simple_exporter(InMemorySpanExporter::default())
+                .build();
+            let dispatch = if pinned_bridge {
+                tracing::Dispatch::new(tracing_subscriber::registry().with(
+                    tracing_opentelemetry::layer().with_tracer(provider.tracer("pinned-bridge")),
+                ))
+            } else {
+                tracing::Dispatch::new(compose_subscriber(
+                    &configured_local_policy(false, Some("off"), None),
+                    None::<tracing_subscriber::layer::Identity>,
+                    Some(provider.tracer("interleaved-entry")),
+                    None::<Shared>,
+                ))
+            };
+            tracing::dispatcher::with_default(&dispatch, || {
+                let original = opentelemetry::Context::current();
+                let app = tracing::info_span!("interleaved_application");
+                let first = app.enter();
+                let app_context = opentelemetry::Context::current()
+                    .span()
+                    .span_context()
+                    .clone();
+                let external = opentelemetry::Context::new().with_value(ExternalMarker);
+                let external = if suppressed {
+                    external.with_telemetry_suppressed()
+                } else {
+                    external
+                };
+                let external_scope = external.attach();
+                let second = app.enter();
+                let before_exit = opentelemetry::Context::current();
+                let remaining = if lifo {
+                    drop(second);
+                    first
+                } else {
+                    // Known limitation: callback IDs cannot tell this exit from
+                    // the second entry's exit. It pops the second activation.
+                    drop(first);
+                    second
+                };
+                let after_entry_exit = opentelemetry::Context::current();
+                drop(external_scope);
+                let after_external_exit = opentelemetry::Context::current();
+                drop(remaining);
+                let restored = opentelemetry::Context::current();
+                assert_eq!(before_exit.span().span_context(), &app_context);
+                assert_eq!(before_exit.is_telemetry_suppressed(), suppressed);
+                assert!(!after_entry_exit.span().span_context().is_valid());
+                assert_eq!(
+                    after_entry_exit.get::<ExternalMarker>(),
+                    Some(&ExternalMarker)
+                );
+                assert_eq!(after_entry_exit.is_telemetry_suppressed(), suppressed);
+                assert_eq!(after_external_exit.span().span_context(), &app_context);
+                assert!(after_external_exit.get::<ExternalMarker>().is_none());
+                // Correct first-entry restoration for LIFO; known early exposure
+                // of that unsuppressed activation when the second entry is alive.
+                assert!(!after_external_exit.is_telemetry_suppressed());
+                assert_eq!(
+                    restored.span().span_context(),
+                    original.span().span_context()
+                );
+                assert_eq!(
+                    restored.is_telemetry_suppressed(),
+                    original.is_telemetry_suppressed()
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn sdk_boundary_runtime_worker_cannot_clear_suppression_by_entering_application_span() {
+        let runtime = sdk_boundary::ExporterRuntime::new().expect("runtime");
+        let exporter = InMemorySpanExporter::default();
+        let provider = tracer_provider_builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let subscriber = compose_subscriber(
+            &configured_local_policy(false, Some("off"), None),
+            None::<tracing_subscriber::layer::Identity>,
+            Some(provider.tracer("runtime")),
+            None::<Shared>,
+        );
+        let (done, received) = std::sync::mpsc::channel();
+        tracing::subscriber::with_default(subscriber, || {
+            let app = tracing::info_span!("runtime_application");
+            runtime.in_scope(|| {
+                tokio::spawn(async move {
+                    app.in_scope(|| {
+                        assert!(opentelemetry::Context::is_current_telemetry_suppressed());
+                        drop(tracing::trace_span!(parent: None, "sdk_transport_root"));
+                        tracing::error!(parent: &app, "sdk_transport_event");
+                    });
+                    tokio::task::yield_now().await;
+                    assert!(opentelemetry::Context::is_current_telemetry_suppressed());
+                    drop(app);
+                    done.send(()).expect("done");
+                });
+            });
+            received
+                .recv_timeout(Duration::from_secs(5))
+                .expect("worker completed");
+            assert!(!opentelemetry::Context::is_current_telemetry_suppressed());
+        });
+        provider.force_flush().expect("flush");
+        let spans = exporter.get_finished_spans().expect("spans");
+        assert_eq!(spans.len(), 1, "{spans:?}");
+        assert_eq!(spans[0].name, "runtime_application");
+        assert!(spans[0].events.events.is_empty());
+        drop(runtime);
+    }
+
+    #[tokio::test]
+    async fn sdk_boundary_guard_keeps_transport_alive_through_both_provider_shutdowns() {
+        use opentelemetry::metrics::MeterProvider as _;
+        use opentelemetry::trace::Tracer as _;
+        use opentelemetry_sdk::metrics::exporter::PushMetricExporter;
+        #[derive(Clone, Debug)]
+        struct Probe {
+            handle: tokio::runtime::Handle,
+            output: std::sync::mpsc::Sender<&'static str>,
+        }
+        impl Probe {
+            async fn transport(&self, signal: &'static str) {
+                let output = self.output.clone();
+                self.handle
+                    .spawn(async move {
+                        tokio::task::yield_now().await;
+                        assert!(opentelemetry::Context::is_current_telemetry_suppressed());
+                        output.send(signal).expect("export signal");
+                    })
+                    .await
+                    .expect("export transport");
+            }
+        }
+        impl SpanExporter for Probe {
+            async fn export(
+                &self,
+                batch: Vec<SpanData>,
+            ) -> opentelemetry_sdk::error::OTelSdkResult {
+                assert!(batch.iter().any(|span| span.name == "shutdown_span"));
+                self.transport("trace").await;
+                Ok(())
+            }
+        }
+        impl PushMetricExporter for Probe {
+            async fn export(
+                &self,
+                metrics: &opentelemetry_sdk::metrics::data::ResourceMetrics,
+            ) -> opentelemetry_sdk::error::OTelSdkResult {
+                assert!(
+                    metrics
+                        .scope_metrics()
+                        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+                        .any(|metric| metric.name() == "shutdown.counter")
+                );
+                self.transport("metric").await;
+                Ok(())
+            }
+            fn force_flush(&self) -> opentelemetry_sdk::error::OTelSdkResult {
+                Ok(())
+            }
+            fn shutdown_with_timeout(
+                &self,
+                _timeout: Duration,
+            ) -> opentelemetry_sdk::error::OTelSdkResult {
+                Ok(())
+            }
+            fn temporality(&self) -> opentelemetry_sdk::metrics::Temporality {
+                opentelemetry_sdk::metrics::Temporality::Cumulative
+            }
+        }
+        let runtime = sdk_boundary::ExporterRuntime::new().expect("runtime");
+        let (output, received) = std::sync::mpsc::channel();
+        let probe = runtime.in_scope(|| Probe {
+            handle: tokio::runtime::Handle::current(),
+            output,
+        });
+        let tracer = tracer_provider_builder()
+            .with_batch_exporter(probe.clone())
+            .build();
+        let meter = SdkMeterProvider::builder()
+            .with_periodic_exporter(probe)
+            .build();
+        drop(tracer.tracer("shutdown").start("shutdown_span"));
+        meter
+            .meter("shutdown")
+            .u64_counter("shutdown.counter")
+            .build()
+            .add(1, &[]);
+        drop(TelemetryGuard {
+            exporter_runtime: Some(runtime),
+            meter: Some(meter),
+            tracer: Some(tracer),
+            subscriber_installed: true,
+            meter_shutdown: shutdown_meter,
+            tracer_shutdown: shutdown_tracer,
+        });
+        let signals: Vec<_> = received.try_iter().collect();
+        assert_eq!(signals, ["metric", "trace"]);
+        assert!(!opentelemetry::Context::is_current_telemetry_suppressed());
+    }
+
+    #[test]
+    fn sdk_boundary_activation_is_subscriber_qualified() {
+        use opentelemetry::trace::TraceContextExt as _;
+        let provider = tracer_provider_builder()
+            .with_simple_exporter(InMemorySpanExporter::default())
+            .build();
+        let config = configured_local_policy(false, Some("off"), None);
+        let dispatch = || {
+            tracing::Dispatch::new(compose_subscriber(
+                &config,
+                None::<tracing_subscriber::layer::Identity>,
+                Some(provider.tracer("dispatch")),
+                None::<Shared>,
+            ))
+        };
+        let a = dispatch();
+        let b = dispatch();
+        let original = opentelemetry::Context::current()
+            .span()
+            .span_context()
+            .clone();
+        tracing::dispatcher::with_default(&a, || {
+            let app_a = tracing::info_span!("app_a");
+            let _entered = app_a.enter();
+            let a_context = opentelemetry::Context::current()
+                .span()
+                .span_context()
+                .clone();
+            tracing::dispatcher::with_default(&b, || {
+                let app_b = tracing::info_span!("app_b");
+                app_b.in_scope(|| {
+                    assert_ne!(
+                        opentelemetry::Context::current()
+                            .span()
+                            .span_context()
+                            .span_id(),
+                        a_context.span_id()
+                    );
+                });
+                assert_eq!(
+                    opentelemetry::Context::current().span().span_context(),
+                    &a_context
+                );
+            });
+        });
+        assert_eq!(
+            opentelemetry::Context::current().span().span_context(),
+            &original
+        );
     }
 
     #[test]
@@ -1771,6 +2264,7 @@ mod tests {
         let counter = provider.meter("test").u64_counter("test.counter").build();
         counter.add(1, &[]);
         drop(TelemetryGuard {
+            exporter_runtime: Some(sdk_boundary::ExporterRuntime::new().expect("runtime")),
             meter: Some(provider),
             tracer: None,
             subscriber_installed: true,
@@ -1797,6 +2291,7 @@ mod tests {
 
         provider.tracer("test").in_span("test-span", |_cx| {});
         drop(TelemetryGuard {
+            exporter_runtime: Some(sdk_boundary::ExporterRuntime::new().expect("runtime")),
             meter: None,
             tracer: Some(provider),
             subscriber_installed: true,
@@ -1814,6 +2309,7 @@ mod tests {
     #[test]
     fn guard_requires_provider_and_subscriber_for_otel_tracing() {
         let installed = TelemetryGuard {
+            exporter_runtime: None,
             meter: None,
             tracer: Some(SdkTracerProvider::builder().build()),
             subscriber_installed: true,
@@ -1824,6 +2320,7 @@ mod tests {
         drop(installed);
 
         let rejected = TelemetryGuard {
+            exporter_runtime: None,
             meter: None,
             tracer: Some(SdkTracerProvider::builder().build()),
             subscriber_installed: false,
@@ -1838,6 +2335,7 @@ mod tests {
         // No OTLP endpoint configured -> both providers None -> Drop does nothing
         // and must not panic.
         drop(TelemetryGuard {
+            exporter_runtime: None,
             meter: None,
             tracer: None,
             subscriber_installed: true,
@@ -1855,6 +2353,7 @@ mod tests {
             fallback_capture::capture(|| {
                 let primary: Result<&str, &str> = Ok("preserved");
                 drop(TelemetryGuard {
+                    exporter_runtime: Some(sdk_boundary::ExporterRuntime::new().expect("runtime")),
                     meter: Some(meter),
                     tracer: None,
                     subscriber_installed: true,
@@ -1881,6 +2380,7 @@ mod tests {
             fallback_capture::capture(|| {
                 let primary: Result<&str, &str> = Ok("preserved");
                 drop(TelemetryGuard {
+                    exporter_runtime: Some(sdk_boundary::ExporterRuntime::new().expect("runtime")),
                     meter: None,
                     tracer: Some(tracer),
                     subscriber_installed: true,

@@ -49,9 +49,12 @@ under transport failure or abrupt process death. It covers instrumentation
 present in the binary, not data a dependency/compiler never generated.
 
 HTTP extraction/adoption is enabled by the installed tracer/subscriber
-capability. Adoption precedes SDK context startup, retains request IDs and safe
-fields, and uses bounded nonrecursive local diagnostics for genuine SDK
-failures. Missing or invalid parent headers remain normal root-context cases.
+capability. Adoption precedes SDK context startup and retains safe fields;
+without a tracer, requests do not attempt assignment. HTTP request IDs are
+preserved or generated and propagated in `x-request-id` response headers, not
+exported as span attributes. OTLP correlation uses top-level trace, span and
+parent span IDs. Genuine SDK failures use bounded nonrecursive local
+diagnostics. Missing or invalid parent headers remain normal root-context cases.
 
 Error span stacks and safe initial/late fields do not depend on local stdout
 admission. A distinct ErrorLayer field cache/updater retains them with pretty,
@@ -71,6 +74,34 @@ and sink-specific field admission remain governed by
 [ADR-0156](../0156-sink-specific-telemetry-interfaces.md). Independent local
 SDK, exporter, configuration, formatter, parent and shutdown diagnostics stay
 outside failing/native export paths to avoid recursion.
+
+### Implemented SDK isolation and lifetime boundary
+
+A fixed, non-configurable per-OTLP-layer SDK-context suppression guard isolates
+SDK self-observation, not application retention. Public context activation
+preserves suppression when SDK work enters an already-admitted application span.
+An owned private exporter-only runtime keeps transport workers and their
+connection/reconnect descendants in suppressed context. Ordinary trace and
+metric SDK builders use that runtime; ordinary application telemetry remains
+unfiltered. Local diagnostics stay independent of this OTLP-only boundary.
+
+`TelemetryGuard` shuts down the metric provider, then the trace provider, then
+the exporter runtime, keeping transport available through both provider flushes.
+Runtime destruction belongs to an ordinary owner thread so dropping the guard
+inside an application async task does not destroy a Tokio runtime there. Runtime
+shutdown uses a fixed five-second best-effort budget, with no configuration
+knob. Unfinished blocking work can remain until it returns or the process exits,
+including when the telemetry guard is dropped while the process continues.
+Joining the runtime owner does not prove that work stopped; Tokio's shutdown API
+reports no timeout outcome.
+
+Activation callbacks identify spans, not entry instances. Repeated entries of
+the same tracing span exited out of order can expose an interleaved external
+OpenTelemetry context early, and can lose suppression after that external scope
+exits. The pinned bridge has the same ordinary latest-span-ID exit behavior.
+Distinguishable-context LIFO restoration is supported; arbitrary entry-instance
+restoration is not promised. This accepted limitation is documentation, not a
+new API restriction or enforced ordering rule.
 
 ## Consequences
 
