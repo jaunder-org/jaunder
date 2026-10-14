@@ -106,16 +106,20 @@ runtime identity, and restores target-schema backups in all four directions.
 Backup format and exact schema version are compatibility authorities; a
 rejection is not recovery success.
 
-For each ordinary source backend, lifecycle work observes service identity and
-publisher-lock ownership after browser/Media creation and after restart plus
-read-only Syndication Feed checks. Canonical service User/Group and resolved
-non-root IDs must match the running service's MainPID, verified executable, all
-four `/proc` UID/GID fields and numeric publisher-lock owner. MainPID must stay
-stable within each observation; a restart may change it. Numeric-only summaries
-are emitted to stderr; structured observations stay restricted in the owned run
-workspace without changing the published evidence schema. These observations
-prove the running service/lock boundary, not the identity of already-exited
-seed/CLI children. Host command/parser stand-ins are not actual VM proof.
+For each ordinary source backend, lifecycle work observes service identity after
+browser/Media creation and after restart plus actual read-only Atom/RSS/JSON
+Syndication Feed verification. Both observations require canonical service
+User/Group, resolved non-root IDs, the running service's MainPID, verified
+executable and all four `/proc` UID/GID fields to agree. The early observation
+omits lock probing and lock fields; only the later observation additionally
+requires publisher-lock ownership to match the service account. Preserve the
+CREATE → RESTART → read-only verification sequence without Feed warmup. MainPID
+must stay stable within each observation; a restart may change it. Numeric-only
+summaries are emitted to stderr; structured observations stay restricted in the
+owned run workspace without changing the published evidence schema. These
+observations prove the running service/lock boundary, not the identity of
+already-exited seed/CLI children. Host command/parser stand-ins are not actual
+VM proof.
 
 ## Evidence
 
