@@ -143,6 +143,72 @@ from a trusted admin machine, then use the same `127.0.0.1` URLs locally:
 ssh -L 8428:127.0.0.1:8428 -L 9428:127.0.0.1:9428 -L 10428:127.0.0.1:10428 operator@example-host
 ```
 
+#### Native log routing and message verification
+
+Jaunder sends logs, traces and metrics to the stack's loopback OTLP Collector.
+Logs use the existing OTLP receiver and batch processor, then the VictoriaLogs
+exporter; the stack does not ingest `jaunder.service` or arbitrary host journals
+and does not parse stdout JSON into logs. Ordinary application messages are not
+mirrored to stdout/journald. CLI command results and fixed local stderr failure
+diagnostics remain separate. In custom deployments without a configured OTLP
+endpoint, ordinary pretty/JSON stdout logging and its local filters remain
+available. The shared endpoint precedence is
+`JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT`, then `OTEL_EXPORTER_OTLP_ENDPOINT`.
+
+For message verification, open the VictoriaLogs UI using loopback/SSH access or
+the authenticated observability host below. Select an explicit time window
+containing a known safe request and start with query `*` in the default Group
+view. The default message should be the actual application body, not the
+`missing _msg field` placeholder or an alternate structured message field. To
+inspect response-completion records, narrow the query to:
+
+```text
+jaunder.target:"tower_http::trace::on_response"
+```
+
+For a known request path, add `jaunder.request.uri:"/your/safe/path"`. Inspect
+`_msg="finished processing request"`, `severity_text="INFO"`,
+`severity_number="9"`, `status`, path-only URI and available trace/span IDs.
+VictoriaLogs exposes OTLP severity through these two fields, not a `severity`
+attribute. A response-completion INFO event can describe a 401 response; it does
+not imply success. Follow the log's trace ID into VictoriaTraces and match its
+span ID to the request span, rather than infer correlation from similar
+timestamps. Root events can legitimately have no IDs. Check for duplicate
+records; enabling a parallel stdout/journal forwarding path would violate the
+supported no-mirroring topology. Historical journal-ingested records are not
+repaired by switching ingress.
+
+If records are missing or malformed:
+
+1. Confirm the process's resolved endpoint and Collector service/configuration;
+   local `JAUNDER_LOG_FILTER`, `RUST_LOG`, `--verbose` and `off` do not control
+   OTLP admission. All application severities, including DEBUG/TRACE, are
+   offered.
+2. Check `journalctl -u jaunder.service` for fixed local logger diagnostics and
+   `journalctl -u opentelemetry-collector.service` for downstream routing/store
+   failures. The service journal is a failure-diagnostic source, not an ordinary
+   application-log copy. Do not share endpoint credentials or raw payloads.
+3. Check VictoriaLogs ingestion, the selected time window and stored `_msg`,
+   `severity_text`, `severity_number` and admitted attributes. Do not treat
+   record existence alone as message correctness or a shutdown acknowledgment as
+   delivery proof.
+
+Logger diagnostics are bounded/redacted and coalesced once per kind per process;
+queue-drop reporting may arrive only at shutdown, so line count is not loss
+count. Setup/export/shutdown failure is non-fatal and does not restore stdout.
+SDK queues are bounded and outages, saturation or abrupt termination can lose
+logs. Graceful shutdown attempts to drain all providers but is best effort, not
+a whole-process deadline or proof that residual blocking work stopped. See
+[observability](observability.md#native-log-records-and-lifetime) for admission,
+SDK policy and lifecycle limitations.
+
+Collector-side filtering, sampling, storage capacity and native store retention
+own preservation decisions. Quiet local settings do not reduce all-severity
+log/span/event volume; budget for DEBUG/TRACE input rather than adding an
+application filter. This routing change alters no retention default, resource
+budget, listener, authentication or backup policy. `JAUNDER_CAPTURE_DIR` and
+isolated `otel-logs.jsonl` are test evidence only, not production log retention.
+
 #### Optional HTTPS observability host and Basic Auth
 
 An optional distinct HTTPS operator host publishes the three prefixed

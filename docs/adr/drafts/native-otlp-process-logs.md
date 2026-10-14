@@ -7,12 +7,13 @@
 ## Context
 
 [ADR-0011](../0011-unified-observability.md) gives native processes a shared
-OTLP endpoint and process-owned trace/metric lifecycle. Logs use stdout
-formatting. [ADR-0196](../0196-single-host-nixos-deployment-stack.md) adds a
+OTLP endpoint and process-owned trace/metric lifecycle. Its initial log path
+used stdout formatting.
+[ADR-0196](../0196-single-host-nixos-deployment-stack.md) adds a
 deployment-specific journald receiver and JSON-body transformation before
 VictoriaLogs ingestion. The reported deployment stores useful text in alternate
-fields while its default message field shows a missing-message placeholder.
-Application logs are not currently exported by an application OTLP logger.
+fields while its default message field shows a missing-message placeholder. That
+journal-based topology motivates a native application OTLP logger.
 
 A field-selection repair alone would preserve different collection paths for the
 same application's three signals. Native OTLP records can carry a canonical
@@ -33,23 +34,23 @@ OTLP records, without stdout mirroring or journal-based duplicate ingestion. CLI
 result output and server-scoped E2E diagnostic capture remain separate
 consumers, not alternate ways to re-export ordinary logs.
 
-Consume the Collector-owned retention foundation to be delivered by
+Consume the delivered Collector-owned retention foundation from
 [#1742](https://github.com/jaunder-org/jaunder/issues/1742). The 2026-10-12
 operator-selected revision supersedes this draft's earlier shared active-sink
 filter policy: `JAUNDER_LOG_FILTER`, then `RUST_LOG`, then established
 ordinary/verbose defaults (including storage INFO) govern local ordinary output
-only. The proposed `TelemetryConfig::local_log_filter()` accessor is local-only,
-not an OTLP logger input. Native logs offer every application severity without
-application-level severity, target or context filtering. #1742 owns unfiltered
-spans/events and AlwaysOn recording despite a clear upstream sampled hint,
-retaining valid trace/parent IDs. No separate OTLP log filter is added.
+only. The delivered `TelemetryConfig::local_log_filter()` accessor is
+local-only, not an OTLP logger input. Native logs offer every application
+severity without application-level severity, target or context filtering. #1742
+owns unfiltered spans/events and AlwaysOn recording despite a clear upstream
+sampled hint, retaining valid trace/parent IDs. No separate OTLP log filter is
+added.
 
 The Collector owns preservation; local disablement cannot disable OTLP output,
 metrics or independent WARN+/panic capture. Shared span-field retention and
 ErrorLayer/SpanTrace do not depend on active stdout. Unfiltered severity is not
-blanket field admission. #1742 lands first; native logging consumes the
-delivered foundation after rebasing, without competing subscriber-policy
-implementation.
+blanket field admission. #1742 has landed and native logging consumes its
+delivered foundation, without a competing subscriber-policy implementation.
 
 Explicit event messages become human-readable log bodies. Severity and approved
 structured diagnostic fields remain available, including safe
@@ -76,7 +77,60 @@ The supported single-host stack consumes logs through its existing OTLP receiver
 and forwards them to VictoriaLogs. Remove its Jaunder journal receiver and
 journal-JSON transformation; do not expand into whole-host journal collection.
 Canonical message presentation, severity, safe structured context, correlation,
-privacy and single-ingestion behavior are tested through the actual stack.
+privacy and single-ingestion behavior require actual-stack proof; source
+integration alone does not certify ingestion or presentation.
+
+### Implemented admission and lifetime boundaries
+
+The native projection retains `jaunder.target` and path-only
+`jaunder.request.uri` from the reviewed HTTP request span. The closed event
+profile admits the `host::error` carrier's `error.kind`, `error.class`,
+`error.public`, `error.source`, `error.context`, `error.disposition` and
+`telemetry.origin`, application scalar `db.system`, audited numeric `user.id`
+from credential-consumption producers, and Tower response-completion `status`.
+Unknown fields and arbitrary Debug/aggregate/inherited-span serialization are
+not admitted. Typed error-source and message constructors still owe ADR-0011's
+safe-text discipline; closed admission is not blanket text sanitization.
+
+Missing parent/tracer context and explicit roots use a span-free SDK emission
+scope so ambient context cannot fabricate correlation. SDK-suppressed events and
+self/fallback targets remain ineligible before emission. The delivered
+activation foundation retains its pinned same-span limitation: repeated entries
+of one span exited out of order can expose interleaved external context early
+and lose suppression after that scope exits. Arbitrary entry-instance
+restoration is not promised; this adds no caller-ordering restriction.
+
+The logger shares the process resource and private suppressed exporter runtime.
+Guard shutdown runs meter → tracer → logger → runtime. Logger shutdown uses the
+pinned SDK five-second default without an unbounded pre-shutdown flush; runtime
+shutdown has a separate five-second best-effort budget. These are not a
+whole-process bound. Acknowledgment proves neither delivery nor containment;
+residual blocking export work may outlive a timeout or guard destruction.
+
+Initialization resolves a private owned SDK `BatchConfig` snapshot and passes it
+as a complete `with_batch_config` replacement. The pinned public processor
+builder constructs a discarded environment-derived default before replacement.
+This constructor-only third-party read cannot change effective policy; no
+application callback, worker, reconnect or teardown rereads effective policy.
+This is the narrow accepted SDK limitation, not a literal zero-third-party-read
+claim, public configuration extension or general environment reader. Ordinary
+pinned batching supports queue size, batch size and scheduled delay, not the
+experimental async export-timeout feature. SDK default queue/batch bounds are
+2048/512 records; saturation can drop logs.
+
+New logger failure diagnostics are fixed redacted stderr lines, once per kind
+per process and below 256 bytes. Export errors retain failure classifications;
+positive partial rejection fails, while zero-rejection warnings remain
+successful with a fixed warning diagnostic. No raw exporter or partial-success
+text is rendered. Queue-drop classification may be observed at shutdown rather
+than synchronously. The failure path never feeds native logs or restores stdout.
+
+The stack and shared E2E harness implement OTLP log routing. Harness logs use a
+separate `file/logs` exporter and `otel-logs.jsonl`; existing trace capture,
+independent WARN+/panic diagnostics and whole-directory retention remain
+unchanged. Real-stack, browser and combined-signal runtime acceptance remain
+separate proof obligations, not consequences of these source contracts. The
+numberless decision remains proposed through feature shipping.
 
 ## Consequences
 

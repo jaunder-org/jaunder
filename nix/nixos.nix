@@ -9,8 +9,9 @@ let
   captureEnv = {
     # The single capture-dir contract (#227): the server writes mail.jsonl,
     # websub.jsonl, and diag.log into this dir, and the e2e otel-collector writes
-    # otel-traces.jsonl (#332). Spliced into the jaunder.service and otel-collector
-    # service envs below; the whole dir is tarred out per combo in e2eRunAndCapture.
+    # separate otel-traces.jsonl (#332) and otel-logs.jsonl (#1743). Spliced into
+    # the jaunder.service and otel-collector service envs below; the whole dir is
+    # tarred out per combo in e2eRunAndCapture.
     JAUNDER_CAPTURE_DIR = "/var/lib/jaunder/capture";
   };
   e2eOtelCollectorEnv = captureEnv // {
@@ -330,6 +331,9 @@ let
           extraOptions = [ "-http.pathPrefix=/traces" ];
         };
 
+        # OTLP-only ingress needs no access to the host journal. The pinned
+        # Collector module otherwise grants this supplementary group unconditionally.
+        systemd.services.opentelemetry-collector.serviceConfig.SupplementaryGroups = lib.mkForce [ ];
         services.opentelemetry-collector = {
           enable = true;
           package = pkgs.opentelemetry-collector-contrib;
@@ -339,22 +343,9 @@ let
                 grpc.endpoint = "127.0.0.1:4317";
                 http.endpoint = "127.0.0.1:4318";
               };
-              journald.units = [ "jaunder.service" ];
             };
             processors = {
               batch = { };
-              "transform/jaunder-json".log_statements = [
-                {
-                  context = "log";
-                  statements = [
-                    "set(body, ParseJSON(body[\"MESSAGE\"])) where IsMatch(body[\"MESSAGE\"], \"^\\\\{\")"
-                    "set(attributes[\"jaunder.target\"], body[\"target\"]) where IsMap(body)"
-                    "set(attributes[\"jaunder.request.uri\"], body[\"span\"][\"uri\"]) where IsMap(body)"
-                    "delete_key(body, \"span\") where IsMap(body)"
-                    "delete_key(body, \"spans\") where IsMap(body)"
-                  ];
-                }
-              ];
             };
             exporters = {
               prometheusremotewrite.endpoint = "http://127.0.0.1:8428/metrics/api/v1/write";
@@ -373,8 +364,8 @@ let
                 exporters = [ "otlphttp/victoriatraces" ];
               };
               logs = {
-                receivers = [ "journald" ];
-                processors = [ "transform/jaunder-json" "batch" ];
+                receivers = [ "otlp" ];
+                processors = [ "batch" ];
                 exporters = [ "otlphttp/victorialogs" ];
               };
             };

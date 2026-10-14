@@ -32,15 +32,20 @@ thread_local! {
 /// Admitted tracing spans activate their `OTel` parent without clearing SDK scope.
 pub(super) struct Activation {
     owner: Arc<()>,
-    dispatch: OnceLock<WeakDispatch>,
+    dispatch: Arc<OnceLock<WeakDispatch>>,
 }
 
 impl Activation {
     pub(super) fn new() -> Self {
         Self {
             owner: Arc::new(()),
-            dispatch: OnceLock::new(),
+            dispatch: Arc::new(OnceLock::new()),
         }
+    }
+
+    /// Shares only the owning dispatch lookup with the native event projection.
+    pub(super) fn dispatch_lookup(&self) -> Arc<OnceLock<WeakDispatch>> {
+        self.dispatch.clone()
     }
 }
 
@@ -94,7 +99,7 @@ impl<S: Subscriber> Layer<S> for Activation {
 // turning exporter cleanup into another process input or retention control.
 const EXPORTER_RUNTIME_SHUTDOWN_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Keeps exporter-only transport workers alive through both provider shutdowns.
+/// Keeps exporter-only transport workers alive through every provider shutdown.
 /// Runtime destruction lives on an ordinary owner thread so dropping the
 /// telemetry guard inside an application's async task does not drop a Tokio
 /// runtime there. Shutdown joins that thread after a fixed best-effort budget.

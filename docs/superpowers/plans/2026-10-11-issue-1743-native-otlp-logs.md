@@ -24,7 +24,7 @@ implementation.
 
 ## Task outline
 
-- [ ] 1. Consume the delivered #1742 foundation and capture the before state.
+- [x] 1. Consume the delivered #1742 foundation and capture the before state.
   - Wait for #1742 to land; rebase this checkout, reconciling docs by intent.
     Verify unfiltered spans/events, AlwaysOn sampled/unsampled-parent behavior,
     local-only filter accessor, initial/late retention, ErrorLayer and
@@ -35,7 +35,7 @@ implementation.
   - Verification: peer merge/contract evidence and source review; baseline
     visual proof. Stop/coordinate if delivered behavior differs from the agreed
     seam.
-- [ ] 2. Introduce a reviewed native log-record projection.
+- [x] 2. Introduce a reviewed native log-record projection.
   - Contract: explicit message → string body; tracing level → SDK severity;
     admitted fields → typed attributes; target/path use existing stack query
     names. No arbitrary field/Debug or inherited-span-map serialization.
@@ -46,7 +46,7 @@ implementation.
     differing explicit parents, root/no-tracer and unsampled upstream parents,
     safe field retention and exclusion of credentials, request aggregates and
     `error.span_trace`.
-- [ ] 3. Integrate the active log sink, logger ownership and failure isolation.
+- [x] 3. Integrate the active log sink, logger ownership and failure isolation.
   - Contract: stdout only without an endpoint, native records only with one.
     Only local stdout consumes #1742's `local_log_filter()` policy. Native logs
     offer all application severities with no severity/target/context filter;
@@ -61,7 +61,7 @@ implementation.
     correlation, unchanged CLI results, one-shot flush, initial/late fields and
     SpanTrace without stdout, repeated failures and nonfatal shutdown. Metrics
     and WARN+/panic capture stay independent. No SDK/local fallback enters logs.
-- [ ] 4. Switch stack ingestion and support isolated harness log export.
+- [x] 4. Switch stack ingestion and support isolated harness log export.
   - Contract: production Collector logs receiver becomes OTLP; remove journal
     receiver/JSON transformation, not other ingress/storage/authentication.
   - Extend the traces-only E2E Collector with a separate test-only log file

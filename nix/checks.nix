@@ -1462,8 +1462,23 @@ mkWasmCoverageMeasurementProducer =
     assert nativeRetentionOverrideStack.config.services.victoriatraces.retentionPeriod == "30d";
     assert sqliteStack.config.services.opentelemetry-collector.package == pkgs.opentelemetry-collector-contrib;
     assert sqliteStack.config.systemd.services.opentelemetry-collector.serviceConfig.DynamicUser;
-    assert sqliteStack.config.systemd.services.opentelemetry-collector.serviceConfig.SupplementaryGroups == [ "systemd-journal" ];
-    assert sqliteStack.config.services.opentelemetry-collector.settings.receivers.journald.units == [ "jaunder.service" ];
+    assert builtins.all (stack:
+      let
+        settings = stack.config.services.opentelemetry-collector.settings;
+        service = stack.config.systemd.services.opentelemetry-collector.serviceConfig;
+      in
+      service.DynamicUser
+      && !(builtins.elem "systemd-journal" (service.SupplementaryGroups or [ ]))
+      && builtins.attrNames settings.receivers == [ "otlp" ]
+      && settings.receivers.otlp.protocols.grpc.endpoint == "127.0.0.1:4317"
+      && settings.receivers.otlp.protocols.http.endpoint == "127.0.0.1:4318"
+      && builtins.attrNames settings.processors == [ "batch" ]
+      && settings.service.pipelines.logs == {
+        receivers = [ "otlp" ];
+        processors = [ "batch" ];
+        exporters = [ "otlphttp/victorialogs" ];
+      }
+    ) [ sqliteStack postgresStack ];
     assert sqliteStack.config.services.opentelemetry-collector.settings.exporters.prometheusremotewrite.endpoint == "http://127.0.0.1:8428/metrics/api/v1/write";
     assert sqliteStack.config.services.opentelemetry-collector.settings.exporters."otlphttp/victoriatraces".traces_endpoint == "http://127.0.0.1:10428/traces/insert/opentelemetry/v1/traces";
     assert sqliteStack.config.services.opentelemetry-collector.settings.exporters."otlphttp/victorialogs".logs_endpoint == "http://127.0.0.1:9428/logs/insert/opentelemetry/v1/logs";
@@ -1588,9 +1603,8 @@ mkWasmCoverageMeasurementProducer =
           services.caddy.virtualHosts."observe.stack.test".extraConfig = lib.mkAfter ''
             tls internal
           '';
-          # The production default is intentionally quiet; the test drives an
-          # INFO request event so the journald parser has a named field to prove.
-          systemd.services.jaunder.environment.RUST_LOG = "info";
+          # Local disablement cannot suppress native stack signals.
+          systemd.services.jaunder.environment.RUST_LOG = "off";
           system.stateVersion = "26.05";
         };
       } // pkgs.lib.optionalAttrs (runtimeCredentials && runtimeAlgorithm == "argon2id") {
@@ -1928,12 +1942,11 @@ mkWasmCoverageMeasurementProducer =
         machine.succeed("test \"$(ps -o uid= -p %s | tr -d ' ')\" != 0" % collector_pid)
         machine.succeed(
           "journal_gid=$(getent group systemd-journal | cut -d: -f3)"
-          + "; grep -Eq \"^Groups:.*(^|[[:space:]])$journal_gid([[:space:]]|$)\""
+          + "; ! grep -Eq \"^Groups:.*(^|[[:space:]])$journal_gid([[:space:]]|$)\""
           + " /proc/%s/status" % collector_pid
         )
         machine.succeed(
-          "systemctl show --property SupplementaryGroups --value opentelemetry-collector.service"
-          + " | grep -Fx systemd-journal"
+          "test -z \"$(systemctl show --property SupplementaryGroups --value opentelemetry-collector.service)\""
         )
 
         ${pkgs.lib.optionalString captureSignals ''
@@ -1980,24 +1993,41 @@ mkWasmCoverageMeasurementProducer =
             "curl " + curl_options + " -fsSG --data-urlencode 'query=* | limit 10000'"
             + " http://127.0.0.1:9428/logs/select/logsql/query"
           )
+          def response_logs(records):
+            return [record for record in records
+              if record.get("jaunder.target") == "tower_http::trace::on_response"
+              and record.get("jaunder.request.uri") == telemetry_uri]
+
           target_log = None
           for _ in range(120):
             records = log_records(log_command)
-            target_log = next((
-              record for record in records
-              if record.get("jaunder.target") == "tower_http::trace::on_response"
-              and record.get("jaunder.request.uri") == telemetry_uri
-            ), None)
-            if target_log is not None:
+            matching = response_logs(records)
+            if matching:
+              assert len(matching) == 1, "duplicate response ingestion: %s" % matching
+              target_log = matching[0]
               break
             machine.sleep(1)
-          assert target_log is not None, "driven structured response log never appeared before reboot:\n%s" % records[-10:]
-          assert "_time" in target_log, "structured response log lacks a timestamp: %s" % target_log
+          assert target_log is not None, "driven native response log never appeared before reboot:\n%s" % records[-10:]
+          assert "_time" in target_log, "native response log lacks a timestamp: %s" % target_log
+          assert target_log.get("_msg") == "finished processing request", target_log
+          assert target_log.get("severity_text") == "INFO", target_log
+          assert target_log.get("severity_number") == "9", target_log
+          assert target_log.get("status") == "401", target_log
+          assert target_log.get("trace_id") == trace_id, target_log
+          response_span_id = target_log.get("span_id")
+          assert isinstance(response_span_id, str) and len(response_span_id) == 16, target_log
+          assert int(response_span_id, 16) != 0, target_log
           target_log_identity = json.dumps(target_log, sort_keys=True, separators=(",", ":"))
           assert request_id not in target_log_identity, "request header marker reached VictoriaLogs: %s" % target_log
           for credential in [authorization, cookie]:
             assert credential not in target_log_identity, "request credential reached VictoriaLogs: %s" % target_log
-          assert "jaunder.request.headers" not in target_log, "request headers were promoted to VictoriaLogs: %s" % target_log
+          for field in ["jaunder.request.headers", "headers", "response_headers", "authorization", "cookie", "span", "spans", "error.span_trace"]:
+            assert field not in target_log, "excluded field reached VictoriaLogs: %s" % target_log
+          assert "error.span_trace" not in target_log_identity, "raw span stack reached VictoriaLogs"
+          assert "panicked at" not in target_log_identity, target_log
+          journal = machine.succeed("journalctl -u jaunder.service --no-pager")
+          assert "finished processing request" not in journal, "ordinary logs mirrored to journal"
+          assert "panicked at" not in journal, "server panic in journal"
 
           trace_command = (
             "curl " + curl_options + " -fsS http://127.0.0.1:10428/traces/select/jaeger/api/traces/"
@@ -2012,8 +2042,23 @@ mkWasmCoverageMeasurementProducer =
             machine.sleep(1)
           assert trace_payload is not None, "driven trace ID %s never appeared before reboot" % trace_id
           trace_payload_identity = json.dumps(trace_payload, sort_keys=True, separators=(",", ":"))
-          for credential in [authorization, cookie]:
-            assert credential not in trace_payload_identity, "request credential reached VictoriaTraces: %s" % trace_payload
+          for credential in [authorization, cookie, request_id]:
+            assert credential not in trace_payload_identity, "request credential/header reached VictoriaTraces: %s" % trace_payload
+          response_spans = [span
+            for trace in trace_payload.get("data", []) if trace.get("traceID") == trace_id
+            for span in trace.get("spans", []) if span.get("spanID") == response_span_id]
+          assert len(response_spans) == 1, "log span does not link to exactly one stored span: %s" % trace_payload
+          response_span = response_spans[0]
+          assert response_span.get("operationName") == "request", response_span
+          response_tags = {tag["key"]: tag.get("value") for tag in response_span.get("tags", [])}
+          assert response_tags.get("uri") == telemetry_uri, response_span
+          assert response_tags.get("method") == "GET", response_span
+          assert any(reference.get("refType") == "CHILD_OF"
+            and reference.get("traceID") == trace_id
+            and reference.get("spanID") == "0123456789abcdef"
+            for reference in response_span.get("references", [])), response_span
+          # Re-query after all signals arrive to catch a second ingestion path.
+          assert len(response_logs(log_records(log_command))) == 1, "duplicate native/journal ingestion"
 
           ${pkgs.lib.optionalString persistSignals ''
           machine.reboot()
@@ -2039,6 +2084,7 @@ mkWasmCoverageMeasurementProducer =
           ), "driven pre-reboot metric sample is absent at its captured timestamp"
 
           persisted_logs = log_records(log_command)
+          assert len(response_logs(persisted_logs)) == 1, "duplicate persisted response ingestion"
           assert any(
             json.dumps(record, sort_keys=True, separators=(",", ":")) == target_log_identity
             for record in persisted_logs
@@ -2048,6 +2094,10 @@ mkWasmCoverageMeasurementProducer =
           assert any(trace.get("traceID") == trace_id for trace in trace_payload.get("data", [])), (
             "driven pre-reboot trace ID %s is absent" % trace_id
           )
+          assert any(span.get("spanID") == response_span_id
+            for trace in trace_payload.get("data", []) if trace.get("traceID") == trace_id
+            for span in trace.get("spans", [])), "linked pre-reboot response span is absent"
+          assert "panicked at" not in machine.succeed("journalctl -u jaunder.service --no-pager"), "server panic after reboot"
           ''}
         ''}
       '';

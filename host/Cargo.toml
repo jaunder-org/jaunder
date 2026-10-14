@@ -93,6 +93,9 @@ webauthn-rs.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+# Existing pinned OTLP wire/transport types for owned loopback failure fixtures.
+opentelemetry-proto = { version = "=0.32.0", default-features = false, features = ["gen-tonic", "logs"] }
+tonic = { version = "=0.14.6", default-features = false, features = ["transport", "router"] }
 common = { path = "../common", features = ["test-support"] }
 tempfile = { workspace = true }
 tokio = { workspace = true }

@@ -1,7 +1,7 @@
 # Observability
 
-This project emits OpenTelemetry traces from the backend, host-side seed
-processes, and end-to-end test runner.
+Native processes emit OpenTelemetry logs, traces and metrics through a shared
+Collector endpoint. The end-to-end test runner also emits correlated traces.
 
 ## Backend
 
@@ -15,7 +15,9 @@ processes, and end-to-end test runner.
 - In e2e VM checks, the running server, production `jaunder site-config set`
   seed steps, and the `test-support` seed binary export to the in-VM collector.
   The collector writes under the capture-dir contract (#332):
-  - `/var/lib/jaunder/capture/otel-traces.jsonl` (inside the VM)
+  - `/var/lib/jaunder/capture/otel-traces.jsonl` (traces inside the VM)
+  - `/var/lib/jaunder/capture/otel-logs.jsonl` (native logs, separate file
+    exporter)
   - lifted per lane inside `capture-<lane>.tar.gz` (the same bundle that carries
     `diag.log` and the mail/websub JSONL — see below)
 - `cargo xtask e2e-local` supervises the same collector pipeline on the host,
@@ -37,13 +39,16 @@ processes, and end-to-end test runner.
 ### Independent log and trace controls
 
 The server, production CLI commands and `test-support` resolve the same
-immutable telemetry policy at process startup. Ordinary logs still go to stdout;
-native OTLP log routing is separate work (#1743).
+immutable telemetry policy at process startup. Without a resolved OTLP endpoint,
+ordinary logs use the existing pretty/JSON stdout formatter and local filter.
+With an endpoint, ordinary logs use native OTLP records only, including when
+logger setup fails: stdout mirroring is not restored. CLI command results
+written to stdout remain separate and usable.
 
 | Control                               | Policy                                                                                           |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | `JAUNDER_LOG_FILTER`                  | Preferred local ordinary-log filter; otherwise `RUST_LOG`, then ordinary or `--verbose` defaults |
-| `JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT` | Preferred traces/metrics endpoint; otherwise `OTEL_EXPORTER_OTLP_ENDPOINT`                       |
+| `JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT` | Preferred logs/traces/metrics endpoint; otherwise `OTEL_EXPORTER_OTLP_ENDPOINT`                  |
 
 The local filter accepts tracing filter grammar, including levels, target/span
 selectors and `off`. Ordinary defaults remain WARN for application targets and
@@ -55,10 +60,12 @@ formats retain the same local-output policy.
 With an endpoint configured, the OTLP trace layer admits generated application
 spans and permitted span events at every level, including DEBUG and TRACE,
 without application-level severity, target or context filtering. For example,
-`JAUNDER_LOG_FILTER=warn` keeps local logs quiet while OTLP spans remain
-available; local `off` does not disable OTLP spans, metrics, independent WARN+
-diagnostic capture or the panic hook. No endpoint means no OTLP provider/export;
-local logs and diagnostic context remain available without a Collector.
+`JAUNDER_LOG_FILTER=warn` limits stdout when used without OTLP, but does not
+limit configured OTLP output. Native logs also offer all application severities,
+TRACE through ERROR, without a level/target/context filter. Local `off` does not
+disable native logs, OTLP spans, metrics, independent WARN+ diagnostic capture
+or the panic hook. No endpoint means no OTLP provider/export; local logs and
+diagnostic context remain available without a Collector.
 
 The SDK uses `Sampler::AlwaysOn` for Jaunder's spans, even when a valid incoming
 W3C parent's sampled flag is clear. Its trace ID and parent span ID are
@@ -71,8 +78,8 @@ binary, not instrumentation a compiler or dependency never generated.
 **Compatibility change:** `JAUNDER_LOG_FILTER`, `RUST_LOG` and `--verbose`
 control local output only, not OTLP retention. There is no application trace
 filter or sampling knob. Quiet local logs can accompany increased Collector
-volume, including DEBUG/TRACE spans and events. Budget Collector storage and
-configure Collector-side sampling, filtering and retention there.
+volume, including DEBUG/TRACE logs, spans and events. Budget Collector storage
+and configure Collector-side sampling, filtering and retention there.
 
 HTTP parent extraction/adoption follows the installed tracer/subscriber
 capability. Without a tracer, requests do not attempt assignment. With the
@@ -91,10 +98,83 @@ filtered or absent stdout in either pretty or JSON mode. Unfiltered output does
 not broaden privacy, redaction or sink-specific field admission: HTTP fields
 remain method, path-only URI, version and bounded trusted-proxy outcome, never
 queries, whole headers or raw parent input. Independent diagnostics are not OTLP
-logs; native OTLP logs and their lifetime/no-mirroring proof remain #1743 work.
+logs and must not be re-exported as ordinary application records.
 
 See the
-[Collector-owned retention decision](adr/drafts/independent-log-and-trace-filtering.md).
+[Collector-owned retention decision](adr/drafts/independent-log-and-trace-filtering.md)
+and [native OTLP process logs decision](adr/drafts/native-otlp-process-logs.md).
+
+### Native log records and lifetime
+
+An explicit/formatted application message becomes the string body, not a dump of
+structured fields or the span stack. Native severity retains the actual tracing
+level. In the supported VictoriaLogs OTLP ingestion path, severity is stored as
+`severity_text` and `severity_number` (for INFO, `"INFO"` and `"9"`), not as a
+`severity` attribute. These are record severity fields, separate from the closed
+attribute profile:
+
+- `jaunder.target`: event target.
+- `jaunder.request.uri`: path-only context from the reviewed HTTP `request`
+  span, including late updates; query strings, fragments and controls are
+  rejected.
+- `error.kind`, `error.class`, `error.public`, `error.source`, `error.context`,
+  `error.disposition`, `telemetry.origin`: reviewed `host::error` carriers only.
+- `db.system`: scalar from application/seed producers; `user.id`: audited
+  numeric identifier from registration, password-reset and email
+  credential-consumption events; `status`: reviewed Tower response-completion
+  target only.
+
+Admitted scalars retain their types; unsigned values outside OTLP's signed
+integer range retain exact decimal text instead of wrapping. Arbitrary fields,
+Debug values, inherited span maps, headers, request aggregates, credentials,
+request bodies, user PII and raw stacks (including event-field
+`error.span_trace`) are excluded. Message and typed error-source constructors
+still owe ADR-0011's safe-text discipline; this is not blanket sanitization of
+arbitrary producer text.
+
+Trace/span correlation follows the event's resolved tracing parent: explicit
+parents win over current spans, contextual events use their active parent, and
+explicit roots or missing/unavailable tracer context acquire no fabricated or
+ambient SDK IDs. Repeated entries of the same tracing span exited out of order
+retain the pinned bridge's external-context/suppression limitation: arbitrary
+entry-instance restoration is not promised. This is an accepted limitation, not
+an additional caller-ordering rule.
+
+All providers share the process resource, endpoint and private suppressed
+exporter runtime. Guard shutdown runs meter → tracer → logger → exporter
+runtime, keeping transport available for one-shot draining and server teardown.
+Logger shutdown uses the pinned SDK's five-second default, with no additional
+unbounded pre-shutdown flush. Runtime shutdown has its own five-second
+best-effort budget; neither is a whole-process deadline. Acknowledgment is not
+delivery proof, and residual blocking export work can outlive a timeout.
+
+Native batching receives a complete owned SDK `BatchConfig` snapshot resolved at
+initialization. The pinned public processor builder constructs a discarded
+environment-derived default before `with_batch_config` replaces it. That
+constructor-only third-party read cannot change effective policy; application
+callbacks, workers, reconnects and teardown do not resolve it again. Do not
+infer a literal zero-third-party-read guarantee. Ordinary pinned batching
+supports queue size, batch size and scheduled delay, not experimental async
+export-timeout policy. Without inherited overrides, SDK defaults bound the queue
+to 2048 records and batches to 512; saturation can drop records.
+
+Logger setup/export/partial-rejection/queue/flush/shutdown failures use fixed,
+redacted local stderr classifications, at most one line per kind per process,
+each below 256 bytes. Endpoint credentials and raw transport/partial-success
+payloads are never rendered. Positive rejected-record counts remain failure; a
+zero-rejection warning remains successful with a fixed warning diagnostic.
+Queue-drop classification may be delayed until shutdown. SDK/exporter and local
+fallback events are ineligible for native export, avoiding recursion. These
+best-effort failures do not change application results or exit status and do not
+restore ordinary stdout. See the
+[deployment procedures](DESIGN.md#native-log-routing-and-message-verification)
+for message queries and failure investigation.
+
+The shared E2E Collector writes logs only to `otel-logs.jsonl`, isolated from
+`otel-traces.jsonl`, `diag.log`, mail and WebSub evidence. Whole-directory
+retention carries both OTLP files without changing trace analysis, boot coverage
+or zero-panic consumers. `JAUNDER_CAPTURE_DIR` remains test-only; it is not a
+production fallback or a browser log-export feature.
 
 ### Backend Saturation Gauges
 
