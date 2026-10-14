@@ -41,7 +41,7 @@ isolation/ingestion.
     before matrix expansion; source inspection is not execution proof.
   - Focused checks: `jaunder-stack-module`, `jaunder-stack-sqlite-bcrypt`.
 
-- [ ] 2. Complete negative lifecycle, rotation, algorithm, and compatibility
+- [x] 2. Complete negative lifecycle, rotation, algorithm, and compatibility
       proof.
   - Contract: build on task 1's real lifecycle; failed refresh/validation never
     submits replacement auth. Prior parsed auth stays active even if the
