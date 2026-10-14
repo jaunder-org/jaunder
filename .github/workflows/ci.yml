@@ -67,7 +67,7 @@ jobs:
           probe memory-and-swap free -b
       - name: Upload host resource baseline
         if: always() && steps.host-resource-baseline.outcome != 'skipped'
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: validate-host-resource-baseline
           path: .xtask/host-resource-baseline.txt
@@ -84,7 +84,7 @@ jobs:
           fi
       - name: Upload host validation diagnostics
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: validate-host-diagnostics
           path: |
@@ -115,7 +115,7 @@ jobs:
           fi
       - name: Upload hermetic validation diagnostics
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: validate-hermetic-diagnostics
           path: |
@@ -165,7 +165,7 @@ jobs:
           fi
       - name: Upload test checks validation diagnostics
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: validate-test-checks-diagnostics
           path: |
@@ -206,7 +206,7 @@ jobs:
           probe-source
       - name: Upload coverage validation diagnostics
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: validate-coverage-diagnostics
           path: |
@@ -261,7 +261,7 @@ jobs:
           matrix.backend }} chromium
       - name: Upload e2e diagnostics
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: e2e-diagnostics-${{ matrix.backend }}-chromium
           path: |
@@ -290,7 +290,7 @@ jobs:
           matrix.backend }}-firefox-${{ matrix.lane }}
       - name: Upload lane-qualified e2e evidence
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: e2e-firefox-${{ matrix.backend }}-${{ matrix.lane }}
           path: |
@@ -327,7 +327,7 @@ jobs:
           .xtask/e2e-firefox/diagnostics
       - name: Upload Firefox reconciliation diagnostics
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: e2e-firefox-reconcile-${{ matrix.backend }}
           path: .xtask/last-result.json

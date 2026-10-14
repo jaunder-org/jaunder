@@ -90,7 +90,7 @@ jobs:
 
       - name: Upload generated thumbnail diagnostics
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: generated-theme-thumbnail
           path: ${{ runner.temp }}/jaunder-theme-thumbnail.png
@@ -102,7 +102,7 @@ jobs:
         run: echo 'name=theme-package' >>"$GITHUB_OUTPUT"
 
       - name: Upload theme package
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.artifact.outputs.name }}
           path: ${{ runner.temp }}/jaunder-theme-package/theme-package.zip
