@@ -94,6 +94,22 @@ async function waitForRequest(sequence: number): Promise<BrowserRequest> {
   }
 }
 
+function completedPhaseChecks(phase: BrowserRequest["phase"]): string[] {
+  return phase === "create"
+    ? ["browser-create", "atompub"]
+    : ["browser-read-only", "atompub", "feeds"];
+}
+
+contractTest("Feed passes belong only to completed verification phases", () => {
+  expect(completedPhaseChecks("create")).toEqual(["browser-create", "atompub"]);
+  for (const phase of ["read-only", "restored"] as const)
+    expect(completedPhaseChecks(phase)).toEqual([
+      "browser-read-only",
+      "atompub",
+      "feeds",
+    ]);
+});
+
 async function runPhase(
   request: BrowserRequest,
   page: Parameters<typeof createProductionBaseline>[0],
@@ -101,7 +117,6 @@ async function runPhase(
 ): Promise<BrowserResult> {
   if (!statePath) throw new Error("baseline browser state path is missing");
   const started = performance.now();
-  let checks: string[];
   if (request.phase === "create") {
     if (!request.seed_process)
       throw new Error("create phase omitted the seed process path");
@@ -131,7 +146,6 @@ async function runPhase(
       state.nonSubscriberSession.marker,
     ]);
     await writeFile(statePath, JSON.stringify(state));
-    checks = ["browser-create", "atompub", "feeds"];
   } else {
     const state = JSON.parse(
       await readFile(statePath, "utf8"),
@@ -167,8 +181,8 @@ async function runPhase(
         await recoveryContext.close();
       }
     }
-    checks = ["browser-read-only", "atompub", "feeds"];
   }
+  const checks = completedPhaseChecks(request.phase);
   const durationMs = Math.max(
     1,
     Math.floor((performance.now() - started) / checks.length),

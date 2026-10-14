@@ -120,14 +120,20 @@ identity, environment, quoting and exit behavior intact. Do not reintroduce Git
 build-revision equality: unchanged Nix outputs across clean commits remain
 admissible.
 
-For each ordinary source backend, observe service identity and publisher-lock
-ownership after browser/Media creation and after restart plus read-only
-Syndication Feed verification. Use existing guest control and lifecycle records;
-retain one restricted structured observation per boundary and emit a
-numeric-only sanitized summary. Require canonical service User/Group, resolved
-non-root IDs, actual service MainPID/executable, all four `/proc` UID/GID fields
-and lock owner to agree. MainPID must be stable within one observation, not
-across restart. This observes the running service and lock, not an
+For each ordinary source backend, after browser/Media creation, observe actual
+service identity and process credentials. After service restart and existing
+read-only Atom/RSS/JSON Syndication Feed verification, additionally require
+publisher-lock ownership to match the service account. Feed success is recorded
+only after actual Feed verification, never at creation. Preserve the existing
+CREATE → RESTART → read-only verification sequence without Feed warmup.
+
+Use existing guest control and lifecycle records; retain one restricted
+structured observation per boundary and emit a numeric-only sanitized summary.
+Both observations require canonical service User/Group, resolved non-root IDs,
+actual service MainPID/executable and all four `/proc` UID/GID fields to agree.
+The early observation omits lock probing and lock fields; the later observation
+requires the lock and matching numeric ownership. MainPID must be stable within
+one observation, not across restart. This observes the running service, not an
 already-exited seed/CLI child. Host stand-ins prove command/parsing/retention
 only; actual VM proof remains required. No evidence-schema or observer framework
 change is permitted.

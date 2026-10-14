@@ -1414,13 +1414,21 @@ fn run_source_matrix(
     let seed_process = lifecycle.seed_process(source_id, &harness_output.join("bin/node"))?;
     recorder.behavior(|| browser.run("create", Some(&seed_process)))?;
     recorder.lifecycle(format!("{source_id}-post-create-service-state"), || {
-        lifecycle.observe_service_state(source_id, "post-create")
+        lifecycle.observe_service_state(
+            source_id,
+            "post-create",
+            crate::production_baseline_lifecycle::ServiceStateMode::ServiceOnly,
+        )
     })?;
     recorder.check("service-restart", || lifecycle.restart_service(source_id))?;
     lifecycle.select_proxy(source_id)?;
     recorder.behavior(|| browser.run("read-only", None))?;
     recorder.lifecycle(format!("{source_id}-post-restart-service-state"), || {
-        lifecycle.observe_service_state(source_id, "post-restart")
+        lifecycle.observe_service_state(
+            source_id,
+            "post-restart",
+            crate::production_baseline_lifecycle::ServiceStateMode::RequiredLock,
+        )
     })?;
     recorder.check("vm-reboot", || lifecycle.reboot(source_id))?;
     lifecycle.select_proxy(source_id)?;
@@ -2347,6 +2355,44 @@ mod tests {
         fn run(&mut self, recorder: &mut DiscoveryRecorder) -> Result<()> {
             recorder.lifecycle("deploy", || bail!("fixture lifecycle failure"))
         }
+    }
+
+    #[test]
+    fn create_then_failed_verification_records_no_feed_pass() {
+        let checks = |ids: &[&str]| {
+            ids.iter()
+                .map(|id| BehaviorCheck {
+                    id: (*id).into(),
+                    outcome: TimedOutcomeStatus::Passed,
+                    duration_ms: 1,
+                })
+                .collect()
+        };
+        let mut recorder = DiscoveryRecorder::default();
+        recorder
+            .behavior(|| Ok(checks(&["browser-create", "atompub"])))
+            .unwrap();
+        assert!(
+            recorder
+                .behavior(|| bail!("read-only verification failed"))
+                .is_err()
+        );
+        assert!(!recorder.checks.iter().any(|entry| entry.id == "feeds"));
+        assert_eq!(recorder.failure_classes, vec![FailureClass::Product]);
+        recorder
+            .behavior(|| Ok(checks(&["browser-read-only", "atompub", "feeds"])))
+            .unwrap();
+        recorder
+            .behavior(|| Ok(checks(&["browser-read-only", "atompub", "feeds"])))
+            .unwrap();
+        let feeds: Vec<_> = recorder
+            .checks
+            .iter()
+            .filter(|entry| entry.id == "feeds")
+            .collect();
+        assert_eq!(feeds.len(), 1);
+        assert_eq!(feeds[0].duration_ms, 2);
+        assert_eq!(feeds[0].outcome, TimedOutcomeStatus::Passed);
     }
 
     #[test]
