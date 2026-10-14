@@ -34,8 +34,15 @@ fn package_draft(css: &str) -> Draft {
 }
 
 fn archive(css: &str) -> Vec<u8> {
+    named_archive("Paper", css)
+}
+
+fn named_archive(name: &str, css: &str) -> Vec<u8> {
+    let manifest = serde_json::json!({
+        "schema": 1, "name": name, "style_contract": 1, "assets": {}, "defaults": {}
+    });
     export_theme_package(
-        br#"{"schema":1,"name":"Paper","style_contract":1,"assets":{},"defaults":{}}"#,
+        &serde_json::to_vec(&manifest).unwrap(),
         css.as_bytes(),
         &BTreeMap::new(),
     )
@@ -147,11 +154,24 @@ async fn multipart_response(
 }
 
 fn multipart_body(scope: &str, name: &str, archive: &[u8]) -> Vec<u8> {
+    multipart_import(scope, Some(name), archive)
+}
+
+fn multipart_import(scope: &str, name: Option<&str>, archive: &[u8]) -> Vec<u8> {
     let boundary = "----jaunder-theme-test-boundary";
     let mut body = format!(
-        "--{boundary}\r\nContent-Disposition: form-data; name=\"scope\"\r\n\r\n{scope}\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\n{name}\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"archive\"; filename=\"theme.zip\"\r\nContent-Type: application/zip\r\n\r\n"
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"scope\"\r\n\r\n{scope}\r\n"
     )
     .into_bytes();
+    if let Some(name) = name {
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\n{name}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
+    body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"archive\"; filename=\"theme.zip\"\r\nContent-Type: application/zip\r\n\r\n").as_bytes());
     body.extend_from_slice(archive);
     body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
     body
@@ -428,6 +448,287 @@ async fn theme_export_is_private_safe_and_contains_only_package_state(#[case] ba
 
 #[apply(backends)]
 #[tokio::test]
+async fn theme_import_zip_defaults_to_manifest_name_without_publishing_or_selecting(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let owner = create_user_and_session(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let app = make_app!(&env, &env.base);
+    let (status, body) = post_server_fn(
+        app.clone(),
+        &web::themes::Select {
+            scope: OwnershipScope::Author,
+            selection: Some(PublicThemeSelection::BuiltIn(Theme::Reader)),
+        },
+        Some(&owner.cookie()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let response = multipart_response(
+        app.clone(),
+        multipart_import("author", None, &archive("body { color: teal; }")),
+        &owner.cookie(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], NO_STORE);
+    let imported: web::themes::CatalogEntry = confirmed_for(
+        serde_json::from_str::<MutationOutcome<_>>(&body_string(response).await).unwrap(),
+        "manifest-named ZIP import",
+    );
+    assert_eq!(imported.name, "Paper");
+    assert!(!imported.published);
+    let (status, body) = post_server_fn(
+        app,
+        &web::themes::GetSelection {
+            scope: OwnershipScope::Author,
+        },
+        Some(&owner.cookie()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        serde_json::from_str::<Option<PublicThemeSelection>>(&body).unwrap(),
+        Some(PublicThemeSelection::BuiltIn(Theme::Reader))
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn theme_import_zip_rejects_invalid_catalog_names_without_fallback_or_side_effects(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let owner = create_user_and_session(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let too_long = "界".repeat(101);
+    for (manifest, override_name, expected) in [
+        ("Paper", Some(""), "must not be empty"),
+        ("Paper", Some(" \t "), "must not be empty"),
+        ("Paper", Some("sTuDiO"), "conflicts with a built-in"),
+        ("Paper", Some("Terminal"), "conflicts with a built-in"),
+        ("Paper", Some("READER"), "conflicts with a built-in"),
+        ("Paper", Some(too_long.as_str()), "must not exceed 100"),
+        ("sTuDiO", None, "conflicts with a built-in"),
+        ("Terminal", None, "conflicts with a built-in"),
+        ("READER", None, "conflicts with a built-in"),
+        (too_long.as_str(), None, "must not exceed 100"),
+    ] {
+        let response = multipart_response(
+            make_app!(&env, &env.base),
+            multipart_import("author", override_name, &named_archive(manifest, "body {}")),
+            &owner.cookie(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = body_string(response).await;
+        assert!(body.contains(expected), "{body}");
+        assert!(
+            body.contains("override"),
+            "name errors explain recovery: {body}"
+        );
+    }
+    let (status, body) = post_server_fn(
+        make_app!(&env, &env.base),
+        &web::themes::List {
+            scope: OwnershipScope::Author,
+        },
+        Some(&owner.cookie()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        serde_json::from_str::<Vec<web::themes::CatalogEntry>>(&body)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn theme_import_zip_collisions_offer_an_override_without_partial_import(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let owner = create_user_and_session(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let original = create_author_theme(
+        make_app!(&env, &env.base),
+        &owner.cookie(),
+        "Paper",
+        "body { color: navy; }",
+    )
+    .await;
+    for override_name in [None, Some(" Paper ")] {
+        let response = multipart_response(
+            make_app!(&env, &env.base),
+            multipart_import("author", override_name, &archive("body { color: red; }")),
+            &owner.cookie(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = body_string(response).await;
+        assert!(body.contains("theme name already exists"), "{body}");
+        assert!(body.contains("override"), "{body}");
+    }
+    let (status, body) = post_server_fn(
+        make_app!(&env, &env.base),
+        &web::themes::List {
+            scope: OwnershipScope::Author,
+        },
+        Some(&owner.cookie()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_str::<Vec<web::themes::CatalogEntry>>(&body).unwrap(),
+        vec![original]
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn theme_import_zip_trims_effective_names_and_counts_unicode_scalars(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let owner = create_user_and_session(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let unicode_name = "界".repeat(100);
+    for (manifest, override_name, expected) in [
+        (" \t Trimmed manifest \n ", None, "Trimmed manifest"),
+        ("Paper", Some("  Explicit override  "), "Explicit override"),
+        (
+            "sTuDiO",
+            Some("Reserved package override"),
+            "Reserved package override",
+        ),
+        (unicode_name.as_str(), None, unicode_name.as_str()),
+    ] {
+        let response = multipart_response(
+            make_app!(&env, &env.base),
+            multipart_import("author", override_name, &named_archive(manifest, "body {}")),
+            &owner.cookie(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let imported: web::themes::CatalogEntry = confirmed_for(
+            serde_json::from_str::<MutationOutcome<_>>(&body_string(response).await).unwrap(),
+            "effective catalog name",
+        );
+        assert_eq!(imported.name, expected);
+        assert!(!imported.published);
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn theme_import_zip_validates_packages_before_default_names_and_authorizes_before_archives(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let owner = create_user_and_session(
+        Arc::clone(&env.users()),
+        Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    for (bytes, override_name) in [
+        (b"not a zip".to_vec(), None),
+        (named_archive(" \t ", "body {}"), None),
+        (named_archive(" \t ", "body {}"), Some("Valid override")),
+        (
+            named_archive("Studio", "@import url('https://example.com/style.css');"),
+            None,
+        ),
+    ] {
+        let response = multipart_response(
+            make_app!(&env, &env.base),
+            multipart_import("author", override_name, &bytes),
+            &owner.cookie(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = body_string(response).await;
+        assert!(body.contains("invalid theme package"), "{body}");
+        assert!(
+            !body.contains("theme name conflicts"),
+            "package validation precedes default naming: {body}"
+        );
+        assert!(
+            !body.contains("override"),
+            "invalid packages need package repair: {body}"
+        );
+    }
+    for body in [
+        multipart_fields(&[("scope", b"author")]),
+        multipart_fields(&[("scope", b"author"), ("name", b"Valid")]),
+    ] {
+        let response = multipart_response(make_app!(&env, &env.base), body, &owner.cookie()).await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            body_string(response)
+                .await
+                .contains("missing theme archive")
+        );
+    }
+    let oversized = vec![0; ThemePackageLimits::default().max_archive_bytes + 1];
+    let response = multipart_response(
+        make_app!(&env, &env.base),
+        multipart_import("author", None, &oversized),
+        &owner.cookie(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(body_string(response).await.contains("too large"));
+    let response = multipart_response(
+        make_app!(&env, &env.base),
+        multipart_import("site", None, b"not a zip"),
+        &owner.cookie(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(body_string(response).await.contains("unauthorized"));
+    let mut anonymous = multipart_request(multipart_import("author", None, b"not a zip"), "");
+    anonymous.headers_mut().remove(header::COOKIE);
+    let response = make_app!(&env, &env.base).oneshot(anonymous).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(body_string(response).await.contains("unauthorized"));
+    let (status, body) = post_server_fn(
+        make_app!(&env, &env.base),
+        &web::themes::List {
+            scope: OwnershipScope::Author,
+        },
+        Some(&owner.cookie()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        serde_json::from_str::<Vec<web::themes::CatalogEntry>>(&body)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn theme_import_zip_creates_drafts_and_rejects_invalid_packages(#[case] backend: Backend) {
     let env = backend.setup().await;
     let themes: std::sync::Arc<dyn storage::ThemeStorage> = std::sync::Arc::clone(&env.themes());
@@ -462,7 +763,11 @@ async fn theme_import_zip_creates_drafts_and_rejects_invalid_packages(#[case] ba
     assert_eq!(imported.name, "Imported");
     let site_import = multipart_response(
         make_app!(&env, &storage),
-        multipart_body("site", "Site imported", &archive("body { color: navy; }")),
+        multipart_import(
+            "site",
+            None,
+            &named_archive("Site imported", "body { color: navy; }"),
+        ),
         &operator.cookie(),
     )
     .await;
@@ -594,11 +899,16 @@ async fn theme_import_zip_rejects_out_of_order_and_extra_fields(#[case] backend:
     let valid_archive = archive("body { color: green; }");
     let cases = [
         multipart_fields(&[("name", b"Wrong first")]),
-        multipart_fields(&[("scope", b"author"), ("archive", b"Wrong second")]),
+        multipart_fields(&[("scope", b"author"), ("extra", b"Wrong second")]),
         multipart_fields(&[
             ("scope", b"author"),
             ("name", b"Wrong third"),
             ("extra", b"not an archive"),
+        ]),
+        multipart_fields(&[
+            ("scope", b"author"),
+            ("archive", &valid_archive),
+            ("name", b"Late override"),
         ]),
         multipart_fields(&[
             ("scope", b"author"),
@@ -647,7 +957,7 @@ async fn theme_import_zip_rejects_truncated_multipart_framing(#[case] backend: B
 
 #[apply(backends)]
 #[tokio::test]
-async fn theme_import_admission_precedes_archive_parsing_and_is_principal_scoped(
+async fn theme_import_zip_admission_precedes_archive_parsing_and_is_principal_scoped(
     #[case] backend: Backend,
 ) {
     let env = backend.setup().await;
@@ -739,7 +1049,7 @@ async fn theme_import_admission_precedes_archive_parsing_and_is_principal_scoped
 
 #[apply(backends)]
 #[tokio::test]
-async fn theme_import_validation_releases_the_request_permit(#[case] backend: Backend) {
+async fn theme_import_zip_validation_releases_the_request_permit(#[case] backend: Backend) {
     let env = backend.setup().await;
     let owner = create_user_and_session(
         std::sync::Arc::clone(&env.users()),

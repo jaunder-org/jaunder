@@ -29,7 +29,7 @@ Approval hashes identify their original documents, not resulting metadata bytes.
 
 ## Key contracts and ordered tasks
 
-- [ ] 1. Compatible ZIP import with validated manifest-default catalog naming.
+- [x] 1. Compatible ZIP import with validated manifest-default catalog naming.
   - Contract: shared package validation supplies name metadata; absent multipart
     `name` uses it, valid explicit `name` wins, invalid/blank explicit input
     fails. Preserve response shape, scope-first admission, bounded archive
