@@ -22,8 +22,8 @@ enum SeedBin {
     Jaunder,
 }
 
-const OTLP_ENDPOINT_ENV: &str = "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT";
-const SEED_OTLP_ENDPOINT: &str = "http://127.0.0.1:4317";
+pub(crate) const OTLP_ENDPOINT_ENV: &str = "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT";
+pub(crate) const SEED_OTLP_ENDPOINT: &str = "http://127.0.0.1:4317";
 const SEED_PROCESS_ENV: &str = "JAUNDER_E2E_SEED_PROCESS";
 const JAUNDER_SEED_PROCESS: &str = "e2e.seed.jaunder";
 const TEST_SUPPORT_SEED_PROCESS: &str = "e2e.seed.test-support";
@@ -80,29 +80,34 @@ fn seed_invocations() -> Vec<(SeedBin, Vec<String>)> {
     ]
 }
 
-fn child_env(db: &str, bin: SeedBin) -> [(&'static str, &str); 4] {
+fn child_env<'a>(db: &'a str, bin: SeedBin, endpoint: &'a OsStr) -> [(&'static str, &'a OsStr); 4] {
     let process = match bin {
         SeedBin::Jaunder => JAUNDER_SEED_PROCESS,
         SeedBin::TestSupport => TEST_SUPPORT_SEED_PROCESS,
     };
     [
-        ("JAUNDER_DB", db),
-        (OTLP_ENDPOINT_ENV, SEED_OTLP_ENDPOINT),
-        (SEED_PROCESS_ENV, process),
-        ("RUST_LOG", SEED_RUST_LOG),
+        ("JAUNDER_DB", OsStr::new(db)),
+        (OTLP_ENDPOINT_ENV, endpoint),
+        (SEED_PROCESS_ENV, OsStr::new(process)),
+        ("RUST_LOG", OsStr::new(SEED_RUST_LOG)),
     ]
 }
 
 /// Run the canonical seed by shelling each step out to its target binary
 /// (`test_support_bin` or `jaunder_bin`) with the DB and OTLP endpoint passed to
 /// every child process. Fatal on the first non-zero exit; the bail message names
-pub fn run(db: &str, test_support_bin: &Path, jaunder_bin: &Path) -> anyhow::Result<()> {
+pub fn run(
+    db: &str,
+    test_support_bin: &Path,
+    jaunder_bin: &Path,
+    endpoint: &OsStr,
+) -> anyhow::Result<()> {
     for (bin, args) in seed_invocations() {
         let path = match bin {
             SeedBin::TestSupport => test_support_bin,
             SeedBin::Jaunder => jaunder_bin,
         };
-        let env = child_env(db, bin);
+        let env = child_env(db, bin, endpoint);
         let status = Command::new(path)
             .args(&args)
             .envs(env.iter().map(|(key, value)| (OsStr::new(key), value)))
@@ -119,6 +124,8 @@ pub fn run(db: &str, test_support_bin: &Path, jaunder_bin: &Path) -> anyhow::Res
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
+
     use super::{
         JAUNDER_SEED_PROCESS, OTLP_ENDPOINT_ENV, SEED_OTLP_ENDPOINT, SEED_PROCESS_ENV,
         SEED_RUST_LOG, SeedBin, TEST_SUPPORT_SEED_PROCESS, child_env, seed_invocations,
@@ -189,23 +196,49 @@ mod tests {
     }
 
     #[test]
+    fn selected_endpoint_reaches_both_seed_process_kinds() {
+        for endpoint in ["http://127.0.0.1:54317", "http://127.0.0.1:4317"] {
+            for bin in [SeedBin::Jaunder, SeedBin::TestSupport] {
+                let environment = child_env("sqlite:/tmp/jaunder.db", bin, OsStr::new(endpoint));
+                assert_eq!(
+                    environment
+                        .iter()
+                        .find(|(key, _)| *key == OTLP_ENDPOINT_ENV),
+                    Some(&(OTLP_ENDPOINT_ENV, OsStr::new(endpoint)))
+                );
+            }
+        }
+    }
+
+    #[test]
     fn child_env_sets_db_endpoint_and_seed_process() {
         assert_eq!(
-            child_env("sqlite:/tmp/jaunder.db", SeedBin::TestSupport),
+            child_env(
+                "sqlite:/tmp/jaunder.db",
+                SeedBin::TestSupport,
+                OsStr::new(SEED_OTLP_ENDPOINT)
+            ),
             [
-                ("JAUNDER_DB", "sqlite:/tmp/jaunder.db"),
-                (OTLP_ENDPOINT_ENV, SEED_OTLP_ENDPOINT),
-                (SEED_PROCESS_ENV, TEST_SUPPORT_SEED_PROCESS),
-                ("RUST_LOG", SEED_RUST_LOG),
+                ("JAUNDER_DB", OsStr::new("sqlite:/tmp/jaunder.db")),
+                (OTLP_ENDPOINT_ENV, OsStr::new(SEED_OTLP_ENDPOINT)),
+                (SEED_PROCESS_ENV, OsStr::new(TEST_SUPPORT_SEED_PROCESS)),
+                ("RUST_LOG", OsStr::new(SEED_RUST_LOG)),
             ]
         );
         assert_eq!(
-            child_env("postgres://jaunder@localhost/jaunder", SeedBin::Jaunder),
+            child_env(
+                "postgres://jaunder@localhost/jaunder",
+                SeedBin::Jaunder,
+                OsStr::new(SEED_OTLP_ENDPOINT)
+            ),
             [
-                ("JAUNDER_DB", "postgres://jaunder@localhost/jaunder"),
-                (OTLP_ENDPOINT_ENV, SEED_OTLP_ENDPOINT),
-                (SEED_PROCESS_ENV, JAUNDER_SEED_PROCESS),
-                ("RUST_LOG", SEED_RUST_LOG),
+                (
+                    "JAUNDER_DB",
+                    OsStr::new("postgres://jaunder@localhost/jaunder")
+                ),
+                (OTLP_ENDPOINT_ENV, OsStr::new(SEED_OTLP_ENDPOINT)),
+                (SEED_PROCESS_ENV, OsStr::new(JAUNDER_SEED_PROCESS)),
+                ("RUST_LOG", OsStr::new(SEED_RUST_LOG)),
             ]
         );
     }

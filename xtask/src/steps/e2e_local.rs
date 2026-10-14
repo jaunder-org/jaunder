@@ -591,6 +591,24 @@ fn devtool_seed_args(tools: &Path) -> [String; 6] {
     ]
 }
 
+fn devtool_seed_command<'a>(
+    sh: &'a Shell,
+    tools: &Path,
+    db: &str,
+    test_support: &str,
+    jaunder: &Path,
+    capture: &str,
+    endpoint: &str,
+) -> xshell::Cmd<'a> {
+    let devtool_args = devtool_seed_args(tools);
+    cmd!(
+        sh,
+        "cargo {devtool_args...} --db {db} --test-support-bin {test_support} --jaunder-bin {jaunder}"
+    )
+    .env("JAUNDER_CAPTURE_DIR", capture)
+    .env("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT", endpoint)
+}
+
 fn run_lifecycle(
     sh: &Shell,
     result: &mut CommandResult,
@@ -777,14 +795,17 @@ fn run_lifecycle(
     };
 
     let tools = root.join("tools/Cargo.toml");
-    let devtool_args = devtool_seed_args(&tools);
     let jaunder = &artifacts.jaunder;
     let seed_start = std::time::Instant::now();
-    if cmd!(
+    if devtool_seed_command(
         sh,
-        "cargo {devtool_args...} --db {db} --test-support-bin {test_support} --jaunder-bin {jaunder}"
+        &tools,
+        &db,
+        &test_support,
+        jaunder,
+        &capture,
+        &collector.grpc_exporter_url(),
     )
-    .env("JAUNDER_CAPTURE_DIR", &capture)
     .run()
     .is_err()
     {
@@ -899,6 +920,8 @@ pub fn run(
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
+
     use super::*;
 
     #[test]
@@ -934,6 +957,30 @@ mod tests {
                 "--",
                 "seed-e2e",
             ]
+        );
+    }
+
+    #[test]
+    fn local_seed_receives_owned_collector_endpoint() {
+        let sh = Shell::new().expect("test shell");
+        let command: std::process::Command = devtool_seed_command(
+            &sh,
+            Path::new("/repo/tools/Cargo.toml"),
+            "sqlite:/tmp/local.db",
+            "/repo/target/debug/test-support",
+            Path::new("/repo/target/debug/jaunder"),
+            "/tmp/local/capture",
+            "http://127.0.0.1:54317",
+        )
+        .into();
+        let environment: std::collections::HashMap<_, _> = command.get_envs().collect();
+        assert_eq!(
+            environment.get(OsStr::new("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT")),
+            Some(&Some(OsStr::new("http://127.0.0.1:54317")))
+        );
+        assert_eq!(
+            environment.get(OsStr::new("JAUNDER_CAPTURE_DIR")),
+            Some(&Some(OsStr::new("/tmp/local/capture")))
         );
     }
 
