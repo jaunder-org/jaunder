@@ -50,6 +50,7 @@ mod steps {
     pub mod boot_decomposition_coverage;
     pub mod build_csr;
     pub mod common_host_target_closure;
+    pub mod csr_prerequisite;
     pub mod doc_links;
     pub mod doctest_fences;
     pub mod duration_budget;

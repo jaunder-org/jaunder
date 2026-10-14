@@ -1,8 +1,34 @@
-//! Host-owned test fixtures for password domain values.
+//! Host-owned domain-value and executable-boundary test fixtures.
+
+pub mod telemetry;
 
 use super::feed::{FeedMinDays, FeedMinItems};
 use super::password::Password;
 use super::smtp_password::SmtpPassword;
+
+/// Composes the actual host subscriber with an injected SDK tracer and discarded
+/// ordinary output, without installing a global subscriber or provider.
+pub fn telemetry_subscriber(
+    config: &crate::telemetry::TelemetryConfig,
+    tracer: Option<opentelemetry_sdk::trace::SdkTracer>,
+) -> impl tracing::Subscriber + Send + Sync + 'static {
+    crate::telemetry::compose_subscriber(
+        config,
+        None::<tracing_subscriber::layer::Identity>,
+        tracer,
+        Some(std::io::sink),
+    )
+}
+
+/// Builds the actual host tracer policy with an injected in-memory/export seam.
+#[must_use]
+pub fn telemetry_tracer_provider(
+    exporter: impl opentelemetry_sdk::trace::SpanExporter + 'static,
+) -> opentelemetry_sdk::trace::SdkTracerProvider {
+    crate::telemetry::tracer_provider_builder()
+        .with_simple_exporter(exporter)
+        .build()
+}
 
 /// Parses `s` into a valid [`Password`] for tests.
 ///

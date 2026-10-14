@@ -1,5 +1,8 @@
 //! The build-only contract for content-addressed CSR runtime bundles.
 
+mod shell;
+pub use shell::{ShellValidationError, validate_rendered_shell};
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};

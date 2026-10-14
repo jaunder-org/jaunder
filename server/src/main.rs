@@ -97,6 +97,33 @@ mod tests {
     use std::os::unix::ffi::OsStringExt as _;
     use tempfile::TempDir;
 
+    #[test]
+    fn subprocess_preserves_inherited_local_log_policy() {
+        use host::test_support::telemetry::{LOCAL_LOG_CHILD, local_log_scenarios};
+        if let Some(scenario) = std::env::var_os(LOCAL_LOG_CHILD) {
+            let config = telemetry_config(true);
+            assert_eq!(
+                config.local_log_filter().to_string(),
+                if scenario == "override" {
+                    "warn"
+                } else {
+                    "off"
+                }
+            );
+            return;
+        }
+        let executable = std::env::current_exe().expect("test binary");
+        for scenario in local_log_scenarios() {
+            let output = scenario
+                .command(&executable)
+                .output()
+                .expect("configuration child");
+            let diagnostic = child_diagnostic(&output.stderr);
+            assert!(output.status.success(), "{}: {diagnostic}", scenario.name);
+            assert!(diagnostic.is_empty(), "{diagnostic}");
+        }
+    }
+
     fn child_diagnostic(output: &[u8]) -> String {
         String::from_utf8_lossy(output).into_owned()
     }
