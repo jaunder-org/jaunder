@@ -7,6 +7,8 @@
 //! [`TelemetryGuard`] whose drop path flushes short-lived process telemetry
 //! before exit. Server-only request diagnostics stay in `server::observability`.
 
+mod native_export;
+mod native_logs;
 mod sdk_boundary;
 mod span_fields;
 use std::time::{Duration, Instant};
@@ -103,6 +105,14 @@ enum FallbackKind {
     OtlpEndpoint,
     LogFilter,
     SpanFieldFormat,
+    NativeLogProjection,
+    LoggerSetup,
+    LoggerExport,
+    LoggerPartial,
+    LoggerPartialWarning,
+    LoggerQueueFull,
+    LoggerFlush,
+    LoggerShutdown,
     SlowThreshold,
     LogFormat,
 }
@@ -146,6 +156,29 @@ impl FallbackKind {
             Self::SpanFieldFormat => (
                 "host.telemetry.span_fields",
                 "diagnostic span field formatting failed",
+            ),
+            Self::LoggerSetup => ("host.telemetry.logger_setup", "native log export disabled"),
+            Self::LoggerExport => ("host.telemetry.logger_export", "native log export failed"),
+            Self::LoggerPartial => (
+                "host.telemetry.logger_partial",
+                "native log export partially rejected",
+            ),
+            Self::LoggerPartialWarning => (
+                "host.telemetry.logger_partial_warning",
+                "native log export warning",
+            ),
+            Self::LoggerQueueFull => (
+                "host.telemetry.logger_queue_full",
+                "native log queue full; records dropped",
+            ),
+            Self::LoggerFlush => ("host.telemetry.logger_flush", "native log flush failed"),
+            Self::LoggerShutdown => (
+                "host.telemetry.logger_shutdown",
+                "native log shutdown failed",
+            ),
+            Self::NativeLogProjection => (
+                "host.telemetry.native_log_projection",
+                "native log field formatting failed",
             ),
             Self::SlowThreshold => (
                 "host.telemetry.slow_threshold",
@@ -517,6 +550,7 @@ fn span_metadata_only(metadata: &tracing::Metadata<'_>) -> bool {
     metadata.is_span()
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn compose_subscriber<L, W>(
     config: &TelemetryConfig,
     extra_layer: Option<L>,
@@ -527,20 +561,41 @@ where
     L: Layer<tracing_subscriber::Registry> + Send + Sync + 'static,
     W: for<'writer> fmt::MakeWriter<'writer> + Send + Sync + 'static,
 {
-    let fmt_layer = output.map(|writer| {
-        if config.json_format {
-            fmt::layer()
-                .json()
-                .with_writer(writer)
-                .with_filter(config.local_log_filter())
-                .boxed()
-        } else {
-            fmt::layer()
-                .with_writer(writer)
-                .with_filter(config.local_log_filter())
-                .boxed()
-        }
-    });
+    compose_subscriber_with_logger(config, extra_layer, tracer, output, None)
+}
+
+fn compose_subscriber_with_logger<L, W>(
+    config: &TelemetryConfig,
+    extra_layer: Option<L>,
+    tracer: Option<opentelemetry_sdk::trace::SdkTracer>,
+    output: Option<W>,
+    logger: Option<opentelemetry_sdk::logs::SdkLogger>,
+) -> impl tracing::Subscriber + Send + Sync + 'static
+where
+    L: Layer<tracing_subscriber::Registry> + Send + Sync + 'static,
+    W: for<'writer> fmt::MakeWriter<'writer> + Send + Sync + 'static,
+{
+    let activation = sdk_boundary::Activation::new();
+    let native_logs =
+        logger.map(|logger| native_logs::NativeLogs::new(logger, activation.dispatch_lookup()));
+    // Endpoint selection owns routing even if native setup failed. Restoring
+    // ordinary stdout would silently create a second ingestion path.
+    let fmt_layer = output
+        .filter(|_| !config.otlp_endpoint_configured())
+        .map(|writer| {
+            if config.json_format {
+                fmt::layer()
+                    .json()
+                    .with_writer(writer)
+                    .with_filter(config.local_log_filter())
+                    .boxed()
+            } else {
+                fmt::layer()
+                    .with_writer(writer)
+                    .with_filter(config.local_log_filter())
+                    .boxed()
+            }
+        });
     let otel_layer = tracer.map(|tracer| {
         tracing_opentelemetry::layer()
             .with_tracer(tracer)
@@ -563,12 +618,10 @@ where
         )
         .with(fmt_layer)
         .with(otel_layer)
+        .with(native_logs)
         // Option<Layer> does not forward dispatch registration; keep activation
         // outside that adapter so it receives the owning weak dispatch.
-        .with(
-            sdk_boundary::Activation::new()
-                .with_filter(tracing_subscriber::filter::filter_fn(span_metadata_only)),
-        )
+        .with(activation.with_filter(tracing_subscriber::filter::filter_fn(span_metadata_only)))
 }
 
 fn setup_exporter_runtime_with<T>(
@@ -591,6 +644,12 @@ fn init_tracing_impl_with_layer<L>(
 where
     L: Layer<tracing_subscriber::Registry> + Send + Sync + 'static,
 {
+    // Resolve the owned SDK policy at the process initialization boundary,
+    // before exporter/provider work. See native_export for the pinned builder's
+    // discarded constructor-only default read and complete snapshot override.
+    let log_batch_policy = config
+        .otlp_endpoint_configured()
+        .then(native_export::BatchPolicy::resolve);
     // Forward any existing `log` macros to tracing so we can migrate in
     // phases without duplicate logging calls. A failure here is non-fatal (it
     // means a `log` bridge is already installed), but tracing isn't up yet, so
@@ -629,20 +688,36 @@ where
             .and_then(|(endpoint, runtime)| {
                 setup_otel_meter_with(
                     endpoint,
-                    |endpoint| runtime.in_scope(|| build_otel_meter(endpoint, resource)),
+                    |endpoint| runtime.in_scope(|| build_otel_meter(endpoint, resource.clone())),
                     |error| {
                         exporter_fallback(FallbackKind::MeterExporterSetup, error);
                     },
                 )
             });
 
+    let logger = endpoint
+        .as_deref()
+        .zip(exporter_runtime.as_ref())
+        .zip(log_batch_policy)
+        .and_then(|((endpoint, runtime), policy)| {
+            match runtime.in_scope(|| native_export::build(endpoint, resource, policy)) {
+                Ok(provider) => Some(provider),
+                Err(error) => {
+                    native_export::setup_failure(&error);
+                    None
+                }
+            }
+        });
+
     let subscriber_installed = install_subscriber_with(
         || {
-            tracing::subscriber::set_global_default(compose_subscriber(
+            use opentelemetry::logs::LoggerProvider as _;
+            tracing::subscriber::set_global_default(compose_subscriber_with_logger(
                 config,
                 extra_layer,
                 tracer.as_ref().map(|provider| provider.tracer("jaunder")),
                 Some(std::io::stdout),
+                logger.as_ref().map(|provider| provider.logger("jaunder")),
             ))
         },
         || fallback(FallbackKind::SubscriberInstall),
@@ -652,6 +727,7 @@ where
         exporter_runtime,
         meter,
         tracer,
+        logger,
         subscriber_installed,
         meter_shutdown: shutdown_meter,
         tracer_shutdown: shutdown_tracer,
@@ -688,20 +764,21 @@ type MeterShutdownOperation =
 type TracerShutdownOperation =
     fn(&opentelemetry_sdk::trace::SdkTracerProvider) -> opentelemetry_sdk::error::OTelSdkResult;
 
-/// Owns the OTLP providers installed by [`init_tracing`] so a short-lived
-/// process flushes buffered telemetry before exit. The periodic metric reader
-/// and batch span processor only export on their interval — which a one-shot
-/// CLI command exits long before — so without this the CLI's metric and span
-/// emits are silently dropped. Holding the guard for the command's scope and
-/// letting `Drop` run `shutdown()` (force-flush + shutdown) exports them on
-/// every exit path: success, `?` error-return, and panic unwind.
+/// Owns every installed signal provider across process or command execution.
+/// SDK shutdown drains buffered telemetry using each provider's existing bounded
+/// budget; no unbounded pre-shutdown flush is added. Cleanup runs on ordinary
+/// return, error return and panic unwind without changing the primary outcome.
+/// Logger shutdown acknowledgment alone is not export/delivery proof: actual
+/// export failures and partial rejection are observed at the native boundary.
 ///
-/// Both fields are `None` when no OTLP endpoint is configured, making the guard
-/// an inert no-op (the common dev/test case).
+/// Providers are absent without configured OTLP. The private transport runtime
+/// outlives all provider shutdown attempts and retains its fixed best-effort
+/// five-second cleanup policy, not a guarantee that residual blocking work ends.
 pub struct TelemetryGuard {
     exporter_runtime: Option<sdk_boundary::ExporterRuntime>,
     meter: Option<opentelemetry_sdk::metrics::SdkMeterProvider>,
     tracer: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
+    logger: Option<opentelemetry_sdk::logs::SdkLoggerProvider>,
     subscriber_installed: bool,
     meter_shutdown: MeterShutdownOperation,
     tracer_shutdown: TracerShutdownOperation,
@@ -769,7 +846,10 @@ impl Drop for TelemetryGuard {
         if let Some(tracer) = self.tracer.as_ref() {
             finish_tracer_shutdown(tracer, self.tracer_shutdown);
         }
-        // Both SDK workers can flush via transport until shutdown finishes.
+        if let Some(logger) = self.logger.as_ref() {
+            native_export::shutdown(logger);
+        }
+        // Every installed provider can use transport until shutdown finishes.
         drop(self.exporter_runtime.take());
     }
 }
@@ -821,6 +901,108 @@ mod tests {
         fn make_writer(&'writer self) -> Self::Writer {
             self.clone()
         }
+    }
+
+    #[test]
+    fn native_logger_guard_shutdown_drains_short_lived_records() {
+        use opentelemetry::logs::LoggerProvider as _;
+        use opentelemetry_sdk::logs::{InMemoryLogExporter, LogBatch, LogExporter};
+        #[derive(Clone, Debug)]
+        struct Retained(InMemoryLogExporter);
+        impl LogExporter for Retained {
+            async fn export(&self, batch: LogBatch<'_>) -> opentelemetry_sdk::error::OTelSdkResult {
+                self.0.export(batch).await
+            }
+        }
+        let exporter = InMemoryLogExporter::default();
+        let logger = native_export::provider(
+            Resource::builder().build(),
+            native_export::BatchPolicy::resolve(),
+            Retained(exporter.clone()),
+        );
+        let mut config = configured_local_policy(false, Some("off"), None);
+        config.otlp_endpoint = Some("http://127.0.0.1:4317".to_owned());
+        let subscriber = compose_subscriber_with_logger(
+            &config,
+            None::<tracing_subscriber::layer::Identity>,
+            None,
+            None::<Shared>,
+            Some(logger.logger("short-lived")),
+        );
+        tracing::subscriber::with_default(
+            subscriber,
+            || tracing::info!(target: "host::application", "one-shot completion"),
+        );
+        drop(TelemetryGuard {
+            exporter_runtime: None,
+            meter: None,
+            tracer: None,
+            logger: Some(logger),
+            subscriber_installed: true,
+            meter_shutdown: shutdown_meter,
+            tracer_shutdown: shutdown_tracer,
+        });
+        assert_eq!(exporter.get_emitted_logs().expect("drained logs").len(), 1);
+    }
+
+    #[test]
+    fn native_sink_configured_endpoint_never_mirrors_or_restores_stdout() {
+        use opentelemetry::logs::LoggerProvider as _;
+        use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLoggerProvider};
+        for installed in [true, false] {
+            let mut config = configured_local_policy(false, Some("trace"), None);
+            config.otlp_endpoint = Some("http://127.0.0.1:4317".to_owned());
+            let output = Arc::new(Mutex::new(Vec::new()));
+            let exporter = InMemoryLogExporter::default();
+            let provider = SdkLoggerProvider::builder()
+                .with_simple_exporter(exporter.clone())
+                .build();
+            let subscriber = compose_subscriber_with_logger(
+                &config,
+                None::<tracing_subscriber::layer::Identity>,
+                None,
+                Some(Shared(output.clone())),
+                installed.then(|| provider.logger("routing")),
+            );
+            tracing::subscriber::with_default(
+                subscriber,
+                || tracing::info!(target: "host::application", "ordinary native message"),
+            );
+            assert!(
+                output.lock().expect("stdout").is_empty(),
+                "configured endpoint must never restore stdout even when logger setup fails"
+            );
+            assert_eq!(
+                exporter.get_emitted_logs().expect("logs").len(),
+                usize::from(installed)
+            );
+        }
+    }
+
+    #[test]
+    fn native_projection_exports_exact_message_and_actual_severity() {
+        use opentelemetry::logs::{AnyValue, LoggerProvider as _, Severity};
+        use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLoggerProvider};
+        let exporter = InMemoryLogExporter::default();
+        let provider = SdkLoggerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let subscriber = compose_subscriber_with_logger(
+            &configured_local_policy(false, Some("off"), None),
+            None::<tracing_subscriber::layer::Identity>,
+            None,
+            None::<Shared>,
+            Some(provider.logger("projection")),
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(target: "host::application", "finished {}", "operation");
+        });
+        let records = exporter.get_emitted_logs().expect("logs");
+        assert_eq!(records.len(), 1);
+        let record = &records[0].record;
+        assert_eq!(record.body(), Some(&AnyValue::from("finished operation")));
+        assert_eq!(record.severity_number(), Some(Severity::Info));
+        assert_eq!(record.severity_text(), Some("INFO"));
     }
 
     #[test]
@@ -1217,66 +1399,75 @@ mod tests {
         drop(runtime);
     }
 
+    #[derive(Clone, Debug)]
+    struct Probe {
+        handle: tokio::runtime::Handle,
+        output: std::sync::mpsc::Sender<&'static str>,
+    }
+    impl Probe {
+        async fn transport(&self, signal: &'static str) {
+            let output = self.output.clone();
+            self.handle
+                .spawn(async move {
+                    tokio::task::yield_now().await;
+                    assert!(opentelemetry::Context::is_current_telemetry_suppressed());
+                    output.send(signal).expect("export signal");
+                })
+                .await
+                .expect("export transport");
+        }
+    }
+    impl SpanExporter for Probe {
+        async fn export(&self, batch: Vec<SpanData>) -> opentelemetry_sdk::error::OTelSdkResult {
+            assert!(batch.iter().any(|span| span.name == "shutdown_span"));
+            self.transport("trace").await;
+            Ok(())
+        }
+    }
+    impl opentelemetry_sdk::metrics::exporter::PushMetricExporter for Probe {
+        async fn export(
+            &self,
+            metrics: &opentelemetry_sdk::metrics::data::ResourceMetrics,
+        ) -> opentelemetry_sdk::error::OTelSdkResult {
+            assert!(
+                metrics
+                    .scope_metrics()
+                    .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+                    .any(|metric| metric.name() == "shutdown.counter")
+            );
+            self.transport("metric").await;
+            Ok(())
+        }
+        fn force_flush(&self) -> opentelemetry_sdk::error::OTelSdkResult {
+            Ok(())
+        }
+        fn shutdown_with_timeout(
+            &self,
+            _timeout: Duration,
+        ) -> opentelemetry_sdk::error::OTelSdkResult {
+            Ok(())
+        }
+        fn temporality(&self) -> opentelemetry_sdk::metrics::Temporality {
+            opentelemetry_sdk::metrics::Temporality::Cumulative
+        }
+    }
+    impl opentelemetry_sdk::logs::LogExporter for Probe {
+        async fn export(
+            &self,
+            batch: opentelemetry_sdk::logs::LogBatch<'_>,
+        ) -> opentelemetry_sdk::error::OTelSdkResult {
+            assert!(batch.iter().any(|(record, _)| record.body()
+                == Some(&opentelemetry::logs::AnyValue::from("shutdown_log"))));
+            self.transport("log").await;
+            Ok(())
+        }
+    }
     #[tokio::test]
-    async fn sdk_boundary_guard_keeps_transport_alive_through_both_provider_shutdowns() {
+    async fn sdk_boundary_guard_keeps_transport_alive_through_all_provider_shutdowns() {
         use opentelemetry::metrics::MeterProvider as _;
         use opentelemetry::trace::Tracer as _;
         use opentelemetry_sdk::metrics::exporter::PushMetricExporter;
-        #[derive(Clone, Debug)]
-        struct Probe {
-            handle: tokio::runtime::Handle,
-            output: std::sync::mpsc::Sender<&'static str>,
-        }
-        impl Probe {
-            async fn transport(&self, signal: &'static str) {
-                let output = self.output.clone();
-                self.handle
-                    .spawn(async move {
-                        tokio::task::yield_now().await;
-                        assert!(opentelemetry::Context::is_current_telemetry_suppressed());
-                        output.send(signal).expect("export signal");
-                    })
-                    .await
-                    .expect("export transport");
-            }
-        }
-        impl SpanExporter for Probe {
-            async fn export(
-                &self,
-                batch: Vec<SpanData>,
-            ) -> opentelemetry_sdk::error::OTelSdkResult {
-                assert!(batch.iter().any(|span| span.name == "shutdown_span"));
-                self.transport("trace").await;
-                Ok(())
-            }
-        }
-        impl PushMetricExporter for Probe {
-            async fn export(
-                &self,
-                metrics: &opentelemetry_sdk::metrics::data::ResourceMetrics,
-            ) -> opentelemetry_sdk::error::OTelSdkResult {
-                assert!(
-                    metrics
-                        .scope_metrics()
-                        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
-                        .any(|metric| metric.name() == "shutdown.counter")
-                );
-                self.transport("metric").await;
-                Ok(())
-            }
-            fn force_flush(&self) -> opentelemetry_sdk::error::OTelSdkResult {
-                Ok(())
-            }
-            fn shutdown_with_timeout(
-                &self,
-                _timeout: Duration,
-            ) -> opentelemetry_sdk::error::OTelSdkResult {
-                Ok(())
-            }
-            fn temporality(&self) -> opentelemetry_sdk::metrics::Temporality {
-                opentelemetry_sdk::metrics::Temporality::Cumulative
-            }
-        }
+        let log_policy = native_export::BatchPolicy::resolve();
         let runtime = sdk_boundary::ExporterRuntime::new().expect("runtime");
         let (output, received) = std::sync::mpsc::channel();
         let probe = runtime.in_scope(|| Probe {
@@ -1287,6 +1478,15 @@ mod tests {
         let tracer = tracer_provider_builder()
             .with_batch_exporter(probe.clone())
             .build();
+        let logger =
+            native_export::provider(Resource::builder().build(), log_policy, probe.clone());
+        {
+            use opentelemetry::logs::{LogRecord as _, Logger as _, LoggerProvider as _};
+            let log = logger.logger("shutdown");
+            let mut record = log.create_log_record();
+            record.set_body("shutdown_log".into());
+            log.emit(record);
+        }
         let meter = SdkMeterProvider::builder()
             .with_periodic_exporter(probe)
             .build();
@@ -1300,12 +1500,13 @@ mod tests {
             exporter_runtime: Some(runtime),
             meter: Some(meter),
             tracer: Some(tracer),
+            logger: Some(logger),
             subscriber_installed: true,
             meter_shutdown: shutdown_meter,
             tracer_shutdown: shutdown_tracer,
         });
         let signals: Vec<_> = received.try_iter().collect();
-        assert_eq!(signals, ["metric", "trace"]);
+        assert_eq!(signals, ["metric", "trace", "log"]);
         assert!(!opentelemetry::Context::is_current_telemetry_suppressed());
     }
 
@@ -2367,6 +2568,7 @@ mod tests {
             exporter_runtime: Some(sdk_boundary::ExporterRuntime::new().expect("runtime")),
             meter: Some(provider),
             tracer: None,
+            logger: None,
             subscriber_installed: true,
             meter_shutdown: shutdown_meter,
             tracer_shutdown: shutdown_tracer,
@@ -2394,6 +2596,7 @@ mod tests {
             exporter_runtime: Some(sdk_boundary::ExporterRuntime::new().expect("runtime")),
             meter: None,
             tracer: Some(provider),
+            logger: None,
             subscriber_installed: true,
             meter_shutdown: shutdown_meter,
             tracer_shutdown: shutdown_tracer,
@@ -2409,6 +2612,7 @@ mod tests {
     #[test]
     fn guard_requires_provider_and_subscriber_for_otel_tracing() {
         let installed = TelemetryGuard {
+            logger: None,
             exporter_runtime: None,
             meter: None,
             tracer: Some(SdkTracerProvider::builder().build()),
@@ -2420,6 +2624,7 @@ mod tests {
         drop(installed);
 
         let rejected = TelemetryGuard {
+            logger: None,
             exporter_runtime: None,
             meter: None,
             tracer: Some(SdkTracerProvider::builder().build()),
@@ -2438,6 +2643,7 @@ mod tests {
             exporter_runtime: None,
             meter: None,
             tracer: None,
+            logger: None,
             subscriber_installed: true,
             meter_shutdown: shutdown_meter,
             tracer_shutdown: shutdown_tracer,
@@ -2456,6 +2662,7 @@ mod tests {
                     exporter_runtime: Some(sdk_boundary::ExporterRuntime::new().expect("runtime")),
                     meter: Some(meter),
                     tracer: None,
+                    logger: None,
                     subscriber_installed: true,
                     meter_shutdown: |_| {
                         Err(opentelemetry_sdk::error::OTelSdkError::InternalFailure(
@@ -2483,6 +2690,7 @@ mod tests {
                     exporter_runtime: Some(sdk_boundary::ExporterRuntime::new().expect("runtime")),
                     meter: None,
                     tracer: Some(tracer),
+                    logger: None,
                     subscriber_installed: true,
                     meter_shutdown: shutdown_meter,
                     tracer_shutdown: |_| {
