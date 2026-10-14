@@ -475,7 +475,16 @@ fn main() -> Result<()> {
             )
         }
         Command::SeedE2e(args) => {
-            seed_e2e::run(&args.db, &args.test_support_bin, &args.jaunder_bin)
+            // Preserve raw configured input: the seed children own telemetry
+            // trimming and invalid-value diagnostics, including non-Unicode.
+            let endpoint = std::env::var_os(seed_e2e::OTLP_ENDPOINT_ENV)
+                .unwrap_or_else(|| seed_e2e::SEED_OTLP_ENDPOINT.into());
+            seed_e2e::run(
+                &args.db,
+                &args.test_support_bin,
+                &args.jaunder_bin,
+                &endpoint,
+            )
         }
         #[cfg(feature = "performance")]
         Command::Performance(command) => performance::run(*command),

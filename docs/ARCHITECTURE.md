@@ -2791,14 +2791,42 @@ over loopback. An optional distinct
 `services.jaunder.stack.observability.hostName` adds a second Caddy HTTPS host
 for those prefixes. It must differ from the application host after lowercasing:
 same-host Caddy definitions collide and could authenticate or replace the
-application route. Its
-`services.jaunder.stack.observability.basicAuth.{username,passwordHash}` values
-are required: the username matches `[A-Za-z0-9._-]+`, and `$2a$`/`$2b$` bcrypt
-and `$argon2id$` hashes select the matching Caddy algorithm, while plaintext and
-unrecognized hashes fail module evaluation. `passwordHash` is a literal
-evaluated Nix string embedded in generated Caddy configuration and the Nix
-store, not a runtime-file secret. Caddy authenticates this external route before
-proxying; ingestion never traverses Caddy or Basic Auth.
+application route. Its Basic Auth requires exactly one complete source: the
+compatible inline `username`/`passwordHash` pair or an absolute runtime filename
+string `credentialsFile` with both inline fields empty
+([runtime observability credentials](adr/drafts/runtime-observability-credentials.md)).
+Inline usernames match `[A-Za-z0-9._-]+`; complete `$2a$`/`$2b$` bcrypt and
+`$argon2id$` hashes select their algorithm, while plaintext/unrecognized hashes
+fail evaluation. The literal inline hash enters generated Caddy configuration
+and the Nix store. File contents are never read/copied at evaluation/build; only
+runtime references enter those artifacts. File-only `credentialsFileAlgorithm`
+selects `bcrypt` (default) or `argon2id` without changing inline inference.
+
+File mode requires the configured systemd package >=260, with pinned 261.2 as
+the lifecycle proof target; older packages are clearly rejected for file mode,
+not inline. One named `LoadCredential` provides a private read-only copy to a
+literal hostname-wide auth import. The ordinary NixOS Caddy run/reload commands
+consume systemd's credential environment/mount and perform native adaptation and
+provisioning; no custom content validator or executable wrapper is added.
+Operators supply trusted native `username hashed-password` account entries and
+use `caddy hash-password` through stdin for the selected algorithm. Native
+syntax/import failures reject activation; empty fragments can successfully
+activate deny-all, and malformed hash internals are not necessarily provisioning
+errors. The stack never substitutes unauthenticated proxy routes on failure.
+
+`RefreshOnReload=credentials` preserves normal unprivileged shared-Caddy reload;
+reload and restart can both refresh/rotate credentials, while source replacement
+alone leaves active authentication unchanged. Failed reload retains the prior
+parsed authenticated configuration in the healthy main process, not a guarantee
+that the credential mount rolled back. A successful empty-file reload instead
+replaces prior accounts with deny-all. Operators repair the source and retry;
+service-operation success alone does not prove credential usability. The manager
+can read a root-only source without granting Caddy direct source access. Root,
+Caddy and protected runtime autosave/admin configuration remain inside the trust
+boundary; unrelated local/store readers are the exposure being reduced. Caddy
+authenticates every external request before proxying; ingestion never traverses
+Caddy or Basic Auth. Operator provisioning/rotation procedures live in
+[the deployment runbook](DESIGN.md#optional-https-observability-host-and-basic-auth).
 
 The closed stack database choice defaults to SQLite. PostgreSQL mode additively
 enables the host's ordinary shared PostgreSQL instance, ensures a Jaunder
