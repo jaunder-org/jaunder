@@ -161,11 +161,13 @@ let
       postgresqlDatabase = cfg.database == "postgresql";
       applicationHostName = if dnsHostName cfg.hostName then normalizedDnsHostName cfg.hostName else "invalid-stack-host.invalid";
       observabilityHostName = if dnsHostName cfg.observability.hostName then normalizedDnsHostName cfg.observability.hostName else "invalid-observability-host.invalid";
-      hashAlgorithm = if bcryptHash then "bcrypt" else "argon2id";
+      fileAuth = cfg.observability.basicAuth.credentialsFile != null;
+      managedFileAuth = fileAuth && dnsHostName cfg.observability.hostName;
+      hashAlgorithm = if fileAuth then cfg.observability.basicAuth.credentialsFileAlgorithm else if bcryptHash then "bcrypt" else "argon2id";
       observabilityIngress = lib.optionalString (dnsHostName cfg.observability.hostName) ''
         # The stores remain credential-free on loopback; this is their only remote access path.
         basic_auth ${hashAlgorithm} {
-          ${cfg.observability.basicAuth.username} ${cfg.observability.basicAuth.passwordHash}
+          ${if fileAuth then "import {$CREDENTIALS_DIRECTORY}/jaunder-observability" else "${cfg.observability.basicAuth.username} ${cfg.observability.basicAuth.passwordHash}"}
         }
         reverse_proxy /metrics* 127.0.0.1:8428
         reverse_proxy /logs* 127.0.0.1:9428
@@ -194,6 +196,24 @@ let
             description = "Optional HTTPS operator host for the loopback observability UIs.";
           };
           basicAuth = {
+            credentialsFile = lib.mkOption {
+              type = lib.types.nullOr (lib.types.addCheck lib.types.str (value:
+                builtins.isString value && lib.hasPrefix "/" value
+                && builtins.match ".*[[:cntrl:]].*" value == null
+                && builtins.all (character: !lib.hasInfix character value) [ "*" "?" "[" "]" ]));
+              default = null;
+              description = ''
+                Absolute runtime filename (not a Nix path or glob), read by systemd into Caddy's private credential copy. Requires systemd >=260.
+                Supply Caddy basic_auth account entries (username hashed-password), using hashes for credentialsFileAlgorithm.
+                Generate hashes with caddy hash-password through stdin; see https://caddyserver.com/docs/caddyfile/directives/basic_auth and https://caddyserver.com/docs/command-line#caddy-hash-password.
+                Contents are trusted operator configuration; native Caddy parsing/provisioning applies. An empty file can activate deny-all authentication, and malformed hash internals are not necessarily rejected at startup.
+              '';
+            };
+            credentialsFileAlgorithm = lib.mkOption {
+              type = lib.types.enum [ "bcrypt" "argon2id" ];
+              default = "bcrypt";
+              description = "Hash algorithm for credentialsFile entries; inline hashes retain algorithm inference.";
+            };
             username = lib.mkOption {
               type = lib.types.str;
               default = "";
@@ -222,12 +242,12 @@ let
           }
           {
             jaunderStack = true;
-            assertion = cfg.observability.hostName == null || nonWhitespace cfg.observability.basicAuth.username;
+            assertion = cfg.observability.hostName == null || fileAuth || nonWhitespace cfg.observability.basicAuth.username;
             message = "services.jaunder.stack.observability.basicAuth.username must be non-whitespace when an observability host is configured.";
           }
           {
             jaunderStack = true;
-            assertion = cfg.observability.hostName == null || caddyToken cfg.observability.basicAuth.username;
+            assertion = cfg.observability.hostName == null || fileAuth || caddyToken cfg.observability.basicAuth.username;
             message = "services.jaunder.stack.observability.basicAuth.username must contain only ASCII letters, digits, periods, hyphens, or underscores when an observability host is configured.";
           }
           {
@@ -237,15 +257,33 @@ let
           }
           {
             jaunderStack = true;
-            assertion = cfg.observability.hostName == null || nonWhitespace cfg.observability.basicAuth.passwordHash;
+            assertion = cfg.observability.hostName == null || fileAuth || nonWhitespace cfg.observability.basicAuth.passwordHash;
             message = "services.jaunder.stack.observability.basicAuth.passwordHash must be non-whitespace when an observability host is configured.";
           }
           {
             jaunderStack = true;
-            assertion = cfg.observability.hostName == null || bcryptHash || argon2idHash;
+            assertion = cfg.observability.hostName == null || fileAuth || bcryptHash || argon2idHash;
             message = "services.jaunder.stack.observability.basicAuth.passwordHash must be a complete $2a$/$2b$ bcrypt or $argon2id$ encoded hash.";
           }
+          {
+            jaunderStack = true;
+            assertion = cfg.observability.hostName == null || !fileAuth || (cfg.observability.basicAuth.username == "" && cfg.observability.basicAuth.passwordHash == "");
+            message = "Observability Basic Auth requires exactly one source: credentialsFile with empty inline fields, or a complete inline username/passwordHash pair.";
+          }
+          {
+            jaunderStack = true;
+            assertion = !managedFileAuth || lib.versionAtLeast config.systemd.package.version "260";
+            message = "Observability credentialsFile requires systemd >=260 for RefreshOnReload=credentials.";
+          }
         ];
+
+        systemd.services.caddy = lib.mkIf managedFileAuth {
+          serviceConfig = {
+            # The public filename is literal, not a systemd specifier expression.
+            LoadCredential = [ "jaunder-observability:${lib.replaceStrings [ "%" ] [ "%%" ] cfg.observability.basicAuth.credentialsFile}" ];
+            RefreshOnReload = "credentials";
+          };
+        };
 
         networking.firewall.allowedTCPPorts = [ 80 443 ];
         services.caddy = lib.mkIf (dnsHostName cfg.hostName) {

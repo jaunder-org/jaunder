@@ -145,38 +145,173 @@ ssh -L 8428:127.0.0.1:8428 -L 9428:127.0.0.1:9428 -L 10428:127.0.0.1:10428 opera
 
 #### Optional HTTPS observability host and Basic Auth
 
-An optional distinct HTTPS operator host publishes only the three prefixed
+An optional distinct HTTPS operator host publishes the three prefixed
 observability routes. It follows the DNS hostname contract above and must remain
-distinct from the application host after lowercasing. Configure both Basic Auth
-fields when setting it. The username must match the exact ASCII grammar
-`[A-Za-z0-9._-]+`:
+distinct from the application host after lowercasing. Every external request,
+including query APIs and unmatched paths, passes hostname-wide Basic Auth before
+proxying. Collector ingestion stays credential-free on loopback.
+
+##### Recommended runtime-file configuration
 
 ```nix
-services.jaunder.stack.observability.hostName = "observe.example.com";
-services.jaunder.stack.observability.basicAuth.username = "operator";
-services.jaunder.stack.observability.basicAuth.passwordHash = "$2b$..."; # bcrypt, or an $argon2id$... hash
+{
+  imports = [ inputs.jaunder.nixosModules.jaunder-stack ];
+  services.jaunder.stack = {
+    enable = true;
+    hostName = "jaunder.example.com";
+    observability = {
+      hostName = "observe.example.com";
+      basicAuth = {
+        credentialsFile = "/run/observability-auth/users";
+      };
+    };
+  };
+}
 ```
 
-`passwordHash` is a literal evaluated Nix string embedded in generated Caddy
-configuration and the Nix store; it is not a runtime-file secret. Protect the
-plaintext while generating the hash, use a strong password because an exposed
-hash permits offline guessing, and store only the generated hash in host Nix
-configuration.
+This example relies on the unchanged defaults: SQLite, file algorithm `bcrypt`,
+and empty inline `username`/`passwordHash`. Set
+`basicAuth.credentialsFileAlgorithm = "argon2id"` only when using Argon2id
+entries. `credentialsFile` defaults to `null`. Supply an absolute runtime
+filename **string**, not a Nix path literal, glob, `builtins.readFile`, or
+secret content interpolated into Nix. Evaluation/build never reads or copies the
+file contents; only runtime references enter generated configuration, units and
+store artifacts. When enabling the observability host, exactly one complete
+source is required: this file with both inline fields empty, or a valid inline
+username/hash pair. Conflicting and incomplete declarations fail evaluation.
 
-Before running either command below, ensure a compatible Caddy binary is
-installed and available on `PATH` on a trusted admin machine. Generate the hash
-interactively so the plaintext does not appear in the command line or shell
-history, then unset it:
+File mode requires the host's configured `systemd.package` to be version **260
+or newer**, not merely a recent `system.stateVersion`. Older configured packages
+are rejected; there is no silent fallback. Lifecycle proof uses pinned systemd
+261.2 and Caddy 2.11.4, not a promise of execution on every consumer's nixpkgs.
+
+##### Entry format and private provisioning
+
+Supply native
+[Caddy Basic Auth account entries](https://caddyserver.com/docs/caddyfile/directives/basic_auth),
+`username hashed-password`, one account per line, with hashes matching the
+selected `credentialsFileAlgorithm`. Generate the hash with
+[`caddy hash-password`](https://caddyserver.com/docs/command-line#caddy-hash-password)
+using `--algorithm bcrypt` or `--algorithm argon2id`; Argon2id's salt is already
+inside the generated hash, not an extra field.
+
+The file is trusted operator-supplied Caddy configuration, parsed/provisioned by
+Caddy itself, not an untrusted upload or sanitized data interface. Use account
+entries; arbitrary directives/import fragments are not a supported credentials
+recipe. The stack does not independently inspect username/hash internals or
+impose a private content grammar.
+
+Prefer Caddy-generated hashes. On the host, use a compatible Caddy binary on
+`PATH`, disable shell tracing, and hash through stdin so plaintext is neither an
+external command argument nor shell-history text. This Bash example creates or
+atomically replaces a root-owned file without displaying its hash:
 
 ```bash
-read -rs -p 'Password: ' password; printf '\n'; printf '%s' "$password" | caddy hash-password --algorithm bcrypt; unset password
-read -rs -p 'Password: ' password; printf '\n'; printf '%s' "$password" | caddy hash-password --algorithm argon2id; unset password
+set +x
+sudo -v
+sudo install -d -o root -g root -m 0700 /run/observability-auth
+read -rs -p 'Password: ' password; printf '\n'
+if hash=$(printf '%s' "$password" | caddy hash-password --algorithm bcrypt); then
+  unset password
+  sudo install -o root -g root -m 0600 /dev/null /run/observability-auth/users.new &&
+    printf 'operator %s\n' "$hash" | sudo tee /run/observability-auth/users.new >/dev/null &&
+    sudo mv /run/observability-auth/users.new /run/observability-auth/users
+else
+  unset password
+  printf 'Hash generation failed; credentials not replaced\n' >&2
+fi
+unset hash
 ```
 
-With the host configured, use `https://observe.example.com/metrics/`,
-`https://observe.example.com/logs/`, and `https://observe.example.com/traces/`.
-Caddy authenticates before proxying; collector ingestion continues directly over
-loopback and carries no Basic Auth.
+For Argon2id, use `--algorithm argon2id` and set the file algorithm accordingly.
+Check that each provisioning command succeeds before proceeding. Use a strong
+password: possession of a hash still permits offline guessing. Do not paste
+credential contents into logs, Nix configuration, or tracked fixtures.
+
+Systemd's manager reads the source; it can be `root:root 0600` inside a
+`root:root 0700` directory. Caddy need not read that source directly. Keep the
+source stable during the lifecycle operation and prefer runtime locations over
+home directories hidden by service hardening. `/run` is volatile: manual
+provisioning must happen before starting Caddy after each boot; use durable
+protected operator storage or boot-time secret provisioning for unattended
+hosts.
+
+Manual provisioning, sops-nix and agenix are all supported without depending on
+one manager. For either secret manager, configure its decrypted output filename,
+root ownership and restrictive permissions, then point `credentialsFile` at that
+runtime filename string. Order the **actual unit that finishes provisioning**
+before `caddy.service`: set `systemd.services.caddy.after` and `requires` to
+that unit when service-based provisioning needs explicit ordering. Confirm its
+name and boot/rotation behavior in your installed secret-manager module; do not
+assume that importing a manager, ordering alone, or a Nix string creates the
+file. Never give Caddy write access to the source or loosen permissions for
+unrelated readers merely to satisfy startup.
+
+##### Reload, restart, rotation and failures
+
+The stack adds one `LoadCredential` named `jaunder-observability`, providing a
+private read-only copy to Caddy, and imports that literal copy inside Basic
+Auth. The normal NixOS Caddy run/reload commands adapt and provision this
+configuration using the credential environment/mount supplied by systemd. No
+custom validator, prestart helper or reload wrapper is added, and no error path
+substitutes unauthenticated proxy routes.
+
+`RefreshOnReload=credentials` preserves normal unprivileged shared-Caddy reload,
+without a privileged helper or disabling reload. Unlike unrefreshed
+`LoadCredential`, this supported setting allows **reload to rotate
+credentials**. Atomically replace the source using your provisioning method,
+then either:
+
+```bash
+sudo systemctl reload caddy.service
+# Or refresh through a full service restart:
+sudo systemctl restart caddy.service
+```
+
+Source replacement alone does not activate new authentication. With normal Caddy
+reload enabled, successful reload refreshes the copy and applies current Caddy
+configuration, including other virtual hosts sharing the service. Restart also
+refreshes the copy, but interrupts that shared service. If your host explicitly
+disables Caddy reload, use restart. Test old credentials are denied and new ones
+work at the frontends and query APIs after the chosen operation.
+
+Missing/unreadable manager sources and native Caddy syntax/import errors prevent
+activation. A failed reload retains the previous **parsed authenticated
+configuration** in the healthy main process, not a guarantee that the credential
+mount rolled back. Repair source/provisioning or configuration, then retry
+reload or restart; avoid stopping a healthy service just to recover from a
+failed reload.
+
+An empty, whitespace-only or comment-only file can successfully start or reload
+with **deny-all authentication**. Such a successful reload replaces the previous
+accounts: even previously correct credentials are denied, but requests are not
+proxied without authentication. Restore usable entries and reload/restart to
+recover. Malformed hash internals or algorithm-mismatched hashes are not
+necessarily rejected at startup/provisioning and may instead fail during
+authentication. Operators must use the native hash tool and verify credentials
+at the frontends/query APIs; a successful service operation alone does not prove
+the credentials work. Inspect status/journal without printing secret contents.
+
+The goal is reducing exposure to unrelated local/store readers, not protection
+from root or the trusted Caddy process. Root and Caddy can access credentials;
+Caddy's protected runtime autosave and admin configuration may contain imported
+hashes. Protect its state and admin access as part of the same trust boundary.
+
+##### Compatible inline configuration
+
+The existing `username` and `passwordHash` string options retain empty defaults;
+set both for inline mode and leave `credentialsFile = null`. Complete `$2a$`/
+`$2b$` bcrypt and `$argon2id$` hashes select their algorithm automatically;
+`credentialsFileAlgorithm` affects only file mode. Inline mode does not require
+systemd 260 and remains compatible, but its literal evaluated hash enters the
+Caddy configuration and Nix store, allowing offline guessing by store readers.
+Prefer file mode for production. Hash interactively through stdin as above and
+store only the hash, never the plaintext, if choosing this tradeoff.
+
+Use `https://observe.example.com/metrics/`, `https://observe.example.com/logs/`,
+and `https://observe.example.com/traces/`. The separate hostnames, native
+prefixes, loopback backends, credential-free collector ingestion and application
+trusted-proxy boundary are unchanged.
 
 #### Database, retention, persistence, and maturity
 

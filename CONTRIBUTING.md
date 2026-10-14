@@ -1835,9 +1835,22 @@ For the supported single-host composition, import `nixosModules.jaunder-stack`:
 
 The [NixOS deployment runbook](docs/DESIGN.md#nixos-deployment-stack) owns
 operator procedures, including PostgreSQL boundaries, UI/SSH access, retention,
-persistence and backup, and optional Basic Auth. Its Basic Auth username grammar
-is `[A-Za-z0-9._-]+`; `passwordHash` is a literal evaluated Nix string embedded
-in generated Caddy configuration and the Nix store, not a runtime-file secret.
+persistence and backup, and optional Basic Auth. Inline Basic Auth usernames
+match `[A-Za-z0-9._-]+`. Inline `username`/`passwordHash` remain compatible,
+with algorithm inference; the literal evaluated hash enters generated Caddy
+configuration and the Nix store. Production deployments should prefer
+`basicAuth.credentialsFile`, an absolute runtime filename string, with both
+inline fields empty and file-only `credentialsFileAlgorithm` (`bcrypt` by
+default, or `argon2id`). Never read or embed those contents in Nix. File mode
+requires configured systemd >=260 and uses a private `LoadCredential` copy with
+native NixOS Caddy startup/reload parsing and provisioning, without a custom
+content validator. Supply native account entries and use `caddy hash-password`
+through stdin for the selected algorithm. Both ordinary reload and restart can
+refresh/rotate credentials; source replacement alone does not activate them.
+Failed reload retains parsed authentication, not necessarily the old credential
+mount; a successful empty-file reload instead activates deny-all, and malformed
+hash internals are not necessarily startup errors. The runbook owns the native
+recipe, provisioning, recovery and runtime trust boundary details.
 
 Do not set `JAUNDER_CAPTURE_DIR` in production. That is test-only and should
 stay in the interactive VM or e2e test node config. The `jaunder` CLI is
