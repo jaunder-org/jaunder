@@ -47,15 +47,21 @@ executable, seed authority and both guest helper bindings agree; the complete
 historical authority-file digest is checked before lifecycle work.
 
 The historical fixture retains all 73 native Posts, seeded text Media, uploaded
-PNG, authentication and all three Syndication Feed formats. Its exact v1 wire
-and historical composer/Post-create contracts are explicit, not inferred from
-replies. Ordinary App Password creation/token controls also belong to that fixed
-fixture: `.j-app-passwords` and `.j-app-password-token code` for the historical
-source, unchanged modern Sessions controls otherwise. The same selection reaches
-primary creation, manifest-author access and fresh mint/use/revoke. All other
-ordinary sources and live e2e retain strict modern v2, five-Media and Rendered
-Title obligations. Incompatible upgrade targets fail; there is no adapter,
-retry, selector option or ambient fixture flag.
+PNG, authentication and all three Syndication Feed formats. Only its canonical
+`baseline-seeded.txt` requires HTTP `application/octet-stream`: the pinned
+helper stores that detected type and the pinned product serves it unchanged.
+Modern seeded text remains strictly `text/plain`, all four modern SVGs remain
+`image/svg+xml`, and the independently uploaded PNG remains `image/png`. Status,
+Media identities, URLs, lengths and byte hashes remain exact; HTTP success alone
+does not prove seeded Media Record ownership or direct row readback. Its exact
+v1 wire and historical composer/Post-create contracts are explicit, not inferred
+from replies. Ordinary App Password creation/token controls also belong to that
+fixed fixture: `.j-app-passwords` and `.j-app-password-token code` for the
+historical source, unchanged modern Sessions controls otherwise. The same
+selection reaches primary creation, manifest-author access and fresh
+mint/use/revoke. All other ordinary sources and live e2e retain strict modern
+v2, five-Media and Rendered Title obligations. Incompatible upgrade targets
+fail; there is no adapter, retry, selector option or ambient fixture flag.
 
 Historical discovery evidence remains schema1. New evidence attributes the
 actual selected graph and current executing harness/verifier, not historical

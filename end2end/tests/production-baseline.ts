@@ -82,6 +82,40 @@ const PNG = Buffer.from([
   0x60, 0x82,
 ]);
 
+/** Verify the selected fixture's seeded HTTP representations, not row ownership. */
+export async function verifySeededMedia(
+  state: OrdinarySeedState,
+  request: APIRequestContext,
+): Promise<void> {
+  const seededMediaRecords =
+    state.fixture === "modern"
+      ? state.seededManifest.media
+      : [state.seededManifest.media!];
+  for (const seededMedia of seededMediaRecords) {
+    const expectedSha256 = SEEDED_MEDIA_SHA256[seededMedia.filename];
+    expect(expectedSha256, seededMedia.filename).toBeDefined();
+    expect(seededMedia.sha256).toBe(expectedSha256);
+    const seededContent = await request.get(
+      `${BASE_URL}${seededMedia.contentUrl}`,
+    );
+    expect(seededContent.status(), seededMedia.contentUrl).toBe(200);
+    expect(seededContent.headers()["content-type"]).toBe(
+      // The pinned historical helper detects .txt as octet-stream.
+      state.fixture === "legacy1419" &&
+        seededMedia.filename === "baseline-seeded.txt"
+        ? "application/octet-stream"
+        : seededMedia.filename.endsWith(".svg")
+          ? "image/svg+xml"
+          : "text/plain",
+    );
+    const bytes = new Uint8Array(await seededContent.body());
+    expect(bytes).toHaveLength(seededMedia.sizeBytes);
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe(
+      expectedSha256,
+    );
+  }
+}
+
 type VerifiedBrowserPost = {
   permalink: string;
   slug: string;
@@ -1021,27 +1055,7 @@ export async function verifyProductionBaseline(
   }
   const anonymousContext = await isolatedRequest(tracedContext);
   try {
-    const seededMediaRecords =
-      state.fixture === "modern"
-        ? state.seededManifest.media
-        : [state.seededManifest.media!];
-    for (const seededMedia of seededMediaRecords) {
-      const expectedSha256 = SEEDED_MEDIA_SHA256[seededMedia.filename];
-      expect(expectedSha256, seededMedia.filename).toBeDefined();
-      expect(seededMedia.sha256).toBe(expectedSha256);
-      const seededContent = await anonymousContext.request.get(
-        `${BASE_URL}${seededMedia.contentUrl}`,
-      );
-      expect(seededContent.status(), seededMedia.contentUrl).toBe(200);
-      expect(seededContent.headers()["content-type"]).toBe(
-        seededMedia.filename.endsWith(".svg") ? "image/svg+xml" : "text/plain",
-      );
-      const bytes = new Uint8Array(await seededContent.body());
-      expect(bytes).toHaveLength(seededMedia.sizeBytes);
-      expect(createHash("sha256").update(bytes).digest("hex")).toBe(
-        expectedSha256,
-      );
-    }
+    await verifySeededMedia(state, anonymousContext.request);
     const now = new Date();
     const atomFeed = await fetchFeedContaining(
       anonymousContext.request,

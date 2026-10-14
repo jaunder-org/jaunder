@@ -18,6 +18,7 @@ import {
   composeBaselinePost,
   baselinePostRequest,
   verifySeededManifest,
+  verifySeededMedia,
 } from "./production-baseline";
 import { allowSecondBoot } from "./bootBudget";
 import { goto, login, TEST_PASSWORD } from "./helpers";
@@ -305,6 +306,16 @@ contractTest(
             : value.media;
           media.sha256 = "0".repeat(64);
         },
+        ...["author", "filename", "contentUrl", "sizeBytes"].map(
+          (field) => (value: typeof manifest) => {
+            const media = Array.isArray(value.media)
+              ? value.media[0]
+              : value.media;
+            Object.assign(media, {
+              [field]: field === "sizeBytes" ? 23 : "wrong",
+            });
+          },
+        ),
         (value: typeof manifest) => {
           value.posts[0].format = "unknown";
         },
@@ -353,6 +364,86 @@ contractTest(
       ).toThrow();
     }
     expect(() => parseOrdinaryFixture("v1")).toThrow();
+  },
+);
+
+contractTest(
+  "seeded HTTP Media uses strict fixture-owned MIME and bytes",
+  async () => {
+    const bodies: Record<string, Buffer> = Object.fromEntries(
+      Object.entries({
+        "baseline-seeded.txt": "baseline seeded media\n",
+        "blue-horizon.svg":
+          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 64" role="img" aria-label="A blue horizon"><rect width="96" height="64" fill="#dbeafe"/><path d="M0 43h96v21H0z" fill="#2563eb"/><circle cx="70" cy="20" r="11" fill="#facc15"/></svg>',
+        "warm-workshop.svg":
+          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 64" role="img" aria-label="A warm workshop"><rect width="96" height="64" fill="#ffedd5"/><path d="M16 48 48 12l32 36z" fill="#ea580c"/><path d="M38 48V34h20v14" fill="#7c2d12"/></svg>',
+        "green-field.svg":
+          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 64" role="img" aria-label="A green field"><rect width="96" height="64" fill="#dcfce7"/><path d="M0 38c18-16 34 10 52-5 15-13 28 3 44-8v39H0z" fill="#16a34a"/><path d="m24 36 9-17 9 17z" fill="#166534"/></svg>',
+        "violet-night.svg":
+          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 64" role="img" aria-label="A violet night"><rect width="96" height="64" fill="#ede9fe"/><path d="M0 44h96v20H0z" fill="#7c3aed"/><path d="m18 35 12-18 12 18 12-12 12 12 12-18 12 18z" fill="#4c1d95"/></svg>',
+      }).map(([filename, body]) => [filename, Buffer.from(body)]),
+    );
+    for (const fixture of ["legacy1419", "modern"] as const) {
+      const manifest = contractManifest(fixture);
+      const records = Array.isArray(manifest.media)
+        ? manifest.media
+        : [manifest.media];
+      for (const record of records)
+        record.sizeBytes = bodies[record.filename].length;
+      const state = {
+        fixture,
+        seededManifest: manifest,
+      } as unknown as BaselineState;
+      validateBaselineState(state, fixture);
+      let override:
+        | { filename: string; type?: string; status?: number; body?: Buffer }
+        | undefined;
+      const requested: string[] = [];
+      const request = {
+        get: async (url: string) => {
+          const record = records.find((record) =>
+            url.endsWith(record.contentUrl),
+          );
+          expect(record, url).toBeDefined();
+          const filename = record!.filename;
+          requested.push(filename);
+          const changed =
+            override?.filename === filename ? override : undefined;
+          return {
+            status: () => changed?.status ?? 200,
+            headers: () => ({
+              "content-type":
+                changed?.type ??
+                (filename.endsWith(".svg")
+                  ? "image/svg+xml"
+                  : fixture === "legacy1419"
+                    ? "application/octet-stream"
+                    : "text/plain"),
+            }),
+            body: async () => changed?.body ?? bodies[filename],
+          };
+        },
+      } as unknown as Parameters<typeof verifySeededMedia>[1];
+      await verifySeededMedia(state, request);
+      expect(requested).toEqual(records.map((record) => record.filename));
+      for (const record of records) {
+        for (const change of [
+          {
+            type: record.filename.endsWith(".svg")
+              ? "text/plain"
+              : fixture === "legacy1419"
+                ? "text/plain"
+                : "application/octet-stream",
+          },
+          { status: 404 },
+          { body: bodies[record.filename].subarray(1) },
+          { body: Buffer.alloc(bodies[record.filename].length) },
+        ]) {
+          override = { filename: record.filename, ...change };
+          await expect(verifySeededMedia(state, request)).rejects.toThrow();
+        }
+      }
+    }
   },
 );
 

@@ -52,13 +52,25 @@ Keep one shared creation/verification workflow. Historical verification
 preserves all 73 seeded Posts and their native title, body, authoring format,
 visibility, draft/scheduled/publication state and Media references. Preserve the
 real seeded text Media object and independently uploaded PNG, checking
-owner/member/content identities, bytes and hashes. Preserve browser/web/AtomPub
-operation Posts, public and restricted views, retained authentication, fresh
-login, App Password mint/use/revoke, and all three Syndication Feed formats with
-inclusion/exclusion assertions. Execute restart, reboot, upgrade and all four
-schema-exact restores (SQLite → SQLite, PostgreSQL → PostgreSQL, and both
-cross-backend directions). Format-1 admission and exact schema matching are
-unchanged (ADR-0174).
+owner/member/content identities, bytes and hashes. The fixed `legacy1419`
+fixture requires HTTP `application/octet-stream` only for its canonical
+`baseline-seeded.txt`: helper `78d201…` stores its detected type (`.txt` is
+absent from that detection table), and product `520034…` serves the type
+unchanged. Modern seeded text remains strictly `text/plain` and its four SVGs
+remain `image/svg+xml`; independently uploaded PNG remains `image/png`. Preserve
+exact status, owner/identity parsing, URL, length and byte/hash checks and every
+existing stored/Member assertion. Retained HTTP 200/22-byte/hash evidence
+supports the historical MIME contract, not direct seeded-row ownership/type
+readback: the product's extension fallback produces the same type. No MIME
+alternatives, normalization or probing is permitted. Focused tests exercise the
+actual HTTP verifier's historical and modern positive/negative MIME assertions,
+all four modern SVGs, and rejection of wrong identities, lengths, hashes and
+fixture switches. Preserve browser/web/AtomPub operation Posts, public and
+restricted views, retained authentication, fresh login, App Password
+mint/use/revoke, and all three Syndication Feed formats with inclusion/exclusion
+assertions. Execute restart, reboot, upgrade and all four schema-exact restores
+(SQLite → SQLite, PostgreSQL → PostgreSQL, and both cross-backend directions).
+Format-1 admission and exact schema matching are unchanged (ADR-0174).
 
 Historical expectations do not require later Rendered Title fixtures or the
 additional SVG corpus. Modern verification remains strict for its five actual
