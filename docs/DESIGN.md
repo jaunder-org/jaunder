@@ -187,20 +187,19 @@ are rejected; there is no silent fallback. Lifecycle proof uses pinned systemd
 
 ##### Entry format and private provisioning
 
-The file must be nonempty ASCII, with exactly two whitespace-separated tokens
-per line: `username encoded-hash`. Usernames match `[A-Za-z0-9._-]+`, except
-`import` is reserved in file mode because Caddy interprets it as an import
-directive even when followed by a valid hash. No blank lines, comments,
-directives, braces, imports, or third token are allowed; a final newline is
-fine. All entries use the selected `credentialsFileAlgorithm`:
+Supply native
+[Caddy Basic Auth account entries](https://caddyserver.com/docs/caddyfile/directives/basic_auth),
+`username hashed-password`, one account per line, with hashes matching the
+selected `credentialsFileAlgorithm`. Generate the hash with
+[`caddy hash-password`](https://caddyserver.com/docs/command-line#caddy-hash-password)
+using `--algorithm bcrypt` or `--algorithm argon2id`; Argon2id's salt is already
+inside the generated hash, not an extra field.
 
-- `bcrypt` accepts complete `$2a$` or `$2b$` hashes, cost 04–31.
-- `argon2id` accepts `$argon2id$v=19$m=...,t=...,p=...$salt$hash`. Costs are
-  positive decimal integers; memory is at least eight times parallelism. Memory
-  and iterations are at most 4294967295; parallelism at most 16777215. Salt/hash
-  use canonical **unpadded standard Base64** (not URL-safe Base64), decoding to
-  at least 8/4 bytes respectively. The salt is embedded in the PHC hash, never a
-  separate third token.
+The file is trusted operator-supplied Caddy configuration, parsed/provisioned by
+Caddy itself, not an untrusted upload or sanitized data interface. Use account
+entries; arbitrary directives/import fragments are not a supported credentials
+recipe. The stack does not independently inspect username/hash internals or
+impose a private content grammar.
 
 Prefer Caddy-generated hashes. On the host, use a compatible Caddy binary on
 `PATH`, disable shell tracing, and hash through stdin so plaintext is neither an
@@ -252,12 +251,10 @@ unrelated readers merely to satisfy startup.
 
 The stack adds one `LoadCredential` named `jaunder-observability`, providing a
 private read-only copy to Caddy, and imports that literal copy inside Basic
-Auth. Strict copy validation runs before startup and inside `ExecReload`
-**after** systemd refresh and **before** Caddy adaptation/submission. It rejects
-missing credential environment/copy, skipped setup, unreadable/empty/malformed
-entries and algorithm mismatch; no source fallback or empty unauthenticated
-route exists. Caddy's importer/provisioner alone does not establish valid
-credential contents.
+Auth. The normal NixOS Caddy run/reload commands adapt and provision this
+configuration using the credential environment/mount supplied by systemd. No
+custom validator, prestart helper or reload wrapper is added, and no error path
+substitutes unauthenticated proxy routes.
 
 `RefreshOnReload=credentials` preserves normal unprivileged shared-Caddy reload,
 without a privileged helper or disabling reload. Unlike unrefreshed
@@ -278,14 +275,22 @@ refreshes the copy, but interrupts that shared service. If your host explicitly
 disables Caddy reload, use restart. Test old credentials are denied and new ones
 work at the frontends and query APIs after the chosen operation.
 
-A failed refresh or strict validation causes reload to fail while retaining the
-previous **parsed authenticated configuration** in the healthy main process.
-This is not a credential-mount rollback guarantee: a rejected new copy may
-already be mounted. Repair the source/provisioning or configuration, then retry
-reload or restart. Invalid startup fails rather than opening HTTPS without
-protection; do not restart a healthy instance with known-invalid credentials as
-a recovery shortcut. Inspect service status/journal without printing secret
-contents.
+Missing/unreadable manager sources and native Caddy syntax/import errors prevent
+activation. A failed reload retains the previous **parsed authenticated
+configuration** in the healthy main process, not a guarantee that the credential
+mount rolled back. Repair source/provisioning or configuration, then retry
+reload or restart; avoid stopping a healthy service just to recover from a
+failed reload.
+
+An empty, whitespace-only or comment-only file can successfully start or reload
+with **deny-all authentication**. Such a successful reload replaces the previous
+accounts: even previously correct credentials are denied, but requests are not
+proxied without authentication. Restore usable entries and reload/restart to
+recover. Malformed hash internals or algorithm-mismatched hashes are not
+necessarily rejected at startup/provisioning and may instead fail during
+authentication. Operators must use the native hash tool and verify credentials
+at the frontends/query APIs; a successful service operation alone does not prove
+the credentials work. Inspect status/journal without printing secret contents.
 
 The goal is reducing exposure to unrelated local/store readers, not protection
 from root or the trusted Caddy process. Root and Caddy can access credentials;

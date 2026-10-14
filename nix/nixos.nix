@@ -164,54 +164,6 @@ let
       fileAuth = cfg.observability.basicAuth.credentialsFile != null;
       managedFileAuth = fileAuth && dnsHostName cfg.observability.hostName;
       hashAlgorithm = if fileAuth then cfg.observability.basicAuth.credentialsFileAlgorithm else if bcryptHash then "bcrypt" else "argon2id";
-      credentialValidator = pkgs.writeText "jaunder-observability-credentials.py" ''
-        # Validate only the manager's private copy; never print credential bytes.
-        import base64
-        import os
-        import re
-        import sys
-
-        def valid_base64(value, minimum):
-            try:
-                decoded = base64.b64decode(value + "=" * (-len(value) % 4), validate=True)
-                return len(decoded) >= minimum and base64.b64encode(decoded).decode().rstrip("=") == value
-            except ValueError:
-                return False
-
-        def valid_hash(value):
-            if sys.argv[1] == "bcrypt":
-                return re.fullmatch(r"\$2[ab]\$(0[4-9]|[12][0-9]|3[01])\$[./0-9A-Za-z]{53}", value) is not None
-            parts = re.fullmatch(r"\$argon2id\$v=19\$m=([1-9][0-9]*),t=([1-9][0-9]*),p=([1-9][0-9]*)\$([A-Za-z0-9+/]+)\$([A-Za-z0-9+/]+)", value)
-            if parts is None:
-                return False
-            memory, iterations, parallelism = map(int, parts.group(1, 2, 3))
-            return (8 * parallelism <= memory <= 4294967295
-                    and iterations <= 4294967295 and parallelism <= 16777215
-                    and valid_base64(parts[4], 8) and valid_base64(parts[5], 4))
-
-        try:
-            directory = os.environ.get("CREDENTIALS_DIRECTORY", "")
-            if not directory or not os.path.isabs(directory):
-                raise ValueError()
-            with open(os.path.join(directory, "jaunder-observability"), encoding="ascii") as credentials:
-                lines = credentials.read().splitlines()
-            if not lines:
-                raise ValueError()
-            for line in lines:
-                tokens = line.split()
-                if (len(tokens) != 2 or tokens[0] == "import"
-                        or re.fullmatch(r"[A-Za-z0-9._-]+", tokens[0]) is None
-                        or not valid_hash(tokens[1])):
-                    raise ValueError()
-        except (OSError, ValueError):
-            sys.exit("Invalid or unavailable managed observability credentials")
-      '';
-      validateCredentials = "${pkgs.python3}/bin/python3 ${credentialValidator} ${cfg.observability.basicAuth.credentialsFileAlgorithm}";
-      credentialReload = pkgs.writeShellScript "jaunder-caddy-reload" ''
-        set -eu
-        ${validateCredentials}
-        exec ${lib.getExe config.services.caddy.package} reload --config /etc/caddy/caddy_config ${lib.optionalString (config.services.caddy.adapter != null) "--adapter ${lib.escapeShellArg config.services.caddy.adapter}"} --force
-      '';
       observabilityIngress = lib.optionalString (dnsHostName cfg.observability.hostName) ''
         # The stores remain credential-free on loopback; this is their only remote access path.
         basic_auth ${hashAlgorithm} {
@@ -250,7 +202,12 @@ let
                 && builtins.match ".*[[:cntrl:]].*" value == null
                 && builtins.all (character: !lib.hasInfix character value) [ "*" "?" "[" "]" ]));
               default = null;
-              description = "Absolute runtime credential filename (not a Nix path or glob); read only by systemd. Requires systemd >=260.";
+              description = ''
+                Absolute runtime filename (not a Nix path or glob), read by systemd into Caddy's private credential copy. Requires systemd >=260.
+                Supply Caddy basic_auth account entries (username hashed-password), using hashes for credentialsFileAlgorithm.
+                Generate hashes with caddy hash-password through stdin; see https://caddyserver.com/docs/caddyfile/directives/basic_auth and https://caddyserver.com/docs/command-line#caddy-hash-password.
+                Contents are trusted operator configuration; native Caddy parsing/provisioning applies. An empty file can activate deny-all authentication, and malformed hash internals are not necessarily rejected at startup.
+              '';
             };
             credentialsFileAlgorithm = lib.mkOption {
               type = lib.types.enum [ "bcrypt" "argon2id" ];
@@ -325,9 +282,6 @@ let
             # The public filename is literal, not a systemd specifier expression.
             LoadCredential = [ "jaunder-observability:${lib.replaceStrings [ "%" ] [ "%%" ] cfg.observability.basicAuth.credentialsFile}" ];
             RefreshOnReload = "credentials";
-            ExecStartPre = [ validateCredentials ];
-            # Refresh precedes this command; validation must be inside it, not a separate reload command.
-            ExecReload = lib.mkForce ([ "" ] ++ lib.optional config.services.caddy.enableReload "${credentialReload}");
           };
         };
 
