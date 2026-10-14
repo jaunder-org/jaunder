@@ -73,6 +73,67 @@ function appendBytes(form: URLSearchParams, prefix: string, bytes: Uint8Array) {
     form.append(`${prefix}[${index}]`, String(byte));
 }
 
+/** Opt into the source/package/media authoring controls without weakening their assertions. */
+export async function openThemeAdvanced(page: Page): Promise<void> {
+  const disclosure = page.getByRole("button", {
+    name: "Advanced",
+    exact: true,
+  });
+  if ((await disclosure.getAttribute("aria-expanded")) !== "true")
+    await disclosure.click();
+  await expect(disclosure).toHaveAttribute("aria-expanded", "true");
+}
+
+/** Build a minimal import fixture with the maintained exporter, then remove its source draft. */
+export async function minimalThemeZip(page: Page): Promise<Buffer> {
+  const form = new URLSearchParams({ scope: "author", name: "Fixture source" });
+  appendBytes(
+    form,
+    "draft[manifest]",
+    new TextEncoder().encode(
+      '{"schema": 1, "name": "Intake fixture", "style_contract": 1, "assets": {}, "defaults": {}}',
+    ),
+  );
+  appendBytes(
+    form,
+    "draft[stylesheet]",
+    new TextEncoder().encode(
+      '[data-jaunder-part="main"] { outline: 2px solid rgb(1, 2, 3); }',
+    ),
+  );
+  const created = await page.request.post(`${BASE_URL}/api/themes/create`, {
+    data: form.toString(),
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+  });
+  expect(created.status()).toBe(200);
+  const entry = confirmedMutation(
+    (await created.json()) as MutationOutcome<CatalogEntry>,
+    "fixture create",
+  );
+  const target = new URLSearchParams({
+    scope: "author",
+    theme_id: String(entry.id),
+  });
+  const exported = await page.request.post(`${BASE_URL}/api/themes/export`, {
+    data: target.toString(),
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+  });
+  expect(exported.status()).toBe(200);
+  const archive = Buffer.from((await exported.json()).bytes as number[]);
+  // The live API canonicalizes the manifest; use its exporter rather than hand-rolled ZIP headers.
+  expect(archive.length).toBeGreaterThan(0);
+  const removed = await page.request.post(`${BASE_URL}/api/themes/remove`, {
+    data: target.toString(),
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+  });
+  expect(removed.status()).toBe(200);
+  confirmedMutation(
+    (await removed.json()) as MutationOutcome<null>,
+    "fixture remove",
+  );
+  return archive;
+}
+
 /** Import and publish a complete local package through the live API. */
 export async function publishTheme(
   page: Page,

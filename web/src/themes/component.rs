@@ -1,6 +1,6 @@
 //! Wasm-only private Studio journey for Theme Package management.
 
-use std::{borrow::Cow, str::FromStr};
+use std::borrow::Cow;
 
 use common::{
     MutationOutcome,
@@ -35,69 +35,78 @@ pub fn ThemesPage() -> impl IntoView {
     let selected = page.selected;
     let refresh = page.refresh;
     let status = page.status;
+    let pending = page.pending;
+    let advanced = RwSignal::new(false);
     let (catalog, selection) = owner_resources(scope, refresh);
     let rename_name = NodeRef::<leptos::html::Input>::new();
 
     view! {
         <Topbar title="Themes" sub="Public presentation packages" />
-        <div class="j-page j-themes-page" data-theme-management="studio">
-            <section
-                class="j-card j-theme-authoring-guidance"
-                aria-labelledby="theme-authoring-guidance-heading"
-            >
-                <h2 id="theme-authoring-guidance-heading">"Author themes from a repository"</h2>
-                <p class="j-sub">
-                    "Keep your theme source, preview, and release artifacts together, then use Jaunder to validate and package them."
-                </p>
-                <a
-                    href="https://github.com/jaunder-org/jaunder/blob/main/docs/themes.md"
-                    target="_blank"
-                >
-                    "Read the theme repository guide"
-                </a>
-            </section>
-            {move || match session.get() {
-                None => {
-                    view! {
-                        <p class="error" role="alert">
-                            "Sign in to manage themes."
+        <div class="j-scroll">
+            <div class="j-page j-themes-page" data-theme-management="studio">
+                <Show when=move || advanced.get()>
+                    <section
+                        class="j-card j-theme-authoring-guidance"
+                        aria-labelledby="theme-authoring-guidance-heading"
+                    >
+                        <h2 id="theme-authoring-guidance-heading">
+                            "Author themes from a repository"
+                        </h2>
+                        <p class="j-sub">
+                            "Keep your theme source, preview, and release artifacts together, then use Jaunder to validate and package them."
                         </p>
+                        <a
+                            href="https://github.com/jaunder-org/jaunder/blob/main/docs/themes.md"
+                            target="_blank"
+                        >
+                            "Read the theme repository guide"
+                        </a>
+                    </section>
+                </Show>
+                {move || match session.get() {
+                    None => {
+                        view! {
+                            <p class="error" role="alert">
+                                "Sign in to manage themes."
+                            </p>
+                        }
+                            .into_any()
                     }
-                        .into_any()
-                }
-                Some(user) => {
-                    view! {
-                        {theme_management_controls(
-                            ScopeAvailability::from_session(true, user.is_operator),
-                            page,
-                            scope,
-                            refresh,
-                            status,
-                        )}
-                        <ThemeCatalog
-                            catalog=catalog
-                            selection=selection
-                            scope=scope
-                            selected=selected
-                            refresh=refresh
-                            status=status
-                            rename_name=rename_name
-                        />
-                        {move || {
-                            status
-                                .get()
-                                .map(|message| {
-                                    view! {
-                                        <p class="j-theme-status" role="status" aria-live="polite">
-                                            {message}
-                                        </p>
-                                    }
-                                })
-                        }}
+                    Some(user) => {
+                        view! {
+                            <fieldset
+                                disabled=move || pending.get()
+                                style="border:0;padding:0;margin:0;min-width:0"
+                            >
+                                <For
+                                    each=move || vec![scope.get()]
+                                    key=|scope| *scope == OwnershipScope::Site
+                                    children=move |_| theme_management_controls(
+                                        ScopeAvailability::from_session(true, user.is_operator),
+                                        page,
+                                        advanced,
+                                        scope,
+                                        refresh,
+                                        status,
+                                    )
+                                />
+                                <ThemeCatalog
+                                    catalog=catalog
+                                    selection=selection
+                                    scope=scope
+                                    selected=selected
+                                    refresh=refresh
+                                    status=status
+                                    rename_name=rename_name
+                                    page=page
+                                    advanced=advanced
+                                />
+                            </fieldset>
+                        }
+                            .into_any()
                     }
-                        .into_any()
-                }
-            }}
+                }}
+            </div>
         </div>
     }
 }
@@ -106,6 +115,7 @@ type ThemeCatalogResource = Resource<Result<Vec<CatalogEntry>, WebError>>;
 fn theme_management_controls(
     availability: ScopeAvailability,
     page: ThemePageState,
+    advanced: RwSignal<bool>,
     scope: RwSignal<OwnershipScope>,
     refresh: Invalidator,
     status: RwSignal<Option<String>>,
@@ -117,9 +127,20 @@ fn theme_management_controls(
     let package_file = NodeRef::<leptos::html::Input>::new();
     view! {
         {scope_card(availability, page, scope)}
-        {create_theme_card(create_name, scope, refresh, status)}
-        {css_import_card(css_name, css_source, scope, refresh, status)}
-        {zip_import_card(package_name, package_file, scope, refresh, status)}
+        {zip_import_card(package_name, package_file, page, advanced)}
+        <button
+            type="button"
+            class="j-btn"
+            aria-expanded=move || aria_pressed(advanced.get())
+            aria-controls="theme-advanced-import theme-advanced-editor"
+            on:click=move |_| advanced.update(|open| *open = !*open)
+        >
+            "Advanced"
+        </button>
+        <div id="theme-advanced-import" hidden=move || !advanced.get()>
+            {create_theme_card(create_name, scope, refresh, status)}
+            {css_import_card(css_name, css_source, scope, refresh, status)}
+        </div>
     }
 }
 
@@ -134,13 +155,13 @@ fn scope_card(
                 <div>
                     <h2 id="theme-scope-heading">"Catalog scope"</h2>
                     <div class="j-sub">
-                        "Your author catalog is always available. Site changes remain operator-authorized by the server."
+                        "Your public pages changes your author pages. Site default changes public site pages and authors who inherit it. Home and private management always keep application styling."
                     </div>
                 </div>
             </div>
             <div
                 class="j-form-body j-theme-scope-options"
-                role="radiogroup"
+                role="group"
                 aria-label="Theme catalog scope"
             >
                 <button
@@ -149,7 +170,7 @@ fn scope_card(
                     aria-pressed=move || aria_pressed(scope.get() == OwnershipScope::Author)
                     on:click=move |_| page.select_scope(OwnershipScope::Author)
                 >
-                    "Author catalog"
+                    "Your public pages"
                 </button>
                 {availability
                     .permits(OwnershipScope::Site)
@@ -163,7 +184,7 @@ fn scope_card(
                                 }
                                 on:click=move |_| page.select_scope(OwnershipScope::Site)
                             >
-                                "Site catalog"
+                                "Site default"
                             </button>
                         }
                     })}
@@ -267,9 +288,8 @@ fn css_import_card(
 fn zip_import_card(
     name: NodeRef<leptos::html::Input>,
     file: NodeRef<leptos::html::Input>,
-    scope: RwSignal<OwnershipScope>,
-    refresh: Invalidator,
-    status: RwSignal<Option<String>>,
+    page: ThemePageState,
+    advanced: RwSignal<bool>,
 ) -> impl IntoView {
     view! {
         <section class="j-card" aria-labelledby="theme-package-import-heading">
@@ -282,10 +302,15 @@ fn zip_import_card(
                 </div>
             </div>
             <div class="j-form-body">
-                <label class="j-form-field">
-                    <span class="j-form-label">"Theme name"</span>
-                    <input class="j-form-input" node_ref=name />
-                </label>
+                <div hidden=move || !advanced.get()>
+                    <label class="j-form-field">
+                        <span class="j-form-label">"Catalog label override (optional)"</span>
+                        <input class="j-form-input" node_ref=name />
+                        <span class="j-form-help">
+                            "Leave blank to use the package name. Choose a different label if that name is reserved or already in your catalog."
+                        </span>
+                    </label>
+                </div>
                 <label class="j-form-field">
                     <span class="j-form-label">"Theme Package ZIP"</span>
                     <input
@@ -298,7 +323,7 @@ fn zip_import_card(
                 <button
                     type="button"
                     class="j-btn"
-                    on:click=move |_| import_package_zip(file, name, scope, refresh, status)
+                    on:click=move |_| import_package_zip(file, name, page)
                 >
                     "Import ZIP draft"
                 </button>
@@ -358,10 +383,14 @@ fn presentation_resources(
 fn import_package_zip(
     package_file: NodeRef<leptos::html::Input>,
     package_name: NodeRef<leptos::html::Input>,
-    scope: RwSignal<OwnershipScope>,
-    refresh: Invalidator,
-    status: RwSignal<Option<String>>,
+    page: ThemePageState,
 ) {
+    let scope = page.scope;
+    let refresh = page.refresh;
+    let status = page.status;
+    if page.pending.get_untracked() {
+        return;
+    }
     // crap:allow: Browser File and FormData APIs are wasm-only; host coverage cannot execute the upload handler.
     let Some(file) = package_file
         .get()
@@ -384,13 +413,37 @@ fn import_package_zip(
         return;
     };
     if form.append_with_str("scope", scope_name).is_err()
-        || form.append_with_str("name", &name).is_err()
+        || page_state::import_name_override(&name)
+            .is_some_and(|name| form.append_with_str("name", name).is_err())
         || form.append_with_blob("archive", &file).is_err()
     {
         status.set(Some("Could not prepare the package upload.".into()));
         return;
     }
-    task::spawn_local(async move { settle(api::import_zip(form.into()).await, refresh, status) });
+    page.pending.set(true);
+    status.set(Some("Importing Theme Package…".into()));
+    task::spawn_local(async move {
+        match api::import_zip(form.into()).await {
+            Ok(MutationOutcome::Confirmed(entry)) => {
+                page.selected.set(Some(entry.id));
+                refresh.notify();
+                status.set(Some(format!("Imported {} as a private draft. Choose Use this theme to publish and apply it.", entry.name)));
+            }
+            result => {
+                status.set(Some("Import was not confirmed. Review the catalog before trying again; use Advanced to change a reserved or duplicate catalog label.".into()));
+                reconcile_owner(scope.get_untracked(), refresh, status).await;
+                if let Err(error) = result {
+                    status.update(|message| {
+                        if let Some(message) = message {
+                            message.push(' ');
+                            message.push_str(&error.to_string());
+                        }
+                    });
+                }
+            }
+        }
+        page.pending.set(false);
+    });
 }
 
 fn settle<T>(
@@ -420,6 +473,8 @@ fn ThemeCatalog(
     refresh: Invalidator,
     status: RwSignal<Option<String>>,
     rename_name: NodeRef<leptos::html::Input>,
+    page: ThemePageState,
+    advanced: RwSignal<bool>,
 ) -> impl IntoView {
     view! {
         <section class="j-card" aria-labelledby="theme-catalog-heading">
@@ -438,15 +493,55 @@ fn ThemeCatalog(
                     scope=scope
                     refresh=refresh
                     status=status
+                    pending=page.pending
                 />
-                {catalog_content(catalog, selected)}
-                <ThemeEditor
-                    scope=scope
-                    selected=selected
-                    refresh=refresh
-                    status=status
-                    rename_name=rename_name
-                />
+                {catalog_content(catalog, selected, page.pending)}
+                <Show when=move || selected.get().is_some()>
+                    <p class="j-form-help">
+                        "Opening a draft does not change public selection. Use this theme publishes its current draft, then applies it here. Publishing an already-selected theme immediately updates its public revision."
+                    </p>
+                    <button
+                        type="button"
+                        class="j-btn is-primary"
+                        on:click=move |_| use_selected(page)
+                    >
+                        "Use this theme"
+                    </button>
+                </Show>
+                {move || {
+                    status
+                        .get()
+                        .map(|message| {
+                            view! {
+                                <p class="j-theme-status" role="status" aria-live="polite">
+                                    {message}
+                                </p>
+                            }
+                        })
+                }}
+                <div id="theme-advanced-editor" hidden=move || !advanced.get()>
+                    <For
+                        each=move || {
+                            selected
+                                .get()
+                                .map(|id| (scope.get(), id))
+                                .into_iter()
+                                .collect::<Vec<_>>()
+                        }
+                        key=|target| (target.0 == OwnershipScope::Site, target.1)
+                        children=move |_| {
+                            view! {
+                                <ThemeEditor
+                                    scope=scope
+                                    selected=selected
+                                    refresh=refresh
+                                    status=status
+                                    rename_name=rename_name
+                                />
+                            }
+                        }
+                    />
+                </div>
             </div>
         </section>
     }
@@ -457,6 +552,7 @@ fn ThemeCatalog(
 fn catalog_content(
     catalog: ThemeCatalogResource,
     selected: RwSignal<Option<ThemeId>>,
+    pending: RwSignal<bool>,
 ) -> impl IntoView {
     view! {
         {move || match catalog.get() {
@@ -485,7 +581,11 @@ fn catalog_content(
                                             aria-pressed=move || {
                                                 aria_pressed(selected.get() == Some(entry_id))
                                             }
-                                            on:click=move |_| selected.set(Some(entry_id))
+                                            on:click=move |_| {
+                                                if !pending.get_untracked() {
+                                                    selected.set(Some(entry_id));
+                                                }
+                                            }
                                         >
                                             {entry.name}
                                             {if entry.published { " (published)" } else { " (draft)" }}
@@ -517,6 +617,7 @@ fn ThemeSelection(
     scope: RwSignal<OwnershipScope>,
     refresh: Invalidator,
     status: RwSignal<Option<String>>,
+    pending: RwSignal<bool>,
 ) -> impl IntoView {
     // Reapply the controlled value after the option catalog settles: assigning a
     // custom value before its option exists does not stick in the native select.
@@ -525,26 +626,39 @@ fn ThemeSelection(
         selection_token(selection.get().and_then(Result::ok).flatten())
     };
     let change = move |event| {
+        if pending.get_untracked() {
+            return;
+        }
+        pending.set(true);
         let token = event_target_value(&event);
         let current_scope = scope.get_untracked();
-        let next = if token == "inherit" {
-            None
-        } else if let Ok(theme) = Theme::from_str(&token) {
-            Some(PublicThemeSelection::BuiltIn(theme))
-        } else {
-            ThemeId::from_str(&token)
-                .ok()
-                .map(PublicThemeSelection::Custom)
-        };
+        let next = page_state::selection_from_token(&token);
         task::spawn_local(async move {
-            settle(api::select(current_scope, next).await, refresh, status);
+            status.set(Some("Applying public selection…".into()));
+            let result = api::select(current_scope, next).await;
+            match result {
+                Ok(MutationOutcome::Confirmed(())) => {
+                    refresh.notify();
+                    status.set(Some("Public selection applied.".into()));
+                }
+                result => {
+                    status.set(Some(format!("Selection was not confirmed. Review current selection before trying again. {}", mutation_detail(result))));
+                    reconcile_owner(current_scope, refresh, status).await;
+                }
+            }
+            pending.set(false);
         });
     };
     view! {
         <div class="j-theme-selection">
             <label class="j-form-field">
                 <span class="j-form-label">"Public selection"</span>
-                <select class="j-form-input" prop:value=selected_token on:change=change>
+                <select
+                    class="j-form-input"
+                    prop:value=selected_token
+                    disabled=move || pending.get() || !matches!(selection.get(), Some(Ok(_)))
+                    on:change=change
+                >
                     {move || {
                         view! {
                             <option value="inherit">"Inherit site selection"</option>
@@ -578,6 +692,20 @@ fn ThemeSelection(
                     }}
                 </select>
             </label>
+            {move || match selection.get() {
+                Some(Err(error)) => {
+                    view! {
+                        <p class="error" role="alert">
+                            {format!(
+                                "Current selection is unknown: {error}. Reopen Themes to review it.",
+                            )}
+                        </p>
+                    }
+                        .into_any()
+                }
+                None => view! { <p class="j-loading">"Loading public selection…"</p> }.into_any(),
+                Some(Ok(_)) => ().into_any(),
+            }}
         </div>
     }
 }
@@ -795,6 +923,73 @@ fn export_selected(
             }
         });
     }
+}
+
+fn use_selected(page: ThemePageState) {
+    let Some((scope, id)) = page.begin_use() else {
+        return;
+    };
+    page.status.set(Some("Publishing theme…".into()));
+    task::spawn_local(async move {
+        let published = api::publish(scope, id).await;
+        if page_state::publication_confirmed(&published) {
+            page.status
+                .set(Some("Publication confirmed. Applying theme…".into()));
+            match api::select(scope, Some(PublicThemeSelection::Custom(id))).await {
+                Ok(MutationOutcome::Confirmed(())) => {
+                    page.status.set(Some("Theme published and applied. Your public presentation uses its new revision; private management and Home are unchanged.".into()));
+                }
+                result => {
+                    page.status.set(Some(format!("Publication confirmed, but selection was not confirmed. Publication cannot be undone by a selection failure; an already-selected theme may now use the new revision. {}", mutation_detail(result))));
+                }
+            }
+        } else {
+            page.status.set(Some(format!("Publication was not confirmed, so selection was not requested. An already-selected theme may have advanced if publication committed. Review current state before trying again. {}", mutation_detail(published))));
+        }
+        reconcile_owner(scope, page.refresh, page.status).await;
+        page.pending.set(false);
+    });
+}
+
+fn mutation_detail<T>(result: Result<MutationOutcome<T>, WebError>) -> String {
+    match result {
+        Ok(MutationOutcome::CommitIndeterminate(_)) => {
+            "The database acknowledgement is uncertain.".into()
+        }
+        Err(error) => format!("The server response could not confirm the change: {error}"),
+        Ok(MutationOutcome::Confirmed(_)) => "The server confirmed the change.".into(),
+    }
+}
+
+async fn reconcile_owner(
+    scope: OwnershipScope,
+    refresh: Invalidator,
+    status: RwSignal<Option<String>>,
+) {
+    let catalog = api::list(scope).await;
+    let selection = api::get_selection(scope).await;
+    let catalog_message = match catalog {
+        Ok(entries) => format!("Catalog reread: {} entries.", entries.len()),
+        Err(error) => format!("Catalog reread failed: {error}. Reopen Themes to review it."),
+    };
+    let selection_message = match selection {
+        Ok(selection) => format!(
+            "Current selection from reread: {}.",
+            selection_token(selection)
+        ),
+        Err(error) => format!(
+            "Selection reread failed: {error}. Current selection is unknown; reopen Themes to review it."
+        ),
+    };
+    status.update(|message| {
+        if let Some(message) = message {
+            message.push(' ');
+            message.push_str(&catalog_message);
+            message.push(' ');
+            message.push_str(&selection_message);
+        }
+    });
+    refresh.notify();
 }
 
 fn publish_selected(

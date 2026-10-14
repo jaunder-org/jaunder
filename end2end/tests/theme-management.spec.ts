@@ -9,6 +9,8 @@ import {
 } from "./helpers";
 import { uploadMedia } from "./media-helpers";
 import {
+  minimalThemeZip,
+  openThemeAdvanced,
   packageMember,
   packageMemberDigests,
   publishTheme,
@@ -36,6 +38,194 @@ const THEME_ENDPOINTS = {
 } as const;
 type ThemeEndpoint = keyof typeof THEME_ENDPOINTS;
 
+test("ZIP-only import opens an unselected draft and explicit use publishes then applies it", async ({
+  page,
+  tracedContext,
+}) => {
+  const username = await signInAsNewUser(page);
+  const archive = await minimalThemeZip(page);
+  await goto(page, "/themes");
+  await expect(page.getByLabel("Stylesheet", { exact: true })).toBeHidden();
+  await expect(
+    page.getByLabel("Catalog label override (optional)"),
+  ).toBeHidden();
+  await expect(
+    page.getByRole("button", { name: "Advanced", exact: true }),
+  ).toHaveAttribute("aria-expanded", "false");
+  await expect(
+    page.getByRole("button", { name: "Site default", exact: true }),
+  ).toHaveCount(0);
+  const zipImport = page.locator(
+    "section[aria-labelledby='theme-package-import-heading']",
+  );
+  await zipImport.getByLabel("Theme Package ZIP").setInputFiles({
+    name: "filename-disagrees.zip",
+    mimeType: "application/zip",
+    buffer: archive,
+  });
+  await zipImport.getByRole("button", { name: "Import ZIP draft" }).click();
+  const entry = page.getByRole("button", {
+    name: "Intake fixture (draft)",
+    exact: true,
+  });
+  await expect(entry).toBeVisible();
+  const selection = page.getByLabel("Public selection");
+  await expect(selection).toHaveValue("inherit");
+  await entry.click();
+  await expect(entry).toHaveAttribute("aria-pressed", "true");
+  await expect(selection).toHaveValue("inherit");
+  await expect(page.getByLabel("theme.json")).toBeHidden();
+  const release = await stallServerFn(page, "themes/publish");
+  const requests: string[] = [];
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (path === THEME_ENDPOINTS.publish || path === THEME_ENDPOINTS.select)
+      requests.push(path);
+  });
+  const use = page.getByRole("button", { name: "Use this theme", exact: true });
+  await use.click();
+  await expect(page.getByRole("status")).toContainText("Publishing");
+  await expect(use).toBeDisabled();
+  await expect(selection).toBeDisabled();
+  await expect(entry).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Your public pages", exact: true }),
+  ).toBeDisabled();
+  expect(requests).toEqual([THEME_ENDPOINTS.publish]);
+  release();
+  await expect(page.getByRole("status")).toContainText(
+    "Theme published and applied",
+  );
+  expect(requests).toEqual([THEME_ENDPOINTS.publish, THEME_ENDPOINTS.select]);
+  await expect(selection).not.toHaveValue("inherit");
+  await expect(page.locator(".j-root")).toHaveAttribute("data-theme", "studio");
+  await expect(page.locator("link[data-jaunder-theme-stylesheet]")).toHaveCount(
+    0,
+  );
+  const publicContext = await tracedContext();
+  try {
+    const publicPage = await publicContext.newPage();
+    await goto(publicPage, `/~${username}`);
+    await expect(publicPage.locator(".j-root")).toHaveAttribute(
+      "data-theme",
+      "custom",
+    );
+    await expect(publicPage.locator('[data-jaunder-part="main"]')).toHaveCSS(
+      "outline-color",
+      "rgb(1, 2, 3)",
+    );
+  } finally {
+    await publicContext.close();
+  }
+});
+
+test("Advanced preserves unsaved input across toggles and hides collapsed controls", async ({
+  page,
+}) => {
+  await signInAs(page, "testoperator");
+  const archive = await minimalThemeZip(page);
+  await goto(page, "/themes");
+  await page.getByLabel("Theme Package ZIP").setInputFiles({
+    name: "fixture.zip",
+    mimeType: "application/zip",
+    buffer: archive,
+  });
+  await page.getByRole("button", { name: "Import ZIP draft" }).click();
+  await expect(
+    page.getByRole("button", { name: "Intake fixture (draft)", exact: true }),
+  ).toBeVisible();
+  await openThemeAdvanced(page);
+  const create = page.locator(
+    'section[aria-labelledby="theme-create-heading"]',
+  );
+  const cssImport = page.locator(
+    'section[aria-labelledby="theme-import-heading"]',
+  );
+  const fields = [
+    [page.getByLabel("theme.json", { exact: true }), '{"unsaved":"manifest"}'],
+    [
+      page.getByLabel("style.css", { exact: true }),
+      "/* unsaved package CSS */",
+    ],
+    [page.getByLabel("Stylesheet source"), "/* unsaved replacement CSS */"],
+    [
+      page.getByLabel("Rename selected theme", { exact: true }),
+      "Unsaved rename",
+    ],
+    [create.getByLabel("Theme name"), "Unsaved empty draft"],
+    [cssImport.getByLabel("Theme name"), "Unsaved CSS import"],
+    [
+      cssImport.getByLabel("Stylesheet", { exact: true }),
+      "/* unsaved import CSS */",
+    ],
+    [page.getByLabel("Catalog label override (optional)"), "Second draft"],
+  ] as const;
+  for (const [field, value] of fields) await field.fill(value);
+  const advanced = page.getByRole("button", { name: "Advanced", exact: true });
+  await advanced.click();
+  await expect(advanced).toHaveAttribute("aria-expanded", "false");
+  await advanced.click();
+  for (const [field, value] of fields) await expect(field).toHaveValue(value);
+  await advanced.click();
+  await expect(advanced).toHaveAttribute("aria-expanded", "false");
+  for (const [field] of fields) {
+    await expect(field).toBeHidden();
+    expect(
+      await field.evaluate((node) => {
+        (node as HTMLElement).focus();
+        return document.activeElement === node;
+      }),
+    ).toBe(false);
+  }
+  await advanced.focus();
+  await page.keyboard.press("Tab");
+  expect(
+    await page.evaluate(() =>
+      Boolean(document.activeElement?.closest("[hidden]")),
+    ),
+  ).toBe(false);
+  await expect(
+    page.getByRole("button", { name: "Use this theme", exact: true }),
+  ).toBeVisible();
+  await openThemeAdvanced(page);
+  // Imported draft identity, unlike disclosure visibility, is a reset boundary.
+  await page.getByRole("button", { name: "Import ZIP draft" }).click();
+  await expect(
+    page.getByRole("button", { name: "Second draft (draft)", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByLabel("style.css", { exact: true })).toHaveValue(
+    '[data-jaunder-part="main"] { outline: 2px solid rgb(1, 2, 3); }',
+  );
+  await expect(
+    page.getByLabel("Rename selected theme", { exact: true }),
+  ).toHaveValue("");
+  await page.getByRole("button", { name: "Site default", exact: true }).click();
+  await expect(
+    page.getByLabel("Catalog label override (optional)"),
+  ).toHaveValue("");
+  await expect(cssImport.getByLabel("Theme name")).toHaveValue("");
+});
+
+test("blank Advanced catalog override uses the package name", async ({
+  page,
+}) => {
+  await signInAsNewUser(page);
+  const archive = await minimalThemeZip(page);
+  await goto(page, "/themes");
+  await openThemeAdvanced(page);
+  await page.getByLabel("Catalog label override (optional)").fill("   ");
+  await page.getByLabel("Theme Package ZIP").setInputFiles({
+    name: "different-filename.zip",
+    mimeType: "application/zip",
+    buffer: archive,
+  });
+  await page.getByRole("button", { name: "Import ZIP draft" }).click();
+  await expect(
+    page.getByRole("button", { name: "Intake fixture (draft)", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Public selection")).toHaveValue("inherit");
+});
+
 // The Studio journey must remain a private surface: custom public presentation
 // stylesheets may only appear in the isolated preview document, never in its parent.
 test("theme management mounts as Studio without a public theme stylesheet", async ({
@@ -44,6 +234,7 @@ test("theme management mounts as Studio without a public theme stylesheet", asyn
   await signInAsNewUser(page);
   await goto(page, "/themes");
 
+  await openThemeAdvanced(page);
   const guide = page.getByRole("link", {
     name: "Read the theme repository guide",
   });
@@ -63,7 +254,7 @@ test("theme management mounts as Studio without a public theme stylesheet", asyn
     page.getByRole("heading", { name: "Catalog scope" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Author catalog" }),
+    page.getByRole("button", { name: "Your public pages" }),
   ).toBeVisible();
   await expect(page.locator(".j-root")).toHaveAttribute("data-theme", "studio");
   await expect(page.locator("link[data-jaunder-theme-stylesheet]")).toHaveCount(
@@ -82,7 +273,7 @@ test("theme management mounts as Studio without a public theme stylesheet", asyn
     const scopeBox = await scope.boundingBox();
     const scopeHeadingBox = await scope.getByRole("heading").boundingBox();
     const scopeButtonBox = await scope
-      .getByRole("button", { name: "Author catalog", exact: true })
+      .getByRole("button", { name: "Your public pages", exact: true })
       .boundingBox();
     expect(guidanceBox).not.toBeNull();
     expect(scopeBox).not.toBeNull();
@@ -149,6 +340,7 @@ test("invalid authored CSS is rejected before draft persistence", async ({
 }) => {
   await signInAsNewUser(page);
   await goto(page, "/themes");
+  await openThemeAdvanced(page);
   const cssImport = page.locator("section").filter({ hasText: "Import CSS" });
   await cssImport.getByLabel("Theme name").fill("Rejected external");
   await cssImport
@@ -221,6 +413,7 @@ test("author completes the custom theme lifecycle through Studio", async ({
         response.request().method() === "POST",
     );
 
+  await openThemeAdvanced(page);
   const cssImport = page.locator("section").filter({ hasText: "Import CSS" });
 
   await cssImport.getByLabel("Theme name").fill("Night author");
@@ -415,6 +608,7 @@ test("author completes the custom theme lifecycle through Studio", async ({
   releaseCatalog();
   await expect(freshPage.getByLabel("Public selection")).toHaveValue(themeId!);
   await freshPage.getByRole("button", { name: /Night round trip/ }).click();
+  await openThemeAdvanced(freshPage);
   await expect(freshPage.getByLabel("Logo image")).toHaveValue(
     "unavailable-media",
   );
@@ -466,7 +660,9 @@ test("author completes the custom theme lifecycle through Studio", async ({
   const zipImport = page
     .locator("section")
     .filter({ hasText: "Import Theme Package" });
-  await zipImport.getByLabel("Theme name").fill("Restored package");
+  await zipImport
+    .getByLabel("Catalog label override (optional)")
+    .fill("Restored package");
   await zipImport.getByLabel("Theme Package ZIP").setInputFiles(exportedPath!);
   await Promise.all([
     mutation("import_zip"),
@@ -568,11 +764,12 @@ test("operator manages the site catalog through public selection and fallback", 
         response.request().method() === "POST",
     );
 
-  const siteCatalog = page.getByRole("button", { name: "Site catalog" });
+  const siteCatalog = page.getByRole("button", { name: "Site default" });
   await expect(siteCatalog).toBeVisible();
   await siteCatalog.click();
   await expect(siteCatalog).toHaveAttribute("aria-pressed", "true");
 
+  await openThemeAdvanced(page);
   const cssImport = page.locator("section").filter({ hasText: "Import CSS" });
   await cssImport.getByLabel("Theme name").fill("Operator site draft");
   await cssImport
@@ -636,10 +833,10 @@ test("operator manages the site catalog through public selection and fallback", 
       "rgb(4, 5, 6)",
     );
     await expect(
-      publicPage.getByRole("radiogroup", { name: "Theme catalog scope" }),
+      publicPage.getByRole("group", { name: "Theme catalog scope" }),
     ).toHaveCount(0);
     await expect(
-      publicPage.getByRole("button", { name: "Author catalog" }),
+      publicPage.getByRole("button", { name: "Your public pages" }),
     ).toHaveCount(0);
   } finally {
     await publicContext.close();

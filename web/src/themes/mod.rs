@@ -25,7 +25,8 @@ pub use api::{
 pub use thumbnail::thumbnail_document;
 
 pub use page_state::{
-    Revalidation, ScopeAvailability, ThemePageState, draft_from_editor, revalidation,
+    Revalidation, ScopeAvailability, ThemePageState, draft_from_editor, import_name_override,
+    publication_confirmed, revalidation, selection_from_token,
 };
 pub use presentation_state::{
     HeaderMediaDraft, LogoFallbackOption, MEDIA_PAGE_SIZE, logo_fallback_option, media_page_offset,

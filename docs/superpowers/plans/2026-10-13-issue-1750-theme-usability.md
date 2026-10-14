@@ -41,7 +41,7 @@ Approval hashes identify their original documents, not resulting metadata bytes.
     Database-touching tests retain `#[apply(backends)]` parity. Focused lanes:
     `cargo xtask test-local -- -p host theme_package` and
     `cargo xtask test-local -- -p jaunder theme_import_zip`, via `devtool run`.
-- [ ] 2. Small complete ZIP-import/use UI tracer, dependent on task 1.
+- [x] 2. Small complete ZIP-import/use UI tracer, dependent on task 1.
   - Contract: default ZIP-only form; blank Advanced override omits `name`.
     Catalog choice is not activation. Explicit use publishes then selects the
     same custom Theme ID/scope only on confirmed publication. Built-in/inherit
