@@ -125,6 +125,27 @@ fn scan_root(
     (scanned, hard_errors)
 }
 
+/// Keep compiler diagnostics safe for direct terminal rendering and bounded in reports.
+fn diagnostic_excerpt(output: &str) -> String {
+    const LIMIT: usize = 4096;
+    const TRUNCATED: &str = " [truncated]";
+    let mut excerpt = String::new();
+    let mut truncation_boundary = 0;
+    for character in output.chars() {
+        let rendered: String = character.escape_debug().collect();
+        if excerpt.len() + rendered.len() > LIMIT {
+            excerpt.truncate(truncation_boundary);
+            excerpt.push_str(TRUNCATED);
+            break;
+        }
+        excerpt.push_str(&rendered);
+        if excerpt.len() <= LIMIT - TRUNCATED.len() {
+            truncation_boundary = excerpt.len();
+        }
+    }
+    excerpt
+}
+
 /// Reconcile one command result with the population it was expected to run.
 /// A nonzero status without a failed doctest entry is a command failure, even
 /// when a root contains no fences.
@@ -139,7 +160,12 @@ fn reconcile_doctests(
         Ok((output, succeeded)) => {
             let entries = doctests::libtest::run_entries(&output);
             let mut details = if !succeeded && !entries.iter().any(|entry| entry.failed) {
-                vec![no_failed_entry()]
+                let mut detail = no_failed_entry();
+                if !output.is_empty() {
+                    detail.push(' ');
+                    detail.push_str(&diagnostic_excerpt(&output));
+                }
+                vec![detail]
             } else {
                 Vec::new()
             };
@@ -360,7 +386,7 @@ mod tests {
     fn shared_reconciliation_rejects_a_host_command_without_failed_entry() {
         let details = reconcile_doctests(
             &[],
-            Ok((workspace_entry("ok"), false)),
+            Ok(("error: could not compile xtask".to_string(), false)),
             |error| format!("cannot run xtask doctests: {error}"),
             || {
                 "xtask doctests exited non-zero without a reported failed doctest entry."
@@ -370,8 +396,11 @@ mod tests {
 
         assert_eq!(
             details,
-            ["xtask doctests exited non-zero without a reported failed doctest entry."]
+            [
+                "xtask doctests exited non-zero without a reported failed doctest entry. error: could not compile xtask"
+            ]
         );
+        assert!(!assemble_step("doctest-fences", details).ok);
     }
 
     #[test]
@@ -414,14 +443,69 @@ mod tests {
     }
 
     #[test]
-    fn workspace_command_failure_without_a_failed_entry_is_concise() {
-        let step = workspace_step(&[], vec![], Ok(("raw compiler output".to_string(), false)));
+    fn workspace_command_failure_without_a_failed_entry_retains_compiler_error() {
+        let step = workspace_step(
+            &[],
+            vec![],
+            Ok(("error: permission denied".to_string(), false)),
+        );
+
+        assert!(!step.ok, "{step:?}");
+        assert_eq!(
+            step.detail.as_deref(),
+            Some(
+                "workspace doctests exited non-zero without a reported failed doctest entry. error: permission denied"
+            )
+        );
+    }
+
+    #[test]
+    fn empty_command_failure_keeps_only_the_generic_marker() {
+        let step = workspace_step(&[], vec![], Ok((String::new(), false)));
 
         assert!(!step.ok, "{step:?}");
         assert_eq!(
             step.detail.as_deref(),
             Some("workspace doctests exited non-zero without a reported failed doctest entry.")
         );
+    }
+
+    #[test]
+    fn diagnostic_excerpt_preserves_short_and_exact_limit_output() {
+        assert_eq!(diagnostic_excerpt("error: café 🦀"), "error: café 🦀");
+        assert_eq!(diagnostic_excerpt(""), "");
+        let exact = "é".repeat(2048);
+        assert_eq!(diagnostic_excerpt(&exact), exact);
+    }
+
+    #[test]
+    fn diagnostic_excerpt_bounds_rendered_bytes_without_splitting_unicode_or_escapes() {
+        for output in ["x".repeat(5000), "🦀".repeat(5000), "\u{1b}".repeat(5000)] {
+            let excerpt = diagnostic_excerpt(&output);
+            assert!(excerpt.len() <= 4096, "{}", excerpt.len());
+            let prefix = excerpt
+                .strip_suffix(" [truncated]")
+                .expect("visible truncation");
+            let unit: String = output.chars().next().unwrap().escape_debug().collect();
+            assert_eq!(prefix, unit.repeat(prefix.len() / unit.len()));
+        }
+    }
+
+    #[test]
+    fn diagnostic_excerpt_escapes_terminal_and_direction_controls() {
+        let controls: String = (0..=0x9f)
+            .filter(|value| *value <= 0x1f || *value >= 0x7f)
+            .chain([0x61c, 0x200e, 0x200f])
+            .chain(0x202a..=0x202e)
+            .chain(0x2066..=0x2069)
+            .map(|value| char::from_u32(value).unwrap())
+            .collect();
+        let excerpt = diagnostic_excerpt(&controls);
+        assert!(excerpt.is_ascii(), "{excerpt:?}");
+        assert!(!excerpt.chars().any(char::is_control));
+        assert!(excerpt.contains("\\u{1b}"), "{excerpt}");
+        assert!(excerpt.contains("\\u{202e}"), "{excerpt}");
+        assert_eq!(diagnostic_excerpt("error:\n\tbad\r"), "error:\\n\\tbad\\r");
     }
 
     #[test]

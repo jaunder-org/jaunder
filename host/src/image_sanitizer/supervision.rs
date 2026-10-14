@@ -2,8 +2,9 @@
 //! No capacity or private file can be released without a confirmed child reap.
 
 use std::io::Read;
+use std::os::fd::AsFd;
 use std::path::Path;
-use std::process::{Child, ChildStdout, Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -164,7 +165,7 @@ fn process(
 // return before either normal settlement or Drop can signal a reused PID.
 fn supervise(
     child: &mut ChildOwner,
-    mut stdout: ChildStdout,
+    mut stdout: impl Read + AsFd,
     deadline: Instant,
     canceled: &mut oneshot::Receiver<()>,
 ) -> Result<worker_protocol::Reply, ImageSanitizerError> {
@@ -340,7 +341,6 @@ mod tests {
             loop {
                 let child = self.child.as_mut().expect("owned observer child");
                 if let Some(status) = child.try_wait()? {
-                    self.child.take();
                     return Ok(status);
                 }
                 if Instant::now() >= deadline {
@@ -368,7 +368,9 @@ mod tests {
             // only while that wait authority remains, then confirm settlement.
             let kill = child.child.kill();
             let wait = self.wait_until(Instant::now() + Duration::from_secs(5));
-            settled_child(kill, wait.map(|_| ())).map_err(std::io::Error::other)
+            settled_child(kill, wait.map(|_| ())).map_err(std::io::Error::other)?;
+            self.child.take();
+            Ok(())
         }
     }
 
@@ -396,15 +398,10 @@ mod tests {
         let child = owner.child.as_mut().expect("owned observer");
         let pid = pid(&child.child);
         let reaped = child.reaped.clone();
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            if let Some(status) = child.try_wait().expect("owned observer wait") {
-                assert!(status.success());
-                break;
-            }
-            assert!(Instant::now() < deadline, "owned observer reap deadline");
-            std::thread::sleep(Duration::from_millis(1));
-        }
+        let status = owner
+            .wait_until(Instant::now() + Duration::from_secs(10))
+            .expect("owned observer wait");
+        assert!(status.success());
         assert!(reaped.load(Ordering::Acquire));
         assert!(
             owner.child.is_some(),
@@ -678,6 +675,114 @@ mod tests {
             );
         }
         assert!(std::panic::catch_unwind(|| report_unwind_results(Ok(()), Ok(()))).is_ok());
+    }
+
+    // Only the first read is injected; descriptor setup and every subsequent
+    // read use the native worker's actual pipe.
+    struct InterruptedOnce {
+        stdout: std::process::ChildStdout,
+        calls: usize,
+        forwarded: Vec<u8>,
+        cancel: Option<oneshot::Sender<()>>,
+    }
+    impl AsFd for InterruptedOnce {
+        fn as_fd(&self) -> std::os::fd::BorrowedFd<'_> {
+            self.stdout.as_fd()
+        }
+    }
+    impl Read for InterruptedOnce {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.calls += 1;
+            if self.calls == 1 {
+                if let Some(cancel) = self.cancel.take() {
+                    cancel.send(()).expect("supervisor cancellation receiver");
+                }
+                return Err(std::io::Error::from(std::io::ErrorKind::Interrupted));
+            }
+            let count = self.stdout.read(buffer)?;
+            self.forwarded.extend_from_slice(&buffer[..count]);
+            Ok(count)
+        }
+    }
+
+    fn interrupted_native_supervision(cancel_on_read: bool) {
+        let input = NamedTempFile::new().expect("private spool");
+        let content = b"ordinary attachment";
+        std::fs::write(input.path(), content).expect("input bytes");
+        let path = input.path().to_owned();
+        let reaped = Arc::new(AtomicBool::new(true));
+        let spool = Spool {
+            file: Some(input),
+            reaped: reaped.clone(),
+        };
+        let capacity = Arc::new(Semaphore::new(2));
+        let permit = PermitOwner::new(
+            capacity.clone().try_acquire_owned().expect("permit"),
+            Arc::new(AtomicBool::new(false)),
+            reaped.clone(),
+        );
+        let native_child = worker(spool.file());
+        reaped.store(false, Ordering::Release);
+        let mut child = ChildOwner {
+            child: native_child,
+            reaped: reaped.clone(),
+            ownership_lost: false,
+        };
+        let pid = pid(&child.child);
+        let (cancel, mut canceled) = oneshot::channel();
+        let mut reader = InterruptedOnce {
+            stdout: child.child.stdout.take().expect("real worker reply pipe"),
+            calls: 0,
+            forwarded: Vec::new(),
+            cancel: None,
+        };
+        if cancel_on_read {
+            reader.cancel = Some(cancel);
+        }
+        let outcome = supervise(
+            &mut child,
+            &mut reader,
+            Instant::now() + Duration::from_secs(5),
+            &mut canceled,
+        );
+        if cancel_on_read {
+            assert!(matches!(outcome, Err(ImageSanitizerError::Canceled)));
+            assert_eq!(reader.calls, 1, "cancellation precedes another read");
+            assert!(reader.forwarded.is_empty());
+        } else {
+            assert!(matches!(outcome.expect("recovered native reply"),
+                worker_protocol::Reply::Passthrough { size } if size == content.len() as u64));
+            assert!(reader.calls > 1, "recovery reads the actual pipe");
+            let expected = worker_protocol::encode(&worker_protocol::Reply::Passthrough {
+                size: content.len() as u64,
+            })
+            .expect("expected reply framing");
+            assert_eq!(reader.forwarded, expected, "actual native reply bytes");
+        }
+        assert!(reaped.load(Ordering::Acquire));
+        assert!(!child.ownership_lost);
+        assert_eq!(
+            rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::NOHANG).err(),
+            Some(rustix::io::Errno::CHILD),
+            "supervision confirmed the owned reap"
+        );
+        assert!(path.exists());
+        assert_eq!(capacity.available_permits(), 1);
+        drop(child);
+        drop(spool);
+        drop(permit);
+        assert!(!path.exists());
+        assert_eq!(capacity.available_permits(), 2);
+    }
+
+    #[test]
+    fn interrupted_supervision_recovers_the_real_native_reply_and_reaps() {
+        interrupted_native_supervision(false);
+    }
+
+    #[test]
+    fn interrupted_supervision_rechecks_cancellation_before_reading_and_reaps() {
+        interrupted_native_supervision(true);
     }
 
     struct FailedRead(std::io::ErrorKind);
