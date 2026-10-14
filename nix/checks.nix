@@ -1295,6 +1295,27 @@ mkWasmCoverageMeasurementProducer =
       };
     };
   };
+  runtimeAuthStackOptions = {
+    enable = true;
+    hostName = "jaunder.example.test";
+    observability = {
+      hostName = "observe.example.test";
+      basicAuth.credentialsFile = "/run/secrets/observability-users";
+    };
+  };
+  runtimeAuthStack = mkStackConfiguration runtimeAuthStackOptions;
+  unsupportedRuntimeAuthStack = nixpkgs.lib.nixosSystem {
+    inherit system;
+    modules = [
+      self.nixosModules.jaunder-stack
+      ({ ... }: {
+        boot.isContainer = true;
+        system.stateVersion = "26.05";
+        systemd.package = pkgs.systemd.overrideAttrs (_: { version = "259"; });
+        services.jaunder.stack = runtimeAuthStackOptions;
+      })
+    ];
+  };
   nativeRetentionOverrideStack = nixpkgs.lib.nixosSystem {
     inherit system;
     modules = [
@@ -1352,6 +1373,18 @@ mkWasmCoverageMeasurementProducer =
     ];
   }).config.system.build.toplevel.drvPath).success;
   jaunderStackModuleCheck =
+    assert stackEvaluationSucceeds runtimeAuthStackOptions;
+    assert stackEvaluationSucceeds (pkgs.lib.recursiveUpdate runtimeAuthStackOptions { observability.basicAuth.credentialsFileAlgorithm = "argon2id"; });
+    assert !(builtins.tryEval unsupportedRuntimeAuthStack.config.system.build.toplevel.drvPath).success;
+    assert stackEvaluationFails (pkgs.lib.recursiveUpdate runtimeAuthStackOptions { observability.basicAuth.credentialsFileAlgorithm = "scrypt"; });
+    assert stackEvaluationFails (pkgs.lib.recursiveUpdate runtimeAuthStackOptions { observability.basicAuth.username = "operator"; });
+    assert stackEvaluationFails (pkgs.lib.recursiveUpdate runtimeAuthStackOptions { observability.basicAuth.passwordHash = validStackBasicAuth.passwordHash; });
+    assert runtimeAuthStack.config.systemd.services.caddy.serviceConfig.LoadCredential == [ "jaunder-observability:/run/secrets/observability-users" ];
+    assert runtimeAuthStack.config.systemd.services.caddy.serviceConfig.RefreshOnReload == "credentials";
+    assert pkgs.lib.hasInfix "import {$CREDENTIALS_DIRECTORY}/jaunder-observability" runtimeAuthStack.config.services.caddy.virtualHosts."observe.example.test".extraConfig;
+    assert runtimeAuthStack.config.services.jaunder.stack.observability.basicAuth.username == "";
+    assert stackEvaluationFails (pkgs.lib.recursiveUpdate runtimeAuthStackOptions { observability.basicAuth = validStackBasicAuth; });
+    assert builtins.all (credentialsFile: stackEvaluationFails (pkgs.lib.recursiveUpdate runtimeAuthStackOptions { observability.basicAuth = { inherit credentialsFile; }; })) [ "" "relative" "/run/secrets/*" ./checks.nix ];
     assert sqliteStack.config.services.jaunder.bind == "127.0.0.1:3000";
     assert sqliteStack.config.services.jaunder.prod;
     assert sqliteStack.config.services.jaunder.db == "sqlite:/var/lib/jaunder/data/jaunder.db";
@@ -1444,6 +1477,7 @@ mkWasmCoverageMeasurementProducer =
       captureSignals ? false,
       persistSignals ? false,
       database ? "sqlite",
+      runtimeCredentials ? false,
     }:
     pkgs.testers.nixosTest {
       name = checkName;
@@ -1471,12 +1505,51 @@ mkWasmCoverageMeasurementProducer =
             hostName = "jaunder.stack.test";
             observability = {
               hostName = "observe.stack.test";
-              basicAuth = {
+              basicAuth = if runtimeCredentials then {
+                credentialsFile = "/run/observability-source/users";
+              } else {
                 username = "operator";
                 inherit passwordHash;
               };
             };
           };
+          systemd.services.stack-test-credentials = lib.mkIf runtimeCredentials {
+            before = [ "caddy.service" ];
+            requiredBy = [ "caddy.service" ];
+            serviceConfig = { Type = "oneshot"; RemainAfterExit = true; };
+            script = ''
+              set -eu
+              install -d -m 0700 /run/observability-source
+              ${pkgs.openssl}/bin/openssl rand -hex 16 > /run/observability-source/username
+              ${pkgs.openssl}/bin/openssl rand -hex 24 > /run/observability-source/password
+              ${pkgs.caddy}/bin/caddy hash-password --algorithm bcrypt < /run/observability-source/password > /run/observability-source/hash
+              printf '%s %s\n' "$(cat /run/observability-source/username)" "$(cat /run/observability-source/hash)" > /run/observability-source/users
+              printf '%s:%s' "$(cat /run/observability-source/username)" "$(cat /run/observability-source/password)" > /run/observability-source/curl-auth
+              chmod 0600 /run/observability-source/*
+            '';
+          };
+          services.caddy.package = lib.mkIf runtimeCredentials (pkgs.symlinkJoin {
+            name = "stack-test-caddy";
+            meta.mainProgram = "caddy";
+            paths = [ pkgs.caddy ];
+            postBuild = ''
+              rm $out/bin/caddy
+              cat > $out/bin/caddy <<'WRAPPER'
+              #!${pkgs.runtimeShell}
+              set -eu
+              if [ "$1" = run ] || [ "$1" = reload ]; then
+                test "$(id -un)" = caddy
+                test -n "$CREDENTIALS_DIRECTORY"
+                test -r "$CREDENTIALS_DIRECTORY/jaunder-observability"
+                test ! -w "$CREDENTIALS_DIRECTORY/jaunder-observability"
+                ${pkgs.util-linux}/bin/findmnt -T "$CREDENTIALS_DIRECTORY/jaunder-observability" -n -o OPTIONS | ${pkgs.gnugrep}/bin/grep -E '(^|,)ro(,|$)'
+                printf '%s\n' "$(id -un):$(id -gn)" "$CREDENTIALS_DIRECTORY" > /var/lib/caddy/proof-"$1"
+              fi
+              exec ${pkgs.caddy}/bin/caddy "$@"
+              WRAPPER
+              chmod +x $out/bin/caddy
+            '';
+          });
           # Public ACME is an operator contract. The VM has no public DNS, so
           # only this test replaces it with Caddy's deterministic local CA.
           services.caddy.virtualHosts."jaunder.stack.test".extraConfig = lib.mkAfter ''
@@ -1515,8 +1588,9 @@ mkWasmCoverageMeasurementProducer =
             raise AssertionError("invalid JSON from %s: %s\n%s" % (command, error, output)) from error
 
         def assert_ingress():
-          for path in ["/metrics/", "/logs/", "/traces/"]:
+          for path in ["/metrics/", "/logs/", "/traces/", "/unmatched", "/metrics/api/v1/query?query=up", "/logs/select/logsql/query?query=uri:*", "/traces/select/jaeger/api/services"]:
             assert caddy_status(path) == "401", "unauthenticated ingress unexpectedly allowed %s" % path
+            assert caddy_status(path, " -u wrong:wrong") == "401", path
           for path in [
             "/metrics/",
             "/metrics/api/v1/query?query=jaunder_db_pool_max",
@@ -1525,7 +1599,7 @@ mkWasmCoverageMeasurementProducer =
             "/traces/",
             "/traces/select/jaeger/api/services",
           ]:
-            assert caddy_status(path, " -u operator:stack-password") == "200", path
+            assert caddy_status(path, ${if runtimeCredentials then ''" -u \"$(cat /run/observability-source/curl-auth)\""'' else ''" -u operator:stack-password"''}) == "200", path
 
         def assert_local_uis():
           for port, prefix in [(8428, "metrics"), (9428, "logs"), (10428, "traces")]:
@@ -1580,6 +1654,22 @@ mkWasmCoverageMeasurementProducer =
 
         machine.start(allow_reboot=True)
         wait_for_stack_ready()
+
+        ${pkgs.lib.optionalString runtimeCredentials ''
+        machine.succeed("systemctl --version | grep -E '^systemd 261 .*261\\.2'")
+        machine.succeed("grep -Fx caddy:caddy /var/lib/caddy/proof-run")
+        machine.succeed("runuser -u nobody -- test ! -r /run/observability-source/users")
+        machine.succeed("runuser -u caddy -- test ! -r /run/observability-source/users")
+        hardening = machine.succeed("systemctl show caddy -p NoNewPrivileges -p PrivateDevices -p ProtectHome").splitlines()
+        assert set(hardening) == {"NoNewPrivileges=yes", "PrivateDevices=yes", "ProtectHome=yes"}
+        machine.succeed("runuser -u nobody -- test ! -r \"$(tail -n1 /var/lib/caddy/proof-run)/jaunder-observability\"")
+        # Synthetic secret values are generated in the guest, never part of the fixture/store.
+        machine.succeed("grep -Fq 'import {$CREDENTIALS_DIRECTORY}/jaunder-observability' /etc/caddy/caddy_config")
+        machine.succeed("! grep -Fq -f /run/observability-source/username /etc/caddy/caddy_config; ! grep -Fq -f /run/observability-source/hash /etc/caddy/caddy_config")
+        machine.succeed("systemctl cat caddy > /tmp/caddy-unit; ! grep -Fq -f /run/observability-source/username /tmp/caddy-unit; ! grep -Fq -f /run/observability-source/hash /tmp/caddy-unit")
+        machine.succeed("find /nix/store -maxdepth 2 -type f \\( -name '*observability-credentials.py' -o -name '*caddy-reload' -o -name Caddyfile -o -name caddy.service -o -name '*stack-test-credentials-start' \\) -print > /tmp/auth-store-files; test -s /tmp/auth-store-files; while read -r file; do if grep -qF -f /run/observability-source/username \"$file\"; then exit 1; else test $? = 1; fi; done < /tmp/auth-store-files")
+        machine.succeed("while read -r file; do if grep -qF -f /run/observability-source/hash \"$file\"; then exit 1; else test $? = 1; fi; done < /tmp/auth-store-files")
+        ''}
 
         ${pkgs.lib.optionalString (database == "postgresql") ''
           # PostgreSQL cold-boots with the stack. Its native readiness target
@@ -1667,6 +1757,17 @@ mkWasmCoverageMeasurementProducer =
         )
         assert_local_uis()
         assert_ingress()
+        ${pkgs.lib.optionalString runtimeCredentials ''
+        previous_pid = machine.succeed("systemctl show --value -p MainPID caddy").strip()
+        # An unrelated shared-Caddy site is applied by the ordinary reload, without restarting.
+        machine.succeed("cp /etc/caddy/caddy_config /tmp/reloaded-caddy; printf '\\nhttps://shared.stack.test {\\n tls internal\\n respond shared\\n}\\n' >> /tmp/reloaded-caddy; mv /tmp/reloaded-caddy /etc/caddy/caddy_config")
+        machine.succeed("systemctl reload caddy")
+        machine.wait_until_succeeds("curl " + curl_options + " -ksSf --resolve shared.stack.test:443:127.0.0.1 https://shared.stack.test/ | grep -Fx shared", timeout=30)
+        assert previous_pid == machine.succeed("systemctl show --value -p MainPID caddy").strip()
+        machine.succeed("grep -Fx caddy:caddy /var/lib/caddy/proof-reload")
+        assert_ingress()
+        machine.succeed("curl " + curl_options + " -ksSf --resolve jaunder.stack.test:443:127.0.0.1 https://jaunder.stack.test/ > /dev/null")
+        ''}
 
         assert_listener_contract()
         collector_pid = machine.succeed(
@@ -2093,6 +2194,7 @@ e2eGateChecks
   jaunder-stack-module = jaunderStackModuleCheck;
   jaunder-stack-sqlite-bcrypt = mkJaunderStackVmCheck {
     checkName = "jaunder-stack-sqlite-bcrypt";
+    runtimeCredentials = true;
     passwordHash = "$2a$14$3XbcVHEiOPQs7JeFsE4L6.viyrrG.5pCGkdC5yzH5WK4pGCIm4u4S";
     captureSignals = true;
     persistSignals = true;

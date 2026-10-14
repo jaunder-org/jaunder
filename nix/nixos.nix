@@ -161,11 +161,60 @@ let
       postgresqlDatabase = cfg.database == "postgresql";
       applicationHostName = if dnsHostName cfg.hostName then normalizedDnsHostName cfg.hostName else "invalid-stack-host.invalid";
       observabilityHostName = if dnsHostName cfg.observability.hostName then normalizedDnsHostName cfg.observability.hostName else "invalid-observability-host.invalid";
-      hashAlgorithm = if bcryptHash then "bcrypt" else "argon2id";
+      fileAuth = cfg.observability.basicAuth.credentialsFile != null;
+      managedFileAuth = fileAuth && dnsHostName cfg.observability.hostName;
+      hashAlgorithm = if fileAuth then cfg.observability.basicAuth.credentialsFileAlgorithm else if bcryptHash then "bcrypt" else "argon2id";
+      credentialValidator = pkgs.writeText "jaunder-observability-credentials.py" ''
+        # Validate only the manager's private copy; never print credential bytes.
+        import base64
+        import os
+        import re
+        import sys
+
+        def valid_base64(value, minimum):
+            try:
+                decoded = base64.b64decode(value + "=" * (-len(value) % 4), validate=True)
+                return len(decoded) >= minimum and base64.b64encode(decoded).decode().rstrip("=") == value
+            except ValueError:
+                return False
+
+        def valid_hash(value):
+            if sys.argv[1] == "bcrypt":
+                return re.fullmatch(r"\$2[ab]\$(0[4-9]|[12][0-9]|3[01])\$[./0-9A-Za-z]{53}", value) is not None
+            parts = re.fullmatch(r"\$argon2id\$v=19\$m=([1-9][0-9]*),t=([1-9][0-9]*),p=([1-9][0-9]*)\$([A-Za-z0-9+/]+)\$([A-Za-z0-9+/]+)", value)
+            if parts is None:
+                return False
+            memory, iterations, parallelism = map(int, parts.group(1, 2, 3))
+            return (8 * parallelism <= memory <= 4294967295
+                    and iterations <= 4294967295 and parallelism <= 16777215
+                    and valid_base64(parts[4], 8) and valid_base64(parts[5], 4))
+
+        try:
+            directory = os.environ.get("CREDENTIALS_DIRECTORY", "")
+            if not directory or not os.path.isabs(directory):
+                raise ValueError()
+            with open(os.path.join(directory, "jaunder-observability"), encoding="ascii") as credentials:
+                lines = credentials.read().splitlines()
+            if not lines:
+                raise ValueError()
+            for line in lines:
+                tokens = line.split()
+                if (len(tokens) != 2 or re.fullmatch(r"[A-Za-z0-9._-]+", tokens[0]) is None
+                        or not valid_hash(tokens[1])):
+                    raise ValueError()
+        except (OSError, ValueError):
+            sys.exit("Invalid or unavailable managed observability credentials")
+      '';
+      validateCredentials = "${pkgs.python3}/bin/python3 ${credentialValidator} ${cfg.observability.basicAuth.credentialsFileAlgorithm}";
+      credentialReload = pkgs.writeShellScript "jaunder-caddy-reload" ''
+        set -eu
+        ${validateCredentials}
+        exec ${lib.getExe config.services.caddy.package} reload --config /etc/caddy/caddy_config ${lib.optionalString (config.services.caddy.adapter != null) "--adapter ${lib.escapeShellArg config.services.caddy.adapter}"} --force
+      '';
       observabilityIngress = lib.optionalString (dnsHostName cfg.observability.hostName) ''
         # The stores remain credential-free on loopback; this is their only remote access path.
         basic_auth ${hashAlgorithm} {
-          ${cfg.observability.basicAuth.username} ${cfg.observability.basicAuth.passwordHash}
+          ${if fileAuth then "import {$CREDENTIALS_DIRECTORY}/jaunder-observability" else "${cfg.observability.basicAuth.username} ${cfg.observability.basicAuth.passwordHash}"}
         }
         reverse_proxy /metrics* 127.0.0.1:8428
         reverse_proxy /logs* 127.0.0.1:9428
@@ -194,6 +243,19 @@ let
             description = "Optional HTTPS operator host for the loopback observability UIs.";
           };
           basicAuth = {
+            credentialsFile = lib.mkOption {
+              type = lib.types.nullOr (lib.types.addCheck lib.types.str (value:
+                builtins.isString value && lib.hasPrefix "/" value
+                && builtins.match ".*[[:cntrl:]].*" value == null
+                && builtins.all (character: !lib.hasInfix character value) [ "*" "?" "[" "]" ]));
+              default = null;
+              description = "Absolute runtime credential filename (not a Nix path or glob); read only by systemd. Requires systemd >=260.";
+            };
+            credentialsFileAlgorithm = lib.mkOption {
+              type = lib.types.enum [ "bcrypt" "argon2id" ];
+              default = "bcrypt";
+              description = "Hash algorithm for credentialsFile entries; inline hashes retain algorithm inference.";
+            };
             username = lib.mkOption {
               type = lib.types.str;
               default = "";
@@ -222,12 +284,12 @@ let
           }
           {
             jaunderStack = true;
-            assertion = cfg.observability.hostName == null || nonWhitespace cfg.observability.basicAuth.username;
+            assertion = cfg.observability.hostName == null || fileAuth || nonWhitespace cfg.observability.basicAuth.username;
             message = "services.jaunder.stack.observability.basicAuth.username must be non-whitespace when an observability host is configured.";
           }
           {
             jaunderStack = true;
-            assertion = cfg.observability.hostName == null || caddyToken cfg.observability.basicAuth.username;
+            assertion = cfg.observability.hostName == null || fileAuth || caddyToken cfg.observability.basicAuth.username;
             message = "services.jaunder.stack.observability.basicAuth.username must contain only ASCII letters, digits, periods, hyphens, or underscores when an observability host is configured.";
           }
           {
@@ -237,15 +299,35 @@ let
           }
           {
             jaunderStack = true;
-            assertion = cfg.observability.hostName == null || nonWhitespace cfg.observability.basicAuth.passwordHash;
+            assertion = cfg.observability.hostName == null || fileAuth || nonWhitespace cfg.observability.basicAuth.passwordHash;
             message = "services.jaunder.stack.observability.basicAuth.passwordHash must be non-whitespace when an observability host is configured.";
           }
           {
             jaunderStack = true;
-            assertion = cfg.observability.hostName == null || bcryptHash || argon2idHash;
+            assertion = cfg.observability.hostName == null || fileAuth || bcryptHash || argon2idHash;
             message = "services.jaunder.stack.observability.basicAuth.passwordHash must be a complete $2a$/$2b$ bcrypt or $argon2id$ encoded hash.";
           }
+          {
+            jaunderStack = true;
+            assertion = cfg.observability.hostName == null || !fileAuth || (cfg.observability.basicAuth.username == "" && cfg.observability.basicAuth.passwordHash == "");
+            message = "Observability Basic Auth requires exactly one source: credentialsFile with empty inline fields, or a complete inline username/passwordHash pair.";
+          }
+          {
+            jaunderStack = true;
+            assertion = !managedFileAuth || lib.versionAtLeast config.systemd.package.version "260";
+            message = "Observability credentialsFile requires systemd >=260 for RefreshOnReload=credentials.";
+          }
         ];
+
+        systemd.services.caddy = lib.mkIf managedFileAuth {
+          serviceConfig = {
+            LoadCredential = [ "jaunder-observability:${cfg.observability.basicAuth.credentialsFile}" ];
+            RefreshOnReload = "credentials";
+            ExecStartPre = [ validateCredentials ];
+            # Refresh precedes this command; validation must be inside it, not a separate reload command.
+            ExecReload = lib.mkForce ([ "" ] ++ lib.optional config.services.caddy.enableReload "${credentialReload}");
+          };
+        };
 
         networking.firewall.allowedTCPPorts = [ 80 443 ];
         services.caddy = lib.mkIf (dnsHostName cfg.hostName) {

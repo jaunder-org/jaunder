@@ -26,7 +26,7 @@ isolation/ingestion.
 
 ## Task outline
 
-- [ ] 1. Deliver the smallest complete private-copy startup/reload tracer.
+- [x] 1. Deliver the smallest complete private-copy startup/reload tracer.
   - Contract: in `nix/nixos.nix`, add approved `credentialsFile` and file-only
     `credentialsFileAlgorithm`; keep inline defaults/inference. Enforce exactly
     one source and clear unsupported-systemd refusal without reading secret
