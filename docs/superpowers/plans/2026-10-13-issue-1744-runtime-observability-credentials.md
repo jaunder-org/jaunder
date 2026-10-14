@@ -58,7 +58,7 @@ isolation/ingestion.
     and `jaunder-stack-postgresql`; no unrelated application/browser matrix
     expansion.
 
-- [ ] 3. Project approved contracts into enduring operator/architecture docs.
+- [x] 3. Project approved contracts into enduring operator/architecture docs.
   - Contract: after spec AND outline approval, maintain `docs/DESIGN.md`,
     `CONTRIBUTING.md`, `docs/ARCHITECTURE.md`, and a numberless
     `docs/adr/drafts/` decision. Add runtime alternative without rewriting
