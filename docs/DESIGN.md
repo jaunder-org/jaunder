@@ -188,9 +188,11 @@ are rejected; there is no silent fallback. Lifecycle proof uses pinned systemd
 ##### Entry format and private provisioning
 
 The file must be nonempty ASCII, with exactly two whitespace-separated tokens
-per line: `username encoded-hash`. Usernames match `[A-Za-z0-9._-]+`. No blank
-lines, comments, directives, braces, imports, or third token are allowed; a
-final newline is fine. All entries use the selected `credentialsFileAlgorithm`:
+per line: `username encoded-hash`. Usernames match `[A-Za-z0-9._-]+`, except
+`import` is reserved in file mode because Caddy interprets it as an import
+directive even when followed by a valid hash. No blank lines, comments,
+directives, braces, imports, or third token are allowed; a final newline is
+fine. All entries use the selected `credentialsFileAlgorithm`:
 
 - `bcrypt` accepts complete `$2a$` or `$2b$` hashes, cost 04–31.
 - `argon2id` accepts `$argon2id$v=19$m=...,t=...,p=...$salt$hash`. Costs are

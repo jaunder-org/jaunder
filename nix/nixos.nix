@@ -199,7 +199,8 @@ let
                 raise ValueError()
             for line in lines:
                 tokens = line.split()
-                if (len(tokens) != 2 or re.fullmatch(r"[A-Za-z0-9._-]+", tokens[0]) is None
+                if (len(tokens) != 2 or tokens[0] == "import"
+                        or re.fullmatch(r"[A-Za-z0-9._-]+", tokens[0]) is None
                         or not valid_hash(tokens[1])):
                     raise ValueError()
         except (OSError, ValueError):
@@ -321,7 +322,8 @@ let
 
         systemd.services.caddy = lib.mkIf managedFileAuth {
           serviceConfig = {
-            LoadCredential = [ "jaunder-observability:${cfg.observability.basicAuth.credentialsFile}" ];
+            # The public filename is literal, not a systemd specifier expression.
+            LoadCredential = [ "jaunder-observability:${lib.replaceStrings [ "%" ] [ "%%" ] cfg.observability.basicAuth.credentialsFile}" ];
             RefreshOnReload = "credentials";
             ExecStartPre = [ validateCredentials ];
             # Refresh precedes this command; validation must be inside it, not a separate reload command.

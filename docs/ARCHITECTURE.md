@@ -2810,7 +2810,9 @@ environment/copy, skipped setup, unreadable/empty/non-entry content and invalid
 or algorithm-mismatched two-token username/hash entries before startup and
 inside `ExecReload`, after refresh and before Caddy adaptation/submission.
 Argon2id uses PHC-embedded salt and canonical unpadded standard Base64, not a
-third token.
+third token. File-mode usernames match `[A-Za-z0-9._-]+` except the reserved
+`import` token, which is rejected before Caddy can interpret it as a directive;
+inline behavior is unchanged.
 
 `RefreshOnReload=credentials` preserves normal unprivileged shared-Caddy reload;
 reload and restart can both refresh/rotate credentials, while source replacement

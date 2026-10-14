@@ -1304,6 +1304,9 @@ mkWasmCoverageMeasurementProducer =
     };
   };
   runtimeAuthStack = mkStackConfiguration runtimeAuthStackOptions;
+  literalPercentAuthStack = mkStackConfiguration (pkgs.lib.recursiveUpdate runtimeAuthStackOptions {
+    observability.basicAuth.credentialsFile = "/run/secrets/users%n";
+  });
   unsupportedRuntimeAuthStack = nixpkgs.lib.nixosSystem {
     inherit system;
     modules = [
@@ -1386,6 +1389,8 @@ mkWasmCoverageMeasurementProducer =
     assert stackEvaluationFails (pkgs.lib.recursiveUpdate runtimeAuthStackOptions { observability.basicAuth.passwordHash = validStackBasicAuth.passwordHash; });
     assert runtimeAuthStack.config.systemd.services.caddy.serviceConfig.LoadCredential == [ "jaunder-observability:/run/secrets/observability-users" ];
     assert runtimeAuthStack.config.systemd.services.caddy.serviceConfig.RefreshOnReload == "credentials";
+    assert literalPercentAuthStack.config.services.jaunder.stack.observability.basicAuth.credentialsFile == "/run/secrets/users%n";
+    assert literalPercentAuthStack.config.systemd.services.caddy.serviceConfig.LoadCredential == [ "jaunder-observability:/run/secrets/users%%n" ];
     assert pkgs.lib.hasInfix "import {$CREDENTIALS_DIRECTORY}/jaunder-observability" runtimeAuthStack.config.services.caddy.virtualHosts."observe.example.test".extraConfig;
     assert runtimeAuthStack.config.services.jaunder.stack.observability.basicAuth.username == "";
     assert pkgs.lib.hasInfix "basic_auth bcrypt" (mkStackConfiguration {
@@ -1518,7 +1523,7 @@ mkWasmCoverageMeasurementProducer =
             observability = {
               hostName = "observe.stack.test";
               basicAuth = if runtimeCredentials then {
-                credentialsFile = "/run/observability-source/users";
+                credentialsFile = if runtimeAlgorithm == "bcrypt" then "/run/observability-source/users%n" else "/run/observability-source/users";
                 credentialsFileAlgorithm = runtimeAlgorithm;
               } else {
                 username = "operator";
@@ -1538,6 +1543,10 @@ mkWasmCoverageMeasurementProducer =
               ${pkgs.caddy}/bin/caddy hash-password --algorithm ${runtimeAlgorithm} < /run/observability-source/password > /run/observability-source/hash
               printf '%s %s\n' "$(cat /run/observability-source/username)" "$(cat /run/observability-source/hash)" > /run/observability-source/users.next
               mv /run/observability-source/users.next /run/observability-source/users
+              ${lib.optionalString (runtimeAlgorithm == "bcrypt") ''
+                # Only this literal source alias exists; specifier expansion cannot find another users filename.
+                ln -s users /run/observability-source/users%n
+              ''}
               printf '%s:%s' "$(cat /run/observability-source/username)" "$(cat /run/observability-source/password)" > /run/observability-source/curl-auth
               chmod 0600 /run/observability-source/*
             '';
@@ -1554,6 +1563,10 @@ mkWasmCoverageMeasurementProducer =
               if [ "$1" = run ] || [ "$1" = reload ]; then
                 # Mark entry before test-only checks, so they cannot mask a skipped product validator.
                 touch /var/lib/caddy/submitted-"$1"
+                # A red directive regression must not let Caddy log the runtime hash as an import filename.
+                if ${pkgs.gnugrep}/bin/grep -q '^import[[:space:]]' "$CREDENTIALS_DIRECTORY/jaunder-observability"; then
+                  exit 1
+                fi
                 test "$(id -un)" = caddy
                 test -n "$CREDENTIALS_DIRECTORY"
                 test -r "$CREDENTIALS_DIRECTORY/jaunder-observability"
@@ -1695,6 +1708,9 @@ mkWasmCoverageMeasurementProducer =
         ${pkgs.lib.optionalString runtimeCredentials ''
         machine.succeed("systemctl --version | grep -E '^systemd 261 .*261\\.2'")
         machine.succeed("grep -Fx caddy:caddy /var/lib/caddy/proof-run")
+        ${pkgs.lib.optionalString (runtimeAlgorithm == "bcrypt") ''
+        machine.succeed("test -L /run/observability-source/users%n; test ! -e /run/observability-source/userscaddy.service")
+        ''}
         machine.succeed("runuser -u nobody -- test ! -r /run/observability-source/users")
         machine.succeed("runuser -u caddy -- test ! -r /run/observability-source/users")
         hardening = machine.succeed("systemctl show caddy -p NoNewPrivileges -p PrivateDevices -p ProtectHome").splitlines()
@@ -1836,6 +1852,7 @@ mkWasmCoverageMeasurementProducer =
           ("plaintext", "printf 'invalid plaintext\\n' > " + source + "users"),
           ("malformed-hash", "printf 'invalid $2b$12$broken\\n' > " + source + "users"),
           ("directive", "printf 'import /run/anything\\n' > " + source + "users"),
+          ("reserved-import", "sed -E 's/^[^ ]+/import/' " + source + "good-users > " + source + "users"),
           ("third-token", "sed 's/$/ third/' " + source + "good-users > " + source + "users"),
           ("blank-line", "printf '\\n' > " + source + "users"),
         ]

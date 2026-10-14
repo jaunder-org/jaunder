@@ -33,10 +33,13 @@ application/storage interfaces do not change.
 - File-only `credentialsFileAlgorithm` is `bcrypt` by default or `argon2id`.
   Inline algorithm inference and defaults are unchanged. Runtime entries are
   nonempty ASCII lines of exactly two tokens, username and complete encoded
-  hash, with username grammar `[A-Za-z0-9._-]+`. Blank/comment/directive lines
-  and third tokens are rejected. Bcrypt accepts `$2a$`/`$2b$`; Argon2id uses v19
-  PHC encoding, valid positive bounded costs and canonical unpadded standard
-  Base64 salt/hash. Salt is embedded, not a separate field.
+  hash, with username grammar `[A-Za-z0-9._-]+` except the reserved `import`
+  token: Caddy interprets it as a directive even with a valid hash, so file-mode
+  validation rejects it before adaptation. Inline behavior is unchanged.
+  Blank/comment/directive lines and third tokens are rejected. Bcrypt accepts
+  `$2a$`/`$2b$`; Argon2id uses v19 PHC encoding, valid positive bounded costs
+  and canonical unpadded standard Base64 salt/hash. Salt is embedded, not a
+  separate field.
 - Systemd's manager reads the source into one named private read-only
   `LoadCredential` copy, imported literally inside hostname-wide Basic Auth. A
   root-owned 0600 source in a 0700 directory needs no direct Caddy readability.
