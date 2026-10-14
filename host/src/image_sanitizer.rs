@@ -835,7 +835,7 @@ mod tests {
     // All observed worker/cleanup progress here belongs to the independent
     // std owner, not this caller's Tokio runtime. Share the bounded observation
     // contract across cancellation, exec handoff and runtime-teardown proofs.
-    fn wait_until_observed(
+    pub(super) fn wait_until_observed(
         mut observed: impl FnMut() -> bool,
         deadline: Instant,
     ) -> Result<(), &'static str> {
@@ -869,6 +869,24 @@ mod tests {
             wait_until_observed(|| true, expired).is_ok(),
             "already settled resources need no wait"
         );
+        let mut observations = 0;
+        let mut result = Ok(None::<()>);
+        wait_until_observed(
+            || {
+                observations += 1;
+                result = Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "controlled observation failure",
+                ));
+                !matches!(result, Ok(None))
+            },
+            expired,
+        )
+        .expect("concrete errors terminate observation even at the deadline");
+        assert_eq!(observations, 1);
+        let error = result.expect_err("observation source retained");
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(error.to_string(), "controlled observation failure");
     }
 
     fn observed_pid(result: std::io::Result<String>) -> Option<rustix::process::Pid> {

@@ -281,6 +281,7 @@ impl From<std::io::Error> for ImageSanitizerError {
 #[cfg(test)]
 mod tests {
     use super::super::owner_registry::PermitOwner;
+    use super::super::tests::wait_until_observed;
     use super::*;
     use tokio::sync::Semaphore;
 
@@ -338,19 +339,19 @@ mod tests {
         }
 
         fn wait_until(&mut self, deadline: Instant) -> std::io::Result<std::process::ExitStatus> {
-            loop {
-                let child = self.child.as_mut().expect("owned observer child");
-                if let Some(status) = child.try_wait()? {
-                    return Ok(status);
-                }
-                if Instant::now() >= deadline {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        "observer child reap deadline",
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(1));
-            }
+            let child = self.child.as_mut().expect("owned observer child");
+            let mut result = Ok(None);
+            wait_until_observed(
+                || {
+                    result = child.try_wait();
+                    !matches!(result, Ok(None))
+                },
+                deadline,
+            )
+            .map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::TimedOut, "observer child reap deadline")
+            })?;
+            Ok(result?.expect("completed observer status"))
         }
 
         fn settle(&mut self) -> std::io::Result<()> {
@@ -449,21 +450,23 @@ mod tests {
         let mut owner = ObserverOwner::spawn(command).expect("owned exiting observer");
         let stdout = owner.stdout.file().path().to_owned();
         let stderr = owner.stderr.file().path().to_owned();
-        let pid = pid(&owner.child.as_ref().expect("owned observer").child);
+        let child = owner.child.as_ref().expect("owned observer");
+        let pid = pid(&child.child);
+        let reaped = child.reaped.clone();
         let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            if rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::NOHANG)
-                .expect("independent observer reap")
-                .is_some()
-            {
-                break;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "independent observer reap deadline"
-            );
-            std::thread::sleep(Duration::from_millis(1));
-        }
+        let mut result = Ok(None);
+        wait_until_observed(
+            || {
+                result = rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::NOHANG);
+                !matches!(result, Ok(None))
+            },
+            deadline,
+        )
+        .expect("independent observer reap deadline");
+        let independently_reaped = result
+            .expect("independent observer reap")
+            .expect("completed independent observer status");
+        assert_eq!(independently_reaped.0, pid);
         assert_eq!(
             owner
                 .wait_until(deadline)
@@ -471,7 +474,12 @@ mod tests {
                 .raw_os_error(),
             Some(rustix::io::Errno::CHILD.raw_os_error())
         );
+        assert!(
+            !reaped.load(Ordering::Acquire),
+            "no owned observer reap confirmation"
+        );
         assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(owner))).is_err());
+        assert!(!reaped.load(Ordering::Acquire));
         assert!(
             stdout.exists() && stderr.exists(),
             "unconfirmed captures retained"
@@ -979,19 +987,18 @@ mod tests {
         let pid = pid(&child.child);
         let stdout = child.child.stdout.take().expect("real worker reply pipe");
         let reap_deadline = Instant::now() + Duration::from_secs(10);
-        let independently_reaped = loop {
-            if let Some(record) =
-                rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::NOHANG)
-                    .expect("controlled external reap")
-            {
-                break record;
-            }
-            assert!(
-                Instant::now() < reap_deadline,
-                "independent worker reap deadline"
-            );
-            std::thread::sleep(Duration::from_millis(1));
-        };
+        let mut result = Ok(None);
+        wait_until_observed(
+            || {
+                result = rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::NOHANG);
+                !matches!(result, Ok(None))
+            },
+            reap_deadline,
+        )
+        .expect("independent worker reap deadline");
+        let independently_reaped = result
+            .expect("controlled external reap")
+            .expect("completed independent worker status");
         let (cancel, mut canceled) = oneshot::channel();
         let outcome = supervise(
             &mut child,
