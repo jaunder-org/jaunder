@@ -6,11 +6,17 @@ server behavior.
 
 Theme management lives at `/themes`:
 
-- **Your public pages** opens the signed-in author's private catalog by default;
-- only operators can deliberately switch to the separate **Site default**
-  catalog;
-- author and site themes never cross catalogs implicitly. Move a theme between
-  catalogs or instances by exporting and importing its Theme Package.
+- **User theme** opens the signed-in author's view: how visitors see their
+  public pages, not their private workspace. Ordinary users see only this view.
+- Operators can navigate explicitly between **User theme** and **Site theme**.
+  Site theme controls public site pages and user pages using the site theme.
+- Each view shows its current theme near the top, before adding or choosing.
+  Confirmed author inheritance reads **Using the site theme**; failed reads say
+  **Current theme could not be checked**, not an invented name or default. An
+  unset site setting is identified as unset, without pretending to have read its
+  effective name.
+- Author and site themes never cross owners implicitly. Move a theme between
+  owners or instances by exporting and importing its Theme Package.
 
 ## Bundled defaults and application styling
 
@@ -32,19 +38,23 @@ rules.
 
 The default workflow needs only a Theme Package ZIP:
 
-1. Choose the ZIP under **Theme Package ZIP** and press **Import ZIP draft**.
-2. Jaunder validates the package and uses its `theme.json.name` as the catalog
-   label. The filename never supplies a fallback label.
-3. The imported entry opens as a private, unpublished draft. Opening it, or
-   choosing another catalog entry, does not activate a public theme.
-4. Choose **Use this theme** to publish the draft and then apply it to the
-   chosen scope. Verify its appearance in a fresh signed-out browser.
+1. **Add or choose a theme**: choose the **Theme ZIP file** and press **Upload
+   theme**, or open one of the **Available themes**. Jaunder validates the ZIP
+   and uses `theme.json.name` as its name. The filename is never a fallback.
+2. **Review your choice**: opening a choice does not activate it. **Saved, not
+   live yet** is shown only for a known unused, unpublished choice. **Currently
+   in use** requires a confirmed matching Theme ID. Unknown current state is
+   identified explicitly; choosing never implies the theme is already live.
+3. **Use this theme** prepares the chosen theme, then switches to it. Compare
+   the current theme shown above and verify public appearance in a fresh
+   signed-out browser. Preparing an already-used theme can update public pages
+   even if switching later fails.
 
-**Advanced** is initially closed. Open it for an optional **Catalog label
-override (optional)**, empty-draft creation, plain CSS import, package/source
-editing, presentation Media, isolated preview, export, rename, or delete. A
-blank or whitespace-only UI override omits the name field and uses the validated
-manifest name. A nonblank override is authoritative.
+**Advanced** is initially closed. Open it for **Theme name (optional)**,
+empty-draft creation, plain CSS import, package/source editing, presentation
+Media, isolated preview, export, rename, or delete. A blank or whitespace-only
+UI override omits the name field and uses the validated manifest name. A
+nonblank override is authoritative.
 
 Catalog labels are trimmed, nonempty, and limited to 100 Unicode scalar values.
 Studio, Terminal and Reader are reserved case-insensitively; catalog collisions
@@ -160,9 +170,10 @@ URL identifies the distribution while the deterministic ZIP bytes identify the
 exact package. Installed-version metadata or update discovery would require a
 separately designed manifest revision.
 
-Importing the ZIP into Studio still creates a private, unselected draft. Preview
-it, explicitly publish it, then explicitly select the published theme;
-repository automation does not import, publish, or select a theme.
+Uploading the ZIP into Studio still creates a private, unselected draft. Review
+it and choose **Use this theme** when ready; preview and standalone publication
+remain in Advanced. Repository automation does not import, publish, or select a
+theme.
 
 ## Theme Package format
 
@@ -409,16 +420,27 @@ not select historical published revisions directly.
 2. only after a confirmed publication acknowledgement, apply that same Theme ID
    to the captured scope.
 
-Publishing and applying progress are shown beside the action. Pending controls
-cannot duplicate the operation or change its target/scope. These operations are
-not atomic: publication can succeed even if applying fails. Advanced still
-provides standalone **Publish** for authoring; it does not itself change public
-selection.
+Progress reads **Getting your theme ready…**, then **Applying your theme…**;
+only confirmed completion says **Your theme is now in use.** Feedback is shown
+beside the action, with one accessible live status: neutral progress, success
+for confirmation, and error for rejection, uncertainty or local failure. Pending
+controls cannot duplicate the operation or change its target/scope. These
+operations are not atomic: publication can succeed even if applying fails.
+Advanced still provides standalone **Publish** for authoring; it does not itself
+change public selection.
 
-Only published themes appear as custom selection options. Selecting an author
+After Review and Use, **Other theme choices** offers explicit **Use studio**,
+**Use terminal**, and **Use reader** recovery actions; User theme also offers
+**Use site theme**. In **Advanced**, **Use a saved version** switches to the
+last published version of a custom theme without preparing its editable draft.
+This expert control appears only when published custom themes are available. Its
+placeholder remains selected when the current theme is bundled, follows the site
+theme, is unknown, or does not match an available published custom theme; the
+separate Current theme summary still reports the actual setting. These paths use
+selection alone, never publication. They are disabled while the current-setting
+read is pending or failed, and during another operation. Selecting an author
 theme affects that author's public routes. Selecting a site theme affects site
-routes and authors who inherit the site selection. Authors can choose **Inherit
-site selection** instead of an override.
+routes and authors using the site theme.
 
 Publishing a new revision of an already selected theme advances its stable Theme
 ID, so public pages adopt the new revision without another selection change.

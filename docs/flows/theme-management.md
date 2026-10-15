@@ -7,22 +7,31 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#theme-management-api-transport`
 - `route:/themes`
 
 `/themes` is an authenticated Studio route. It begins in the session owner's
-author catalog; an operator may deliberately switch to the distinct site
-catalog. The UI labels these scopes **Your public pages** and **Site default**;
-only operators see the latter. The server remains authoritative for the selected
-scope and returns an authorization error if site operations are attempted
-without operator status.
+author-owned **User theme** view; only operators can deliberately navigate
+between **User theme** and **Site theme**. Each has its own heading and effect
+explanation, sharing an owner-keyed workflow rather than duplicate editors.
+Ordinary users have no ownership chooser. The server remains authoritative for
+the selected scope and returns an authorization error if site operations are
+attempted without operator status.
 
 The route loads catalog, selection, draft and presentation data through the
 owner-authorized API. Its custom-theme preview is isolated from Studio: draft
 CSS is returned only to a sandboxed preview document and is never inserted into
-the private route's stylesheet cascade. The default form exposes only a ZIP
-picker and import action. Omitted multipart `name` uses the shared validated
-manifest name; an optional Advanced UI override omits blank input, while an
-explicit invalid or blank API name still fails without fallback. Catalog labels
-retain trimming, the 100-Unicode-scalar limit, reserved bundled names and
-case-insensitive uniqueness. Invalid packages and collisions never trigger
-filename naming, suffixes or import-then-rename.
+the private route's stylesheet cascade. The basic journey is **Add or choose a
+theme** (ZIP **Upload theme** or **Available themes**) → **Review your choice**
+→ **Use this theme**, with the current theme shown first, before Add or choose.
+Selection-only recovery follows Review and Use under **Other theme choices**.
+Uploading and choosing never activate a theme. A confirmed unused unpublished
+choice reads **Saved, not live yet**; a confirmed matching Theme ID reads
+**Currently in use**, with a warning that preparing an already-used theme can
+update public pages. Unknown reads never imply either state.
+
+Omitted multipart `name` uses the shared validated manifest name; Advanced
+**Theme name (optional)** omits blank input, while an explicit invalid or blank
+API name still fails without fallback. Catalog labels retain trimming, the
+100-Unicode-scalar limit, reserved bundled names and case-insensitive
+uniqueness. Invalid packages and collisions never trigger filename naming,
+suffixes or import-then-rename.
 
 Catalog choice opens a private draft without changing public selection. Advanced
 is initially closed and preserves unsaved inputs when toggled; its hidden
@@ -67,11 +76,26 @@ Typed rejection prevents chaining. `CommitIndeterminate` or transport/decoding
 uncertainty after dispatch stops chaining without an automatic retry, success,
 rollback or definite-nonactivation claim. Catalog and selection rereads describe
 current state, not proof of an uncertain write's outcome; failed rereads report
-unknown state and a next action. A failed or pending selection read displays a
-disabled unknown placeholder, never a fabricated inheritance value. Import
-feedback is beside its picker; publication/application feedback is beside Use,
-outside Advanced. Other confirmed/indeterminate authoring mutations request
-owner-state rereads rather than asserting that those reads succeeded.
+unknown state and a next action. The current-theme summary uses existing reads:
+known names, **Using the site theme** for confirmed author inheritance,
+**Checking current theme…** while loading, or **Current theme could not be
+checked** on failure or a missing custom-theme name. An unset site setting is
+identified as unset, not presented as a guessed effective default. Failed or
+pending selection reads disable ready-theme recovery actions, never implying
+inheritance. **Use site theme** and explicit bundled **Use** buttons are
+selection-only; **Use a saved version**, inside **Advanced** and only offered
+when published custom themes exist, selects a published custom version without
+preparing edits. Only a matching available published custom ID can select one of
+its options. All other settings select its visible placeholder, while the
+separate Current theme summary continues to report the actual setting. The
+controlled value is reapplied as the option list settles. Import feedback is
+beside its picker; publication/application feedback is beside Use, outside
+Advanced. **Getting your theme ready…** → **Applying your theme…** → **Your
+theme is now in use.** preserves the separate stages. Only confirmed completion
+has success styling; progress is neutral, and rejection, uncertainty and local
+failures use error styling. A single polite, atomic live status follows the
+action that produced it. Other confirmed/indeterminate authoring mutations
+request owner-state rereads rather than asserting that those reads succeeded.
 
 Site-owned operations require an operator; author-owned operations require the
 authenticated author, and every draft, package, preview, asset, and binding read

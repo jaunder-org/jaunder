@@ -137,6 +137,80 @@ impl ThemePageState {
     }
 }
 
+/// Names only settings established by the existing owner reads. A missing custom
+/// entry cannot supply a name, and an unset site setting is not an invented default.
+#[must_use]
+pub fn current_theme_summary(
+    scope: OwnershipScope,
+    selection: Option<&Result<Option<PublicThemeSelection>, WebError>>,
+    catalog: Option<&Result<Vec<super::CatalogEntry>, WebError>>,
+) -> String {
+    match selection {
+        None => "Checking current theme…".into(),
+        Some(Err(_)) => "Current theme could not be checked".into(),
+        Some(Ok(None)) => match scope {
+            OwnershipScope::Author => "Using the site theme".into(),
+            OwnershipScope::Site => "Site theme has not been set".into(),
+        },
+        Some(Ok(Some(PublicThemeSelection::BuiltIn(theme)))) => theme.to_string(),
+        Some(Ok(Some(PublicThemeSelection::Custom(id)))) => match catalog {
+            None => "Checking current theme…".into(),
+            Some(Ok(entries)) => entries.iter().find(|entry| entry.id == *id).map_or_else(
+                || "Current theme could not be checked".into(),
+                |entry| entry.name.clone(),
+            ),
+            Some(Err(_)) => "Current theme could not be checked".into(),
+        },
+    }
+}
+
+/// Reviews a saved choice without confusing opening, preparing, and switching.
+#[must_use]
+pub fn review_choice(
+    chosen: Option<ThemeId>,
+    catalog: Option<&Result<Vec<super::CatalogEntry>, WebError>>,
+    selection: Option<&Result<Option<PublicThemeSelection>, WebError>>,
+) -> (String, &'static str) {
+    let Some(id) = chosen else {
+        return (
+            "Choose a theme above".into(),
+            "Uploading or choosing a theme does not change the current setting.",
+        );
+    };
+    let entries = match catalog {
+        Some(Ok(entries)) => entries,
+        None => {
+            return (
+                "Checking your choice…".into(),
+                "Your choice could not yet be checked.",
+            );
+        }
+        Some(Err(_)) => {
+            return (
+                "Choice could not be checked".into(),
+                "Current theme could not be checked. This choice may already be in use.",
+            );
+        }
+    };
+    let Some(entry) = entries.iter().find(|entry| entry.id == id) else {
+        return (
+            "Choice could not be checked".into(),
+            "Choose an available theme before continuing.",
+        );
+    };
+    let state = match selection {
+        Some(Ok(Some(PublicThemeSelection::Custom(current)))) if *current == id => {
+            "Currently in use. Getting this theme ready can update your public pages, even if switching later fails."
+        }
+        Some(Ok(_)) if !entry.published => "Saved, not live yet",
+        Some(Ok(_)) => "Ready to use. Getting it ready includes any edits made in Advanced.",
+        None | Some(Err(_)) => {
+            "Current theme could not be checked. This choice may already be in use."
+        }
+    };
+    (entry.name.clone(), state)
+}
+
 /// Decodes the existing public-selection control values, retaining inheritance for unknown tokens.
 #[must_use]
 pub fn selection_from_token(token: &str) -> Option<PublicThemeSelection> {
@@ -214,41 +288,38 @@ pub fn mutation_receipt<T>(result: &Result<MutationOutcome<T>, WebError>) -> Rec
 pub fn mutation_message(stage: MutationStage, receipt: &Receipt) -> String {
     let message = match (stage, receipt) {
         (MutationStage::Import, Receipt::Confirmed) => {
-            "Imported as a private draft. Use this theme to publish and apply it."
+            "Theme saved. Review your choice, then choose Use this theme."
         }
         (MutationStage::Import, Receipt::Rejected(_)) => {
-            "Import rejected. Choose a valid Theme Package ZIP; use Advanced to override a reserved, too-long or duplicate catalog label."
+            "Upload rejected. Choose a valid theme ZIP file; use Advanced to change a reserved, too-long or duplicate theme name."
         }
         (MutationStage::Import, Receipt::Uncertain(_)) => {
-            "Import outcome is uncertain. Review the reread catalog before importing again; no automatic retry ran."
+            "The upload outcome is uncertain. Check available themes before uploading again; no automatic retry ran."
         }
-        (MutationStage::Publish, Receipt::Confirmed) => "Publication confirmed. Applying theme…",
+        (MutationStage::Publish, Receipt::Confirmed) => "Applying your theme…",
         (MutationStage::PublishOnly, Receipt::Confirmed) => {
             "Publication confirmed. No selection request was sent; an already-selected theme now uses the new revision."
         }
         (MutationStage::Publish | MutationStage::PublishOnly, Receipt::Rejected(_)) => {
-            "Publication rejected. Selection was not requested. Fix the draft in Advanced before using this theme again."
+            "Getting your theme ready was rejected. We did not try to switch themes. Fix the theme in Advanced before using it again."
         }
         (MutationStage::Publish | MutationStage::PublishOnly, Receipt::Uncertain(_)) => {
-            "Publication outcome is uncertain. Selection was not requested. An already-selected theme may have advanced. Review reread state before trying again; no automatic retry ran."
+            "We could not confirm your theme is ready; the outcome is uncertain. We did not try to switch themes. If this theme was already in use, your public pages may have changed. Check the refreshed setting before trying again; no automatic retry ran."
         }
-        (MutationStage::Apply { published: true }, Receipt::Confirmed) => {
-            "Theme published and applied. Private management and Home are unchanged."
-        }
-        (MutationStage::Apply { published: false }, Receipt::Confirmed) => {
-            "Public selection applied. Private management and Home are unchanged."
+        (MutationStage::Apply { .. }, Receipt::Confirmed) => {
+            "Your theme is now in use. Private management and Home are unchanged."
         }
         (MutationStage::Apply { published: true }, Receipt::Rejected(_)) => {
-            "Publication confirmed, but applying was rejected. Publication cannot be undone by selection failure; an already-selected theme now uses the new revision. Review current selection before choosing another theme."
+            "Your updated theme is ready, but switching was rejected. If it was already in use, the new version is already live; a failed switch cannot undo that update. Check the current theme before choosing another."
         }
         (MutationStage::Apply { published: false }, Receipt::Rejected(_)) => {
-            "Applying was rejected. Review current selection and choose another theme."
+            "Switching was rejected. Check the current theme and choose another theme."
         }
         (MutationStage::Apply { published: true }, Receipt::Uncertain(_)) => {
-            "Publication confirmed, but applying outcome is uncertain. Publication cannot be undone by selection failure; an already-selected theme now uses the new revision. Review reread state before trying again; no automatic retry ran."
+            "Your updated theme is ready, but the switching outcome is uncertain. If it was already in use, the new version is already live; a failed switch cannot undo that update. Check the refreshed setting before trying again; no automatic retry ran."
         }
         (MutationStage::Apply { published: false }, Receipt::Uncertain(_)) => {
-            "Applying outcome is uncertain. Review reread state before trying again; no automatic retry ran."
+            "The switching outcome is uncertain. Check the refreshed setting before trying again; no automatic retry ran."
         }
     };
     match receipt {
@@ -260,37 +331,62 @@ pub fn mutation_message(stage: MutationStage, receipt: &Receipt) -> String {
 /// Rereads report current state, never proof that an uncertain operation committed or rolled back.
 #[must_use]
 pub fn reconciliation_message(
+    scope: OwnershipScope,
     catalog: &Result<Vec<super::CatalogEntry>, WebError>,
     selection: &Result<Option<PublicThemeSelection>, WebError>,
     target: Option<ThemeId>,
 ) -> String {
     let catalog_message = match catalog {
         Ok(entries) => {
-            let target_message = target.map(|id| match entries.iter().find(|entry| entry.id == id) {
-                Some(entry) if entry.published => "Chosen theme currently has a published revision.",
-                Some(_) => "Chosen theme currently has no published revision.",
-                None => "Chosen theme is absent from the reread catalog; reopen Themes before continuing.",
-            }).unwrap_or_default();
-            format!("Catalog reread: {} themes. {target_message}", entries.len())
+            let target_message = target
+                .map(|id| match entries.iter().find(|entry| entry.id == id) {
+                    Some(entry) if entry.published => "Your choice has a ready version.",
+                    Some(_) => "Your choice has no ready version.",
+                    None => "Your choice is no longer available; reopen Themes before continuing.",
+                })
+                .unwrap_or_default();
+            format!(
+                "Available themes checked: {}. {target_message}",
+                entries.len()
+            )
         }
         Err(error) => format!(
-            "Catalog reread failed: {error}. Publication state is unknown; reopen Themes to review it."
+            "Available themes could not be checked: {error}. Theme readiness is unknown; reopen Themes to review it."
         ),
     };
     let selection_message = match selection {
-        Ok(selection) => format!(
-            "Current selection from reread: {}.",
-            selection_token(*selection)
+        Ok(_) => format!(
+            "Current theme: {}.",
+            current_theme_summary(scope, Some(selection), Some(catalog))
         ),
         Err(error) => format!(
-            "Selection reread failed: {error}. Current selection is unknown; reopen Themes to review it."
+            "Current theme could not be checked: {error}. The current setting is unknown; reopen Themes to review it."
         ),
     };
     format!("{catalog_message} {selection_message}")
 }
 
-/// Unread or failed current selection is an empty, disabled UI placeholder, not inheritance.
-/// The caller renders loading/errors separately and permits changes only after a successful read.
+/// The Advanced selector contains published custom IDs only. Other current settings
+/// select its real placeholder rather than assigning a value absent from its options.
+#[must_use]
+pub fn saved_version_control_token(
+    selection: Option<&Result<Option<PublicThemeSelection>, WebError>>,
+    catalog: Option<&Result<Vec<super::CatalogEntry>, WebError>>,
+) -> String {
+    match (selection, catalog) {
+        (Some(Ok(Some(PublicThemeSelection::Custom(id)))), Some(Ok(entries)))
+            if entries
+                .iter()
+                .any(|entry| entry.id == *id && entry.published) =>
+        {
+            id.to_string()
+        }
+        _ => String::new(),
+    }
+}
+
+/// An unread or failed current setting has no token, never a fabricated inheritance.
+/// The view names the state separately and permits recovery only after a successful read.
 #[must_use]
 pub fn selection_control_token(
     state: Option<&Result<Option<PublicThemeSelection>, WebError>>,
@@ -360,6 +456,197 @@ mod tests {
     use crate::themes::OwnershipScope;
     use common::MutationOutcome;
     use leptos::prelude::{GetUntracked, Owner, Set};
+
+    #[test]
+    fn saved_version_control_selects_only_an_available_published_custom_id() {
+        use super::saved_version_control_token;
+        use crate::{error::WebError, themes::CatalogEntry};
+        use common::{
+            ids::ThemeId,
+            theme::{PublicThemeSelection, Theme},
+        };
+        let id = ThemeId::from(42);
+        let catalog = Ok(vec![CatalogEntry {
+            id,
+            name: "Paper".into(),
+            published: true,
+        }]);
+        assert_eq!(saved_version_control_token(None, Some(&catalog)), "");
+        assert_eq!(
+            saved_version_control_token(
+                Some(&Err(WebError::server_function("read failed"))),
+                Some(&catalog)
+            ),
+            ""
+        );
+        assert_eq!(
+            saved_version_control_token(Some(&Ok(None)), Some(&catalog)),
+            ""
+        );
+        assert_eq!(
+            saved_version_control_token(
+                Some(&Ok(Some(PublicThemeSelection::BuiltIn(Theme::Reader)))),
+                Some(&catalog)
+            ),
+            ""
+        );
+        let custom = Ok(Some(PublicThemeSelection::Custom(id)));
+        assert_eq!(
+            saved_version_control_token(Some(&custom), Some(&catalog)),
+            "42"
+        );
+        assert_eq!(saved_version_control_token(Some(&custom), None), "");
+        assert_eq!(
+            saved_version_control_token(
+                Some(&custom),
+                Some(&Err(WebError::server_function("list failed")))
+            ),
+            ""
+        );
+        assert_eq!(
+            saved_version_control_token(Some(&custom), Some(&Ok(Vec::new()))),
+            ""
+        );
+        let unpublished = Ok(vec![CatalogEntry {
+            id,
+            name: "Paper".into(),
+            published: false,
+        }]);
+        assert_eq!(
+            saved_version_control_token(Some(&custom), Some(&unpublished)),
+            ""
+        );
+    }
+
+    #[test]
+    fn current_theme_summary_reports_only_confirmed_owner_state() {
+        use super::current_theme_summary;
+        use crate::{error::WebError, themes::CatalogEntry};
+        use common::{
+            ids::ThemeId,
+            theme::{PublicThemeSelection, Theme},
+        };
+        let entries = Ok(vec![CatalogEntry {
+            id: ThemeId::from(42),
+            name: "Paper".into(),
+            published: true,
+        }]);
+        let inherited = Ok(None);
+        assert_eq!(
+            current_theme_summary(OwnershipScope::Author, None, None),
+            "Checking current theme…"
+        );
+        assert_eq!(
+            current_theme_summary(OwnershipScope::Author, Some(&inherited), None),
+            "Using the site theme"
+        );
+        assert_eq!(
+            current_theme_summary(OwnershipScope::Site, Some(&inherited), None),
+            "Site theme has not been set"
+        );
+        assert_eq!(
+            current_theme_summary(
+                OwnershipScope::Author,
+                Some(&Ok(Some(PublicThemeSelection::BuiltIn(Theme::Reader)))),
+                None
+            ),
+            "reader"
+        );
+        let custom = Ok(Some(PublicThemeSelection::Custom(ThemeId::from(42))));
+        assert_eq!(
+            current_theme_summary(OwnershipScope::Site, Some(&custom), Some(&entries)),
+            "Paper"
+        );
+        assert_eq!(
+            current_theme_summary(OwnershipScope::Site, Some(&custom), None),
+            "Checking current theme…"
+        );
+        assert_eq!(
+            current_theme_summary(OwnershipScope::Site, Some(&custom), Some(&Ok(Vec::new()))),
+            "Current theme could not be checked"
+        );
+        let failed = Err(WebError::server_function("read failed"));
+        assert_eq!(
+            current_theme_summary(OwnershipScope::Author, Some(&failed), Some(&entries)),
+            "Current theme could not be checked"
+        );
+        assert_eq!(
+            current_theme_summary(
+                OwnershipScope::Site,
+                Some(&custom),
+                Some(&Err(WebError::server_function("list failed")))
+            ),
+            "Current theme could not be checked"
+        );
+    }
+
+    #[test]
+    fn reviewing_a_choice_distinguishes_unused_current_ready_and_unknown() {
+        use super::review_choice;
+        use crate::{error::WebError, themes::CatalogEntry};
+        use common::{ids::ThemeId, theme::PublicThemeSelection};
+        let id = ThemeId::from(7);
+        let mut entries = Ok(vec![CatalogEntry {
+            id,
+            name: "Paper".into(),
+            published: false,
+        }]);
+        assert_eq!(review_choice(None, None, None).0, "Choose a theme above");
+        assert_eq!(
+            review_choice(Some(id), None, None).0,
+            "Checking your choice…"
+        );
+        assert_eq!(
+            review_choice(
+                Some(id),
+                Some(&Err(WebError::server_function("list failed"))),
+                None
+            ),
+            (
+                "Choice could not be checked".into(),
+                "Current theme could not be checked. This choice may already be in use."
+            )
+        );
+        assert_eq!(
+            review_choice(Some(id), Some(&Ok(Vec::new())), None).0,
+            "Choice could not be checked"
+        );
+        assert_eq!(
+            review_choice(Some(id), Some(&entries), Some(&Ok(None))),
+            ("Paper".into(), "Saved, not live yet")
+        );
+        let current = Ok(Some(PublicThemeSelection::Custom(id)));
+        assert!(
+            review_choice(Some(id), Some(&entries), Some(&current))
+                .1
+                .starts_with("Currently in use")
+        );
+        assert!(
+            review_choice(Some(id), Some(&entries), None)
+                .1
+                .contains("may already be in use")
+        );
+        assert!(
+            review_choice(
+                Some(id),
+                Some(&entries),
+                Some(&Err(WebError::server_function("read failed")))
+            )
+            .1
+            .contains("may already be in use")
+        );
+        entries.as_mut().unwrap()[0].published = true;
+        assert!(
+            review_choice(Some(id), Some(&entries), Some(&Ok(None)))
+                .1
+                .starts_with("Ready to use")
+        );
+        assert!(
+            !review_choice(Some(id), Some(&entries), Some(&current))
+                .1
+                .contains("not live")
+        );
+    }
 
     #[test]
     fn session_scope_availability_rejects_anonymous_and_allows_author_scope() {
@@ -581,16 +868,16 @@ mod tests {
     fn stage_feedback_never_equates_rejection_uncertainty_and_application() {
         use super::{MutationStage, Receipt, mutation_message};
         for (stage, expected) in [
-            (MutationStage::Import, "Imported as a private draft"),
-            (MutationStage::Publish, "Publication confirmed"),
+            (MutationStage::Import, "Theme saved"),
+            (MutationStage::Publish, "Applying your theme"),
             (MutationStage::PublishOnly, "Publication confirmed"),
             (
                 MutationStage::Apply { published: true },
-                "Theme published and applied",
+                "Your theme is now in use",
             ),
             (
                 MutationStage::Apply { published: false },
-                "Public selection applied",
+                "Your theme is now in use",
             ),
         ] {
             assert!(mutation_message(stage, &Receipt::Confirmed).starts_with(expected));
@@ -604,21 +891,22 @@ mod tests {
                 uncertain.contains("uncertain") && uncertain.contains("no automatic retry"),
                 "{uncertain}"
             );
-            assert!(!uncertain.contains("Theme published and applied"));
+            assert!(!uncertain.contains("Your theme is now in use"));
         }
         let rejected = mutation_message(MutationStage::Publish, &Receipt::Rejected("CSS".into()));
         assert!(
-            rejected.contains("Selection was not requested") && rejected.contains("Fix the draft")
+            rejected.contains("We did not try to switch themes")
+                && rejected.contains("Fix the theme")
         );
-        assert!(!rejected.contains("may have advanced"));
+        assert!(!rejected.contains("may have changed"));
         let applied = mutation_message(
             MutationStage::Apply { published: true },
             &Receipt::Rejected("selection".into()),
         );
         assert!(
-            applied.contains("Publication confirmed")
-                && applied.contains("cannot be undone")
-                && applied.contains("already-selected")
+            applied.contains("Your updated theme is ready")
+                && applied.contains("cannot undo")
+                && applied.contains("already in use")
         );
     }
 
@@ -629,8 +917,8 @@ mod tests {
         use common::theme::{PublicThemeSelection, Theme};
         let id = common::ids::ThemeId::from(42);
         for (published, expected) in [
-            (true, "has a published revision"),
-            (false, "has no published revision"),
+            (true, "has a ready version"),
+            (false, "has no ready version"),
         ] {
             let catalog = Ok(vec![CatalogEntry {
                 id,
@@ -638,20 +926,24 @@ mod tests {
                 published,
             }]);
             let message = reconciliation_message(
+                OwnershipScope::Author,
                 &catalog,
                 &Ok(Some(PublicThemeSelection::Custom(id))),
                 Some(id),
             );
             assert!(
-                message.contains(expected)
-                    && message.contains("Current selection from reread: 42."),
+                message.contains(expected) && message.contains("Current theme: Night."),
                 "{message}"
             );
             assert!(!message.contains("confirmed"));
         }
-        let missing = reconciliation_message(&Ok(Vec::new()), &Ok(None), Some(id));
-        assert!(missing.contains("absent") && missing.contains("inherit"));
+        let missing =
+            reconciliation_message(OwnershipScope::Author, &Ok(Vec::new()), &Ok(None), Some(id));
+        assert!(
+            missing.contains("no longer available") && missing.contains("Using the site theme")
+        );
         let bundled = reconciliation_message(
+            OwnershipScope::Author,
             &Ok(Vec::new()),
             &Ok(Some(PublicThemeSelection::BuiltIn(Theme::Reader))),
             None,
@@ -659,26 +951,28 @@ mod tests {
         assert!(bundled.contains("reader"));
         let failure = Err(WebError::server_function("reread unavailable"));
         let both = reconciliation_message(
+            OwnershipScope::Author,
             &failure,
             &Err(WebError::server_function("read failed")),
             Some(id),
         );
         assert!(
-            both.contains("Publication state is unknown")
-                && both.contains("Current selection is unknown")
+            both.contains("Theme readiness is unknown")
+                && both.contains("current setting is unknown")
         );
         assert!(!both.contains("inherit"));
         assert!(
-            reconciliation_message(&failure, &Ok(None), None)
-                .contains("Current selection from reread: inherit")
+            reconciliation_message(OwnershipScope::Author, &failure, &Ok(None), None)
+                .contains("Current theme: Using the site theme")
         );
         assert!(
             reconciliation_message(
+                OwnershipScope::Author,
                 &Ok(Vec::new()),
                 &Err(WebError::server_function("read failed")),
                 None
             )
-            .contains("Selection reread failed")
+            .contains("Current theme could not be checked")
         );
     }
 

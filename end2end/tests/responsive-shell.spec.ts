@@ -31,7 +31,7 @@ test("custom Theme surface reaches the public rail and scroll canvas", async ({
 }) => {
   await signInAs(page, "testoperator");
   await goto(page, "/themes");
-  await page.getByRole("button", { name: "Site default" }).click();
+  await page.getByRole("button", { name: "Site theme", exact: true }).click();
   await openThemeAdvanced(page);
   const mutation = (endpoint: keyof typeof THEME_ENDPOINTS) =>
     page.waitForResponse(
@@ -53,7 +53,7 @@ test("custom Theme surface reaches the public rail and scroll canvas", async ({
     mutation("publish"),
     page.getByRole("button", { name: "Publish", exact: true }).click(),
   ]);
-  const selection = page.getByLabel("Public selection");
+  const selection = page.getByLabel("Use a saved version");
   const id = await selection
     .getByRole("option", { name: "Continuous shell proof" })
     .getAttribute("value");

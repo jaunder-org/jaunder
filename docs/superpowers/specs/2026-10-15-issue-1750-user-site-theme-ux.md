@@ -1,9 +1,13 @@
 # Issue #1750: User theme and Site theme UX revision
 
-- Status: Agreed visible UX direction; cold Spec review found no findings and
-  Lead accepted this working contract. This document grants no UI
-  implementation, baseline capture or merge permission; Manager Site BEFORE
-  admission is pending.
+- Status: Lead accepted implementation Tasks 1–2 after scoped Standards and Spec
+  reviews found no findings and native plus 44 Chromium / 44 Firefox focused
+  proofs passed. The six-image Site BEFORE prerequisite was accepted at clean
+  `9931031adefa58f9e364c625a59d3cad53f2ab29` with the maintained standard
+  `operator`, before presentation mutation. Normal hooks gate implementation
+  preservation; final committed-tree visual proof, CI/coverage and human UX
+  acceptance remain pending. This document grants no final capture or merge
+  permission.
 - Starting PR 1788 HEAD `13b94dc9362675f937a74eceb3be26c00841a2e3`, tree
   `a73b21cd45b574fce13ae8f204265eb7d6980f9f`; prior iteration contracts retired.
 - Approval: direct human answer **“agreed”** to the exact visible proposal

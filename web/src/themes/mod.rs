@@ -26,8 +26,9 @@ pub use thumbnail::thumbnail_document;
 
 pub use page_state::{
     Feedback, MutationStage, Receipt, Revalidation, ScopeAvailability, ThemePageState,
-    draft_from_editor, import_name_override, mutation_feedback, mutation_message, mutation_receipt,
-    publication_confirmed, reconciliation_message, revalidation, selection_control_token,
+    current_theme_summary, draft_from_editor, import_name_override, mutation_feedback,
+    mutation_message, mutation_receipt, publication_confirmed, reconciliation_message,
+    revalidation, review_choice, saved_version_control_token, selection_control_token,
     selection_from_token, selection_token,
 };
 pub use presentation_state::{

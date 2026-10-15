@@ -34,102 +34,168 @@ pub fn ThemesPage() -> impl IntoView {
     let session = auth::use_session().current;
     let page = ThemePageState::default();
     let scope = page.scope;
-    let selected = page.selected;
-    let refresh = page.refresh;
-    let status = page.status;
-    let pending = page.pending;
     let advanced = RwSignal::new(false);
-    let (catalog, selection) = owner_resources(scope, refresh);
-    let rename_name = NodeRef::<leptos::html::Input>::new();
+    let (catalog, selection) = owner_resources(scope, page.refresh);
 
     view! {
-        <Topbar title="Themes" sub="Public presentation packages" />
-        <div class="j-scroll">
-            <div class="j-page j-themes-page" data-theme-management="studio">
-                <Show when=move || advanced.get()>
-                    <section
-                        class="j-card j-theme-authoring-guidance"
-                        aria-labelledby="theme-authoring-guidance-heading"
-                    >
-                        <h2 id="theme-authoring-guidance-heading">
-                            "Author themes from a repository"
-                        </h2>
-                        <p class="j-sub">
-                            "Keep your theme source, preview, and release artifacts together, then use Jaunder to validate and package them."
-                        </p>
-                        <a
-                            href="https://github.com/jaunder-org/jaunder/blob/main/docs/themes.md"
-                            target="_blank"
-                        >
-                            "Read the theme repository guide"
-                        </a>
-                    </section>
-                </Show>
-                {move || match session.get() {
-                    None => {
-                        view! {
-                            <p class="error" role="alert">
-                                "Sign in to manage themes."
-                            </p>
+        {move || match session.get() {
+            None => {
+                view! {
+                    <Topbar title="Themes" />
+                    <p class="error" role="alert">
+                        "Sign in to manage themes."
+                    </p>
+                }
+                    .into_any()
+            }
+            Some(user) => {
+                view! {
+                    <For
+                        each=move || vec![scope.get()]
+                        key=|scope| *scope == OwnershipScope::Site
+                        children=move |owner| match owner {
+                            OwnershipScope::Author => {
+                                view! {
+                                    <UserThemeView
+                                        page=page
+                                        advanced=advanced
+                                        catalog=catalog
+                                        selection=selection
+                                        availability=ScopeAvailability::from_session(
+                                            true,
+                                            user.is_operator,
+                                        )
+                                    />
+                                }
+                                    .into_any()
+                            }
+                            OwnershipScope::Site => {
+                                view! {
+                                    <SiteThemeView
+                                        page=page
+                                        advanced=advanced
+                                        catalog=catalog
+                                        selection=selection
+                                    />
+                                }
+                                    .into_any()
+                            }
                         }
-                            .into_any()
-                    }
-                    Some(user) => {
-                        view! {
-                            <fieldset
-                                disabled=move || pending.get()
-                                style="border:0;padding:0;margin:0;min-width:0"
-                            >
-                                <For
-                                    each=move || vec![scope.get()]
-                                    key=|scope| *scope == OwnershipScope::Site
-                                    children=move |_| theme_management_controls(
-                                        ScopeAvailability::from_session(true, user.is_operator),
-                                        page,
-                                        advanced,
-                                        scope,
-                                        refresh,
-                                        status,
-                                    )
-                                />
-                                <ThemeCatalog
-                                    catalog=catalog
-                                    selection=selection
-                                    scope=scope
-                                    selected=selected
-                                    refresh=refresh
-                                    status=status
-                                    rename_name=rename_name
-                                    page=page
-                                    advanced=advanced
-                                />
-                            </fieldset>
-                        }
-                            .into_any()
-                    }
-                }}
-            </div>
-        </div>
+                    />
+                }
+                    .into_any()
+            }
+        }}
     }
 }
 type ThemeCatalogResource = Resource<Result<Vec<CatalogEntry>, WebError>>;
 
-fn theme_management_controls(
+/// Each owner has its own page chrome and effects; operations share one workflow.
+#[component]
+fn UserThemeView(
+    page: ThemePageState,
+    advanced: RwSignal<bool>,
+    catalog: ThemeCatalogResource,
+    selection: ThemeSelectionResource,
+    availability: ScopeAvailability,
+) -> impl IntoView {
+    view! {
+        <Topbar
+            title="User theme"
+            sub="Choose how visitors see your public pages. This does not change your private workspace."
+        />
+        <ThemeViewBody
+            page=page
+            advanced=advanced
+            catalog=catalog
+            selection=selection
+            availability=availability
+        />
+    }
+}
+
+#[component]
+fn SiteThemeView(
+    page: ThemePageState,
+    advanced: RwSignal<bool>,
+    catalog: ThemeCatalogResource,
+    selection: ThemeSelectionResource,
+) -> impl IntoView {
+    view! {
+        <Topbar
+            title="Site theme"
+            sub="Choose the default look for public site pages and user pages using the site theme."
+        />
+        <ThemeViewBody
+            page=page
+            advanced=advanced
+            catalog=catalog
+            selection=selection
+            availability=ScopeAvailability::AuthorAndSite
+        />
+    }
+}
+
+#[component]
+fn ThemeViewBody(
+    page: ThemePageState,
+    advanced: RwSignal<bool>,
+    catalog: ThemeCatalogResource,
+    selection: ThemeSelectionResource,
+    availability: ScopeAvailability,
+) -> impl IntoView {
+    view! {
+        <div class="j-scroll">
+            <div class="j-page j-themes-page" data-theme-management="studio">
+                <fieldset
+                    class="j-theme-workflow"
+                    disabled=move || page.pending.get()
+                    style="border:0;padding:0;margin:0;min-width:0"
+                >
+                    <ThemeWorkflow
+                        page=page
+                        advanced=advanced
+                        catalog=catalog
+                        selection=selection
+                        availability=availability
+                    />
+                </fieldset>
+            </div>
+        </div>
+    }
+}
+
+#[component]
+fn ThemeWorkflow(
     availability: ScopeAvailability,
     page: ThemePageState,
     advanced: RwSignal<bool>,
-    scope: RwSignal<OwnershipScope>,
-    refresh: Invalidator,
-    status: RwSignal<Option<String>>,
+    catalog: ThemeCatalogResource,
+    selection: ThemeSelectionResource,
 ) -> impl IntoView {
+    let scope = page.scope;
+    let refresh = page.refresh;
+    let status = page.status;
+    let rename_name = NodeRef::<leptos::html::Input>::new();
     let create_name = NodeRef::<leptos::html::Input>::new();
     let css_name = NodeRef::<leptos::html::Input>::new();
     let css_source = NodeRef::<leptos::html::Textarea>::new();
     let package_name = NodeRef::<leptos::html::Input>::new();
     let package_file = NodeRef::<leptos::html::Input>::new();
     view! {
-        {scope_card(availability, page, scope)}
-        {zip_import_card(package_name, package_file, page, advanced)}
+        <ThemeViewNavigation availability=availability page=page />
+        <ThemeCurrent catalog=catalog selection=selection scope=scope />
+        <section class="j-card" aria-labelledby="theme-add-heading">
+            <div class="j-card-head">
+                <h2 id="theme-add-heading">"Add or choose a theme"</h2>
+            </div>
+            <div class="j-form-body">
+                {zip_import_card(package_name, package_file, page, advanced)}
+                <h3>"Available themes"</h3> {catalog_content(catalog, page.selected, page.pending)}
+            </div>
+        </section>
+        <ThemeReview page=page catalog=catalog selection=selection />
+        <ThemeRecovery page=page selection=selection />
         <button
             type="button"
             class="j-btn"
@@ -140,58 +206,53 @@ fn theme_management_controls(
             "Advanced"
         </button>
         <div id="theme-advanced-import" hidden=move || !advanced.get()>
+            <ThemeSavedVersions page=page catalog=catalog selection=selection />
             {create_theme_card(page, create_name, scope, refresh, status)}
             {css_import_card(page, css_name, css_source, scope, refresh, status)}
+            <section
+                class="j-card j-theme-authoring-guidance"
+                aria-labelledby="theme-authoring-guidance-heading"
+            >
+                <h2 id="theme-authoring-guidance-heading">"Author themes from a repository"</h2>
+                <p class="j-sub">
+                    "Keep your theme source, preview, and release artifacts together, then use Jaunder to validate and package them."
+                </p>
+                <a
+                    href="https://github.com/jaunder-org/jaunder/blob/main/docs/themes.md"
+                    target="_blank"
+                >
+                    "Read the theme repository guide"
+                </a>
+            </section>
         </div>
+        <ThemeAdvancedEditor page=page advanced=advanced rename_name=rename_name />
     }
 }
 
-fn scope_card(
-    availability: ScopeAvailability,
-    page: ThemePageState,
-    scope: RwSignal<OwnershipScope>,
-) -> impl IntoView {
+#[component]
+fn ThemeViewNavigation(availability: ScopeAvailability, page: ThemePageState) -> impl IntoView {
+    let scope = page.scope;
     view! {
-        <section class="j-card j-theme-scope" aria-labelledby="theme-scope-heading">
-            <div class="j-card-head">
-                <div>
-                    <h2 id="theme-scope-heading">"Catalog scope"</h2>
-                    <div class="j-sub">
-                        "Choose the catalog to manage; switching scope does not apply a theme. Using a theme in Your public pages styles your author routes. Site default styles public site pages and inheriting authors. Home and private management keep application styling."
-                    </div>
-                </div>
-            </div>
-            <div
-                class="j-form-body j-theme-scope-options"
-                role="group"
-                aria-label="Theme catalog scope"
-            >
+        <Show when=move || availability.permits(OwnershipScope::Site)>
+            <div class="j-theme-scope-options" role="group" aria-label="Theme views">
                 <button
                     type="button"
                     class="j-btn"
                     aria-pressed=move || aria_pressed(scope.get() == OwnershipScope::Author)
                     on:click=move |_| page.select_scope(OwnershipScope::Author)
                 >
-                    "Your public pages"
+                    "User theme"
                 </button>
-                {availability
-                    .permits(OwnershipScope::Site)
-                    .then(|| {
-                        view! {
-                            <button
-                                type="button"
-                                class="j-btn"
-                                aria-pressed=move || {
-                                    aria_pressed(scope.get() == OwnershipScope::Site)
-                                }
-                                on:click=move |_| page.select_scope(OwnershipScope::Site)
-                            >
-                                "Site default"
-                            </button>
-                        }
-                    })}
+                <button
+                    type="button"
+                    class="j-btn"
+                    aria-pressed=move || aria_pressed(scope.get() == OwnershipScope::Site)
+                    on:click=move |_| page.select_scope(OwnershipScope::Site)
+                >
+                    "Site theme"
+                </button>
             </div>
-        </section>
+        </Show>
     }
 }
 
@@ -310,24 +371,24 @@ fn zip_import_card(
         <section class="j-card" aria-labelledby="theme-package-import-heading">
             <div class="j-card-head">
                 <div>
-                    <h2 id="theme-package-import-heading">"Import Theme Package"</h2>
+                    <h3 id="theme-package-import-heading">"Upload theme"</h3>
                     <div class="j-sub">
-                        "Import a ZIP package as a new private, unselected draft."
+                        "Uploading saves a theme without changing the current setting."
                     </div>
                 </div>
             </div>
             <div class="j-form-body">
                 <div hidden=move || !advanced.get()>
                     <label class="j-form-field">
-                        <span class="j-form-label">"Catalog label override (optional)"</span>
+                        <span class="j-form-label">"Theme name (optional)"</span>
                         <input class="j-form-input" node_ref=name />
                         <span class="j-form-help">
-                            "Leave blank to use the package name. Choose a different label if that name is reserved or already in your catalog."
+                            "Leave blank to use the theme’s own name."
                         </span>
                     </label>
                 </div>
                 <label class="j-form-field">
-                    <span class="j-form-label">"Theme Package ZIP"</span>
+                    <span class="j-form-label">"Theme ZIP file"</span>
                     <input
                         class="j-form-input"
                         type="file"
@@ -340,7 +401,7 @@ fn zip_import_card(
                     class="j-btn"
                     on:click=move |_| import_package_zip(file, name, page)
                 >
-                    "Import ZIP draft"
+                    "Upload theme"
                 </button>
                 <Show when=move || page.feedback_in_import.get()>
                     <ThemeFeedback status=page.status feedback=page.feedback />
@@ -417,7 +478,7 @@ fn import_package_zip(
         .and_then(|input| input.files())
         .and_then(|files| files.get(0))
     else {
-        status.set(Some("Choose a Theme Package ZIP file first.".into()));
+        status.set(Some("Choose a theme ZIP file first.".into()));
         return;
     };
     let name = package_name
@@ -442,14 +503,14 @@ fn import_package_zip(
     }
     page.pending.set(true);
     page.feedback.set(Feedback::Progress);
-    status.set(Some("Importing Theme Package…".into()));
+    status.set(Some("Uploading theme…".into()));
     task::spawn_local(async move {
         match api::import_zip(form.into()).await {
             Ok(MutationOutcome::Confirmed(entry)) => {
                 page.selected.set(Some(entry.id));
                 page.feedback.set(Feedback::Success);
                 refresh.notify();
-                status.set(Some(format!("Imported {} as a private draft. Choose Use this theme to publish and apply it.", entry.name)));
+                status.set(Some(format!("Uploaded {}. Review your choice, then choose Use this theme when you are ready.", entry.name)));
             }
             result => {
                 set_mutation_feedback(page, MutationStage::Import, &result);
@@ -470,58 +531,83 @@ fn settle<T>(
         Revalidation::Confirmed => {
             page.feedback.set(Feedback::Success);
             refresh.notify();
-            status.set(Some("Saved. Rereading catalog state…".into()));
+            status.set(Some("Saved. Checking available themes…".into()));
         }
         Revalidation::Indeterminate => {
             page.feedback.set(Feedback::Error);
             refresh.notify();
-            status.set(Some("The server could not confirm this change. Rereading catalog and selection; review current state before continuing. No automatic retry ran.".into()));
+            status.set(Some("The server could not confirm this change. Checking available themes and your current setting; review them before continuing. No automatic retry ran.".into()));
         }
         Revalidation::Failed(message) => {
             page.feedback.set(Feedback::Error);
             refresh.notify();
-            status.set(Some(format!("The change was not confirmed. Review current catalog and selection before continuing. {message}")));
+            status.set(Some(format!("The change was not confirmed. Check available themes and your current setting before continuing. {message}")));
         }
     }
 }
 
 #[component]
-fn ThemeCatalog(
-    catalog: Resource<Result<Vec<CatalogEntry>, WebError>>,
-    selection: Resource<Result<Option<PublicThemeSelection>, WebError>>,
+fn ThemeCurrent(
+    catalog: ThemeCatalogResource,
+    selection: ThemeSelectionResource,
     scope: RwSignal<OwnershipScope>,
-    selected: RwSignal<Option<ThemeId>>,
-    refresh: Invalidator,
-    status: RwSignal<Option<String>>,
-    rename_name: NodeRef<leptos::html::Input>,
+) -> impl IntoView {
+    view! {
+        <section class="j-card" aria-label="Current theme setting">
+            <div class="j-form-body">
+                <h2 id="theme-current-heading">"Current theme"</h2>
+                <p
+                    aria-label="Current theme"
+                    data-theme-selection=move || page_state::selection_control_token(
+                        selection.get().as_ref(),
+                    )
+                >
+                    {move || page_state::current_theme_summary(
+                        scope.get(),
+                        selection.get().as_ref(),
+                        catalog.get().as_ref(),
+                    )}
+                </p>
+            </div>
+        </section>
+    }
+}
+
+#[component]
+fn ThemeReview(
     page: ThemePageState,
-    advanced: RwSignal<bool>,
+    catalog: ThemeCatalogResource,
+    selection: ThemeSelectionResource,
 ) -> impl IntoView {
     view! {
         <section class="j-card" aria-labelledby="theme-catalog-heading">
             <div class="j-card-head">
                 <div>
-                    <h2 id="theme-catalog-heading">"Catalog and selection"</h2>
-                    <div class="j-sub">
-                        "Opening a catalog entry does not activate it. Use this theme publishes its draft before applying it. Authors may instead inherit the site selection or choose a bundled theme without publishing."
-                    </div>
+                    <h2 id="theme-catalog-heading">"Review your choice"</h2>
                 </div>
             </div>
             <div class="j-form-body">
-                <ThemeSelection
-                    selection=selection
-                    catalog=catalog
-                    scope=scope
-                    refresh=refresh
-                    status=status
-                    pending=page.pending
-                    page=page
-                />
-                {catalog_content(catalog, selected, page.pending)}
-                <Show when=move || selected.get().is_some()>
-                    <p class="j-form-help">
-                        "Opening a draft does not change public selection. Use this theme publishes its current draft, then applies it here. Publishing an already-selected theme immediately updates its public revision."
-                    </p>
+                <h3>
+                    {move || {
+                        page_state::review_choice(
+                                page.selected.get(),
+                                catalog.get().as_ref(),
+                                selection.get().as_ref(),
+                            )
+                            .0
+                    }}
+                </h3>
+                <p class="j-form-help">
+                    {move || {
+                        page_state::review_choice(
+                                page.selected.get(),
+                                catalog.get().as_ref(),
+                                selection.get().as_ref(),
+                            )
+                            .1
+                    }}
+                </p>
+                <Show when=move || page.selected.get().is_some()>
                     <button
                         type="button"
                         class="j-btn is-primary"
@@ -531,34 +617,42 @@ fn ThemeCatalog(
                     </button>
                 </Show>
                 <Show when=move || !page.feedback_in_import.get()>
-                    <ThemeFeedback status=status feedback=page.feedback />
+                    <ThemeFeedback status=page.status feedback=page.feedback />
                 </Show>
-                <div id="theme-advanced-editor" hidden=move || !advanced.get()>
-                    <For
-                        each=move || {
-                            selected
-                                .get()
-                                .map(|id| (scope.get(), id))
-                                .into_iter()
-                                .collect::<Vec<_>>()
-                        }
-                        key=|target| (target.0 == OwnershipScope::Site, target.1)
-                        children=move |_| {
-                            view! {
-                                <ThemeEditor
-                                    page=page
-                                    scope=scope
-                                    selected=selected
-                                    refresh=refresh
-                                    status=status
-                                    rename_name=rename_name
-                                />
-                            }
-                        }
-                    />
-                </div>
             </div>
         </section>
+    }
+}
+
+#[component]
+fn ThemeAdvancedEditor(
+    page: ThemePageState,
+    advanced: RwSignal<bool>,
+    rename_name: NodeRef<leptos::html::Input>,
+) -> impl IntoView {
+    let selected = page.selected;
+    let scope = page.scope;
+    view! {
+        <div id="theme-advanced-editor" hidden=move || !advanced.get()>
+            <For
+                each=move || {
+                    selected.get().map(|id| (scope.get(), id)).into_iter().collect::<Vec<_>>()
+                }
+                key=|target| (target.0 == OwnershipScope::Site, target.1)
+                children=move |_| {
+                    view! {
+                        <ThemeEditor
+                            page=page
+                            scope=scope
+                            selected=selected
+                            refresh=page.refresh
+                            status=page.status
+                            rename_name=rename_name
+                        />
+                    }
+                }
+            />
+        </div>
     }
 }
 
@@ -571,18 +665,18 @@ fn catalog_content(
 ) -> impl IntoView {
     view! {
         {move || match catalog.get() {
-            None => view! { <p class="j-loading">"Loading catalog…"</p> }.into_any(),
+            None => view! { <p class="j-loading">"Loading available themes…"</p> }.into_any(),
             Some(Ok(entries)) if entries.is_empty() => {
                 view! {
                     <p class="j-theme-catalog-empty">
-                        "No themes in this catalog yet. Create a draft or import a package to start authoring."
+                        "No saved themes yet. Upload a theme ZIP file to get started."
                     </p>
                 }
                     .into_any()
             }
             Some(Ok(entries)) => {
                 view! {
-                    <ul class="j-theme-catalog" aria-label="Theme catalog">
+                    <ul class="j-theme-catalog" aria-label="Available themes">
                         <For
                             each=move || entries.clone()
                             key=|entry| entry.id
@@ -603,7 +697,6 @@ fn catalog_content(
                                             }
                                         >
                                             {entry.name}
-                                            {if entry.published { " (published)" } else { " (draft)" }}
                                         </button>
                                     </li>
                                 }
@@ -626,64 +719,96 @@ fn catalog_content(
 }
 
 #[component]
-fn ThemeSelection(
-    catalog: Resource<Result<Vec<CatalogEntry>, WebError>>,
-    selection: Resource<Result<Option<PublicThemeSelection>, WebError>>,
-    scope: RwSignal<OwnershipScope>,
-    refresh: Invalidator,
-    status: RwSignal<Option<String>>,
-    pending: RwSignal<bool>,
-    page: ThemePageState,
-) -> impl IntoView {
-    // Reapply the controlled value after the option catalog settles: assigning a
-    // custom value before its option exists does not stick in the native select.
-    let selected_token = move || {
-        drop(catalog.get());
-        page_state::selection_control_token(selection.get().as_ref())
-    };
-    let change = move |event| {
-        if pending.get_untracked() {
-            return;
-        }
-        pending.set(true);
-        page.feedback_in_import.set(false);
-        page.feedback.set(Feedback::Progress);
-        let token = event_target_value(&event);
-        let current_scope = scope.get_untracked();
-        let next = page_state::selection_from_token(&token);
-        task::spawn_local(async move {
-            status.set(Some("Applying public selection…".into()));
-            let result = api::select(current_scope, next).await;
-            set_mutation_feedback(page, MutationStage::Apply { published: false }, &result);
-            reconcile_owner(current_scope, refresh, status, None).await;
-            pending.set(false);
-        });
-    };
+fn ThemeRecovery(page: ThemePageState, selection: ThemeSelectionResource) -> impl IntoView {
+    let disabled = move || page.pending.get() || !matches!(selection.get(), Some(Ok(_)));
     view! {
-        <div class="j-theme-selection">
-            <label class="j-form-field">
-                <span class="j-form-label">"Public selection"</span>
-                <select
-                    class="j-form-input"
-                    prop:value=selected_token
-                    disabled=move || pending.get() || !matches!(selection.get(), Some(Ok(_)))
-                    on:change=change
-                >
-                    {move || {
-                        view! {
+        <section class="j-card j-theme-selection" aria-labelledby="theme-ready-heading">
+            <div class="j-card-head">
+                <div>
+                    <h2 id="theme-ready-heading">"Other theme choices"</h2>
+                    <p class="j-sub">
+                        "These choices switch the public look without changing your saved theme."
+                    </p>
+                </div>
+            </div>
+            <div class="j-form-body">
+                <div class="j-theme-actions">
+                    <Show when=move || page.scope.get() == OwnershipScope::Author>
+                        <button
+                            type="button"
+                            class="j-btn"
+                            disabled=disabled
+                            on:click=move |_| select_ready_theme(page, selection, None)
+                        >
+                            "Use site theme"
+                        </button>
+                    </Show>
+                    <For
+                        each=move || built_in_themes()
+                        key=|theme| *theme
+                        children=move |theme| {
+                            view! {
+                                <button
+                                    type="button"
+                                    class="j-btn"
+                                    disabled=disabled
+                                    on:click=move |_| select_ready_theme(
+                                        page,
+                                        selection,
+                                        Some(PublicThemeSelection::BuiltIn(theme)),
+                                    )
+                                >
+                                    {format!("Use {theme}")}
+                                </button>
+                            }
+                        }
+                    />
+                </div>
+            </div>
+        </section>
+    }
+}
+
+#[component]
+fn ThemeSavedVersions(
+    page: ThemePageState,
+    catalog: ThemeCatalogResource,
+    selection: ThemeSelectionResource,
+) -> impl IntoView {
+    let disabled = move || page.pending.get() || !matches!(selection.get(), Some(Ok(_)));
+    view! {
+        <Show when=move || {
+            catalog
+                .get()
+                .is_some_and(|result| {
+                    result.is_ok_and(|entries| entries.iter().any(|entry| entry.published))
+                })
+        }>
+            <section class="j-card" aria-label="Published theme versions">
+                <div class="j-form-body">
+                    <label class="j-form-field">
+                        <span class="j-form-label">"Use a saved version"</span>
+                        <select
+                            class="j-form-input"
+                            disabled=disabled
+                            prop:value=move || {
+                                page_state::saved_version_control_token(
+                                    selection.get().as_ref(),
+                                    catalog.get().as_ref(),
+                                )
+                            }
+                            on:change=move |event| {
+                                let token = event_target_value(&event);
+                                select_ready_theme(
+                                    page,
+                                    selection,
+                                    page_state::selection_from_token(&token),
+                                );
+                            }
+                        >
                             <option value="" disabled>
-                                "Current selection unknown"
+                                "Choose a ready saved theme"
                             </option>
-                            <option value="inherit">"Inherit site selection"</option>
-                            <For
-                                each=move || built_in_themes()
-                                key=|theme| *theme
-                                children=move |theme| {
-                                    view! {
-                                        <option value=theme.to_string()>{theme.to_string()}</option>
-                                    }
-                                }
-                            />
                             <For
                                 each=move || {
                                     catalog
@@ -701,26 +826,33 @@ fn ThemeSelection(
                                     }
                                 }
                             />
-                        }
-                    }}
-                </select>
-            </label>
-            {move || match selection.get() {
-                Some(Err(error)) => {
-                    view! {
-                        <p class="error" role="alert">
-                            {format!(
-                                "Current selection is unknown: {error}. Reopen Themes to review it.",
-                            )}
-                        </p>
-                    }
-                        .into_any()
-                }
-                None => view! { <p class="j-loading">"Loading public selection…"</p> }.into_any(),
-                Some(Ok(_)) => ().into_any(),
-            }}
-        </div>
+                        </select>
+                        <span class="j-form-help">
+                            "Uses the last ready version, without preparing any edits in Advanced."
+                        </span>
+                    </label>
+                </div>
+            </section>
+        </Show>
     }
+}
+
+fn select_ready_theme(
+    page: ThemePageState,
+    selection: ThemeSelectionResource,
+    next: Option<PublicThemeSelection>,
+) {
+    if !matches!(selection.get_untracked(), Some(Ok(_))) || !page.begin_mutation() {
+        return;
+    }
+    let scope = page.scope.get_untracked();
+    page.status.set(Some("Applying your theme…".into()));
+    task::spawn_local(async move {
+        let result = api::select(scope, next).await;
+        set_mutation_feedback(page, MutationStage::Apply { published: false }, &result);
+        reconcile_owner(scope, page.refresh, page.status, None).await;
+        page.pending.set(false);
+    });
 }
 
 #[component]
@@ -1017,7 +1149,7 @@ fn use_selected(page: ThemePageState) {
     let Some((scope, id)) = page.begin_use() else {
         return;
     };
-    page.status.set(Some("Publishing theme…".into()));
+    page.status.set(Some("Getting your theme ready…".into()));
     task::spawn_local(async move {
         let published = api::publish(scope, id).await;
         set_mutation_feedback(page, MutationStage::Publish, &published);
@@ -1038,7 +1170,8 @@ async fn reconcile_owner(
 ) {
     let catalog = api::list(scope).await;
     let selection = api::get_selection(scope).await;
-    let message_from_rereads = page_state::reconciliation_message(&catalog, &selection, target);
+    let message_from_rereads =
+        page_state::reconciliation_message(scope, &catalog, &selection, target);
     status.update(|message| {
         if let Some(message) = message {
             message.push(' ');

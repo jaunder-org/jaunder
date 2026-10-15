@@ -93,16 +93,14 @@ export async function openThemeAdvanced(page: Page): Promise<void> {
 export async function importMinimalTheme(page: Page): Promise<void> {
   const archive = await minimalThemeZip(page);
   await goto(page, "/themes");
-  await page.getByLabel("Theme Package ZIP").setInputFiles({
+  await page.getByLabel("Theme ZIP file").setInputFiles({
     name: "filename-disagrees.zip",
     mimeType: "application/zip",
     buffer: archive,
   });
-  await page
-    .getByRole("button", { name: "Import ZIP draft", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Upload theme", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "Intake fixture (draft)", exact: true }),
+    page.getByRole("button", { name: "Intake fixture", exact: true }),
   ).toHaveAttribute("aria-pressed", "true");
 }
 

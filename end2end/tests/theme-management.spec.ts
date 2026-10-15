@@ -98,16 +98,20 @@ test("publication rejection stops selection and offers draft repair without unce
   await page
     .getByRole("button", { name: "Use this theme", exact: true })
     .click();
-  await expect(page.getByRole("status")).toContainText("Publication rejected");
+  await expect(page.getByRole("status")).toContainText(
+    "Getting your theme ready was rejected",
+  );
   await expect(page.getByRole("status")).toHaveClass(/error/);
   await expect(page.getByRole("status")).not.toHaveClass(/success/);
-  await expect(page.getByRole("status")).toContainText("Fix the draft");
-  await expect(page.getByRole("status")).not.toContainText("may have advanced");
+  await expect(page.getByRole("status")).toContainText("Fix the theme");
+  await expect(page.getByRole("status")).not.toContainText("may have changed");
   await expect(
     page.getByRole("button", { name: "Use this theme", exact: true }),
   ).toBeEnabled();
   expect(selections).toBe(0);
-  await expect(page.getByLabel("Public selection")).toHaveValue("inherit");
+  await expect(
+    page.getByLabel("Current theme", { exact: true }),
+  ).toHaveAttribute("data-theme-selection", "inherit");
 });
 
 for (const stage of ["publish", "select"] as const) {
@@ -175,16 +179,16 @@ for (const stage of ["publish", "select"] as const) {
       const status = page.getByRole("status");
       await expect(status).toContainText(
         stage === "publish"
-          ? "Publication outcome is uncertain"
+          ? "We could not confirm your theme is ready"
           : fault === "reject"
-            ? "applying was rejected"
-            : "applying outcome is uncertain",
+            ? "switching was rejected"
+            : "switching outcome is uncertain",
       );
-      await expect(status).not.toContainText("Theme published and applied");
+      await expect(status).not.toContainText("Your theme is now in use");
       await expect(status).toHaveClass(/error/);
       await expect(status).not.toHaveClass(/success/);
-      await expect(status).toContainText("Catalog reread");
-      await expect(status).toContainText("Current selection from reread");
+      await expect(status).toContainText("Available themes checked");
+      await expect(status).toContainText("Current theme:");
       await expect(use).toBeEnabled();
       const expectedWrites =
         stage === "publish"
@@ -195,21 +199,22 @@ for (const stage of ["publish", "select"] as const) {
       expect(reads).toContain("/api/themes/get_selection");
       expect(new URLSearchParams(writes[0].body).get("scope")).toBe("author");
       if (stage === "select") {
-        await expect(status).toContainText("Publication confirmed");
+        await expect(status).toContainText("Your updated theme is ready");
         const publish = new URLSearchParams(writes[0].body);
         const select = new URLSearchParams(writes[1].body);
         expect(select.get("scope")).toBe("author");
         expect(select.get("selection[value]")).toBe(publish.get("theme_id"));
-      } else await expect(status).toContainText("Selection was not requested");
+      } else
+        await expect(status).toContainText("We did not try to switch themes");
       const applied = stage === "select" && fault !== "reject";
       if (!applied)
-        await expect(page.getByLabel("Public selection")).toHaveValue(
-          "inherit",
-        );
+        await expect(
+          page.getByLabel("Current theme", { exact: true }),
+        ).toHaveAttribute("data-theme-selection", "inherit");
       else
-        await expect(page.getByLabel("Public selection")).not.toHaveValue(
-          "inherit",
-        );
+        await expect(
+          page.getByLabel("Current theme", { exact: true }),
+        ).not.toHaveAttribute("data-theme-selection", "inherit");
       const publicContext = await tracedContext();
       try {
         const publicPage = await publicContext.newPage();
@@ -276,18 +281,34 @@ for (const stage of ["publish", "select"] as const) {
     });
     await use.click();
     await expect(page.getByRole("status")).toContainText(
-      "Publication state is unknown",
+      "Theme readiness is unknown",
     );
     await expect(page.getByRole("status")).toContainText(
-      "Current selection is unknown",
+      "current setting is unknown",
     );
     await expect(page.getByRole("status")).toContainText("reopen Themes");
     await expect(page.getByRole("status")).not.toContainText(
-      "Current selection from reread: inherit",
+      "Current theme: Using the site theme",
     );
     await expect(use).toBeEnabled();
-    await expect(page.getByLabel("Public selection")).toBeDisabled();
-    await expect(page.getByLabel("Public selection")).toHaveValue("");
+    await expect(page.getByLabel("Use a saved version")).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Use site theme", exact: true }),
+    ).toBeDisabled();
+    await expect(
+      page.getByLabel("Current theme", { exact: true }),
+    ).toHaveAttribute("data-theme-selection", "");
+    await expect(page.getByLabel("Current theme", { exact: true })).toHaveText(
+      "Current theme could not be checked",
+    );
+    await expect(
+      page.getByText(
+        "Current theme could not be checked. This choice may already be in use.",
+      ),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Saved, not live yet", { exact: true }),
+    ).toHaveCount(0);
     expect(writes).toEqual(
       stage === "publish"
         ? [THEME_ENDPOINTS.publish]
@@ -305,7 +326,7 @@ test("invalid package assets after successful import gives error feedback outsid
     'section[aria-labelledby="theme-package-import-heading"]',
   );
   await expect(zip.getByRole("status")).toContainText(
-    "Imported Intake fixture",
+    "Uploaded Intake fixture",
   );
   await expect(zip.getByRole("status")).toHaveClass(/success/);
   await expect(zip.getByRole("status")).not.toHaveClass(/error/);
@@ -358,7 +379,7 @@ test("pending Advanced draft write blocks use, duplicate write and scope changes
   await save.click();
   const use = page.getByRole("button", { name: "Use this theme", exact: true });
   const scope = page.getByRole("button", {
-    name: "Your public pages",
+    name: "Use site theme",
     exact: true,
   });
   try {
@@ -427,10 +448,10 @@ test("already-selected publication advances the public revision even when applyi
   // operation burst on exporter/importer setup unrelated to republication.
   const selected = String(await publishAndSelectTheme(page));
   await goto(page, "/themes");
-  await expect(page.getByLabel("Public selection")).toHaveValue(selected);
-  await page
-    .getByRole("button", { name: "Conformance (published)", exact: true })
-    .click();
+  await expect(
+    page.getByLabel("Current theme", { exact: true }),
+  ).toHaveAttribute("data-theme-selection", selected);
+  await page.getByRole("button", { name: "Conformance", exact: true }).click();
   const use = page.getByRole("button", { name: "Use this theme", exact: true });
   await openThemeAdvanced(page);
   await page
@@ -457,13 +478,15 @@ test("already-selected publication advances the public revision even when applyi
   );
   await use.click();
   await expect(page.getByRole("status")).toContainText(
-    "Publication confirmed, but applying was rejected",
+    "Your updated theme is ready, but switching was rejected",
   );
   await expect(page.getByRole("status")).toContainText(
-    "already-selected theme now uses the new revision",
+    "already in use, the new version is already live",
   );
   await expect(use).toBeEnabled();
-  await expect(page.getByLabel("Public selection")).toHaveValue(selected);
+  await expect(
+    page.getByLabel("Current theme", { exact: true }),
+  ).toHaveAttribute("data-theme-selection", selected);
   const publicContext = await tracedContext();
   try {
     const publicPage = await publicContext.newPage();
@@ -484,44 +507,70 @@ test("ZIP-only import opens an unselected draft and explicit use publishes then 
   const username = await signInAsNewUser(page);
   const archive = await minimalThemeZip(page);
   await goto(page, "/themes");
-  await expect(page.getByLabel("Stylesheet", { exact: true })).toBeHidden();
   await expect(
-    page.getByLabel("Catalog label override (optional)"),
-  ).toBeHidden();
+    page.getByRole("heading", { level: 1, name: "User theme", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "Choose how visitors see your public pages. This does not change your private workspace.",
+    ),
+  ).toBeVisible();
+  await expect(page.getByLabel("Current theme", { exact: true })).toHaveText(
+    "Using the site theme",
+  );
+  await expect(page.getByRole("group", { name: "Theme views" })).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "Add or choose a theme", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Review your choice", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Stylesheet", { exact: true })).toBeHidden();
+  await expect(page.getByLabel("Theme name (optional)")).toBeHidden();
   await expect(
     page.getByRole("button", { name: "Advanced", exact: true }),
   ).toHaveAttribute("aria-expanded", "false");
   await expect(
-    page.getByRole("button", { name: "Site default", exact: true }),
+    page.getByRole("button", { name: "Site theme", exact: true }),
   ).toHaveCount(0);
   const zipImport = page.locator(
     "section[aria-labelledby='theme-package-import-heading']",
   );
-  await zipImport.getByLabel("Theme Package ZIP").setInputFiles({
+  await zipImport.getByLabel("Theme ZIP file").setInputFiles({
     name: "filename-disagrees.zip",
     mimeType: "application/zip",
     buffer: archive,
   });
   const releaseImport = await stallServerFn(page, "themes/import_zip");
-  await zipImport.getByRole("button", { name: "Import ZIP draft" }).click();
+  await zipImport.getByRole("button", { name: "Upload theme" }).click();
   try {
-    await expect(page.getByRole("status")).toContainText("Importing");
+    await expect(page.getByRole("status")).toContainText("Uploading");
     await expect(page.getByRole("status")).not.toHaveClass(/success|error/);
   } finally {
     releaseImport();
   }
   const entry = page.getByRole("button", {
-    name: "Intake fixture (draft)",
+    name: "Intake fixture",
     exact: true,
   });
   await expect(entry).toBeVisible();
   await expect(page.getByRole("status")).toHaveClass(/success/);
   await expect(page.getByRole("status")).not.toHaveClass(/error/);
-  const selection = page.getByLabel("Public selection");
-  await expect(selection).toHaveValue("inherit");
+  const selection = page.getByLabel("Use a saved version");
+  await expect(
+    page.getByLabel("Current theme", { exact: true }),
+  ).toHaveAttribute("data-theme-selection", "inherit");
   await entry.click();
   await expect(entry).toHaveAttribute("aria-pressed", "true");
-  await expect(selection).toHaveValue("inherit");
+  await expect(
+    page.getByRole("heading", { name: "Intake fixture", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Saved, not live yet", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByLabel("Current theme", { exact: true }),
+  ).toHaveAttribute("data-theme-selection", "inherit");
   await expect(page.getByLabel("theme.json")).toBeHidden();
   const release = await stallServerFn(page, "themes/publish");
   const releaseApply = await stallServerFn(page, "themes/select");
@@ -533,31 +582,57 @@ test("ZIP-only import opens an unselected draft and explicit use publishes then 
   });
   const use = page.getByRole("button", { name: "Use this theme", exact: true });
   await use.click();
-  await expect(page.getByRole("status")).toContainText("Publishing");
+  await expect(page.getByRole("status")).toContainText(
+    "Getting your theme ready",
+  );
   await expect(page.getByRole("status")).not.toHaveClass(/success|error/);
   await expect(use).toBeDisabled();
-  await expect(selection).toBeDisabled();
+  await expect(selection).toHaveCount(0);
   await expect(entry).toBeDisabled();
   await expect(
-    page.getByRole("button", { name: "Your public pages", exact: true }),
+    page.getByRole("button", { name: "Use site theme", exact: true }),
   ).toBeDisabled();
   expect(requests).toEqual([THEME_ENDPOINTS.publish]);
   release();
   try {
-    await expect(page.getByRole("status")).toContainText(
-      "Publication confirmed. Applying theme",
-    );
+    await expect(page.getByRole("status")).toContainText("Applying your theme");
     await expect(page.getByRole("status")).not.toHaveClass(/success|error/);
   } finally {
     releaseApply();
   }
   await expect(page.getByRole("status")).toContainText(
-    "Theme published and applied",
+    "Your theme is now in use",
   );
   await expect(page.getByRole("status")).toHaveClass(/success/);
   await expect(page.getByRole("status")).not.toHaveClass(/error/);
   expect(requests).toEqual([THEME_ENDPOINTS.publish, THEME_ENDPOINTS.select]);
-  await expect(selection).not.toHaveValue("inherit");
+  await expect(
+    page.getByLabel("Current theme", { exact: true }),
+  ).not.toHaveAttribute("data-theme-selection", "inherit");
+  await expect(page.getByLabel("Current theme", { exact: true })).toHaveText(
+    "Intake fixture",
+  );
+  await expect(page.getByText(/^Currently in use\./)).toBeVisible();
+  await expect(
+    page.getByText("Saved, not live yet", { exact: true }),
+  ).toHaveCount(0);
+  expect(
+    await page
+      .getByRole("heading", { name: "Review your choice", exact: true })
+      .evaluate((node) => {
+        const add = document.querySelector("#theme-add-heading");
+        const use = Array.from(document.querySelectorAll("button")).find(
+          (button) => button.textContent === "Use this theme",
+        );
+        return Boolean(
+          add &&
+          use &&
+          add.compareDocumentPosition(node) &
+            Node.DOCUMENT_POSITION_FOLLOWING &&
+          node.compareDocumentPosition(use) & Node.DOCUMENT_POSITION_FOLLOWING,
+        );
+      }),
+  ).toBe(true);
   await expect(page.locator(".j-root")).toHaveAttribute("data-theme", "studio");
   await expect(page.locator("link[data-jaunder-theme-stylesheet]")).toHaveCount(
     0,
@@ -585,14 +660,14 @@ test("Advanced preserves unsaved input across toggles and hides collapsed contro
   await signInAs(page, "testoperator");
   const archive = await minimalThemeZip(page);
   await goto(page, "/themes");
-  await page.getByLabel("Theme Package ZIP").setInputFiles({
+  await page.getByLabel("Theme ZIP file").setInputFiles({
     name: "fixture.zip",
     mimeType: "application/zip",
     buffer: archive,
   });
-  await page.getByRole("button", { name: "Import ZIP draft" }).click();
+  await page.getByRole("button", { name: "Upload theme" }).click();
   await expect(
-    page.getByRole("button", { name: "Intake fixture (draft)", exact: true }),
+    page.getByRole("button", { name: "Intake fixture", exact: true }),
   ).toBeVisible();
   await openThemeAdvanced(page);
   const create = page.locator(
@@ -618,7 +693,7 @@ test("Advanced preserves unsaved input across toggles and hides collapsed contro
       cssImport.getByLabel("Stylesheet", { exact: true }),
       "/* unsaved import CSS */",
     ],
-    [page.getByLabel("Catalog label override (optional)"), "Second draft"],
+    [page.getByLabel("Theme name (optional)"), "Second draft"],
   ] as const;
   for (const [field, value] of fields) await field.fill(value);
   const advanced = page.getByRole("button", { name: "Advanced", exact: true });
@@ -649,9 +724,9 @@ test("Advanced preserves unsaved input across toggles and hides collapsed contro
   ).toBeVisible();
   await openThemeAdvanced(page);
   // Imported draft identity, unlike disclosure visibility, is a reset boundary.
-  await page.getByRole("button", { name: "Import ZIP draft" }).click();
+  await page.getByRole("button", { name: "Upload theme" }).click();
   await expect(
-    page.getByRole("button", { name: "Second draft (draft)", exact: true }),
+    page.getByRole("button", { name: "Second draft", exact: true }),
   ).toBeVisible();
   await expect(page.getByLabel("style.css", { exact: true })).toHaveValue(
     '[data-jaunder-part="main"] { outline: 2px solid rgb(1, 2, 3); }',
@@ -659,10 +734,8 @@ test("Advanced preserves unsaved input across toggles and hides collapsed contro
   await expect(
     page.getByLabel("Rename selected theme", { exact: true }),
   ).toHaveValue("");
-  await page.getByRole("button", { name: "Site default", exact: true }).click();
-  await expect(
-    page.getByLabel("Catalog label override (optional)"),
-  ).toHaveValue("");
+  await page.getByRole("button", { name: "Site theme", exact: true }).click();
+  await expect(page.getByLabel("Theme name (optional)")).toHaveValue("");
   await expect(cssImport.getByLabel("Theme name")).toHaveValue("");
 });
 
@@ -673,17 +746,19 @@ test("blank Advanced catalog override uses the package name", async ({
   const archive = await minimalThemeZip(page);
   await goto(page, "/themes");
   await openThemeAdvanced(page);
-  await page.getByLabel("Catalog label override (optional)").fill("   ");
-  await page.getByLabel("Theme Package ZIP").setInputFiles({
+  await page.getByLabel("Theme name (optional)").fill("   ");
+  await page.getByLabel("Theme ZIP file").setInputFiles({
     name: "different-filename.zip",
     mimeType: "application/zip",
     buffer: archive,
   });
-  await page.getByRole("button", { name: "Import ZIP draft" }).click();
+  await page.getByRole("button", { name: "Upload theme" }).click();
   await expect(
-    page.getByRole("button", { name: "Intake fixture (draft)", exact: true }),
+    page.getByRole("button", { name: "Intake fixture", exact: true }),
   ).toBeVisible();
-  await expect(page.getByLabel("Public selection")).toHaveValue("inherit");
+  await expect(
+    page.getByLabel("Current theme", { exact: true }),
+  ).toHaveAttribute("data-theme-selection", "inherit");
 });
 
 test("missing or malformed ZIP gives nearby actionable feedback without import or selection", async ({
@@ -699,33 +774,31 @@ test("missing or malformed ZIP gives nearby actionable feedback without import o
     if (new URL(request.url()).pathname === THEME_ENDPOINTS.import_zip)
       imports += 1;
   });
-  await zip
-    .getByRole("button", { name: "Import ZIP draft", exact: true })
-    .click();
+  await zip.getByRole("button", { name: "Upload theme", exact: true }).click();
   await expect(zip.getByRole("status")).toContainText(
-    "Choose a Theme Package ZIP file first",
+    "Choose a theme ZIP file first",
   );
   expect(imports).toBe(0);
-  await zip.getByLabel("Theme Package ZIP").setInputFiles({
+  await zip.getByLabel("Theme ZIP file").setInputFiles({
     name: "not-a-package.zip",
     mimeType: "application/zip",
     buffer: Buffer.from("not a ZIP package"),
   });
-  await zip
-    .getByRole("button", { name: "Import ZIP draft", exact: true })
-    .click();
-  await expect(zip.getByRole("status")).toContainText("Import rejected");
+  await zip.getByRole("button", { name: "Upload theme", exact: true }).click();
+  await expect(zip.getByRole("status")).toContainText("Upload rejected");
   await expect(zip.getByRole("status")).toContainText(
-    "Choose a valid Theme Package ZIP",
+    "Choose a valid theme ZIP file",
   );
   await expect(zip.getByRole("status")).toHaveAttribute("aria-live", "polite");
-  await expect(zip.getByRole("status")).not.toContainText("Imported");
+  await expect(zip.getByRole("status")).not.toContainText("Uploaded");
   await expect(
-    zip.getByRole("button", { name: "Import ZIP draft", exact: true }),
+    zip.getByRole("button", { name: "Upload theme", exact: true }),
   ).toBeEnabled();
   expect(imports).toBe(1);
   await expect(page.locator(".j-theme-catalog-item")).toHaveCount(0);
-  await expect(page.getByLabel("Public selection")).toHaveValue("inherit");
+  await expect(
+    page.getByLabel("Current theme", { exact: true }),
+  ).toHaveAttribute("data-theme-selection", "inherit");
 });
 
 for (const manifestName of ["Studio", "x".repeat(101)]) {
@@ -738,46 +811,46 @@ for (const manifestName of ["Studio", "x".repeat(101)]) {
     const zip = page.locator(
       'section[aria-labelledby="theme-package-import-heading"]',
     );
-    await zip.getByLabel("Theme Package ZIP").setInputFiles({
+    await zip.getByLabel("Theme ZIP file").setInputFiles({
       name: "filename-is-not-a-fallback.zip",
       mimeType: "application/zip",
       buffer: archive,
     });
     await zip
-      .getByRole("button", { name: "Import ZIP draft", exact: true })
+      .getByRole("button", { name: "Upload theme", exact: true })
       .click();
-    await expect(zip.getByRole("status")).toContainText("Import rejected");
+    await expect(zip.getByRole("status")).toContainText("Upload rejected");
     await expect(zip.getByRole("status")).toContainText("Advanced");
     await expect(page.locator(".j-theme-catalog-item")).toHaveCount(0);
     await openThemeAdvanced(page);
-    await expect(zip.getByRole("status")).toContainText("Import rejected");
+    await expect(zip.getByRole("status")).toContainText("Upload rejected");
     await expect(zip.getByRole("status")).toHaveClass(/error/);
-    await page.getByLabel("Catalog label override (optional)").fill("Studio");
+    await page.getByLabel("Theme name (optional)").fill("Studio");
     await zip
-      .getByRole("button", { name: "Import ZIP draft", exact: true })
+      .getByRole("button", { name: "Upload theme", exact: true })
       .click();
-    await expect(zip.getByRole("status")).toContainText("Import rejected");
+    await expect(zip.getByRole("status")).toContainText("Upload rejected");
     await expect(page.locator(".j-theme-catalog-item")).toHaveCount(0);
-    await page
-      .getByLabel("Catalog label override (optional)")
-      .fill("Recovered label");
+    await page.getByLabel("Theme name (optional)").fill("Recovered label");
     await zip
-      .getByRole("button", { name: "Import ZIP draft", exact: true })
+      .getByRole("button", { name: "Upload theme", exact: true })
       .click();
     await expect(
       page.getByRole("button", {
-        name: "Recovered label (draft)",
+        name: "Recovered label",
         exact: true,
       }),
     ).toBeVisible();
     await expect(zip.getByRole("status")).toContainText(
-      "Imported Recovered label",
+      "Uploaded Recovered label",
     );
-    await expect(page.getByLabel("Public selection")).toHaveValue("inherit");
+    await expect(
+      page.getByLabel("Current theme", { exact: true }),
+    ).toHaveAttribute("data-theme-selection", "inherit");
   });
 }
 
-test("duplicate catalog label rejects without suffix and explicit override recovers", async ({
+test("duplicate theme name rejects without suffix and explicit override recovers", async ({
   page,
 }) => {
   await signInAsNewUser(page);
@@ -785,28 +858,22 @@ test("duplicate catalog label rejects without suffix and explicit override recov
   const zip = page.locator(
     'section[aria-labelledby="theme-package-import-heading"]',
   );
-  await zip
-    .getByRole("button", { name: "Import ZIP draft", exact: true })
-    .click();
-  await expect(zip.getByRole("status")).toContainText("Import rejected");
-  await expect(zip.getByRole("status")).toContainText(
-    "duplicate catalog label",
-  );
+  await zip.getByRole("button", { name: "Upload theme", exact: true }).click();
+  await expect(zip.getByRole("status")).toContainText("Upload rejected");
+  await expect(zip.getByRole("status")).toContainText("duplicate theme name");
   await expect(page.locator(".j-theme-catalog-item")).toHaveCount(1);
   await openThemeAdvanced(page);
-  await expect(zip.getByRole("status")).toContainText("Import rejected");
+  await expect(zip.getByRole("status")).toContainText("Upload rejected");
   await expect(zip.getByRole("status")).toHaveClass(/error/);
-  await page
-    .getByLabel("Catalog label override (optional)")
-    .fill("Distinct label");
-  await zip
-    .getByRole("button", { name: "Import ZIP draft", exact: true })
-    .click();
+  await page.getByLabel("Theme name (optional)").fill("Distinct label");
+  await zip.getByRole("button", { name: "Upload theme", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "Distinct label (draft)", exact: true }),
+    page.getByRole("button", { name: "Distinct label", exact: true }),
   ).toBeVisible();
   await expect(page.locator(".j-theme-catalog-item")).toHaveCount(2);
-  await expect(page.getByLabel("Public selection")).toHaveValue("inherit");
+  await expect(
+    page.getByLabel("Current theme", { exact: true }),
+  ).toHaveAttribute("data-theme-selection", "inherit");
 });
 
 for (const viewport of [
@@ -883,7 +950,7 @@ for (const viewport of [
     await use.focus();
     await page.keyboard.press("Enter");
     const status = page.getByRole("status");
-    await expect(status).toContainText("Publishing");
+    await expect(status).toContainText("Getting your theme ready");
     await expect(status).toHaveAttribute("aria-live", "polite");
     expect(
       await status.evaluate((node) =>
@@ -895,7 +962,7 @@ for (const viewport of [
       ),
     ).toBe(false);
     release();
-    await expect(status).toContainText("Theme published and applied");
+    await expect(status).toContainText("Your theme is now in use");
     await expect(use).toBeEnabled();
     await expect(status).toBeInViewport();
     await page.route(`**${THEME_ENDPOINTS.publish}`, (route) =>
@@ -906,8 +973,8 @@ for (const viewport of [
       }),
     );
     await use.click();
-    await expect(status).toContainText("Publication rejected");
-    await expect(status).toContainText("Fix the draft");
+    await expect(status).toContainText("Getting your theme ready was rejected");
+    await expect(status).toContainText("Fix the theme");
     await expect(status).toHaveClass(/error/);
     await expect(use).toBeEnabled();
     await page.mouse.move(viewport.width - 40, 350);
@@ -940,17 +1007,15 @@ test("theme management mounts as Studio without a public theme stylesheet", asyn
   await expect(guide).toHaveAttribute("target", "_blank");
   await expect(
     page.getByText(
-      "No themes in this catalog yet. Create a draft or import a package to start authoring.",
+      "No saved themes yet. Upload a theme ZIP file to get started.",
     ),
   ).toBeVisible();
   await expect(page.locator(".j-loading")).toHaveCount(0);
   await expect(page.locator(".j-theme-catalog-item")).toHaveCount(0);
   await expect(
-    page.getByRole("heading", { name: "Catalog scope" }),
+    page.getByRole("heading", { level: 1, name: "User theme", exact: true }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Your public pages" }),
-  ).toBeVisible();
+  await expect(page.getByRole("group", { name: "Theme views" })).toHaveCount(0);
   await expect(page.locator(".j-root")).toHaveAttribute("data-theme", "studio");
   await expect(page.locator("link[data-jaunder-theme-stylesheet]")).toHaveCount(
     0,
@@ -963,12 +1028,17 @@ test("theme management mounts as Studio without a public theme stylesheet", asyn
     const guidance = page.getByRole("region", {
       name: "Author themes from a repository",
     });
-    const scope = page.getByRole("region", { name: "Catalog scope" });
+    const scope = page.getByRole("region", {
+      name: "Current theme setting",
+      exact: true,
+    });
     const guidanceBox = await guidance.boundingBox();
     const scopeBox = await scope.boundingBox();
-    const scopeHeadingBox = await scope.getByRole("heading").boundingBox();
+    const scopeHeadingBox = await scope
+      .getByRole("heading", { name: "Current theme", exact: true })
+      .boundingBox();
     const scopeButtonBox = await scope
-      .getByRole("button", { name: "Your public pages", exact: true })
+      .getByLabel("Current theme", { exact: true })
       .boundingBox();
     expect(guidanceBox).not.toBeNull();
     expect(scopeBox).not.toBeNull();
@@ -1012,7 +1082,7 @@ test("theme catalog loading does not offer the empty-catalog next action", async
   const release = await stallServerFn(page, "themes/list");
   await goto(page, "/themes");
 
-  await expect(page.getByText("Loading catalog…")).toBeVisible();
+  await expect(page.getByText("Loading available themes…")).toBeVisible();
   await expect(page.locator(".j-theme-catalog-empty")).toHaveCount(0);
 
   release();
@@ -1246,7 +1316,7 @@ test("author completes the custom theme lifecycle through Studio", async ({
   await expect(page.getByRole("status")).toContainText("Publication confirmed");
   await expect(page.getByRole("status")).toHaveClass(/success/);
   await expect(page.getByRole("status")).not.toHaveClass(/error/);
-  const publicSelection = page.getByLabel("Public selection");
+  const publicSelection = page.getByLabel("Use a saved version");
   await expect(
     publicSelection.getByRole("option", { name: "Night round trip" }),
   ).toHaveCount(1);
@@ -1258,7 +1328,9 @@ test("author completes the custom theme lifecycle through Studio", async ({
     mutation("select"),
     publicSelection.selectOption(themeId!),
   ]);
-  await expect(publicSelection).toHaveValue(themeId!);
+  await expect(
+    page.getByLabel("Current theme", { exact: true }),
+  ).toHaveAttribute("data-theme-selection", themeId!);
 
   const publicContext = await tracedContext();
   try {
@@ -1306,7 +1378,13 @@ test("author completes the custom theme lifecycle through Studio", async ({
   await goto(freshPage, "/themes");
   await persistedSelection;
   releaseCatalog();
-  await expect(freshPage.getByLabel("Public selection")).toHaveValue(themeId!);
+  await openThemeAdvanced(freshPage);
+  await expect(freshPage.getByLabel("Use a saved version")).toHaveValue(
+    themeId!,
+  );
+  await expect(
+    freshPage.getByLabel("Current theme", { exact: true }),
+  ).toHaveAttribute("data-theme-selection", themeId!);
   await freshPage.getByRole("button", { name: /Night round trip/ }).click();
   await openThemeAdvanced(freshPage);
   await expect(freshPage.getByLabel("Logo image")).toHaveValue(
@@ -1358,18 +1436,18 @@ test("author completes the custom theme lifecycle through Studio", async ({
   await expect(
     page.getByRole("button", { name: /Night round trip/ }),
   ).toHaveCount(0);
-  await expect(publicSelection).toHaveValue("inherit");
+  await expect(
+    page.getByLabel("Current theme", { exact: true }),
+  ).toHaveAttribute("data-theme-selection", "inherit");
 
-  const zipImport = page
-    .locator("section")
-    .filter({ hasText: "Import Theme Package" });
-  await zipImport
-    .getByLabel("Catalog label override (optional)")
-    .fill("Restored package");
-  await zipImport.getByLabel("Theme Package ZIP").setInputFiles(exportedPath!);
+  const zipImport = page.locator(
+    'section[aria-labelledby="theme-package-import-heading"]',
+  );
+  await zipImport.getByLabel("Theme name (optional)").fill("Restored package");
+  await zipImport.getByLabel("Theme ZIP file").setInputFiles(exportedPath!);
   await Promise.all([
     mutation("import_zip"),
-    zipImport.getByRole("button", { name: "Import ZIP draft" }).click(),
+    zipImport.getByRole("button", { name: "Upload theme" }).click(),
   ]);
   await expect(
     page.getByRole("button", { name: /Restored package/ }),
@@ -1381,6 +1459,112 @@ test("author completes the custom theme lifecycle through Studio", async ({
       .getByRole("list", { name: "Selected header Media" })
       .getByRole("listitem"),
   ).toHaveCount(0);
+});
+
+test("current theme and Advanced saved choices stay truthful across inheritance and bundled recovery", async ({
+  page,
+  tracedContext,
+}) => {
+  const username = await signInAsNewUser(page);
+  const themeId = String(await publishTheme(page));
+  await goto(page, "/themes");
+  const saved = page.getByLabel("Use a saved version");
+  await expect(
+    saved.getByRole("option", { name: "Conformance", includeHidden: true }),
+  ).toHaveAttribute("value", themeId);
+  // A real placeholder must be selected, not selectedIndex=-1 from an unsupported token.
+  await expect
+    .poll(() =>
+      saved.evaluate((node: HTMLSelectElement) =>
+        Array.from(node.selectedOptions, (option) => option.value),
+      ),
+    )
+    .toEqual([""]);
+  await expect(saved).toBeHidden();
+  await expect(page.getByLabel("Current theme", { exact: true })).toHaveText(
+    "Using the site theme",
+  );
+  expect(
+    await page.getByLabel("Current theme", { exact: true }).evaluate((node) => {
+      const add = document.querySelector("#theme-add-heading");
+      const review = document.querySelector("#theme-catalog-heading");
+      const other = document.querySelector("#theme-ready-heading");
+      return Boolean(
+        add &&
+        review &&
+        other &&
+        node.compareDocumentPosition(add) & Node.DOCUMENT_POSITION_FOLLOWING &&
+        add.compareDocumentPosition(review) &
+          Node.DOCUMENT_POSITION_FOLLOWING &&
+        review.compareDocumentPosition(other) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+    }),
+  ).toBe(true);
+  await expect(
+    page.getByRole("heading", { name: "Other theme choices", exact: true }),
+  ).toBeVisible();
+  await openThemeAdvanced(page);
+  await expect(saved).toBeVisible();
+  await expect(saved.locator("option:checked")).toHaveText(
+    "Choose a ready saved theme",
+  );
+  const writes: { path: string; body: string }[] = [];
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (path === THEME_ENDPOINTS.publish || path === THEME_ENDPOINTS.select)
+      writes.push({ path, body: request.postData() ?? "" });
+  });
+  await saved.selectOption(themeId);
+  await expect(
+    page.getByLabel("Current theme", { exact: true }),
+  ).toHaveAttribute("data-theme-selection", themeId);
+  expect(writes.map((write) => write.path)).toEqual([THEME_ENDPOINTS.select]);
+  const selected = new URLSearchParams(writes[0].body);
+  expect(selected.get("scope")).toBe("author");
+  expect(selected.get("selection[value]")).toBe(themeId);
+  await page.getByRole("button", { name: "Use reader", exact: true }).click();
+  await expect(page.getByLabel("Current theme", { exact: true })).toHaveText(
+    "reader",
+  );
+  await expect
+    .poll(() =>
+      saved.evaluate((node: HTMLSelectElement) =>
+        Array.from(node.selectedOptions, (option) => option.value),
+      ),
+    )
+    .toEqual([""]);
+  await page
+    .getByRole("button", { name: "Use site theme", exact: true })
+    .click();
+  await expect(page.getByLabel("Current theme", { exact: true })).toHaveText(
+    "Using the site theme",
+  );
+  await expect(saved.locator("option:checked")).toHaveText(
+    "Choose a ready saved theme",
+  );
+  await saved.selectOption(themeId);
+  await expect(saved).toHaveValue(themeId);
+  await expect(
+    page.getByLabel("Current theme", { exact: true }),
+  ).toHaveAttribute("data-theme-selection", themeId);
+  expect(writes.map((write) => write.path)).toEqual(
+    Array(4).fill(THEME_ENDPOINTS.select),
+  );
+  const context = await tracedContext();
+  try {
+    const cold = await context.newPage();
+    await signInAs(cold, username);
+    const release = await stallServerFn(cold, "themes/list");
+    await goto(cold, "/themes");
+    await expect(cold.getByLabel("Use a saved version")).toHaveCount(0);
+    release();
+    await expect(cold.getByLabel("Use a saved version")).toBeHidden();
+    await openThemeAdvanced(cold);
+    await expect(cold.getByLabel("Use a saved version")).toHaveValue(themeId);
+  } finally {
+    await context.close();
+  }
 });
 
 test("cold Studio return retains a custom author selection before built-in recovery", async ({
@@ -1400,8 +1584,10 @@ test("cold Studio return retains a custom author selection before built-in recov
   }
   const themeId = await publishTheme(page);
   await goto(page, "/themes");
+  await expect(page.getByLabel("Use a saved version")).toBeHidden();
+  await openThemeAdvanced(page);
 
-  const selection = page.getByLabel("Public selection");
+  const selection = page.getByLabel("Use a saved version");
   await expect(
     selection.getByRole("option", { name: "Conformance" }),
   ).toHaveAttribute("value", String(themeId));
@@ -1413,7 +1599,9 @@ test("cold Studio return retains a custom author selection before built-in recov
     ),
     selection.selectOption(String(themeId)),
   ]);
-  await expect(selection).toHaveValue(String(themeId));
+  await expect(
+    page.getByLabel("Current theme", { exact: true }),
+  ).toHaveAttribute("data-theme-selection", String(themeId));
 
   const publicContext = await tracedContext();
   try {
@@ -1432,11 +1620,16 @@ test("cold Studio return retains a custom author selection before built-in recov
     const studioPage = await studioContext.newPage();
     await signInAs(studioPage, username);
     await goto(studioPage, "/themes");
-    const coldSelection = studioPage.getByLabel("Public selection");
+    await expect(studioPage.getByLabel("Use a saved version")).toBeHidden();
+    await openThemeAdvanced(studioPage);
+    const coldSelection = studioPage.getByLabel("Use a saved version");
     await expect(
       coldSelection.getByRole("option", { name: "Conformance" }),
     ).toHaveAttribute("value", String(themeId));
     await expect(coldSelection).toHaveValue(String(themeId));
+    await expect(
+      studioPage.getByLabel("Current theme", { exact: true }),
+    ).toHaveAttribute("data-theme-selection", String(themeId));
 
     const recoveryWrites: string[] = [];
     studioPage.on("request", (request) => {
@@ -1450,12 +1643,20 @@ test("cold Studio return retains a custom author selection before built-in recov
           new URL(response.url()).pathname === THEME_ENDPOINTS.select &&
           response.request().method() === "POST",
       ),
-      coldSelection.selectOption("studio"),
+      studioPage
+        .getByRole("button", { name: "Use studio", exact: true })
+        .click(),
     ]);
-    await expect(coldSelection).toHaveValue("studio");
+    await expect(
+      studioPage.getByLabel("Current theme", { exact: true }),
+    ).toHaveAttribute("data-theme-selection", "studio");
     expect(recoveryWrites).toEqual([THEME_ENDPOINTS.select]);
-    await coldSelection.selectOption("inherit");
-    await expect(coldSelection).toHaveValue("inherit");
+    await studioPage
+      .getByRole("button", { name: "Use site theme", exact: true })
+      .click();
+    await expect(
+      studioPage.getByLabel("Current theme", { exact: true }),
+    ).toHaveAttribute("data-theme-selection", "inherit");
     expect(recoveryWrites).toEqual([
       THEME_ENDPOINTS.select,
       THEME_ENDPOINTS.select,
@@ -1487,10 +1688,24 @@ test("operator manages the site catalog through public selection and fallback", 
         response.request().method() === "POST",
     );
 
-  const siteCatalog = page.getByRole("button", { name: "Site default" });
+  const siteCatalog = page.getByRole("button", {
+    name: "Site theme",
+    exact: true,
+  });
   await expect(siteCatalog).toBeVisible();
   await siteCatalog.click();
   await expect(siteCatalog).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Site theme", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "Choose the default look for public site pages and user pages using the site theme.",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Use site theme", exact: true }),
+  ).toHaveCount(0);
 
   await openThemeAdvanced(page);
   const cssImport = page.locator("section").filter({ hasText: "Import CSS" });
@@ -1533,12 +1748,14 @@ test("operator manages the site catalog through public selection and fallback", 
   const releaseSelection = await stallServerFn(page, "themes/select");
   const use = page.getByRole("button", { name: "Use this theme", exact: true });
   const authorScope = page.getByRole("button", {
-    name: "Your public pages",
+    name: "User theme",
     exact: true,
   });
-  const publicSelection = page.getByLabel("Public selection");
+  const publicSelection = page.getByLabel("Use a saved version");
   await use.click();
-  await expect(page.getByRole("status")).toContainText("Publishing");
+  await expect(page.getByRole("status")).toContainText(
+    "Getting your theme ready",
+  );
   await expect(authorScope).toBeDisabled();
   await expect(siteCatalog).toBeDisabled();
   await expect(publicSelection).toBeDisabled();
@@ -1552,7 +1769,7 @@ test("operator manages the site catalog through public selection and fallback", 
   expect(writes.map((write) => write.path)).toEqual([THEME_ENDPOINTS.publish]);
   await expect(siteCatalog).toHaveAttribute("aria-pressed", "true");
   releasePublication();
-  await expect(page.getByRole("status")).toContainText("Applying theme");
+  await expect(page.getByRole("status")).toContainText("Applying your theme");
   await expect(use).toBeDisabled();
   await expect(authorScope).toBeDisabled();
   await use.evaluate((node) =>
@@ -1563,7 +1780,7 @@ test("operator manages the site catalog through public selection and fallback", 
   );
   releaseSelection();
   await expect(page.getByRole("status")).toContainText(
-    "Theme published and applied",
+    "Your theme is now in use",
   );
   await expect(use).toBeEnabled();
   expect(writes.map((write) => write.path)).toEqual([
@@ -1579,7 +1796,9 @@ test("operator manages the site catalog through public selection and fallback", 
     .getByRole("option", { name: "Operator site published" })
     .getAttribute("value");
   expect(themeId).not.toBeNull();
-  await expect(publicSelection).toHaveValue(themeId!);
+  await expect(
+    page.getByLabel("Current theme", { exact: true }),
+  ).toHaveAttribute("data-theme-selection", themeId!);
 
   const publicContext = await tracedContext();
   try {
@@ -1606,10 +1825,10 @@ test("operator manages the site catalog through public selection and fallback", 
       inheritingAuthor.locator("[data-jaunder-theme-surface]"),
     ).toHaveCSS("outline-color", "rgb(4, 5, 6)");
     await expect(
-      publicPage.getByRole("group", { name: "Theme catalog scope" }),
+      publicPage.getByRole("group", { name: "Theme views" }),
     ).toHaveCount(0);
     await expect(
-      publicPage.getByRole("button", { name: "Your public pages" }),
+      publicPage.getByRole("button", { name: "User theme" }),
     ).toHaveCount(0);
   } finally {
     await publicContext.close();
@@ -1622,7 +1841,9 @@ test("operator manages the site catalog through public selection and fallback", 
   await expect(
     page.getByRole("button", { name: /Operator site published/ }),
   ).toHaveCount(0);
-  await expect(publicSelection).toHaveValue("studio");
+  await expect(
+    page.getByLabel("Current theme", { exact: true }),
+  ).toHaveAttribute("data-theme-selection", "studio");
 
   const fallbackContext = await tracedContext();
   try {

@@ -1,8 +1,14 @@
 # Issue #1750: User/Site theme UX revision outline
 
-- Status: Lead-accepted internal execution aid after cold outline review found
-  no findings. Human “agreed” covers the visible direction quoted in the spec,
-  not private seams, document bytes or a human-approved outline hash.
+- Status: Lead accepted Tasks 1–2 after scoped Standards and Spec reviews found
+  no findings and native plus 44 Chromium / 44 Firefox focused proofs passed.
+  The six-image Site BEFORE prerequisite was accepted at clean
+  `9931031adefa58f9e364c625a59d3cad53f2ab29` with the maintained standard
+  `operator`, before presentation mutation. Normal hooks gate implementation
+  preservation; Task 3 final committed-tree visual proof, CI/coverage and human
+  UX acceptance remain pending. Human “agreed” covers the visible direction
+  quoted in the spec, not private seams, document bytes or a human-approved
+  outline hash. Final capture requires separate admission.
 - Execute, only after admission, with `jaunder-iterate`; use `jaunder-dispatch`
   for bounded work. No execution is authorized by this preparation assignment.
 - Reason for workplan (not a new public-interface approval trigger): ordered
@@ -26,7 +32,7 @@ programmatic/API versus wheel/UI labels and raw 355-byte `84d7…` ZIP condition
 
 ## Ordered tasks
 
-- [ ] 1. Shared journey with distinct owner-specific presentations.
+- [x] 1. Shared journey with distinct owner-specific presentations.
   - Lead technical seam: named `UserThemeView` / `SiteThemeView` compositions
     share cohesive workflow/components; names are not a new public API contract.
     Neither duplicate editors nor relabel the existing combined form.
@@ -37,7 +43,7 @@ programmatic/API versus wheel/UI labels and raw 355-byte `84d7…` ZIP condition
     reads, owner/pending decisions and feedback; maintained theme-management
     browser seam for both roles, upload/choice/use and selection-only recovery.
 
-- [ ] 2. Regression completeness and enduring guidance.
+- [x] 2. Regression completeness and enduring guidance.
   - Contract: plain primary copy without inventing state; confirmed versus
     uncertain stages and already-selected revision truthfulness remain intact.
     Preserve names/validation/quotas/API behavior, errors and private Studio.
