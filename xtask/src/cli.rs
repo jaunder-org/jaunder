@@ -356,6 +356,9 @@ pub enum Command {
     /// points the e2e suite actually drives.
     #[command(subcommand)]
     ServerFnCoverage(ServerFnCoverageCommand),
+    /// Validate completed mutation producer evidence without running mutations.
+    #[command(subcommand)]
+    Mutants(MutantsCommand),
     /// Observe a pull request until the next caller-actionable outcome (#729).
     /// Host-only manual command; needs `gh`.
     #[command(subcommand)]
@@ -384,6 +387,22 @@ pub enum Command {
         /// A Jaunder command run against an existing named workspace.
         #[arg(last = true, allow_hyphen_values = true)]
         command: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum MutantsCommand {
+    /// Report counts only for completed, applicable and consistent evidence.
+    VerifyEvidence {
+        #[arg(long, value_parser = nonempty)]
+        package: String,
+        #[arg(long, value_parser = nonempty)]
+        file: String,
+        /// Producer output root containing mutants.out/.
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, allow_hyphen_values = true)]
+        producer_status: i32,
     },
 }
 
@@ -757,6 +776,7 @@ impl Cli {
                 "production-baseline-qualify-styling"
             }
             Command::Sandbox { .. } => "sandbox",
+            Command::Mutants(MutantsCommand::VerifyEvidence { .. }) => "mutants-verify-evidence",
             Command::Pr(PrCommand::Watch { .. }) => "pr-watch",
             Command::Pr(PrCommand::Cleanup { .. }) => "pr-cleanup",
             Command::Pr(PrCommand::Land { .. }) => "pr-land",

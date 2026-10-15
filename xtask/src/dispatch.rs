@@ -6,9 +6,9 @@ use xshell::Shell;
 use crate::{
     adr, adr_readme, audit_wasm, cache_safety, census,
     cli::{
-        AdrCommand, CacheSafetyCommand, CiValidateLane, Cli, Command, CoverageCommand, NixCommand,
-        PrCommand, ProductionBaselineCommand, ServerFnCoverageCommand, TracesCommand,
-        WasmCoverageCommand,
+        AdrCommand, CacheSafetyCommand, CiValidateLane, Cli, Command, CoverageCommand,
+        MutantsCommand, NixCommand, PrCommand, ProductionBaselineCommand, ServerFnCoverageCommand,
+        TracesCommand, WasmCoverageCommand,
     },
     coverage, gate, issue, lifecycle, nix_probe, performance, pr, production_baseline,
     result::{CommandResult, Mode, StepResult},
@@ -29,6 +29,20 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         );
     }
     match cli.command {
+        Command::Mutants(MutantsCommand::VerifyEvidence {
+            package,
+            file,
+            output,
+            producer_status,
+        }) => {
+            let start = Instant::now();
+            let report = crate::mutants::verify_evidence(&package, &file, &output, producer_status)
+                .map_err(|error| error.context("verification failed"))?;
+            let mut result = CommandResult::new("mutants-verify-evidence");
+            result.push(StepResult::ok("mutants-verify-evidence").detail(report));
+            lifecycle::finalize(&mut result, start);
+            Ok(result)
+        }
         Command::Performance(command) => performance::run(command),
         Command::ProductionBaseline(
             command @ (ProductionBaselineCommand::Discover { .. }
