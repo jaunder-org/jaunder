@@ -8,13 +8,28 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#theme-management-api-transport`
 
 `/themes` is an authenticated Studio route. It begins in the session owner's
 author catalog; an operator may deliberately switch to the distinct site
-catalog. The server remains authoritative for the selected scope and returns an
-authorization error if site operations are attempted without operator status.
+catalog. The UI labels these scopes **Your public pages** and **Site default**;
+only operators see the latter. The server remains authoritative for the selected
+scope and returns an authorization error if site operations are attempted
+without operator status.
 
 The route loads catalog, selection, draft and presentation data through the
 owner-authorized API. Its custom-theme preview is isolated from Studio: draft
 CSS is returned only to a sandboxed preview document and is never inserted into
-the private route's stylesheet cascade.
+the private route's stylesheet cascade. The default form exposes only a ZIP
+picker and import action. Omitted multipart `name` uses the shared validated
+manifest name; an optional Advanced UI override omits blank input, while an
+explicit invalid or blank API name still fails without fallback. Catalog labels
+retain trimming, the 100-Unicode-scalar limit, reserved bundled names and
+case-insensitive uniqueness. Invalid packages and collisions never trigger
+filename naming, suffixes or import-then-rename.
+
+Catalog choice opens a private draft without changing public selection. Advanced
+is initially closed and preserves unsaved inputs when toggled; its hidden
+controls cannot receive keyboard focus. Source/package/Media and authoring
+operations are opt-in, while **Use this theme** and live feedback stay outside
+the disclosure. The standard scroll region makes expanded bottom controls
+reachable.
 
 ## Endpoint census
 
@@ -40,9 +55,26 @@ the private route's stylesheet cascade.
 | `endpoint:/api/themes/preview`          | API transport | Renders an owned draft through the Style Contract renderer without changing selection.               |
 | `/theme/draft/{theme_id}/{path}`        | API transport | Serves an owned draft asset only to its author owner or an operator owning its site draft.           |
 
-The mounted `/themes` journey consumes this complete census. Every confirmed
-mutation rereads the affected catalog state; an indeterminate commit also
-rereads and leaves an explicit status message that the owner must review the
-reloaded state. Site-owned operations require an operator; author-owned
-operations require the authenticated author, and every draft, package, preview,
-asset, and binding read remains owner-scoped.
+The mounted `/themes` journey consumes this complete census. **Use this theme**
+captures scope and Theme ID, publishes, and applies that same ID only after
+`Confirmed` publication. Pending actions cannot change that captured target or
+dispatch duplicates. Bundled selection and author inheritance use selection
+alone. Publication and selection remain separate operations: publication of an
+already-selected ID advances its public revision even if the later selection
+fails.
+
+Typed rejection prevents chaining. `CommitIndeterminate` or transport/decoding
+uncertainty after dispatch stops chaining without an automatic retry, success,
+rollback or definite-nonactivation claim. Catalog and selection rereads describe
+current state, not proof of an uncertain write's outcome; failed rereads report
+unknown state and a next action. A failed or pending selection read displays a
+disabled unknown placeholder, never a fabricated inheritance value. Import
+feedback is beside its picker; publication/application feedback is beside Use,
+outside Advanced. Other confirmed/indeterminate authoring mutations request
+owner-state rereads rather than asserting that those reads succeeded.
+
+Site-owned operations require an operator; author-owned operations require the
+authenticated author, and every draft, package, preview, asset, and binding read
+remains owner-scoped. Custom styles affect public site/author routes according
+to precedence; Home and private management always keep protected application
+styling.

@@ -9,6 +9,7 @@ import {
 } from "./helpers";
 import { uploadMedia } from "./media-helpers";
 import {
+  importMinimalTheme,
   minimalThemeZip,
   openThemeAdvanced,
   packageMember,
@@ -24,6 +25,8 @@ const ASSET_BYTES = [
   0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
 ];
 const THEME_ENDPOINTS = {
+  list: "/api/themes/list",
+  get_selection: "/api/themes/get_selection",
   import_css: "/api/themes/import_css",
   import_package: "/api/themes/import_package",
   import_zip: "/api/themes/import_zip",
@@ -37,6 +40,384 @@ const THEME_ENDPOINTS = {
   shuffle: "/api/themes/shuffle",
 } as const;
 type ThemeEndpoint = keyof typeof THEME_ENDPOINTS;
+
+test("publication rejection stops selection and offers draft repair without uncertain-success claims", async ({
+  page,
+}) => {
+  await signInAsNewUser(page);
+  await importMinimalTheme(page);
+  let selections = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === THEME_ENDPOINTS.select)
+      selections += 1;
+  });
+  await page.route(`**${THEME_ENDPOINTS.publish}`, (route) =>
+    route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({
+        validation: { message: "Draft rejected for this test" },
+      }),
+    }),
+  );
+  await page
+    .getByRole("button", { name: "Use this theme", exact: true })
+    .click();
+  await expect(page.getByRole("status")).toContainText("Publication rejected");
+  await expect(page.getByRole("status")).toContainText("Fix the draft");
+  await expect(page.getByRole("status")).not.toContainText("may have advanced");
+  await expect(
+    page.getByRole("button", { name: "Use this theme", exact: true }),
+  ).toBeEnabled();
+  expect(selections).toBe(0);
+  await expect(page.getByLabel("Public selection")).toHaveValue("inherit");
+});
+
+for (const stage of ["publish", "select"] as const) {
+  for (const fault of [
+    "reject",
+    "indeterminate",
+    "lost",
+    "undecodable",
+  ] as const) {
+    if (stage === "publish" && fault === "reject") continue; // Covered by the repair tracer above.
+    test(`${stage} ${fault} stops or finishes chaining honestly and rereads without retry`, async ({
+      page,
+      tracedContext,
+    }) => {
+      const username = await signInAsNewUser(page);
+      await importMinimalTheme(page);
+      const writes: { path: string; body: string }[] = [];
+      const reads: string[] = [];
+      page.on("request", (request) => {
+        const path = new URL(request.url()).pathname;
+        if (path === THEME_ENDPOINTS.publish || path === THEME_ENDPOINTS.select)
+          writes.push({ path, body: request.postData() ?? "" });
+        if (path === "/api/themes/list" || path === "/api/themes/get_selection")
+          reads.push(path);
+      });
+      await page.route(`**${THEME_ENDPOINTS[stage]}`, async (route) => {
+        if (fault === "reject") {
+          await route.fulfill({
+            status: 500,
+            contentType: "application/json",
+            body: JSON.stringify({
+              validation: { message: "Selection rejected for this test" },
+            }),
+          });
+          return;
+        }
+        // Exercise the real mutation first; only its acknowledgement is replaced/lost.
+        const response = await route.fetch();
+        expect(response.status()).toBe(200);
+        expect(await response.json()).toEqual({ Confirmed: null });
+        if (fault === "lost") await route.abort("failed");
+        else
+          await route.fulfill({
+            response,
+            body:
+              fault === "indeterminate"
+                ? JSON.stringify({ CommitIndeterminate: null })
+                : "undecodable acknowledgement",
+          });
+      });
+      const use = page.getByRole("button", {
+        name: "Use this theme",
+        exact: true,
+      });
+      await use.click();
+      const status = page.getByRole("status");
+      await expect(status).toContainText(
+        stage === "publish"
+          ? "Publication outcome is uncertain"
+          : fault === "reject"
+            ? "applying was rejected"
+            : "applying outcome is uncertain",
+      );
+      await expect(status).not.toContainText("Theme published and applied");
+      await expect(status).toContainText("Catalog reread");
+      await expect(status).toContainText("Current selection from reread");
+      await expect(use).toBeEnabled();
+      const expectedWrites =
+        stage === "publish"
+          ? [THEME_ENDPOINTS.publish]
+          : [THEME_ENDPOINTS.publish, THEME_ENDPOINTS.select];
+      expect(writes.map((write) => write.path)).toEqual(expectedWrites);
+      expect(reads).toContain("/api/themes/list");
+      expect(reads).toContain("/api/themes/get_selection");
+      expect(new URLSearchParams(writes[0].body).get("scope")).toBe("author");
+      if (stage === "select") {
+        await expect(status).toContainText("Publication confirmed");
+        const publish = new URLSearchParams(writes[0].body);
+        const select = new URLSearchParams(writes[1].body);
+        expect(select.get("scope")).toBe("author");
+        expect(select.get("selection[value]")).toBe(publish.get("theme_id"));
+      } else await expect(status).toContainText("Selection was not requested");
+      const applied = stage === "select" && fault !== "reject";
+      if (!applied)
+        await expect(page.getByLabel("Public selection")).toHaveValue(
+          "inherit",
+        );
+      else
+        await expect(page.getByLabel("Public selection")).not.toHaveValue(
+          "inherit",
+        );
+      const publicContext = await tracedContext();
+      try {
+        const publicPage = await publicContext.newPage();
+        await goto(publicPage, `/~${username}`);
+        await expect(publicPage.locator(".j-root")).toHaveAttribute(
+          "data-theme",
+          applied ? "custom" : "studio",
+        );
+        if (applied)
+          await expect(
+            publicPage.locator('[data-jaunder-part="main"]'),
+          ).toHaveCSS("outline-color", "rgb(1, 2, 3)");
+      } finally {
+        await publicContext.close();
+      }
+      await expect(page.locator(".j-root")).toHaveAttribute(
+        "data-theme",
+        "studio",
+      );
+      await expect(
+        page.locator("link[data-jaunder-theme-stylesheet]"),
+      ).toHaveCount(0);
+    });
+  }
+
+  test(`${stage} uncertainty reports failed catalog and selection rereads as unknown`, async ({
+    page,
+  }) => {
+    await signInAsNewUser(page);
+    await importMinimalTheme(page);
+    let dispatched = false;
+    const writes: string[] = [];
+    page.on("request", (request) => {
+      const path = new URL(request.url()).pathname;
+      if (path === THEME_ENDPOINTS.publish || path === THEME_ENDPOINTS.select)
+        writes.push(path);
+    });
+    for (const endpoint of [
+      THEME_ENDPOINTS.list,
+      THEME_ENDPOINTS.get_selection,
+    ]) {
+      await page.route(`**${endpoint}`, async (route) => {
+        if (dispatched)
+          await route.fulfill({ status: 500, body: "reread unavailable" });
+        else await route.continue();
+      });
+    }
+    await page.route(`**${THEME_ENDPOINTS[stage]}`, async (route) => {
+      const response = await route.fetch();
+      expect(response.status()).toBe(200);
+      expect(await response.json()).toEqual({ Confirmed: null });
+      dispatched = true;
+      await route.fulfill({
+        response,
+        body: JSON.stringify({ CommitIndeterminate: null }),
+      });
+    });
+    const use = page.getByRole("button", {
+      name: "Use this theme",
+      exact: true,
+    });
+    await use.click();
+    await expect(page.getByRole("status")).toContainText(
+      "Publication state is unknown",
+    );
+    await expect(page.getByRole("status")).toContainText(
+      "Current selection is unknown",
+    );
+    await expect(page.getByRole("status")).toContainText("reopen Themes");
+    await expect(page.getByRole("status")).not.toContainText(
+      "Current selection from reread: inherit",
+    );
+    await expect(use).toBeEnabled();
+    await expect(page.getByLabel("Public selection")).toBeDisabled();
+    await expect(page.getByLabel("Public selection")).toHaveValue("");
+    expect(writes).toEqual(
+      stage === "publish"
+        ? [THEME_ENDPOINTS.publish]
+        : [THEME_ENDPOINTS.publish, THEME_ENDPOINTS.select],
+    );
+  });
+}
+
+test("invalid package assets after successful import gives error feedback outside Advanced in the catalog", async ({
+  page,
+}) => {
+  await signInAsNewUser(page);
+  await importMinimalTheme(page);
+  const zip = page.locator(
+    'section[aria-labelledby="theme-package-import-heading"]',
+  );
+  await expect(zip.getByRole("status")).toContainText(
+    "Imported Intake fixture",
+  );
+  await expect(zip.getByRole("status")).not.toHaveClass(/error/);
+  await openThemeAdvanced(page);
+  await page.getByLabel("Package assets JSON").fill("not JSON");
+  await page
+    .getByRole("button", { name: "Save complete draft package", exact: true })
+    .click();
+  const status = page.getByRole("status");
+  await expect(status).toContainText("Package assets must be valid JSON");
+  await expect(status).toHaveClass(/error/);
+  const catalog = page.locator(
+    'section[aria-labelledby="theme-catalog-heading"]',
+  );
+  await expect(catalog.getByRole("status")).toContainText(
+    "Package assets must be valid JSON",
+  );
+  await expect(zip.getByRole("status")).toHaveCount(0);
+  expect(
+    await status.evaluate((node) =>
+      Boolean(node.closest("#theme-advanced-editor")),
+    ),
+  ).toBe(false);
+});
+
+test("pending Advanced draft write blocks use, duplicate write and scope changes", async ({
+  page,
+}) => {
+  await signInAsNewUser(page);
+  await importMinimalTheme(page);
+  await openThemeAdvanced(page);
+  await page
+    .getByLabel("Stylesheet source")
+    .fill('[data-jaunder-part="main"] { outline: 2px solid rgb(4, 5, 6); }');
+  const release = await stallServerFn(page, "themes/replace_css");
+  const writes: string[] = [];
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (
+      [
+        THEME_ENDPOINTS.publish,
+        THEME_ENDPOINTS.select,
+        "/api/themes/replace_css",
+      ].includes(path)
+    )
+      writes.push(path);
+  });
+  const save = page.getByRole("button", { name: "Save CSS", exact: true });
+  await save.click();
+  const use = page.getByRole("button", { name: "Use this theme", exact: true });
+  const scope = page.getByRole("button", {
+    name: "Your public pages",
+    exact: true,
+  });
+  try {
+    await expect(use).toBeDisabled();
+    await expect(save).toBeDisabled();
+    await expect(scope).toBeDisabled();
+    await save.evaluate((node) =>
+      node.dispatchEvent(new MouseEvent("click", { bubbles: true })),
+    );
+    await use.evaluate((node) =>
+      node.dispatchEvent(new MouseEvent("click", { bubbles: true })),
+    );
+    expect(writes).toEqual(["/api/themes/replace_css"]);
+  } finally {
+    release();
+  }
+  await expect(page.getByRole("status")).toContainText("Saved");
+  await expect(use).toBeEnabled();
+  await expect(save).toBeEnabled();
+  expect(writes).toEqual(["/api/themes/replace_css"]);
+});
+
+for (const operation of ["preview", "export"] as const) {
+  test(`Advanced ${operation} failure is live, actionable, and does not publish`, async ({
+    page,
+  }) => {
+    await signInAsNewUser(page);
+    await importMinimalTheme(page);
+    await openThemeAdvanced(page);
+    await failServerFn(page, `themes/${operation}`);
+    const writes: string[] = [];
+    page.on("request", (request) => {
+      const path = new URL(request.url()).pathname;
+      if (path === THEME_ENDPOINTS.publish || path === THEME_ENDPOINTS.select)
+        writes.push(path);
+    });
+    await page
+      .getByRole("button", {
+        name: operation === "preview" ? "Preview draft" : "Export ZIP",
+        exact: true,
+      })
+      .click();
+    const status = page.getByRole("status");
+    await expect(status).toContainText(
+      operation === "preview" ? "Preview failed" : "Export failed",
+    );
+    await expect(status).toContainText("reopen Themes", { ignoreCase: true });
+    await expect(status).toHaveClass(/error/);
+    await expect(
+      page.getByRole("button", { name: "Use this theme", exact: true }),
+    ).toBeEnabled();
+    expect(writes).toEqual([]);
+  });
+}
+
+test("already-selected publication advances the public revision even when applying is rejected", async ({
+  page,
+  tracedContext,
+}) => {
+  const username = await signInAsNewUser(page);
+  await importMinimalTheme(page);
+  const use = page.getByRole("button", { name: "Use this theme", exact: true });
+  await use.click();
+  await expect(page.getByRole("status")).toContainText(
+    "Theme published and applied",
+  );
+  await expect(use).toBeEnabled();
+  const selected = await page.getByLabel("Public selection").inputValue();
+  await openThemeAdvanced(page);
+  await page
+    .getByLabel("style.css", { exact: true })
+    .fill('[data-jaunder-part="main"] { outline: 2px solid rgb(4, 5, 6); }');
+  await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === THEME_ENDPOINTS.import_package,
+    ),
+    page
+      .getByRole("button", { name: "Save complete draft package", exact: true })
+      .click(),
+  ]);
+  await expect(page.getByRole("status")).toContainText("Saved");
+  await page.route(`**${THEME_ENDPOINTS.select}`, (route) =>
+    route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({
+        validation: { message: "Applying rejected for this test" },
+      }),
+    }),
+  );
+  await use.click();
+  await expect(page.getByRole("status")).toContainText(
+    "Publication confirmed, but applying was rejected",
+  );
+  await expect(page.getByRole("status")).toContainText(
+    "already-selected theme now uses the new revision",
+  );
+  await expect(use).toBeEnabled();
+  await expect(page.getByLabel("Public selection")).toHaveValue(selected);
+  const publicContext = await tracedContext();
+  try {
+    const publicPage = await publicContext.newPage();
+    await goto(publicPage, `/~${username}`);
+    await expect(publicPage.locator('[data-jaunder-part="main"]')).toHaveCSS(
+      "outline-color",
+      "rgb(4, 5, 6)",
+    );
+  } finally {
+    await publicContext.close();
+  }
+});
 
 test("ZIP-only import opens an unselected draft and explicit use publishes then applies it", async ({
   page,
@@ -225,6 +606,242 @@ test("blank Advanced catalog override uses the package name", async ({
   ).toBeVisible();
   await expect(page.getByLabel("Public selection")).toHaveValue("inherit");
 });
+
+test("missing or malformed ZIP gives nearby actionable feedback without import or selection", async ({
+  page,
+}) => {
+  await signInAsNewUser(page);
+  await goto(page, "/themes");
+  const zip = page.locator(
+    'section[aria-labelledby="theme-package-import-heading"]',
+  );
+  let imports = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === THEME_ENDPOINTS.import_zip)
+      imports += 1;
+  });
+  await zip
+    .getByRole("button", { name: "Import ZIP draft", exact: true })
+    .click();
+  await expect(zip.getByRole("status")).toContainText(
+    "Choose a Theme Package ZIP file first",
+  );
+  expect(imports).toBe(0);
+  await zip.getByLabel("Theme Package ZIP").setInputFiles({
+    name: "not-a-package.zip",
+    mimeType: "application/zip",
+    buffer: Buffer.from("not a ZIP package"),
+  });
+  await zip
+    .getByRole("button", { name: "Import ZIP draft", exact: true })
+    .click();
+  await expect(zip.getByRole("status")).toContainText("Import rejected");
+  await expect(zip.getByRole("status")).toContainText(
+    "Choose a valid Theme Package ZIP",
+  );
+  await expect(zip.getByRole("status")).toHaveAttribute("aria-live", "polite");
+  await expect(zip.getByRole("status")).not.toContainText("Imported");
+  await expect(
+    zip.getByRole("button", { name: "Import ZIP draft", exact: true }),
+  ).toBeEnabled();
+  expect(imports).toBe(1);
+  await expect(page.locator(".j-theme-catalog-item")).toHaveCount(0);
+  await expect(page.getByLabel("Public selection")).toHaveValue("inherit");
+});
+
+for (const manifestName of ["Studio", "x".repeat(101)]) {
+  test(`catalog-invalid package name ${manifestName.length === 101 ? "too long" : "reserved"} offers an explicit override`, async ({
+    page,
+  }) => {
+    await signInAsNewUser(page);
+    const archive = await minimalThemeZip(page, manifestName);
+    await goto(page, "/themes");
+    const zip = page.locator(
+      'section[aria-labelledby="theme-package-import-heading"]',
+    );
+    await zip.getByLabel("Theme Package ZIP").setInputFiles({
+      name: "filename-is-not-a-fallback.zip",
+      mimeType: "application/zip",
+      buffer: archive,
+    });
+    await zip
+      .getByRole("button", { name: "Import ZIP draft", exact: true })
+      .click();
+    await expect(zip.getByRole("status")).toContainText("Import rejected");
+    await expect(zip.getByRole("status")).toContainText("Advanced");
+    await expect(page.locator(".j-theme-catalog-item")).toHaveCount(0);
+    await openThemeAdvanced(page);
+    await expect(zip.getByRole("status")).toContainText("Import rejected");
+    await expect(zip.getByRole("status")).toHaveClass(/error/);
+    await page.getByLabel("Catalog label override (optional)").fill("Studio");
+    await zip
+      .getByRole("button", { name: "Import ZIP draft", exact: true })
+      .click();
+    await expect(zip.getByRole("status")).toContainText("Import rejected");
+    await expect(page.locator(".j-theme-catalog-item")).toHaveCount(0);
+    await page
+      .getByLabel("Catalog label override (optional)")
+      .fill("Recovered label");
+    await zip
+      .getByRole("button", { name: "Import ZIP draft", exact: true })
+      .click();
+    await expect(
+      page.getByRole("button", {
+        name: "Recovered label (draft)",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(zip.getByRole("status")).toContainText(
+      "Imported Recovered label",
+    );
+    await expect(page.getByLabel("Public selection")).toHaveValue("inherit");
+  });
+}
+
+test("duplicate catalog label rejects without suffix and explicit override recovers", async ({
+  page,
+}) => {
+  await signInAsNewUser(page);
+  await importMinimalTheme(page);
+  const zip = page.locator(
+    'section[aria-labelledby="theme-package-import-heading"]',
+  );
+  await zip
+    .getByRole("button", { name: "Import ZIP draft", exact: true })
+    .click();
+  await expect(zip.getByRole("status")).toContainText("Import rejected");
+  await expect(zip.getByRole("status")).toContainText(
+    "duplicate catalog label",
+  );
+  await expect(page.locator(".j-theme-catalog-item")).toHaveCount(1);
+  await openThemeAdvanced(page);
+  await expect(zip.getByRole("status")).toContainText("Import rejected");
+  await expect(zip.getByRole("status")).toHaveClass(/error/);
+  await page
+    .getByLabel("Catalog label override (optional)")
+    .fill("Distinct label");
+  await zip
+    .getByRole("button", { name: "Import ZIP draft", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Distinct label (draft)", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".j-theme-catalog-item")).toHaveCount(2);
+  await expect(page.getByLabel("Public selection")).toHaveValue("inherit");
+});
+
+for (const viewport of [
+  { width: 390, height: 844 },
+  { width: 1440, height: 900 },
+]) {
+  test(`Advanced keyboard disclosure and ordinary-wheel bottom reachability at ${viewport.width}x${viewport.height}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
+    await signInAsNewUser(page);
+    await importMinimalTheme(page);
+    expect(await page.evaluate(() => window.devicePixelRatio)).toBe(1);
+    const advanced = page.getByRole("button", {
+      name: "Advanced",
+      exact: true,
+    });
+    const manifest = page.getByLabel("theme.json", { exact: true });
+    await expect(advanced).toHaveAttribute("aria-expanded", "false");
+    await expect(manifest).toBeHidden();
+    expect(
+      await manifest.evaluate((node) => {
+        (node as HTMLElement).focus();
+        return document.activeElement === node;
+      }),
+    ).toBe(false);
+    await advanced.focus();
+    await page.keyboard.press("Enter");
+    await expect(advanced).toHaveAttribute("aria-expanded", "true");
+    await expect(advanced).toBeFocused();
+    await manifest.fill('{"unsaved":"reachable"}');
+    await advanced.focus();
+    await page.keyboard.press("Space");
+    await expect(manifest).toBeHidden();
+    await page.keyboard.press("Enter");
+    await expect(manifest).toHaveValue('{"unsaved":"reachable"}');
+    await expectAccessible(page);
+    // Actual wheel input, not locator clicks/scrollIntoView, must expose the editor's last control.
+    await page.mouse.move(viewport.width - 40, 350);
+    await page.mouse.wheel(0, 20000);
+    const bottom = page.getByRole("button", {
+      name: "Delete theme",
+      exact: true,
+    });
+    await expect(bottom).toBeInViewport({ ratio: 1 });
+    expect(
+      await page.locator(".j-scroll").evaluate((node) => node.scrollTop),
+    ).toBeGreaterThan(0);
+    // Starting at the disclosure, native Tab walks to the bottom and scrolls focus into view.
+    await advanced.focus();
+    let reached = false;
+    for (let index = 0; index < 60; index += 1) {
+      await page.keyboard.press("Tab");
+      if (await bottom.evaluate((node) => document.activeElement === node)) {
+        reached = true;
+        break;
+      }
+      expect(
+        await page.evaluate(() =>
+          Boolean(document.activeElement?.closest("[hidden]")),
+        ),
+      ).toBe(false);
+    }
+    expect(reached).toBe(true);
+    await expect(bottom).toBeFocused();
+    await expect(bottom).toBeInViewport({ ratio: 1 });
+    await advanced.focus();
+    await page.keyboard.press("Enter");
+    const use = page.getByRole("button", {
+      name: "Use this theme",
+      exact: true,
+    });
+    const release = await stallServerFn(page, "themes/publish");
+    await use.focus();
+    await page.keyboard.press("Enter");
+    const status = page.getByRole("status");
+    await expect(status).toContainText("Publishing");
+    await expect(status).toHaveAttribute("aria-live", "polite");
+    expect(
+      await status.evaluate((node) =>
+        Boolean(
+          node.closest(
+            '[id="theme-advanced-editor"], [id="theme-advanced-import"]',
+          ),
+        ),
+      ),
+    ).toBe(false);
+    release();
+    await expect(status).toContainText("Theme published and applied");
+    await expect(use).toBeEnabled();
+    await expect(status).toBeInViewport();
+    await page.route(`**${THEME_ENDPOINTS.publish}`, (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ validation: { message: "Draft needs repair" } }),
+      }),
+    );
+    await use.click();
+    await expect(status).toContainText("Publication rejected");
+    await expect(status).toContainText("Fix the draft");
+    await expect(status).toHaveClass(/error/);
+    await expect(use).toBeEnabled();
+    await page.mouse.move(viewport.width - 40, 350);
+    await page.mouse.wheel(0, 20000);
+    await expect(status).toBeInViewport({ ratio: 1 });
+    expect(
+      await page.evaluate(() =>
+        Boolean(document.activeElement?.closest("[hidden]")),
+      ),
+    ).toBe(false);
+  });
+}
 
 // The Studio journey must remain a private surface: custom public presentation
 // stylesheets may only appear in the isolated preview document, never in its parent.
@@ -725,6 +1342,12 @@ test("cold Studio return retains a custom author selection before built-in recov
     ).toHaveAttribute("value", String(themeId));
     await expect(coldSelection).toHaveValue(String(themeId));
 
+    const recoveryWrites: string[] = [];
+    studioPage.on("request", (request) => {
+      const path = new URL(request.url()).pathname;
+      if (path === THEME_ENDPOINTS.publish || path === THEME_ENDPOINTS.select)
+        recoveryWrites.push(path);
+    });
     await Promise.all([
       studioPage.waitForResponse(
         (response) =>
@@ -734,6 +1357,13 @@ test("cold Studio return retains a custom author selection before built-in recov
       coldSelection.selectOption("studio"),
     ]);
     await expect(coldSelection).toHaveValue("studio");
+    expect(recoveryWrites).toEqual([THEME_ENDPOINTS.select]);
+    await coldSelection.selectOption("inherit");
+    await expect(coldSelection).toHaveValue("inherit");
+    expect(recoveryWrites).toEqual([
+      THEME_ENDPOINTS.select,
+      THEME_ENDPOINTS.select,
+    ]);
   } finally {
     await studioContext.close();
   }
@@ -800,21 +1430,62 @@ test("operator manages the site catalog through public selection and fallback", 
     page.getByTitle("Isolated theme preview").contentFrame().locator("body"),
   ).toContainText("Jaunder");
 
-  await Promise.all([
-    mutation("publish"),
-    page.getByRole("button", { name: "Publish", exact: true }).click(),
-  ]);
-  const publicSelection = page.getByLabel("Public selection");
-  const selectedOption = publicSelection.getByRole("option", {
-    name: "Operator site published",
+  const writes: { path: string; body: string }[] = [];
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (path === THEME_ENDPOINTS.publish || path === THEME_ENDPOINTS.select)
+      writes.push({ path, body: request.postData() ?? "" });
   });
-  await expect(selectedOption).toHaveCount(1);
-  const themeId = await selectedOption.getAttribute("value");
-  expect(themeId).not.toBeNull();
-  await Promise.all([
-    mutation("select"),
-    publicSelection.selectOption(themeId!),
+  const releasePublication = await stallServerFn(page, "themes/publish");
+  const releaseSelection = await stallServerFn(page, "themes/select");
+  const use = page.getByRole("button", { name: "Use this theme", exact: true });
+  const authorScope = page.getByRole("button", {
+    name: "Your public pages",
+    exact: true,
+  });
+  const publicSelection = page.getByLabel("Public selection");
+  await use.click();
+  await expect(page.getByRole("status")).toContainText("Publishing");
+  await expect(authorScope).toBeDisabled();
+  await expect(siteCatalog).toBeDisabled();
+  await expect(publicSelection).toBeDisabled();
+  // Even duplicate DOM delivery cannot dispatch twice or change the captured owner boundary.
+  await use.evaluate((node) =>
+    node.dispatchEvent(new MouseEvent("click", { bubbles: true })),
+  );
+  await authorScope.evaluate((node) =>
+    node.dispatchEvent(new MouseEvent("click", { bubbles: true })),
+  );
+  expect(writes.map((write) => write.path)).toEqual([THEME_ENDPOINTS.publish]);
+  await expect(siteCatalog).toHaveAttribute("aria-pressed", "true");
+  releasePublication();
+  await expect(page.getByRole("status")).toContainText("Applying theme");
+  await expect(use).toBeDisabled();
+  await expect(authorScope).toBeDisabled();
+  await use.evaluate((node) =>
+    node.dispatchEvent(new MouseEvent("click", { bubbles: true })),
+  );
+  await authorScope.evaluate((node) =>
+    node.dispatchEvent(new MouseEvent("click", { bubbles: true })),
+  );
+  releaseSelection();
+  await expect(page.getByRole("status")).toContainText(
+    "Theme published and applied",
+  );
+  await expect(use).toBeEnabled();
+  expect(writes.map((write) => write.path)).toEqual([
+    THEME_ENDPOINTS.publish,
+    THEME_ENDPOINTS.select,
   ]);
+  const published = new URLSearchParams(writes[0].body);
+  const applied = new URLSearchParams(writes[1].body);
+  expect(published.get("scope")).toBe("site");
+  expect(applied.get("scope")).toBe("site");
+  expect(applied.get("selection[value]")).toBe(published.get("theme_id"));
+  const themeId = await publicSelection
+    .getByRole("option", { name: "Operator site published" })
+    .getAttribute("value");
+  expect(themeId).not.toBeNull();
   await expect(publicSelection).toHaveValue(themeId!);
 
   const publicContext = await tracedContext();
@@ -832,6 +1503,15 @@ test("operator manages the site catalog through public selection and fallback", 
       "outline-color",
       "rgb(4, 5, 6)",
     );
+    const inheritingAuthor = await publicContext.newPage();
+    await goto(inheritingAuthor, "/~testlogin");
+    await expect(inheritingAuthor.locator(".j-root")).toHaveAttribute(
+      "data-theme",
+      "custom",
+    );
+    await expect(
+      inheritingAuthor.locator("[data-jaunder-theme-surface]"),
+    ).toHaveCSS("outline-color", "rgb(4, 5, 6)");
     await expect(
       publicPage.getByRole("group", { name: "Theme catalog scope" }),
     ).toHaveCount(0);

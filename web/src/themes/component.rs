@@ -16,7 +16,9 @@ use crate::{
     auth, error::WebError, media::Item as MediaItem, reactive::Invalidator, topbar::Topbar,
 };
 
-use super::page_state::{self, Revalidation, ScopeAvailability, ThemePageState};
+use super::page_state::{
+    self, MutationStage, Receipt, Revalidation, ScopeAvailability, ThemePageState,
+};
 use super::presentation_state::{
     HeaderMediaDraft, MEDIA_PAGE_SIZE, logo_fallback_option, media_page_offset,
 };
@@ -138,8 +140,8 @@ fn theme_management_controls(
             "Advanced"
         </button>
         <div id="theme-advanced-import" hidden=move || !advanced.get()>
-            {create_theme_card(create_name, scope, refresh, status)}
-            {css_import_card(css_name, css_source, scope, refresh, status)}
+            {create_theme_card(page, create_name, scope, refresh, status)}
+            {css_import_card(page, css_name, css_source, scope, refresh, status)}
         </div>
     }
 }
@@ -155,7 +157,7 @@ fn scope_card(
                 <div>
                     <h2 id="theme-scope-heading">"Catalog scope"</h2>
                     <div class="j-sub">
-                        "Your public pages changes your author pages. Site default changes public site pages and authors who inherit it. Home and private management always keep application styling."
+                        "Choose the catalog to manage; switching scope does not apply a theme. Using a theme in Your public pages styles your author routes. Site default styles public site pages and inheriting authors. Home and private management keep application styling."
                     </div>
                 </div>
             </div>
@@ -194,6 +196,7 @@ fn scope_card(
 }
 
 fn create_theme_card(
+    page: ThemePageState,
     name: NodeRef<leptos::html::Input>,
     scope: RwSignal<OwnershipScope>,
     refresh: Invalidator,
@@ -220,10 +223,13 @@ fn create_theme_card(
                     on:click=move |_| {
                         let name = name.get().map(|input| input.value()).unwrap_or_default();
                         let scope = scope.get_untracked();
-                        task::spawn_local(async move {
-                            let result = api::import_css(scope, name, Vec::new()).await;
-                            settle(result, refresh, status);
-                        });
+                        spawn_theme_operation(
+                            page,
+                            async move {
+                                let result = api::import_css(scope, name, Vec::new()).await;
+                                settle(page, result, refresh, status);
+                            },
+                        );
                     }
                 >
                     "Create empty draft"
@@ -234,6 +240,7 @@ fn create_theme_card(
 }
 
 fn css_import_card(
+    page: ThemePageState,
     name: NodeRef<leptos::html::Input>,
     stylesheet: NodeRef<leptos::html::Textarea>,
     scope: RwSignal<OwnershipScope>,
@@ -273,9 +280,17 @@ fn css_import_card(
                             .map(|input| input.value().into_bytes())
                             .unwrap_or_default();
                         let scope = scope.get_untracked();
-                        task::spawn_local(async move {
-                            settle(api::import_css(scope, name, stylesheet).await, refresh, status);
-                        });
+                        spawn_theme_operation(
+                            page,
+                            async move {
+                                settle(
+                                    page,
+                                    api::import_css(scope, name, stylesheet).await,
+                                    refresh,
+                                    status,
+                                );
+                            },
+                        );
                     }
                 >
                     "Import CSS draft"
@@ -327,6 +342,9 @@ fn zip_import_card(
                 >
                     "Import ZIP draft"
                 </button>
+                <Show when=move || page.feedback_in_import.get()>
+                    <ThemeFeedback status=page.status error=page.feedback_error />
+                </Show>
             </div>
         </section>
     }
@@ -391,6 +409,8 @@ fn import_package_zip(
     if page.pending.get_untracked() {
         return;
     }
+    page.feedback_in_import.set(true);
+    page.feedback_error.set(true);
     // crap:allow: Browser File and FormData APIs are wasm-only; host coverage cannot execute the upload handler.
     let Some(file) = package_file
         .get()
@@ -421,6 +441,7 @@ fn import_package_zip(
         return;
     }
     page.pending.set(true);
+    page.feedback_error.set(false);
     status.set(Some("Importing Theme Package…".into()));
     task::spawn_local(async move {
         match api::import_zip(form.into()).await {
@@ -430,16 +451,8 @@ fn import_package_zip(
                 status.set(Some(format!("Imported {} as a private draft. Choose Use this theme to publish and apply it.", entry.name)));
             }
             result => {
-                status.set(Some("Import was not confirmed. Review the catalog before trying again; use Advanced to change a reserved or duplicate catalog label.".into()));
-                reconcile_owner(scope.get_untracked(), refresh, status).await;
-                if let Err(error) = result {
-                    status.update(|message| {
-                        if let Some(message) = message {
-                            message.push(' ');
-                            message.push_str(&error.to_string());
-                        }
-                    });
-                }
+                set_mutation_feedback(page, MutationStage::Import, &result);
+                reconcile_owner(scope.get_untracked(), refresh, status, None).await;
             }
         }
         page.pending.set(false);
@@ -447,20 +460,28 @@ fn import_package_zip(
 }
 
 fn settle<T>(
+    page: ThemePageState,
     result: Result<MutationOutcome<T>, WebError>,
     refresh: Invalidator,
     status: RwSignal<Option<String>>,
 ) {
+    page.feedback_error.set(!matches!(
+        page_state::mutation_receipt(&result),
+        Receipt::Confirmed
+    ));
     match page_state::revalidation(result) {
         Revalidation::Confirmed => {
             refresh.notify();
-            status.set(Some("Saved. Catalog state was reloaded.".into()));
+            status.set(Some("Saved. Rereading catalog state…".into()));
         }
         Revalidation::Indeterminate => {
             refresh.notify();
-            status.set(Some("The server could not confirm this change. Catalog state was reloaded; review it before continuing.".into()));
+            status.set(Some("The server could not confirm this change. Rereading catalog and selection; review current state before continuing. No automatic retry ran.".into()));
         }
-        Revalidation::Failed(message) => status.set(Some(message)),
+        Revalidation::Failed(message) => {
+            refresh.notify();
+            status.set(Some(format!("The change was not confirmed. Review current catalog and selection before continuing. {message}")));
+        }
     }
 }
 
@@ -482,7 +503,7 @@ fn ThemeCatalog(
                 <div>
                     <h2 id="theme-catalog-heading">"Catalog and selection"</h2>
                     <div class="j-sub">
-                        "Only published custom themes can be selected. Authors may instead inherit the site selection."
+                        "Opening a catalog entry does not activate it. Use this theme publishes its draft before applying it. Authors may instead inherit the site selection or choose a bundled theme without publishing."
                     </div>
                 </div>
             </div>
@@ -494,6 +515,7 @@ fn ThemeCatalog(
                     refresh=refresh
                     status=status
                     pending=page.pending
+                    page=page
                 />
                 {catalog_content(catalog, selected, page.pending)}
                 <Show when=move || selected.get().is_some()>
@@ -508,17 +530,9 @@ fn ThemeCatalog(
                         "Use this theme"
                     </button>
                 </Show>
-                {move || {
-                    status
-                        .get()
-                        .map(|message| {
-                            view! {
-                                <p class="j-theme-status" role="status" aria-live="polite">
-                                    {message}
-                                </p>
-                            }
-                        })
-                }}
+                <Show when=move || !page.feedback_in_import.get()>
+                    <ThemeFeedback status=status error=page.feedback_error />
+                </Show>
                 <div id="theme-advanced-editor" hidden=move || !advanced.get()>
                     <For
                         each=move || {
@@ -532,6 +546,7 @@ fn ThemeCatalog(
                         children=move |_| {
                             view! {
                                 <ThemeEditor
+                                    page=page
                                     scope=scope
                                     selected=selected
                                     refresh=refresh
@@ -618,34 +633,29 @@ fn ThemeSelection(
     refresh: Invalidator,
     status: RwSignal<Option<String>>,
     pending: RwSignal<bool>,
+    page: ThemePageState,
 ) -> impl IntoView {
     // Reapply the controlled value after the option catalog settles: assigning a
     // custom value before its option exists does not stick in the native select.
     let selected_token = move || {
         drop(catalog.get());
-        selection_token(selection.get().and_then(Result::ok).flatten())
+        page_state::selection_control_token(selection.get().as_ref())
     };
     let change = move |event| {
         if pending.get_untracked() {
             return;
         }
         pending.set(true);
+        page.feedback_in_import.set(false);
+        page.feedback_error.set(false);
         let token = event_target_value(&event);
         let current_scope = scope.get_untracked();
         let next = page_state::selection_from_token(&token);
         task::spawn_local(async move {
             status.set(Some("Applying public selection…".into()));
             let result = api::select(current_scope, next).await;
-            match result {
-                Ok(MutationOutcome::Confirmed(())) => {
-                    refresh.notify();
-                    status.set(Some("Public selection applied.".into()));
-                }
-                result => {
-                    status.set(Some(format!("Selection was not confirmed. Review current selection before trying again. {}", mutation_detail(result))));
-                    reconcile_owner(current_scope, refresh, status).await;
-                }
-            }
+            set_mutation_feedback(page, MutationStage::Apply { published: false }, &result);
+            reconcile_owner(current_scope, refresh, status, None).await;
             pending.set(false);
         });
     };
@@ -661,6 +671,9 @@ fn ThemeSelection(
                 >
                     {move || {
                         view! {
+                            <option value="" disabled>
+                                "Current selection unknown"
+                            </option>
                             <option value="inherit">"Inherit site selection"</option>
                             <For
                                 each=move || built_in_themes()
@@ -712,6 +725,7 @@ fn ThemeSelection(
 
 #[component]
 fn ThemeEditor(
+    page: ThemePageState,
     scope: RwSignal<OwnershipScope>,
     selected: RwSignal<Option<ThemeId>>,
     refresh: Invalidator,
@@ -722,12 +736,12 @@ fn ThemeEditor(
     let preview_document = RwSignal::new(None::<String>);
     let media_page = RwSignal::new(0_u32);
     let (presentation, owner_media) = presentation_resources(scope, selected, refresh, media_page);
-    let rename = move |_| rename_selected(scope, selected, rename_name, refresh, status);
-    let save_css = move |_| save_selected_css(scope, selected, stylesheet, refresh, status);
-    let preview = move |_| preview_selected(scope, selected, preview_document, status);
-    let export = move |_| export_selected(scope, selected, status);
-    let publish = move |_| publish_selected(scope, selected, refresh, status);
-    let remove = move |_| remove_selected(scope, selected, refresh, status);
+    let rename = move |_| rename_selected(page, scope, selected, rename_name, refresh, status);
+    let save_css = move |_| save_selected_css(page, scope, selected, stylesheet, refresh, status);
+    let preview = move |_| preview_selected(page, scope, selected, preview_document, status);
+    let export = move |_| export_selected(page, scope, selected, status);
+    let publish = move |_| publish_selected(page, scope, selected, refresh, status);
+    let remove = move |_| remove_selected(page, scope, selected, refresh, status);
     view! {
         <Show
             when=move || selected.get().is_some()
@@ -763,6 +777,7 @@ fn ThemeEditor(
                     "Save CSS"
                 </button>
                 <ThemePresentationEditor
+                    page=page
                     scope=scope
                     selected=selected
                     refresh=refresh
@@ -771,7 +786,13 @@ fn ThemeEditor(
                     owner_media=owner_media
                     media_page=media_page
                 />
-                <DraftPackageEditor scope=scope selected=selected refresh=refresh status=status />
+                <DraftPackageEditor
+                    page=page
+                    scope=scope
+                    selected=selected
+                    refresh=refresh
+                    status=status
+                />
                 <div class="j-theme-actions">
                     <button type="button" class="j-btn" on:click=preview>
                         "Preview draft"
@@ -806,6 +827,7 @@ fn ThemeEditor(
 }
 
 fn rename_selected(
+    page: ThemePageState,
     scope: RwSignal<OwnershipScope>,
     selected: RwSignal<Option<ThemeId>>,
     name: NodeRef<leptos::html::Input>,
@@ -815,13 +837,14 @@ fn rename_selected(
     if let Some(id) = selected.get_untracked() {
         let scope = scope.get_untracked();
         let name = name.get().map(|input| input.value()).unwrap_or_default();
-        task::spawn_local(
-            async move { settle(api::rename(scope, id, name).await, refresh, status) },
-        );
+        spawn_theme_operation(page, async move {
+            settle(page, api::rename(scope, id, name).await, refresh, status);
+        });
     }
 }
 
 fn save_selected_css(
+    page: ThemePageState,
     scope: RwSignal<OwnershipScope>,
     selected: RwSignal<Option<ThemeId>>,
     css: NodeRef<leptos::html::Textarea>,
@@ -834,13 +857,19 @@ fn save_selected_css(
             .get()
             .map(|input| input.value().into_bytes())
             .unwrap_or_default();
-        task::spawn_local(async move {
-            settle(api::replace_css(scope, id, css).await, refresh, status);
+        spawn_theme_operation(page, async move {
+            settle(
+                page,
+                api::replace_css(scope, id, css).await,
+                refresh,
+                status,
+            );
         });
     }
 }
 
 fn preview_selected(
+    page: ThemePageState,
     scope: RwSignal<OwnershipScope>,
     selected: RwSignal<Option<ThemeId>>,
     document: RwSignal<Option<String>>,
@@ -848,13 +877,16 @@ fn preview_selected(
 ) {
     if let Some(id) = selected.get_untracked() {
         let scope = scope.get_untracked();
-        task::spawn_local(async move {
+        spawn_theme_operation(page, async move {
             match api::preview(scope, id).await {
                 Ok(preview) => {
                     document.set(Some(preview_document(&preview.css, &preview.html)));
                     status.set(Some("Preview updated in an isolated document.".into()));
                 }
-                Err(error) => status.set(Some(error.to_string())),
+                Err(error) => {
+                    page.feedback_error.set(true);
+                    status.set(Some(format!("Preview failed: {error}. The last preview may be stale; review the draft or reopen Themes.")));
+                }
             }
         });
     }
@@ -906,6 +938,7 @@ fn html_style_text(css: &str) -> Cow<'_, str> {
 }
 
 fn export_selected(
+    page: ThemePageState,
     scope: RwSignal<OwnershipScope>,
     selected: RwSignal<Option<ThemeId>>,
     status: RwSignal<Option<String>>,
@@ -913,16 +946,66 @@ fn export_selected(
     // crap:allow: Browser download initiation is wasm-only; host coverage cannot execute the export handler.
     if let Some(id) = selected.get_untracked() {
         let scope = scope.get_untracked();
-        task::spawn_local(async move {
+        spawn_theme_operation(page, async move {
             match api::export(scope, id).await {
                 Ok(package) => match download_package(&package.filename, &package.bytes) {
                     Ok(()) => status.set(Some("Theme Package download started.".into())),
-                    Err(message) => status.set(Some(message)),
+                    Err(message) => {
+                        page.feedback_error.set(true);
+                        status.set(Some(format!("Download could not start: {message}. Try exporting again after checking browser downloads.")));
+                    }
                 },
-                Err(error) => status.set(Some(error.to_string())),
+                Err(error) => {
+                    page.feedback_error.set(true);
+                    status.set(Some(format!("Export failed: {error}. Reopen Themes to review the draft before exporting again.")));
+                }
             }
         });
     }
+}
+
+#[component]
+fn ThemeFeedback(status: RwSignal<Option<String>>, error: RwSignal<bool>) -> impl IntoView {
+    view! {
+        <Show when=move || status.get().is_some()>
+            <p
+                class="j-theme-status"
+                class:error=move || error.get()
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+            >
+                {move || status.get()}
+            </p>
+        </Show>
+    }
+}
+
+fn set_mutation_feedback<T>(
+    page: ThemePageState,
+    stage: MutationStage,
+    result: &Result<MutationOutcome<T>, WebError>,
+) {
+    let receipt = page_state::mutation_receipt(result);
+    page.feedback_error
+        .set(!matches!(receipt, Receipt::Confirmed));
+    page.status
+        .set(Some(page_state::mutation_message(stage, &receipt)));
+}
+
+// Browser scheduling only: the admission decision lives in the host-tested page state.
+fn spawn_theme_operation(
+    page: ThemePageState,
+    future: impl std::future::Future<Output = ()> + 'static,
+) {
+    if !page.begin_mutation() {
+        return;
+    }
+    page.status.set(Some("Working…".into()));
+    task::spawn_local(async move {
+        future.await;
+        page.pending.set(false);
+    });
 }
 
 fn use_selected(page: ThemePageState) {
@@ -932,67 +1015,36 @@ fn use_selected(page: ThemePageState) {
     page.status.set(Some("Publishing theme…".into()));
     task::spawn_local(async move {
         let published = api::publish(scope, id).await;
+        set_mutation_feedback(page, MutationStage::Publish, &published);
         if page_state::publication_confirmed(&published) {
-            page.status
-                .set(Some("Publication confirmed. Applying theme…".into()));
-            match api::select(scope, Some(PublicThemeSelection::Custom(id))).await {
-                Ok(MutationOutcome::Confirmed(())) => {
-                    page.status.set(Some("Theme published and applied. Your public presentation uses its new revision; private management and Home are unchanged.".into()));
-                }
-                result => {
-                    page.status.set(Some(format!("Publication confirmed, but selection was not confirmed. Publication cannot be undone by a selection failure; an already-selected theme may now use the new revision. {}", mutation_detail(result))));
-                }
-            }
-        } else {
-            page.status.set(Some(format!("Publication was not confirmed, so selection was not requested. An already-selected theme may have advanced if publication committed. Review current state before trying again. {}", mutation_detail(published))));
+            let applied = api::select(scope, Some(PublicThemeSelection::Custom(id))).await;
+            set_mutation_feedback(page, MutationStage::Apply { published: true }, &applied);
         }
-        reconcile_owner(scope, page.refresh, page.status).await;
+        reconcile_owner(scope, page.refresh, page.status, Some(id)).await;
         page.pending.set(false);
     });
-}
-
-fn mutation_detail<T>(result: Result<MutationOutcome<T>, WebError>) -> String {
-    match result {
-        Ok(MutationOutcome::CommitIndeterminate(_)) => {
-            "The database acknowledgement is uncertain.".into()
-        }
-        Err(error) => format!("The server response could not confirm the change: {error}"),
-        Ok(MutationOutcome::Confirmed(_)) => "The server confirmed the change.".into(),
-    }
 }
 
 async fn reconcile_owner(
     scope: OwnershipScope,
     refresh: Invalidator,
     status: RwSignal<Option<String>>,
+    target: Option<ThemeId>,
 ) {
     let catalog = api::list(scope).await;
     let selection = api::get_selection(scope).await;
-    let catalog_message = match catalog {
-        Ok(entries) => format!("Catalog reread: {} entries.", entries.len()),
-        Err(error) => format!("Catalog reread failed: {error}. Reopen Themes to review it."),
-    };
-    let selection_message = match selection {
-        Ok(selection) => format!(
-            "Current selection from reread: {}.",
-            selection_token(selection)
-        ),
-        Err(error) => format!(
-            "Selection reread failed: {error}. Current selection is unknown; reopen Themes to review it."
-        ),
-    };
+    let message_from_rereads = page_state::reconciliation_message(&catalog, &selection, target);
     status.update(|message| {
         if let Some(message) = message {
             message.push(' ');
-            message.push_str(&catalog_message);
-            message.push(' ');
-            message.push_str(&selection_message);
+            message.push_str(&message_from_rereads);
         }
     });
     refresh.notify();
 }
 
 fn publish_selected(
+    page: ThemePageState,
     scope: RwSignal<OwnershipScope>,
     selected: RwSignal<Option<ThemeId>>,
     refresh: Invalidator,
@@ -1000,25 +1052,34 @@ fn publish_selected(
 ) {
     if let Some(id) = selected.get_untracked() {
         let scope = scope.get_untracked();
-        task::spawn_local(async move { settle(api::publish(scope, id).await, refresh, status) });
+        spawn_theme_operation(page, async move {
+            status.set(Some("Publishing theme…".into()));
+            let result = api::publish(scope, id).await;
+            set_mutation_feedback(page, MutationStage::PublishOnly, &result);
+            reconcile_owner(scope, refresh, status, Some(id)).await;
+        });
     }
 }
 
 fn remove_selected(
+    page: ThemePageState,
     scope: RwSignal<OwnershipScope>,
     selected: RwSignal<Option<ThemeId>>,
     refresh: Invalidator,
     status: RwSignal<Option<String>>,
 ) {
     if let Some(id) = selected.get_untracked() {
-        selected.set(None);
         let scope = scope.get_untracked();
-        task::spawn_local(async move { settle(api::remove(scope, id).await, refresh, status) });
+        spawn_theme_operation(page, async move {
+            selected.set(None);
+            settle(page, api::remove(scope, id).await, refresh, status);
+        });
     }
 }
 
 #[component]
 fn DraftPackageEditor(
+    page: ThemePageState,
     scope: RwSignal<OwnershipScope>,
     selected: RwSignal<Option<ThemeId>>,
     refresh: Invalidator,
@@ -1042,6 +1103,7 @@ fn DraftPackageEditor(
                     Some(Ok(draft)) => {
                         view! {
                             <DraftPackageForm
+                                page=page
                                 scope=scope
                                 selected=selected
                                 draft=draft
@@ -1068,6 +1130,7 @@ fn DraftPackageEditor(
 
 #[component]
 fn DraftPackageForm(
+    page: ThemePageState,
     scope: RwSignal<OwnershipScope>,
     selected: RwSignal<Option<ThemeId>>,
     draft: super::Draft,
@@ -1099,15 +1162,20 @@ fn DraftPackageForm(
         match page_state::draft_from_editor(manifest, stylesheet, &assets) {
             Ok(package) => {
                 let scope = scope.get_untracked();
-                task::spawn_local(async move {
+                spawn_theme_operation(page, async move {
                     settle(
+                        page,
                         api::import_package(scope, id, package).await,
                         refresh,
                         status,
                     );
                 });
             }
-            Err(error) => status.set(Some(error)),
+            Err(error) => {
+                page.feedback_in_import.set(false);
+                page.feedback_error.set(true);
+                status.set(Some(error));
+            }
         }
     };
     view! {
@@ -1152,6 +1220,7 @@ fn DraftPackageForm(
 
 #[component]
 fn ThemePresentationEditor(
+    page: ThemePageState,
     scope: RwSignal<OwnershipScope>,
     selected: RwSignal<Option<ThemeId>>,
     refresh: Invalidator,
@@ -1169,6 +1238,7 @@ fn ThemePresentationEditor(
         <fieldset class="j-theme-presentation">
             <legend>"Presentation media"</legend>
             <ThemeLogoEditor
+                page=page
                 scope=scope
                 selected=selected
                 refresh=refresh
@@ -1177,8 +1247,15 @@ fn ThemePresentationEditor(
                 owner_media=owner_media
             />
             <ThemeMediaPagination owner_media=owner_media media_page=media_page />
-            <ThemeHeaderBindingEditor scope=scope selected=selected refresh=refresh status=status />
+            <ThemeHeaderBindingEditor
+                page=page
+                scope=scope
+                selected=selected
+                refresh=refresh
+                status=status
+            />
             <ThemeHeaderPoolEditor
+                page=page
                 scope=scope
                 selected=selected
                 refresh=refresh
@@ -1193,6 +1270,7 @@ fn ThemePresentationEditor(
 
 #[component]
 fn ThemeLogoEditor(
+    page: ThemePageState,
     scope: RwSignal<OwnershipScope>,
     selected: RwSignal<Option<ThemeId>>,
     refresh: Invalidator,
@@ -1205,6 +1283,7 @@ fn ThemeLogoEditor(
         let token = event_target_value(&event);
         if let Some(input) = logo_input(&token, owner_media) {
             replace_role(
+                page,
                 scope,
                 selected,
                 ThemeImageRole::Logo,
@@ -1264,6 +1343,7 @@ fn ThemeMediaPagination(
 
 #[component]
 fn ThemeHeaderBindingEditor(
+    page: ThemePageState,
     scope: RwSignal<OwnershipScope>,
     selected: RwSignal<Option<ThemeId>>,
     refresh: Invalidator,
@@ -1275,6 +1355,7 @@ fn ThemeHeaderBindingEditor(
                 type="button"
                 class="j-btn"
                 on:click=move |_| replace_role(
+                    page,
                     scope,
                     selected,
                     ThemeImageRole::Header,
@@ -1289,6 +1370,7 @@ fn ThemeHeaderBindingEditor(
                 type="button"
                 class="j-btn"
                 on:click=move |_| replace_role(
+                    page,
                     scope,
                     selected,
                     ThemeImageRole::Header,
@@ -1305,6 +1387,7 @@ fn ThemeHeaderBindingEditor(
 
 #[component]
 fn ThemeHeaderPoolEditor(
+    page: ThemePageState,
     scope: RwSignal<OwnershipScope>,
     selected: RwSignal<Option<ThemeId>>,
     refresh: Invalidator,
@@ -1328,6 +1411,7 @@ fn ThemeHeaderPoolEditor(
         <ThemeHeaderMediaEditor owner_media=owner_media header_media_draft=header_media_draft />
         {move || presentation_status(presentation, owner_media)}
         <ThemeHeaderPoolActions
+            page=page
             scope=scope
             selected=selected
             refresh=refresh
@@ -1394,6 +1478,7 @@ fn ThemeHeaderMediaEditor(
 
 #[component]
 fn ThemeHeaderPoolActions(
+    page: ThemePageState,
     scope: RwSignal<OwnershipScope>,
     selected: RwSignal<Option<ThemeId>>,
     refresh: Invalidator,
@@ -1403,6 +1488,7 @@ fn ThemeHeaderPoolActions(
     let pool = move |_| {
         let draft = header_media_draft.get_untracked();
         update_pool(
+            page,
             scope,
             selected,
             refresh,
@@ -1411,7 +1497,7 @@ fn ThemeHeaderPoolActions(
             draft.entries().to_vec(),
         );
     };
-    let shuffle = move |_| shuffle_presentation(scope, selected, refresh, status);
+    let shuffle = move |_| shuffle_presentation(page, scope, selected, refresh, status);
     view! {
         <button type="button" class="j-btn" on:click=pool>
             "Save header pool"
@@ -1538,6 +1624,7 @@ fn presentation_status(
 }
 
 fn update_pool(
+    page: ThemePageState,
     scope: RwSignal<OwnershipScope>,
     selected: RwSignal<Option<ThemeId>>,
     refresh: Invalidator,
@@ -1558,12 +1645,15 @@ fn update_pool(
     let seed = match fresh_seed() {
         Ok(seed) => seed,
         Err(error) => {
+            page.feedback_in_import.set(false);
+            page.feedback_error.set(true);
             status.set(Some(error));
             return;
         }
     };
-    task::spawn_local(async move {
+    spawn_theme_operation(page, async move {
         settle(
+            page,
             api::replace_pool(current_scope, id, entries, seed).await,
             refresh,
             status,
@@ -1572,6 +1662,7 @@ fn update_pool(
 }
 
 fn shuffle_presentation(
+    page: ThemePageState,
     scope: RwSignal<OwnershipScope>,
     selected: RwSignal<Option<ThemeId>>,
     refresh: Invalidator,
@@ -1584,16 +1675,24 @@ fn shuffle_presentation(
     let seed = match fresh_seed() {
         Ok(seed) => seed,
         Err(error) => {
+            page.feedback_in_import.set(false);
+            page.feedback_error.set(true);
             status.set(Some(error));
             return;
         }
     };
-    task::spawn_local(async move {
-        settle(api::shuffle(current_scope, id, seed).await, refresh, status);
+    spawn_theme_operation(page, async move {
+        settle(
+            page,
+            api::shuffle(current_scope, id, seed).await,
+            refresh,
+            status,
+        );
     });
 }
 
 fn replace_role(
+    page: ThemePageState,
     scope: RwSignal<OwnershipScope>,
     selected: RwSignal<Option<ThemeId>>,
     role: ThemeImageRole,
@@ -1603,8 +1702,9 @@ fn replace_role(
 ) {
     if let Some(id) = selected.get_untracked() {
         let current_scope = scope.get_untracked();
-        task::spawn_local(async move {
+        spawn_theme_operation(page, async move {
             settle(
+                page,
                 api::replace_binding(current_scope, id, role, input).await,
                 refresh,
                 status,
@@ -1653,14 +1753,6 @@ fn download_package(filename: &str, bytes: &[u8]) -> Result<(), String> {
 
 fn built_in_themes() -> impl Iterator<Item = Theme> {
     Theme::VARIANTS.iter().copied()
-}
-
-fn selection_token(selection: Option<PublicThemeSelection>) -> String {
-    match selection {
-        None => "inherit".into(),
-        Some(PublicThemeSelection::BuiltIn(theme)) => theme.to_string(),
-        Some(PublicThemeSelection::Custom(id)) => id.to_string(),
-    }
 }
 
 fn aria_pressed(pressed: bool) -> &'static str {

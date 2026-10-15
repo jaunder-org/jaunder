@@ -6,8 +6,9 @@ server behavior.
 
 Theme management lives at `/themes`:
 
-- every signed-in author manages a private **Author catalog**;
-- operators can switch to the separate **Site catalog**;
+- **Your public pages** opens the signed-in author's private catalog by default;
+- only operators can deliberately switch to the separate **Site default**
+  catalog;
 - author and site themes never cross catalogs implicitly. Move a theme between
   catalogs or instances by exporting and importing its Theme Package.
 
@@ -29,17 +30,38 @@ rules.
 
 ## Choose a starting point
 
-The Studio page supports three starting points:
+The default workflow needs only a Theme Package ZIP:
 
-1. **Create empty draft** creates a zero-asset draft.
-2. **Import CSS draft** wraps a stylesheet in a generated version-1 manifest.
-3. **Import ZIP draft** imports a complete Theme Package.
+1. Choose the ZIP under **Theme Package ZIP** and press **Import ZIP draft**.
+2. Jaunder validates the package and uses its `theme.json.name` as the catalog
+   label. The filename never supplies a fallback label.
+3. The imported entry opens as a private, unpublished draft. Opening it, or
+   choosing another catalog entry, does not activate a public theme.
+4. Choose **Use this theme** to publish the draft and then apply it to the
+   chosen scope. Verify its appearance in a fresh signed-out browser.
 
-All three create private, unselected drafts. Creating or importing a theme does
-not change any public page.
+**Advanced** is initially closed. Open it for an optional **Catalog label
+override (optional)**, empty-draft creation, plain CSS import, package/source
+editing, presentation Media, isolated preview, export, rename, or delete. A
+blank or whitespace-only UI override omits the name field and uses the validated
+manifest name. A nonblank override is authoritative.
 
-Use plain CSS while establishing a layout. Use a Theme Package when the theme
-needs fonts, images, packaged logo/header defaults, or portable source control.
+Catalog labels are trimmed, nonempty, and limited to 100 Unicode scalar values.
+Studio, Terminal and Reader are reserved case-insensitively; catalog collisions
+are rejected. Use the Advanced override to choose a valid distinct label rather
+than expecting a filename fallback, truncation, suffix, or automatic rename.
+Malformed packages still fail even with a valid override. Error feedback remains
+outside Advanced, beside import or application actions.
+
+The existing multipart import API remains compatible: `scope` and `archive`
+retain their meanings; `name` is optional. Only an omitted `name` defaults from
+validated manifest metadata. An explicitly supplied invalid or blank name fails
+without fallback; valid supplied names and existing response shapes are
+unchanged. Package validation precedes manifest-default naming.
+
+Creating or importing by any starting point remains private and unselected; it
+never changes public selection. Use plain CSS while establishing a layout, and a
+complete package for portable fonts, assets and defaults.
 
 ## Maintain a theme repository
 
@@ -354,7 +376,12 @@ canonical validation path for a particular Theme Package.
 
 ## Modify a theme
 
-Selecting a catalog entry opens its editor. Available operations include:
+Choosing a catalog entry opens its draft without activation. Open **Advanced**
+to reveal its editor. Closing and reopening Advanced preserves unsaved values
+for that draft; save before changing the catalog entry or scope. Expanded bottom
+controls are reachable by ordinary scrolling and keyboard navigation.
+
+Available operations include:
 
 - **Rename** changes the catalog label without changing the stable Theme ID.
 - **Save CSS** replaces the authored stylesheet while preserving the manifest
@@ -375,11 +402,18 @@ not select historical published revisions directly.
 
 ## Publish and deploy
 
-Deployment has two explicit steps:
+**Use this theme**, outside Advanced, performs two existing separate operations:
 
-1. Choose **Publish** to validate the complete draft and create an immutable,
-   content-addressed revision.
-2. Choose the published custom theme under **Public selection**.
+1. validate and publish the chosen draft as an immutable, content-addressed
+   revision;
+2. only after a confirmed publication acknowledgement, apply that same Theme ID
+   to the captured scope.
+
+Publishing and applying progress are shown beside the action. Pending controls
+cannot duplicate the operation or change its target/scope. These operations are
+not atomic: publication can succeed even if applying fails. Advanced still
+provides standalone **Publish** for authoring; it does not itself change public
+selection.
 
 Only published themes appear as custom selection options. Selecting an author
 theme affects that author's public routes. Selecting a site theme affects site
@@ -387,9 +421,19 @@ routes and authors who inherit the site selection. Authors can choose **Inherit
 site selection** instead of an override.
 
 Publishing a new revision of an already selected theme advances its stable Theme
-ID, so public pages adopt the new revision without another selection change. A
-failed publish leaves the previous published revision and public presentation
-unchanged.
+ID, so public pages adopt the new revision without another selection change.
+Later application failure cannot undo that publication. Explicit publication
+rejection prevents the application step; fix the draft before trying again.
+
+An indeterminate database acknowledgement, lost response, or undecodable
+response after dispatch stops chaining and reports uncertainty, not success,
+rollback or definite nonactivation. Catalog and selection are reread; failed
+rereads explicitly leave current state unknown. No automatic retry runs. Review
+that feedback and verify current public presentation before a manual retry; if
+rereads failed, reopen Themes to obtain current state. Choosing a bundled theme
+or author inheritance uses selection alone and never publishes a custom draft.
+Home and private management retain protected application styling regardless of
+public selection.
 
 For a cautious rollout:
 

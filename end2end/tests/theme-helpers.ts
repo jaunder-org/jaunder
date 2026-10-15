@@ -5,7 +5,12 @@ import { resolve } from "node:path";
 
 import { expect, type Page } from "@playwright/test";
 
-import { BASE_URL, confirmedMutation, type MutationOutcome } from "./helpers";
+import {
+  BASE_URL,
+  confirmedMutation,
+  goto,
+  type MutationOutcome,
+} from "./helpers";
 
 export type ThemeAsset = { path: string; mime: string; bytes: Uint8Array };
 export type ThemePackage = {
@@ -84,14 +89,34 @@ export async function openThemeAdvanced(page: Page): Promise<void> {
   await expect(disclosure).toHaveAttribute("aria-expanded", "true");
 }
 
+/** Drive the default import form with a real exporter-backed package. */
+export async function importMinimalTheme(page: Page): Promise<void> {
+  const archive = await minimalThemeZip(page);
+  await goto(page, "/themes");
+  await page.getByLabel("Theme Package ZIP").setInputFiles({
+    name: "filename-disagrees.zip",
+    mimeType: "application/zip",
+    buffer: archive,
+  });
+  await page
+    .getByRole("button", { name: "Import ZIP draft", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Intake fixture (draft)", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+}
+
 /** Build a minimal import fixture with the maintained exporter, then remove its source draft. */
-export async function minimalThemeZip(page: Page): Promise<Buffer> {
+export async function minimalThemeZip(
+  page: Page,
+  manifestName = "Intake fixture",
+): Promise<Buffer> {
   const form = new URLSearchParams({ scope: "author", name: "Fixture source" });
   appendBytes(
     form,
     "draft[manifest]",
     new TextEncoder().encode(
-      '{"schema": 1, "name": "Intake fixture", "style_contract": 1, "assets": {}, "defaults": {}}',
+      `{"schema": 1, "name": ${JSON.stringify(manifestName)}, "style_contract": 1, "assets": {}, "defaults": {}}`,
     ),
   );
   appendBytes(

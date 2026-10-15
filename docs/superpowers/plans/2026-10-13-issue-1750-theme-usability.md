@@ -66,12 +66,20 @@ Approval hashes identify their original documents, not resulting metadata bytes.
 ## Prerequisite and risk checks
 
 - Accepted actual BEFORE capture is required before task 2 presentation
-  mutation. The latest consumed attempt produced only initial `/themes` images
-  at 1440×900 and 390×844; selected-draft, scroll and public captures remain
-  outstanding. No runtime is ongoing. Capture uses current unmodified
-  management/editor counterparts, standard author data, a minimal schema-1 ZIP,
-  device scale 1 and light mode; not original Tailwind. No runtime execution is
-  authorized by this metadata-preparation assignment.
+  mutation. Actual BEFORE (13 images) and interim AFTER (9 images) are
+  preserved; Lead accepted those interim matched pairs and scoped task-3
+  code/docs/proof reviews for historical HEAD
+  `af691c0b1d4ede421381e4e6d27f5b74ef81a6ed`, staged presentation index tree
+  `53ac938029282c9b6ba9f11e04cf5be5c5ea5660`, not committed/merged or
+  security-certified source. Final matched AFTER remains pending an accepted
+  committed presentation tree, a free executor and fresh resource fit for one
+  execution unit of at most 1800 seconds. No runtime is ongoing. The shared main
+  Rustls repair `08ea5b46173d83d6f9f06fde68e96362c73beb91` is already
+  integrated; the earlier security hold is historical. Fresh applicable proof,
+  project completion and integration-boundary certification remain pending.
+  Captures use standard author data, a minimal schema-1 ZIP, device scale 1 and
+  light mode; not original Tailwind. No runtime execution is authorized by this
+  metadata-preparation assignment.
 - Keep API wire compatibility and authorization ahead of archive consumption;
   default naming must not duplicate ZIP parsing/manifest validation.
 - Preserve ADR-0184/0197, private/no-store drafts, isolated previews, quotas,
