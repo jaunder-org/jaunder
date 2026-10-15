@@ -33,8 +33,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 slug="$(echo "$file" | tr '/.' '--')"
 out="$TMPDIR/verify-$slug"
-rm -rf "$out"
-mkdir -p "$out"
+if ! { rm -rf "$out" && mkdir -p "$out"; }; then
+  echo "ERROR: verification failed: cannot prepare fresh output: $out" >&2
+  exit 1
+fi
 
 echo "verifying $pkg :: $file"
 echo "  output: $out"
@@ -42,31 +44,36 @@ echo "  output: $out"
 run_mutants --package "$pkg" --file "$file" --output "$out"
 status=$?
 
+# Survivors are findings, but tool errors cannot establish verification.
+case "$status" in
+  0|2) ;;
+  *)
+    echo "ERROR: verification failed: cargo-mutants exited $status; see $out" >&2
+    exit "$status"
+    ;;
+esac
+
+# Validate before publishing counts or survivor conclusions. Missing category
+# files are I/O errors too, not evidence of a zero population.
+if ! counts=$(jq -ers --arg package "$pkg" --arg file "$file" \
+  --argjson status "$status" \
+  --rawfile missed "$out/mutants.out/missed.txt" \
+  --rawfile caught "$out/mutants.out/caught.txt" \
+  --rawfile unviable "$out/mutants.out/unviable.txt" \
+  --rawfile timeout "$out/mutants.out/timeout.txt" \
+  -f "$ROOT/.mutants-loop/verify-outcomes.jq" "$out/mutants.out/outcomes.json"); then
+  echo "ERROR: verification failed: invalid or incomplete evidence; see $out" >&2
+  exit 1
+fi
+
 echo
 echo "--- $file ---"
-for f in missed caught unviable timeout; do
-  path="$out/mutants.out/$f.txt"
-  if [ -s "$path" ]; then
-    echo "$f: $(wc -l <"$path")"
-  else
-    echo "$f: 0"
-  fi
-done
+printf '%s\n' "$counts"
 
 if [ -s "$out/mutants.out/missed.txt" ]; then
   echo
   echo "STILL ALIVE:"
-  cat "$out/mutants.out/missed.txt"
-fi
-
-# cargo-mutants exits non-zero when mutants survive; that is a result, not a
-# tool failure. Exit 4 (baseline failed) is a real failure and must not be
-# mistaken for "nothing survived".
-if [ "$status" -eq 4 ]; then
-  echo
-  echo "ERROR: unmutated baseline FAILED — nothing was tested." >&2
-  echo "Do not read the zeros above as success. See PROTOCOL.md." >&2
-  exit 4
+  cat "$out/mutants.out/missed.txt" || exit 1
 fi
 
 exit 0
