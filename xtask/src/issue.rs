@@ -509,8 +509,10 @@ fn list_milestone_issues(gh: &impl Github, milestone: u64) -> Result<Vec<IssueLi
     let array = rest_issue_pages(gh, &path)?;
     let mut issues = Vec::new();
     for item in &array {
-        if item.get("pull_request").is_some() {
-            continue;
+        match item.get("pull_request") {
+            None => {}
+            Some(Value::Object(_)) => continue,
+            Some(_) => bail!("milestone issue response has malformed pull_request discriminator"),
         }
         let labels = item
             .get("labels")
@@ -1296,6 +1298,20 @@ mod tests {
         let detail = format!("{error:#}");
         assert!(detail.contains("blocked_by page 2"), "{detail}");
         assert!(detail.contains("dependency transport failure"));
+    }
+
+    #[test]
+    fn discovery_rejects_malformed_pull_request_discriminators() {
+        for discriminator in [Value::Null, json!(false), json!("PR"), json!(0), json!([])] {
+            let mut issue = listing(1);
+            issue["pull_request"] = discriminator;
+            let gh = FakeGithub::new(vec![metadata_response(), json!([issue])]);
+            let error = candidates(&gh, "3").unwrap_err();
+            assert!(
+                error.to_string().contains("malformed pull_request"),
+                "{error:#}"
+            );
+        }
     }
 
     #[test]
