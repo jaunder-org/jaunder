@@ -1088,6 +1088,30 @@ baseline.
   `pr land` merge outcome or project Status—set Status to **Done** separately
   after cleanup.
 
+### Discovering milestone issue candidates
+
+`cargo xtask --json issue candidates --milestone <number-or-exact-title>`
+gathers open issues, Jaunder Backlog claim status, open native prerequisites,
+and local resume artifacts. Discovery is read-only: it does not claim issues,
+acquire runtime ownership, or dispatch work. An open milestone must match
+exactly and unambiguously by number or title.
+
+Success means the observed REST inventory was traversed through its last page,
+including prerequisite pages before closed prerequisites are filtered out.
+Candidate and skipped counts describe the gathered issues, excluding pull
+requests. This is not an atomic snapshot: GitHub state may change during or
+following discovery. Repeated issue identities across pages are refused rather
+than silently deduplicated.
+
+GraphQL metadata reads are bounded to 100 open milestones, 100 labels, 100 issue
+types, and 10 project items per issue. Every required connection must explicitly
+report `hasNextPage=false`; overflow or missing/malformed completeness evidence
+fails with a nonzero incomplete-inventory error, not a false absence. Shared
+metadata refusal also protects issue-creation preflight before any mutation. Any
+API, parsing, or later-page failure prevents a successful candidate report;
+there is no partial-success mode. Do not interpret a failed read as an empty or
+exhausted milestone.
+
 ### Targeted Rust tests
 
 The server integration tests compile as a **single** `integration` binary, so
