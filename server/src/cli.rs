@@ -863,7 +863,7 @@ mod tests {
             }
             _ => unreachable!("parent owns the closed CLI parser child scenario set"),
         };
-        println!("CLI_TEST_PROJECTION={projection}");
+        println!("\nCLI_TEST_PROJECTION={projection}");
     }
 
     // --- storage_path precedence ---
