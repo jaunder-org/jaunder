@@ -14,7 +14,7 @@ use super::{Event, EventKind, Outcome, PrReport, Subject};
 /// Arming is a mutation, so it is a separate capability from observing: no
 /// `PrSource` can merge anything, whatever a future caller passes it.
 pub trait PrArmer {
-    fn arm_auto_merge(&self, subject: &Subject) -> Result<(), ApiError>;
+    fn arm_auto_merge(&self, subject: &Subject, expected_head: &str) -> Result<(), ApiError>;
 }
 
 /// GitHub represents a successful arm in either of two ways: a pending
@@ -29,14 +29,35 @@ pub(super) fn arm_is_verified(auto_merge_armed: bool, in_merge_queue: bool) -> b
 pub struct GhArmer;
 
 impl PrArmer for GhArmer {
-    fn arm_auto_merge(&self, subject: &Subject) -> Result<(), ApiError> {
+    fn arm_auto_merge(&self, subject: &Subject, expected_head: &str) -> Result<(), ApiError> {
         // `run_gh_raw`, not `run_gh`: this prints a human sentence rather than JSON,
         // so parsing stdout would classify every *successful* arm as malformed. Its
         // output is not evidence either way — the next snapshot is.
         let number = subject.number.to_string();
         let repo = format!("{}/{}", subject.owner, subject.repo);
-        gh::run_gh_raw(&["pr", "merge", &number, "--repo", &repo, "--auto", "--merge"])
+        gh::run_gh_raw(&merge_args(&number, &repo, expected_head))
     }
+}
+
+// Condition the mutation itself: a matching read cannot close the read/write race.
+fn merge_args<'a>(number: &'a str, repo: &'a str, expected_head: &'a str) -> [&'a str; 9] {
+    [
+        "pr",
+        "merge",
+        number,
+        "--repo",
+        repo,
+        "--auto",
+        "--merge",
+        "--match-head-commit",
+        expected_head,
+    ]
+}
+
+pub(super) fn head_drift_detail(expected: &str, observed: &str) -> String {
+    format!(
+        "refusing to land: expected PR head {expected}, observed {observed}; a fresh qualified landing invocation is required"
+    )
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -171,6 +192,7 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
     armer: &A,
     clock: &C,
     subject: &Subject,
+    expected_head: &str,
     cfg: WatchConfig,
     sink: &mut dyn FnMut(&Event),
 ) -> PrReport {
@@ -182,7 +204,7 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
         Err(e) => {
             return report(
                 subject,
-                String::new(),
+                expected_head.into(),
                 Outcome::WatcherError,
                 Some(format!("could not read the branch ruleset: {}", e.detail())),
                 None,
@@ -198,7 +220,7 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
         Err(e) => {
             return report(
                 subject,
-                String::new(),
+                expected_head.into(),
                 Outcome::WatcherError,
                 Some(format!("could not read the PR: {}", e.detail())),
                 None,
@@ -206,6 +228,16 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
             );
         }
     };
+    if snap.head_sha != expected_head {
+        return report(
+            subject,
+            expected_head.into(),
+            Outcome::Stale,
+            Some(head_drift_detail(expected_head, &snap.head_sha)),
+            None,
+            events,
+        );
+    }
     // Including the ejection probe. Without it an already-ejected PR — open, green,
     // unqueued — classifies as merely not-yet-armed, and `land` would re-enqueue it:
     // the one action this tool explicitly refuses, because requeuing a genuinely
@@ -286,7 +318,7 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
     // Armed **or** already queued: a green PR merged into a live queue is enqueued
     // directly, leaving `autoMergeRequest` null — checking only that field would
     // report a working direct enqueue as a failed arm.
-    let mut head_sha = snap.head_sha;
+    let head_sha = expected_head.to_string();
     for attempt in 1..=2u32 {
         if attempt == 1 {
             push(
@@ -305,7 +337,7 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
                 "auto-merge did not take; re-arming once".into(),
             );
         }
-        if let Err(e) = armer.arm_auto_merge(subject) {
+        if let Err(e) = armer.arm_auto_merge(subject, expected_head) {
             return report(
                 subject,
                 head_sha,
@@ -336,7 +368,16 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
                 );
             }
         };
-        head_sha = after.head_sha.clone();
+        if after.head_sha != expected_head {
+            return report(
+                subject,
+                head_sha,
+                Outcome::Stale,
+                Some(head_drift_detail(expected_head, &after.head_sha)),
+                None,
+                events,
+            );
+        }
         if arm_is_verified(after.auto_merge_armed, after.queue.in_queue) {
             let mut watch_cfg = cfg;
             watch_cfg.stop_at_ready = false;
@@ -346,8 +387,11 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
                 clock,
                 subject,
                 watch_cfg,
-                progress,
-                emitted_optional_failure_ids,
+                watch::WatchContinuation {
+                    progress,
+                    emitted_optional_failure_ids,
+                    expected_head: Some(expected_head),
+                },
                 sink,
             );
             // One log: the prologue happened first, so it reads first.
@@ -453,6 +497,17 @@ mod tests {
     use crate::pr::snapshot::{CheckState, Mergeable, RequiredChecks};
     use crate::pr::test_support::*;
 
+    fn land<S: PrSource, A: PrArmer, C: Clock>(
+        source: &S,
+        armer: &A,
+        clock: &C,
+        subject: &Subject,
+        cfg: WatchConfig,
+        sink: &mut dyn FnMut(&Event),
+    ) -> PrReport {
+        super::land(source, armer, clock, subject, "abc", cfg, sink)
+    }
+
     // ---- the divergence guard ----
 
     #[test]
@@ -501,21 +556,150 @@ mod tests {
 
     struct CountingArmer {
         calls: std::cell::Cell<u32>,
+        expected_heads: std::cell::RefCell<Vec<String>>,
     }
 
     impl CountingArmer {
         fn new() -> Self {
             Self {
                 calls: std::cell::Cell::new(0),
+                expected_heads: std::cell::RefCell::new(Vec::new()),
             }
         }
     }
 
     impl PrArmer for CountingArmer {
-        fn arm_auto_merge(&self, _: &Subject) -> Result<(), ApiError> {
+        fn arm_auto_merge(&self, _: &Subject, expected_head: &str) -> Result<(), ApiError> {
+            self.expected_heads.borrow_mut().push(expected_head.into());
+            assert_eq!(expected_head, "abc");
             self.calls.set(self.calls.get() + 1);
             Ok(())
         }
+    }
+
+    #[test]
+    fn production_merge_request_conditions_the_mutation_on_the_approved_head() {
+        assert_eq!(
+            merge_args("731", "owner/repo", "approved-A"),
+            [
+                "pr",
+                "merge",
+                "731",
+                "--repo",
+                "owner/repo",
+                "--auto",
+                "--merge",
+                "--match-head-commit",
+                "approved-A",
+            ]
+        );
+    }
+
+    #[test]
+    fn changed_arm_readback_never_verifies_or_retries_a_replacement() {
+        for mut replacement in [
+            open_pending(),
+            armed_snapshot(),
+            queued_at(1),
+            merged_snapshot(),
+        ] {
+            replacement.head_sha = "replacement-B".into();
+            let src = FakeSource::new(vec![Ok(open_pending()), Ok(replacement)], queue_rules());
+            let armer = CountingArmer::new();
+            let report = land(&src, &armer, &clock(), &subject(), cfg(), &mut |_| {});
+            assert_eq!(report.outcome, Outcome::Stale);
+            assert_eq!(report.head_sha, "abc");
+            let detail = report.detail.unwrap();
+            assert!(detail.contains("abc") && detail.contains("replacement-B"));
+            assert_eq!(armer.calls.get(), 1);
+        }
+    }
+
+    #[test]
+    fn changed_head_after_verified_arm_cannot_land_a_replacement() {
+        let mut replacement = merged_snapshot();
+        replacement.head_sha = "replacement-B".into();
+        let src = FakeSource::new(
+            vec![Ok(open_pending()), Ok(armed_snapshot()), Ok(replacement)],
+            queue_rules(),
+        );
+        let armer = CountingArmer::new();
+        let report = land(&src, &armer, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(report.outcome, Outcome::Stale);
+        assert_eq!(report.head_sha, "abc");
+        assert!(report.detail.unwrap().contains("replacement-B"));
+        assert_eq!(armer.calls.get(), 1);
+    }
+
+    #[test]
+    fn unreadable_prearm_snapshot_never_authorizes_mutation() {
+        let src = FakeSource::new(
+            vec![Err(ApiError::Malformed("unreadable".into()))],
+            queue_rules(),
+        );
+        let armer = CountingArmer::new();
+        let report = land(&src, &armer, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(report.outcome, Outcome::WatcherError);
+        assert_eq!(report.head_sha, "abc");
+        assert_eq!(armer.calls.get(), 0);
+    }
+
+    #[test]
+    fn unchanged_head_initial_arm_is_verified_and_merged() {
+        let src = FakeSource::new(
+            vec![
+                Ok(open_pending()),
+                Ok(armed_snapshot()),
+                Ok(merged_snapshot()),
+            ],
+            queue_rules(),
+        );
+        let armer = CountingArmer::new();
+        let report = land(&src, &armer, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(report.outcome, Outcome::Merged);
+        assert_eq!(report.head_sha, "abc");
+        assert_eq!(*armer.expected_heads.borrow(), ["abc"]);
+    }
+
+    #[test]
+    fn unreadable_arm_readback_never_authorizes_a_retry() {
+        let src = FakeSource::new(
+            vec![
+                Ok(open_pending()),
+                Err(ApiError::Transport("readback unavailable".into())),
+            ],
+            queue_rules(),
+        );
+        let armer = CountingArmer::new();
+        let report = land(&src, &armer, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(report.outcome, Outcome::WatcherError);
+        assert_eq!(report.head_sha, "abc");
+        assert!(report.detail.unwrap().contains("readback unavailable"));
+        assert_eq!(armer.calls.get(), 1);
+    }
+
+    #[test]
+    fn mutation_boundary_head_mismatch_fails_without_retry() {
+        struct ConditionalArmer(std::cell::RefCell<Vec<String>>);
+        impl PrArmer for ConditionalArmer {
+            fn arm_auto_merge(&self, _: &Subject, expected_head: &str) -> Result<(), ApiError> {
+                self.0.borrow_mut().push(expected_head.into());
+                // GitHub's head changed after the matching pre-arm read.
+                if expected_head != "replacement-B" {
+                    return Err(ApiError::Transport(
+                        "head does not match replacement-B".into(),
+                    ));
+                }
+                Ok(())
+            }
+        }
+        let src = FakeSource::new(vec![Ok(open_pending())], queue_rules());
+        let armer = ConditionalArmer(std::cell::RefCell::new(Vec::new()));
+        let report = land(&src, &armer, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(report.outcome, Outcome::WatcherError);
+        assert_eq!(report.head_sha, "abc");
+        assert_eq!(*armer.0.borrow(), ["abc"]);
+        assert!(report.detail.unwrap().contains("head does not match"));
     }
 
     #[test]
@@ -537,6 +721,8 @@ mod tests {
             2,
             "a silent no-op must be re-armed exactly once"
         );
+        assert_eq!(*armer.expected_heads.borrow(), ["abc", "abc"]);
+        assert_eq!(report.head_sha, "abc");
         assert_eq!(report.outcome, Outcome::Merged);
     }
 
