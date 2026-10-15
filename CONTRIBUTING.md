@@ -496,6 +496,37 @@ invoke it.
   This certifies trace evidence, not a boot time budget, source coverage, or
   `#[server]` request-flow coverage.
 
+#### Bounding full local E2E fan-out
+
+A deliberate full `cargo xtask validate` can limit its concurrently executing
+E2E lane-build operations with `--e2e-jobs <N>`. Choose a positive integer from
+actual CPU/RAM capacity admitted for this invocation; for example, a caller
+admitted for two lane builds can run `cargo xtask validate --e2e-jobs 2`.
+Omission preserves all-enabled-lanes fan-out, not a host-capacity guarantee.
+Values above the enabled lane count are accepted and effectively capped at that
+count. Invalid values and combining the option with `--no-e2e` are rejected
+before validation work starts. Other E2E commands keep their existing
+interfaces.
+
+Before lane dispatch, stderr reports requested/default, enabled and effective
+counts. The same values appear in the human summary and structured result's
+`e2e_concurrency` object (`requested: null` means omitted). Every enabled lane
+still runs, a settled build frees its slot immediately, and a failed build does
+not cancel healthy work or discard pending lanes. Lane artifacts, both Firefox
+reconciliations and authoritative flow-coverage verification remain required.
+Lane phase sidecars remain intact; bounded admission makes aggregate phase
+elapsed time unavailable without shared timing boundaries, so the summary
+reports that limitation rather than treating a maximum as total elapsed time.
+
+This is a host dispatch bound, not Nix's `max-jobs`/core scheduler or a limit on
+all host processes, guest workers, dependency builds, substitutions or builders.
+Nix settings and other invocations can further affect actual overlap. Current
+production lanes request two vCPUs, with 4 GiB for ordinary Firefox guests and 3
+GiB for other guests; these are configured guest sizes, not measured host use or
+proof that any particular cap is safe. Cross-checkout heavy-path admission is
+separate work in #1753, not a prerequisite. No global queue, automatic host
+threshold or resource-pressure cancellation is introduced.
+
 #### Visual snapshot workflow
 
 Visual coverage is deliberately five existing behavioral tests tagged `@visual`:

@@ -87,10 +87,12 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         Command::Validate {
             no_e2e,
             allow_dirty,
+            e2e_jobs,
         } => {
             let policy = gate::execution_policy(&Command::Validate {
                 no_e2e,
                 allow_dirty,
+                e2e_jobs,
             });
             let sh = Shell::new()?;
             let start = Instant::now();
@@ -100,7 +102,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                 // separately. The flow-coverage verifier resolves the already-realized
                 // authoritative combo's individual output because only that combo owns
                 // the empirical snapshot verdict.
-                let e2e = steps::nix::e2e(&mut result);
+                let e2e = steps::nix::e2e(&mut result, e2e_jobs);
                 steps::server_fn_coverage_check::verify_after_validate(
                     &mut result,
                     e2e.combinations_ok,

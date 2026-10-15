@@ -286,7 +286,7 @@ pub fn reconcile(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::fs;
     use std::path::Path;
 
@@ -330,7 +330,7 @@ mod tests {
         "sqlite-firefox-serial-special",
     ];
 
-    fn write_capture(path: &Path, trace: &str) {
+    pub(crate) fn write_capture(path: &Path, trace: &str) {
         let file = fs::File::create(path).unwrap();
         let encoder = GzEncoder::new(file, Compression::default());
         let mut archive = tar::Builder::new(encoder);
@@ -344,7 +344,7 @@ mod tests {
         archive.into_inner().unwrap().finish().unwrap();
     }
 
-    fn fixture(root: &Path) -> Vec<LaneEvidence> {
+    pub(crate) fn fixture(root: &Path) -> Vec<LaneEvidence> {
         IDENTITIES
             .iter()
             .enumerate()
