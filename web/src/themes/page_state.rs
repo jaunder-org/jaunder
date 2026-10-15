@@ -56,6 +56,17 @@ impl ScopeAvailability {
     }
 }
 
+/// Presentation of theme feedback, independent of message wording.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Feedback {
+    /// A dispatched operation has not completed.
+    Progress,
+    /// The requested operation completed with confirmation.
+    Success,
+    /// Rejection, uncertainty or a local failure needs attention.
+    Error,
+}
+
 /// Reactive private-page identity state kept separate from browser-only controls.
 #[derive(Clone, Copy, Debug)]
 pub struct ThemePageState {
@@ -71,8 +82,8 @@ pub struct ThemePageState {
     pub status: RwSignal<Option<String>>,
     /// Places import feedback beside its picker rather than below Advanced authoring.
     pub feedback_in_import: RwSignal<bool>,
-    /// Styles failed or uncertain operations without implying rollback.
-    pub feedback_error: RwSignal<bool>,
+    /// Distinguishes confirmed completion from progress and failed or uncertain operations.
+    pub feedback: RwSignal<Feedback>,
 }
 
 impl Default for ThemePageState {
@@ -84,7 +95,7 @@ impl Default for ThemePageState {
             refresh: Invalidator::new(),
             status: RwSignal::new(None),
             feedback_in_import: RwSignal::new(false),
-            feedback_error: RwSignal::new(false),
+            feedback: RwSignal::new(Feedback::Progress),
         }
     }
 }
@@ -99,7 +110,7 @@ impl ThemePageState {
         self.selected.set(None);
         self.status.set(None);
         self.feedback_in_import.set(false);
-        self.feedback_error.set(false);
+        self.feedback.set(Feedback::Progress);
     }
 
     /// Serializes every theme operation in this page so draft writes cannot race activation.
@@ -110,7 +121,7 @@ impl ThemePageState {
         }
         self.pending.set(true);
         self.feedback_in_import.set(false);
-        self.feedback_error.set(false);
+        self.feedback.set(Feedback::Progress);
         true
     }
 
@@ -167,6 +178,16 @@ pub enum MutationStage {
     Publish,
     PublishOnly,
     Apply { published: bool },
+}
+
+/// Publication within Use is progress until its separate selection stage completes.
+#[must_use]
+pub fn mutation_feedback(stage: MutationStage, receipt: &Receipt) -> Feedback {
+    match (stage, receipt) {
+        (MutationStage::Publish, Receipt::Confirmed) => Feedback::Progress,
+        (_, Receipt::Confirmed) => Feedback::Success,
+        (_, Receipt::Rejected(_) | Receipt::Uncertain(_)) => Feedback::Error,
+    }
 }
 
 /// Distinguishes typed admission rejection from uncertain dispatch/commit acknowledgement.
@@ -333,8 +354,8 @@ pub fn revalidation<T, E: ToString>(result: Result<MutationOutcome<T>, E>) -> Re
 #[cfg(test)]
 mod tests {
     use super::{
-        Revalidation, ScopeAvailability, ThemePageState, draft_from_editor, import_name_override,
-        publication_confirmed, revalidation,
+        Feedback, Revalidation, ScopeAvailability, ThemePageState, draft_from_editor,
+        import_name_override, publication_confirmed, revalidation,
     };
     use crate::themes::OwnershipScope;
     use common::MutationOutcome;
@@ -362,7 +383,7 @@ mod tests {
             page.selected.set(Some(common::ids::ThemeId::from(42)));
             page.status.set(Some("saved".into()));
             page.feedback_in_import.set(true);
-            page.feedback_error.set(true);
+            page.feedback.set(Feedback::Success);
 
             page.select_scope(OwnershipScope::Site);
 
@@ -370,7 +391,7 @@ mod tests {
             assert_eq!(page.selected.get_untracked(), None);
             assert_eq!(page.status.get_untracked(), None);
             assert!(!page.feedback_in_import.get_untracked());
-            assert!(!page.feedback_error.get_untracked());
+            assert_eq!(page.feedback.get_untracked(), Feedback::Progress);
         });
     }
 
@@ -381,7 +402,7 @@ mod tests {
             page.selected.set(Some(common::ids::ThemeId::from(42)));
             page.pending.set(true);
             page.feedback_in_import.set(true);
-            page.feedback_error.set(true);
+            page.feedback.set(Feedback::Error);
             page.select_scope(OwnershipScope::Site);
             assert_eq!(page.scope.get_untracked(), OwnershipScope::Author);
             assert_eq!(
@@ -389,7 +410,31 @@ mod tests {
                 Some(common::ids::ThemeId::from(42))
             );
             assert!(page.feedback_in_import.get_untracked());
-            assert!(page.feedback_error.get_untracked());
+            assert_eq!(page.feedback.get_untracked(), Feedback::Error);
+        });
+    }
+
+    #[test]
+    fn feedback_styles_only_confirmed_completion_as_success() {
+        use super::{MutationStage, Receipt, mutation_feedback};
+        for (stage, expected) in [
+            (MutationStage::Import, Feedback::Success),
+            (MutationStage::Publish, Feedback::Progress),
+            (MutationStage::PublishOnly, Feedback::Success),
+            (MutationStage::Apply { published: false }, Feedback::Success),
+            (MutationStage::Apply { published: true }, Feedback::Success),
+        ] {
+            assert_eq!(mutation_feedback(stage, &Receipt::Confirmed), expected);
+            for receipt in [
+                Receipt::Rejected("rejected".into()),
+                Receipt::Uncertain("unknown".into()),
+            ] {
+                assert_eq!(mutation_feedback(stage, &receipt), Feedback::Error);
+            }
+        }
+        Owner::new().with(|| {
+            let page = ThemePageState::default();
+            assert_eq!(page.feedback.get_untracked(), Feedback::Progress);
         });
     }
 
@@ -427,10 +472,10 @@ mod tests {
         Owner::new().with(|| {
             let page = ThemePageState::default();
             page.selected.set(Some(common::ids::ThemeId::from(42)));
-            page.feedback_error.set(true);
+            page.feedback.set(Feedback::Success);
             page.feedback_in_import.set(true);
             assert!(page.begin_mutation());
-            assert!(!page.feedback_error.get_untracked());
+            assert_eq!(page.feedback.get_untracked(), Feedback::Progress);
             assert!(!page.feedback_in_import.get_untracked());
             assert!(!page.begin_mutation());
             assert_eq!(page.begin_use(), None);

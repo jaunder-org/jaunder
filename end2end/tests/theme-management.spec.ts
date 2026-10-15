@@ -64,6 +64,8 @@ test("publication rejection stops selection and offers draft repair without unce
     .getByRole("button", { name: "Use this theme", exact: true })
     .click();
   await expect(page.getByRole("status")).toContainText("Publication rejected");
+  await expect(page.getByRole("status")).toHaveClass(/error/);
+  await expect(page.getByRole("status")).not.toHaveClass(/success/);
   await expect(page.getByRole("status")).toContainText("Fix the draft");
   await expect(page.getByRole("status")).not.toContainText("may have advanced");
   await expect(
@@ -135,6 +137,8 @@ for (const stage of ["publish", "select"] as const) {
             : "applying outcome is uncertain",
       );
       await expect(status).not.toContainText("Theme published and applied");
+      await expect(status).toHaveClass(/error/);
+      await expect(status).not.toHaveClass(/success/);
       await expect(status).toContainText("Catalog reread");
       await expect(status).toContainText("Current selection from reread");
       await expect(use).toBeEnabled();
@@ -256,6 +260,7 @@ test("invalid package assets after successful import gives error feedback outsid
   await expect(zip.getByRole("status")).toContainText(
     "Imported Intake fixture",
   );
+  await expect(zip.getByRole("status")).toHaveClass(/success/);
   await expect(zip.getByRole("status")).not.toHaveClass(/error/);
   await openThemeAdvanced(page);
   await page.getByLabel("Package assets JSON").fill("not JSON");
@@ -265,6 +270,7 @@ test("invalid package assets after successful import gives error feedback outsid
   const status = page.getByRole("status");
   await expect(status).toContainText("Package assets must be valid JSON");
   await expect(status).toHaveClass(/error/);
+  await expect(status).not.toHaveClass(/success/);
   const catalog = page.locator(
     'section[aria-labelledby="theme-catalog-heading"]',
   );
@@ -311,6 +317,8 @@ test("pending Advanced draft write blocks use, duplicate write and scope changes
   try {
     await expect(use).toBeDisabled();
     await expect(save).toBeDisabled();
+    await expect(page.getByRole("status")).toContainText("Working");
+    await expect(page.getByRole("status")).not.toHaveClass(/success|error/);
     await expect(scope).toBeDisabled();
     await save.evaluate((node) =>
       node.dispatchEvent(new MouseEvent("click", { bubbles: true })),
@@ -323,6 +331,8 @@ test("pending Advanced draft write blocks use, duplicate write and scope changes
     release();
   }
   await expect(page.getByRole("status")).toContainText("Saved");
+  await expect(page.getByRole("status")).toHaveClass(/success/);
+  await expect(page.getByRole("status")).not.toHaveClass(/error/);
   await expect(use).toBeEnabled();
   await expect(save).toBeEnabled();
   expect(writes).toEqual(["/api/themes/replace_css"]);
@@ -444,12 +454,21 @@ test("ZIP-only import opens an unselected draft and explicit use publishes then 
     mimeType: "application/zip",
     buffer: archive,
   });
+  const releaseImport = await stallServerFn(page, "themes/import_zip");
   await zipImport.getByRole("button", { name: "Import ZIP draft" }).click();
+  try {
+    await expect(page.getByRole("status")).toContainText("Importing");
+    await expect(page.getByRole("status")).not.toHaveClass(/success|error/);
+  } finally {
+    releaseImport();
+  }
   const entry = page.getByRole("button", {
     name: "Intake fixture (draft)",
     exact: true,
   });
   await expect(entry).toBeVisible();
+  await expect(page.getByRole("status")).toHaveClass(/success/);
+  await expect(page.getByRole("status")).not.toHaveClass(/error/);
   const selection = page.getByLabel("Public selection");
   await expect(selection).toHaveValue("inherit");
   await entry.click();
@@ -457,6 +476,7 @@ test("ZIP-only import opens an unselected draft and explicit use publishes then 
   await expect(selection).toHaveValue("inherit");
   await expect(page.getByLabel("theme.json")).toBeHidden();
   const release = await stallServerFn(page, "themes/publish");
+  const releaseApply = await stallServerFn(page, "themes/select");
   const requests: string[] = [];
   page.on("request", (request) => {
     const path = new URL(request.url()).pathname;
@@ -466,6 +486,7 @@ test("ZIP-only import opens an unselected draft and explicit use publishes then 
   const use = page.getByRole("button", { name: "Use this theme", exact: true });
   await use.click();
   await expect(page.getByRole("status")).toContainText("Publishing");
+  await expect(page.getByRole("status")).not.toHaveClass(/success|error/);
   await expect(use).toBeDisabled();
   await expect(selection).toBeDisabled();
   await expect(entry).toBeDisabled();
@@ -474,9 +495,19 @@ test("ZIP-only import opens an unselected draft and explicit use publishes then 
   ).toBeDisabled();
   expect(requests).toEqual([THEME_ENDPOINTS.publish]);
   release();
+  try {
+    await expect(page.getByRole("status")).toContainText(
+      "Publication confirmed. Applying theme",
+    );
+    await expect(page.getByRole("status")).not.toHaveClass(/success|error/);
+  } finally {
+    releaseApply();
+  }
   await expect(page.getByRole("status")).toContainText(
     "Theme published and applied",
   );
+  await expect(page.getByRole("status")).toHaveClass(/success/);
+  await expect(page.getByRole("status")).not.toHaveClass(/error/);
   expect(requests).toEqual([THEME_ENDPOINTS.publish, THEME_ENDPOINTS.select]);
   await expect(selection).not.toHaveValue("inherit");
   await expect(page.locator(".j-root")).toHaveAttribute("data-theme", "studio");
@@ -1148,6 +1179,8 @@ test("author completes the custom theme lifecycle through Studio", async ({
   await expect(
     page.getByTitle("Isolated theme preview").contentFrame().locator("body"),
   ).toContainText("Jaunder");
+  await expect(page.getByRole("status")).toHaveClass(/success/);
+  await expect(page.getByRole("status")).not.toHaveClass(/error/);
   const desktopViewport = page.viewportSize();
   if (desktopViewport === null) {
     throw new Error("Studio lifecycle requires an explicit desktop viewport");
@@ -1163,6 +1196,9 @@ test("author completes the custom theme lifecycle through Studio", async ({
     mutation("publish"),
     page.getByRole("button", { name: "Publish" }).click(),
   ]);
+  await expect(page.getByRole("status")).toContainText("Publication confirmed");
+  await expect(page.getByRole("status")).toHaveClass(/success/);
+  await expect(page.getByRole("status")).not.toHaveClass(/error/);
   const publicSelection = page.getByLabel("Public selection");
   await expect(
     publicSelection.getByRole("option", { name: "Night round trip" }),
@@ -1244,6 +1280,9 @@ test("author completes the custom theme lifecycle through Studio", async ({
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export ZIP" }).click();
   const exported = await downloadPromise;
+  await expect(page.getByRole("status")).toContainText("download started");
+  await expect(page.getByRole("status")).toHaveClass(/success/);
+  await expect(page.getByRole("status")).not.toHaveClass(/error/);
   const exportedPath = await exported.path();
   expect(exportedPath).not.toBeNull();
   const exportedMembers = packageMemberDigests(exportedPath!);

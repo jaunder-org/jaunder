@@ -17,7 +17,7 @@ use crate::{
 };
 
 use super::page_state::{
-    self, MutationStage, Receipt, Revalidation, ScopeAvailability, ThemePageState,
+    self, Feedback, MutationStage, Revalidation, ScopeAvailability, ThemePageState,
 };
 use super::presentation_state::{
     HeaderMediaDraft, MEDIA_PAGE_SIZE, logo_fallback_option, media_page_offset,
@@ -343,7 +343,7 @@ fn zip_import_card(
                     "Import ZIP draft"
                 </button>
                 <Show when=move || page.feedback_in_import.get()>
-                    <ThemeFeedback status=page.status error=page.feedback_error />
+                    <ThemeFeedback status=page.status feedback=page.feedback />
                 </Show>
             </div>
         </section>
@@ -410,7 +410,7 @@ fn import_package_zip(
         return;
     }
     page.feedback_in_import.set(true);
-    page.feedback_error.set(true);
+    page.feedback.set(Feedback::Error);
     // crap:allow: Browser File and FormData APIs are wasm-only; host coverage cannot execute the upload handler.
     let Some(file) = package_file
         .get()
@@ -441,12 +441,13 @@ fn import_package_zip(
         return;
     }
     page.pending.set(true);
-    page.feedback_error.set(false);
+    page.feedback.set(Feedback::Progress);
     status.set(Some("Importing Theme Package…".into()));
     task::spawn_local(async move {
         match api::import_zip(form.into()).await {
             Ok(MutationOutcome::Confirmed(entry)) => {
                 page.selected.set(Some(entry.id));
+                page.feedback.set(Feedback::Success);
                 refresh.notify();
                 status.set(Some(format!("Imported {} as a private draft. Choose Use this theme to publish and apply it.", entry.name)));
             }
@@ -465,20 +466,19 @@ fn settle<T>(
     refresh: Invalidator,
     status: RwSignal<Option<String>>,
 ) {
-    page.feedback_error.set(!matches!(
-        page_state::mutation_receipt(&result),
-        Receipt::Confirmed
-    ));
     match page_state::revalidation(result) {
         Revalidation::Confirmed => {
+            page.feedback.set(Feedback::Success);
             refresh.notify();
             status.set(Some("Saved. Rereading catalog state…".into()));
         }
         Revalidation::Indeterminate => {
+            page.feedback.set(Feedback::Error);
             refresh.notify();
             status.set(Some("The server could not confirm this change. Rereading catalog and selection; review current state before continuing. No automatic retry ran.".into()));
         }
         Revalidation::Failed(message) => {
+            page.feedback.set(Feedback::Error);
             refresh.notify();
             status.set(Some(format!("The change was not confirmed. Review current catalog and selection before continuing. {message}")));
         }
@@ -531,7 +531,7 @@ fn ThemeCatalog(
                     </button>
                 </Show>
                 <Show when=move || !page.feedback_in_import.get()>
-                    <ThemeFeedback status=status error=page.feedback_error />
+                    <ThemeFeedback status=status feedback=page.feedback />
                 </Show>
                 <div id="theme-advanced-editor" hidden=move || !advanced.get()>
                     <For
@@ -647,7 +647,7 @@ fn ThemeSelection(
         }
         pending.set(true);
         page.feedback_in_import.set(false);
-        page.feedback_error.set(false);
+        page.feedback.set(Feedback::Progress);
         let token = event_target_value(&event);
         let current_scope = scope.get_untracked();
         let next = page_state::selection_from_token(&token);
@@ -881,10 +881,11 @@ fn preview_selected(
             match api::preview(scope, id).await {
                 Ok(preview) => {
                     document.set(Some(preview_document(&preview.css, &preview.html)));
+                    page.feedback.set(Feedback::Success);
                     status.set(Some("Preview updated in an isolated document.".into()));
                 }
                 Err(error) => {
-                    page.feedback_error.set(true);
+                    page.feedback.set(Feedback::Error);
                     status.set(Some(format!("Preview failed: {error}. The last preview may be stale; review the draft or reopen Themes.")));
                 }
             }
@@ -949,14 +950,17 @@ fn export_selected(
         spawn_theme_operation(page, async move {
             match api::export(scope, id).await {
                 Ok(package) => match download_package(&package.filename, &package.bytes) {
-                    Ok(()) => status.set(Some("Theme Package download started.".into())),
+                    Ok(()) => {
+                        page.feedback.set(Feedback::Success);
+                        status.set(Some("Theme Package download started.".into()));
+                    }
                     Err(message) => {
-                        page.feedback_error.set(true);
+                        page.feedback.set(Feedback::Error);
                         status.set(Some(format!("Download could not start: {message}. Try exporting again after checking browser downloads.")));
                     }
                 },
                 Err(error) => {
-                    page.feedback_error.set(true);
+                    page.feedback.set(Feedback::Error);
                     status.set(Some(format!("Export failed: {error}. Reopen Themes to review the draft before exporting again.")));
                 }
             }
@@ -965,12 +969,13 @@ fn export_selected(
 }
 
 #[component]
-fn ThemeFeedback(status: RwSignal<Option<String>>, error: RwSignal<bool>) -> impl IntoView {
+fn ThemeFeedback(status: RwSignal<Option<String>>, feedback: RwSignal<Feedback>) -> impl IntoView {
     view! {
         <Show when=move || status.get().is_some()>
             <p
                 class="j-theme-status"
-                class:error=move || error.get()
+                class:success=move || feedback.get() == Feedback::Success
+                class:error=move || feedback.get() == Feedback::Error
                 role="status"
                 aria-live="polite"
                 aria-atomic="true"
@@ -987,8 +992,8 @@ fn set_mutation_feedback<T>(
     result: &Result<MutationOutcome<T>, WebError>,
 ) {
     let receipt = page_state::mutation_receipt(result);
-    page.feedback_error
-        .set(!matches!(receipt, Receipt::Confirmed));
+    page.feedback
+        .set(page_state::mutation_feedback(stage, &receipt));
     page.status
         .set(Some(page_state::mutation_message(stage, &receipt)));
 }
@@ -1173,7 +1178,7 @@ fn DraftPackageForm(
             }
             Err(error) => {
                 page.feedback_in_import.set(false);
-                page.feedback_error.set(true);
+                page.feedback.set(Feedback::Error);
                 status.set(Some(error));
             }
         }
@@ -1646,7 +1651,7 @@ fn update_pool(
         Ok(seed) => seed,
         Err(error) => {
             page.feedback_in_import.set(false);
-            page.feedback_error.set(true);
+            page.feedback.set(Feedback::Error);
             status.set(Some(error));
             return;
         }
@@ -1676,7 +1681,7 @@ fn shuffle_presentation(
         Ok(seed) => seed,
         Err(error) => {
             page.feedback_in_import.set(false);
-            page.feedback_error.set(true);
+            page.feedback.set(Feedback::Error);
             status.set(Some(error));
             return;
         }
