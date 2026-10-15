@@ -44,36 +44,8 @@ echo "  output: $out"
 run_mutants --package "$pkg" --file "$file" --output "$out"
 status=$?
 
-# Survivors are findings, but tool errors cannot establish verification.
-case "$status" in
-  0|2) ;;
-  *)
-    echo "ERROR: verification failed: cargo-mutants exited $status; see $out" >&2
-    exit "$status"
-    ;;
-esac
-
-# Validate before publishing counts or survivor conclusions. Missing category
-# files are I/O errors too, not evidence of a zero population.
-if ! counts=$(jq -ers --arg package "$pkg" --arg file "$file" \
-  --argjson status "$status" \
-  --rawfile missed "$out/mutants.out/missed.txt" \
-  --rawfile caught "$out/mutants.out/caught.txt" \
-  --rawfile unviable "$out/mutants.out/unviable.txt" \
-  --rawfile timeout "$out/mutants.out/timeout.txt" \
-  -f "$ROOT/.mutants-loop/verify-outcomes.jq" "$out/mutants.out/outcomes.json"); then
-  echo "ERROR: verification failed: invalid or incomplete evidence; see $out" >&2
-  exit 1
-fi
-
-echo
-echo "--- $file ---"
-printf '%s\n' "$counts"
-
-if [ -s "$out/mutants.out/missed.txt" ]; then
-  echo
-  echo "STILL ALIVE:"
-  cat "$out/mutants.out/missed.txt" || exit 1
-fi
-
-exit 0
+# One native consumer owns all evidence policy and reporting. Propagate its
+# outcome, including launcher failures, rather than interpreting partial output.
+cargo xtask mutants verify-evidence --package "$pkg" --file "$file" \
+  --output "$out" --producer-status "$status"
+exit $?

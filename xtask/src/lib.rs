@@ -21,6 +21,7 @@ mod ids;
 pub mod issue;
 mod lifecycle;
 pub mod markers;
+mod mutants;
 mod nix_build;
 mod nix_probe;
 mod performance;
@@ -93,9 +94,9 @@ mod steps {
 
 pub use cli::{
     AdrCommand, CacheSafetyCommand, Cli, Command, CoverageCommand, E2eBackend, E2eBrowser,
-    NixCommand, PerformanceBackend, PerformanceBrowser, PerformanceCommand, PerformanceProfile,
-    PerformanceRunArgs, PrCommand, PrWatchUntil, ProductionBaselineCommand, SandboxProfile,
-    ServerFnCoverageCommand, TracesCommand, WasmCoverageCommand,
+    MutantsCommand, NixCommand, PerformanceBackend, PerformanceBrowser, PerformanceCommand,
+    PerformanceProfile, PerformanceRunArgs, PrCommand, PrWatchUntil, ProductionBaselineCommand,
+    SandboxProfile, ServerFnCoverageCommand, TracesCommand, WasmCoverageCommand,
 };
 pub use dispatch::run;
 pub use host_tooling::prepare_checkout;

@@ -56,6 +56,20 @@ incomplete evidence fails verification before counts are published; zero
 applicable mutants is not proof that the file is fixed. Do not add a cache to
 speed it up.
 
+`verify.sh` keeps the shared shell producer and delegates evidence validation
+and reporting once, after producer termination, to:
+
+```bash
+cargo xtask mutants verify-evidence --package <package> --file <file> --output <artifact-directory> --producer-status <status>
+```
+
+The output root contains `mutants.out/`. Native validation errors and launcher
+failures propagate as nonzero caller exits. Production uses the existing
+cargo-xtask/Nix launcher: new tooling inputs need normal Git source admission;
+cold realization/build and checkout preparation are real costs, while warm
+invocations reuse store outputs. Native regression tests prove behavior, not
+production Nix source admission.
+
 ## Files here
 
 | File           | Holds                                                  |
@@ -175,12 +189,13 @@ reason. Resolve the incomplete measurement before reading authoritative counts.
 
 **Exit codes and artifacts must agree.** In cargo-mutants 27.1.0, 0 means
 success, 1 usage error, 2 surviving mutants, 3 timeout, and 4 baseline failure;
-other tool failures also fail verification. `verify.sh` accepts only 0 or 2, and
-only with completed `outcomes.json`, successful baseline tests, nonempty
-applicable mutant outcomes, consistent phase results/counts and matching
-category lists. Partial JSON is written during a run: existence alone proves
-nothing. A valid survivor run still prints counts and `STILL ALIVE` details and
-returns caller exit 0; that is a finding, not a tool failure.
+other tool failures also fail verification. The native evidence consumer accepts
+only producer status 0 or 2, and only with completed `outcomes.json`, successful
+baseline tests, nonempty applicable mutant outcomes, consistent phase
+results/counts and matching category lists. Partial JSON is written during a
+run: existence alone proves nothing. A valid survivor run still prints counts
+and `STILL ALIVE` details and returns caller exit 0; that is a finding, not a
+tool failure.
 
 `client` is deliberately never scanned: WASM-only, no host test reaches it, all
 42 mutants survived with nothing caught. `web` likewise, by the user's call —

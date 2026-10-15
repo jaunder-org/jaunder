@@ -13,7 +13,7 @@ edits.
 
 ## Task outline
 
-- [ ] 1. Native module validates typed evidence and reports valid findings.
+- [x] 1. Native module validates typed evidence and reports valid findings.
   - Contract: explicit target, artifact root/status; complete, applicable,
     consistent evidence before counts/details. Add direct Jiff 0.2.35
     requirement and xtask lock edge, retaining locked 0.2.38; inspect generated
@@ -21,7 +21,7 @@ edits.
   - Verification: direct tests reject invalid evidence/status/baseline, timeout
     and zero-applicable cases; preserve valid counts/survivors and
     fractional-time order.
-- [ ] 2. Smallest real-consumer tracer connects script and native reporting.
+- [x] 2. Smallest real-consumer tracer connects script and native reporting.
   - Contract: SPEC-002's `cargo xtask mutants verify-evidence` arguments; output
     root contains `mutants.out/`. Keep `common.sh`/`run_mutants` unchanged; one
     native call after producer termination, propagating final outcome/launch
@@ -29,7 +29,7 @@ edits.
   - Verification: real `verify.sh`, `CARGO_BIN_EXE_xtask` normal startup and
     fake cargo forwarding only xtask/substituting only producer; one
     valid/invalid fixture.
-- [ ] 3. Expand real-consumer regressions to the full original contract.
+- [x] 3. Expand real-consumer regressions to the full original contract.
   - Contract: remove production jq/`verify-outcomes.jq`; minimally align
     protocol.
   - Verification: existing auxiliary host lane covers

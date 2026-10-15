@@ -7,12 +7,21 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 fn verify(fixture: Option<&Path>, status: i32) -> Output {
+    verify_with_binary(fixture, status, Path::new(env!("CARGO_BIN_EXE_xtask")))
+}
+
+fn verify_with_binary(fixture: Option<&Path>, status: i32, binary: &Path) -> Output {
     let temp = tempfile::tempdir().unwrap();
     let cargo = temp.path().join("cargo");
     fs::write(
         &cargo,
         r#"#!/usr/bin/env bash
 set -eu
+if [ "$1" = xtask ]; then
+  shift
+  exec "$XTASK_BIN" "$@"
+fi
+[ "$1" = mutants ] || exit 64
 while [ "$#" -gt 0 ]; do
   if [ "$1" = --output ]; then
     shift
@@ -29,7 +38,8 @@ exit "$PRODUCER_STATUS"
     .unwrap();
     fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    Command::new("bash")
+    let mut command = Command::new("bash");
+    command
         .arg(root.join(".mutants-loop/verify.sh"))
         .args(["common", "common/src/render.rs"])
         .current_dir(root)
@@ -44,8 +54,20 @@ exit "$PRODUCER_STATUS"
         .env("TMPDIR_MUTANTS", temp.path().join("scratch"))
         .env("FIXTURE", fixture.unwrap_or(Path::new("")))
         .env("PRODUCER_STATUS", status.to_string())
-        .output()
-        .unwrap()
+        .env("XTASK_BIN", binary);
+    // Normal xtask startup touches Git hooks; never inherit a hook's index or
+    // repository redirection into that startup.
+    for key in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_COMMON_DIR",
+        "GIT_NAMESPACE",
+    ] {
+        command.env_remove(key);
+    }
+    command.output().unwrap()
 }
 
 fn assert_non_verification(output: Output) {
@@ -64,6 +86,27 @@ fn assert_non_verification(output: Output) {
 #[test]
 fn invalid_argument_without_artifacts_is_not_verification() {
     assert_non_verification(verify(None, 1));
+}
+
+#[test]
+fn real_consumer_delegates_valid_and_invalid_evidence_to_native_command() {
+    let fixture = fixture(&evidence("MissedMutant"));
+    let valid = verify(Some(fixture.path()), 2);
+    assert!(
+        valid.status.success(),
+        "{}",
+        String::from_utf8_lossy(&valid.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&valid.stderr)
+            .contains("xtask-done: command=mutants-verify-evidence ok=true")
+    );
+    let invalid = verify(None, 1);
+    assert!(
+        String::from_utf8_lossy(&invalid.stderr)
+            .contains("xtask-done: command=mutants-verify-evidence ok=false")
+    );
+    assert_non_verification(invalid);
 }
 
 // Shapes follow cargo-mutants v27.1.0 outcome.rs, mutant.rs and process.rs.
@@ -258,6 +301,29 @@ fn failed_baseline_and_tool_errors_cannot_publish_counts_even_with_artifacts() {
     }
     assert_non_verification(verify(Some(fixture.path()), 2));
     let fixture = self::fixture(&evidence("MissedMutant"));
+    assert_non_verification(verify(Some(fixture.path()), 0));
+}
+
+#[test]
+fn native_launch_failure_propagates_without_counts() {
+    let fixture = fixture(&evidence("CaughtMutant"));
+    let output = verify_with_binary(
+        Some(fixture.path()),
+        0,
+        &fixture.path().join("missing-xtask"),
+    );
+    assert_eq!(output.status.code(), Some(127));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!stdout.contains("missed:"), "{stdout}");
+    assert!(!stdout.contains("STILL ALIVE"), "{stdout}");
+}
+
+#[test]
+fn native_timestamp_validation_preserves_fractional_order() {
+    let mut value = evidence("CaughtMutant");
+    value["start_time"] = json!("2026-10-15T00:00:00.123456789Z");
+    value["end_time"] = json!("2026-10-15T00:00:00.123456788Z");
+    let fixture = fixture(&value);
     assert_non_verification(verify(Some(fixture.path()), 0));
 }
 
