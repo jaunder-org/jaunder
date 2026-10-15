@@ -859,6 +859,7 @@ mod tests {
             execution_policy(&Command::Validate {
                 no_e2e: true,
                 allow_dirty: false,
+                e2e_jobs: None,
             }),
             ExecutionPolicy::Exhaustive
         );
@@ -950,6 +951,7 @@ mod tests {
             execution_policy(&Command::Validate {
                 no_e2e: true,
                 allow_dirty: false,
+                e2e_jobs: None,
             }),
             false,
         );

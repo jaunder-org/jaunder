@@ -107,6 +107,15 @@ struct Offender<'a> {
 /// an input failure is loud without replacing the primary failure diagnostics.
 pub(crate) fn validate_lifted_combo(backend: &str, browser: &str, lane: &str) -> StepResult {
     let diagnostics = Path::new(".xtask/diagnostics").join(format!("e2e-{lane}"));
+    validate_lifted_combo_at(backend, browser, lane, &diagnostics)
+}
+
+pub(crate) fn validate_lifted_combo_at(
+    backend: &str,
+    browser: &str,
+    lane: &str,
+    diagnostics: &Path,
+) -> StepResult {
     let report = diagnostics.join(format!("playwright-report-{lane}.json"));
     let manifest = diagnostics.join(format!("duration-budget-manifest-{lane}.json"));
 

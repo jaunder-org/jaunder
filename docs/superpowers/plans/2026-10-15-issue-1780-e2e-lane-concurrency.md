@@ -18,7 +18,7 @@ and normal approved-contract commit prerequisites, not merely spec approval.
 
 ## Task outline
 
-- [ ] 1. Expose the approved caller contract and resolved readback.
+- [x] 1. Expose the approved caller contract and resolved readback.
   - Contract: `cli.rs` parses optional positive N only for `Validate` and
     rejects invalid/overflow values and explicit `--no-e2e` conflict before work
     starts. `dispatch.rs` passes the resolved typed input to full E2E
@@ -29,7 +29,7 @@ and normal approved-contract commit prerequisites, not merely spec approval.
   - Verification: focused CLI parsing and result-rendering/serialization tests,
     including omission, valid/above-count N, every specified rejection, and
     readback against the actual enabled catalog. No validation or VM launch.
-- [ ] 2. Bound actual lane-build work without reducing completed protection.
+- [x] 2. Bound actual lane-build work without reducing completed protection.
   - Contract: adapt `steps/nix.rs::build_candidate_lanes`' injected build seam
     and full `e2e` callsite. Refill a freed slot without waiting for an
     unrelated active build; count through existing build-completion handling.
@@ -43,7 +43,7 @@ and normal approved-contract commit prerequisites, not merely spec approval.
     Prove bounded peak, permitted overlap, prompt refill, exactly-once enabled
     population, disabled exclusion, out-of-order completion, early failure with
     pending work continuing, complete settlement and deterministic results.
-- [ ] 3. Close integrated evidence, timing and documentation acceptance.
+- [x] 3. Close integrated evidence, timing and documentation acceptance.
   - Contract: preserve `finish_e2e_combo`'s unconditional lift and successful
     duration-then-boot checks; reconcile both Firefox backends only after all
     builds settle; preserve `E2eOutcome` and authoritative flow-coverage gating.

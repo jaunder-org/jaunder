@@ -35,6 +35,15 @@ use crate::traces::{
 /// the VM itself passed, preserving its primary failure if Playwright failed.
 pub(crate) fn validate_lifted_combo(backend: &str, browser: &str, lane: &str) -> StepResult {
     let diagnostics = Path::new(".xtask/diagnostics").join(format!("e2e-{lane}"));
+    validate_lifted_combo_at(backend, browser, lane, &diagnostics)
+}
+
+pub(crate) fn validate_lifted_combo_at(
+    backend: &str,
+    browser: &str,
+    lane: &str,
+    diagnostics: &Path,
+) -> StepResult {
     let report = diagnostics.join(format!("playwright-report-{lane}.json"));
     let capture = diagnostics.join(format!("capture-{lane}.tar.gz"));
 
