@@ -276,16 +276,30 @@ mod tests {
         tracer: Option<opentelemetry_sdk::trace::SdkTracer>,
         operation: impl FnOnce(),
     ) -> Vec<SdkLogRecord> {
+        capture_with_config(
+            &super::super::default_telemetry_config(),
+            tracer,
+            "projection",
+            operation,
+        )
+    }
+
+    fn capture_with_config(
+        config: &super::super::TelemetryConfig,
+        tracer: Option<opentelemetry_sdk::trace::SdkTracer>,
+        scope: &'static str,
+        operation: impl FnOnce(),
+    ) -> Vec<SdkLogRecord> {
         let exporter = InMemoryLogExporter::default();
         let provider = SdkLoggerProvider::builder()
             .with_simple_exporter(exporter.clone())
             .build();
         let subscriber = super::super::compose_subscriber_with_logger(
-            &super::super::default_telemetry_config(),
+            config,
             None::<tracing_subscriber::layer::Identity>,
             tracer,
             None::<fn() -> std::io::Stdout>,
-            Some(provider.logger("projection")),
+            Some(provider.logger(scope)),
         );
         tracing::subscriber::with_default(subscriber, operation);
         exporter
@@ -315,54 +329,40 @@ mod tests {
             (false, None),
             (true, None),
         ] {
-            let exporter = InMemoryLogExporter::default();
-            let logger = SdkLoggerProvider::builder()
-                .with_simple_exporter(exporter.clone())
-                .build();
             let tracer = super::super::tracer_provider_builder().build();
-            let config = super::super::TelemetryConfig::from_raw(
-                verbose,
-                super::super::TelemetryRawConfig {
-                    log_filter: Ok(policy.map(str::to_owned)),
-                    rust_log: Ok(None),
-                    log_format: Ok(None),
-                    jaunder_otlp_endpoint: Ok(None),
-                    otlp_endpoint: Ok(None),
-                    slow_op_ms: Ok(None),
-                    e2e_seed_process: Ok(None),
-                },
+            let mut config = super::super::default_telemetry_config();
+            config.filter = policy.map_or_else(
+                || super::super::default_filter(verbose),
+                tracing_subscriber::EnvFilter::new,
             );
-            let subscriber = super::super::compose_subscriber_with_logger(
+            let records = capture_with_config(
                 &config,
-                None::<tracing_subscriber::layer::Identity>,
                 Some(tracer.tracer("severity")),
-                None::<fn() -> std::io::Stdout>,
-                Some(logger.logger("severity")),
-            );
-            tracing::subscriber::with_default(subscriber, || {
-                let context =
-                    tracing::info_span!(target: "host::application", "context", enabled = true);
-                context.in_scope(|| {
-                    tracing::trace!(target: "host::application", "trace message");
-                    tracing::debug!(target: "host::application", "debug message");
-                    tracing::info!(target: "host::application", "info message");
-                    tracing::warn!(target: "host::application", "warn message");
-                    tracing::error!(target: "host::application", "error message");
-                });
-                let _scope = opentelemetry::Context::enter_telemetry_suppressed_scope();
-                context.in_scope(|| {
+                "severity",
+                || {
+                    let context =
+                        tracing::info_span!(target: "host::application", "context", enabled = true);
+                    context.in_scope(|| {
+                        tracing::trace!(target: "host::application", "trace message");
+                        tracing::debug!(target: "host::application", "debug message");
+                        tracing::info!(target: "host::application", "info message");
+                        tracing::warn!(target: "host::application", "warn message");
+                        tracing::error!(target: "host::application", "error message");
+                    });
+                    let _scope = opentelemetry::Context::enter_telemetry_suppressed_scope();
+                    context.in_scope(|| {
                     tracing::error!(target: "host::application", parent: None, "SDK root must stay excluded");
                     tracing::error!(target: "host::application", parent: &context, "SDK explicit must stay excluded");
                     assert!(opentelemetry::Context::is_current_telemetry_suppressed());
                 });
-                assert!(opentelemetry::Context::is_current_telemetry_suppressed());
-            });
-            let records = exporter.get_emitted_logs().expect("logs");
+                    assert!(opentelemetry::Context::is_current_telemetry_suppressed());
+                },
+            );
             assert_eq!(records.len(), 5, "{verbose}/{policy:?}");
             assert_eq!(
                 records
                     .iter()
-                    .map(|log| log.record.severity_number().expect("severity"))
+                    .map(|record| record.severity_number().expect("severity"))
                     .collect::<Vec<_>>(),
                 [
                     Severity::Trace,
@@ -375,7 +375,7 @@ mod tests {
             assert_eq!(
                 records
                     .iter()
-                    .map(|log| log.record.body().expect("body").clone())
+                    .map(|record| record.body().expect("body").clone())
                     .collect::<Vec<_>>(),
                 [
                     "trace message",
@@ -389,7 +389,7 @@ mod tests {
             assert!(
                 records
                     .iter()
-                    .all(|log| log.record.trace_context().is_some())
+                    .all(|record| record.trace_context().is_some())
             );
             assert!(!opentelemetry::Context::is_current_telemetry_suppressed());
         }
@@ -480,15 +480,24 @@ mod tests {
 
     #[test]
     fn native_projection_never_renders_unreviewed_debug_fields_or_inherits_request_aggregates() {
-        struct MustNotRender;
-        impl std::fmt::Debug for MustNotRender {
-            fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                panic!("unreviewed Debug field was rendered");
+        struct CountingDebug<'a>(&'a std::sync::atomic::AtomicUsize);
+        impl std::fmt::Debug for CountingDebug<'_> {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                formatter.write_str("unreviewed debug control")
             }
         }
+        let count = std::sync::atomic::AtomicUsize::new(0);
+        let sentinel = CountingDebug(&count);
+        assert_eq!(format!("{sentinel:?}"), "unreviewed debug control");
+        assert_eq!(
+            count.load(Ordering::Relaxed),
+            1,
+            "positive formatter calibration"
+        );
         let records = capture(None, || {
-            tracing::info!(target: "external::library", { error.source = ?MustNotRender, error.span_trace = ?MustNotRender, request = ?MustNotRender, db.system = ?MustNotRender }, "external control");
-            tracing::info!(target: "host::application", { error.span_trace = ?MustNotRender, request = ?MustNotRender, db.system = ?MustNotRender }, "application control");
+            tracing::info!(target: "external::library", { error.source = ?sentinel, error.span_trace = ?sentinel, request = ?sentinel, db.system = ?sentinel }, "external control");
+            tracing::info!(target: "host::application", { error.span_trace = ?sentinel, request = ?sentinel, db.system = ?sentinel }, "application control");
             let wrong =
                 tracing::info_span!(target: "external::library", "request", uri = "/unreviewed");
             wrong.in_scope(|| tracing::info!(target: "host::application", "wrong producer"));
@@ -499,6 +508,11 @@ mod tests {
             request.in_scope(|| tracing::info!(target: "host::application", "query rejected"));
             tracing::info!(target: "host::application", parent: None, "root has no request path");
         });
+        assert_eq!(
+            count.load(Ordering::Relaxed),
+            1,
+            "excluded fields must not render the calibrated formatter"
+        );
         assert_eq!(records.len(), 6);
         for (index, record) in records.iter().enumerate() {
             let path = record
@@ -600,8 +614,13 @@ mod tests {
             tracing::info!(target: "web::email::api", { user.id = u64::MAX }, "unsigned identifier");
             tracing::info!(target: "host::error", { error.public = true, error.source = 1.5_f64 }, "scalars");
             tracing::info!(target: "tower_http::trace::on_response", status = Some(401_i32), response_headers = ?["synthetic-secret"], "finished processing request");
+            tracing::info!(target: "tower_http::trace::on_response", status = ?Some(401_i32), "debug optional status");
+            tracing::info!(target: "tower_http::trace::on_response", status = ?401_i32, "debug scalar status");
+            let absent = None::<i32>;
+            tracing::info!(target: "tower_http::trace::on_response", status = ?absent, "absent status");
+            tracing::info!(target: "tower_http::trace::on_response", status = ?"malformed", "malformed status");
         });
-        assert_eq!(records.len(), 4);
+        assert_eq!(records.len(), 8);
         let attribute = |index: usize, name: &str| {
             records[index]
                 .attributes_iter()
@@ -615,7 +634,11 @@ mod tests {
         );
         assert_eq!(attribute(2, "error.public"), Some(AnyValue::Boolean(true)));
         assert_eq!(attribute(2, "error.source"), Some(AnyValue::Double(1.5)));
-        assert_eq!(attribute(3, "status"), Some(AnyValue::Int(401)));
+        for index in 3..=5 {
+            assert_eq!(attribute(index, "status"), Some(AnyValue::Int(401)));
+        }
+        assert!(attribute(6, "status").is_none());
+        assert!(attribute(7, "status").is_none());
         assert!(attribute(3, "response_headers").is_none());
     }
 

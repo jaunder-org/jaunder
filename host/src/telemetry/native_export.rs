@@ -343,6 +343,17 @@ mod tests {
                 task,
             }
         }
+        fn logger(
+            &self,
+            runtime: &super::super::sdk_boundary::ExporterRuntime,
+            resource: Resource,
+        ) -> SdkLoggerProvider {
+            let policy = BatchPolicy::resolve();
+            runtime
+                .in_scope(|| build(&self.endpoint, resource, policy))
+                .expect("wire logger")
+        }
+
         async fn stop(self) {
             self.stop.send(()).expect("request normal shutdown");
             tokio::time::timeout(Duration::from_secs(5), self.task)
@@ -351,6 +362,20 @@ mod tests {
                 .expect("server task")
                 .expect("server shutdown");
         }
+    }
+
+    fn log_config(
+        endpoint: &str,
+        verbose: bool,
+        filter: Option<&str>,
+    ) -> super::super::TelemetryConfig {
+        let mut config = super::super::default_telemetry_config();
+        config.filter = filter.map_or_else(
+            || super::super::default_filter(verbose),
+            tracing_subscriber::EnvFilter::new,
+        );
+        config.otlp_endpoint = Some(endpoint.to_owned());
+        config
     }
 
     #[derive(Debug)]
@@ -451,11 +476,8 @@ mod tests {
                 _ => {}
             }
             let output = child.output().expect("child");
-            assert!(
-                output.status.success(),
-                "{mode}: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            let stderr = String::from_utf8(output.stderr).expect("child stderr");
+            assert!(output.status.success(), "{mode}: {stderr}");
         }
     }
 
@@ -496,11 +518,8 @@ mod tests {
                 child.env_remove(name);
             }
             let output = child.output().expect("saturation child");
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            let stderr = String::from_utf8(output.stderr).expect("child stderr");
+            assert!(output.status.success(), "{stderr}");
             return;
         }
         let (started, started_rx) = std::sync::mpsc::channel();
@@ -564,15 +583,7 @@ mod tests {
         use opentelemetry::logs::{LogRecord as _, Logger as _};
         let server = WireServer::start(Reply::Unavailable);
         let runtime = super::super::sdk_boundary::ExporterRuntime::new().expect("runtime");
-        let logger = runtime
-            .in_scope(|| {
-                build(
-                    &server.endpoint,
-                    Resource::builder().build(),
-                    BatchPolicy::resolve(),
-                )
-            })
-            .expect("logger");
+        let logger = server.logger(&runtime, Resource::builder().build());
         let log = logger.logger("unavailable");
         for _ in 0..3 {
             let mut record = log.create_log_record();
@@ -659,17 +670,33 @@ mod tests {
             diagnostic,
             "host.telemetry.logger_shutdown: native log shutdown failed\n"
         );
-        assert!(
-            matches!(
-                stopped_rx.try_recv(),
-                Err(std::sync::mpsc::TryRecvError::Empty)
-            ),
+        assert_eq!(
+            stopped_rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty),
             "shutdown return is not worker containment or delivery proof"
         );
         release.send(()).expect("release residual export");
         stopped_rx
             .recv_timeout(Duration::from_secs(5))
             .expect("normal eventual exporter cleanup");
+    }
+
+    #[test]
+    fn native_logger_shutdown_wrapper_failure_is_coalesced_and_preserves_primary_result() {
+        let logger = SdkLoggerProvider::builder().build();
+        logger.shutdown().expect("initial shutdown");
+        let (primary, diagnostic) = super::super::fallback_capture::capture(|| {
+            let primary = Ok::<_, &'static str>("application completion");
+            shutdown(&logger);
+            shutdown(&logger);
+            primary
+        });
+        assert_eq!(primary, Ok("application completion"));
+        assert_eq!(
+            diagnostic,
+            "host.telemetry.logger_shutdown: native log shutdown failed\n"
+        );
+        assert!(diagnostic.len() <= 256);
     }
 
     #[test]
@@ -857,24 +884,11 @@ mod tests {
                         "shared-process-fixture",
                     ))
                     .build();
-                let logger = runtime
-                    .in_scope(|| build(&server.endpoint, resource, BatchPolicy::resolve()))
-                    .expect("logger");
+                let logger = server.logger(&runtime, resource);
                 let tracer = super::super::tracer_provider_builder().build();
                 let stdout = Captured::default();
                 let diagnostic = Captured::default();
-                let config = super::super::TelemetryConfig::from_raw(
-                    verbose,
-                    super::super::TelemetryRawConfig {
-                        log_filter: Ok(policy.map(str::to_owned)),
-                        rust_log: Ok(None),
-                        log_format: Ok(None),
-                        jaunder_otlp_endpoint: Ok(Some(server.endpoint.clone())),
-                        otlp_endpoint: Ok(None),
-                        slow_op_ms: Ok(None),
-                        e2e_seed_process: Ok(None),
-                    },
-                );
+                let config = log_config(&server.endpoint, verbose, policy);
                 let extra = tracing_subscriber::fmt::layer()
                     .json()
                     .with_writer(diagnostic.clone())
@@ -896,6 +910,9 @@ mod tests {
                     .drain(..)
                     .collect();
                 assert_wire_records(&requests);
+                let buffered = diagnostic.0.lock().expect("diag").clone();
+                std::io::Write::flush(&mut diagnostic.clone()).expect("flush diagnostic writer");
+                assert_eq!(*diagnostic.0.lock().expect("diag"), buffered);
                 assert!(stdout.0.lock().expect("stdout").is_empty());
                 let diag =
                     String::from_utf8(diagnostic.0.lock().expect("diag").clone()).expect("utf8");
@@ -914,15 +931,7 @@ mod tests {
         use opentelemetry::logs::{LogRecord as _, Logger as _};
         let server = WireServer::start(Reply::Partial);
         let runtime = super::super::sdk_boundary::ExporterRuntime::new().expect("exporter runtime");
-        let logger = runtime
-            .in_scope(|| {
-                build(
-                    &server.endpoint,
-                    Resource::builder().build(),
-                    BatchPolicy::resolve(),
-                )
-            })
-            .expect("real logger");
+        let logger = server.logger(&runtime, Resource::builder().build());
         let log = logger.logger("wire");
         for _ in 0..3 {
             let mut record = log.create_log_record();
@@ -950,10 +959,7 @@ mod tests {
         use opentelemetry::logs::{LogRecord as _, Logger as _};
         let server = WireServer::start(Reply::PartialWarning);
         let runtime = super::super::sdk_boundary::ExporterRuntime::new().expect("runtime");
-        let policy = BatchPolicy::resolve();
-        let logger = runtime
-            .in_scope(|| build(&server.endpoint, Resource::builder().build(), policy))
-            .expect("logger");
+        let logger = server.logger(&runtime, Resource::builder().build());
         let log = logger.logger("warning");
         let mut record = log.create_log_record();
         record.set_body("accepted with warning".into());
@@ -996,18 +1002,7 @@ mod tests {
                 BatchPolicy::resolve(),
                 FailingTransport,
             );
-            let config = super::super::TelemetryConfig::from_raw(
-                false,
-                super::super::TelemetryRawConfig {
-                    log_filter: Ok(Some("trace".to_owned())),
-                    rust_log: Ok(None),
-                    log_format: Ok(None),
-                    jaunder_otlp_endpoint: Ok(Some("configured-native".to_owned())),
-                    otlp_endpoint: Ok(None),
-                    slow_op_ms: Ok(None),
-                    e2e_seed_process: Ok(None),
-                },
-            );
+            let config = log_config("configured-native", false, Some("trace"));
             let extra = tracing_subscriber::fmt::layer()
                 .json()
                 .with_writer(diag)
@@ -1039,13 +1034,9 @@ mod tests {
         let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
             .args(["--exact", "telemetry::native_export::tests::native_logger_repeated_export_failures_are_redacted_nonrecursive_and_nonfatal", "--nocapture"])
             .env(CHILD, "1").env("JAUNDER_TEST_NATIVE_DIAG_PATH", &diag).output().expect("child");
-        assert!(
-            output.status.success(),
-            "child failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let stdout = String::from_utf8(output.stdout).expect("stdout");
         let stderr = String::from_utf8(output.stderr).expect("stderr");
+        assert!(output.status.success(), "child failed: {stderr}");
+        let stdout = String::from_utf8(output.stdout).expect("stdout");
         assert!(stdout.contains("cli result preserved"));
         assert!(!stdout.contains("ordinary native message"));
         assert!(!stderr.contains("synthetic-secret"));
