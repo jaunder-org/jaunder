@@ -524,10 +524,19 @@ pub enum PrCommand {
         #[arg(long, value_name = "MINUTES", default_value_t = 90, value_parser = clap::value_parser!(u64).range(1..))]
         timeout: u64,
     },
-    /// Clean this checkout after a PR has merged. This is local-only: it proves the
-    /// exact merged head before fetching, detaching, safely deleting the branch, and
-    /// running `cargo clean`.
-    #[command(after_help = "EXAMPLES:\n  \
+    /// Clean an unmanaged checkout after a PR has merged.
+    ///
+    /// Manager-assigned work: leave the semantic branch checked out and the checkout
+    /// intact; skip this command and equivalent detach/delete operations while the
+    /// assignment is active. Lead accepts merge, validation, and preservation evidence
+    /// for Manager handoff; Manager retains required branch selectors and owns
+    /// authorized retirement through supported runtime routes.
+    ///
+    /// Unmanaged cleanup is local-only: it proves the exact merged head, main target,
+    /// clean tree, and ancestry before detaching, safely deleting the branch, and
+    /// running `cargo clean`. It does not authorize checkout removal, which separately
+    /// requires an explicit removal request and interactive runtime confirmation.
+    #[command(after_help = "UNMANAGED EXAMPLES:\n  \
         cargo xtask pr cleanup\n  \
         cargo xtask pr cleanup 1155")]
     Cleanup {
@@ -1338,6 +1347,27 @@ mod tests {
                 assert_eq!(until, None);
             }
             _ => panic!("expected pr watch"),
+        }
+    }
+
+    #[test]
+    fn pr_cleanup_help_distinguishes_assignment_ownership() {
+        for args in [
+            vec!["xtask", "pr", "--help"],
+            vec!["xtask", "pr", "cleanup", "--help"],
+        ] {
+            let cleanup_help = args.len() == 4;
+            let help = Cli::try_parse_from(args).err().expect("help is displayed");
+            assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
+            let text = help.to_string();
+            assert!(text.contains("unmanaged"), "{text}");
+            if cleanup_help {
+                let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                assert!(text.contains("Manager-assigned work"), "{text}");
+                assert!(text.contains("semantic branch checked out"), "{text}");
+                assert!(text.contains("checkout intact"), "{text}");
+                assert!(text.contains("skip this command"), "{text}");
+            }
         }
     }
 

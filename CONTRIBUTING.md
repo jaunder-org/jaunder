@@ -1077,16 +1077,51 @@ baseline.
   [the actionable-handoff decision](docs/adr/0135-pr-watch-actionable-handoff.md)
   for the stopping policy.
 
-  **Post-land cleanup:** after `pr land` reports `merged`, run
-  `cargo xtask pr cleanup [N]` from that PR's checkout. It is explicit and
-  local-only: it verifies the merged PR targets `main`, the checked-out branch
-  and HEAD exactly match the PR's head ref and SHA, and the tree is clean before
-  fetching, detaching at `origin/main`, safely deleting the local branch, and
-  running `cargo clean`. Omit `N` only to have cleanup exhaustively resolve
-  exactly one merged PR matching the current checkout. Cleanup exits 0 only when
-  complete; a refusal or operation failure exits 1. It does not alter the
-  `pr land` merge outcome or project Status—set Status to **Done** separately
-  after cleanup.
+  **Post-merge ownership:** after `pr land` reports verified `merged`, choose
+  the preservation or cleanup path by actual assignment ownership. Missing or
+  conflicting ownership blocks affected cleanup.
+
+  - **Manager-assigned work:** implementors and assigned Leads leave the
+    semantic branch checked out and the checkout intact while the assignment is
+    active. Skip `cargo xtask pr cleanup` and equivalent detach/delete
+    operations. Lead inspects and accepts merge, validation, and preservation
+    evidence, then hands it to Manager: exact branch/HEAD and commits,
+    dirty/staged/untracked inventory (including empty results), proof and
+    artifact references, unresolved work, and the next owner/action. Delivered
+    work can be complete while Manager-owned lifecycle cleanup remains pending;
+    receipt alone is not acceptance or assignment release.
+
+    Manager retains required branch selectors, reconciles exact current
+    assignment/runtime identity, and owns authorized retirement through
+    supported runtime routes. Moving the branch-deleting helper to Manager is
+    not a safe handoff while the active assignment still needs that branch
+    handle. A missing supported route is a Manager-owned capability blocker, not
+    a dependency on a hypothetical runtime fix or a reason to withhold
+    delivered-work evidence.
+
+  - **Unmanaged work:** with no unresolved required work, competing writer, or
+    owned operation to strand, run `cargo xtask pr cleanup [N]` from that PR's
+    checkout. It is explicit and local-only: it verifies the merged PR targets
+    `main`, the checked-out branch and HEAD exactly match the PR's head ref and
+    SHA, and the tree is clean before fetching, proving the captured head is an
+    ancestor of `origin/main`, detaching there, safely deleting the local
+    branch, and running `cargo clean`. Prefer explicit `N`; omission
+    exhaustively resolves exactly one matching merged PR. Cleanup exits 0 only
+    when complete; a refusal or operation failure exits 1. Preserve failure
+    evidence rather than bypassing safeguards. Cleanup does not alter the
+    `pr land` merge outcome or project Status, and does not authorize checkout
+    deletion.
+
+  Physical checkout removal is separate: it requires an explicit removal request
+  and the runtime's interactive confirmation. Use the supported runtime route,
+  never a direct CLI bypass, force, branch recreation, or external process kill.
+
+  Set Status to **Done** manually only after verified eligible cleanup. Managed
+  work hands remaining cleanup and tracker responsibility to Manager with an
+  explicit next action; preservation handoff is not cleanup proof or permission
+  to set Done early. If tracker readback is already Closed/Done, acknowledge it
+  without undoing or reapplying it; that state is not cleanup proof or runtime
+  retirement.
 
 ### Targeted Rust tests
 
