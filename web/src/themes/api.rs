@@ -693,6 +693,41 @@ pub async fn import_zip(data: MultipartData) -> WebResult<MutationOutcome<Catalo
         "author" => ThemeOwner::Author(actor.user_id),
         _ => return Err(InternalError::validation("invalid theme ownership scope")),
     };
+    let (name, draft) = read_import_archive(&mut multipart).await?;
+    let themes = expect_context::<Arc<dyn ThemeStorage>>();
+    let write_scope = expect_context::<WriteScope>();
+    let name_for_write = name.clone();
+    let outcome = write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                themes
+                    .create_theme(
+                        transaction,
+                        owner,
+                        &name_for_write,
+                        &draft,
+                        ThemeQuotaLimits::production(),
+                    )
+                    .await
+                    .map_err(import_storage_error)
+            })
+        })
+        .await
+        .map_err(error::from_write_scope_error)?;
+    no_store();
+    Ok(outcome.map(|id| CatalogEntry {
+        id,
+        name,
+        published: false,
+    }))
+}
+
+/// Reads the ordered override/archive fields only after principal and scope admission.
+/// Shared package and CSS validation precede manifest-default catalog naming.
+#[cfg(feature = "server")]
+async fn read_import_archive(
+    multipart: &mut multer::Multipart<'_>,
+) -> Result<(String, ThemeDraft), InternalError> {
     let next = multipart
         .next_field()
         .await
@@ -742,32 +777,7 @@ pub async fn import_zip(data: MultipartData) -> WebResult<MutationOutcome<Catalo
         Some(name) => name,
         None => import_theme_name(&manifest_name)?,
     };
-    let themes = expect_context::<Arc<dyn ThemeStorage>>();
-    let write_scope = expect_context::<WriteScope>();
-    let name_for_write = name.clone();
-    let outcome = write_scope
-        .run(move |transaction| {
-            Box::pin(async move {
-                themes
-                    .create_theme(
-                        transaction,
-                        owner,
-                        &name_for_write,
-                        &draft,
-                        ThemeQuotaLimits::production(),
-                    )
-                    .await
-                    .map_err(import_storage_error)
-            })
-        })
-        .await
-        .map_err(error::from_write_scope_error)?;
-    no_store();
-    Ok(outcome.map(|id| CatalogEntry {
-        id,
-        name,
-        published: false,
-    }))
+    Ok((name, draft))
 }
 
 /// Imports plain CSS as a new private version-1 package draft with no assets.
@@ -1192,9 +1202,9 @@ mod tests {
         CatalogEntry, Draft, OwnershipScope, ThemeBindingInput, ThemeMediaInput, ThemePoolInput,
         admission_error, binding_wire, catalog, create_storage_error, digest_hex, draft_asset_urls,
         draft_from_archive, draft_from_input, draft_wire, get_selection, import_css,
-        import_package, manager_error, media_wire, package_asset_urls, plain_css_manifest,
-        pool_wire, publication_error, publish, remove, rename, replace_binding, replace_css,
-        replace_draft_error, replace_pool, safe_filename, select, shuffle, theme_name,
+        import_package, import_storage_error, manager_error, media_wire, package_asset_urls,
+        plain_css_manifest, pool_wire, publication_error, publish, remove, rename, replace_binding,
+        replace_css, replace_draft_error, replace_pool, safe_filename, select, shuffle, theme_name,
         theme_storage_error,
     };
     use crate::{
@@ -1362,6 +1372,16 @@ mod tests {
         assert_validation(&in_flight, "theme operation already in progress");
         let quota = create_storage_error(sqlx::Error::RowNotFound);
         assert_validation(&quota, "theme quota exceeded");
+        let import_quota = import_storage_error(sqlx::Error::RowNotFound);
+        assert_validation(&import_quota, "theme quota exceeded");
+        let import_internal =
+            import_storage_error(sqlx::Error::Io(std::io::Error::other("import failed")));
+        assert_eq!(
+            project(import_internal.kind(), import_internal.public_message()),
+            WebError::Storage {
+                message: "storage operation failed".into()
+            }
+        );
         let not_found = theme_storage_error(sqlx::Error::RowNotFound);
         assert_eq!(
             project(not_found.kind(), not_found.public_message()),

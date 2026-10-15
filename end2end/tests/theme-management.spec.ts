@@ -1,3 +1,4 @@
+import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { expectAccessible } from "./accessibility";
 import {
@@ -15,6 +16,7 @@ import {
   packageMember,
   packageMemberDigests,
   publishTheme,
+  publishAndSelectTheme,
 } from "./theme-helpers";
 
 const ASSET_PATH = "assets/pixel.png";
@@ -40,6 +42,39 @@ const THEME_ENDPOINTS = {
   shuffle: "/api/themes/shuffle",
 } as const;
 type ThemeEndpoint = keyof typeof THEME_ENDPOINTS;
+
+// Compare the effective public revision, not an assumed Studio site default.
+async function publicThemeIdentity(page: Page) {
+  return {
+    theme: await page.locator(".j-root").getAttribute("data-theme"),
+    stylesheet: await page
+      .locator("link[data-jaunder-theme-stylesheet]")
+      .evaluateAll((links) => links.map((link) => link.getAttribute("href"))),
+  };
+}
+
+async function wheelToEditorBottom(page: Page) {
+  const scroll = page.locator(".j-scroll");
+  const box = await scroll.boundingBox();
+  expect(box).not.toBeNull();
+  // Use the scroll canvas edge, outside nested source textareas. Firefox caps
+  // each wheel event near one viewport, even when deltaY is much larger.
+  await page.mouse.move(box!.x + box!.width - 4, box!.y + box!.height / 2);
+  const pages = await scroll.evaluate((node) =>
+    Math.ceil(node.scrollHeight / node.clientHeight),
+  );
+  for (let index = 0; index < pages; index += 1) {
+    const before = await scroll.evaluate((node) => ({
+      top: node.scrollTop,
+      end: node.scrollTop + node.clientHeight >= node.scrollHeight - 1,
+    }));
+    if (before.end) break;
+    await page.mouse.wheel(0, box!.height);
+    await expect
+      .poll(() => scroll.evaluate((node) => node.scrollTop))
+      .toBeGreaterThan(before.top);
+  }
+}
 
 test("publication rejection stops selection and offers draft repair without uncertain-success claims", async ({
   page,
@@ -89,6 +124,15 @@ for (const stage of ["publish", "select"] as const) {
     }) => {
       const username = await signInAsNewUser(page);
       await importMinimalTheme(page);
+      const baselineContext = await tracedContext();
+      let baseline: Awaited<ReturnType<typeof publicThemeIdentity>>;
+      try {
+        const baselinePage = await baselineContext.newPage();
+        await goto(baselinePage, `/~${username}`);
+        baseline = await publicThemeIdentity(baselinePage);
+      } finally {
+        await baselineContext.close();
+      }
       const writes: { path: string; body: string }[] = [];
       const reads: string[] = [];
       page.on("request", (request) => {
@@ -170,10 +214,13 @@ for (const stage of ["publish", "select"] as const) {
       try {
         const publicPage = await publicContext.newPage();
         await goto(publicPage, `/~${username}`);
-        await expect(publicPage.locator(".j-root")).toHaveAttribute(
-          "data-theme",
-          applied ? "custom" : "studio",
-        );
+        if (!applied)
+          expect(await publicThemeIdentity(publicPage)).toEqual(baseline!);
+        else
+          await expect(publicPage.locator(".j-root")).toHaveAttribute(
+            "data-theme",
+            "custom",
+          );
         if (applied)
           await expect(
             publicPage.locator('[data-jaunder-part="main"]'),
@@ -376,14 +423,15 @@ test("already-selected publication advances the public revision even when applyi
   tracedContext,
 }) => {
   const username = await signInAsNewUser(page);
-  await importMinimalTheme(page);
+  // Establish the selected revision directly, without spending this owner's
+  // operation burst on exporter/importer setup unrelated to republication.
+  const selected = String(await publishAndSelectTheme(page));
+  await goto(page, "/themes");
+  await expect(page.getByLabel("Public selection")).toHaveValue(selected);
+  await page
+    .getByRole("button", { name: "Conformance (published)", exact: true })
+    .click();
   const use = page.getByRole("button", { name: "Use this theme", exact: true });
-  await use.click();
-  await expect(page.getByRole("status")).toContainText(
-    "Theme published and applied",
-  );
-  await expect(use).toBeEnabled();
-  const selected = await page.getByLabel("Public selection").inputValue();
   await openThemeAdvanced(page);
   await page
     .getByLabel("style.css", { exact: true })
@@ -798,8 +846,7 @@ for (const viewport of [
     await expect(manifest).toHaveValue('{"unsaved":"reachable"}');
     await expectAccessible(page);
     // Actual wheel input, not locator clicks/scrollIntoView, must expose the editor's last control.
-    await page.mouse.move(viewport.width - 40, 350);
-    await page.mouse.wheel(0, 20000);
+    await wheelToEditorBottom(page);
     const bottom = page.getByRole("button", {
       name: "Delete theme",
       exact: true,
@@ -1340,7 +1387,17 @@ test("cold Studio return retains a custom author selection before built-in recov
   page,
   tracedContext,
 }) => {
-  await signInAs(page, "testoperator");
+  // A fresh owner avoids retained catalog labels across retries/other specs.
+  const username = await signInAsNewUser(page);
+  const baselineContext = await tracedContext();
+  let baseline: Awaited<ReturnType<typeof publicThemeIdentity>>;
+  try {
+    const baselinePage = await baselineContext.newPage();
+    await goto(baselinePage, `/~${username}`);
+    baseline = await publicThemeIdentity(baselinePage);
+  } finally {
+    await baselineContext.close();
+  }
   const themeId = await publishTheme(page);
   await goto(page, "/themes");
 
@@ -1361,7 +1418,7 @@ test("cold Studio return retains a custom author selection before built-in recov
   const publicContext = await tracedContext();
   try {
     const publicPage = await publicContext.newPage();
-    await goto(publicPage, "/~testoperator");
+    await goto(publicPage, `/~${username}`);
     await expect(publicPage.locator(".j-root")).toHaveAttribute(
       "data-theme",
       "custom",
@@ -1373,7 +1430,7 @@ test("cold Studio return retains a custom author selection before built-in recov
   const studioContext = await tracedContext();
   try {
     const studioPage = await studioContext.newPage();
-    await signInAs(studioPage, "testoperator");
+    await signInAs(studioPage, username);
     await goto(studioPage, "/themes");
     const coldSelection = studioPage.getByLabel("Public selection");
     await expect(
@@ -1410,11 +1467,8 @@ test("cold Studio return retains a custom author selection before built-in recov
   const recoveryContext = await tracedContext();
   try {
     const recoveryPage = await recoveryContext.newPage();
-    await goto(recoveryPage, "/~testoperator");
-    await expect(recoveryPage.locator(".j-root")).toHaveAttribute(
-      "data-theme",
-      "studio",
-    );
+    await goto(recoveryPage, `/~${username}`);
+    expect(await publicThemeIdentity(recoveryPage)).toEqual(baseline!);
   } finally {
     await recoveryContext.close();
   }
