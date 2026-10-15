@@ -404,10 +404,19 @@ pub(super) fn watch_with_progress<S: PrSource, C: Clock>(
         clock,
         subject,
         cfg,
-        progress,
-        BTreeSet::new(),
+        WatchContinuation {
+            progress,
+            emitted_optional_failure_ids: BTreeSet::new(),
+            expected_head: None,
+        },
         sink,
     )
+}
+
+pub(super) struct WatchContinuation<'a> {
+    pub progress: Progress,
+    pub emitted_optional_failure_ids: BTreeSet<String>,
+    pub expected_head: Option<&'a str>,
 }
 
 pub(super) fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
@@ -415,10 +424,14 @@ pub(super) fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
     clock: &C,
     subject: &Subject,
     cfg: WatchConfig,
-    mut progress: Progress,
-    mut emitted_optional_failure_ids: BTreeSet<String>,
+    continuation: WatchContinuation<'_>,
     sink: &mut dyn FnMut(&Event),
 ) -> PrReport {
+    let WatchContinuation {
+        mut progress,
+        mut emitted_optional_failure_ids,
+        expected_head,
+    } = continuation;
     let start = clock.now_unix();
     // Saturating: `--timeout` has no upper bound, and an absurd value should mean
     // "effectively forever", not a debug-build overflow panic.
@@ -431,7 +444,7 @@ pub(super) fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
 
     let mut required: Option<RequiredChecks> = None;
     let mut strikes = 0u32;
-    let mut head_sha = String::new();
+    let mut head_sha = expected_head.unwrap_or_default().to_string();
     let mut prev: Option<Rendered> = None;
     let mut last_incomplete_detail: Option<String> = None;
     let mut ever_read = false;
@@ -481,6 +494,24 @@ pub(super) fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
                 None => source.required_checks(subject)?,
             };
             let snap = source.snapshot(subject)?;
+            // Landing cannot inherit a replacement head's checks or merged state.
+            if let Some(expected) = expected_head
+                && snap.head_sha != expected
+            {
+                return Ok(Polled {
+                    required: req,
+                    classification: SnapshotClassification::Complete {
+                        step: Step::Terminal {
+                            outcome: Outcome::Stale,
+                            detail: Some(super::land::head_drift_detail(expected, &snap.head_sha)),
+                            pointer: None,
+                            subject_failure: None,
+                        },
+                        optional_failures: Vec::new(),
+                    },
+                    snapshot: snap,
+                });
+            }
             let ejection = if decide::needs_ejection_probe(&snap, &req) {
                 source.ejection_run(subject)?
             } else {
@@ -578,7 +609,7 @@ pub(super) fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
             }
         };
 
-        head_sha = snap.head_sha.clone();
+        head_sha = expected_head.unwrap_or(&snap.head_sha).to_string();
         required = Some(req.clone());
 
         // A push starts a new observation history. Without this reset, seeing head A

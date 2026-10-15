@@ -16,13 +16,13 @@ lock the PR against future pushes or change how read-only `pr watch` works.
 
 ## Execution outline
 
-- [ ] Carry the initial commit ID through landing and its merge requests; apply
+- [x] Carry the initial commit ID through landing and its merge requests; apply
       the same requirement to the shared promoter caller using the expected
       commit ID it already holds. No unqualified merge-request path.
-- [ ] Reject changed commits before arming, accepting readback or retrying;
+- [x] Reject changed commits before arming, accepting readback or retrying;
       preserve existing typed failures, check/ejection refusals, and the
       permitted single retry when the commit is unchanged.
-- [ ] Prove this with existing offline fake-source/arming/clock tests: A changes
+- [x] Prove this with existing offline fake-source/arming/clock tests: A changes
       to B before arming or retrying; GitHub rejects a commit mismatch at the
       request boundary; unchanged A still lands through ordinary arm, direct
       enqueue or retry. Verify the production request includes the commit-match
