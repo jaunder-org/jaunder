@@ -6,10 +6,17 @@ server behavior.
 
 Theme management lives at `/themes`:
 
-- every signed-in author manages a private **Author catalog**;
-- operators can switch to the separate **Site catalog**;
-- author and site themes never cross catalogs implicitly. Move a theme between
-  catalogs or instances by exporting and importing its Theme Package.
+- **User theme** opens the signed-in author's view: how visitors see their
+  public pages, not their private workspace. Ordinary users see only this view.
+- Operators can navigate explicitly between **User theme** and **Site theme**.
+  Site theme controls public site pages and user pages using the site theme.
+- Each view shows its current theme near the top, before adding or choosing.
+  Confirmed author inheritance reads **Using the site theme**; failed reads say
+  **Current theme could not be checked**, not an invented name or default. An
+  unset site setting is identified as unset, without pretending to have read its
+  effective name.
+- Author and site themes never cross owners implicitly. Move a theme between
+  owners or instances by exporting and importing its Theme Package.
 
 ## Bundled defaults and application styling
 
@@ -29,17 +36,42 @@ rules.
 
 ## Choose a starting point
 
-The Studio page supports three starting points:
+The default workflow needs only a Theme Package ZIP:
 
-1. **Create empty draft** creates a zero-asset draft.
-2. **Import CSS draft** wraps a stylesheet in a generated version-1 manifest.
-3. **Import ZIP draft** imports a complete Theme Package.
+1. **Add or choose a theme**: choose the **Theme ZIP file** and press **Upload
+   theme**, or open one of the **Available themes**. Jaunder validates the ZIP
+   and uses `theme.json.name` as its name. The filename is never a fallback.
+2. **Review your choice**: opening a choice does not activate it. **Saved, not
+   live yet** is shown only for a known unused, unpublished choice. **Currently
+   in use** requires a confirmed matching Theme ID. Unknown current state is
+   identified explicitly; choosing never implies the theme is already live.
+3. **Use this theme** prepares the chosen theme, then switches to it. Compare
+   the current theme shown above and verify public appearance in a fresh
+   signed-out browser. Preparing an already-used theme can update public pages
+   even if switching later fails.
 
-All three create private, unselected drafts. Creating or importing a theme does
-not change any public page.
+**Advanced** is initially closed. Open it for **Theme name (optional)**,
+empty-draft creation, plain CSS import, package/source editing, presentation
+Media, isolated preview, export, rename, or delete. A blank or whitespace-only
+UI override omits the name field and uses the validated manifest name. A
+nonblank override is authoritative.
 
-Use plain CSS while establishing a layout. Use a Theme Package when the theme
-needs fonts, images, packaged logo/header defaults, or portable source control.
+Catalog labels are trimmed, nonempty, and limited to 100 Unicode scalar values.
+Studio, Terminal and Reader are reserved case-insensitively; catalog collisions
+are rejected. Use the Advanced override to choose a valid distinct label rather
+than expecting a filename fallback, truncation, suffix, or automatic rename.
+Malformed packages still fail even with a valid override. Error feedback remains
+outside Advanced, beside import or application actions.
+
+The existing multipart import API remains compatible: `scope` and `archive`
+retain their meanings; `name` is optional. Only an omitted `name` defaults from
+validated manifest metadata. An explicitly supplied invalid or blank name fails
+without fallback; valid supplied names and existing response shapes are
+unchanged. Package validation precedes manifest-default naming.
+
+Creating or importing by any starting point remains private and unselected; it
+never changes public selection. Use plain CSS while establishing a layout, and a
+complete package for portable fonts, assets and defaults.
 
 ## Maintain a theme repository
 
@@ -138,9 +170,10 @@ URL identifies the distribution while the deterministic ZIP bytes identify the
 exact package. Installed-version metadata or update discovery would require a
 separately designed manifest revision.
 
-Importing the ZIP into Studio still creates a private, unselected draft. Preview
-it, explicitly publish it, then explicitly select the published theme;
-repository automation does not import, publish, or select a theme.
+Uploading the ZIP into Studio still creates a private, unselected draft. Review
+it and choose **Use this theme** when ready; preview and standalone publication
+remain in Advanced. Repository automation does not import, publish, or select a
+theme.
 
 ## Theme Package format
 
@@ -354,7 +387,12 @@ canonical validation path for a particular Theme Package.
 
 ## Modify a theme
 
-Selecting a catalog entry opens its editor. Available operations include:
+Choosing a catalog entry opens its draft without activation. Open **Advanced**
+to reveal its editor. Closing and reopening Advanced preserves unsaved values
+for that draft; save before changing the catalog entry or scope. Expanded bottom
+controls are reachable by ordinary scrolling and keyboard navigation.
+
+Available operations include:
 
 - **Rename** changes the catalog label without changing the stable Theme ID.
 - **Save CSS** replaces the authored stylesheet while preserving the manifest
@@ -375,21 +413,49 @@ not select historical published revisions directly.
 
 ## Publish and deploy
 
-Deployment has two explicit steps:
+**Use this theme**, outside Advanced, performs two existing separate operations:
 
-1. Choose **Publish** to validate the complete draft and create an immutable,
-   content-addressed revision.
-2. Choose the published custom theme under **Public selection**.
+1. validate and publish the chosen draft as an immutable, content-addressed
+   revision;
+2. only after a confirmed publication acknowledgement, apply that same Theme ID
+   to the captured scope.
 
-Only published themes appear as custom selection options. Selecting an author
+Progress reads **Getting your theme ready…**, then **Applying your theme…**;
+only confirmed completion says **Your theme is now in use.** Feedback is shown
+beside the action, with one accessible live status: neutral progress, success
+for confirmation, and error for rejection, uncertainty or local failure. Pending
+controls cannot duplicate the operation or change its target/scope. These
+operations are not atomic: publication can succeed even if applying fails.
+Advanced still provides standalone **Publish** for authoring; it does not itself
+change public selection.
+
+After Review and Use, **Other theme choices** offers explicit **Use studio**,
+**Use terminal**, and **Use reader** recovery actions; User theme also offers
+**Use site theme**. In **Advanced**, **Use a saved version** switches to the
+last published version of a custom theme without preparing its editable draft.
+This expert control appears only when published custom themes are available. Its
+placeholder remains selected when the current theme is bundled, follows the site
+theme, is unknown, or does not match an available published custom theme; the
+separate Current theme summary still reports the actual setting. These paths use
+selection alone, never publication. They are disabled while the current-setting
+read is pending or failed, and during another operation. Selecting an author
 theme affects that author's public routes. Selecting a site theme affects site
-routes and authors who inherit the site selection. Authors can choose **Inherit
-site selection** instead of an override.
+routes and authors using the site theme.
 
 Publishing a new revision of an already selected theme advances its stable Theme
-ID, so public pages adopt the new revision without another selection change. A
-failed publish leaves the previous published revision and public presentation
-unchanged.
+ID, so public pages adopt the new revision without another selection change.
+Later application failure cannot undo that publication. Explicit publication
+rejection prevents the application step; fix the draft before trying again.
+
+An indeterminate database acknowledgement, lost response, or undecodable
+response after dispatch stops chaining and reports uncertainty, not success,
+rollback or definite nonactivation. Catalog and selection are reread; failed
+rereads explicitly leave current state unknown. No automatic retry runs. Review
+that feedback and verify current public presentation before a manual retry; if
+rereads failed, reopen Themes to obtain current state. Choosing a bundled theme
+or author inheritance uses selection alone and never publishes a custom draft.
+Home and private management retain protected application styling regardless of
+public selection.
 
 For a cautious rollout:
 

@@ -258,10 +258,18 @@ fn draft_from_input(theme_id: ThemeId, input: Draft) -> Result<ThemeDraft, Inter
     })
 }
 
-#[cfg(feature = "server")]
+#[cfg(all(feature = "server", test))]
 fn draft_from_archive(theme_id: ThemeId, archive: &[u8]) -> Result<ThemeDraft, InternalError> {
     let package = theme_package::validate_theme_package(archive, ThemePackageLimits::default())
         .map_err(|error| InternalError::validation_source("invalid theme package", error))?;
+    draft_from_validated_archive(theme_id, package)
+}
+
+#[cfg(feature = "server")]
+fn draft_from_validated_archive(
+    theme_id: ThemeId,
+    package: ValidatedThemePackage,
+) -> Result<ThemeDraft, InternalError> {
     let assets = package
         .asset_paths()
         .map(|path| {
@@ -354,6 +362,15 @@ fn create_storage_error(error: sqlx::Error) -> InternalError {
 }
 
 #[cfg(feature = "server")]
+fn import_storage_error(error: sqlx::Error) -> InternalError {
+    if matches!(&error, sqlx::Error::Database(database) if database.is_unique_violation()) {
+        InternalError::conflict("theme name already exists; supply a different theme name override")
+    } else {
+        create_storage_error(error)
+    }
+}
+
+#[cfg(feature = "server")]
 fn theme_storage_error(error: sqlx::Error) -> InternalError {
     match &error {
         sqlx::Error::RowNotFound => InternalError::not_found("theme"),
@@ -376,6 +393,13 @@ fn replace_draft_error(error: ReplaceDraftError) -> InternalError {
 fn theme_name(name: &str) -> Result<String, InternalError> {
     storage::validate_theme_catalog_name(name)
         .map_err(|error| InternalError::validation(error.to_string()))
+}
+
+#[cfg(feature = "server")]
+fn import_theme_name(name: &str) -> Result<String, InternalError> {
+    storage::validate_theme_catalog_name(name).map_err(|error| {
+        InternalError::validation(format!("{error}; supply a different theme name override"))
+    })
 }
 
 #[cfg(feature = "server")]
@@ -637,7 +661,8 @@ pub async fn import_package(
 
 /// Imports a complete ZIP Theme Package as a new, unselected private draft.
 ///
-/// The ordered multipart fields are `scope`, `name`, then `archive`; principal
+/// The ordered multipart fields are `scope`, optional catalog override `name`,
+/// then `archive`. An omitted name uses the validated manifest label. Principal
 /// admission and site authorization happen before archive bytes are consumed.
 #[macros::server(input = MultipartFormData, skip_all)]
 pub async fn import_zip(data: MultipartData) -> WebResult<MutationOutcome<CatalogEntry>> {
@@ -668,22 +693,58 @@ pub async fn import_zip(data: MultipartData) -> WebResult<MutationOutcome<Catalo
         "author" => ThemeOwner::Author(actor.user_id),
         _ => return Err(InternalError::validation("invalid theme ownership scope")),
     };
-    let name = multipart
-        .next_field()
+    let (name, draft) = read_import_archive(&mut multipart).await?;
+    let themes = expect_context::<Arc<dyn ThemeStorage>>();
+    let write_scope = expect_context::<WriteScope>();
+    let name_for_write = name.clone();
+    let outcome = write_scope
+        .run(move |transaction| {
+            Box::pin(async move {
+                themes
+                    .create_theme(
+                        transaction,
+                        owner,
+                        &name_for_write,
+                        &draft,
+                        ThemeQuotaLimits::production(),
+                    )
+                    .await
+                    .map_err(import_storage_error)
+            })
+        })
         .await
-        .map_err(multipart_error)?
-        .ok_or_else(|| InternalError::validation("missing theme name"))?;
-    if name.name() != Some("name") {
-        return Err(InternalError::validation(
-            "theme import fields must be scope, name, archive",
-        ));
-    }
-    let name = theme_name(&name.text().await.map_err(multipart_error)?)?;
-    let mut archive = multipart
+        .map_err(error::from_write_scope_error)?;
+    no_store();
+    Ok(outcome.map(|id| CatalogEntry {
+        id,
+        name,
+        published: false,
+    }))
+}
+
+/// Reads the ordered override/archive fields only after principal and scope admission.
+/// Shared package and CSS validation precede manifest-default catalog naming.
+#[cfg(feature = "server")]
+async fn read_import_archive(
+    multipart: &mut multer::Multipart<'_>,
+) -> Result<(String, ThemeDraft), InternalError> {
+    let next = multipart
         .next_field()
         .await
         .map_err(multipart_error)?
         .ok_or_else(|| InternalError::validation("missing theme archive"))?;
+    let (name, mut archive) = if next.name() == Some("name") {
+        // Explicit invalid overrides fail rather than falling back to the package.
+        let name = import_theme_name(&next.text().await.map_err(multipart_error)?)?;
+        let archive = multipart
+            .next_field()
+            .await
+            .map_err(multipart_error)?
+            .ok_or_else(|| InternalError::validation("missing theme archive"))?;
+        (Some(name), archive)
+    } else {
+        (None, next)
+    };
     if archive.name() != Some("archive") {
         return Err(InternalError::validation(
             "theme import fields must be scope, name, archive",
@@ -708,33 +769,15 @@ pub async fn import_zip(data: MultipartData) -> WebResult<MutationOutcome<Catalo
             "theme import fields must be scope, name, archive",
         ));
     }
-    let draft = draft_from_archive(ThemeId::from(0), &bytes)?;
-    let themes = expect_context::<Arc<dyn ThemeStorage>>();
-    let write_scope = expect_context::<WriteScope>();
-    let name_for_write = name.clone();
-    let outcome = write_scope
-        .run(move |transaction| {
-            Box::pin(async move {
-                themes
-                    .create_theme(
-                        transaction,
-                        owner,
-                        &name_for_write,
-                        &draft,
-                        ThemeQuotaLimits::production(),
-                    )
-                    .await
-                    .map_err(create_storage_error)
-            })
-        })
-        .await
-        .map_err(error::from_write_scope_error)?;
-    no_store();
-    Ok(outcome.map(|id| CatalogEntry {
-        id,
-        name,
-        published: false,
-    }))
+    let package = theme_package::validate_theme_package(&bytes, ThemePackageLimits::default())
+        .map_err(|error| InternalError::validation_source("invalid theme package", error))?;
+    let manifest_name = package.name().to_owned();
+    let draft = draft_from_validated_archive(ThemeId::from(0), package)?;
+    let name = match name {
+        Some(name) => name,
+        None => import_theme_name(&manifest_name)?,
+    };
+    Ok((name, draft))
 }
 
 /// Imports plain CSS as a new private version-1 package draft with no assets.
@@ -1159,9 +1202,9 @@ mod tests {
         CatalogEntry, Draft, OwnershipScope, ThemeBindingInput, ThemeMediaInput, ThemePoolInput,
         admission_error, binding_wire, catalog, create_storage_error, digest_hex, draft_asset_urls,
         draft_from_archive, draft_from_input, draft_wire, get_selection, import_css,
-        import_package, manager_error, media_wire, package_asset_urls, plain_css_manifest,
-        pool_wire, publication_error, publish, remove, rename, replace_binding, replace_css,
-        replace_draft_error, replace_pool, safe_filename, select, shuffle, theme_name,
+        import_package, import_storage_error, manager_error, media_wire, package_asset_urls,
+        plain_css_manifest, pool_wire, publication_error, publish, remove, rename, replace_binding,
+        replace_css, replace_draft_error, replace_pool, safe_filename, select, shuffle, theme_name,
         theme_storage_error,
     };
     use crate::{
@@ -1329,6 +1372,16 @@ mod tests {
         assert_validation(&in_flight, "theme operation already in progress");
         let quota = create_storage_error(sqlx::Error::RowNotFound);
         assert_validation(&quota, "theme quota exceeded");
+        let import_quota = import_storage_error(sqlx::Error::RowNotFound);
+        assert_validation(&import_quota, "theme quota exceeded");
+        let import_internal =
+            import_storage_error(sqlx::Error::Io(std::io::Error::other("import failed")));
+        assert_eq!(
+            project(import_internal.kind(), import_internal.public_message()),
+            WebError::Storage {
+                message: "storage operation failed".into()
+            }
+        );
         let not_found = theme_storage_error(sqlx::Error::RowNotFound);
         assert_eq!(
             project(not_found.kind(), not_found.public_message()),

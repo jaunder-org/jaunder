@@ -5,7 +5,12 @@ import { resolve } from "node:path";
 
 import { expect, type Page } from "@playwright/test";
 
-import { BASE_URL, confirmedMutation, type MutationOutcome } from "./helpers";
+import {
+  BASE_URL,
+  confirmedMutation,
+  goto,
+  type MutationOutcome,
+} from "./helpers";
 
 export type ThemeAsset = { path: string; mime: string; bytes: Uint8Array };
 export type ThemePackage = {
@@ -71,6 +76,85 @@ export function conformanceThemePackage(): ThemePackage {
 function appendBytes(form: URLSearchParams, prefix: string, bytes: Uint8Array) {
   for (const [index, byte] of bytes.entries())
     form.append(`${prefix}[${index}]`, String(byte));
+}
+
+/** Opt into the source/package/media authoring controls without weakening their assertions. */
+export async function openThemeAdvanced(page: Page): Promise<void> {
+  const disclosure = page.getByRole("button", {
+    name: "Advanced",
+    exact: true,
+  });
+  if ((await disclosure.getAttribute("aria-expanded")) !== "true")
+    await disclosure.click();
+  await expect(disclosure).toHaveAttribute("aria-expanded", "true");
+}
+
+/** Drive the default import form with a real exporter-backed package. */
+export async function importMinimalTheme(page: Page): Promise<void> {
+  const archive = await minimalThemeZip(page);
+  await goto(page, "/themes");
+  await page.getByLabel("Theme ZIP file").setInputFiles({
+    name: "filename-disagrees.zip",
+    mimeType: "application/zip",
+    buffer: archive,
+  });
+  await page.getByRole("button", { name: "Upload theme", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Intake fixture", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+}
+
+/** Build a minimal import fixture with the maintained exporter, then remove its source draft. */
+export async function minimalThemeZip(
+  page: Page,
+  manifestName = "Intake fixture",
+): Promise<Buffer> {
+  const form = new URLSearchParams({ scope: "author", name: "Fixture source" });
+  appendBytes(
+    form,
+    "draft[manifest]",
+    new TextEncoder().encode(
+      `{"schema": 1, "name": ${JSON.stringify(manifestName)}, "style_contract": 1, "assets": {}, "defaults": {}}`,
+    ),
+  );
+  appendBytes(
+    form,
+    "draft[stylesheet]",
+    new TextEncoder().encode(
+      '[data-jaunder-part="main"] { outline: 2px solid rgb(1, 2, 3); }',
+    ),
+  );
+  const created = await page.request.post(`${BASE_URL}/api/themes/create`, {
+    data: form.toString(),
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+  });
+  expect(created.status()).toBe(200);
+  const entry = confirmedMutation(
+    (await created.json()) as MutationOutcome<CatalogEntry>,
+    "fixture create",
+  );
+  const target = new URLSearchParams({
+    scope: "author",
+    theme_id: String(entry.id),
+  });
+  const exported = await page.request.post(`${BASE_URL}/api/themes/export`, {
+    data: target.toString(),
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+  });
+  expect(exported.status()).toBe(200);
+  const archive = Buffer.from((await exported.json()).bytes as number[]);
+  // The live API canonicalizes the manifest; use its exporter rather than hand-rolled ZIP headers.
+  expect(archive.length).toBeGreaterThan(0);
+  const removed = await page.request.post(`${BASE_URL}/api/themes/remove`, {
+    data: target.toString(),
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+  });
+  expect(removed.status()).toBe(200);
+  confirmedMutation(
+    (await removed.json()) as MutationOutcome<null>,
+    "fixture remove",
+  );
+  return archive;
 }
 
 /** Import and publish a complete local package through the live API. */

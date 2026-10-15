@@ -2169,6 +2169,11 @@
   max-width: 980px;
 }
 
+.j-theme-workflow {
+  display: grid;
+  gap: 16px;
+}
+
 .j-theme-scope-options,
 .j-theme-actions {
   display: flex;
