@@ -7,6 +7,7 @@ let
     craneLib
     commonArgs
     hostArgs
+    imageObserverArgs
     wasmTestSrc
     siteSrc
     siteCargoMembers
@@ -89,7 +90,8 @@ let
     || pkgs.lib.hasPrefix "storage/migrations/" relative
     || pkgs.lib.hasPrefix "host/system_theme_sources/" relative
     || relative == "testdata/theme-repository/minimal/preview.png"
-    || pkgs.lib.hasPrefix "server/tests/misc/backup_corpus/" relative;
+    || pkgs.lib.hasPrefix "server/tests/misc/backup_corpus/" relative
+    || pkgs.lib.hasPrefix "host/src/image_sanitizer_fixtures/" relative;
   coverageSrc =
     # Pure source-filter negative case: excluded auxiliary assets cannot perturb
     # coverage source identity.
@@ -185,6 +187,12 @@ performanceGlobalTimeout = 6000;
 # fail the check only after the copies are safe. On success the copies land
 # in $out; on failure they live in the --keep-failed build dir for xtask's
 # rescue_diagnostics to recover. Shared by both backends so they can't drift.
+# Playwright consumes the host-owned fixtures through repository-relative paths.
+# Project just that shared subtree into the guest, not an entire source checkout.
+e2eImageFixtureSetup = ''
+  machine.succeed("mkdir -p /tmp/host/src && cp -r ${../host/src/image_sanitizer_fixtures} /tmp/host/src/image_sanitizer_fixtures")
+'';
+
 # VM-local OTel test glue shared by both backends. A systemd unit becomes
 # active when the collector process is spawned, before its receivers are
 # necessarily listening (#1243), so every initial start and restart probes
@@ -641,7 +649,8 @@ mkE2eCheck =
             "${backend}/${browser}: VM booted and the Jaunder HTTP readiness port opened.",
           )
 
-          machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")${afterPackageCopy}# Seed a fresh DB and run the one browser this derivation targets.
+          machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
+          ${e2eImageFixtureSetup}${afterPackageCopy}# Seed a fresh DB and run the one browser this derivation targets.
           # Browsers run as separate derivations (one VM each) so their state
           # mutations cannot interfere; that also lets CI fan them out.
           seed_db()
@@ -959,6 +968,7 @@ mkPerformanceProducer =
 
       ${pkgs.lib.optionalString (producerKind == "browser") ''
         machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
+        ${e2eImageFixtureSetup}
         browser_path = machine.succeed(
           "cd /tmp/e2e && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
           + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
@@ -1071,6 +1081,7 @@ mkWasmCoverageProducer =
       machine.wait_for_unit("jaunder.service", timeout=60)
       machine.wait_for_open_port(3000, timeout=30)
       machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
+      ${e2eImageFixtureSetup}
       if "${failure}" == "early":
         status, output = machine.execute(
           "bash -o pipefail -c '{ printf \"%s\\n\" \"injected early Playwright failure\"; exit 73; } 2>&1 | tee /var/lib/jaunder/wasm-coverage/diagnostics/playwright.log'",
@@ -1155,6 +1166,7 @@ mkWasmCoverageMeasurementProducer =
       machine.wait_for_unit("jaunder.service", timeout=60)
       machine.wait_for_open_port(3000, timeout=30)
       machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e && mkdir -p /var/lib/jaunder/wasm-coverage")
+      ${e2eImageFixtureSetup}
       status, output = machine.execute(
         "cd /tmp/e2e"
         + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
@@ -2051,6 +2063,7 @@ mkWasmCoverageMeasurementProducer =
   coverageFinalCacheChecks = rec {
     coverage = nonSubstitutable (craneLib.mkCargoDerivation (
       hostArgs
+      // imageObserverArgs
       // {
         src = coverageSrc;
         inherit cargoArtifacts;
@@ -2072,11 +2085,12 @@ mkWasmCoverageMeasurementProducer =
         # release `jaunderBin` uses; `build.rs` copies from these paths.
         JAUNDER_CSR_BUNDLE_DIR = "${csrWasmBundle}";
         JAUNDER_PUBLIC_DIR = "${../public}";
-        nativeBuildInputs = hostArgs.nativeBuildInputs ++ [
+        nativeBuildInputs = imageObserverArgs.nativeBuildInputs ++ [
           devtoolBin
           cargo-crap
           pkgs.cargo-llvm-cov
           pkgs.cargo-nextest
+          pkgs.jq
           # devtool runs the whole test suite under an ephemeral
           # PostgreSQL (via devtool pg) so
           # storage/src/postgres/* gets instrumented coverage. The
@@ -2087,9 +2101,68 @@ mkWasmCoverageMeasurementProducer =
         buildPhaseCargoCommand = ''
           export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:''${LD_LIBRARY_PATH:-}"
           mkdir -p emit-out
+          # Keep production-feature maps separate from feature-unified libtest
+          # binaries, whose cheap-KDF guard refuses application startup.
+          (
+            environment="$(cargo llvm-cov show-env --export-prefix)" || exit
+            eval "$environment" || exit
+            cargo build --locked --package jaunder --bin jaunder --message-format=json > emit-out/application-build.json
+          )
+          application_executable="$(jq -ser --arg root "$PWD" '
+            [.[] | select(.reason == "compiler-artifact")] as $artifacts
+            | ($artifacts | map(select(.target.src_path == ($root + "/host/src/lib.rs")))) as $host
+            | ($artifacts | map(select(.target.src_path == ($root + "/storage/src/lib.rs")))) as $storage
+            | if ($host | length) == 0 or ($storage | length) == 0
+                or any($host[]; (.features | index("cheap-kdf")) != null)
+                or any($storage[]; (.features | index("test-utils")) != null)
+              then error("production application feature evidence rejected") else . end
+            | [$artifacts[] | select(.target.name == "jaunder" and .target.src_path == ($root + "/server/src/main.rs") and (.target.kind | index("bin")) != null and (.package_id | startswith("path+file://" + $root + "/server#jaunder@"))) | .executable | select(. != null)]
+            | if length == 1 then .[0] else error("expected one application executable") end
+          ' emit-out/application-build.json)"
+          application_objects="$(dirname "$application_executable")/deps"
+          unsettled="$(find "$application_objects" -maxdepth 1 -name 'jaunder-native-application-*' -print -quit)"
+          if test -n "$unsettled"; then
+            printf '%s\n' 'unsettled application fixture object exists' >&2
+            exit 1
+          fi
+          JAUNDER_APPLICATION_BIN="$(mktemp "$application_objects/jaunder-native-application-XXXXXX")"
+          export JAUNDER_APPLICATION_BIN
+          cleanup_application_fixture() {
+            status=$?
+            if ! rm -- "$JAUNDER_APPLICATION_BIN"; then
+              printf '%s\n' 'application fixture cleanup failed' >&2
+              exit 1
+            fi
+            exit "$status"
+          }
+          trap cleanup_application_fixture EXIT
+          cp "$application_executable" "$JAUNDER_APPLICATION_BIN"
+          chmod 700 "$JAUNDER_APPLICATION_BIN"
+          cmp "$application_executable" "$JAUNDER_APPLICATION_BIN"
+          application_identity="$(sha256sum "$JAUNDER_APPLICATION_BIN")"
+          printf '%s\n' "$application_identity" > emit-out/application-retained.sha256
+          # Libtest cannot serve the private worker mode. Build a real executable
+          # under the producer's exact instrumentation environment, not the
+          # separately packaged, uninstrumented test-support binary. The producer
+          # cleans profraw files only, so the compiled fixture remains available.
+          (
+            environment="$(cargo llvm-cov show-env --export-prefix)" || exit
+            eval "$environment" || exit
+            cargo build --package test-support --bin test-support --message-format=json > image-worker-build.json
+          )
+          # Cargo owns the artifact path (including target/profile layout).
+          # Reject absent or ambiguous executable evidence rather than guessing.
+          JAUNDER_IMAGE_WORKER_BIN="$(jq -ser '
+            [.[] | select(.reason == "compiler-artifact" and .target.name == "test-support" and (.target.kind | index("bin")) != null) | .executable | select(. != null)]
+            | if length == 1 then .[0] else error("expected one image worker executable") end
+          ' image-worker-build.json)"
+          export JAUNDER_IMAGE_WORKER_BIN
+          test -x "$JAUNDER_IMAGE_WORKER_BIN"
           # The producer emits checked stage evidence; the Nix gate and host xtask
           # consume its status and reports as separate authoritative boundaries.
           devtool coverage emit --out emit-out
+          settled_application_identity="$(sha256sum "$JAUNDER_APPLICATION_BIN")"
+          test "$application_identity" = "$settled_application_identity"
         '';
         installPhaseCommand = ''
           mkdir -p $out
@@ -2102,6 +2175,9 @@ mkWasmCoverageMeasurementProducer =
           if test -d emit-out/diagnostics; then
             cp -r emit-out/diagnostics $out/diagnostics
           fi
+          mkdir -p $out/diagnostics/application-fixture
+          cp emit-out/application-build.json $out/diagnostics/application-fixture/build.json
+          cp emit-out/application-retained.sha256 $out/diagnostics/application-fixture/retained.sha256
           # emit-out/coverage-report.lcov is intentionally NOT copied: it is an
           # intermediate consumed only by `cargo crap`, not a gate output the host reads.
           if test -e emit-out/coverage-report.txt; then
@@ -2356,6 +2432,7 @@ e2eGateChecks
       machine.succeed("mkdir -p /tmp/elisp-coverage")
       machine.succeed(
           "JAUNDER_TEST_BINARY=${jaunderBin}/bin/jaunder "
+          + "JAUNDER_TEST_IMAGE_FIXTURES=${../host/src/image_sanitizer_fixtures} "
           + "JAUNDER_ELISP_COVERAGE_DIR=/tmp/elisp-coverage "
           + "emacs --batch -Q -l ${emacsSrc}/scripts/run-coverage.el"
       )
@@ -2445,6 +2522,7 @@ static-code =
                 "csr"
                 "host"
                 "test-support"
+                "third-party/little-exif"
                 "public"
                 "tools"
                 "end2end"
@@ -2462,6 +2540,8 @@ static-code =
         assert !(staticCodeSourceFilter "/source/xtask/src/lib.rs" "regular");
         assert (staticCodeSourceFilter "/source/testdata/theme-repository/minimal/preview.png" "regular");
         assert !(staticCodeSourceFilter "/source/testdata/unrelated.png" "regular");
+        assert staticCodeSourceFilter "/source/third-party/little-exif/src/lib.rs" "regular";
+        assert !(staticCodeSourceFilter "/source/third-party/unrelated/src/lib.rs" "regular");
         staticCodeSourceFilter;
     };
   in

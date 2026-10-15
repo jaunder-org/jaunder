@@ -261,7 +261,7 @@ When DRAFT is non-nil, create a draft Member."
           (assets (expand-file-name "assets" root))
           (original (expand-file-name "π-image.png" assets))
           (original-spelling "file:assets/π-image.png")
-          (bytes (string-as-unibyte "live verified media bytes"))
+          (bytes (jaunder-test--image-bytes "png-sanitized.png"))
           (jaunder-blogs (list (cons root (list :base-url jaunder-test-base-url
                                                 :username jaunder-test-username))))
           path local id url scratch)
@@ -359,8 +359,8 @@ When DRAFT is non-nil, create a draft Member."
           (assets (expand-file-name "assets" root))
           (original (expand-file-name "original.png" assets))
           (added (expand-file-name "added.png" assets))
-          (verified (string-as-unibyte "verified original bytes"))
-          (added-bytes (string-as-unibyte "ordinary fallback bytes"))
+          (verified (jaunder-test--image-bytes "png-sanitized.png"))
+          (added-bytes (jaunder-test--image-bytes "apng-first-original.png"))
           (hash (secure-hash 'sha256 verified))
           (jaunder-blogs (list (cons root (list :base-url jaunder-test-base-url
                                                 :username jaunder-test-username))))
@@ -440,7 +440,7 @@ When DRAFT is non-nil, create a draft Member."
    (let* ((root (file-name-as-directory (make-temp-file "jaunder-reuse-collision-" t)))
           (assets (expand-file-name "assets" root))
           (original (expand-file-name "original.png" assets))
-          (bytes (string-as-unibyte "collision verified bytes"))
+          (bytes (jaunder-test--image-bytes "png-sanitized.png"))
           (jaunder-blogs (list (cons root (list :base-url jaunder-test-base-url
                                                 :username jaunder-test-username))))
           id path local url before collision)
@@ -487,7 +487,7 @@ When DRAFT is non-nil, create a draft Member."
    (let* ((root (file-name-as-directory (make-temp-file "jaunder-reuse-rename-" t)))
           (assets (expand-file-name "assets" root))
           (original (expand-file-name "original.png" assets))
-          (bytes (string-as-unibyte "rename verified bytes"))
+          (bytes (jaunder-test--image-bytes "png-sanitized.png"))
           (jaunder-blogs (list (cons root (list :base-url jaunder-test-base-url
                                                 :username jaunder-test-username))))
           id path local url)
@@ -528,7 +528,7 @@ When DRAFT is non-nil, create a draft Member."
   (jaunder-test--with-live-server
    (let* ((root (file-name-as-directory (make-temp-file "jaunder-reuse-etag-" t)))
           (original (expand-file-name "original.png" root))
-          (bytes (string-as-unibyte "etag verified media bytes"))
+          (bytes (jaunder-test--image-bytes "png-sanitized.png"))
           (jaunder-blogs (list (cons root (list :base-url jaunder-test-base-url
                                                 :username jaunder-test-username))))
           id path local url before drifted)
@@ -1047,9 +1047,9 @@ When DRAFT is non-nil, create a draft Member."
          (jaunder--call-with-blog
           root
           (lambda ()
-            (with-temp-file first-source (insert "verified partial media"))
-            (with-temp-file failed-source (insert "rejected media"))
-            (with-temp-file success-source (insert "successful media"))
+            (jaunder-test--copy-image "png-sanitized.png" first-source)
+            (jaunder-test--copy-image "apng-first-original.png" failed-source)
+            (jaunder-test--copy-image "apng-default-original.png" success-source)
             (setq first-url (jaunder--upload-media first-source "image/png")
                   failed-url (jaunder--upload-media failed-source "image/png")
                   success-url (jaunder--upload-media success-source "image/png"))

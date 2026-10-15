@@ -99,6 +99,9 @@ allow = [
     "CC0-1.0",
     "CDLA-Permissive-2.0",
     "GPL-3.0-only",
+    # The linked native metadata library offers version 3 or later. Accepting
+    # that dependency grant does not change first-party contribution grants.
+    "GPL-3.0-or-later",
     "ISC",
     "MIT",
     "MPL-2.0",

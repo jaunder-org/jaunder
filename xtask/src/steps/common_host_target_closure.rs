@@ -128,10 +128,14 @@ struct CargoMetadata {
 }
 
 #[derive(Deserialize)]
+struct WorkspaceMetadata {
+    workspace_members: BTreeSet<String>,
+}
+
+#[derive(Deserialize)]
 struct CargoPackage {
     id: String,
     name: String,
-    source: Option<String>,
     targets: Vec<CargoTarget>,
 }
 
@@ -164,18 +168,23 @@ struct CargoDependencyKind {
 }
 
 /// Converts Cargo's structured metadata into the evaluator's target graph.
-fn graph_from_metadata(metadata: CargoMetadata, root_name: &str) -> Result<Graph> {
+fn graph_from_metadata(
+    metadata: CargoMetadata,
+    root_name: &str,
+    first_party_members: &BTreeSet<String>,
+) -> Result<Graph> {
     let mut root = None;
     let mut packages = BTreeMap::new();
     for package in metadata.packages {
         if package.name == root_name {
             root = Some(package.id.clone());
         }
+        let workspace = first_party_members.contains(&package.id);
         packages.insert(
             package.id,
             Package {
                 name: package.name,
-                workspace: package.source.is_none(),
+                workspace,
                 proc_macro: package
                     .targets
                     .iter()
@@ -204,10 +213,16 @@ fn graph_from_metadata(metadata: CargoMetadata, root_name: &str) -> Result<Graph
             )
         })
         .collect();
+    let root = root.with_context(|| format!("Cargo metadata omitted the `{root_name}` package"))?;
+    if !first_party_members.contains(&root) {
+        return Err(anyhow!(
+            "Cargo metadata root `{root_name}` is not a declared first-party workspace member"
+        ));
+    }
     Ok(Graph {
         packages,
         nodes,
-        root: root.with_context(|| format!("Cargo metadata omitted the `{root_name}` package"))?,
+        root,
     })
 }
 
@@ -243,7 +258,12 @@ fn root_crates_io_patch_section(root: &Path) -> Result<String> {
 
 /// Obtains metadata for one target root, avoiding feature unification between
 /// the host floor and the exact CSR wasm closure.
-fn load_graph(sh: &Shell, package: &str, target: Option<&str>) -> Result<Graph> {
+fn load_graph(
+    sh: &Shell,
+    package: &str,
+    target: Option<&str>,
+    first_party_members: &BTreeSet<String>,
+) -> Result<Graph> {
     let root = git::toplevel(Path::new("."))?;
     let patches = root_crates_io_patch_section(Path::new(&root))?;
     let temporary = tempfile::tempdir().context("creating temporary metadata root")?;
@@ -275,17 +295,43 @@ fn load_graph(sh: &Shell, package: &str, target: Option<&str>) -> Result<Graph> 
         .read()
         .with_context(|| format!("resolving the {package} dependency graph with cargo metadata"))?;
     let metadata = serde_json::from_str(&json).context("parsing Cargo metadata JSON")?;
-    graph_from_metadata(metadata, package)
+    graph_from_metadata(metadata, package, first_party_members)
+}
+
+/// Path dependencies have no registry source even when Cargo excludes them from
+/// a workspace. Use the declared first-party workspaces rather than that proxy;
+/// the isolated target root itself cannot identify their membership.
+fn first_party_workspace_members(sh: &Shell, root: &Path) -> Result<BTreeSet<String>> {
+    let mut members = BTreeSet::new();
+    for manifest in [
+        root.join("Cargo.toml"),
+        root.join("tools/Cargo.toml"),
+        root.join("xtask/Cargo.toml"),
+    ] {
+        let json = cmd!(
+            sh,
+            "cargo metadata --no-deps --format-version=1 --manifest-path {manifest}"
+        )
+        .read()
+        .context("reading first-party workspace membership")?;
+        let metadata: WorkspaceMetadata =
+            serde_json::from_str(&json).context("parsing first-party workspace membership")?;
+        members.extend(metadata.workspace_members);
+    }
+    Ok(members)
 }
 
 /// Runs the repository-shape gate.
 pub fn run(result: &mut CommandResult) {
     let start = std::time::Instant::now();
     let shell = Shell::new().expect("constructing a shell cannot fail");
-    let step = load_graph(&shell, "host", None)
-        .and_then(|host| {
-            load_graph(&shell, "csr", Some(CSR_TARGET))
-                .and_then(|csr| evaluate(&host, &csr).map_err(|error| anyhow!(error)))
+    let step = git::toplevel(Path::new("."))
+        .and_then(|root| first_party_workspace_members(&shell, Path::new(&root)))
+        .and_then(|members| {
+            load_graph(&shell, "host", None, &members).and_then(|host| {
+                load_graph(&shell, "csr", Some(CSR_TARGET), &members)
+                    .and_then(|csr| evaluate(&host, &csr).map_err(|error| anyhow!(error)))
+            })
         })
         .map_or_else(
             |error| StepResult::fail("common-host-target-closure").detail(error.to_string()),
@@ -389,6 +435,59 @@ members = [\"host\"]
             packages,
             nodes,
             root: root.to_owned(),
+        }
+    }
+
+    fn metadata_host(dependency: &str) -> Graph {
+        let json = serde_json::json!({
+            "packages": [
+                {"id": "host", "name": "host", "source": null, "targets": [{"kind": ["lib"]}]},
+                {"id": dependency, "name": dependency, "source": null, "targets": [{"kind": ["lib"]}]}
+            ],
+            "resolve": {"nodes": [
+                {"id": "host", "features": [], "deps": [{"pkg": dependency, "dep_kinds": [{"kind": null}]}]},
+                {"id": dependency, "features": [], "deps": []}
+            ]}
+        });
+        let members = ["host", "storage", "server", "web", "auxiliary-member"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        super::graph_from_metadata(
+            serde_json::from_value(json).expect("Cargo metadata control"),
+            "host",
+            &members,
+        )
+        .expect("metadata host graph")
+    }
+
+    #[test]
+    fn rejects_metadata_without_an_authoritative_first_party_root() {
+        let json = serde_json::json!({
+            "packages": [{"id": "host", "name": "host", "source": null, "targets": [{"kind": ["lib"]}]}],
+            "resolve": {"nodes": [{"id": "host", "features": [], "deps": []}]}
+        });
+        let error = super::graph_from_metadata(
+            serde_json::from_value(json).expect("unknown-root metadata control"),
+            "host",
+            &BTreeSet::new(),
+        )
+        .expect_err("missing first-party membership must not disable the host floor");
+        assert!(
+            error
+                .to_string()
+                .contains("not a declared first-party workspace member")
+        );
+    }
+
+    #[test]
+    fn permits_excluded_local_dependency_without_relaxing_first_party_floor() {
+        evaluate(&metadata_host("maintained-library"), &clean_csr())
+            .expect("an excluded dependency is not a first-party workspace member");
+        for member in ["storage", "server", "web", "auxiliary-member"] {
+            let error = evaluate(&metadata_host(member), &clean_csr())
+                .expect_err("all first-party workspaces retain the host floor");
+            assert!(error.contains(&format!("host -> {member}")));
         }
     }
 

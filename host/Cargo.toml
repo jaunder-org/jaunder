@@ -71,6 +71,7 @@ tree-sitter-xml = "=0.7.0"
 tree-sitter-yaml = "=0.7.1"
 tree-sitter-zig = "=1.1.2"
 tokio.workspace = true
+tempfile.workspace = true
 tracing-log.workspace = true
 tracing-subscriber.workspace = true
 serde.workspace = true
@@ -87,8 +88,14 @@ serde_jcs = { version = "0.2.0", default-features = false }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "avif-native"] }
 wuff = "=0.2.9"
 lightningcss = { version = "=1.0.0-alpha.72", default-features = false, features = ["serde", "visitor"] }
-rustix.workspace = true
+rustix = { workspace = true, features = ["stdio"] }
 mp4parse = "=0.17.0"
+# Linked native metadata editing; the narrow HEIF extent patch is maintained
+# locally with the upstream notices (third-party/little-exif/JAUNDER.md).
+exiftool-rs = "=0.9.0"
+img-parts = "=0.4.0"
+gif = "=0.14.2"
+little_exif = { version = "=0.6.23", path = "../third-party/little-exif" }
 webauthn-rs.workspace = true
 url.workspace = true
 

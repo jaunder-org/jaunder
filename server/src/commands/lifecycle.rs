@@ -556,25 +556,6 @@ fn feed_worker(
     )
 }
 
-fn media_manager(
-    media: Arc<dyn MediaStorage>,
-    posts: Arc<dyn PostStorage>,
-    site_config: Arc<dyn SiteConfigStorage>,
-    write_scope: WriteScope,
-    content_locks: Arc<MediaContentLocks>,
-    instance_id: InstanceId,
-    ownership_resolver: Arc<dyn storage::MediaReferenceOwnershipResolver>,
-) -> Arc<MediaManager> {
-    Arc::new(MediaManager::new(
-        media,
-        posts,
-        site_config,
-        write_scope,
-        content_locks,
-        instance_id,
-        ownership_resolver,
-    ))
-}
 fn theme_asset_manager(
     themes: Arc<dyn storage::ThemeStorage>,
     write_scope: WriteScope,
@@ -619,20 +600,38 @@ fn public_projector(
 
 /// HTTP policy data stays at the serve composition root; runtime consumers
 /// receive the individual settings that govern their own boundary.
-struct ServeHttpPolicy {
-    prod: bool,
-    trace_parent_enabled: bool,
-    trusted_proxies: crate::trusted_proxy::TrustedProxyConfig,
+pub(crate) struct ServeHttpPolicy {
+    pub(crate) prod: bool,
+    pub(crate) trace_parent_enabled: bool,
+    pub(crate) trusted_proxies: crate::trusted_proxy::TrustedProxyConfig,
 }
 
-fn compose_server_router(
+fn with_storage_extensions(app: Router, dependencies: &ServeStorage) -> Router {
+    let app = crate::context::with_post_account_extensions(
+        app,
+        Arc::clone(&dependencies.posts),
+        Arc::clone(&dependencies.audiences),
+        Arc::clone(&dependencies.users),
+        Arc::clone(&dependencies.user_config),
+    );
+    crate::context::with_theme_media_extensions(
+        app,
+        Arc::clone(&dependencies.themes),
+        Arc::clone(&dependencies.site_config),
+        Arc::clone(&dependencies.media),
+        Arc::clone(&dependencies.feed_cache),
+    )
+}
+
+async fn compose_server_router(
     dependencies: &ServeStorage,
     application_stylesheet_url: common::root_relative_url::RootRelativeUrl,
     storage_path: PathBuf,
     instance_id: &InstanceId,
     mailer: Arc<dyn common::mailer::MailSender>,
     http_policy: ServeHttpPolicy,
-) -> Router {
+    image_sanitizer: Arc<host::image_sanitizer::ImageSanitizer>,
+) -> anyhow::Result<Router> {
     let storage_path = Arc::new(storage_path);
     let locks = Arc::new(MediaContentLocks::new(Arc::clone(&storage_path)));
     let (resolver, ownership) =
@@ -642,14 +641,21 @@ fn compose_server_router(
         Arc::clone(&dependencies.publisher),
         dependencies.write_scope.clone(),
     );
-    let manager = media_manager(
-        Arc::clone(&dependencies.media),
-        Arc::clone(&dependencies.posts),
-        Arc::clone(&dependencies.site_config),
-        dependencies.write_scope.clone(),
-        Arc::clone(&locks),
-        instance_id.clone(),
-        resolver,
+    image_sanitizer
+        .check_runtime()
+        .await
+        .context("deployed image worker startup probe failed")?;
+    let manager = Arc::new(
+        MediaManager::new(
+            Arc::clone(&dependencies.media),
+            Arc::clone(&dependencies.posts),
+            Arc::clone(&dependencies.site_config),
+            dependencies.write_scope.clone(),
+            Arc::clone(&locks),
+            instance_id.clone(),
+            resolver,
+        )
+        .with_image_sanitizer(image_sanitizer),
     );
     let asset_manager = theme_asset_manager(
         Arc::clone(&dependencies.themes),
@@ -705,20 +711,7 @@ fn compose_server_router(
         public_projector(dependencies, application_stylesheet_url),
     );
     let app = crate::context::with_media_extensions(app, ownership, manager, locks, storage_path);
-    let app = crate::context::with_post_account_extensions(
-        app,
-        Arc::clone(&dependencies.posts),
-        Arc::clone(&dependencies.audiences),
-        Arc::clone(&dependencies.users),
-        Arc::clone(&dependencies.user_config),
-    );
-    let app = crate::context::with_theme_media_extensions(
-        app,
-        Arc::clone(&dependencies.themes),
-        Arc::clone(&dependencies.site_config),
-        Arc::clone(&dependencies.media),
-        Arc::clone(&dependencies.feed_cache),
-    );
+    let app = with_storage_extensions(app, dependencies);
     let app = crate::context::with_publisher_extensions(
         app,
         publisher,
@@ -726,13 +719,13 @@ fn compose_server_router(
         Arc::clone(&dependencies.sessions),
         dependencies.write_scope.clone(),
     );
-    create_router_with_trusted_proxies(
+    Ok(create_router_with_trusted_proxies(
         app,
         instance_id,
         http_policy.prod,
         http_policy.trace_parent_enabled,
         http_policy.trusted_proxies,
-    )
+    ))
 }
 
 async fn install_and_reconcile_system_artifact_inventory(
@@ -849,16 +842,20 @@ pub async fn prepare_server(
     telemetry: &TelemetryConfig,
     otel_tracing_enabled: bool,
     capture: Option<&ServeCapturePaths>,
+    image_sanitizer: Arc<host::image_sanitizer::ImageSanitizer>,
 ) -> anyhow::Result<PreparedServer> {
     let trusted_proxies = crate::trusted_proxy::TrustedProxyConfig::default();
     prepare_server_with_trusted_proxies(
         storage,
         bind,
-        prod,
         telemetry,
-        otel_tracing_enabled,
         capture,
-        trusted_proxies,
+        ServeHttpPolicy {
+            prod,
+            trace_parent_enabled: otel_tracing_enabled,
+            trusted_proxies,
+        },
+        image_sanitizer,
     )
     .await
 }
@@ -866,11 +863,10 @@ pub async fn prepare_server(
 async fn prepare_server_with_trusted_proxies(
     storage: &StorageArgs,
     bind: SocketAddr,
-    prod: bool,
     telemetry: &TelemetryConfig,
-    otel_tracing_enabled: bool,
     capture: Option<&ServeCapturePaths>,
-    trusted_proxies: crate::trusted_proxy::TrustedProxyConfig,
+    http_policy: ServeHttpPolicy,
+    image_sanitizer: Arc<host::image_sanitizer::ImageSanitizer>,
 ) -> anyhow::Result<PreparedServer> {
     let (runtime_guard, start_time) = prepare_runtime_identity(&storage.storage_path, bind)?;
     // The exclusive OS lock and live reservation above prove no valid upload can
@@ -884,7 +880,7 @@ async fn prepare_server_with_trusted_proxies(
         factory,
         instance_id,
         pool_observer,
-    } = open_server_database(storage, &runtime, prod).await?;
+    } = open_server_database(storage, &runtime, http_policy.prod).await?;
     // Presentations created by an older server must be refreshed before any
     // router or Syndication Feed worker can expose their cached HTML.
     factory
@@ -920,12 +916,10 @@ async fn prepare_server_with_trusted_proxies(
         storage.storage_path.clone(),
         &instance_id,
         mailer,
-        ServeHttpPolicy {
-            prod,
-            trace_parent_enabled: otel_tracing_enabled,
-            trusted_proxies,
-        },
-    );
+        http_policy,
+        image_sanitizer,
+    )
+    .await?;
 
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let workers = BackgroundWorkers::start(worker_setup).await?;
@@ -1151,11 +1145,16 @@ pub async fn cmd_serve(
     cmd_serve_with_trusted_proxies(
         storage,
         bind,
-        prod,
         telemetry,
-        otel_tracing_enabled,
         capture,
-        trusted_proxies,
+        ServeHttpPolicy {
+            prod,
+            trace_parent_enabled: otel_tracing_enabled,
+            trusted_proxies,
+        },
+        Arc::new(host::image_sanitizer::ImageSanitizer::new(
+            std::env::current_exe()?,
+        )?),
     )
     .await
 }
@@ -1163,11 +1162,10 @@ pub async fn cmd_serve(
 pub(crate) async fn cmd_serve_with_trusted_proxies(
     storage: &StorageArgs,
     bind: SocketAddr,
-    prod: bool,
     telemetry: &TelemetryConfig,
-    otel_tracing_enabled: bool,
     capture: Option<&ServeCapturePaths>,
-    trusted_proxies: crate::trusted_proxy::TrustedProxyConfig,
+    http_policy: ServeHttpPolicy,
+    image_sanitizer: Arc<host::image_sanitizer::ImageSanitizer>,
 ) -> anyhow::Result<()> {
     // Telemetry is owned by `run`, which holds the TelemetryGuard across this
     // call (see `server/src/main.rs`); `cmd_serve` does not init it, matching
@@ -1178,6 +1176,7 @@ pub(crate) async fn cmd_serve_with_trusted_proxies(
     let (shutdown_rx, shutdown_supervisor) =
         ShutdownSupervisor::install(runtime_file::canonical_runtime_path(&storage.storage_path))?;
 
+    let prod = http_policy.prod;
     let PreparedServer {
         listener,
         router,
@@ -1187,11 +1186,10 @@ pub(crate) async fn cmd_serve_with_trusted_proxies(
     } = prepare_server_with_trusted_proxies(
         storage,
         bind,
-        prod,
         telemetry,
-        otel_tracing_enabled,
         capture,
-        trusted_proxies,
+        http_policy,
+        image_sanitizer,
     )
     .await?;
 
@@ -1236,6 +1234,17 @@ pub(crate) async fn cmd_serve_with_trusted_proxies(
 
 #[cfg(test)]
 mod tests {
+    fn test_image_sanitizer() -> std::sync::Arc<host::image_sanitizer::ImageSanitizer> {
+        std::sync::Arc::new(
+            host::image_sanitizer::ImageSanitizer::new(
+                std::env::var_os("JAUNDER_IMAGE_WORKER_BIN")
+                    .map(std::path::PathBuf::from)
+                    .expect("prepared real worker fixture"),
+            )
+            .expect("real worker"),
+        )
+    }
+
     use super::super::test_support::{assert_command_source, sqlite_storage_args};
     use super::*;
     use rstest::*;
@@ -2015,9 +2024,17 @@ mod tests {
         );
         let telemetry = test_telemetry(None);
         let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
-        let prepared = prepare_server(&storage, bind, false, &telemetry, false, None)
-            .await
-            .expect("prepare server");
+        let prepared = prepare_server(
+            &storage,
+            bind,
+            false,
+            &telemetry,
+            false,
+            None,
+            test_image_sanitizer(),
+        )
+        .await
+        .expect("prepare server");
 
         assert!(
             prepared.workers.backup.is_some(),
@@ -2045,10 +2062,18 @@ mod tests {
             .expect("invalid checkpoint fixture");
         let telemetry = test_telemetry(None);
         let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
-        let error = prepare_server(&storage, bind, false, &telemetry, false, None)
-            .await
-            .err()
-            .expect("unsupported refresh version must abort startup");
+        let error = prepare_server(
+            &storage,
+            bind,
+            false,
+            &telemetry,
+            false,
+            None,
+            test_image_sanitizer(),
+        )
+        .await
+        .err()
+        .expect("unsupported refresh version must abort startup");
         assert!(
             error
                 .to_string()
@@ -2097,9 +2122,17 @@ mod tests {
         .expect("stale Post fixture");
         let telemetry = test_telemetry(None);
         let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
-        let prepared = prepare_server(&storage, bind, false, &telemetry, false, None)
-            .await
-            .expect("startup refresh");
+        let prepared = prepare_server(
+            &storage,
+            bind,
+            false,
+            &telemetry,
+            false,
+            None,
+            test_image_sanitizer(),
+        )
+        .await
+        .expect("startup refresh");
         let rendered: String =
             sqlx::query_scalar("SELECT rendered_html FROM posts WHERE post_id = $1")
                 .bind(i64::from(post.post_id))
@@ -2133,9 +2166,17 @@ mod tests {
 
         let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
         let telemetry = test_telemetry(None);
-        let prepared = prepare_server(&storage, bind, false, &telemetry, false, None)
-            .await
-            .expect("dev-mode prepare_server must auto-initialize");
+        let prepared = prepare_server(
+            &storage,
+            bind,
+            false,
+            &telemetry,
+            false,
+            None,
+            test_image_sanitizer(),
+        )
+        .await
+        .expect("dev-mode prepare_server must auto-initialize");
 
         assert!(db_path.exists(), "auto-init must have created the database");
         shutdown_prepared_server(prepared).await;
@@ -2151,9 +2192,17 @@ mod tests {
         let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
 
         let telemetry = test_telemetry(Some("http://127.0.0.1:4318"));
-        let prepared = prepare_server(&storage, bind, false, &telemetry, false, None)
-            .await
-            .expect("prepare server");
+        let prepared = prepare_server(
+            &storage,
+            bind,
+            false,
+            &telemetry,
+            false,
+            None,
+            test_image_sanitizer(),
+        )
+        .await
+        .expect("prepare server");
 
         assert!(prepared.saturation_metrics.is_some());
         shutdown_prepared_server(prepared).await;
@@ -2169,9 +2218,17 @@ mod tests {
         let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
 
         let telemetry = test_telemetry(None);
-        let prepared = prepare_server(&storage, bind, false, &telemetry, false, None)
-            .await
-            .expect("prepare server");
+        let prepared = prepare_server(
+            &storage,
+            bind,
+            false,
+            &telemetry,
+            false,
+            None,
+            test_image_sanitizer(),
+        )
+        .await
+        .expect("prepare server");
 
         assert!(prepared.saturation_metrics.is_none());
         shutdown_prepared_server(prepared).await;
@@ -2196,9 +2253,17 @@ mod tests {
         let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
         let runtime_path = temp.path().join("runtime.json");
         let telemetry = test_telemetry(None);
-        let prepared = prepare_server(&storage, bind, false, &telemetry, false, None)
-            .await
-            .expect("prepare server after temporary cleanup");
+        let prepared = prepare_server(
+            &storage,
+            bind,
+            false,
+            &telemetry,
+            false,
+            None,
+            test_image_sanitizer(),
+        )
+        .await
+        .expect("prepare server after temporary cleanup");
 
         assert!(
             fs::read_dir(&tmp_dir)
@@ -2238,10 +2303,18 @@ mod tests {
 
         let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
         let telemetry = test_telemetry(None);
-        let error = prepare_server(&storage, bind, false, &telemetry, false, None)
-            .await
-            .err()
-            .expect("temporary cleanup failure must stop startup");
+        let error = prepare_server(
+            &storage,
+            bind,
+            false,
+            &telemetry,
+            false,
+            None,
+            test_image_sanitizer(),
+        )
+        .await
+        .err()
+        .expect("temporary cleanup failure must stop startup");
 
         assert_eq!(
             error.to_string(),
@@ -2278,10 +2351,18 @@ mod tests {
 
         let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
         let telemetry = test_telemetry(None);
-        let error = prepare_server(&storage, bind, false, &telemetry, false, None)
-            .await
-            .err()
-            .expect("a live canonical runtime identity must refuse startup");
+        let error = prepare_server(
+            &storage,
+            bind,
+            false,
+            &telemetry,
+            false,
+            None,
+            test_image_sanitizer(),
+        )
+        .await
+        .err()
+        .expect("a live canonical runtime identity must refuse startup");
 
         assert!(
             error
@@ -2318,10 +2399,18 @@ mod tests {
 
         let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
         let telemetry = test_telemetry(None);
-        let error = prepare_server(&storage, bind, false, &telemetry, false, None)
-            .await
-            .err()
-            .expect("a canonical reservation failure must stop startup");
+        let error = prepare_server(
+            &storage,
+            bind,
+            false,
+            &telemetry,
+            false,
+            None,
+            test_image_sanitizer(),
+        )
+        .await
+        .err()
+        .expect("a canonical reservation failure must stop startup");
 
         assert!(
             error
@@ -2360,9 +2449,17 @@ mod tests {
         let _lock = StartupLockGuard::acquire(temp.path()).expect("hold startup lock");
         let bind: SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
         let telemetry = test_telemetry(None);
-        let err = prepare_server(&storage, bind, false, &telemetry, false, None)
-            .await
-            .err();
+        let err = prepare_server(
+            &storage,
+            bind,
+            false,
+            &telemetry,
+            false,
+            None,
+            test_image_sanitizer(),
+        )
+        .await
+        .err();
         assert!(
             err.is_some_and(|e| e.to_string().contains("exclusive startup lock")),
             "prepare_server must refuse when a live process holds the OS lock"
@@ -2572,11 +2669,14 @@ mod tests {
             cmd_serve_with_trusted_proxies(
                 &storage,
                 bind,
-                false,
                 &telemetry,
-                false,
                 None,
-                crate::trusted_proxy::TrustedProxyConfig::default(),
+                ServeHttpPolicy {
+                    prod: false,
+                    trace_parent_enabled: false,
+                    trusted_proxies: crate::trusted_proxy::TrustedProxyConfig::default(),
+                },
+                test_image_sanitizer(),
             )
             .await
         });

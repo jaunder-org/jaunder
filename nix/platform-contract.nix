@@ -1,6 +1,6 @@
 # Evaluation-only regression for the public platform boundary.
 # Run with:
-# nix eval --impure --expr 'import ./nix/platform-contract.nix { flake = builtins.getFlake (toString ./.); }'
+# nix eval --impure --expr 'import ./nix/platform-contract.nix { flake = builtins.getFlake ("git+file://" + toString ./. + "?shallow=1"); }'
 { flake }:
 let
   systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];

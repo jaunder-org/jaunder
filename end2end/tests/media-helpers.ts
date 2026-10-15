@@ -1,4 +1,13 @@
 import { expect, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const OWNED_JPEG = readFileSync(
+  resolve(
+    __dirname,
+    "../../host/src/image_sanitizer_fixtures/jpeg-sanitized.jpg",
+  ),
+);
 import { BASE_URL, confirmedMutation, type MutationOutcome } from "./helpers";
 
 export type UploadedMedia = { url: string; filename: string };
@@ -7,7 +16,7 @@ export type UploadedMedia = { url: string; filename: string };
 export async function uploadMedia(
   page: Page,
   name: string,
-  content: Buffer = Buffer.from("delete guard content"),
+  content: Buffer = OWNED_JPEG,
   mimeType = "image/jpeg",
 ): Promise<UploadedMedia> {
   const response = await page.request.post(BASE_URL + "/api/media/upload", {

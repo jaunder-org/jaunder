@@ -24,9 +24,9 @@ pub const WORKSPACE: &[&str] = &[
     "web",
 ];
 
-/// Roots no Nix check can see: `xtask/` is excluded from the flake `src` filter
-/// and `tools/` is a separate virtual workspace.
-pub const HOST: &[&str] = &["xtask", "tools"];
+/// Doctests outside the root-workspace Nix execution: the auxiliary workspaces
+/// and the maintained local dependency require their own host Cargo invocations.
+pub const HOST: &[&str] = &["xtask", "tools", "third-party/little-exif"];
 
 /// Every scan root. The union must cover every tracked `.rs` file.
 pub const ALL: &[&str] = &[
@@ -41,6 +41,7 @@ pub const ALL: &[&str] = &[
     "web",
     "xtask",
     "tools",
+    "third-party/little-exif",
 ];
 
 #[cfg(test)]

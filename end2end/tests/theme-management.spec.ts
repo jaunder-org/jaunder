@@ -1,3 +1,4 @@
+import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { expectAccessible } from "./accessibility";
 import {
@@ -21,6 +22,20 @@ const ASSET_BYTES = [
   1, 1, 4, 0, 251, 255, 0, 18, 52, 86, 0, 248, 0, 157, 248, 215, 100, 140, 0, 0,
   0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
 ];
+// Fixed native-sanitized Media goldens preserve the encoded pixels and carry
+// only empty rendering EXIF. Theme Package assets retain ASSET_BYTES unchanged.
+const SANITIZED_LOGO_BYTES = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAEGVYSWZJSSoACAAAAAAAAAAAAAAAnDy5KAAAAA9JREFUeAEBBAD7/wASNFYA+ACd+NdkjAAAAABJRU5ErkJggg==",
+  "base64",
+);
+const SANITIZED_HEADER_ONE_BYTES = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAEGVYSWZJSSoACAAAAAAAAAAAAAAAnDy5KAAAAAxJREFUeJxjEDYJAwAA+wCe02/AYQAAAABJRU5ErkJggg==",
+  "base64",
+);
+const SANITIZED_HEADER_TWO_BYTES = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAEGVYSWZJSSoACAAAAAAAAAAAAAAAnDy5KAAAAAxJREFUeJxjEDEJAwAA/gCfqGY7BQAAAABJRU5ErkJggg==",
+  "base64",
+);
 const THEME_ENDPOINTS = {
   import_css: "/api/themes/import_css",
   import_package: "/api/themes/import_package",
@@ -35,6 +50,50 @@ const THEME_ENDPOINTS = {
   shuffle: "/api/themes/shuffle",
 } as const;
 type ThemeEndpoint = keyof typeof THEME_ENDPOINTS;
+
+function waitForThemeMutations(page: Page) {
+  return (endpoint: ThemeEndpoint) =>
+    page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === THEME_ENDPOINTS[endpoint] &&
+        response.request().method() === "POST",
+    );
+}
+
+async function uploadStudioBindingImages(page: Page) {
+  const uploadedLogo = await uploadMedia(
+    page,
+    "blog-logo.png",
+    Buffer.from(ASSET_BYTES),
+    "image/png",
+  );
+  // Distinct RGB pixels (13/34/56 and 14/34/56 hex), with valid PNG chunks.
+  const headerOneBytes = Buffer.from([
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0,
+    0, 0, 1, 8, 2, 0, 0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 120,
+    156, 99, 16, 54, 9, 3, 0, 0, 251, 0, 158, 211, 111, 192, 97, 0, 0, 0, 0, 73,
+    69, 78, 68, 174, 66, 96, 130,
+  ]);
+  const headerTwoBytes = Buffer.from([
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0,
+    0, 0, 1, 8, 2, 0, 0, 0, 144, 119, 83, 222, 0, 0, 0, 12, 73, 68, 65, 84, 120,
+    156, 99, 16, 49, 9, 3, 0, 0, 254, 0, 159, 168, 102, 59, 5, 0, 0, 0, 0, 73,
+    69, 78, 68, 174, 66, 96, 130,
+  ]);
+  const headerOne = await uploadMedia(
+    page,
+    "header-one.png",
+    headerOneBytes,
+    "image/png",
+  );
+  const headerTwo = await uploadMedia(
+    page,
+    "header-two.png",
+    headerTwoBytes,
+    "image/png",
+  );
+  return { uploadedLogo, headerOne, headerTwo };
+}
 
 // The Studio journey must remain a private surface: custom public presentation
 // stylesheets may only appear in the isolated preview document, never in its parent.
@@ -172,54 +231,127 @@ test("invalid authored CSS is rejected before draft persistence", async ({
   ).toHaveCount(0);
 });
 
+test("author selects older PNG bindings through Studio image pagination", async ({
+  page,
+  tracedContext,
+}) => {
+  const username = await signInAsNewUser(page);
+  await uploadStudioBindingImages(page);
+  // All three PNG bindings must remain selectable beyond the first fifty real
+  // images. The lifecycle test independently proves their public bytes.
+  for (let index = 0; index < 50; index += 2) {
+    await Promise.all(
+      [index, index + 1].map((entry) =>
+        uploadMedia(
+          page,
+          `newer-${entry.toString().padStart(2, "0")}.svg`,
+          Buffer.from(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="blue"/></svg>',
+          ),
+          "image/svg+xml",
+        ),
+      ),
+    );
+  }
+  await goto(page, "/themes");
+  const mutation = waitForThemeMutations(page);
+  const cssImport = page.locator("section").filter({ hasText: "Import CSS" });
+  await cssImport.getByLabel("Theme name").fill("Pagination draft");
+  await cssImport
+    .getByLabel("Stylesheet")
+    .fill("[data-jaunder-theme-surface] { color: blue; }");
+  await Promise.all([
+    mutation("import_css"),
+    cssImport.getByRole("button", { name: "Import CSS draft" }).click(),
+  ]);
+  await page.getByRole("button", { name: /Pagination draft/ }).click();
+  await expect(page.getByRole("button", { name: "Next images" })).toBeEnabled();
+  await page.getByRole("button", { name: "Next images" }).click();
+  await expect(page.getByText("Image page 2")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Next images" }),
+  ).toBeDisabled();
+  await Promise.all([
+    mutation("replace_binding"),
+    page
+      .getByLabel("Logo image")
+      .selectOption({ label: "Media: blog-logo.png" }),
+  ]);
+  await expect(
+    page.getByLabel("Logo image").locator("option:checked"),
+  ).toHaveText("Media: blog-logo.png");
+  for (const filename of ["header-one.png", "header-two.png"]) {
+    await page.getByLabel("Media to add").selectOption({ label: filename });
+    await page.getByRole("button", { name: "Add Media" }).click();
+  }
+  await expect(
+    page.getByRole("list", { name: "Selected header Media" }),
+  ).toContainText("header-one.png");
+  await expect(
+    page.getByRole("list", { name: "Selected header Media" }),
+  ).toContainText("header-two.png");
+  await Promise.all([
+    mutation("replace_pool"),
+    page.getByRole("button", { name: "Save header pool" }).click(),
+  ]);
+  await Promise.all([
+    mutation("publish"),
+    page.getByRole("button", { name: "Publish" }).click(),
+  ]);
+  const publicSelection = page.getByLabel("Public selection");
+  const themeId = await publicSelection
+    .getByRole("option", { name: "Pagination draft" })
+    .getAttribute("value");
+  expect(themeId).not.toBeNull();
+  await Promise.all([
+    mutation("select"),
+    publicSelection.selectOption(themeId!),
+  ]);
+  await expect(publicSelection).toHaveValue(themeId!);
+
+  const freshContext = await tracedContext();
+  try {
+    const freshPage = await freshContext.newPage();
+    await signInAs(freshPage, username);
+    const releaseCatalog = await stallServerFn(freshPage, "themes/list");
+    const persistedSelection = freshPage.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === "/api/themes/get_selection",
+    );
+    await goto(freshPage, "/themes");
+    await persistedSelection;
+    releaseCatalog();
+    await expect(freshPage.getByLabel("Public selection")).toHaveValue(
+      themeId!,
+    );
+    await freshPage.getByRole("button", { name: /Pagination draft/ }).click();
+    await expect(freshPage.getByLabel("Logo image")).toHaveValue(
+      "unavailable-media",
+    );
+    await freshPage.getByRole("button", { name: "Next images" }).click();
+    await expect(freshPage.getByLabel("Logo image")).toHaveValue(
+      /media\/upload\//,
+    );
+    await expect(
+      freshPage.getByRole("list", { name: "Selected header Media" }),
+    ).toContainText("header-one.png");
+    await expect(
+      freshPage.getByRole("list", { name: "Selected header Media" }),
+    ).toContainText("header-two.png");
+  } finally {
+    await freshContext.close();
+  }
+});
+
 test("author completes the custom theme lifecycle through Studio", async ({
   page,
   tracedContext,
 }) => {
   const username = await signInAsNewUser(page);
-  const uploadedLogo = await uploadMedia(
-    page,
-    "blog-logo.png",
-    Buffer.from(ASSET_BYTES),
-    "image/png",
-  );
-  const headerOneBytes = Buffer.from([
-    ...ASSET_BYTES.slice(0, -12),
-    1,
-    ...ASSET_BYTES.slice(-11),
-  ]);
-  const headerTwoBytes = Buffer.from([
-    ...ASSET_BYTES.slice(0, -12),
-    2,
-    ...ASSET_BYTES.slice(-11),
-  ]);
-  const headerOne = await uploadMedia(
-    page,
-    "header-one.png",
-    headerOneBytes,
-    "image/png",
-  );
-  const headerTwo = await uploadMedia(
-    page,
-    "header-two.png",
-    headerTwoBytes,
-    "image/png",
-  );
-  for (let index = 0; index < 50; index += 1) {
-    await uploadMedia(
-      page,
-      `newer-${index.toString().padStart(2, "0")}.png`,
-      Buffer.from(ASSET_BYTES),
-      "image/png",
-    );
-  }
+  const { uploadedLogo, headerOne, headerTwo } =
+    await uploadStudioBindingImages(page);
   await goto(page, "/themes");
-  const mutation = (endpoint: ThemeEndpoint) =>
-    page.waitForResponse(
-      (response) =>
-        new URL(response.url()).pathname === THEME_ENDPOINTS[endpoint] &&
-        response.request().method() === "POST",
-    );
+  const mutation = waitForThemeMutations(page);
 
   const cssImport = page.locator("section").filter({ hasText: "Import CSS" });
 
@@ -276,12 +408,6 @@ test("author completes the custom theme lifecycle through Studio", async ({
     page.getByRole("button", { name: "Save complete draft package" }).click(),
   ]);
 
-  await expect(page.getByRole("button", { name: "Next images" })).toBeEnabled();
-  await page.getByRole("button", { name: "Next images" }).click();
-  await expect(page.getByText("Image page 2")).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Next images" }),
-  ).toBeDisabled();
   await Promise.all([
     mutation("replace_binding"),
     page
@@ -379,15 +505,21 @@ test("author completes the custom theme lifecycle through Studio", async ({
       new URL(logoUrl!, publicPage.url()).toString(),
     );
     expect(publicLogo.status()).toBe(200);
-    expect(await publicLogo.body()).toEqual(Buffer.from(ASSET_BYTES));
+    expect(await publicLogo.body()).toEqual(SANITIZED_LOGO_BYTES);
     const header = publicPage.locator('[data-jaunder-part="header-image"]');
     await expect(header).toBeVisible();
     const headerUrl = await header.getAttribute("src");
     expect(headerUrl).not.toBeNull();
     const headerPath = new URL(headerUrl!, publicPage.url()).pathname;
     const ownedHeaderBytes = new Map([
-      [new URL(headerOne.url, publicPage.url()).pathname, headerOneBytes],
-      [new URL(headerTwo.url, publicPage.url()).pathname, headerTwoBytes],
+      [
+        new URL(headerOne.url, publicPage.url()).pathname,
+        SANITIZED_HEADER_ONE_BYTES,
+      ],
+      [
+        new URL(headerTwo.url, publicPage.url()).pathname,
+        SANITIZED_HEADER_TWO_BYTES,
+      ],
     ]);
     const expectedHeaderBytes = headerPath.startsWith("/theme/")
       ? Buffer.from(ASSET_BYTES)
@@ -401,34 +533,6 @@ test("author completes the custom theme lifecycle through Studio", async ({
   } finally {
     await publicContext.close();
   }
-
-  const freshContext = await tracedContext();
-  const freshPage = await freshContext.newPage();
-  await signInAs(freshPage, username);
-  const releaseCatalog = await stallServerFn(freshPage, "themes/list");
-  const persistedSelection = freshPage.waitForResponse(
-    (response) =>
-      new URL(response.url()).pathname === "/api/themes/get_selection",
-  );
-  await goto(freshPage, "/themes");
-  await persistedSelection;
-  releaseCatalog();
-  await expect(freshPage.getByLabel("Public selection")).toHaveValue(themeId!);
-  await freshPage.getByRole("button", { name: /Night round trip/ }).click();
-  await expect(freshPage.getByLabel("Logo image")).toHaveValue(
-    "unavailable-media",
-  );
-  await freshPage.getByRole("button", { name: "Next images" }).click();
-  await expect(freshPage.getByLabel("Logo image")).toHaveValue(
-    /media\/upload\//,
-  );
-  await expect(
-    freshPage.getByRole("list", { name: "Selected header Media" }),
-  ).toContainText("header-one.png");
-  await expect(
-    freshPage.getByRole("list", { name: "Selected header Media" }),
-  ).toContainText("header-two.png");
-  await freshContext.close();
 
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export ZIP" }).click();
@@ -561,12 +665,7 @@ test("operator manages the site catalog through public selection and fallback", 
 }) => {
   await signInAs(page, "testoperator");
   await goto(page, "/themes");
-  const mutation = (endpoint: ThemeEndpoint) =>
-    page.waitForResponse(
-      (response) =>
-        new URL(response.url()).pathname === THEME_ENDPOINTS[endpoint] &&
-        response.request().method() === "POST",
-    );
+  const mutation = waitForThemeMutations(page);
 
   const siteCatalog = page.getByRole("button", { name: "Site catalog" });
   await expect(siteCatalog).toBeVisible();

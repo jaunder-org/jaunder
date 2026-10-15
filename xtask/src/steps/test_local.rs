@@ -4,6 +4,9 @@ use crate::compile_cache;
 use crate::result::{CommandResult, StepResult};
 use crate::sh::step_with_env;
 
+#[path = "application_fixture.rs"]
+mod application_fixture;
+
 pub fn run(sh: &Shell, result: &mut CommandResult, nextest_args: &[String]) {
     run_with_producer(
         sh,
@@ -64,7 +67,56 @@ fn run_with_producer(
     let _bundle_env = sh.push_env("JAUNDER_CSR_BUNDLE_DIR", &root);
     let args = args_for(nextest_args);
     let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    let (env, cache_detail) = compile_cache::cargo_compile_env();
+    let (mut env, cache_detail) = compile_cache::cargo_compile_env();
+    // Integration/libtest executables cannot dispatch internal application modes.
+    // Prepare the real demo executable explicitly for every local product lane.
+    let build = step_with_env(
+        sh,
+        "image-worker-fixture",
+        "cargo",
+        &[
+            "build",
+            "--locked",
+            "-p",
+            "test-support",
+            "--bin",
+            "test-support",
+            "--target-dir",
+            "target",
+        ],
+        &env,
+    );
+    let built = build.ok;
+    result.push(build);
+    if !built {
+        return;
+    }
+    let start = std::time::Instant::now();
+    let application = match application_fixture::PreparedApplication::prepare(sh, &env) {
+        Ok(application) => {
+            let mut step = StepResult::ok("application-fixture");
+            step.duration_ms = start.elapsed().as_millis();
+            result.push(step);
+            application
+        }
+        Err(error) => {
+            let mut step = StepResult::fail("application-fixture").detail(format!("{error:#}"));
+            step.duration_ms = start.elapsed().as_millis();
+            result.push(step);
+            return;
+        }
+    };
+    env.push((
+        "JAUNDER_APPLICATION_BIN".into(),
+        application.path().display().to_string(),
+    ));
+    env.push((
+        "JAUNDER_IMAGE_WORKER_BIN".into(),
+        sh.current_dir()
+            .join("target/debug/test-support")
+            .display()
+            .to_string(),
+    ));
     let mut step = step_with_env(sh, "test-local", "cargo", &refs, &env);
     if let Some(cache_detail) = cache_detail {
         step.detail = Some(match step.detail.take() {
@@ -73,6 +125,11 @@ fn run_with_producer(
         });
     }
     result.push(step);
+    match application.close() {
+        Ok(()) => result.push(StepResult::ok("application-fixture-cleanup")),
+        Err(error) => result
+            .push(StepResult::fail("application-fixture-cleanup").detail(format!("{error:#}"))),
+    }
 }
 
 pub fn args_for(nextest_args: &[String]) -> Vec<String> {
@@ -203,11 +260,30 @@ mod tests {
             return;
         }
         for explicit in [false, true] {
-            for fail_consumer in [false, true] {
+            for failure in ["none", "worker", "application", "nextest"] {
                 for prior_failure in [false, true] {
                     let temp = tempfile::tempdir().unwrap();
                     let fixture = temp.path().join("fixture");
                     super::super::csr_prerequisite::tests::write_bundle(&fixture);
+                    let profile = temp.path().join("target/debug");
+                    fs::create_dir_all(profile.join("deps")).unwrap();
+                    let original = profile.join("jaunder");
+                    fs::write(&original, b"#!/bin/sh\nexit 0\n").unwrap();
+                    fs::set_permissions(&original, fs::Permissions::from_mode(0o700)).unwrap();
+                    let records = [
+                        serde_json::json!({"reason":"compiler-artifact","target":{"src_path":temp.path().join("host/src/lib.rs")},"features":["default","sqlx"]}),
+                        serde_json::json!({"reason":"compiler-artifact","target":{"src_path":temp.path().join("storage/src/lib.rs")},"features":["default","sqlx"]}),
+                        serde_json::json!({"reason":"compiler-artifact","package_id":format!("path+{}#jaunder@0.1.0", url::Url::from_file_path(temp.path().join("server")).unwrap()),"target":{"src_path":temp.path().join("server/src/main.rs"),"name":"jaunder","kind":["bin"]},"executable":original}),
+                    ];
+                    fs::write(
+                        temp.path().join("artifacts"),
+                        records
+                            .iter()
+                            .map(serde_json::Value::to_string)
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    )
+                    .unwrap();
                     let cargo = temp.path().join("cargo");
                     // Only sanitized fixture copying and observations; no Cargo,
                     // PostgreSQL, wasm or application process is launched here.
@@ -221,11 +297,23 @@ if [ "$1" = producer ]; then
     printf 'producer\n' >> "$CALLS"
     mkdir -p target
     cp -R "$FIXTURE" target/site
-else
-    printf 'consumer\n' >> "$CALLS"
-    printf '%s\n' "$JAUNDER_CSR_BUNDLE_DIR" "$RUSTC_WRAPPER" "$CARGO_INCREMENTAL" "$@" > "$OBSERVED"
-    if [ "$FAIL_CONSUMER" = yes ]; then echo 'controlled consumer failure' >&2; exit 8; fi
+    printf '%s\n' "$@" > "$OBSERVED-producer"
+    exit 0
 fi
+if [ "$1" = build ]; then
+    if [ "$3" = -p ]; then stage=worker; else stage=application; fi
+else
+    stage=nextest
+fi
+printf '%s\n' "$stage" >> "$CALLS"
+printf '%s\n' "$PWD" "$JAUNDER_CSR_BUNDLE_DIR" "$RUSTC_WRAPPER" "$CARGO_INCREMENTAL" "$SCCACHE_BASEDIRS" "$@" > "$OBSERVED-$stage"
+if [ "$stage" = nextest ]; then
+    test -x "$JAUNDER_APPLICATION_BIN" || exit 43
+    cmp "$JAUNDER_APPLICATION_BIN" "$ORIGINAL" || exit 44
+    printf '%s\n' "$JAUNDER_APPLICATION_BIN" "$JAUNDER_IMAGE_WORKER_BIN" > "$RETAINED"
+fi
+if [ "$FAIL_STAGE" = "$stage" ]; then echo "controlled $stage failure" >&2; exit 8; fi
+if [ "$stage" = application ]; then cat "$ARTIFACTS"; fi
 "#,
                     )
                     .unwrap();
@@ -249,7 +337,10 @@ fi
                     sh.set_var("FIXTURE", &fixture);
                     sh.set_var("CALLS", temp.path().join("calls"));
                     sh.set_var("OBSERVED", temp.path().join("observed"));
-                    sh.set_var("FAIL_CONSUMER", if fail_consumer { "yes" } else { "no" });
+                    sh.set_var("FAIL_STAGE", failure);
+                    sh.set_var("ARTIFACTS", temp.path().join("artifacts"));
+                    sh.set_var("ORIGINAL", &original);
+                    sh.set_var("RETAINED", temp.path().join("retained"));
                     let args = if explicit {
                         strings(&["-p", "jaunder", "--no-fail-fast"])
                     } else {
@@ -276,46 +367,118 @@ fi
                     );
                     assert_eq!(
                         result.ok,
-                        !fail_consumer && !prior_failure,
+                        failure == "none" && !prior_failure,
                         "{:?}",
                         result.steps
                     );
+                    let stages: &[&str] = match failure {
+                        "worker" => &["worker"],
+                        "application" => &["worker", "application"],
+                        _ => &["worker", "application", "nextest"],
+                    };
+                    let mut calls = if explicit {
+                        String::new()
+                    } else {
+                        "producer\n".into()
+                    };
+                    for stage in stages {
+                        calls.push_str(stage);
+                        calls.push('\n');
+                    }
                     assert_eq!(
                         fs::read_to_string(temp.path().join("calls")).unwrap(),
-                        if explicit {
-                            "consumer\n"
-                        } else {
-                            "producer\nconsumer\n"
-                        }
+                        calls
                     );
+                    if !explicit {
+                        assert_eq!(
+                            fs::read_to_string(temp.path().join("observed-producer")).unwrap(),
+                            "producer\n"
+                        );
+                    }
                     let root = if explicit {
                         fixture
                     } else {
                         temp.path().join("target/site")
                     };
-                    let observed = fs::read_to_string(temp.path().join("observed")).unwrap();
-                    let lines = observed.lines().collect::<Vec<_>>();
-                    assert_eq!(lines[0], root.canonicalize().unwrap().to_str().unwrap());
-                    assert_eq!(&lines[1..3], &["sccache", "0"]);
-                    assert_eq!(
-                        &lines[3..],
-                        args_for(&args)
-                            .iter()
-                            .map(String::as_str)
-                            .collect::<Vec<_>>()
-                    );
-                    if fail_consumer {
+                    let (cache_env, _) = compile_cache::cargo_compile_env();
+                    let basedirs = cache_env
+                        .iter()
+                        .find(|(key, _)| key == "SCCACHE_BASEDIRS")
+                        .unwrap()
+                        .1
+                        .as_str();
+                    for stage in stages {
+                        let observed =
+                            fs::read_to_string(temp.path().join(format!("observed-{stage}")))
+                                .unwrap();
+                        let lines = observed.lines().collect::<Vec<_>>();
+                        assert_eq!(lines[0], temp.path().to_str().unwrap());
+                        assert_eq!(lines[1], root.canonicalize().unwrap().to_str().unwrap());
+                        assert_eq!(&lines[2..5], &["sccache", "0", basedirs]);
+                        let expected = match *stage {
+                            "worker" => strings(&[
+                                "build",
+                                "--locked",
+                                "-p",
+                                "test-support",
+                                "--bin",
+                                "test-support",
+                                "--target-dir",
+                                "target",
+                            ]),
+                            "application" => strings(&[
+                                "build",
+                                "--locked",
+                                "--package",
+                                "jaunder",
+                                "--bin",
+                                "jaunder",
+                                "--message-format=json",
+                            ]),
+                            _ => args_for(&args),
+                        };
+                        assert_eq!(
+                            &lines[5..],
+                            expected.iter().map(String::as_str).collect::<Vec<_>>()
+                        );
+                    }
+                    if failure != "none" {
+                        let name = match failure {
+                            "worker" => "image-worker-fixture",
+                            "application" => "application-fixture",
+                            _ => "test-local",
+                        };
+                        let failed = result.steps.iter().find(|step| step.name == name).unwrap();
+                        assert!(!failed.ok);
                         assert!(
-                            result
-                                .steps
-                                .last()
-                                .unwrap()
+                            failed
                                 .detail
                                 .as_ref()
                                 .unwrap()
-                                .contains("controlled consumer failure")
+                                .contains(&format!("controlled {failure} failure"))
                         );
                     }
+                    if stages.contains(&"nextest") {
+                        let retained = fs::read_to_string(temp.path().join("retained")).unwrap();
+                        let paths = retained.lines().collect::<Vec<_>>();
+                        assert_ne!(paths[0], original.to_str().unwrap());
+                        assert_eq!(
+                            std::path::Path::new(paths[0]).parent().unwrap(),
+                            profile.join("deps")
+                        );
+                        assert!(
+                            !std::path::Path::new(paths[0]).exists(),
+                            "owned fixture must close after nextest success or failure"
+                        );
+                        assert_eq!(paths[1], profile.join("test-support").to_str().unwrap());
+                        let cleanup = result.steps.last().unwrap();
+                        assert_eq!(cleanup.name, "application-fixture-cleanup");
+                        assert!(cleanup.ok);
+                    } else {
+                        assert!(!temp.path().join("retained").exists());
+                    }
+                    assert_eq!(fs::read(&original).unwrap(), b"#!/bin/sh\nexit 0\n");
+                    assert_eq!(fs::read_dir(profile.join("deps")).unwrap().count(), 0);
                     // A cooperative caller can take the checkout lock as soon
                     // as the completed consumer releases it.
                     let peer_path = std::env::var_os("JAUNDER_TEST_LOCAL_CHECKOUT_LOCK").unwrap();

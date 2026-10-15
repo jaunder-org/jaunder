@@ -605,6 +605,10 @@ enum NonE2eValidationSurface {
     ElispCoverage,
 }
 
+// Git admission excludes ignored host build products; shallow CI checkouts must
+// not require walking unavailable parent history.
+const PLATFORM_CONTRACT_FLAKE_REF: &str = r#""git+file://" + toString ./. + "?shallow=1""#;
+
 const NON_E2E_VALIDATION_SURFACES: [NonE2eValidationSurface; 9] = [
     NonE2eValidationSurface::HostGateWithoutTests,
     NonE2eValidationSurface::NixPlatformContract,
@@ -660,7 +664,9 @@ impl NonE2eValidationSurface {
                     "eval",
                     "--impure",
                     "--expr",
-                    "import ./nix/platform-contract.nix { flake = builtins.getFlake (toString ./.); }",
+                    &format!(
+                        "import ./nix/platform-contract.nix {{ flake = builtins.getFlake ({PLATFORM_CONTRACT_FLAKE_REF}); }}"
+                    ),
                 ],
             )),
             Self::NixStaticChecks => steps::nix::static_checks(result),
@@ -803,6 +809,43 @@ mod tests {
             full.into_iter().collect(),
             "lanes must cover every non-E2E full-validation surface"
         );
+    }
+
+    #[test]
+    fn platform_contract_uses_live_git_source_without_ignored_build_products() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("repository root");
+        let ignored = root.join(".xtask");
+        std::fs::create_dir_all(&ignored).expect("ignored artifacts directory");
+        let _witness = tempfile::NamedTempFile::new_in(&ignored).expect("ignored witness");
+        let expression = format!(
+            r#"let
+              reference = ({PLATFORM_CONTRACT_FLAKE_REF});
+              parsed = builtins.parseFlakeRef reference;
+              flake = builtins.getFlake reference;
+            in assert parsed.type == "git";
+            assert parsed.shallow;
+            assert builtins.pathExists ./.xtask;
+            assert !builtins.pathExists (flake.outPath + "/.xtask");
+            assert !builtins.pathExists (flake.outPath + "/target");
+            assert !builtins.pathExists (flake.outPath + "/xtask/target");
+            assert builtins.pathExists (flake.outPath + "/Cargo.toml");
+            assert builtins.readFile (flake.outPath + "/nix/platform-contract.nix")
+              == builtins.readFile ./nix/platform-contract.nix;
+            true"#
+        );
+        let output = std::process::Command::new("nix")
+            .current_dir(root)
+            .args(["eval", "--impure", "--expr", &expression])
+            .output()
+            .expect("Nix source-boundary probe");
+        assert!(
+            output.status.success(),
+            "source-boundary probe: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "true");
     }
 
     #[test]

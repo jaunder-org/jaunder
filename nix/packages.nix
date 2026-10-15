@@ -81,6 +81,9 @@ let
     "test-support"
     "web"
   ];
+  # Cargo resolves local dependency manifests even for excluded host targets.
+  # Keep that manifest closure without admitting their code to wasm sources.
+  cargoResolutionMembers = cargoPackageClosure workspaceMembers;
   cargoWorkspaceInput =
     path:
     let
@@ -90,7 +93,7 @@ let
     || relative == "Cargo.lock"
     || relative == "rust-toolchain.toml"
     || relative == ".cargo/config.toml"
-    || builtins.any (member: relative == "${member}/Cargo.toml") workspaceMembers;
+    || builtins.any (member: relative == "${member}/Cargo.toml") cargoResolutionMembers;
   cargoTargetSource =
     members: path: type:
     let
@@ -252,12 +255,7 @@ let
           path: type:
           cargoTargetSource siteCargoMembers path type || pkgs.lib.hasSuffix "csr/index.html" path;
       })
-      [
-        "host"
-        "server"
-        "storage"
-        "test-support"
-      ];
+      (pkgs.lib.subtractLists siteCargoMembers cargoResolutionMembers);
   wasmTestSrc =
     withWorkspacePlaceholders "jaunder-wasm-test-cargo-source"
       (pkgs.lib.cleanSourceWith {
@@ -269,14 +267,7 @@ let
           in
           cargoTargetSource wasmTestCargoMembers path type || pkgs.lib.hasPrefix "client/tests/" relative;
       })
-      [
-        "csr"
-        "host"
-        "server"
-        "storage"
-        "test-support"
-        "web"
-      ];
+      (pkgs.lib.subtractLists wasmTestCargoMembers cargoResolutionMembers);
 
   src = pkgs.lib.cleanSourceWith {
     src = craneLib.path ../.;
@@ -304,6 +295,7 @@ let
         # The CSR SPA shell the server embeds via include_str! (#239). Specific
         # (not a broad .html suffix) to keep stray HTML out of the crane src.
         || (pkgs.lib.hasSuffix "csr/index.html" path)
+        || pkgs.lib.hasInfix "/host/src/image_sanitizer_fixtures/" path
         || (builtins.match "scripts/.*" path != null)
         || (craneLib.filterCargoSources path type)
       );
@@ -360,6 +352,18 @@ let
   # also builds the wasm CSR package.
   hostArgs = commonArgs // {
     buildInputs = commonArgs.buildInputs ++ [ pkgs.dav1d ];
+  };
+
+  # Independent privacy/rendering observers belong only to behavioral tests,
+  # not production binaries or their dependency preparation.
+  imageObserverArgs = {
+    nativeBuildInputs = commonArgs.nativeBuildInputs ++ [
+      pkgs.exiftool
+      pkgs.imagemagick
+      (pkgs.python3.withPackages (ps: [ ps.pillow ]))
+    ];
+    JAUNDER_IMAGE_MAGICK = "${pkgs.imagemagick}/bin/magick";
+    JAUNDER_IMAGE_PYTHON = "${pkgs.python3.withPackages (ps: [ ps.pillow ])}/bin/python3";
   };
 
   mkOfflineCargoHome =
@@ -491,7 +495,7 @@ let
           || relative == "server/assets/jaunder.css"
           || pkgs.lib.hasPrefix "host/system_theme_sources/" relative
           || pkgs.lib.hasPrefix "storage/migrations/" relative
-          || cargoMemberSource [ "common" "host" "macros" "storage" ] path type
+          || cargoMemberSource (cargoPackageClosure [ "common" "host" "macros" "storage" ]) path type
           || pkgs.lib.hasPrefix "tools/doctests/testdata/" relative
           || (pkgs.lib.hasPrefix "tools/" relative && craneLib.filterCargoSources path type);
       })
@@ -1160,6 +1164,7 @@ in
       craneLib
       commonArgs
       hostArgs
+      imageObserverArgs
       wasmTestSrc
       siteSrc
       siteCargoMembers

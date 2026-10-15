@@ -190,7 +190,7 @@
   (jaunder-test--with-live-server
    (let* ((root (make-temp-file "jaunder-web-copy-pull-" t))
           (image (expand-file-name "web image.png" root))
-          (bytes "WEB-COPIED-MEDIA")
+          (bytes (jaunder-test--image-bytes "png-sanitized.png"))
           (jaunder-blogs
            (list (cons (file-name-as-directory root)
                        (list :base-url jaunder-test-base-url
@@ -199,7 +199,7 @@
          (jaunder--call-with-blog
           root
           (lambda ()
-            (with-temp-file image (insert bytes))
+            (jaunder-test--copy-image "png-sanitized.png" image)
             (let* ((absolute (jaunder--upload-media image "image/png"))
                    ;; media.spec.ts proves Copy writes the thumbnail's src;
                    ;; this live AtomPub/Emacs leg exercises that same public route.
@@ -230,9 +230,7 @@
                   (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
                     (jaunder-reconcile-pull-selected)))
                 (should (equal gets (list absolute))))
-              (should (equal (with-temp-buffer
-                               (insert-file-contents-literally copy)
-                               (buffer-string)) bytes))
+              (should (equal (jaunder-test--file-bytes copy) bytes))
               (should (equal (with-temp-buffer
                                (insert-file-contents path)
                                (org-mode)
@@ -251,14 +249,16 @@
   (jaunder-test--with-live-server
    (let* ((root (make-temp-file "jaunder-pull-media-live-" t))
           (image (expand-file-name "source image.png" root))
-          (source-bytes "PULL-MEDIA-BYTES")
+          (source-bytes (jaunder-test--image-bytes "png-original.png"))
+          (served-bytes (jaunder-test--image-bytes "png-sanitized.png"))
           (jaunder-blogs
            (list (cons (file-name-as-directory root)
                        (list :base-url jaunder-test-base-url
                              :username jaunder-test-username)))))
      (unwind-protect
          (progn
-           (with-temp-file image (insert source-bytes))
+           (jaunder-test--copy-image "png-original.png" image)
+           (should-not (equal source-bytes served-bytes))
            (let ((real-get (symbol-function 'jaunder--pull-media-get))
                  (real-install (symbol-function 'jaunder--install-pulled-bytes))
                  (real-http (symbol-function 'jaunder--http-request))
@@ -290,6 +290,13 @@
                                                                   (match-string 1 media-url)))
                                                                (copy (expand-file-name
                                                                       (concat "local-media/" hash "/source image.png") root)))
+                                                          (should (equal hash (secure-hash 'sha256 served-bytes)))
+                                                          (should-not (equal hash (secure-hash 'sha256 source-bytes)))
+                                                          (should (equal source-bytes
+                                                                         (with-temp-buffer
+                                                                           (set-buffer-multibyte nil)
+                                                                           (insert-file-contents-literally image)
+                                                                           (buffer-string))))
                                                           (setq counted-url media-url)
                                                           (let ((failure (should-error (jaunder--pull-member root first))))
                                                             (should (equal (error-message-string failure)
@@ -298,10 +305,8 @@
                                                            (file-exists-p
                                                             (expand-file-name
                                                              (concat (jaunder-inventory-member-slug first) ".org") root)))
-                                                          (should (equal (with-temp-buffer
-                                                                           (insert-file-contents-literally copy)
-                                                                           (buffer-string))
-                                                                         source-bytes))
+                                                          (should (equal (jaunder-test--file-bytes copy)
+                                                                         served-bytes))
                                                           (should (= gets 1))
                                                           (jaunder-reconcile root)
                                                           (with-current-buffer "*Jaunder Reconcile*"
@@ -316,9 +321,7 @@
                                                           (let* ((path (expand-file-name
                                                                         (concat (jaunder-inventory-member-slug first) ".org")
                                                                         root))
-                                                                 (before (with-temp-buffer
-                                                                           (insert-file-contents-literally copy)
-                                                                           (buffer-string)))
+                                                                 (before (jaunder-test--file-bytes copy))
                                                                  (native-body
                                                                   (concat "[[file:local-media/" hash
                                                                           "/source%20image.png]]")))
@@ -348,6 +351,12 @@
                                                                   (with-current-buffer buffer (set-buffer-modified-p nil))
                                                                   (kill-buffer buffer))))
                                                             (should (equal media-upload-statuses '(200)))
+                                                            (should (equal source-bytes
+                                                                           (with-temp-buffer
+                                                                             (set-buffer-multibyte nil)
+                                                                             (insert-file-contents-literally image)
+                                                                             (buffer-string))))
+                                                            (should (equal (secure-hash 'sha256 before) hash))
                                                             (should (equal
                                                                      (with-temp-buffer
                                                                        (insert-file-contents path)
@@ -355,10 +364,7 @@
                                                                        (jaunder-entry-body
                                                                         (jaunder--org->atom)))
                                                                      native-body))
-                                                            (should (equal before
-                                                                           (with-temp-buffer
-                                                                             (insert-file-contents-literally copy)
-                                                                             (buffer-string)))))
+                                                            (should (equal before (jaunder-test--file-bytes copy))))
                                                           ;; Republish must store the authoritative server URL,
                                                           ;; never the durable local preview path, in Member body.
                                                           (let ((republished
@@ -390,12 +396,12 @@
         (progn
           (jaunder-test--bind-from state
                                    (let* ((image (expand-file-name "offline source.png" root))
-                                          (source "OFFLINE-PULL-BYTES")
+                                          (source (jaunder-test--image-bytes "png-sanitized.png"))
                                           (jaunder-blogs
                                            (list (cons (file-name-as-directory root)
                                                        (list :base-url jaunder-test-base-url
                                                              :username jaunder-test-username)))))
-                                     (with-temp-file image (insert source))
+                                     (jaunder-test--copy-image "png-sanitized.png" image)
                                      (jaunder--call-with-blog root (lambda () (let* ((media-url (jaunder--upload-media image "image/png"))
                                                                                      (member
                                                                                       (jaunder-pull-integration--create-server-only-member
@@ -419,11 +425,7 @@
           (jaunder-test--server-down state)
           (setq state nil)
           (should (string-prefix-p "file:local-media/" native-link))
-          (should (equal
-                   (with-temp-buffer
-                     (insert-file-contents-literally copy-path)
-                     (buffer-string))
-                   source-bytes)))
+          (should (equal (jaunder-test--file-bytes copy-path) source-bytes)))
       (when state (jaunder-test--server-down state))
       (delete-directory root t))))
 

@@ -303,6 +303,11 @@ macro_rules! make_app {
                 std::sync::Arc::clone(&content_locks),
                 instance_id.clone(),
                 resolver,
+            ).with_image_sanitizer(
+                std::sync::Arc::new(host::image_sanitizer::ImageSanitizer::new(
+                    std::env::var_os("JAUNDER_IMAGE_WORKER_BIN").map(std::path::PathBuf::from)
+                        .expect("configured image runtime"),
+                ).expect("image runtime")),
             ));
             let theme_asset_manager = std::sync::Arc::new(storage::ThemeAssetManager::new(
                 themes.clone(),
@@ -974,4 +979,16 @@ pub async fn get_asset(uri: &str) -> (StatusCode, Option<String>) {
         .map(|v| v.to_str().unwrap().to_string());
 
     (status, content_type)
+}
+
+/// A real executable fixture explicitly prepared by the product test lane.
+pub fn test_image_sanitizer() -> std::sync::Arc<host::image_sanitizer::ImageSanitizer> {
+    std::sync::Arc::new(
+        host::image_sanitizer::ImageSanitizer::new(
+            std::env::var_os("JAUNDER_IMAGE_WORKER_BIN")
+                .map(std::path::PathBuf::from)
+                .expect("prepared real worker fixture"),
+        )
+        .expect("real worker"),
+    )
 }

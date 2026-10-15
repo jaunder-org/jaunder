@@ -277,11 +277,16 @@ impl Commands {
             } => lifecycle::cmd_serve_with_trusted_proxies(
                 &storage,
                 bind,
-                environment.is_prod(),
                 telemetry,
-                otel_tracing_enabled,
                 capture.as_ref(),
-                resolve_trusted_proxies(trusted_proxies)?,
+                lifecycle::ServeHttpPolicy {
+                    prod: environment.is_prod(),
+                    trace_parent_enabled: otel_tracing_enabled,
+                    trusted_proxies: resolve_trusted_proxies(trusted_proxies)?,
+                },
+                std::sync::Arc::new(host::image_sanitizer::ImageSanitizer::new(
+                    std::env::current_exe()?,
+                )?),
             )
             .await
             .map(|()| CommandOutput::None),

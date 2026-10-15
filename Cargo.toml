@@ -11,7 +11,7 @@ members = [
   "test-support",
   "web"
 ]
-exclude = ["xtask"]
+exclude = ["xtask", "third-party/little-exif"]
 
 [workspace.package]
 version = "0.1.0"

@@ -309,6 +309,12 @@ fn storage_runtime_config(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if let Some(request) =
+        host::image_sanitizer::worker_request::parse(std::env::args_os().skip(1))?
+    {
+        host::image_sanitizer::worker::execute(&request)?;
+        return Ok(());
+    }
     let cli = Cli::parse();
     if matches!(&cli.command, Commands::BuildCommit) {
         println!(
@@ -352,7 +358,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             db,
             storage_path,
             profile,
-        } => cmd_seed_sandbox_profile(&db, &storage_path, profile.into()).await,
+        } => {
+            cmd_seed_sandbox_profile(&db, &storage_path, profile.into(), deployed_image_worker)
+                .await
+        }
         Commands::SeedTheme {
             db,
             storage_path,
@@ -537,11 +546,17 @@ fn cmd_capture_path_for_stream(stream: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn deployed_image_worker() -> anyhow::Result<std::path::PathBuf> {
+    Ok(std::env::current_exe()?)
+}
+
 /// Seed one complete fixed sandbox profile and report only after every phase commits.
+/// Deployed-worker resolution is lazy: the Standard profile does not need images.
 async fn cmd_seed_sandbox_profile(
     db: &DbConnectOptions,
     storage_path: &std::path::Path,
     profile: SandboxProfile,
+    image_worker_executable: impl FnOnce() -> anyhow::Result<std::path::PathBuf>,
 ) -> anyhow::Result<()> {
     let runtime = storage_runtime_config(db)?;
     let opened = storage::open_existing_database_with_observer(db, &runtime).await?;
@@ -557,6 +572,10 @@ async fn cmd_seed_sandbox_profile(
         }
         SandboxProfile::Demo => {
             let storage_path = std::sync::Arc::new(storage_path.to_path_buf());
+            let executable = image_worker_executable()?;
+            let sanitizer =
+                std::sync::Arc::new(host::image_sanitizer::ImageSanitizer::new(executable)?);
+            sanitizer.check_runtime().await?;
             let media_manager = storage::MediaManager::new(
                 factory.media(),
                 factory.posts(),
@@ -567,7 +586,8 @@ async fn cmd_seed_sandbox_profile(
                 ))),
                 opened.instance_id,
                 std::sync::Arc::new(SandboxMediaOwnershipResolver),
-            );
+            )
+            .with_image_sanitizer(sanitizer);
             seed_demo_sandbox_profile(
                 factory.site_config(),
                 factory.users(),
@@ -778,6 +798,16 @@ mod tests {
 
     fn cli(command: Commands) -> Cli {
         Cli { command }
+    }
+
+    #[test]
+    fn demo_worker_is_the_current_deployed_executable() {
+        let selected = deployed_image_worker().expect("current executable");
+        assert!(selected.is_absolute());
+        assert_eq!(
+            selected,
+            std::env::current_exe().expect("current executable")
+        );
     }
 
     #[test]
@@ -1396,15 +1426,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sandbox_profile_handler_resolves_deployed_worker_only_for_demo() {
+        let (storage, db) = temp_db().await;
+        let no_runtime = || anyhow::bail!("required image worker unavailable");
+        let error = cmd_seed_sandbox_profile(&db, storage.path(), SandboxProfile::Demo, no_runtime)
+            .await
+            .expect_err("missing runtime must reject the actual demo seed handler");
+        assert_eq!(error.to_string(), "required image worker unavailable");
+        let factory =
+            storage::open_existing_database(&db, &storage::StorageRuntimeConfig::default())
+                .await
+                .expect("reopen unseeded database");
+        assert!(
+            factory
+                .users()
+                .get_user_by_username(&"user".parse().expect("seed User name"))
+                .await
+                .expect("User lookup")
+                .is_none()
+        );
+        assert!(
+            factory
+                .site_config()
+                .list()
+                .await
+                .expect("Site Configuration listing")
+                .is_empty()
+        );
+        assert!(
+            !storage.path().join("media").exists(),
+            "missing runtime must not publish or spool Media"
+        );
+        cmd_seed_sandbox_profile(&db, storage.path(), SandboxProfile::Standard, no_runtime)
+            .await
+            .expect("standard profile must not require an image runtime");
+        assert!(
+            factory
+                .users()
+                .get_user_by_username(&"user".parse().expect("seed User name"))
+                .await
+                .expect("User lookup")
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
     async fn sandbox_profile_handler_dispatches_demo_media_and_posts() {
         let (storage, db) = temp_db().await;
-        run(cli(Commands::SeedSandboxProfile {
-            db: db.clone(),
-            storage_path: storage.path().to_owned(),
-            profile: SandboxProfileArg::Demo,
-        }))
+        // Exercise the real CLI dispatch and its current_exe worker composition;
+        // this libtest executable cannot dispatch an internal application mode.
+        let output = tokio::process::Command::new(
+            std::env::var_os("JAUNDER_IMAGE_WORKER_BIN").expect("prepared demo executable"),
+        )
+        .arg("seed-sandbox-profile")
+        .arg("--db")
+        .arg(db.expose_url())
+        .arg("--storage-path")
+        .arg(storage.path())
+        .args(["--profile", "demo"])
+        .output()
         .await
-        .expect("demo profile handler succeeds");
+        .expect("real demo seed command");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "demo profile command: {stderr}");
 
         let factory =
             storage::open_existing_database(&db, &storage::StorageRuntimeConfig::default())

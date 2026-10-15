@@ -14,6 +14,27 @@ import { createPostViaApi } from "./posts";
 import { navigateInApp } from "./navigate";
 import type { Locator, Page } from "@playwright/test";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const OWNED_JPEG = readFileSync(
+  resolve(
+    __dirname,
+    "../../host/src/image_sanitizer_fixtures/jpeg-sanitized.jpg",
+  ),
+);
+const PRIVATE_PNG = readFileSync(
+  resolve(
+    __dirname,
+    "../../host/src/image_sanitizer_fixtures/png-original.png",
+  ),
+);
+const SANITIZED_PNG = readFileSync(
+  resolve(
+    __dirname,
+    "../../host/src/image_sanitizer_fixtures/png-sanitized.png",
+  ),
+);
 import { seedConfigViaTool } from "./seed";
 import { uploadMedia } from "./media-helpers";
 
@@ -82,12 +103,62 @@ async function openMediaLibrary(page: Page): Promise<void> {
 }
 
 test.describe("Media upload and serving", () => {
+  test("real picker removes image metadata and clearly rejects malformed raster", async ({
+    page,
+  }, testInfo) => {
+    await signInAsNewUser(page);
+    await goto(page, "/media", {
+      timeout: slowBrowserFirstNavigationTimeoutMs(testInfo, 30_000),
+    });
+    await expect(page.locator(".j-topbar h1")).toHaveText("Media");
+    const picker = page.locator(
+      "input[type='file']:not([accept]):not([capture])",
+    );
+    await picker.setInputFiles({
+      name: "private.png",
+      mimeType: "image/svg+xml",
+      buffer: PRIVATE_PNG,
+    });
+    const link = page.getByRole("link", { name: "private.png", exact: true });
+    await expect(link).toBeVisible();
+    const url = await link.getAttribute("href");
+    expect(url).toBeTruthy();
+    const hash = createHash("sha256").update(SANITIZED_PNG).digest("hex");
+    expect(url).toContain(hash);
+    const served = await page.request.get(BASE_URL + url);
+    expect(served.status()).toBe(200);
+    expect(served.headers()["content-type"]).toBe("image/png");
+    expect(served.headers()["etag"]).toContain(hash);
+    expect(await served.body()).toEqual(SANITIZED_PNG);
+    expect(SANITIZED_PNG.equals(PRIVATE_PNG)).toBe(false);
+    const dimensions = await page.evaluate(async (source) => {
+      const image = new Image();
+      image.src = source;
+      await image.decode();
+      return [image.naturalWidth, image.naturalHeight];
+    }, BASE_URL + url);
+    expect(dimensions.every((dimension) => dimension > 0)).toBe(true);
+    await picker.setInputFiles({
+      name: "broken.jpg",
+      mimeType: "application/octet-stream",
+      buffer: Buffer.from("not an image"),
+    });
+    await expect(
+      page.getByText("Invalid image upload", { exact: false }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "broken.jpg", exact: true }),
+    ).toHaveCount(0);
+    await expect(link).toBeVisible();
+    await expect(picker).toHaveValue("");
+  });
+
   test("authenticated user can upload and access media", async ({ page }) => {
     await signInAsNewUser(page);
 
     // Drive `media::upload` directly — the session cookie is in the page's
     // cookie jar and the helper unwraps its confirmed mutation payload.
-    const fileContent = Buffer.from("fake image content for testing");
+    const fileContent = OWNED_JPEG;
     const json = await uploadMedia(page, "test-image.jpg", fileContent);
     expect(json.filename).toBe("test-image.jpg");
     expect(json.url).toContain("/media/upload/");
@@ -109,7 +180,7 @@ test.describe("Media upload and serving", () => {
     // stack it is also the one place the whole chain is exercised: the URL the server
     // derives, the name it wrote on disk, and the request the browser sends back for it
     // (#675). Before the fix the derived URL carried a raw space.
-    const fileContent = Buffer.from("spaced filename content");
+    const fileContent = OWNED_JPEG;
     const json = await uploadMedia(page, "my holiday photo.jpg", fileContent);
     // Since #720 the wire field carries the canonical encoded spelling — it is a lookup
     // key, not a display value, so it matches the URL segment and the on-disk name byte
@@ -120,7 +191,7 @@ test.describe("Media upload and serving", () => {
 
     const serveResponse = await page.request.get(BASE_URL + json.url);
     expect(serveResponse.status()).toBe(200);
-    expect(await serveResponse.text()).toBe("spaced filename content");
+    expect(await serveResponse.body()).toEqual(OWNED_JPEG);
   });
 
   test("proxy canonicalizes a media source URL without following its redirect", async ({
@@ -158,11 +229,7 @@ test.describe("Media upload and serving", () => {
     await signInAsNewUser(page);
     await goto(page, "/app");
 
-    await uploadMedia(
-      page,
-      "my holiday photo.jpg",
-      Buffer.from("spaced filename content"),
-    );
+    await uploadMedia(page, "my holiday photo.jpg", OWNED_JPEG);
 
     // Reached via the nav link and pinned on the page's own landmark, matching the
     // sibling media-page tests below — a bare `goto` races the CSR shell's mount.
@@ -278,7 +345,7 @@ test.describe("Media upload and serving", () => {
     const selectedFile = {
       name: "progress.png",
       mimeType: "image/png",
-      buffer: Buffer.from("progress"),
+      buffer: OWNED_JPEG,
     };
     await fileInput.setInputFiles(selectedFile);
     await expect(media).toContainText("Uploading…");
@@ -308,7 +375,7 @@ test.describe("Media upload and serving", () => {
     const selectedPhoto = {
       name: "failed.png",
       mimeType: "image/png",
-      buffer: Buffer.from("failed"),
+      buffer: OWNED_JPEG,
     };
     await expect(media).toHaveAttribute("aria-expanded", "false");
     await photoInput.setInputFiles(selectedPhoto);
@@ -333,7 +400,7 @@ test.describe("Media upload and serving", () => {
           file: {
             name: "indeterminate.png",
             mimeType: "image/png",
-            buffer: Buffer.from("indeterminate"),
+            buffer: OWNED_JPEG,
           },
         },
       },
@@ -362,7 +429,7 @@ test.describe("Media upload and serving", () => {
     const selectedFile = {
       name: "indeterminate.png",
       mimeType: "image/png",
-      buffer: Buffer.from("indeterminate"),
+      buffer: OWNED_JPEG,
     };
     await fileInput.setInputFiles(selectedFile);
     await expect(page.locator(".j-composer-media > .error")).toContainText(
@@ -407,14 +474,14 @@ test.describe("Media upload and serving", () => {
     await fileInput.setInputFiles({
       name: "first image.png",
       mimeType: "image/png",
-      buffer: Buffer.from("first image"),
+      buffer: OWNED_JPEG,
     });
     await expect(page.locator(".j-composer-media-row")).toHaveCount(1);
     await expect(media).toContainText("first image.png");
     await fileInput.setInputFiles({
       name: "second-image.png",
       mimeType: "image/png",
-      buffer: Buffer.from("second image"),
+      buffer: OWNED_JPEG,
     });
     const rows = page.locator(".j-composer-media-row");
     await expect(rows).toHaveCount(2);
@@ -469,7 +536,7 @@ test.describe("Media upload and serving", () => {
     await fileInput.setInputFiles({
       name: "home-image.png",
       mimeType: "image/png",
-      buffer: Buffer.from("home image"),
+      buffer: OWNED_JPEG,
     });
     await expect(page.locator(".j-composer-media-row")).toContainText(
       "home-image.png",
@@ -489,11 +556,7 @@ test.describe("Media upload capability", () => {
     await seedConfigViaTool("media.uploads_enabled", "true");
     await signInAsNewUser(page);
 
-    const existing = await uploadMedia(
-      page,
-      "read-only-media.jpg",
-      Buffer.from("media remains available while uploads are disabled"),
-    );
+    const existing = await uploadMedia(page, "read-only-media.jpg", OWNED_JPEG);
     await seedConfigViaTool("media.uploads_enabled", "false");
 
     await goto(page, "/app");
@@ -583,7 +646,7 @@ test.describe("Media upload capability", () => {
     await photoInput.setInputFiles({
       name: "desktop-photo.jpg",
       mimeType: "image/jpeg",
-      buffer: Buffer.from("desktop photo fallback"),
+      buffer: OWNED_JPEG,
     });
     await expect.poll(counts.uploadRequests).toBe(1);
     await expect(
@@ -680,7 +743,7 @@ test.describe("Media delete guard", () => {
     tracedContext,
   }) => {
     await signInAsNewUser(page);
-    const content = "delete guard content";
+    const content = OWNED_JPEG;
     const sha = createHash("sha256").update(content).digest("hex");
     const url = `/media/upload/${sha.slice(0, 2)}/${sha.slice(2, 4)}/${sha}/guarded.jpg`;
     // Create the foreign reference while there is no canonical source:
