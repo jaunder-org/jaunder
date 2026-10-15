@@ -945,27 +945,29 @@ mod tests {
     }
 
     #[test]
-    fn issue_create_parses_required_metadata() {
+    fn issue_create_parses_complete_help_example() {
         let cli = Cli::try_parse_from([
             "xtask",
+            "--json",
             "issue",
             "create",
             "--title",
-            "feat(xtask): add issue helpers",
+            "feat(xtask): add helper",
             "--type",
             "Task",
             "--milestone",
             "Developer tooling & DX",
             "--priority",
-            "p2",
+            "P2",
             "--label",
             "tooling",
             "--label",
             "dx",
             "--body-file",
-            "/tmp/body.md",
+            "/tmp/issue.md",
         ])
         .unwrap();
+        assert!(cli.json);
         assert_eq!(cli.command_name(), "issue-create");
         match cli.command {
             Command::Issue(issue::IssueCommand::Create {
@@ -976,15 +978,85 @@ mod tests {
                 labels,
                 body_file,
             }) => {
-                assert_eq!(title, "feat(xtask): add issue helpers");
+                assert_eq!(title, "feat(xtask): add helper");
                 assert_eq!(issue_type, "Task");
                 assert_eq!(milestone, "Developer tooling & DX");
                 assert_eq!(priority, issue::Priority::P2);
                 assert_eq!(labels, ["tooling", "dx"]);
-                assert_eq!(body_file, PathBuf::from("/tmp/body.md"));
+                assert_eq!(body_file, PathBuf::from("/tmp/issue.md"));
             }
             _ => panic!("expected issue create"),
         }
+    }
+
+    fn issue_create_args() -> Vec<&'static str> {
+        vec![
+            "xtask",
+            "issue",
+            "create",
+            "--title",
+            "feat(xtask): add helper",
+            "--type",
+            "Task",
+            "--milestone",
+            "Developer tooling & DX",
+            "--label",
+            "tooling",
+            "--body-file",
+            "/tmp/issue.md",
+        ]
+    }
+
+    #[test]
+    fn issue_create_accepts_uppercase_and_lowercase_priorities() {
+        for (spelling, expected) in [
+            ("P1", issue::Priority::P1),
+            ("p1", issue::Priority::P1),
+            ("P2", issue::Priority::P2),
+            ("p2", issue::Priority::P2),
+            ("P3", issue::Priority::P3),
+            ("p3", issue::Priority::P3),
+            ("P4", issue::Priority::P4),
+            ("p4", issue::Priority::P4),
+        ] {
+            let mut args = issue_create_args();
+            args.extend(["--priority", spelling]);
+            let cli = Cli::try_parse_from(args).unwrap();
+            match cli.command {
+                Command::Issue(issue::IssueCommand::Create { priority, .. }) => {
+                    assert_eq!(priority, expected, "{spelling}");
+                }
+                _ => panic!("expected issue create"),
+            }
+        }
+    }
+
+    #[test]
+    fn issue_create_rejects_invalid_priority_during_parsing() {
+        for spelling in ["P0", "P5", "urgent"] {
+            let mut args = issue_create_args();
+            args.extend(["--priority", spelling]);
+            let Err(error) = Cli::try_parse_from(args) else {
+                panic!("accepted invalid Priority {spelling}");
+            };
+            assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
+            let diagnostic = error.to_string();
+            assert!(diagnostic.contains("invalid value"));
+            assert!(diagnostic.contains(spelling));
+            assert!(diagnostic.contains("P1, P2, P3, P4"));
+        }
+    }
+
+    #[test]
+    fn issue_create_requires_explicit_priority() {
+        let Err(error) = Cli::try_parse_from(issue_create_args()) else {
+            panic!("accepted missing Priority");
+        };
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+        assert!(error.to_string().contains("--priority"));
     }
 
     #[test]
