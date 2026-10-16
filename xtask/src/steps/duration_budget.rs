@@ -12,7 +12,6 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::StepResult;
 use crate::playwright_report::{PlaywrightReport, PlaywrightSpec, PlaywrightTest};
 
 const SCHEMA_VERSION: u32 = 1;
@@ -99,32 +98,6 @@ struct Offender<'a> {
     duration_ms: f64,
     effective_timeout_ms: f64,
     utilization: f64,
-}
-
-/// Validate a lifted combo's two authoritative duration inputs.
-///
-/// This runs only after a successful VM check and after the diagnostic lift, so
-/// an input failure is loud without replacing the primary failure diagnostics.
-pub(crate) fn validate_lifted_combo(backend: &str, browser: &str, lane: &str) -> StepResult {
-    let diagnostics = Path::new(".xtask/diagnostics").join(format!("e2e-{lane}"));
-    validate_lifted_combo_at(backend, browser, lane, &diagnostics)
-}
-
-pub(crate) fn validate_lifted_combo_at(
-    backend: &str,
-    browser: &str,
-    lane: &str,
-    diagnostics: &Path,
-) -> StepResult {
-    let report = diagnostics.join(format!("playwright-report-{lane}.json"));
-    let manifest = diagnostics.join(format!("duration-budget-manifest-{lane}.json"));
-
-    match validate_files(&report, &manifest) {
-        Ok(detail) => StepResult::ok("e2e-duration-budget").detail(detail),
-        Err(error) => StepResult::fail("e2e-duration-budget").detail(format!(
-            "e2e {backend}/{browser} duration-budget input is unavailable or inconsistent: {error}"
-        )),
-    }
 }
 
 pub(crate) fn validate_files(report_path: &Path, manifest_path: &Path) -> Result<String, String> {

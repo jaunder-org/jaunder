@@ -498,7 +498,7 @@ fn e2e_with_build(
                 lift_e2e_diagnostics(&output, &diagnostics);
             },
             || {
-                validate_lifted_e2e_combo_at(
+                validate_lifted_e2e_combo(
                     &lane_spec.backend,
                     &lane_spec.browser,
                     &lane,
@@ -653,7 +653,7 @@ pub fn e2e_control(result: &mut CommandResult, backend: &str, workers: u8) {
                 &diagnostics,
             );
         },
-        || validate_lifted_e2e_combo(backend, "firefox", &lane),
+        || validate_lifted_e2e_combo(backend, "firefox", &lane, &diagnostics),
     );
     if let Some(phases) = read_e2e_phase_records(&diagnostics, backend, "firefox", &lane) {
         result.record_phases(phases);
@@ -700,7 +700,9 @@ pub fn e2e_lane(result: &mut CommandResult, identity: &str) {
     result.push(build);
     lift_e2e_diagnostics(Path::new(&format!(".xtask/gcroots/{check}")), &diagnostics);
     if succeeded {
-        for step in validate_lifted_e2e_combo(&lane.backend, &lane.browser, &lane.identity) {
+        for step in
+            validate_lifted_e2e_combo(&lane.backend, &lane.browser, &lane.identity, &diagnostics)
+        {
             result.push(step);
         }
     } else {
@@ -946,7 +948,7 @@ pub fn e2e_combo(result: &mut CommandResult, backend: &str, browser: &str) {
         || {
             lift_e2e_diagnostics(Path::new(&format!(".xtask/gcroots/{check}")), &diagnostics);
         },
-        || validate_lifted_e2e_combo(backend, browser, &lane),
+        || validate_lifted_e2e_combo(backend, browser, &lane, &diagnostics),
     );
     if let Some(phases) = read_e2e_phase_records(&diagnostics, backend, browser, &lane) {
         result.record_phases(phases);
@@ -957,32 +959,38 @@ pub fn e2e_combo(result: &mut CommandResult, backend: &str, browser: &str) {
 ///
 /// Both aggregate and single-combination orchestration use this seam so the
 /// duration verdict always precedes boot-decomposition coverage.
-fn validate_lifted_e2e_combo_at(
+fn validate_lifted_e2e_combo(
     backend: &str,
     browser: &str,
     lane: &str,
     diagnostics: &Path,
 ) -> [StepResult; 2] {
+    // Path ownership and command-result adaptation belong to orchestration;
+    // each evidence consumer owns only its distinct reconciliation semantics.
+    let report = diagnostics.join(format!("playwright-report-{lane}.json"));
+    let step = |name: &str, context: &str, verdict: Result<String, String>| match verdict {
+        Ok(detail) => StepResult::ok(name).detail(detail),
+        Err(error) => StepResult::fail(name).detail(format!(
+            "e2e {backend}/{browser} {context} is unavailable or inconsistent: {error}"
+        )),
+    };
     [
-        crate::steps::duration_budget::validate_lifted_combo_at(
-            backend,
-            browser,
-            lane,
-            diagnostics,
+        step(
+            "e2e-duration-budget",
+            "duration-budget input",
+            crate::steps::duration_budget::validate_files(
+                &report,
+                &diagnostics.join(format!("duration-budget-manifest-{lane}.json")),
+            ),
         ),
-        crate::steps::boot_decomposition_coverage::validate_lifted_combo_at(
-            backend,
-            browser,
-            lane,
-            diagnostics,
+        step(
+            "e2e-boot-decomposition-coverage",
+            "boot-decomposition evidence",
+            crate::steps::boot_decomposition_coverage::validate_files(
+                &report,
+                &diagnostics.join(format!("capture-{lane}.tar.gz")),
+            ),
         ),
-    ]
-}
-
-fn validate_lifted_e2e_combo(backend: &str, browser: &str, lane: &str) -> [StepResult; 2] {
-    [
-        crate::steps::duration_budget::validate_lifted_combo(backend, browser, lane),
-        crate::steps::boot_decomposition_coverage::validate_lifted_combo(backend, browser, lane),
     ]
 }
 
@@ -3452,6 +3460,48 @@ else:
             "all candidate builds must start before any result is awaited"
         );
         assert_eq!(worker.join().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn lifted_e2e_validation_preserves_order_paths_and_failure_context() {
+        let root = tempfile::tempdir().unwrap();
+        let lane = "sqlite-chromium-unsplit";
+        let report = root.path().join(format!("playwright-report-{lane}.json"));
+        for malformed in [false, true] {
+            if malformed {
+                fs::write(&report, "not json").unwrap();
+            }
+            let steps = super::validate_lifted_e2e_combo("sqlite", "chromium", lane, root.path());
+            assert_eq!(steps[0].name, "e2e-duration-budget");
+            assert_eq!(steps[1].name, "e2e-boot-decomposition-coverage");
+            for (step, context) in steps.iter().zip([
+                "e2e sqlite/chromium duration-budget input is unavailable or inconsistent:",
+                "e2e sqlite/chromium boot-decomposition evidence is unavailable or inconsistent:",
+            ]) {
+                assert!(!step.ok);
+                let detail = step.detail.as_ref().unwrap();
+                assert!(detail.starts_with(context), "{detail}");
+                if !malformed {
+                    assert!(detail.contains(report.to_str().unwrap()), "{detail}");
+                }
+            }
+            if malformed {
+                assert!(
+                    steps[0]
+                        .detail
+                        .as_ref()
+                        .unwrap()
+                        .contains("reading manifest")
+                );
+                assert!(
+                    steps[1]
+                        .detail
+                        .as_ref()
+                        .unwrap()
+                        .contains("opening capture")
+                );
+            }
+        }
     }
 
     #[test]
