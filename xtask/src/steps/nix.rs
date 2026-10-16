@@ -2822,7 +2822,9 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         let helper = generated_seed_trace_helper();
         let script = format!(
             r#"
+import contextlib
 import json
+import sys
 import textwrap
 
 class FakeMachine:
@@ -2851,7 +2853,8 @@ class FakeMachine:
 machine = FakeMachine()
 exec(textwrap.dedent({helper:?}))
 try:
-  assert_seed_storage_spans()
+  with contextlib.redirect_stdout(sys.stderr):
+    assert_seed_storage_spans()
 except AssertionError as error:
   print(json.dumps({{"error": str(error), "actions": machine.actions}}))
 else:
@@ -2867,6 +2870,11 @@ else:
             output.status.success(),
             "seed timeout harness failed: {}",
             String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("capture-hash exit=0"),
+            "capture-retention diagnostics must remain on stderr: {:?}",
+            output.stderr
         );
         serde_json::from_slice(&output.stdout).expect("seed timeout harness JSON")
     }

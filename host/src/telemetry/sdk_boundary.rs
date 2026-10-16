@@ -94,7 +94,7 @@ impl<S: Subscriber> Layer<S> for Activation {
 // turning exporter cleanup into another process input or retention control.
 const EXPORTER_RUNTIME_SHUTDOWN_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Keeps exporter-only transport workers alive through both provider shutdowns.
+/// Keeps exporter-only transport workers alive through every provider shutdown.
 /// Runtime destruction lives on an ordinary owner thread so dropping the
 /// telemetry guard inside an application's async task does not drop a Tokio
 /// runtime there. Shutdown joins that thread after a fixed best-effort budget.
@@ -110,6 +110,7 @@ pub(super) struct ExporterRuntime {
 fn build_runtime() -> std::io::Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
+        .max_blocking_threads(2)
         .thread_name("otel-transport")
         .on_thread_start(|| {
             let guard = OtelContext::enter_telemetry_suppressed_scope();

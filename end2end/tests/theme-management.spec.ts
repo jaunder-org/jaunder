@@ -2,6 +2,8 @@ import { test, expect } from "./fixtures";
 import { expectAccessible } from "./accessibility";
 import {
   failServerFn,
+  confirmedMutation,
+  type MutationOutcome,
   goto,
   signInAs,
   signInAsNewUser,
@@ -12,6 +14,7 @@ import {
   packageMember,
   packageMemberDigests,
   publishTheme,
+  withSiteThemeSelection,
 } from "./theme-helpers";
 
 const ASSET_PATH = "assets/pixel.png";
@@ -559,116 +562,131 @@ test("operator manages the site catalog through public selection and fallback", 
   page,
   tracedContext,
 }) => {
-  await signInAs(page, "testoperator");
-  await goto(page, "/themes");
-  const mutation = (endpoint: ThemeEndpoint) =>
-    page.waitForResponse(
-      (response) =>
-        new URL(response.url()).pathname === THEME_ENDPOINTS[endpoint] &&
-        response.request().method() === "POST",
-    );
+  await withSiteThemeSelection(tracedContext, async (mutate) => {
+    await signInAs(page, "testoperator");
+    await goto(page, "/themes");
+    const mutation = (endpoint: ThemeEndpoint) =>
+      page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === THEME_ENDPOINTS[endpoint] &&
+          response.request().method() === "POST",
+      );
 
-  const siteCatalog = page.getByRole("button", { name: "Site catalog" });
-  await expect(siteCatalog).toBeVisible();
-  await siteCatalog.click();
-  await expect(siteCatalog).toHaveAttribute("aria-pressed", "true");
+    const siteCatalog = page.getByRole("button", { name: "Site catalog" });
+    await expect(siteCatalog).toBeVisible();
+    await siteCatalog.click();
+    await expect(siteCatalog).toHaveAttribute("aria-pressed", "true");
 
-  const cssImport = page.locator("section").filter({ hasText: "Import CSS" });
-  await cssImport.getByLabel("Theme name").fill("Operator site draft");
-  await cssImport
-    .getByLabel("Stylesheet")
-    .fill(":root { outline: 2px solid rgb(4, 5, 6); }");
-  await Promise.all([
-    mutation("import_css"),
-    cssImport.getByRole("button", { name: "Import CSS draft" }).click(),
-  ]);
+    const cssImport = page.locator("section").filter({ hasText: "Import CSS" });
+    await cssImport.getByLabel("Theme name").fill("Operator site draft");
+    await cssImport
+      .getByLabel("Stylesheet")
+      .fill(":root { outline: 2px solid rgb(4, 5, 6); }");
+    await Promise.all([
+      mutation("import_css"),
+      cssImport.getByRole("button", { name: "Import CSS draft" }).click(),
+    ]);
 
-  await page.getByRole("button", { name: /Operator site draft/ }).click();
-  await page
-    .getByLabel("Rename selected theme")
-    .fill("Operator site published");
-  await Promise.all([
-    mutation("rename"),
-    page.getByRole("button", { name: "Rename", exact: true }).click(),
-  ]);
-  await expect(
-    page.getByRole("button", { name: /Operator site published/ }),
-  ).toBeVisible();
+    await page.getByRole("button", { name: /Operator site draft/ }).click();
+    await page
+      .getByLabel("Rename selected theme")
+      .fill("Operator site published");
+    await Promise.all([
+      mutation("rename"),
+      page.getByRole("button", { name: "Rename", exact: true }).click(),
+    ]);
+    await expect(
+      page.getByRole("button", { name: /Operator site published/ }),
+    ).toBeVisible();
 
-  await Promise.all([
-    mutation("preview"),
-    page.getByRole("button", { name: "Preview draft" }).click(),
-  ]);
-  await expect(
-    page.getByTitle("Isolated theme preview").contentFrame().locator("body"),
-  ).toContainText("Jaunder");
+    await Promise.all([
+      mutation("preview"),
+      page.getByRole("button", { name: "Preview draft" }).click(),
+    ]);
+    await expect(
+      page.getByTitle("Isolated theme preview").contentFrame().locator("body"),
+    ).toContainText("Jaunder");
 
-  await Promise.all([
-    mutation("publish"),
-    page.getByRole("button", { name: "Publish", exact: true }).click(),
-  ]);
-  const publicSelection = page.getByLabel("Public selection");
-  const selectedOption = publicSelection.getByRole("option", {
-    name: "Operator site published",
+    await Promise.all([
+      mutation("publish"),
+      page.getByRole("button", { name: "Publish", exact: true }).click(),
+    ]);
+    const publicSelection = page.getByLabel("Public selection");
+    const selectedOption = publicSelection.getByRole("option", {
+      name: "Operator site published",
+    });
+    await expect(selectedOption).toHaveCount(1);
+    const themeId = await selectedOption.getAttribute("value");
+    expect(themeId).not.toBeNull();
+    await mutate(async () => {
+      const [response] = await Promise.all([
+        mutation("select"),
+        publicSelection.selectOption(themeId!),
+      ]);
+      expect(response.status()).toBe(200);
+      confirmedMutation(
+        (await response.json()) as MutationOutcome<null>,
+        "themes::select",
+      );
+    });
+    await expect(publicSelection).toHaveValue(themeId!);
+
+    const publicContext = await tracedContext();
+    try {
+      const publicPage = await publicContext.newPage();
+      await goto(publicPage, "/");
+      await expect(publicPage.locator(".j-root")).toHaveAttribute(
+        "data-theme",
+        "custom",
+      );
+      await expect(
+        publicPage.locator("link[data-jaunder-theme-stylesheet]"),
+      ).toHaveCount(1);
+      await expect(
+        publicPage.locator("[data-jaunder-theme-surface]"),
+      ).toHaveCSS("outline-color", "rgb(4, 5, 6)");
+      await expect(
+        publicPage.getByRole("radiogroup", { name: "Theme catalog scope" }),
+      ).toHaveCount(0);
+      await expect(
+        publicPage.getByRole("button", { name: "Author catalog" }),
+      ).toHaveCount(0);
+    } finally {
+      await publicContext.close();
+    }
+
+    await mutate(async () => {
+      const [response] = await Promise.all([
+        mutation("remove"),
+        page.getByRole("button", { name: "Delete theme" }).click(),
+      ]);
+      expect(response.status()).toBe(200);
+      confirmedMutation(
+        (await response.json()) as MutationOutcome<null>,
+        "themes::remove",
+      );
+    });
+    await expect(
+      page.getByRole("button", { name: /Operator site published/ }),
+    ).toHaveCount(0);
+    await expect(publicSelection).toHaveValue("studio");
+
+    const fallbackContext = await tracedContext();
+    try {
+      const fallbackPage = await fallbackContext.newPage();
+      await goto(fallbackPage, "/");
+      await expect(fallbackPage.locator(".j-root")).toHaveAttribute(
+        "data-theme",
+        "studio",
+      );
+      await expect(
+        fallbackPage.locator("link[data-jaunder-theme-stylesheet]"),
+      ).toHaveCount(1);
+      await expect(
+        fallbackPage.locator("link[data-jaunder-theme-stylesheet]"),
+      ).toHaveAttribute("href", /^\/theme\/[0-9a-f]{64}$/);
+    } finally {
+      await fallbackContext.close();
+    }
   });
-  await expect(selectedOption).toHaveCount(1);
-  const themeId = await selectedOption.getAttribute("value");
-  expect(themeId).not.toBeNull();
-  await Promise.all([
-    mutation("select"),
-    publicSelection.selectOption(themeId!),
-  ]);
-  await expect(publicSelection).toHaveValue(themeId!);
-
-  const publicContext = await tracedContext();
-  try {
-    const publicPage = await publicContext.newPage();
-    await goto(publicPage, "/");
-    await expect(publicPage.locator(".j-root")).toHaveAttribute(
-      "data-theme",
-      "custom",
-    );
-    await expect(
-      publicPage.locator("link[data-jaunder-theme-stylesheet]"),
-    ).toHaveCount(1);
-    await expect(publicPage.locator("[data-jaunder-theme-surface]")).toHaveCSS(
-      "outline-color",
-      "rgb(4, 5, 6)",
-    );
-    await expect(
-      publicPage.getByRole("radiogroup", { name: "Theme catalog scope" }),
-    ).toHaveCount(0);
-    await expect(
-      publicPage.getByRole("button", { name: "Author catalog" }),
-    ).toHaveCount(0);
-  } finally {
-    await publicContext.close();
-  }
-
-  await Promise.all([
-    mutation("remove"),
-    page.getByRole("button", { name: "Delete theme" }).click(),
-  ]);
-  await expect(
-    page.getByRole("button", { name: /Operator site published/ }),
-  ).toHaveCount(0);
-  await expect(publicSelection).toHaveValue("studio");
-
-  const fallbackContext = await tracedContext();
-  try {
-    const fallbackPage = await fallbackContext.newPage();
-    await goto(fallbackPage, "/");
-    await expect(fallbackPage.locator(".j-root")).toHaveAttribute(
-      "data-theme",
-      "studio",
-    );
-    await expect(
-      fallbackPage.locator("link[data-jaunder-theme-stylesheet]"),
-    ).toHaveCount(1);
-    await expect(
-      fallbackPage.locator("link[data-jaunder-theme-stylesheet]"),
-    ).toHaveAttribute("href", /^\/theme\/[0-9a-f]{64}$/);
-  } finally {
-    await fallbackContext.close();
-  }
 });

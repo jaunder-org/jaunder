@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 use serde::Deserialize;
@@ -241,18 +241,15 @@ fn root_crates_io_patch_section(root: &Path) -> Result<String> {
         .to_owned())
 }
 
-/// Obtains metadata for one target root, avoiding feature unification between
-/// the host floor and the exact CSR wasm closure.
-fn load_graph(sh: &Shell, package: &str, target: Option<&str>) -> Result<Graph> {
-    let root = git::toplevel(Path::new("."))?;
-    let patches = root_crates_io_patch_section(Path::new(&root))?;
-    let temporary = tempfile::tempdir().context("creating temporary metadata root")?;
-    let manifest = temporary.path().join("Cargo.toml");
-    let source = temporary.path().join("src");
+/// Materializes an isolated package for a single product target's metadata.
+fn prepare_metadata_root(root: &Path, directory: &Path, package: &str) -> Result<PathBuf> {
+    let patches = root_crates_io_patch_section(root)?;
+    let manifest = directory.join("Cargo.toml");
+    let source = directory.join("src");
     fs::create_dir(&source).context("creating temporary metadata source directory")?;
     fs::write(source.join("lib.rs"), "pub fn graph_root() {}\n")
         .context("writing temporary metadata source")?;
-    let package_path = serde_json::to_string(&Path::new(&root).join(package).to_string_lossy())
+    let package_path = serde_json::to_string(&root.join(package).to_string_lossy())
         .context("encoding package path for temporary manifest")?;
     fs::write(
         &manifest,
@@ -262,7 +259,18 @@ fn load_graph(sh: &Shell, package: &str, target: Option<&str>) -> Result<Graph> 
         ),
     )
     .context("writing temporary metadata manifest")?;
+    // Preserve product-selected versions while Cargo reconciles this isolated root.
+    fs::copy(root.join("Cargo.lock"), directory.join("Cargo.lock"))
+        .context("seeding temporary metadata root from product Cargo.lock")?;
+    Ok(manifest)
+}
 
+/// Obtains metadata for one target root, avoiding feature unification between
+/// the host floor and the exact CSR wasm closure.
+fn load_graph(sh: &Shell, package: &str, target: Option<&str>) -> Result<Graph> {
+    let root = git::toplevel(Path::new("."))?;
+    let temporary = tempfile::tempdir().context("creating temporary metadata root")?;
+    let manifest = prepare_metadata_root(Path::new(&root), temporary.path(), package)?;
     let manifest = manifest.to_string_lossy().into_owned();
     let mut command = cmd!(
         sh,
@@ -296,8 +304,46 @@ pub fn run(result: &mut CommandResult) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Dependency, Graph, Node, Package, crates_io_patch_section, evaluate};
+    use super::{
+        Dependency, Graph, Node, Package, crates_io_patch_section, evaluate, prepare_metadata_root,
+    };
     use std::collections::{BTreeMap, BTreeSet};
+    use std::fs;
+
+    #[test]
+    fn isolated_metadata_roots_reuse_product_lock_without_mutating_it() {
+        let product = tempfile::tempdir().unwrap();
+        fs::write(product.path().join("Cargo.toml"), "[workspace]\n").unwrap();
+        let locked = b"# product-selected dependency versions\nversion = 4\n";
+        fs::write(product.path().join("Cargo.lock"), locked).unwrap();
+
+        for package in ["host", "csr"] {
+            let isolated = tempfile::tempdir().unwrap();
+            let manifest = prepare_metadata_root(product.path(), isolated.path(), package).unwrap();
+            assert!(
+                fs::read_to_string(manifest)
+                    .unwrap()
+                    .contains(&format!("{package} = {{ path = "))
+            );
+            let lock = isolated.path().join("Cargo.lock");
+            assert_eq!(fs::read(&lock).unwrap(), locked);
+            fs::write(lock, "# temporary Cargo reconciliation\n").unwrap();
+            assert_eq!(fs::read(product.path().join("Cargo.lock")).unwrap(), locked);
+        }
+    }
+
+    #[test]
+    fn metadata_roots_require_the_product_lock() {
+        let product = tempfile::tempdir().unwrap();
+        fs::write(product.path().join("Cargo.toml"), "[workspace]\n").unwrap();
+        let isolated = tempfile::tempdir().unwrap();
+        let error = prepare_metadata_root(product.path(), isolated.path(), "host").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "seeding temporary metadata root from product Cargo.lock"
+        );
+        assert!(!isolated.path().join("Cargo.lock").exists());
+    }
 
     #[test]
     fn extracts_all_crates_io_patch_entries() {
