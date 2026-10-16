@@ -1043,10 +1043,21 @@ fn lock_shared(path: &Path) -> anyhow::Result<File> {
     Ok(file)
 }
 fn try_runtime_lock(path: &Path) -> anyhow::Result<File> {
-    let file = lock_file(path)?;
-    file.try_lock()
-        .map_err(|_| anyhow::anyhow!("sandbox runtime is held by an external server"))?;
-    Ok(file)
+    let file = lock_file(path)
+        .with_context(|| format!("opening sandbox runtime lock {}", path.display()))?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(std::fs::TryLockError::WouldBlock) => Err(std::fs::TryLockError::WouldBlock)
+            .with_context(|| {
+                format!(
+                    "sandbox runtime is held by an external server (lock {})",
+                    path.display()
+                )
+            }),
+        Err(std::fs::TryLockError::Error(error)) => {
+            Err(error).with_context(|| format!("acquiring sandbox runtime lock {}", path.display()))
+        }
+    }
 }
 
 fn print_session(session: &HostServerSession, profile: SandboxProfile) {
@@ -1349,6 +1360,31 @@ mod tests {
         let error = try_runtime_lock(&path).expect_err("external runtime holder must fail");
 
         assert!(error.to_string().contains("external server"));
+        assert!(error.to_string().contains(&path.display().to_string()));
+        assert!(matches!(
+            error.downcast_ref::<std::fs::TryLockError>(),
+            Some(std::fs::TryLockError::WouldBlock)
+        ));
+        assert!(try_runtime_lock(&path).is_err(), "owner remains protected");
+    }
+
+    #[test]
+    fn runtime_lock_io_failure_preserves_path_and_cause() {
+        let temp = tempfile::tempdir().expect("temporary runtime root");
+        let path = temp.path().join("runtime.lock");
+        fs::create_dir(&path).expect("directory cannot be opened as a runtime lock");
+
+        let error = try_runtime_lock(&path).expect_err("invalid lock path must fail");
+
+        assert!(error.to_string().contains(&path.display().to_string()));
+        assert!(!format!("{error:#}").contains("external server"));
+        assert_eq!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .expect("underlying I/O error")
+                .kind(),
+            std::io::ErrorKind::IsADirectory
+        );
     }
 
     #[test]
