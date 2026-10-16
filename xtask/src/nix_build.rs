@@ -48,6 +48,15 @@ pub(crate) struct NixBuildObservation {
 }
 
 impl NixBuildObservation {
+    /// Freeze selection separately from success-only result reporting (#1791).
+    pub(crate) fn evidence(&self) -> Value {
+        serde_json::json!({
+            "derivation": self.derivation,
+            "outputs": self.selection.as_ref().map(|s| &s.outputs),
+            "outputs_valid_before": self.selected_outputs,
+        })
+    }
+
     /// Complete a successful gate-owned build observation with its post-build
     /// counterpart and turn both snapshots into one result-envelope report.
     pub(crate) fn finish(self, installable: &str) -> NixReport {
