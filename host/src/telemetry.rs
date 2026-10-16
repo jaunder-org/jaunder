@@ -1660,6 +1660,40 @@ mod tests {
         assert!(!output.contains("ordinary info"));
     }
 
+    fn evaluate_field(evaluated: &std::cell::Cell<u32>) -> u32 {
+        evaluated.set(evaluated.get() + 1);
+        evaluated.get()
+    }
+
+    #[test]
+    fn absent_native_provider_evaluates_admitted_event_fields() {
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let mut config = configured_local_policy(false, Some("trace"), None);
+        config.json_format = true;
+        let subscriber = compose_subscriber(
+            &config,
+            None::<tracing_subscriber::layer::Identity>,
+            None,
+            Some(Shared(output.clone())),
+        );
+        let evaluated = std::cell::Cell::new(0_u32);
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!(evaluated = evaluate_field(&evaluated), "admitted debug");
+            tracing::trace!(evaluated = evaluate_field(&evaluated), "admitted trace");
+        });
+        assert_eq!(evaluated.get(), 2);
+        let output = String::from_utf8(output.lock().expect("output").clone()).expect("utf8");
+        let records: Vec<serde_json::Value> = output
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("JSON event"))
+            .collect();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0]["fields"]["evaluated"], 1);
+        assert_eq!(records[0]["fields"]["message"], "admitted debug");
+        assert_eq!(records[1]["fields"]["evaluated"], 2);
+        assert_eq!(records[1]["fields"]["message"], "admitted trace");
+    }
+
     #[test]
     fn absent_native_provider_does_not_evaluate_filtered_event_fields_but_keeps_span_trace() {
         for policy in ["off", "warn"] {
@@ -1678,20 +1712,8 @@ mod tests {
                     let _decision = decision.enter();
                     let warning = tracing::warn_span!("warning_context", retained = true);
                     let _warning = warning.enter();
-                    tracing::trace!(
-                        evaluated = {
-                            evaluated.set(evaluated.get() + 1);
-                            evaluated.get()
-                        },
-                        "filtered trace"
-                    );
-                    tracing::debug!(
-                        evaluated = {
-                            evaluated.set(evaluated.get() + 1);
-                            evaluated.get()
-                        },
-                        "filtered debug"
-                    );
+                    tracing::trace!(evaluated = evaluate_field(&evaluated), "filtered trace");
+                    tracing::debug!(evaluated = evaluate_field(&evaluated), "filtered debug");
                     tracing::warn!("ordinary warning");
                     let trace = tracing_error::SpanTrace::capture();
                     assert_eq!(trace.status(), tracing_error::SpanTraceStatus::CAPTURED);
@@ -1728,13 +1750,7 @@ mod tests {
         let subscriber = compose_subscriber(&config, Some(extra), None, None::<Shared>);
         let evaluated = std::cell::Cell::new(0_u32);
         tracing::subscriber::with_default(subscriber, || {
-            tracing::debug!(
-                evaluated = {
-                    evaluated.set(evaluated.get() + 1);
-                    evaluated.get()
-                },
-                "filtered debug"
-            );
+            tracing::debug!(evaluated = evaluate_field(&evaluated), "filtered debug");
             tracing::warn!("independent warning");
         });
         assert_eq!(evaluated.get(), 0);

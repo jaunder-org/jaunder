@@ -123,6 +123,85 @@ fn exact_six_metadata_shapes_keep_severity_identity_closed_codes_and_signed_scal
         assert!(text.contains(&i64::MAX.to_string()));
     }
 }
+struct FailingWriter {
+    fail_on: &'static str,
+    written: String,
+    failed: bool,
+}
+impl std::fmt::Write for FailingWriter {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        if text.contains(self.fail_on) {
+            self.failed = true;
+            return Err(std::fmt::Error);
+        }
+        self.written.push_str(text);
+        Ok(())
+    }
+}
+
+struct ForwardToFailingWriter<F> {
+    safe: SafeSdkFormat<F>,
+    fail_on: &'static str,
+    outcomes: Arc<Mutex<Vec<(std::fmt::Result, FailingWriter)>>>,
+}
+impl<S, N, F> FormatEvent<S, N> for ForwardToFailingWriter<F>
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+    N: for<'a> FormatFields<'a> + 'static,
+    F: FormatEvent<S, N>,
+{
+    fn format_event(
+        &self,
+        ctx: &FmtContext<'_, S, N>,
+        _: Writer<'_>,
+        event: &Event<'_>,
+    ) -> std::fmt::Result {
+        let mut output = FailingWriter {
+            fail_on: self.fail_on,
+            written: String::new(),
+            failed: false,
+        };
+        let result = self.safe.format_event(ctx, Writer::new(&mut output), event);
+        self.outcomes.lock().unwrap().push((result, output));
+        Ok(())
+    }
+}
+
+#[test]
+fn selected_event_writer_errors_reach_the_format_event_caller() {
+    for (json, fail_on, expected_prefix) in [
+        (true, "{\"level\":\"", ""),
+        (
+            true,
+            ",\"grpc_message\":",
+            "{\"level\":\"DEBUG\",\"target\":\"opentelemetry-otlp\",\"fields\":{\"name\":\"TonicLogsClient.ExportFailed\"",
+        ),
+        (false, " opentelemetry-otlp: name=", "DEBUG"),
+    ] {
+        let outcomes = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::registry().with(fmt::layer().event_format(
+            ForwardToFailingWriter {
+                safe: SafeSdkFormat::new(fmt::format().without_time(), json),
+                fail_on,
+                outcomes: outcomes.clone(),
+            },
+        ));
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!(name:"TonicLogsClient.ExportFailed",target:"opentelemetry-otlp",grpc_message="WITHHELD",grpc_details="WITHHELD");
+        });
+        let outcomes = outcomes.lock().unwrap();
+        assert_eq!(outcomes.len(), 1);
+        let (result, output) = &outcomes[0];
+        assert_eq!(*result, Err(std::fmt::Error));
+        assert!(
+            output.failed,
+            "the requested write must be reached: {fail_on}"
+        );
+        assert_eq!(output.written, expected_prefix);
+        assert!(!output.written.contains("WITHHELD"));
+    }
+}
+
 #[test]
 fn ordinary_text_bytes_are_identical_and_invalid_selected_carriers_are_not_rendered() {
     let stock = Memory::default();
@@ -147,25 +226,39 @@ fn ordinary_text_bytes_are_identical_and_invalid_selected_carriers_are_not_rende
         tracing::warn!(name:"Unrelated",target:"opentelemetry-otlp",arbitrary="ordinary SDK field");
     });
     assert_eq!(stock.text(), safe.text());
-    let invalid = Memory::default();
-    let subscriber = tracing_subscriber::registry().with(
-        fmt::layer()
-            .json()
-            .event_format(SafeSdkFormat::new(fmt::format().json(), true))
-            .with_writer(invalid.clone()),
-    );
-    tracing::subscriber::with_default(subscriber, || {
-        tracing::debug!(name:"TonicLogsClient.ExportFailed",target:"opentelemetry-otlp",grpc_code=?Some("WITHHELD"),grpc_message="WITHHELD");
-        tracing::warn!(name:"TonicLogsClient.PartialSuccess",target:"opentelemetry-otlp",rejected_log_records="WITHHELD",error_message="WITHHELD");
-    });
-    let text = invalid.text();
-    assert!(!text.contains("WITHHELD"));
-    let records: Vec<serde_json::Value> = text
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
-    assert!(records[0]["fields"].get("grpc_code").is_none());
-    assert!(records[1]["fields"].get("rejected_log_records").is_none());
+    for json in [true, false] {
+        let invalid = Memory::default();
+        let subscriber = tracing_subscriber::registry().with(
+            fmt::layer()
+                .event_format(SafeSdkFormat::new(fmt::format().without_time(), json))
+                .with_writer(invalid.clone()),
+        );
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!(name:"TonicLogsClient.ExportFailed",target:"opentelemetry-otlp",grpc_code=?Some("WITHHELD"),grpc_message="WITHHELD");
+            tracing::warn!(name:"TonicLogsClient.PartialSuccess",target:"opentelemetry-otlp",rejected_log_records="WITHHELD",error_message="WITHHELD",arbitrary="WITHHELD");
+        });
+        let text = invalid.text();
+        assert!(!text.contains("WITHHELD"));
+        assert!(!text.contains("arbitrary"));
+        if json {
+            let records: Vec<serde_json::Value> = text
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert!(records[0]["fields"].get("grpc_code").is_none());
+            assert!(records[1]["fields"].get("rejected_log_records").is_none());
+        } else {
+            assert_eq!(
+                text.lines().collect::<Vec<_>>(),
+                [
+                    "DEBUG opentelemetry-otlp: name=TonicLogsClient.ExportFailed grpc_message=\"remote detail withheld\" grpc_details=\"remote detail withheld\"",
+                    "WARN opentelemetry-otlp: name=TonicLogsClient.PartialSuccess error_message=\"remote detail withheld\"",
+                ]
+            );
+            assert!(!text.contains("grpc_code="));
+            assert!(!text.contains("rejected_"));
+        }
+    }
 }
 
 #[test]
