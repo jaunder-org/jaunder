@@ -2217,17 +2217,18 @@ is not guaranteed transport delivery or recovery of data the caller discarded.
 Increased span/event/log volume requires Collector-side capacity and retention
 decisions; local verbosity does not limit native logs.
 
-A fixed, non-configurable per-OTLP-layer SDK-context guard isolates SDK
-self-observation only, not application retention. Public context activation
-preserves suppression when SDK work enters admitted application spans. An owned
-private exporter-only runtime keeps transport workers and their connection and
-reconnect descendants suppressed, using ordinary trace/metric/log SDK builders.
-The telemetry guard shuts down the metric provider, then the trace provider,
-then the logger provider, then that runtime. Logger shutdown uses the pinned
-SDK's five-second default; runtime shutdown has its own fixed five-second
-best-effort budget, not a whole-process deadline. Residual blocking work can
-outlive runtime shutdown; joining its owner does not prove all work stopped.
-Repeated same-span entries exited out of order have the
+The demonstrated stock composition retains a fixed, non-configurable
+SDK-scope-only dynamic trace-layer gate. It isolates SDK self-observation only,
+not application retention. Public context activation preserves suppression when
+SDK work enters admitted application spans. An owned exporter-only runtime uses
+two workers/two blocking workers and the process-global subscriber with ordinary
+trace/metric/log SDK builders. Scoped worker-dispatch propagation and universal
+containment are not promised. The telemetry guard shuts down the metric
+provider, then the trace provider, then the logger provider, then that runtime.
+Logger shutdown uses the pinned SDK's five-second default; runtime shutdown has
+its own fixed five-second best-effort budget, not a whole-process deadline.
+Residual blocking work can outlive runtime shutdown; joining its owner does not
+prove all work stopped. Repeated same-span entries exited out of order have the
 external-context/suppression limitation documented in the decision; no arbitrary
 entry-instance restoration is promised.
 
@@ -2237,8 +2238,8 @@ IDs remain request/response headers, distinct from OTLP trace/span/parent
 identities. Independent ErrorLayer initial/late field storage, local
 diagnostics/panic capture, privacy, endpoint and metrics contracts remain. Local
 fallback diagnostics stay outside native/failing export paths. Native OTLP logs
-likewise do not consume local verbosity policy; their closed admission and
-no-mirroring routing are described below.
+likewise do not consume local verbosity policy; the stock bridge and shared
+Collector policy below preserve no-mirroring routing.
 
 ### Server-fn span names are macro-derived
 
@@ -2411,7 +2412,70 @@ its existing `file` trace exporter and trace consumers remain unchanged. These
 are implemented source contracts, not certification of actual ingestion,
 persistence, browser presentation or delivery.
 
-#### Native OTLP decision and implemented boundaries
+#### Shared Collector privacy policy
+
+The [native OTLP decision](adr/drafts/native-otlp-process-logs.md) records the
+qualified human amendment JAU-1743-COLLECTOR-AMENDMENT-001, acknowledged by Lead
+against contract SHA256
+`c5ee2ad723645acbff1cda627e3154282f95e468ff04991ae8a28cec879580f6` and the
+latest decision card. It selects stock appender 0.32.0/ordinary SDK batching and
+deletion of application privacy/admission visitors, Debug parsing, classifiers
+and the proposed SpanProcessor decorator. These are implemented source contracts
+with focused subscriber/failure and both-backend Victoria proofs, not final
+browser-matrix/coverage/CI certification, production activation or merge
+approval.
+
+The canonical `nix/otel-processors.json` fragment supplies
+`transform/jaunder_privacy` before batch and every durable log/trace exporter.
+Production imports it; local/VM launchers load it as the second config.
+Closed-checker/module/launcher/source-closure inputs agree on explicit privacy →
+batch arrays; production metrics remain batch-only. Producer-qualified retention
+uses ordinary `instrumentation_scope.name`, or facade `log.target` only within
+scope `log`, not a global safe-field-name union. It removes unknown fields, raw
+secondary stack/header/request/body copies and clears status descriptions while
+retaining status codes. Existing application message/typed-error constructors
+remain trusted, not universally sanitized. At exactly `html5ever::tokenizer`,
+`html5ever::tree_builder`, `html5ever::serialize`, every log/trace-event
+occurrence at every severity retains context but receives fixed body/event-name
+text and only producer/location/level metadata; no event dropping. Safe parser
+state/EOF/future-warning meaning is an approved loss. Preserve operation
+names/determinants, browser boot/test evidence, resources, IDs and stock
+integer/string carriers, including overflow strings. Current links have empty
+attributes; no hypothetical universal link sanitizer is introduced.
+
+This explicitly amends ADR-0011's pre-Collector privacy interpretation: raw
+application SDK, transport and trusted Collector input are accepted processing
+locations, not permission for raw durable output or persisted Collector failure
+or debug diagnostics. Invalid policy fails startup without raw fallback;
+`error_mode: propagate` can reject/retry batches and does not redact diagnostic
+text. Actual synthetic wire/configuration, secondary-copy and persisted-error
+proof supports the selected cases, not universal sanitization or delivery.
+
+VictoriaLogs stores the native producer as `scope.name`, message as `_msg`, and
+correlation as `trace_id`/`span_id`. Neither `jaunder.target` nor direct-log
+`jaunder.request.uri` is exported. Operators follow correct trace/span IDs to
+the linked request trace's safe path, not timestamps; roots legitimately lack
+request context. Exact explicit/contextual/root correlation and
+sampled/unsampled correlation remain. Private per-kind
+diagnostics/coalescing/256-byte promises retire, but nonfatal,
+credential/endpoint/payload-safe and nonrecursive failure behavior does not. The
+demonstrated minimum retains the owning weak-dispatch/public event-context
+adapter, suppression-preserving Activation, SDK-scope-only trace-layer gate and
+process-owned transport runtime. No application retention filter or synthetic
+IDs are introduced. Repeated same-ID entries retain the pinned latest-exit
+limitation; arbitrary entry-instance restoration is not promised.
+
+Local stdout/CLI/capture remain separate; process-owned bounded shutdown and
+one-shot draining remain required. Collector policy cannot fix SDK stderr,
+producer feedback or queue pressure and promises no volume recovery. The
+[operator guide](observability.md#shared-collector-privacy-policy) describes
+actual stored query fields and the confidence limits.
+
+#### Stock native logs and local diagnostic formatting
+
+Stock appender 0.32.0 owns native message/severity/field conversion without
+experimental metadata/span copying. There is no application field visitor,
+Debug/Option parser, target admission or request-path enrichment.
 
 The [native OTLP process logs proposal](adr/drafts/native-otlp-process-logs.md)
 records implemented routing of ordinary application logs through the same
@@ -2426,22 +2490,33 @@ span/event foundation, AlwaysOn recording despite clear upstream sampled hints,
 local-only filter accessor and retained field/diagnostic context. Local
 disablement must not disable OTLP output, metrics or independent WARN+/panic
 capture. Explicit messages become human-readable record bodies; severity and
-deliberately admitted structured fields remain separate. Safe target and
-request-path context are retained, while raw span stacks and `error.span_trace`
-are excluded. Correlation follows the event's resolved parent, including
-explicit parent/root semantics; absent context does not acquire fabricated IDs.
-SDK and exporter failure events use a bounded, redacted local stderr path and
-cannot feed the OTLP log exporter. Setup/shutdown, parent-assignment and
-field-format fallback diagnostics likewise remain local; unfiltered severity
-does not relax privacy or failure-path isolation. CLI result output and
-server-scoped E2E diagnostic capture remain independent. Native log providers
-are process-owned. The delivered #1742 foundation, native logger and
+producer-qualified structured fields remain separate after Collector processing.
+Both-backend Victoria fixtures verify `_msg`, INFO severity strings `"INFO"`/
+`"9"` and string status `"401"`. The store's strings are not native OTLP type
+claims. Exact log span ID → stored request span linkage supplies URI/method/
+remote-parent context; SQLite additionally verifies persistence. Raw span stacks
+and `error.span_trace` are excluded at the shared Collector. Correlation follows
+the event's resolved parent, including explicit parent/root semantics; absent
+context does not acquire fabricated IDs. Six pinned remote-detail diagnostics at
+target `opentelemetry-otlp`,
+`Tonic{Logs,Traces,Metrics}Client.{ExportFailed,PartialSuccess}`, use
+`SafeSdkFormat` at both host fmt variants and the independent server WARN+ JSON
+writer. Actual level/target/name, closed 17-code tonic names or signed scalar
+rejection counts remain visible; untrusted message/details use fixed text and
+selected span copies are absent. Other records delegate unchanged. This is not a
+universal SDK sanitizer, global SDK hide or per-kind/coalescing/size policy.
+Opaque setup and nonrecursive shutdown fallbacks remain; source-input taps are
+test-only, not production or output-privacy exemptions. Setup/shutdown,
+parent-assignment and field-format fallback diagnostics likewise remain local;
+unfiltered severity does not relax privacy or failure-path isolation. CLI result
+output and server-scoped E2E diagnostic capture remain independent. Native log
+providers are process-owned. The delivered #1742 foundation, native logger and
 stack/harness routing are implemented; combined runtime proof remains distinct
 from this architecture projection. The numberless decision remains proposed
 through feature shipping.
 
-Native batching resolves a private owned SDK `BatchConfig` snapshot at init and
-passes the complete value to `with_batch_config`. The pinned processor builder
+Native batching resolves an owned SDK `BatchConfig` snapshot at init and passes
+the complete value to `with_batch_config`. The pinned processor builder
 constructs a discarded environment-derived default before that replacement; this
 constructor-only third-party read cannot change effective policy. No application
 callback, worker, reconnect or teardown resolves effective policy again. This is

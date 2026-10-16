@@ -344,7 +344,7 @@ let
                 http.endpoint = "127.0.0.1:4318";
               };
             };
-            processors = {
+            processors = (builtins.fromJSON (builtins.readFile ./otel-processors.json)).processors // {
               batch = { };
             };
             exporters = {
@@ -360,12 +360,12 @@ let
               };
               traces = {
                 receivers = [ "otlp" ];
-                processors = [ "batch" ];
+                processors = [ "transform/jaunder_privacy" "batch" ];
                 exporters = [ "otlphttp/victoriatraces" ];
               };
               logs = {
                 receivers = [ "otlp" ];
-                processors = [ "batch" ];
+                processors = [ "transform/jaunder_privacy" "batch" ];
                 exporters = [ "otlphttp/victorialogs" ];
               };
             };

@@ -31,6 +31,10 @@ pub fn init_server_tracing(config: &TelemetryConfig, diag_path: Option<PathBuf>)
 }
 
 #[cfg(test)]
+#[path = "sdk_diagnostics_tests.rs"]
+mod sdk_diagnostics_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::observability::diagnostics::{assert_zero_error_metrics, with_process_globals};

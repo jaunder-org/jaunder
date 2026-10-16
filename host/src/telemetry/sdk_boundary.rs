@@ -32,20 +32,15 @@ thread_local! {
 /// Admitted tracing spans activate their `OTel` parent without clearing SDK scope.
 pub(super) struct Activation {
     owner: Arc<()>,
-    dispatch: Arc<OnceLock<WeakDispatch>>,
+    dispatch: OnceLock<WeakDispatch>,
 }
 
 impl Activation {
     pub(super) fn new() -> Self {
         Self {
             owner: Arc::new(()),
-            dispatch: Arc::new(OnceLock::new()),
+            dispatch: OnceLock::new(),
         }
-    }
-
-    /// Shares only the owning dispatch lookup with the native event projection.
-    pub(super) fn dispatch_lookup(&self) -> Arc<OnceLock<WeakDispatch>> {
-        self.dispatch.clone()
     }
 }
 
@@ -115,6 +110,7 @@ pub(super) struct ExporterRuntime {
 fn build_runtime() -> std::io::Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
+        .max_blocking_threads(2)
         .thread_name("otel-transport")
         .on_thread_start(|| {
             let guard = OtelContext::enter_telemetry_suppressed_scope();
