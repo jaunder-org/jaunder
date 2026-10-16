@@ -10,7 +10,10 @@
 mod native_export;
 mod native_logs;
 mod sdk_boundary;
+mod sdk_format;
 mod span_fields;
+
+pub use sdk_format::SafeSdkFormat;
 use std::time::{Duration, Instant};
 
 use opentelemetry::KeyValue;
@@ -105,13 +108,7 @@ enum FallbackKind {
     OtlpEndpoint,
     LogFilter,
     SpanFieldFormat,
-    NativeLogProjection,
     LoggerSetup,
-    LoggerExport,
-    LoggerPartial,
-    LoggerPartialWarning,
-    LoggerQueueFull,
-    LoggerFlush,
     LoggerShutdown,
     SlowThreshold,
     LogFormat,
@@ -158,27 +155,9 @@ impl FallbackKind {
                 "diagnostic span field formatting failed",
             ),
             Self::LoggerSetup => ("host.telemetry.logger_setup", "native log export disabled"),
-            Self::LoggerExport => ("host.telemetry.logger_export", "native log export failed"),
-            Self::LoggerPartial => (
-                "host.telemetry.logger_partial",
-                "native log export partially rejected",
-            ),
-            Self::LoggerPartialWarning => (
-                "host.telemetry.logger_partial_warning",
-                "native log export warning",
-            ),
-            Self::LoggerQueueFull => (
-                "host.telemetry.logger_queue_full",
-                "native log queue full; records dropped",
-            ),
-            Self::LoggerFlush => ("host.telemetry.logger_flush", "native log flush failed"),
             Self::LoggerShutdown => (
                 "host.telemetry.logger_shutdown",
                 "native log shutdown failed",
-            ),
-            Self::NativeLogProjection => (
-                "host.telemetry.native_log_projection",
-                "native log field formatting failed",
             ),
             Self::SlowThreshold => (
                 "host.telemetry.slow_threshold",
@@ -569,42 +548,74 @@ fn compose_subscriber_with_logger<L, W>(
     extra_layer: Option<L>,
     tracer: Option<opentelemetry_sdk::trace::SdkTracer>,
     output: Option<W>,
-    logger: Option<opentelemetry_sdk::logs::SdkLogger>,
+    logger: Option<&opentelemetry_sdk::logs::SdkLoggerProvider>,
 ) -> impl tracing::Subscriber + Send + Sync + 'static
 where
     L: Layer<tracing_subscriber::Registry> + Send + Sync + 'static,
     W: for<'writer> fmt::MakeWriter<'writer> + Send + Sync + 'static,
 {
+    // An absent Option<Layer> advertises Interest::always. Use a filtered
+    // identity for absent sinks, leaving each present sink's own filter intact.
+    let extra_layer = extra_layer.map_or_else(
+        || {
+            tracing_subscriber::layer::Identity::default()
+                .with_filter(tracing::level_filters::LevelFilter::OFF)
+                .boxed()
+        },
+        Layer::boxed,
+    );
     let activation = sdk_boundary::Activation::new();
-    let native_logs =
-        logger.map(|logger| native_logs::NativeLogs::new(logger, activation.dispatch_lookup()));
+    let native_enabled = logger.is_some();
+    let native_logs = native_logs::EventContextBridge::new(logger)
+        // Absence disables only this sink, before event fields are evaluated.
+        // Filtered still forwards registration to the owning context adapter.
+        .with_filter(tracing_subscriber::filter::filter_fn(move |_| {
+            native_enabled
+        }));
     // Endpoint selection owns routing even if native setup failed. Restoring
     // ordinary stdout would silently create a second ingestion path.
     let fmt_layer = output
         .filter(|_| !config.otlp_endpoint_configured())
-        .map(|writer| {
-            if config.json_format {
-                fmt::layer()
-                    .json()
-                    .with_writer(writer)
-                    .with_filter(config.local_log_filter())
+        .map_or_else(
+            || {
+                tracing_subscriber::layer::Identity::default()
+                    .with_filter(tracing::level_filters::LevelFilter::OFF)
                     .boxed()
-            } else {
-                fmt::layer()
-                    .with_writer(writer)
-                    .with_filter(config.local_log_filter())
-                    .boxed()
-            }
-        });
-    let otel_layer = tracer.map(|tracer| {
-        tracing_opentelemetry::layer()
-            .with_tracer(tracer)
-            .with_context_activation(false)
-            // SDK-owned suppression is fixed isolation, never a local verbosity policy.
-            .with_filter(tracing_subscriber::filter::dynamic_filter_fn(|_, _| {
-                !opentelemetry::Context::is_current_telemetry_suppressed()
-            }))
-    });
+            },
+            |writer| {
+                if config.json_format {
+                    fmt::layer()
+                        .json()
+                        .event_format(SafeSdkFormat::new(fmt::format().json(), true))
+                        .with_writer(writer)
+                        .with_filter(config.local_log_filter())
+                        .boxed()
+                } else {
+                    fmt::layer()
+                        .event_format(SafeSdkFormat::new(fmt::format(), false))
+                        .with_writer(writer)
+                        .with_filter(config.local_log_filter())
+                        .boxed()
+                }
+            },
+        );
+    let otel_layer = tracer.map_or_else(
+        || {
+            tracing_subscriber::layer::Identity::default()
+                .with_filter(tracing::level_filters::LevelFilter::OFF)
+                .boxed()
+        },
+        |tracer| {
+            tracing_opentelemetry::layer()
+                .with_tracer(tracer)
+                .with_context_activation(false)
+                // SDK-owned suppression is fixed isolation, never a local verbosity policy.
+                .with_filter(tracing_subscriber::filter::dynamic_filter_fn(|_, _| {
+                    !opentelemetry::Context::is_current_telemetry_suppressed()
+                }))
+                .boxed()
+        },
+    );
     tracing_subscriber::registry()
         .with(extra_layer)
         .with(
@@ -619,8 +630,8 @@ where
         .with(fmt_layer)
         .with(otel_layer)
         .with(native_logs)
-        // Option<Layer> does not forward dispatch registration; keep activation
-        // outside that adapter so it receives the owning weak dispatch.
+        // Both context layers are registered directly: Option<Layer> does not
+        // forward dispatch registration to its inner layer.
         .with(activation.with_filter(tracing_subscriber::filter::filter_fn(span_metadata_only)))
 }
 
@@ -711,13 +722,12 @@ where
 
     let subscriber_installed = install_subscriber_with(
         || {
-            use opentelemetry::logs::LoggerProvider as _;
             tracing::subscriber::set_global_default(compose_subscriber_with_logger(
                 config,
                 extra_layer,
                 tracer.as_ref().map(|provider| provider.tracer("jaunder")),
                 Some(std::io::stdout),
-                logger.as_ref().map(|provider| provider.logger("jaunder")),
+                logger.as_ref(),
             ))
         },
         || fallback(FallbackKind::SubscriberInstall),
@@ -769,7 +779,8 @@ type TracerShutdownOperation =
 /// budget; no unbounded pre-shutdown flush is added. Cleanup runs on ordinary
 /// return, error return and panic unwind without changing the primary outcome.
 /// Logger shutdown acknowledgment alone is not export/delivery proof: actual
-/// export failures and partial rejection are observed at the native boundary.
+/// export failures and partial rejection remain stock SDK diagnostics. The
+/// owning local formatters withhold their remote detail.
 ///
 /// Providers are absent without configured OTLP. The private transport runtime
 /// outlives all provider shutdown attempts and retains its fixed best-effort
@@ -905,7 +916,6 @@ mod tests {
 
     #[test]
     fn native_logger_guard_shutdown_drains_short_lived_records() {
-        use opentelemetry::logs::LoggerProvider as _;
         use opentelemetry_sdk::logs::{InMemoryLogExporter, LogBatch, LogExporter};
         #[derive(Clone, Debug)]
         struct Retained(InMemoryLogExporter);
@@ -927,7 +937,7 @@ mod tests {
             None::<tracing_subscriber::layer::Identity>,
             None,
             None::<Shared>,
-            Some(logger.logger("short-lived")),
+            Some(&logger),
         );
         tracing::subscriber::with_default(
             subscriber,
@@ -947,7 +957,6 @@ mod tests {
 
     #[test]
     fn native_sink_configured_endpoint_never_mirrors_or_restores_stdout() {
-        use opentelemetry::logs::LoggerProvider as _;
         use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLoggerProvider};
         for installed in [true, false] {
             let mut config = configured_local_policy(false, Some("trace"), None);
@@ -962,7 +971,7 @@ mod tests {
                 None::<tracing_subscriber::layer::Identity>,
                 None,
                 Some(Shared(output.clone())),
-                installed.then(|| provider.logger("routing")),
+                installed.then_some(&provider),
             );
             tracing::subscriber::with_default(
                 subscriber,
@@ -981,7 +990,7 @@ mod tests {
 
     #[test]
     fn native_projection_exports_exact_message_and_actual_severity() {
-        use opentelemetry::logs::{AnyValue, LoggerProvider as _, Severity};
+        use opentelemetry::logs::{AnyValue, Severity};
         use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLoggerProvider};
         let exporter = InMemoryLogExporter::default();
         let provider = SdkLoggerProvider::builder()
@@ -992,7 +1001,7 @@ mod tests {
             None::<tracing_subscriber::layer::Identity>,
             None,
             None::<Shared>,
-            Some(provider.logger("projection")),
+            Some(&provider),
         );
         tracing::subscriber::with_default(subscriber, || {
             tracing::info!(target: "host::application", "finished {}", "operation");
@@ -1649,6 +1658,89 @@ mod tests {
         let output = String::from_utf8(output.lock().expect("output").clone()).expect("utf8");
         assert!(output.contains("ordinary warning"));
         assert!(!output.contains("ordinary info"));
+    }
+
+    #[test]
+    fn absent_native_provider_does_not_evaluate_filtered_event_fields_but_keeps_span_trace() {
+        for policy in ["off", "warn"] {
+            for output_enabled in [false, true] {
+                let output = Arc::new(Mutex::new(Vec::new()));
+                let config = configured_local_policy(false, Some(policy), None);
+                let subscriber = compose_subscriber(
+                    &config,
+                    None::<tracing_subscriber::layer::Identity>,
+                    None,
+                    output_enabled.then(|| Shared(output.clone())),
+                );
+                let evaluated = std::cell::Cell::new(0_u32);
+                tracing::subscriber::with_default(subscriber, || {
+                    let decision = tracing::info_span!("decision", request_id = 7);
+                    let _decision = decision.enter();
+                    let warning = tracing::warn_span!("warning_context", retained = true);
+                    let _warning = warning.enter();
+                    tracing::trace!(
+                        evaluated = {
+                            evaluated.set(evaluated.get() + 1);
+                            evaluated.get()
+                        },
+                        "filtered trace"
+                    );
+                    tracing::debug!(
+                        evaluated = {
+                            evaluated.set(evaluated.get() + 1);
+                            evaluated.get()
+                        },
+                        "filtered debug"
+                    );
+                    tracing::warn!("ordinary warning");
+                    let trace = tracing_error::SpanTrace::capture();
+                    assert_eq!(trace.status(), tracing_error::SpanTraceStatus::CAPTURED);
+                    let rendered = trace.to_string();
+                    for context in [
+                        "decision",
+                        "request_id=7",
+                        "warning_context",
+                        "retained=true",
+                    ] {
+                        assert!(rendered.contains(context), "{rendered}");
+                    }
+                });
+                assert_eq!(evaluated.get(), 0, "{policy}, output={output_enabled}");
+                let output =
+                    String::from_utf8(output.lock().expect("output").clone()).expect("utf8");
+                assert_eq!(
+                    output.contains("ordinary warning"),
+                    output_enabled && policy == "warn"
+                );
+                assert!(!output.contains("filtered trace") && !output.contains("filtered debug"));
+            }
+        }
+    }
+
+    #[test]
+    fn absent_native_provider_preserves_independent_warn_sink_without_enabling_debug() {
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let extra = fmt::layer()
+            .json()
+            .with_writer(Shared(output.clone()))
+            .with_filter(tracing::level_filters::LevelFilter::WARN);
+        let config = configured_local_policy(false, Some("off"), None);
+        let subscriber = compose_subscriber(&config, Some(extra), None, None::<Shared>);
+        let evaluated = std::cell::Cell::new(0_u32);
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!(
+                evaluated = {
+                    evaluated.set(evaluated.get() + 1);
+                    evaluated.get()
+                },
+                "filtered debug"
+            );
+            tracing::warn!("independent warning");
+        });
+        assert_eq!(evaluated.get(), 0);
+        let output = String::from_utf8(output.lock().expect("output").clone()).expect("utf8");
+        assert!(output.contains("independent warning"));
+        assert!(!output.contains("filtered debug"));
     }
 
     #[test]

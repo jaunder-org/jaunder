@@ -143,7 +143,7 @@ e2ePanicGate = backend: identity: ''
   machine.succeed("journalctl -u jaunder.service --no-pager -o cat > /tmp/jaunder-journal-${identity}.log")
   # copy_from_machine's 2nd arg is a target *directory*; "" preserves the
   # lane-qualified source basename in the output.
-  machine.copy_from_machine("/tmp/jaunder-journal-${identity}.log", "")
+  _grab("/tmp/jaunder-journal-${identity}.log")
   panic_status, panic_out = machine.execute(
       "test-support verify-no-panics"
       + " --capture-dir /var/lib/jaunder/capture"
@@ -193,15 +193,114 @@ performanceGlobalTimeout = 6000;
 # JSONL file the VM owns.
 e2eOtelTestHelpers = identity: ''
   def wait_for_otel_receivers():
+    # Complete capture belongs on the driver's disk-backed exchange, not the DB root.
+    machine.succeed("test $(findmnt -n -o FSTYPE -T /var/lib/jaunder/capture) = 9p")
+    machine.succeed("test $(stat -c %d /var/lib/jaunder/capture) != $(stat -c %d /)")
+    machine.succeed("test $(stat -c %U:%G:%a /var/lib/jaunder/capture) = jaunder:jaunder:700")
+    machine.succeed("runuser -u jaunder -- test -w /var/lib/jaunder/capture")
     machine.wait_for_open_port(4317, timeout=30)
     machine.wait_for_open_port(4318, timeout=30)
 
   def retain_e2e_capture():
-    # The ordinary and pre-Playwright paths retain one whole-directory artifact,
-    # so a failure cannot silently lose a capture stream that ordinary retention preserves.
-    machine.execute("test -d /var/lib/jaunder/capture && tar czf /tmp/capture-${identity}.tar.gz -C /var/lib/jaunder capture 2>/dev/null || true")
-    if machine.execute("test -e /tmp/capture-${identity}.tar.gz")[0] == 0:
-      machine.copy_from_machine("/tmp/capture-${identity}.tar.gz", "")
+    import hashlib
+    import tarfile
+
+    # Keep every available failure artifact; only the final success path requires
+    # a quiesced, byte-exact snapshot. Earlier seed-failure callers ignore errors.
+    errors = []
+    results: dict[str, tuple[int, str]] = {}
+    for label, command in [
+      ("hash", "find /var/lib/jaunder/capture -type f -exec sha256sum {} +"),
+      ("size", "find /var/lib/jaunder/capture -type f -printf '%s %p\\n'"),
+      ("tar", "test -d /var/lib/jaunder/capture && tar czf /tmp/capture-${identity}.tar.gz -C /var/lib/jaunder capture"),
+    ]:
+      try:
+        results[label] = machine.execute(command)
+      except Exception as error:
+        results[label] = (-1, str(error))
+      status, output = results[label]
+      print("capture-" + label + " exit=%d" % status)
+      print(output)
+      if status != 0:
+        errors.append("capture " + label + " failed")
+    copied = False
+    try:
+      if machine.execute("test -e /tmp/capture-${identity}.tar.gz")[0] == 0:
+        machine.copy_from_machine("/tmp/capture-${identity}.tar.gz", "")
+        copied = True
+      else:
+        errors.append("capture archive missing")
+    except Exception as error:
+      errors.append("capture copy failed: " + str(error))
+    try:
+      assert not errors and copied, "capture inventory/archive/lift failed"
+      source_hashes = {}
+      source_sizes = {}
+      prefix = "/var/lib/jaunder/"
+      for line in results["hash"][1].splitlines():
+        digest, path = line.split(None, 1)
+        assert path.startswith(prefix + "capture/"), "unexpected source path"
+        name = path.removeprefix(prefix)
+        assert name not in source_hashes, "duplicate source hash member"
+        source_hashes[name] = digest
+      for line in results["size"][1].splitlines():
+        size, path = line.split(None, 1)
+        assert path.startswith(prefix + "capture/"), "unexpected source path"
+        name = path.removeprefix(prefix)
+        assert name not in source_sizes, "duplicate source size member"
+        source_sizes[name] = int(size)
+      assert source_hashes and source_hashes.keys() == source_sizes.keys(), "source populations differ or empty"
+      print("capture-source-manifest", json.dumps({"hashes": source_hashes, "bytes": source_sizes}, sort_keys=True))
+      actual_hashes = {}
+      actual_sizes = {}
+      with tarfile.open(machine.out_dir / "capture-${identity}.tar.gz", "r|gz") as archive:
+        for member in archive:
+          assert not any(part.startswith(".virtfs_metadata") for part in member.name.split("/")), "backend metadata exposed"
+          if member.isdir():
+            continue
+          assert member.isfile() and member.name not in actual_hashes, "nonregular or duplicate capture member"
+          data = archive.extractfile(member)
+          assert data is not None, "missing regular capture member"
+          sha = hashlib.sha256()
+          count = 0
+          while True:
+            chunk = data.read(65536)
+            if not chunk:
+              break
+            sha.update(chunk)
+            count += len(chunk)
+          actual_hashes[member.name] = sha.hexdigest()
+          actual_sizes[member.name] = count
+          assert count == member.size, "archive declared size mismatch"
+      assert actual_hashes == source_hashes and actual_sizes == source_sizes, "source/lift member/byte/SHA mismatch"
+      print("capture-integrity-complete", json.dumps({"hashes": actual_hashes, "bytes": actual_sizes}, sort_keys=True))
+    except Exception as error:
+      errors.append("capture integrity failed: " + str(error))
+    for error in errors:
+      print(error)
+    return errors
+
+  def stop_e2e_capture_writers():
+    errors = []
+    # The application's provider drain needs the Collector alive until it exits.
+    for service in ["jaunder.service", "otel-collector.service"]:
+      try:
+        status, output = machine.execute("systemctl stop " + service)
+        print("capture-stop", service, status, output)
+        if status != 0:
+          errors.append("capture writer stop failed: " + service)
+      except Exception as error:
+        errors.append("capture writer stop failed: " + service + ": " + str(error))
+    for service in ["jaunder.service", "otel-collector.service"]:
+      try:
+        status, output = machine.execute("systemctl show " + service + " -p ActiveState -p SubState")
+        print("capture-state", service, status, output)
+        state = dict(line.split("=", 1) for line in output.splitlines())
+        if status != 0 or state != {"ActiveState": "inactive", "SubState": "dead"}:
+          errors.append("capture writer not quiescent: " + service)
+      except Exception as error:
+        errors.append("capture writer state failed: " + service + ": " + str(error))
+    return errors
 
   def assert_seed_storage_spans():
     stop_status, stop_out = machine.execute(
@@ -382,8 +481,8 @@ e2eRunAndCapture =
     # even on failure and without --keep-failed.
     print(pw_out)
 
-    # Stop otel so its trace flushes; ignore status (best-effort capture).
-    machine.execute("systemctl stop otel-collector.service")
+    # Collect failures without aborting the remaining diagnostic lifts.
+    retention_errors = stop_e2e_capture_writers()
 
     result_lift_started_at = time.monotonic()
 
@@ -392,8 +491,16 @@ e2eRunAndCapture =
     # copy_from_machine's 2nd arg is a target *dir*; "" lands the file flat
     # under the per-backend name carried by the source.
     def _grab(path):
-        if machine.execute("test -e " + path)[0] == 0:
-            machine.copy_from_machine(path, "")
+        try:
+            status, output = machine.execute("test -e " + path)
+            if status == 0:
+                machine.copy_from_machine(path, "")
+            elif status != 1:
+                retention_errors.append("diagnostic existence check failed: " + path + ": " + output)
+                print(retention_errors[-1])
+        except Exception as error:
+            retention_errors.append("diagnostic copy failed: " + path + ": " + str(error))
+            print(retention_errors[-1])
 
     machine.execute("test -s /tmp/e2e/test-results/results.json && cp /tmp/e2e/test-results/results.json /tmp/playwright-report-${identity}.json")
     _grab("/tmp/playwright-report-${identity}.json")
@@ -414,12 +521,12 @@ e2eRunAndCapture =
     # Capture-dir contract (#227, #332): the shared helper retains the complete
     # capture directory for ordinary and seed-failure paths alike. It holds diag.log,
     # the collector's flushed otel-traces.jsonl, plus any written mail/websub stream.
-    retain_e2e_capture()
+    retention_errors.extend(retain_e2e_capture())
     record_e2e_phase(
       "result-lift",
       result_lift_started_at,
-      "success",
-      "${backend}/${browser}: copied available Playwright and service diagnostics.",
+      "success" if not retention_errors else "failed",
+      "${backend}/${browser}: attempted available Playwright and service diagnostics; retention errors: " + "; ".join(retention_errors),
     )
 
     post_gate_started_at = time.monotonic()
@@ -439,6 +546,10 @@ e2eRunAndCapture =
     # Preserve ADR-0032's panic assertion before the Playwright assertion.
     assert panic_status == 0, "e2e zero-panic gate failed (exit %d) for ${identity}; see jaunder-journal-${identity}.log + e2e-phase-${identity}.json + build.log" % panic_status
 
+    # A browser failure keeps its original assertion after best-effort capture.
+    # Otherwise, missing drain/inventory/tar/copy integrity must not become green.
+    if pw_status == 0:
+      assert not retention_errors, "e2e capture retention failed: " + "; ".join(retention_errors)
     # Fail the check now — after all artifacts are safely copied out.
     assert pw_status == 0, "e2e Playwright failed (exit %d) for ${identity}; see playwright-report-${identity}.json + duration-budget-manifest-${identity}.json + playwright-artifacts-${identity}.tar.gz + e2e-phase-${identity}.json + e2e-census-${identity}.json + e2e-lane-manifest-${identity}.json + build.log" % pw_status
   '';
@@ -580,9 +691,19 @@ mkE2eCheck =
           jaunderBin
         ];
         environment.etc."jaunder-otel-collector.yaml".source = ../end2end/otel-collector.yaml;
+        environment.etc."jaunder-otel-processors.json".source = ./otel-processors.json;
 
-        systemd.tmpfiles.rules = [ "d /var/lib/jaunder/capture 0755 jaunder jaunder -" ];
+        # The launcher creates this per-machine host exchange before QEMU starts.
+        # Mapped metadata lets the guest's application user own private capture
+        # without requiring the unprivileged host driver to chown to a guest UID.
+        virtualisation.sharedDirectories.e2e-capture = {
+          source = ''"$TMPDIR"/xchg'';
+          target = "/var/lib/jaunder/capture";
+          securityModel = "mapped-file";
+        };
+        systemd.tmpfiles.rules = [ "d /var/lib/jaunder/capture 0700 jaunder jaunder -" ];
         systemd.services.otel-collector = {
+          unitConfig.RequiresMountsFor = [ "/var/lib/jaunder/capture" ];
           description = "Jaunder e2e OTel Collector";
           wantedBy = [ "multi-user.target" ];
           after = [ "network.target" ];
@@ -590,7 +711,7 @@ mkE2eCheck =
           # directory through its environment providers.
           environment = e2eOtelCollectorEnv;
           serviceConfig = {
-            ExecStart = "${pkgs.opentelemetry-collector-contrib}/bin/otelcol-contrib --config /etc/jaunder-otel-collector.yaml";
+            ExecStart = "${pkgs.opentelemetry-collector-contrib}/bin/otelcol-contrib --config /etc/jaunder-otel-collector.yaml --config /etc/jaunder-otel-processors.json";
             Restart = "on-failure";
             RestartSec = "2s";
           };
@@ -603,6 +724,7 @@ mkE2eCheck =
         systemd.services.jaunder.wantedBy = lib.mkForce [ ];
         systemd.services.jaunder.after = [ "otel-collector.service" ];
         systemd.services.jaunder.requires = [ "otel-collector.service" ];
+        systemd.services.jaunder.unitConfig.RequiresMountsFor = [ "/var/lib/jaunder/capture" ];
         systemd.services.jaunder.environment = captureEnv // {
           RUST_LOG = "info";
           JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT = "http://127.0.0.1:4317";
@@ -1445,12 +1567,24 @@ mkWasmCoverageMeasurementProducer =
       && builtins.attrNames settings.receivers == [ "otlp" ]
       && settings.receivers.otlp.protocols.grpc.endpoint == "127.0.0.1:4317"
       && settings.receivers.otlp.protocols.http.endpoint == "127.0.0.1:4318"
-      && builtins.attrNames settings.processors == [ "batch" ]
+      && settings.processors == ((builtins.fromJSON (builtins.readFile ./otel-processors.json)).processors // { batch = { }; })
       && settings.service.pipelines.logs == {
         receivers = [ "otlp" ];
-        processors = [ "batch" ];
+        processors = [ "transform/jaunder_privacy" "batch" ];
         exporters = [ "otlphttp/victorialogs" ];
       }
+      && settings.service.pipelines.traces == {
+        receivers = [ "otlp" ];
+        processors = [ "transform/jaunder_privacy" "batch" ];
+        exporters = [ "otlphttp/victoriatraces" ];
+      }
+      && settings.service.pipelines.metrics == {
+        receivers = [ "otlp" ];
+        processors = [ "batch" ];
+        exporters = [ "prometheusremotewrite" ];
+      }
+      && builtins.attrNames settings.exporters == [ "otlphttp/victorialogs" "otlphttp/victoriatraces" "prometheusremotewrite" ]
+      && builtins.attrNames settings.service.pipelines == [ "logs" "metrics" "traces" ]
     ) [ sqliteStack postgresStack ];
     assert sqliteStack.config.services.opentelemetry-collector.settings.exporters.prometheusremotewrite.endpoint == "http://127.0.0.1:8428/metrics/api/v1/write";
     assert sqliteStack.config.services.opentelemetry-collector.settings.exporters."otlphttp/victoriatraces".traces_endpoint == "http://127.0.0.1:10428/traces/insert/opentelemetry/v1/traces";
@@ -1968,8 +2102,8 @@ mkWasmCoverageMeasurementProducer =
           )
           def response_logs(records):
             return [record for record in records
-              if record.get("jaunder.target") == "tower_http::trace::on_response"
-              and record.get("jaunder.request.uri") == telemetry_uri]
+              if record.get("scope.name") == "tower_http::trace::on_response"
+              and record.get("trace_id") == trace_id]
 
           target_log = None
           for _ in range(120):
@@ -1980,7 +2114,7 @@ mkWasmCoverageMeasurementProducer =
               target_log = matching[0]
               break
             machine.sleep(1)
-          assert target_log is not None, "driven native response log never appeared before reboot:\n%s" % records[-10:]
+          assert target_log is not None, "driven native response log never appeared before reboot; records for the driven trace:\n%s" % [record for record in records if record.get("trace_id") == trace_id]
           assert "_time" in target_log, "native response log lacks a timestamp: %s" % target_log
           assert target_log.get("_msg") == "finished processing request", target_log
           assert target_log.get("severity_text") == "INFO", target_log
@@ -1994,7 +2128,7 @@ mkWasmCoverageMeasurementProducer =
           assert request_id not in target_log_identity, "request header marker reached VictoriaLogs: %s" % target_log
           for credential in [authorization, cookie]:
             assert credential not in target_log_identity, "request credential reached VictoriaLogs: %s" % target_log
-          for field in ["jaunder.request.headers", "headers", "response_headers", "authorization", "cookie", "span", "spans", "error.span_trace"]:
+          for field in ["jaunder.target", "jaunder.request.uri", "jaunder.request.headers", "headers", "response_headers", "authorization", "cookie", "span", "spans", "error.span_trace"]:
             assert field not in target_log, "excluded field reached VictoriaLogs: %s" % target_log
           assert "error.span_trace" not in target_log_identity, "raw span stack reached VictoriaLogs"
           assert "panicked at" not in target_log_identity, target_log
@@ -2030,6 +2164,14 @@ mkWasmCoverageMeasurementProducer =
             and reference.get("traceID") == trace_id
             and reference.get("spanID") == "0123456789abcdef"
             for reference in response_span.get("references", [])), response_span
+          # The exact stored span, not a timestamp approximation, supplies the request path.
+          print("native telemetry proof: " + json.dumps({
+            "log": target_log,
+            "trace": trace_payload,
+            "metric": metric_sample,
+            "application_exec_start": machine.succeed("systemctl show --value -p ExecStart jaunder.service").strip(),
+            "collector_exec_start": machine.succeed("systemctl show --value -p ExecStart opentelemetry-collector.service").strip(),
+          }, sort_keys=True))
           # Re-query after all signals arrive to catch a second ingestion path.
           assert len(response_logs(log_records(log_command))) == 1, "duplicate native/journal ingestion"
 
@@ -2236,6 +2378,7 @@ mkWasmCoverageMeasurementProducer =
         { name = "application"; relevant = "server/src/lib.rs"; excluded = "docs/README.md"; }
         { name = "e2e-package"; relevant = "end2end/tests/fixtures.ts"; excluded = "xtask/src/main.rs"; }
         { name = "nix-test-definition"; relevant = "nix/checks.nix"; excluded = "docs/README.md"; }
+        { name = "otel-privacy-policy"; relevant = "nix/otel-processors.json"; excluded = "docs/README.md"; }
       ];
     };
   };
@@ -2468,6 +2611,7 @@ static-code =
         !(pkgs.lib.hasSuffix ".md" path)
         && (
           pkgs.lib.hasSuffix ".css" path
+          || pkgs.lib.hasSuffix "/nix/otel-processors.json" path
           || pkgs.lib.hasSuffix "/testdata/theme-repository/minimal/preview.png" path
           || (
             !isXtask
@@ -2508,6 +2652,7 @@ static-code =
       src = craneLib.path ../.;
       filter =
         assert staticCodeSourceFilter "/source/xtask/theme.css" "regular";
+        assert staticCodeSourceFilter "/source/nix/otel-processors.json" "regular";
         assert staticCodeSourceFilter "/source/xtask" "directory";
         assert !(staticCodeSourceFilter "/source/xtask/src/lib.rs" "regular");
         assert (staticCodeSourceFilter "/source/testdata/theme-repository/minimal/preview.png" "regular");

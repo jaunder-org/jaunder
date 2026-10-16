@@ -16,9 +16,9 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [batch]
+      processors: [transform/jaunder_privacy, batch]
       exporters: [file]
     logs:
       receivers: [otlp]
-      processors: [batch]
+      processors: [transform/jaunder_privacy, batch]
       exporters: [file/logs]

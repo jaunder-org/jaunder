@@ -1971,9 +1971,11 @@ dependencies = [
  "image",
  "jiff",
  "lightningcss",
+ "log",
  "macros",
  "mp4parse",
  "opentelemetry",
+ "opentelemetry-appender-tracing",
  "opentelemetry-otlp",
  "opentelemetry-proto",
  "opentelemetry_sdk",
@@ -2478,6 +2480,7 @@ dependencies = [
  "nix",
  "opentelemetry",
  "opentelemetry-otlp",
+ "opentelemetry-proto",
  "opentelemetry_sdk",
  "percent-encoding",
  "processkit",
@@ -2502,6 +2505,7 @@ dependencies = [
  "tokio-cron-scheduler",
  "tokio-tungstenite",
  "tokio-util",
+ "tonic",
  "tower",
  "tower-http 0.7.1",
  "tracing",
@@ -3506,6 +3510,18 @@ dependencies = [
  "pin-project-lite",
  "thiserror 2.0.20",
  "tracing",
+]
+
+[[package]]
+name = "opentelemetry-appender-tracing"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c0080f0dc1d7c786f467cd85a4e395fcab11ee852004f39a29a18ab7c25d837"
+dependencies = [
+ "opentelemetry",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber",
 ]
 
 [[package]]

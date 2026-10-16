@@ -17,7 +17,12 @@
       "playwright-tests",
       "otel-config"
     ],
-    "e2e-driver": ["application", "e2e-package", "nix-test-definition"]
+    "e2e-driver": [
+      "application",
+      "e2e-package",
+      "nix-test-definition",
+      "otel-privacy-policy"
+    ]
   },
   "outputs": [
     { "attr": "checks.x86_64-linux.coverage", "classification": "final" },

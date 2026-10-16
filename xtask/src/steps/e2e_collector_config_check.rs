@@ -12,6 +12,28 @@ use crate::result::{CommandResult, StepResult};
 
 const STEP: &str = "e2e-collector-config";
 const CONFIG: &str = "end2end/otel-collector.yaml";
+const POLICY: &str = "nix/otel-processors.json";
+// Digest of the reviewed JSON value (sorted object keys, compact encoding).
+// Policy changes need new semantic wire proof, not just a matching processor name.
+const POLICY_DIGEST: &str = "70f370a4dbf469027245f6ebc74dd3c664235bd19094d6c919f0b06d7c973f53";
+
+fn policy_problem(source: &str) -> Option<String> {
+    use sha2::{Digest as _, Sha256};
+    let value: serde_json::Value = match serde_json::from_str(source) {
+        Ok(value) => value,
+        Err(error) => return Some(format!("{POLICY}: invalid JSON: {error}")),
+    };
+    let bytes = match serde_json::to_vec(&value) {
+        Ok(bytes) => bytes,
+        Err(error) => return Some(format!("{POLICY}: cannot encode JSON: {error}")),
+    };
+    (Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+        != POLICY_DIGEST)
+        .then(|| format!("{POLICY}: policy differs from the reviewed privacy transform"))
+}
 const CAPTURE_SOURCE: &str = "host/src/capture.rs";
 const GRPC_ENDPOINT: &str = "${env:OTELCOL_GRPC_ENDPOINT}";
 const HTTP_ENDPOINT: &str = "${env:OTELCOL_HTTP_ENDPOINT}";
@@ -133,7 +155,10 @@ fn expect_sequence(value: &Value, path: &str, expected: &[&str], found: &mut Vec
 
 /// Return every collector-surface violation. Parsing and shape checks fail closed so
 /// malformed or newly broadened configuration cannot silently escape the host gate.
-pub fn problems(config_source: &str, capture_source: &str) -> Option<String> {
+pub fn problems(config_source: &str, capture_source: &str, policy_source: &str) -> Option<String> {
+    if let Some(problem) = policy_problem(policy_source) {
+        return Some(problem);
+    }
     let config: Value = match serde_yaml::from_str(config_source) {
         Ok(config) => config,
         Err(error) => return Some(format!("{CONFIG}: invalid YAML: {error}")),
@@ -238,7 +263,7 @@ pub fn problems(config_source: &str, capture_source: &str) -> Option<String> {
         expect_sequence(
             &pipeline["processors"],
             &format!("service.pipelines.{signal}.processors"),
-            &["batch"],
+            &["transform/jaunder_privacy", "batch"],
             &mut found,
         );
         expect_sequence(
@@ -269,7 +294,14 @@ pub fn run(result: &mut CommandResult) {
             return;
         }
     };
-    match problems(&config_source, &capture_source) {
+    let policy_source = match std::fs::read_to_string(POLICY) {
+        Ok(source) => source,
+        Err(error) => {
+            result.push(StepResult::fail(STEP).detail(format!("cannot read {POLICY}: {error}")));
+            return;
+        }
+    };
+    match problems(&config_source, &capture_source, &policy_source) {
         Some(detail) => result.push(StepResult::fail(STEP).detail(detail)),
         None => result.push(StepResult::ok(STEP)),
     }
@@ -277,7 +309,11 @@ pub fn run(result: &mut CommandResult) {
 
 #[cfg(test)]
 mod tests {
-    use super::{GRPC_ENDPOINT, HTTP_ENDPOINT, problems};
+    use super::{GRPC_ENDPOINT, HTTP_ENDPOINT};
+    const POLICY: &str = include_str!("../../../nix/otel-processors.json");
+    fn problems(config: &str, capture: &str) -> Option<String> {
+        super::problems(config, capture, POLICY)
+    }
 
     const CAPTURE_SOURCE: &str = r#"
 pub const DIR_ENV: &str = "CAPTURE_ROOT";
@@ -315,11 +351,11 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [batch]
+      processors: [transform/jaunder_privacy, batch]
       exporters: [file]
     logs:
       receivers: [otlp]
-      processors: [batch]
+      processors: [transform/jaunder_privacy, batch]
       exporters: [file/logs]
 "#
         )
@@ -328,6 +364,33 @@ service:
     #[test]
     fn accepts_the_owned_collector_surface() {
         assert_eq!(problems(&valid_config(), CAPTURE_SOURCE), None);
+    }
+
+    #[test]
+    fn rejects_missing_malformed_or_changed_policy_and_raw_bypasses() {
+        for policy in [
+            "",
+            "{",
+            "{}",
+            &POLICY.replace("propagate", "ignore"),
+            &POLICY.replace("host::error", "other::error"),
+        ] {
+            assert!(super::problems(&valid_config(), CAPTURE_SOURCE, policy).is_some());
+        }
+        for processors in [
+            "batch",
+            "batch, transform/jaunder_privacy",
+            "transform/jaunder_privacy",
+            "transform/jaunder_privacy, batch, other",
+        ] {
+            assert!(
+                problems(
+                    &valid_config().replace("transform/jaunder_privacy, batch", processors),
+                    CAPTURE_SOURCE
+                )
+                .is_some()
+            );
+        }
     }
 
     #[test]
@@ -377,7 +440,10 @@ service:
                 "${env:CAPTURE_ROOT}/traces.jsonl",
             ),
             valid_config().replace("receivers: [otlp]", "receivers: [journald]"),
-            valid_config().replace("processors: [batch]", "processors: [batch, transform]"),
+            valid_config().replace(
+                "processors: [transform/jaunder_privacy, batch]",
+                "processors: [batch, transform]",
+            ),
             valid_config().replace("    logs:\n", "    metrics:\n"),
             valid_config().replace("  file/logs:\n", "  debug: {}\n  file/logs:\n"),
         ] {

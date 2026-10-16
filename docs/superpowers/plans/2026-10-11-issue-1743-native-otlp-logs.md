@@ -1,132 +1,110 @@
 # Issue #1743 — native OTLP logging implementation outline
 
-> Execute with **jaunder-iterate**; use **jaunder-dispatch** only for bounded
-> tasks. Trigger: shared subscriber architecture, privacy admission, process
-> lifecycle and a cross-agent prerequisite. The approved spec remains
-> authoritative.
+> Qualified revision: JAU-1743-COLLECTOR-AMENDMENT-001, human “both approved”,
+> acknowledged by Lead against technical contract SHA256
+> `c5ee2ad723645acbff1cda627e3154282f95e468ff04991ae8a28cec879580f6` and the
+> latest decision card. The
+> [spec](../specs/2026-10-11-issue-1743-native-otlp-logs.md) remains
+> authoritative. This outline records implementation and acceptance obligations,
+> not production activation, shipping or merge approval.
 
-> Revision 2026-10-12: supersedes the filtered-OTLP wiring/proof plan. The
-> revised #1743 spec and this outline are approved. Execution still waits for
-> #1742 to land.
+## Scope and sequence
 
-## Scope
+Stock appender/SDK wiring replaces application privacy/admission visitors, Debug
+parsing, path enrichment and private exporter classification. One shared
+producer-qualified production/test Collector policy precedes batch and durable
+log/trace sinks. Local output, source-admitted spans, operation determinants,
+metrics, browser evidence, correlation, lifetime and failure safety remain.
+Approved losses are parser state/EOF/future-warning detail, free-text status
+descriptions, direct-log paths and private per-kind/coalescing/256-byte
+promises. No new guarantee loss or public seam follows from implementation.
 
-In: native process logs through the configured Collector, stdout without OTLP,
-logger lifetime/failure handling, real-stack message proof and operator
-guidance. Out: #1742's tracer/local-policy implementation, historical repair,
-deployment, credentials, retention, browser telemetry, unrelated errors, new
-log-filter controls.
+No production activation, historical repair, credentials, retention/budget
+changes, storage Collector work or unrelated UI changes. The accepted browser
+fixture repairs preserve assertions and test identities: Post-ID-owned image
+selectors, exact routes, and Site Theme reset/restoration inside existing serial
+configuration projects. They do not authorize font/pixel redesign or retries to
+green.
 
-Order: #1742/rebase + baseline → record projection → sink/lifecycle → real-stack
-routing → combined proof/docs. Key risks: privacy admission, explicit-root
-context, SDK recursion and bounded shutdown. No independent filter
-implementation.
+## Behavior packets
 
-## Task outline
+- [x] A. Calibrate the selected stock composition before relying on removals.
+  - Admitted synthetic wire/configuration/failure proofs establish ordinary and
+    facade producers, scalar carriers, context, selected parser policy,
+    secondary-copy removal and safe persisted failure diagnostics.
+  - Negative SDK diagnostics remain visible with safe detail; Collector parse
+    and actual output-write failures remain failures. Source-input taps are test
+    stimulus, not production observers or diagnostic-output exemptions.
+  - These focused cases do not promise volume recovery, universal sanitization
+    or exhaustive workload coverage.
+- [x] B. Integrate stock emission and minimal demonstrated mechanics.
+  - Exact stock appender 0.32.0, no experimental metadata/span copying; ordinary
+    batch/provider semantics. Application visitors, Debug parsing, direct-path
+    enrichment, per-kind classification/coalescing and size policy are absent.
+  - Retain owning public event-context adapter, suppression-preserving
+    Activation, SDK-scope-only dynamic trace-layer gate and process-owned
+    transport runtime. Process-global subscriber, not scoped worker-dispatch
+    propagation; repeated-ID latest-exit and residual-work limits remain.
+  - Six pinned remote-detail SDK identities use SafeSdkFormat at both host fmt
+    variants and independent server WARN+ JSON. Other records delegate
+    unchanged; opaque setup/nonrecursive shutdown fallbacks remain.
+  - Root guard ordering is meter → tracer → logger → runtime. Public
+    subscriber/lifecycle/failure tests, provider-presence regressions and
+    independent source reviews support this packet, not final coverage.
+- [x] C. Install the canonical shared Collector policy.
+  - `nix/otel-processors.json` defines `transform/jaunder_privacy` with
+    `error_mode: propagate`. Production and local/VM assemblies use privacy →
+    batch for logs/traces; metrics remain unchanged. Closed checker, module
+    assertions, launcher and source-closure inputs agree.
+  - Producer-qualified retention is not a global field union. Every selected
+    parser occurrence/severity/context survives with fixed text; status codes,
+    operation/browser evidence and stock integer/string carriers remain.
+  - Invalid policy has no raw fallback; `propagate` is not diagnostic redaction.
+- [ ] D. Complete integrated behavior proof.
+  - Both real Victoria backends verify `scope.name`, meaningful `_msg`, INFO
+    severity and string-valued status `"401"`; exact log span ID joins the
+    stored request span with URI/method/remote parent. SQLite additionally
+    verifies persistence. No legacy target/path attribute or timestamp join.
+  - Current-source SQLite Chromium auth flow is independently proven. This is
+    not PostgreSQL Chromium proof, a full browser matrix, or a replay of private
+    parser fixtures when the live workload emitted none.
+  - Keep comparable before/after message-presentation evidence and original
+    zero-panic/boot/determinant obligations. Record first failures and
+    unexecuted work honestly; no unchanged retries or expectation weakening.
+- [ ] E. Review and certify the final current tree.
+  - Reconcile these seven working/current documents with actual implementation,
+    retaining numberless/proposed ADR status and the same approved contract.
+  - Prove accepted browser repairs through their existing projects on Chromium
+    and Firefox with appropriate backend parity; source/compiled routing alone
+    is not browser proof.
+  - Review the integrated diff before applicable broad validation, authoritative
+    coverage/CSR checks and current-tree CI. Historical green does not certify
+    changed source. Use the normal CONTRIBUTING ladder, not a new framework.
+  - Commit/push/merge/activation are separate authority. Retire spec/outline
+    only after conformance under the established artifact lifecycle; merge
+    requires explicit per-PR approval.
 
-- [x] 1. Consume the delivered #1742 foundation and capture the before state.
-  - Wait for #1742 to land; rebase this checkout, reconciling docs by intent.
-    Verify unfiltered spans/events, AlwaysOn sampled/unsampled-parent behavior,
-    local-only filter accessor, initial/late retention, ErrorLayer and
-    independent capture before altering subscriber composition. Do not consume
-    the removed per-span admission marker or old active-sink filter accessor.
-  - Capture deterministic VictoriaLogs default message presentation while the
-    stack still uses journal ingestion; retain query/state/viewport for task 5.
-  - Verification: peer merge/contract evidence and source review; baseline
-    visual proof. Stop/coordinate if delivered behavior differs from the agreed
-    seam.
-- [x] 2. Introduce a reviewed native log-record projection.
-  - Contract: explicit message → string body; tracing level → SDK severity;
-    admitted fields → typed attributes; target/path use existing stack query
-    names. No arbitrary field/Debug or inherited-span-map serialization.
-  - Resolve the event's explicit/contextual/root parent from actual installed
-    tracing context. Prevent SDK ambient-context fallback for roots or missing
-    parent context; never enter/create a synthetic span to obtain IDs.
-  - Verification: in-memory SDK records for exact body/types, contextual and
-    differing explicit parents, root/no-tracer and unsampled upstream parents,
-    safe field retention and exclusion of credentials, request aggregates and
-    `error.span_trace`.
-- [x] 3. Integrate the active log sink, logger ownership and failure isolation.
-  - Contract: stdout only without an endpoint, native records only with one.
-    Only local stdout consumes #1742's `local_log_filter()` policy. Native logs
-    offer all application severities with no severity/target/context filter;
-    privacy projection and local-fallback isolation remain mandatory. Logger
-    setup failure must not restore ordinary stdout mirroring.
-  - Use the shared endpoint/resource and pinned SDK gRPC capability, creating
-    the provider inside the existing Tokio process lifecycle. The process guard
-    owns logger shutdown alongside tracer/meter; shutdown drains buffered logs.
-  - Verification: real subscriber/SDK export of all application severities under
-    local WARN/off, restrictive target/context directives and ordinary/verbose
-    defaults; no native-filter substitute. Verify sampled/unsampled-parent
-    correlation, unchanged CLI results, one-shot flush, initial/late fields and
-    SpanTrace without stdout, repeated failures and nonfatal shutdown. Metrics
-    and WARN+/panic capture stay independent. No SDK/local fallback enters logs.
-- [x] 4. Switch stack ingestion and support isolated harness log export.
-  - Contract: production Collector logs receiver becomes OTLP; remove journal
-    receiver/JSON transformation, not other ingress/storage/authentication.
-  - Extend the traces-only E2E Collector with a separate test-only log file
-    exporter/pipeline. Keep `otel-traces.jsonl`, diag/panic layout and their
-    consumers unchanged; optional log evidence must not mix into trace JSONL.
-  - Verification: module assertions and both real stack signal-capture VMs
-    (`jaunder-stack-sqlite-bcrypt`, `jaunder-stack-postgresql`): exact `_msg`,
-    severity, safe fields, linked trace/span IDs, credential exclusion and
-    single ingestion. Keep SQLite persistence and existing ingress assertions.
-- [ ] 5. Prove combined behavior and project delivered contracts.
-  - Run focused host/HTTP proofs, one real browser/server flow preserving
-    trace/boot/panic evidence, then applicable stack/CI boundaries. Review
-    findings before expensive final proofs; never weaken gates or resources.
-  - Capture the comparable after VictoriaLogs UI/query presentation. Update
-    observability/deployment procedures and convert proposed architecture to
-    built reality only after implementation; retain the numberless ADR.
-  - Verification: spec conformance, before/after judgment, both-backend stack
-    proof and authoritative CI. Retire completed spec/outline at ship; execution
-    reports and temporary probes remain ignored. Merge requires fresh approval.
+## Risk and proof discipline
 
-## Record-admission and failure contracts
+The approved privacy seam accepts raw SDK/transport/trusted Collector input, not
+raw durable output or persisted diagnostic leaks. New content-bearing or
+attributed-link producers need review; current links have empty attributes.
+Message constructors, TraceField admission and ADR-0168's isolated synthetic
+browser qualification remain in force.
 
-- Start with a closed profile: `error.kind`, `error.class`, `error.public`,
-  `error.source`, `error.context`, `error.disposition`, `telemetry.origin`,
-  `db.system` and audited stable identifier fields. Preserve safe
-  `jaunder.target` and `jaunder.request.uri` context. Freeze actual
-  producer/field representations through table tests before wiring; any
-  additional retained field requires a reviewed existing producer, not wildcard
-  admission. Document query-shape changes.
-- Preserve scalar types where supported; unsigned values must not wrap into
-  OTLP's signed integer range. Debug rendering is allowed only for reviewed
-  carrier/ID projections, never as a fallback for an unknown field or aggregate.
-  Audit messages from newly exported CLI/seed processes as well as the server.
-- Reject SDK/exporter/self-diagnostic targets before native record emission,
-  independently of local verbosity. Include setup/shutdown, parent-assignment
-  and field-format fallback diagnostics in this exclusion, not only exporter
-  targets. Keep them on the agreed local failure path. Redact failure payloads
-  before SDK diagnostics can expose them; preserve a failed
-  result/classification rather than report successful export.
-- Coalesce new logger diagnostics to at most one fixed redacted stderr line per
-  failure kind per process; cap each line at 256 bytes. No endpoint, raw
-  exporter text, payload or caller value. Prove bounds under repeated failures.
-- Rely on pinned SDK bounded batching defaults, not explicit restatement:
-  default queue 2048 records/batch 512; logger shutdown defaults to five
-  seconds. Lock behavior with regressions, including saturation and an
-  unavailable Collector. Resolve any supported inherited SDK policy at the
-  process boundary; callbacks must not reread environment. Never add an
-  unbounded flush before the bounded shutdown or change existing tracer/meter
-  lifetime budgets.
+Collector policy cannot protect SDK stderr or solve generation/feedback/queue
+pressure. Bounded shutdown acknowledgment is not durable-delivery or worker
+containment proof. Runtime failure, timeout, truncated capture and missing
+artifacts remain failed or incomplete evidence. Diagnose the owning seam and
+return out-of-scope product changes to Lead rather than changing assertions,
+resource budgets, admission or policy semantics.
 
-## Risk checks
+Use supported `cargo xtask e2e-local <spec>` for focused SQLite iteration and
+normal Nix/xtask backend/browser lanes for hermetic parity. Full Firefox
+verdicts require every retained producer plus reconciliation. CSR bundle
+integrity and source provenance are distinct from CSR lint and coverage. Final
+broad gates remain after writer settlement; no stale e2e sidecar substitutes for
+a gate.
 
-- Local verbosity must not clamp OTLP records, spans or events; no global,
-  target/context or per-span marker substitutes. Collector retention is outside
-  this work. Document increased volume without weakening resource/proof budgets.
-- Correlation follows actual event parents, including unsampled upstream IDs;
-  roots must not inherit unrelated ambient SDK context. Preserve local fields.
-- Newly visible DEBUG/TRACE messages/fields require a producer/privacy audit.
-  Raw span traces can be explicit event fields, not just inherited stacks;
-  unfiltered severity must not expose them or local fallback/self-failures.
-- Log-provider creation/export/shutdown must be valid under the pinned runtime
-  and must not panic, block indefinitely or alter the application's outcome.
-- Test-only log capture is separate from trace capture; existing metrics
-  behavior, backend parity, panic rules, retries, timeouts and VM budgets remain
-  intact.
-- One writer in this checkout; do not edit the #1742 checkout or implement its
-  owned local-policy/AlwaysOn tracer foundation. New uncertainty returns to
-  coordination/review.
+Execution logs, inventories, approval records and point-in-time test counts stay
+in ignored evidence storage and review handoffs, not this enduring contract.

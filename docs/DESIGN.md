@@ -145,30 +145,68 @@ ssh -L 8428:127.0.0.1:8428 -L 9428:127.0.0.1:9428 -L 10428:127.0.0.1:10428 opera
 
 #### Native log routing and message verification
 
+The qualified #1743 Collector amendment is implemented with stock appender
+0.32.0/SDK batching, without application privacy/admission visitors, Debug
+parsing or classifiers/decorators. The canonical `nix/otel-processors.json`
+fragment supplies `transform/jaunder_privacy` before batch and every durable
+log/trace exporter in production and local/VM tests; metrics remain batch-only.
+The [decision](adr/drafts/native-otlp-process-logs.md) defines exact
+producer-qualified retention: ordinary scope name, or facade `log.target` only
+within scope `log`, never a global union allowlist. All events at the three
+exact reviewed parser targets survive at every severity/context with fixed
+body/event name; no dropping. Status descriptions are cleared/codes retained.
+Safe parser wording, direct-log paths where bespoke enrichment is needed, and
+private per-kind/coalescing/256-byte diagnostic guarantees retire;
+operation/browser fields, metrics, IDs and stock integer/string carriers do not.
+
+Raw SDK/transport/trusted Collector input is accepted, not raw durable outputs
+or persisted Collector failure/debug diagnostics. Invalid policy fails startup
+without raw fallback; `propagate` alone does not redact diagnostics. Actual
+synthetic wire/configuration and persisted-error proof supports the selected
+seams, not universal sanitization. No production activation or final coverage/CI
+certification follows from this documentation. The demonstrated minimum retains
+owning event context, suppression-preserving Activation, SDK-scope-only trace
+gating and the process-owned runtime. Nonfatal, credential/endpoint/payload-safe
+and nonrecursive failure behavior remains. Collector policy cannot fix SDK
+stderr, client feedback or queues and promises no volume recovery. Local
+stdout/CLI/capture stay separate.
+
+VictoriaLogs stores the native producer as `scope.name`, message as `_msg`, and
+correlation as `trace_id`/`span_id`. For request paths, follow the log's trace
+ID into VictoriaTraces, match its exact span ID to the stored request span and
+inspect URI/method/remote parent. Neither `jaunder.target` nor
+`jaunder.request.uri` is exported. Root logs legitimately lack a linked request;
+timestamp similarity is not correlation. See
+[observability](observability.md#shared-collector-privacy-policy).
+
 Jaunder sends logs, traces and metrics to the stack's loopback OTLP Collector.
-Logs use the existing OTLP receiver and batch processor, then the VictoriaLogs
-exporter; the stack does not ingest `jaunder.service` or arbitrary host journals
-and does not parse stdout JSON into logs. Ordinary application messages are not
-mirrored to stdout/journald. CLI command results and fixed local stderr failure
-diagnostics remain separate. In custom deployments without a configured OTLP
-endpoint, ordinary pretty/JSON stdout logging and its local filters remain
-available. The shared endpoint precedence is
-`JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT`, then `OTEL_EXPORTER_OTLP_ENDPOINT`.
+Logs use the existing OTLP receiver, shared privacy transform and batch
+processor, then the VictoriaLogs exporter; the stack does not ingest
+`jaunder.service` or arbitrary host journals and does not parse stdout JSON into
+logs. Ordinary application messages are not mirrored to stdout/journald. CLI
+command results and fixed local stderr failure diagnostics remain separate. In
+custom deployments without a configured OTLP endpoint, ordinary pretty/JSON
+stdout logging and its local filters remain available. The shared endpoint
+precedence is `JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT`, then
+`OTEL_EXPORTER_OTLP_ENDPOINT`.
 
 For message verification, open the VictoriaLogs UI using loopback/SSH access or
 the authenticated observability host below. Select an explicit time window
 containing a known safe request and start with query `*` in the default Group
-view. The default message should be the actual application body, not the
-`missing _msg field` placeholder or an alternate structured message field. To
-inspect response-completion records, narrow the query to:
+view. A body-bearing application event should display its actual body, not an
+alternate structured message field. Stock bodyless dependency records (including
+SQLx records) may legitimately display Victoria's missing-message placeholder;
+they are not the response-completion fixture. Narrow the query to:
 
 ```text
-jaunder.target:"tower_http::trace::on_response"
+scope.name:"tower_http::trace::on_response"
 ```
 
-For a known request path, add `jaunder.request.uri:"/your/safe/path"`. Inspect
+For a known driven request, add `trace_id:"<known-trace-id>"`. Inspect
 `_msg="finished processing request"`, `severity_text="INFO"`,
-`severity_number="9"`, `status`, path-only URI and available trace/span IDs.
+`severity_number="9"`, `status` and trace/span IDs, then obtain the path from
+the exactly linked request span. Both backend fixtures observe string status
+`"401"` in VictoriaLogs; that is not a native OTLP value-type assertion.
 VictoriaLogs exposes OTLP severity through these two fields, not a `severity`
 attribute. A response-completion INFO event can describe a 401 response; it does
 not imply success. Follow the log's trace ID into VictoriaTraces and match its
@@ -193,12 +231,17 @@ If records are missing or malformed:
    record existence alone as message correctness or a shutdown acknowledgment as
    delivery proof.
 
-Logger diagnostics are bounded/redacted and coalesced once per kind per process;
-queue-drop reporting may arrive only at shutdown, so line count is not loss
-count. Setup/export/shutdown failure is non-fatal and does not restore stdout.
-SDK queues are bounded and outages, saturation or abrupt termination can lose
-logs. Graceful shutdown attempts to drain all providers but is best effort, not
-a whole-process deadline or proof that residual blocking work stopped. See
+The six pinned OTLP ExportFailed/PartialSuccess identities use SafeSdkFormat at
+both host fmt variants and the independent server WARN+ JSON writer. Actual
+level/target/name and closed code/scalar rejection details remain visible;
+untrusted message/details use fixed text and selected span copies are absent.
+Other events delegate unchanged; this is not universal SDK sanitization. Opaque
+setup/nonrecursive shutdown fallbacks remain. No per-kind/coalescing/256-byte
+promise or partial-rejection promotion remains. Failure is nonfatal and does not
+restore stdout. SDK queues are bounded and outages, saturation or abrupt
+termination can lose logs. Graceful shutdown attempts to drain all providers but
+is best effort, not a whole-process deadline or proof that residual blocking
+work stopped. See
 [observability](observability.md#native-log-records-and-lifetime) for admission,
 SDK policy and lifecycle limitations.
 
