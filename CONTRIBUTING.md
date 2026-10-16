@@ -544,6 +544,22 @@ screenshot-only animation/caret/font CSS. The public timeline masks only
 `.j-post-time`; other dynamic state must be made deterministic rather than
 masked or tolerated.
 
+Failed visual assertions attach bounded, time-limited `visual-failure-*` JSON
+through the existing Playwright artifacts. Geometry, computed font family and
+interaction state are observed **after failure**, not at the raster instant;
+selected rendered faces and initial pointer coordinates remain unmeasured. No
+additional pass-path browser observations or replacement screenshots are taken.
+An unavailable diagnostic must not replace the original screenshot failure.
+
+E2E diagnostic directories also retain `producer-checkout-<lane>.json` and the
+selected output's `producer-input-<lane>.json` when available. Host Git supplies
+actual HEAD, committed tree and raw parents; clean matching guest revision and
+selected-output identity qualify the input binding. Dirty source is
+committed-base-only. Reused outputs do not establish their original producing
+runtime or current execution. The clean revision intentionally identifies the
+final VM check, not product dependency derivations; distinct clean commits do
+not share a promised final test-verdict identity.
+
 The only supported baseline updater is:
 
 ```bash

@@ -821,7 +821,9 @@ pub fn e2e_experimental(result: &mut CommandResult, backend: &str) {
     }
     let builds = build_candidate_lanes(lanes.into_iter().cloned(), None, |lane| {
         let installable = format!(".#checks.x86_64-linux.e2e-{}", lane.identity);
-        match Command::new("nix")
+        let mut provenance = crate::e2e_provenance::Request::start(Path::new("."), &lane.identity);
+        provenance.selected(nix_build::observe(&installable).evidence());
+        let built = match Command::new("nix")
             .args([
                 "build",
                 "-L",
@@ -853,7 +855,9 @@ pub fn e2e_experimental(result: &mut CommandResult, backend: &str) {
                     CandidateBuild::Realized(path.into())
                 }
             }
-        }
+        };
+        provenance.completed(matches!(&built, CandidateBuild::Realized(_)));
+        built
     });
     let CandidateCollection {
         evidence,
@@ -994,13 +998,10 @@ fn validate_lifted_e2e_combo(
     ]
 }
 
-/// Preserve ADR-0037's diagnostic-before-failure order. A failed VM has already
-/// explained its own failure, so only a successful VM is fail-closed on its
-/// lifted evidence.
-/// Build a single E2E {backend}×{browser} combo, lift its diagnostics, then
-/// validate its duration and boot-decomposition evidence only when the VM itself
-/// succeeded. Used by both CI's `cargo xtask e2e` matrix path and `cargo xtask
-/// validate`.
+/// Lift the successful output before duration and boot-decomposition validation.
+/// Failed builds own their recovery in build_installable (ADR-0037); relifting
+/// from a success-only gcroot would clear recovered inputs or copy stale output.
+/// The build verdict, not destination existence, distinguishes those lifecycles.
 fn finish_e2e_combo(
     result: &mut CommandResult,
     build: StepResult,
@@ -1009,8 +1010,8 @@ fn finish_e2e_combo(
 ) {
     let succeeded = build.ok;
     result.push(build);
-    lift();
     if succeeded {
+        lift();
         for step in validate() {
             result.push(step);
         }
@@ -1085,6 +1086,7 @@ fn is_authoritative_e2e_input(name: &str) -> bool {
         || (name.starts_with("e2e-phase-") && name.ends_with(".json"))
         || (name.starts_with("e2e-census-") && name.ends_with(".json"))
         || (name.starts_with("e2e-lane-manifest-") && name.ends_with(".json"))
+        || (name.starts_with("producer-input-") && name.ends_with(".json"))
         || (name.starts_with("e2e-census-") && name.ends_with(".json"))
         || (name.starts_with("capture-") && name.ends_with(".tar.gz"))
 }
@@ -1094,6 +1096,18 @@ fn is_e2e_diagnostic_artifact(name: &str) -> bool {
         || (name.starts_with("system-journal-") && name.ends_with(".log"))
         || is_authoritative_e2e_input(name)
         || (name.starts_with("playwright-artifacts-") && name.ends_with(".tar.gz"))
+}
+
+/// Marker freshness matters only to attribution, never to lane reconciliation.
+fn record_e2e_artifact_failure(name: &str, detail: String, failures: &mut Vec<String>) {
+    if name.starts_with("producer-input-") && name.ends_with(".json") {
+        let _ = writeln!(
+            io::stderr(),
+            "xtask: warning: xtask.nix.e2e_provenance: {detail}; lifted marker unavailable, use selected-output attribution only"
+        );
+    } else {
+        failures.push(detail);
+    }
 }
 
 fn clear_authoritative_e2e_inputs(
@@ -1129,7 +1143,11 @@ fn clear_authoritative_e2e_inputs(
         match remove(&path) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => failures.push(format!("removing {}: {error}", path.display())),
+            Err(error) => record_e2e_artifact_failure(
+                name,
+                format!("removing {}: {error}", path.display()),
+                failures,
+            ),
         }
     }
 }
@@ -1185,22 +1203,30 @@ fn copy_e2e_diagnostics_with_ops(
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => {
-                failures.push(format!("removing {}: {error}", to.display()));
+                record_e2e_artifact_failure(
+                    name,
+                    format!("removing {}: {error}", to.display()),
+                    &mut failures,
+                );
                 continue;
             }
         }
         match copy(&from, &to) {
             Ok(_) => {
                 if let Err(error) = set_permissions(&to, fs::Permissions::from_mode(0o644)) {
-                    failures.push(format!("setting permissions on {}: {error}", to.display()));
+                    record_e2e_artifact_failure(
+                        name,
+                        format!("setting permissions on {}: {error}", to.display()),
+                        &mut failures,
+                    );
                 }
                 copied += 1;
             }
-            Err(error) => failures.push(format!(
-                "copying {} to {}: {error}",
-                from.display(),
-                to.display()
-            )),
+            Err(error) => record_e2e_artifact_failure(
+                name,
+                format!("copying {} to {}: {error}", from.display(), to.display()),
+                &mut failures,
+            ),
         }
     }
     DiagnosticsCopy { copied, failures }
@@ -1555,6 +1581,9 @@ fn build_package(step_name: &str, package: &str) -> StepResult {
 
 fn build_installable(step_name: &str, check: &str, installable: &str) -> StepResult {
     let start = std::time::Instant::now();
+    let mut provenance = check
+        .strip_prefix("e2e-")
+        .map(|lane| crate::e2e_provenance::Request::start(Path::new("."), lane));
     let mut diagnostic_failed = match prepare_build_dirs_with(
         || fs::create_dir_all(".xtask/gcroots"),
         || fs::create_dir_all(format!(".xtask/diagnostics/{check}")),
@@ -1569,6 +1598,9 @@ fn build_installable(step_name: &str, check: &str, installable: &str) -> StepRes
     let out_link = format!(".xtask/gcroots/{check}");
     let log_dir = format!(".xtask/diagnostics/{check}");
     let before = nix_build::observe(installable);
+    if let Some(request) = &mut provenance {
+        request.selected(before.evidence());
+    }
     let log_path = format!("{log_dir}/build.log");
     let diagnostic: Box<dyn Write + Send> = match File::create(&log_path) {
         Ok(file) => Box::new(file),
@@ -1598,6 +1630,9 @@ fn build_installable(step_name: &str, check: &str, installable: &str) -> StepRes
     ) {
         Ok(process) => process,
         Err(error) => {
+            if let Some(request) = &mut provenance {
+                request.completed(false);
+            }
             diagnostic_failed |= capture_state.outcome().diagnostic_failed;
             report_build_diagnostic_failure(diagnostic_failed, &mut io::stderr());
             return StepResult::fail(step_name)
@@ -1606,7 +1641,7 @@ fn build_installable(step_name: &str, check: &str, installable: &str) -> StepRes
         }
     };
     let outcome = process.wait();
-    finish_build_with(
+    let step = finish_build_with(
         BuildCompletion {
             step_name,
             installable,
@@ -1620,7 +1655,11 @@ fn build_installable(step_name: &str, check: &str, installable: &str) -> StepRes
         || before.finish(installable),
         &mut io::stderr(),
     )
-    .with_duration(start.elapsed())
+    .with_duration(start.elapsed());
+    if let Some(request) = &mut provenance {
+        request.completed(step.ok);
+    }
+    step
 }
 
 enum BuildStatus {
@@ -2897,6 +2936,17 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         assert!(manifest_copy_at < manifest_grab_at && manifest_grab_at < assertion_at);
         assert!(census_copy_at < gate_start_at);
         assert!(gate_start_at < census_grab_at && census_grab_at < assertion_at);
+        let producer_before = checks
+            .find("cp ${producerInput} /tmp/e2e/producer-input.json")
+            .expect("producer marker before browser");
+        let producer_lift = checks
+            .find(r#"machine.copy_from_machine("/tmp/producer-input-${identity}.json", "")"#)
+            .expect("producer marker retained");
+        assert!(producer_before < gate_start_at);
+        assert!(gate_start_at < producer_lift && producer_lift < assertion_at);
+        assert!(checks.contains("revision = self.rev or null;"));
+        assert!(checks.contains("JAUNDER_E2E_PRODUCER_INPUT=/tmp/e2e/producer-input.json"));
+        assert!(!checks.contains("/var/lib/jaunder/capture/producer-input"));
     }
 
     fn generated_seed_trace_helper() -> String {
@@ -3160,6 +3210,91 @@ else:
             );
         }
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn e2e_provenance_lift_failure_does_not_fail_a_successful_lane() {
+        for operation in ["remove", "copy", "permissions"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let src = tmp.path().join("src");
+            let dest = tmp.path().join("dest");
+            std::fs::create_dir_all(&src).unwrap();
+            std::fs::create_dir_all(&dest).unwrap();
+            let name = "producer-input-postgres-firefox-ordinary-1-of-2.json";
+            std::fs::write(src.join(name), b"current marker").unwrap();
+            std::fs::write(dest.join(name), b"stale marker").unwrap();
+            let denied = || std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+            let outcome = super::copy_e2e_diagnostics_with_ops(
+                &src,
+                &dest,
+                |path| {
+                    if operation == "remove" {
+                        Err(denied())
+                    } else {
+                        std::fs::remove_file(path)
+                    }
+                },
+                |from, to| {
+                    if operation == "copy" {
+                        Err(denied())
+                    } else {
+                        std::fs::copy(from, to)
+                    }
+                },
+                |path, permissions| {
+                    if operation == "permissions" {
+                        Err(denied())
+                    } else {
+                        std::fs::set_permissions(path, permissions)
+                    }
+                },
+            );
+            let lane = crate::e2e_lanes::catalog()
+                .unwrap()
+                .lanes
+                .into_iter()
+                .find(|lane| lane.identity == "postgres-firefox-ordinary-1-of-2")
+                .unwrap();
+            let collected = super::collect_candidate_artifacts(
+                tmp.path(),
+                vec![(lane, super::CandidateBuild::Realized(src.clone()))],
+                |_, _, _| outcome.failures.clone(),
+                |_, _| panic!("successful lane must not recover"),
+            );
+            // Compatibility reconciliation receives only correctness-bearing failures.
+            assert!(
+                collected.failures.is_empty(),
+                "{operation}: {:?}",
+                collected.failures
+            );
+            assert_eq!(collected.evidence.len(), 1);
+            if operation == "copy" {
+                assert!(
+                    !dest.join(name).exists(),
+                    "failed copying must not preserve a stale marker"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn e2e_provenance_marker_is_cleared_when_current_producer_emits_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dest = tmp.path().join("dest");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        let name = "producer-input-postgres-chromium-unsplit.json";
+        std::fs::write(dest.join(name), b"previous valid marker").unwrap();
+        let outcome = super::copy_e2e_diagnostics_between(&src, &dest);
+        assert!(outcome.failures.is_empty());
+        assert!(
+            !dest.join(name).exists(),
+            "previous marker cannot attest a new attempt"
+        );
+        std::fs::write(src.join(name), b"current marker").unwrap();
+        assert_eq!(super::copy_e2e_diagnostics_between(&src, &dest).copied, 1);
+        assert_eq!(std::fs::read(dest.join(name)).unwrap(), b"current marker");
     }
 
     #[test]
@@ -3899,7 +4034,93 @@ else:
     }
 
     #[test]
-    fn failed_combo_keeps_diagnostics_but_does_not_mask_primary_failure() {
+    fn failed_combo_preserves_current_recovery_without_relifting_a_success_gcroot() {
+        for current_available in [true, false] {
+            for stale_gcroot in [false, true] {
+                let temp = tempfile::tempdir().unwrap();
+                let selected = temp.path().join("selected-failed-output");
+                let destination = temp.path().join("diagnostics");
+                let gcroot = temp.path().join("success-only-gcroot");
+                std::fs::create_dir_all(&destination).unwrap();
+                if current_available {
+                    std::fs::create_dir(&selected).unwrap();
+                }
+                if stale_gcroot {
+                    std::fs::create_dir(&gcroot).unwrap();
+                }
+                let names = [
+                    "playwright-report-test.json",
+                    "capture-test.tar.gz",
+                    "e2e-phase-test.json",
+                    "e2e-lane-manifest-test.json",
+                    "producer-input-test.json",
+                    "duration-budget-manifest-test.json",
+                    "playwright-artifacts-test.tar.gz",
+                    "jaunder-journal-test.log",
+                ];
+                for name in names {
+                    std::fs::write(destination.join(name), "previous-attempt").unwrap();
+                    if current_available {
+                        std::fs::write(selected.join(name), "current-failed-attempt").unwrap();
+                    }
+                    if stale_gcroot {
+                        std::fs::write(gcroot.join(name), "old-success-output").unwrap();
+                    }
+                }
+                let mut stderr = Vec::new();
+                // Compose the real failed-build recovery and combo-finalization seams.
+                let build = finish_build_with(
+                    BuildCompletion {
+                        step_name: "nix-e2e-test",
+                        installable: ".#checks.test",
+                        log_path: "build.log",
+                        diagnostic_failed: false,
+                        capture: BuildCaptureOutcome::default(),
+                        outcome: Ok(Outcome::Exited(1)),
+                    },
+                    || Ok("failure-excerpt.log".to_owned()),
+                    || {
+                        !super::copy_e2e_diagnostics_between(&selected, &destination)
+                            .failures
+                            .is_empty()
+                    },
+                    || panic!("a failed build cannot report successful realization"),
+                    &mut stderr,
+                );
+                let primary_detail = build.detail.clone();
+                let mut result = CommandResult::new("e2e-test");
+                finish_e2e_combo(
+                    &mut result,
+                    build,
+                    || {
+                        super::lift_e2e_diagnostics(&gcroot, &destination);
+                    },
+                    || panic!("failed browser verdict must remain primary"),
+                );
+                assert!(!result.ok);
+                assert_eq!(result.steps.len(), 1);
+                assert_eq!(result.steps[0].detail, primary_detail);
+                for name in names {
+                    let path = destination.join(name);
+                    if current_available {
+                        assert_eq!(
+                            std::fs::read_to_string(&path).unwrap(),
+                            "current-failed-attempt",
+                            "{name}: stale_gcroot={stale_gcroot}"
+                        );
+                    } else if super::is_authoritative_e2e_input(name) {
+                        assert!(
+                            !path.exists(),
+                            "absent current evidence must not restore stale {name}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn failed_combo_keeps_recovery_owned_by_build_and_primary_failure() {
         let mut result = CommandResult::new("e2e-sqlite-chromium");
         let lifted = std::cell::Cell::new(false);
         finish_e2e_combo(
@@ -3909,7 +4130,10 @@ else:
             || panic!("a failed VM must not dispatch post-build validation"),
         );
 
-        assert!(lifted.get());
+        assert!(
+            !lifted.get(),
+            "failure recovery is already owned by the build"
+        );
         assert!(!result.ok);
         assert_eq!(result.steps.len(), 1);
     }
