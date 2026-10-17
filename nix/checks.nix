@@ -331,7 +331,23 @@ e2eRunAndCapture =
     jaunderDb,
     extraEnv ? "",
   }:
+  let
+    # Bind only the final test recipe to its clean checkout, not product builds.
+    # Dirty flakes cannot attest their entire working tree through a Git revision.
+    producerInput = pkgs.writeText "e2e-producer-input-${identity}.json" (builtins.toJSON {
+      schema_version = 1;
+      lane = identity;
+      revision = self.rev or null;
+      dirty_revision = self.dirtyRev or null;
+    });
+  in
   ''
+    try:
+      producer_input_status, _ = machine.execute("cp ${producerInput} /tmp/e2e/producer-input.json")
+      if producer_input_status != 0:
+        print("producer-input unavailable before Playwright")
+    except Exception:
+      print("producer-input unavailable before Playwright")
     ${pkgs.lib.optionalString (expectedCensusProjectArgs != "") ''
     expected_census_status, expected_census_out = machine.execute(
       "cd /tmp/e2e"
@@ -353,6 +369,7 @@ e2eRunAndCapture =
       + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
       + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
       + " FONTCONFIG_FILE=${visualFontConfig}"
+      + " JAUNDER_E2E_PRODUCER_INPUT=/tmp/e2e/producer-input.json"
       + "${extraEnv}"
       + " JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture"
       + " JAUNDER_DB=${jaunderDb}"
@@ -395,6 +412,16 @@ e2eRunAndCapture =
         if machine.execute("test -e " + path)[0] == 0:
             machine.copy_from_machine(path, "")
 
+    # Separate sidecar: never add metadata to the hashed capture population.
+    try:
+      producer_input_status, _ = machine.execute("cp /tmp/e2e/producer-input.json /tmp/producer-input-${identity}.json")
+      if producer_input_status == 0:
+        # Ancillary sidecar: do not add it to capture-integrity error accounting.
+        machine.copy_from_machine("/tmp/producer-input-${identity}.json", "")
+      else:
+        print("producer-input lift unavailable")
+    except Exception:
+      print("producer-input lift unavailable")
     machine.execute("test -s /tmp/e2e/test-results/results.json && cp /tmp/e2e/test-results/results.json /tmp/playwright-report-${identity}.json")
     _grab("/tmp/playwright-report-${identity}.json")
     machine.execute("test -s /tmp/e2e/test-results/duration-budget-manifest.json && cp /tmp/e2e/test-results/duration-budget-manifest.json /tmp/duration-budget-manifest-${identity}.json")
