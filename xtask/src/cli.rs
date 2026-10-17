@@ -190,6 +190,9 @@ pub enum Command {
         /// Run even when the working tree is dirty (skip the clean-tree precheck).
         #[arg(long)]
         allow_dirty: bool,
+        /// Bound concurrent E2E lane builds for this invocation (default: all enabled lanes).
+        #[arg(long, conflicts_with = "no_e2e")]
+        e2e_jobs: Option<std::num::NonZeroUsize>,
     },
     /// Run one independently schedulable non-E2E CI validation lane. This is
     /// verify-only and always refuses a dirty working tree.
@@ -1003,11 +1006,60 @@ mod tests {
             Command::Validate {
                 no_e2e,
                 allow_dirty,
+                ..
             } => {
                 assert!(!no_e2e);
                 assert!(allow_dirty);
             }
             _ => panic!("expected validate"),
+        }
+    }
+
+    #[test]
+    fn validate_accepts_an_explicit_e2e_job_bound() {
+        for (arguments, expected) in [
+            (vec!["xtask", "validate"], None),
+            (vec!["xtask", "validate", "--e2e-jobs", "2"], Some(2)),
+            (vec!["xtask", "validate", "--e2e-jobs", "12"], Some(12)),
+        ] {
+            let cli = Cli::try_parse_from(arguments).unwrap();
+            match cli.command {
+                Command::Validate { e2e_jobs, .. } => {
+                    assert_eq!(e2e_jobs.map(std::num::NonZeroUsize::get), expected)
+                }
+                _ => panic!("expected validate"),
+            }
+        }
+    }
+
+    #[test]
+    fn validate_rejects_invalid_or_inapplicable_e2e_job_bounds() {
+        for value in [
+            "0",
+            "-1",
+            "one",
+            "1.5",
+            "99999999999999999999999999999999999999999",
+        ] {
+            assert!(
+                Cli::try_parse_from(["xtask", "validate", "--e2e-jobs", value]).is_err(),
+                "{value}"
+            );
+        }
+        for arguments in [
+            vec!["xtask", "validate", "--e2e-jobs"],
+            vec!["xtask", "validate", "--no-e2e", "--e2e-jobs", "2"],
+            vec!["xtask", "validate", "--e2e-jobs", "2", "--no-e2e"],
+            vec![
+                "xtask",
+                "e2e-lane",
+                "sqlite-chromium-unsplit",
+                "--e2e-jobs",
+                "2",
+            ],
+            vec!["xtask", "check", "--e2e-jobs", "2"],
+        ] {
+            assert!(Cli::try_parse_from(arguments).is_err());
         }
     }
 
