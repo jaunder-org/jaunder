@@ -380,7 +380,7 @@ fn read_archive_entries(
     let mut expanded = 0_usize;
     for index in 0..archive.len() {
         let file = archive.by_index(index).map_err(|error| zip_error(&error))?;
-        let path = file.name().to_owned();
+        let path = file.name().map_err(|error| zip_error(&error))?.into_owned();
         validate_member_name(&path)?;
         if !file.is_file()
             || file.encrypted()
