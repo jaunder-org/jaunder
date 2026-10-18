@@ -524,6 +524,7 @@ let
     {
       backend,
       package ? null,
+      testSupport ? null,
     }:
     {
       lib,
@@ -534,6 +535,8 @@ let
     let
       jaunderBin =
         if package == null then self.packages.${pkgs.stdenv.hostPlatform.system}.jaunder else package;
+      seedHelper =
+        if testSupport == null then self.packages.${pkgs.stdenv.hostPlatform.system}.test-support else testSupport;
     in
     {
       imports = [ (mkJaunderModule package) ];
@@ -567,7 +570,7 @@ let
           pkgs.coreutils
           pkgs.gnugrep
           pkgs.util-linux
-          self.packages.${pkgs.stdenv.hostPlatform.system}.test-support
+          seedHelper
         ];
         serviceConfig = {
           ExecStart = "${pkgs.socat}/bin/socat TCP-LISTEN:39000,bind=0.0.0.0,reuseaddr,fork EXEC:${pkgs.bash}/bin/bash,stderr";
@@ -577,7 +580,7 @@ let
 
       # Harness-only seeding runs through the lifecycle control channel. It is
       # deliberately absent from the deployable Jaunder package and service.
-      environment.systemPackages = [ self.packages.${pkgs.stdenv.hostPlatform.system}.test-support ];
+      environment.systemPackages = [ seedHelper ];
 
       services.jaunder = {
         enable = true;
@@ -643,12 +646,13 @@ let
       system,
       package,
       backend,
+      testSupport ? null,
     }:
     nixpkgs.lib.nixosSystem {
       inherit system;
       modules = [
         (productionBaselineVmModule {
-          inherit backend package;
+          inherit backend package testSupport;
         })
       ];
     };

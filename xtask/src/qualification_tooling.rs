@@ -8,6 +8,68 @@ use std::{fs, path::Path, process::Command};
 
 use anyhow::{Context, Result, bail};
 
+/// A closed ordinary fixture; source identity owns every associated input.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum OrdinaryFixture {
+    #[default]
+    Modern,
+    Legacy1419,
+}
+
+impl OrdinaryFixture {
+    pub(crate) fn for_source(commit: &str) -> Self {
+        if commit == "520034ed6f778a854cd5f8708419c1b2b700ad9f" {
+            Self::Legacy1419
+        } else {
+            Self::Modern
+        }
+    }
+
+    pub(crate) const fn graph(self) -> &'static str {
+        match self {
+            Self::Modern => "qualification-harness",
+            Self::Legacy1419 => "qualification-harness-legacy-1419",
+        }
+    }
+
+    pub(crate) const fn seed_authority(self) -> &'static str {
+        match self {
+            Self::Modern => "fn standard_profile_manifest",
+            Self::Legacy1419 => "pub fn sandbox_profile_manifest",
+        }
+    }
+
+    pub(crate) fn verify_seed_identity(self, version: u32, sha256: &str) -> Result<()> {
+        if self == Self::Modern && version != 2 {
+            bail!("modern seed authority must use manifest v2");
+        }
+        if self == Self::Legacy1419
+            && (version != 1
+                || sha256 != "18778e4aa1411fdb784cc689c15dd27fcb5e0049ca4b0452368c198de759f831")
+        {
+            bail!("historical seed authority does not match the selected fixture");
+        }
+        Ok(())
+    }
+}
+
+/// Derive a package only from the graph-owned canonical helper executable.
+pub(crate) fn helper_package(graph: &Path) -> Result<std::path::PathBuf> {
+    let executable = fs::canonicalize(graph.join("bin/test-support"))
+        .context("resolving graph-owned seed helper")?;
+    let package = executable
+        .parent()
+        .and_then(Path::parent)
+        .context("selected helper has no package root")?;
+    if package.parent() != Some(Path::new("/nix/store"))
+        || executable != package.join("bin/test-support")
+    {
+        bail!("selected helper is not a canonical Nix package executable");
+    }
+    Ok(package.to_owned())
+}
+
 /// Verify a selected executable and its compiled Nix output before host effects.
 /// No Git build revision is required when the same declared output is selected.
 fn verify_selected_tool(
@@ -48,6 +110,7 @@ fn verify_helper_override(selected: &Path, requested: Option<&Path>) -> Result<(
 pub(crate) fn admit_harness(
     source: &crate::qualification::SourcePin,
     gc_root: &Path,
+    fixture: OrdinaryFixture,
 ) -> Result<crate::production_baseline_lifecycle::StoreArtifactIdentity> {
     let compiled = env!("JAUNDER_XTASK_NIX_OUTPUT");
     if compiled.is_empty() {
@@ -55,7 +118,7 @@ pub(crate) fn admit_harness(
             "qualification requires Nix-built tooling provenance; invoke cargo xtask from the devShell"
         );
     }
-    let installable = format!("{}#qualification-harness", source.locked_ref());
+    let installable = format!("{}#{}", source.locked_ref(), fixture.graph());
     let build: serde_json::Value = serde_json::from_slice(&nix_output(&[
         "build",
         "--out-link",
@@ -89,6 +152,7 @@ pub(crate) fn admit_harness(
         &Path::new(&output_path).join("bin/test-support"),
         requested_helper.as_deref(),
     )?;
+    helper_package(Path::new(&output_path))?;
     let info: serde_json::Value =
         serde_json::from_slice(&nix_output(&["path-info", "--json", &output_path])?)?;
     let entries = info
@@ -133,6 +197,53 @@ fn nix_output(args: &[&str]) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ordinary_selection_is_exact_source_only() {
+        let historical = "520034ed6f778a854cd5f8708419c1b2b700ad9f";
+        assert_eq!(
+            OrdinaryFixture::for_source(historical),
+            OrdinaryFixture::Legacy1419
+        );
+        for source in [
+            "520034ed",
+            "other",
+            "78d201e6969ed17b8a54b87d3de24be6afa1f5ee",
+        ] {
+            assert_eq!(OrdinaryFixture::for_source(source), OrdinaryFixture::Modern);
+        }
+        assert_eq!(OrdinaryFixture::default().graph(), "qualification-harness");
+        assert!(
+            OrdinaryFixture::Modern
+                .verify_seed_identity(1, "legacy")
+                .is_err()
+        );
+        assert!(
+            OrdinaryFixture::Modern
+                .verify_seed_identity(2, "current")
+                .is_ok()
+        );
+        let fixture = OrdinaryFixture::for_source(historical);
+        assert_eq!(fixture.graph(), "qualification-harness-legacy-1419");
+        assert_eq!(serde_json::to_value(fixture).unwrap(), "legacy1419");
+        assert_eq!(fixture.seed_authority(), "pub fn sandbox_profile_manifest");
+        assert!(fixture.verify_seed_identity(2, "wrong").is_err());
+        assert!(fixture.verify_seed_identity(1, "wrong").is_err());
+        fixture
+            .verify_seed_identity(
+                1,
+                "18778e4aa1411fdb784cc689c15dd27fcb5e0049ca4b0452368c198de759f831",
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn native_helper_package_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir(temp.path().join("bin")).unwrap();
+        fs::write(temp.path().join("bin/test-support"), "copied").unwrap();
+        assert!(helper_package(temp.path()).is_err());
+    }
 
     fn store_executable() -> std::path::PathBuf {
         let executable = std::env::split_paths(&std::env::var_os("PATH").unwrap())

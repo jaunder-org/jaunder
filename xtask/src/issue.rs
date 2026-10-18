@@ -1,3 +1,9 @@
+//! Issue discovery and explicit issue creation through the GitHub transport.
+//!
+//! Candidate success requires exhaustive REST pages and proven-complete bounded
+//! GraphQL metadata. Failures never become empty inventories; discovery performs
+//! only reads, while creation keeps its separately selected mutation path.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -20,7 +26,7 @@ const PRIORITY_FIELD_ID: &str = "PVTSSF_lADOECw7os4BblPPzhWUx50";
 pub enum IssueCommand {
     /// Gather open milestone issues, claim/blocker state, and local resume artifacts. Read-only.
     #[command(
-        after_help = "EXAMPLES:\n  cargo xtask issue candidates --milestone 3\n  cargo xtask --json issue candidates --milestone \"Developer tooling & DX\""
+        after_help = "EXAMPLES:\n  cargo xtask issue candidates --milestone 3\n  cargo xtask --json issue candidates --milestone \"Developer tooling & DX\"\n\nSuccess requires exhaustive REST inventory and proven-complete required GraphQL metadata.\nTruncated metadata, malformed input, or any API failure exits nonzero; no partial-success report.\nDiscovery is read-only and does not acquire runtime ownership. See CONTRIBUTING.md."
     )]
     Candidates {
         /// Open milestone title or number. Resolution must be exact and unambiguous.
@@ -420,15 +426,18 @@ fn fetch_metadata(gh: &impl Github) -> Result<Metadata> {
     let query = r#"query{
   repository(owner:"jaunder-org",name:"jaunder"){
     id
-    milestones(first:100, states:OPEN){nodes{id number title}}
-    labels(first:100){nodes{id name}}
-    issueTypes(first:100){nodes{id name}}
+    milestones(first:100, states:OPEN){nodes{id number title} pageInfo{hasNextPage}}
+    labels(first:100){nodes{id name} pageInfo{hasNextPage}}
+    issueTypes(first:100){nodes{id name} pageInfo{hasNextPage}}
   }
 }"#;
     let v = gh.json(&graphql_args(query, &[]))?;
     let repo = v
         .pointer("/data/repository")
         .ok_or_else(|| anyhow!("metadata response missing repository"))?;
+    for connection in ["milestones", "labels", "issueTypes"] {
+        require_complete_connection(repo, connection)?;
+    }
     Ok(Metadata {
         repository_id: str_field(repo, "id")?,
         milestones: repo
@@ -443,29 +452,75 @@ fn fetch_metadata(gh: &impl Github) -> Result<Metadata> {
     })
 }
 
+/// Bounded GraphQL reads must prove exhaustion before absence can be trusted.
+fn require_complete_connection(parent: &Value, connection: &str) -> Result<()> {
+    match parent
+        .get(connection)
+        .and_then(|value| value.pointer("/pageInfo/hasNextPage"))
+        .and_then(Value::as_bool)
+    {
+        Some(false) => Ok(()),
+        Some(true) => {
+            bail!("incomplete {connection} inventory: additional GraphQL pages are not supported")
+        }
+        None => {
+            bail!("incomplete {connection} inventory: missing or malformed pageInfo.hasNextPage")
+        }
+    }
+}
+
+/// Read numeric REST pages through exhaustion, before callers filter rows.
+/// Repeated issue identities indicate an unstable/nonadvancing inventory, not
+/// permission to silently deduplicate a successful result.
+fn rest_issue_pages(gh: &impl Github, path: &str) -> Result<Vec<Value>> {
+    let separator = if path.contains('?') { '&' } else { '?' };
+    let mut page = 1_u64;
+    let mut seen = BTreeSet::new();
+    let mut rows = Vec::new();
+    loop {
+        let endpoint = format!("{path}{separator}per_page=100&page={page}");
+        let value = gh
+            .json(&["api".into(), endpoint])
+            .with_context(|| format!("reading {path} page {page}"))?;
+        let items = value
+            .as_array()
+            .ok_or_else(|| anyhow!("incomplete {path} inventory: page {page} is not an array"))?;
+        if items.len() > 100 {
+            bail!("incomplete {path} inventory: oversized page {page}");
+        }
+        for item in items {
+            let number = u64_field(item, "number")?;
+            if !seen.insert(number) {
+                bail!("incomplete {path} inventory: repeated issue #{number} on page {page}");
+            }
+            rows.push(item.clone());
+        }
+        if items.len() < 100 {
+            return Ok(rows);
+        }
+        page = page
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("REST page overflow for {path}"))?;
+    }
+}
+
 fn list_milestone_issues(gh: &impl Github, milestone: u64) -> Result<Vec<IssueListing>> {
-    let path = format!("repos/{OWNER}/{REPO}/issues?state=open&milestone={milestone}&per_page=100");
-    let v = gh.json(&["api".into(), path])?;
-    let array = v
-        .as_array()
-        .ok_or_else(|| anyhow!("milestone issues response is not an array"))?;
+    let path = format!("repos/{OWNER}/{REPO}/issues?state=open&milestone={milestone}");
+    let array = rest_issue_pages(gh, &path)?;
     let mut issues = Vec::new();
-    for item in array {
-        if item.get("pull_request").is_some() {
-            continue;
+    for item in &array {
+        match item.get("pull_request") {
+            None => {}
+            Some(Value::Object(_)) => continue,
+            Some(_) => bail!("milestone issue response has malformed pull_request discriminator"),
         }
         let labels = item
             .get("labels")
             .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|label| {
-                label
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            })
-            .collect();
+            .ok_or_else(|| anyhow!("milestone issue response missing labels"))?
+            .iter()
+            .map(|label| str_field(label, "name"))
+            .collect::<Result<Vec<_>>>()?;
         issues.push(IssueListing {
             number: u64_field(item, "number")?,
             title: str_field(item, "title")?,
@@ -483,21 +538,33 @@ fn fetch_project_status(gh: &impl Github, number: u64) -> Result<ProjectStatus> 
     fieldValueByName(name:"Status"){
       ... on ProjectV2ItemFieldSingleSelectValue{name optionId}
     }
-  }}}
+  } pageInfo{hasNextPage}}}
 }}"#;
     let v = gh.json(&graphql_args(query, &[field_int("number", number)]))?;
+    let issue = v
+        .pointer("/data/repository/issue")
+        .ok_or_else(|| anyhow!("project item response missing issue #{number}"))?;
+    require_complete_connection(issue, "projectItems")
+        .with_context(|| format!("reading project status for issue #{number}"))?;
     let nodes = v
         .pointer("/data/repository/issue/projectItems/nodes")
         .and_then(Value::as_array)
         .ok_or_else(|| anyhow!("project item response missing nodes for issue #{number}"))?;
     for node in nodes {
-        if node.pointer("/project/number").and_then(Value::as_u64) == Some(BACKLOG_PROJECT_NUMBER) {
+        let project = node
+            .get("project")
+            .ok_or_else(|| anyhow!("project item response missing project for issue #{number}"))?;
+        if u64_field(project, "number")? == BACKLOG_PROJECT_NUMBER {
+            let status = node.get("fieldValueByName").ok_or_else(|| {
+                anyhow!("project item response missing Status for issue #{number}")
+            })?;
             return Ok(ProjectStatus {
                 item_id: Some(str_field(node, "id")?),
-                status: node
-                    .pointer("/fieldValueByName/name")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
+                status: if status.is_null() {
+                    None
+                } else {
+                    Some(str_field(status, "name")?)
+                },
             });
         }
     }
@@ -509,14 +576,13 @@ fn fetch_project_status(gh: &impl Github, number: u64) -> Result<ProjectStatus> 
 
 fn fetch_open_blockers(gh: &impl Github, number: u64) -> Result<Vec<u64>> {
     let path = format!("repos/{OWNER}/{REPO}/issues/{number}/dependencies/blocked_by");
-    let v = gh.json(&["api".into(), path])?;
-    let Some(array) = v.as_array() else {
-        bail!("blocked_by response for issue #{number} is not an array");
-    };
+    let array = rest_issue_pages(gh, &path)?;
     let mut blockers = Vec::new();
-    for item in array {
-        if item.get("state").and_then(Value::as_str) == Some("open") {
-            blockers.push(u64_field(item, "number")?);
+    for item in &array {
+        match item.get("state").and_then(Value::as_str) {
+            Some("open") => blockers.push(u64_field(item, "number")?),
+            Some("closed") => {}
+            _ => bail!("blocked_by response for issue #{number} has missing or invalid state"),
         }
     }
     blockers.sort_unstable();
@@ -922,14 +988,14 @@ mod tests {
     use serde_json::json;
 
     struct FakeGithub {
-        responses: RefCell<Vec<Value>>,
+        responses: RefCell<Vec<Result<Value>>>,
         calls: RefCell<Vec<Vec<String>>>,
     }
 
     impl FakeGithub {
         fn new(responses: Vec<Value>) -> Self {
             Self {
-                responses: RefCell::new(responses),
+                responses: RefCell::new(responses.into_iter().map(Ok).collect()),
                 calls: RefCell::new(Vec::new()),
             }
         }
@@ -945,7 +1011,7 @@ mod tests {
             if self.responses.borrow().is_empty() {
                 bail!("unexpected gh call: {}", args.join(" "));
             }
-            Ok(self.responses.borrow_mut().remove(0))
+            self.responses.borrow_mut().remove(0)
         }
 
         fn json_stdin(&self, args: &[String], stdin: &str) -> Result<Value> {
@@ -955,7 +1021,7 @@ mod tests {
             if self.responses.borrow().is_empty() {
                 bail!("unexpected gh call: {}", args.join(" "));
             }
-            Ok(self.responses.borrow_mut().remove(0))
+            self.responses.borrow_mut().remove(0)
         }
     }
 
@@ -965,17 +1031,20 @@ mod tests {
                 "repository": {
                     "id": "R_repo",
                     "milestones": {
+                        "pageInfo": {"hasNextPage": false},
                         "nodes": [
                             {"id": "M_dx", "number": 3, "title": "Developer tooling & DX"}
                         ]
                     },
                     "labels": {
+                        "pageInfo": {"hasNextPage": false},
                         "nodes": [
                             {"id": "L_tooling", "name": "tooling"},
                             {"id": "L_dx", "name": "dx"}
                         ]
                     },
                     "issueTypes": {
+                        "pageInfo": {"hasNextPage": false},
                         "nodes": [
                             {"id": "IT_task", "name": "Task"}
                         ]
@@ -989,6 +1058,283 @@ mod tests {
         let file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(file.path(), text).unwrap();
         file
+    }
+
+    #[test]
+    fn candidate_discovery_refuses_incomplete_milestone_metadata() {
+        let mut metadata = metadata_response();
+        metadata["data"]["repository"]["milestones"]["pageInfo"] =
+            json!({"hasNextPage":true,"endCursor":"more"});
+        let gh = FakeGithub::new(vec![metadata, json!([])]);
+        let error = candidates(&gh, "3").unwrap_err();
+        assert!(
+            error.to_string().contains("incomplete milestones"),
+            "{error:#}"
+        );
+    }
+
+    fn listing(number: u64) -> Value {
+        json!({"number":number,"title":format!("Issue {number}"),
+            "html_url":format!("https://github.com/jaunder-org/jaunder/issues/{number}"),
+            "labels":[]})
+    }
+
+    fn project_status(status: Option<&str>) -> Value {
+        let nodes = status.map_or_else(Vec::new, |status| {
+            vec![json!({
+                "id":"PVTI_1", "project":{"number":1},
+                "fieldValueByName":{"name":status}
+            })]
+        });
+        json!({"data":{"repository":{"issue":{"projectItems":{
+            "nodes":nodes,"pageInfo":{"hasNextPage":false}
+        }}}}})
+    }
+
+    #[test]
+    fn candidate_inventory_includes_every_milestone_page_and_excludes_prs() {
+        let first: Vec<_> = (1..=100).map(listing).collect();
+        let mut pr = listing(102);
+        pr["pull_request"] = json!({});
+        let mut responses = vec![metadata_response(), json!(first), json!([listing(101), pr])];
+        for _ in 1..=101 {
+            responses.extend([project_status(None), json!([])]);
+        }
+        let gh = FakeGithub::new(responses);
+        let report = candidates(&gh, "3").unwrap();
+        assert_eq!(report.skipped.len(), 101);
+        assert_eq!(
+            report
+                .skipped
+                .iter()
+                .map(|issue| issue.number)
+                .collect::<Vec<_>>(),
+            (1..=101).collect::<Vec<_>>()
+        );
+        assert!(report.candidates.is_empty());
+        assert!(
+            gh.calls()
+                .iter()
+                .any(|call| call.iter().any(|arg| arg.contains("page=2")))
+        );
+        assert!(gh.responses.borrow().is_empty());
+        assert!(gh.calls().iter().all(|call| {
+            call[0] == "api"
+                && !call
+                    .iter()
+                    .any(|arg| arg.contains("mutation") || arg == "--method")
+        }));
+        let human = render_candidates(&report);
+        assert!(human.contains("Candidates: 0\nSkipped: 101\n"));
+        assert!(human.contains("skipped missing-project-status: 101"));
+        let result = into_result("issue-candidates", IssueReport::Candidates(report));
+        let value = serde_json::to_value(&result).unwrap();
+        assert_eq!(value["issue"]["skipped"].as_array().unwrap().len(), 101);
+        assert_eq!(value["issue"]["candidates"], json!([]));
+        assert!(
+            serde_json::to_string(&result)
+                .unwrap()
+                .contains("0 candidate(s), 101 skipped")
+        );
+    }
+
+    #[test]
+    fn candidate_is_blocked_by_open_prerequisite_after_closed_page() {
+        let closed: Vec<_> = (200..300)
+            .map(|number| json!({"number":number,"state":"closed"}))
+            .collect();
+        let gh = FakeGithub::new(vec![
+            metadata_response(),
+            json!([listing(1)]),
+            project_status(Some("Todo")),
+            json!(closed),
+            json!([{"number":300,"state":"open"}]),
+        ]);
+        let report = candidates(&gh, "3").unwrap();
+        assert!(report.candidates.is_empty());
+        assert_eq!(report.skipped.len(), 1);
+        assert_eq!(report.skipped[0].reason, "blocked");
+        assert_eq!(report.skipped[0].detail, "blocked by open issue(s): 300");
+        assert!(gh.responses.borrow().is_empty());
+    }
+
+    #[test]
+    fn candidate_discovery_refuses_unproven_project_inventory() {
+        for page_info in [
+            json!({"hasNextPage":true,"endCursor":"same"}),
+            json!({}),
+            json!({"hasNextPage":"false"}),
+            Value::Null,
+        ] {
+            let mut project = project_status(Some("In Progress"));
+            project["data"]["repository"]["issue"]["projectItems"]["pageInfo"] = page_info;
+            let gh = FakeGithub::new(vec![
+                metadata_response(),
+                json!([listing(1)]),
+                project,
+                json!([]),
+            ]);
+            let error = candidates(&gh, "3").unwrap_err();
+            assert!(
+                format!("{error:#}").contains("incomplete projectItems"),
+                "{error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn discovery_rejects_later_rest_failure_and_nonadvancing_pages() {
+        let first: Vec<_> = (1..=100).map(listing).collect();
+        for next in [
+            Err(anyhow!("offline API failure")),
+            Ok(json!({})),
+            Ok(json!(first)),
+        ] {
+            let gh = FakeGithub::new(vec![metadata_response(), json!(first)]);
+            gh.responses.borrow_mut().push(next);
+            let error = candidates(&gh, "3").unwrap_err();
+            let detail = format!("{error:#}");
+            assert!(detail.contains("page 2"), "{detail}");
+            assert_eq!(gh.calls().len(), 3);
+        }
+    }
+
+    #[test]
+    fn full_rest_page_requires_terminal_page_before_success() {
+        let full: Vec<_> = (1..=100).map(listing).collect();
+        let mut responses = vec![metadata_response(), json!(full), json!([])];
+        for _ in 1..=100 {
+            responses.extend([project_status(None), json!([])]);
+        }
+        let gh = FakeGithub::new(responses);
+        let report = candidates(&gh, "3").unwrap();
+        assert_eq!(report.skipped.len(), 100);
+        assert!(gh.responses.borrow().is_empty());
+    }
+
+    #[test]
+    fn empty_discovery_requires_complete_metadata_and_exhausted_listing() {
+        let gh = FakeGithub::new(vec![metadata_response(), json!([])]);
+        let report = candidates(&gh, "Developer tooling & DX").unwrap();
+        assert!(report.candidates.is_empty());
+        assert!(report.skipped.is_empty());
+        assert_eq!(gh.calls().len(), 2);
+        assert!(render_candidates(&report).contains("Candidates: 0\nSkipped: 0\n"));
+    }
+
+    #[test]
+    fn create_preflight_refuses_truncated_metadata_without_mutation() {
+        for connection in ["milestones", "labels", "issueTypes"] {
+            for info in [json!({"hasNextPage":true}), json!({}), Value::Null] {
+                let mut metadata = metadata_response();
+                metadata["data"]["repository"][connection]["pageInfo"] = info;
+                let gh = FakeGithub::new(vec![metadata]);
+                let body = temp_body("Body");
+                let error = create(
+                    &gh,
+                    CreateInput {
+                        title: "fix(xtask): protect discovery".into(),
+                        issue_type: "Task".into(),
+                        milestone: "3".into(),
+                        priority: Priority::P2,
+                        labels: vec!["tooling".into()],
+                        body_file: body.path().into(),
+                    },
+                )
+                .unwrap_err();
+                assert!(
+                    error
+                        .to_string()
+                        .contains(&format!("incomplete {connection}")),
+                    "{error:#}"
+                );
+                assert_eq!(gh.calls().len(), 1);
+                assert!(!gh.calls()[0].iter().any(|arg| arg.contains("mutation")));
+            }
+        }
+    }
+
+    #[test]
+    fn discovery_preserves_claim_precedence_and_rejects_bad_prerequisite_state() {
+        let gh = FakeGithub::new(vec![
+            metadata_response(),
+            json!([listing(1)]),
+            project_status(Some("In Progress")),
+            json!([{"number":2,"state":"open"}]),
+        ]);
+        let report = candidates(&gh, "3").unwrap();
+        assert_eq!(report.skipped[0].reason, "claimed");
+        for state in [Value::Null, json!("unknown")] {
+            let gh = FakeGithub::new(vec![
+                metadata_response(),
+                json!([listing(1)]),
+                project_status(Some("Todo")),
+                json!([{"number":2,"state":state}]),
+            ]);
+            assert!(
+                candidates(&gh, "3")
+                    .unwrap_err()
+                    .to_string()
+                    .contains("invalid state")
+            );
+        }
+    }
+
+    #[test]
+    fn discovery_stops_when_dependency_page_fails_after_closed_page() {
+        let closed: Vec<_> = (200..300)
+            .map(|number| json!({"number":number,"state":"closed"}))
+            .collect();
+        let gh = FakeGithub::new(vec![
+            metadata_response(),
+            json!([listing(1)]),
+            project_status(Some("Todo")),
+            json!(closed),
+        ]);
+        gh.responses
+            .borrow_mut()
+            .push(Err(anyhow!("dependency transport failure")));
+        let error = candidates(&gh, "3").unwrap_err();
+        let detail = format!("{error:#}");
+        assert!(detail.contains("blocked_by page 2"), "{detail}");
+        assert!(detail.contains("dependency transport failure"));
+    }
+
+    #[test]
+    fn discovery_rejects_malformed_pull_request_discriminators() {
+        for discriminator in [Value::Null, json!(false), json!("PR"), json!(0), json!([])] {
+            let mut issue = listing(1);
+            issue["pull_request"] = discriminator;
+            let gh = FakeGithub::new(vec![metadata_response(), json!([issue])]);
+            let error = candidates(&gh, "3").unwrap_err();
+            assert!(
+                error.to_string().contains("malformed pull_request"),
+                "{error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn discovery_rejects_malformed_required_issue_and_project_metadata() {
+        let mut bad_listing = listing(1);
+        bad_listing["labels"] = json!([{}]);
+        let gh = FakeGithub::new(vec![
+            metadata_response(),
+            json!([bad_listing]),
+            project_status(None),
+            json!([]),
+        ]);
+        assert!(candidates(&gh, "3").is_err());
+
+        let mut bad_project = project_status(None);
+        bad_project["data"]["repository"]["issue"]["projectItems"]["nodes"] = json!([{}]);
+        let gh = FakeGithub::new(vec![
+            metadata_response(),
+            json!([listing(1)]),
+            bad_project,
+            json!([]),
+        ]);
+        assert!(candidates(&gh, "3").is_err());
     }
 
     #[test]
@@ -1112,7 +1458,7 @@ mod tests {
     #[test]
     fn absent_backlog_project_item_is_missing_project_status() {
         let gh = FakeGithub::new(vec![
-            json!({"data":{"repository":{"issue":{"projectItems":{"nodes":[]}}}}}),
+            json!({"data":{"repository":{"issue":{"projectItems":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}),
         ]);
 
         let status = fetch_project_status(&gh, 1200).unwrap();

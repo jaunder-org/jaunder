@@ -193,7 +193,15 @@ pub fn execute_with<
         ) {
             return Err(anyhow!(land::divergence_message(&local, &remote)));
         }
-        return Ok(land::land(source, armer, clock, &subject, cfg, sink));
+        return Ok(land::land(
+            source,
+            armer,
+            clock,
+            &subject,
+            &snap.head_sha,
+            cfg,
+            sink,
+        ));
     }
     let progress = established
         .as_ref()
@@ -287,7 +295,7 @@ mod tests {
     }
 
     impl PrArmer for SpyArmer {
-        fn arm_auto_merge(&self, _: &Subject) -> std::result::Result<(), ApiError> {
+        fn arm_auto_merge(&self, _: &Subject, _: &str) -> std::result::Result<(), ApiError> {
             self.calls.set(self.calls.get() + 1);
             Ok(())
         }
@@ -399,6 +407,26 @@ mod tests {
         assert!(err.to_string().contains("local-only"), "{err}");
         assert!(err.to_string().contains("abc"), "{err}");
         assert_eq!(armer.calls.get(), 0, "nothing may be armed after a refusal");
+    }
+
+    #[test]
+    fn landing_refuses_a_head_changed_since_establishment() {
+        for mut changed in [open_pending(), merged_snapshot()] {
+            changed.head_sha = "replacement".into();
+            let src = FakeSource::new(vec![Ok(open_pending()), Ok(changed)], queue_rules());
+            let armer = SpyArmer::new();
+            let git = GitFacts {
+                branch: Some("feature".into()),
+                head_sha: Some("abc".into()),
+            };
+            let report =
+                execute_with(&src, &armer, &clock(), invocation(&git, true), &mut |_| {}).unwrap();
+            assert_eq!(report.outcome, Outcome::Stale);
+            assert_eq!(report.head_sha, "abc");
+            let detail = report.detail.unwrap();
+            assert!(detail.contains("abc") && detail.contains("replacement"));
+            assert_eq!(armer.calls.get(), 0);
+        }
     }
 
     #[test]

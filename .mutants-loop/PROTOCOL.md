@@ -50,9 +50,25 @@ scan is by definition older than your checkout:
 devtool run -- .mutants-loop/verify.sh <package> <file>
 ```
 
-A file fixed since the scan returns `missed=0` and drops out by itself. That
-property is what makes a stale list harmless — do not add a cache to speed it
-up.
+A completed, applicable verification of a file fixed since the scan returns
+`missed: 0` and drops out by itself. Missing, malformed, inconsistent or
+incomplete evidence fails verification before counts are published; zero
+applicable mutants is not proof that the file is fixed. Do not add a cache to
+speed it up.
+
+`verify.sh` keeps the shared shell producer and delegates evidence validation
+and reporting once, after producer termination, to:
+
+```bash
+cargo xtask mutants verify-evidence --package <package> --file <file> --output <artifact-directory> --producer-status <status>
+```
+
+The output root contains `mutants.out/`. Native validation errors and launcher
+failures propagate as nonzero caller exits. Production uses the existing
+cargo-xtask/Nix launcher: new tooling inputs need normal Git source admission;
+cold realization/build and checkout preparation are real costs, while warm
+invocations reuse store outputs. Native regression tests prove behavior, not
+production Nix source admission.
 
 ## Files here
 
@@ -130,8 +146,8 @@ not an error.
 
   **Consequence for the grind:** survivors in `storage/src/postgres/**` were
   found by CI with a real cluster and **cannot be reproduced by a bare
-  `verify.sh`** — it will report `missed=0` and you will "fix" nothing while
-  believing you did. Work them under a cluster:
+  `verify.sh`** — it fails verification with no applicable mutants, rather than
+  proving that the file is fixed. Work them under a cluster:
 
   ```bash
   devtool pg run -- env MUTANTS_WITH_POSTGRES=1 .mutants-loop/verify.sh storage <file>
@@ -168,13 +184,18 @@ tests.
 
 **A timeout is a hole, not a result.** Neither caught nor missed — never
 examined, while the summary still reads "0 missed". That is how `storage` looked
-fine at 159 timeouts. CI now fails on any timeout for this reason. Locally,
-treat more than a few percent as a broken measurement and fix the cap before
-reading the numbers.
+fine at 159 timeouts. CI and local `verify.sh` fail on any timeout for this
+reason. Resolve the incomplete measurement before reading authoritative counts.
 
-**Exit codes carry nothing.** 2 means both "found surviving mutants" and
-"invalid argument". Judge on artifacts — `outcomes.json` for "did it test
-anything", `missed.txt` for the finding.
+**Exit codes and artifacts must agree.** In cargo-mutants 27.1.0, 0 means
+success, 1 usage error, 2 surviving mutants, 3 timeout, and 4 baseline failure;
+other tool failures also fail verification. The native evidence consumer accepts
+only producer status 0 or 2, and only with completed `outcomes.json`, successful
+baseline tests, nonempty applicable mutant outcomes, consistent phase
+results/counts and matching category lists. Partial JSON is written during a
+run: existence alone proves nothing. A valid survivor run still prints counts
+and `STILL ALIVE` details and returns caller exit 0; that is a finding, not a
+tool failure.
 
 `client` is deliberately never scanned: WASM-only, no host test reaches it, all
 42 mutants survived with nothing caught. `web` likewise, by the user's call —

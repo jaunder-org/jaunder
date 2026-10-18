@@ -1140,6 +1140,16 @@ in
       testSupport = testSupportBin;
       browser = e2ePackage;
     };
+    qualification-harness-legacy-1419 = import ./qualification-harness.nix {
+      inherit pkgs;
+      name = "jaunder-qualification-harness-legacy-1419";
+      xtask = xtaskBin;
+      # Keep the accepted fixture's complete historical dependency graph.
+      testSupport = (builtins.getFlake
+        "github:jaunder-org/jaunder/78d201e6969ed17b8a54b87d3de24be6afa1f5ee"
+      ).packages.${pkgs.stdenv.hostPlatform.system}.test-support;
+      browser = e2ePackage;
+    };
     theme-thumbnail-environment = themeThumbnailEnvironment;
     # The manually linked diagnostic module and its retained IR/link evidence.
     # A failed producer still exposes its durable `status.json` and `pipeline.log`

@@ -1048,12 +1048,222 @@ mod tests {
         assert!(!workflow.jobs.contains_key("elisp-integration"));
     }
 
-    #[test]
-    fn host_resource_baseline_runs_and_uploads_before_heavy_validation() {
-        let workflow: serde_yaml::Value =
-            serde_yaml::from_str(include_str!("../../.github/workflows/ci.yml")).unwrap();
+    // Share the real-workflow contract with single-change controls so failures
+    // identify the guarantee that was violated, not incidental YAML details.
+    fn host_resource_baseline_contract(
+        workflow: &serde_yaml::Value,
+    ) -> Result<&serde_yaml::Value, &'static str> {
         let steps = workflow["jobs"]["validate-host"]["steps"]
             .as_sequence()
+            .unwrap();
+        let position = |name: &'static str| {
+            steps
+                .iter()
+                .position(|step| step["name"].as_str() == Some(name))
+                .ok_or(name)
+        };
+        let capture = position("Capture host resource baseline")?;
+        let upload = position("Upload host resource baseline")?;
+        let validate = position("Validate host lane (via xtask)")?;
+        let setup = steps
+            .iter()
+            .position(|step| step["uses"].as_str() == Some("./.github/actions/setup-ci"))
+            .ok_or("setup")?;
+        for (ordered, reason) in [
+            (setup < capture, "setup < capture"),
+            (capture < upload, "capture < upload"),
+            (upload < validate, "upload < validation"),
+        ] {
+            if !ordered {
+                return Err(reason);
+            }
+        }
+        // The workflow owns dependency versions; this contract protects the
+        // action identity and explicit ref, not upstream compatibility.
+        let uses = steps[upload]["uses"].as_str().ok_or("upload uses")?;
+        let (action, reference) = uses.split_once('@').ok_or("upload ref")?;
+        if action != "actions/upload-artifact" {
+            return Err("upload action");
+        }
+        if reference.trim().is_empty() {
+            return Err("upload ref");
+        }
+        for (actual, expected, reason) in [
+            (
+                &steps[capture]["id"],
+                "host-resource-baseline",
+                "capture id",
+            ),
+            (
+                &steps[upload]["if"],
+                "always() && steps.host-resource-baseline.outcome != 'skipped'",
+                "upload condition",
+            ),
+            (
+                &steps[upload]["with"]["name"],
+                "validate-host-resource-baseline",
+                "artifact name",
+            ),
+            (
+                &steps[upload]["with"]["path"],
+                ".xtask/host-resource-baseline.txt",
+                "artifact path",
+            ),
+            (
+                &steps[upload]["with"]["if-no-files-found"],
+                "error",
+                "missing-files policy",
+            ),
+        ] {
+            if actual.as_str() != Some(expected) {
+                return Err(reason);
+            }
+        }
+        if steps[upload]["with"]["retention-days"].as_u64() != Some(14) {
+            return Err("retention");
+        }
+        Ok(&steps[capture])
+    }
+
+    #[test]
+    fn host_resource_baseline_accepts_upload_patch_updates() {
+        for reference in ["v7.0.1", "v7.0.2"] {
+            let mut workflow: serde_yaml::Value =
+                serde_yaml::from_str(include_str!("../../.github/workflows/ci.yml")).unwrap();
+            let upload = workflow["jobs"]["validate-host"]["steps"]
+                .as_sequence_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|step| step["name"].as_str() == Some("Upload host resource baseline"))
+                .unwrap();
+            upload["uses"] = format!("actions/upload-artifact@{reference}").into();
+            assert!(
+                host_resource_baseline_contract(&workflow).is_ok(),
+                "{reference}"
+            );
+        }
+    }
+
+    #[test]
+    fn host_resource_baseline_rejects_contract_field_changes() {
+        use serde_yaml::Value;
+
+        let workflow: Value =
+            serde_yaml::from_str(include_str!("../../.github/workflows/ci.yml")).unwrap();
+        host_resource_baseline_contract(&workflow).unwrap();
+        let steps = workflow["jobs"]["validate-host"]["steps"]
+            .as_sequence()
+            .unwrap();
+        let capture = steps
+            .iter()
+            .position(|step| step["name"].as_str() == Some("Capture host resource baseline"))
+            .unwrap();
+        let upload = steps
+            .iter()
+            .position(|step| step["name"].as_str() == Some("Upload host resource baseline"))
+            .unwrap();
+        for (index, path, replacement, reason) in [
+            (upload, &["uses"][..], Value::Null, "upload uses"),
+            (
+                upload,
+                &["uses"][..],
+                "other/upload-artifact@v7.0.1".into(),
+                "upload action",
+            ),
+            (
+                upload,
+                &["uses"][..],
+                "actions/upload-artifact-extra@v7.0.1".into(),
+                "upload action",
+            ),
+            (
+                upload,
+                &["uses"][..],
+                "actions/upload-artifact".into(),
+                "upload ref",
+            ),
+            (
+                upload,
+                &["uses"][..],
+                "actions/upload-artifact@".into(),
+                "upload ref",
+            ),
+            (
+                upload,
+                &["uses"][..],
+                "actions/upload-artifact@ ".into(),
+                "upload ref",
+            ),
+            (capture, &["id"][..], "wrong-id".into(), "capture id"),
+            (upload, &["if"][..], "always()".into(), "upload condition"),
+            (
+                upload,
+                &["with", "name"][..],
+                "wrong-name".into(),
+                "artifact name",
+            ),
+            (
+                upload,
+                &["with", "path"][..],
+                "wrong-path".into(),
+                "artifact path",
+            ),
+            (
+                upload,
+                &["with", "if-no-files-found"][..],
+                "ignore".into(),
+                "missing-files policy",
+            ),
+            (
+                upload,
+                &["with", "retention-days"][..],
+                1.into(),
+                "retention",
+            ),
+        ] {
+            let mut changed = workflow.clone();
+            let mut field = &mut changed["jobs"]["validate-host"]["steps"][index];
+            for key in path {
+                field = &mut field[*key];
+            }
+            *field = replacement;
+            assert_eq!(
+                host_resource_baseline_contract(&changed).unwrap_err(),
+                reason,
+                "{path:?}"
+            );
+        }
+        let mut missing_upload = workflow.clone();
+        missing_upload["jobs"]["validate-host"]["steps"]
+            .as_sequence_mut()
+            .unwrap()
+            .remove(upload);
+        assert_eq!(
+            host_resource_baseline_contract(&missing_upload).unwrap_err(),
+            "Upload host resource baseline"
+        );
+        let mut missing_uses = workflow.clone();
+        missing_uses["jobs"]["validate-host"]["steps"][upload]
+            .as_mapping_mut()
+            .unwrap()
+            .remove(Value::from("uses"));
+        assert_eq!(
+            host_resource_baseline_contract(&missing_uses).unwrap_err(),
+            "upload uses"
+        );
+    }
+
+    #[test]
+    fn host_resource_baseline_rejects_ordering_changes() {
+        let workflow: serde_yaml::Value =
+            serde_yaml::from_str(include_str!("../../.github/workflows/ci.yml")).unwrap();
+        host_resource_baseline_contract(&workflow).unwrap();
+        let steps = workflow["jobs"]["validate-host"]["steps"]
+            .as_sequence()
+            .unwrap();
+        let setup = steps
+            .iter()
+            .position(|step| step["uses"].as_str() == Some("./.github/actions/setup-ci"))
             .unwrap();
         let position = |name: &str| {
             steps
@@ -1064,24 +1274,28 @@ mod tests {
         let capture = position("Capture host resource baseline");
         let upload = position("Upload host resource baseline");
         let validate = position("Validate host lane (via xtask)");
-        let setup = steps
-            .iter()
-            .position(|step| step["uses"].as_str() == Some("./.github/actions/setup-ci"))
-            .unwrap();
-        assert!(setup < capture && capture < upload && upload < validate);
-        assert_eq!(
-            steps[upload]["uses"].as_str(),
-            Some("actions/upload-artifact@v7.0.1")
-        );
-        assert_eq!(
-            steps[upload]["with"]["path"].as_str(),
-            Some(".xtask/host-resource-baseline.txt")
-        );
-        assert_eq!(
-            steps[upload]["with"]["if-no-files-found"].as_str(),
-            Some("error")
-        );
+        for (left, right, reason) in [
+            (setup, capture, "setup < capture"),
+            (capture, upload, "capture < upload"),
+            (upload, validate, "upload < validation"),
+        ] {
+            let mut changed = workflow.clone();
+            changed["jobs"]["validate-host"]["steps"]
+                .as_sequence_mut()
+                .unwrap()
+                .swap(left, right);
+            assert_eq!(
+                host_resource_baseline_contract(&changed).unwrap_err(),
+                reason
+            );
+        }
+    }
 
+    #[test]
+    fn host_resource_baseline_runs_and_uploads_before_heavy_validation() {
+        let workflow: serde_yaml::Value =
+            serde_yaml::from_str(include_str!("../../.github/workflows/ci.yml")).unwrap();
+        let capture = host_resource_baseline_contract(&workflow).unwrap();
         let directory = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(directory.path().join("xtask/target")).unwrap();
         std::fs::write(
@@ -1091,7 +1305,7 @@ mod tests {
         .unwrap();
         // Exercise the real script with only its fixed external store path
         // substituted; unit tests must not walk the machine's actual store.
-        let script = steps[capture]["run"].as_str().unwrap();
+        let script = capture["run"].as_str().unwrap();
         assert!(script.contains("for path in target /nix/store; do"));
         assert!(script.contains("timeout 30s du -s -x -B1"));
         let script = script.replace("/nix/store", "fixture-nix-store");

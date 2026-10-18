@@ -5,6 +5,7 @@
   xtask,
   testSupport,
   browser,
+  name ? "jaunder-qualification-harness",
 }:
 let
   browserRunner = pkgs.writeShellApplication {
@@ -15,7 +16,7 @@ let
     '';
   };
 in
-(pkgs.linkFarm "jaunder-qualification-harness" [
+(pkgs.linkFarm name [
   { name = "bin/xtask"; path = "${xtask}/bin/xtask"; }
   { name = "bin/test-support"; path = "${testSupport}/bin/test-support"; }
   { name = "bin/node"; path = "${pkgs.nodejs}/bin/node"; }
