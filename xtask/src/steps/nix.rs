@@ -3724,7 +3724,27 @@ else:
                         &trace,
                     );
                     let step = if failed_identity == Some(lane.identity.as_str()) {
-                        StepResult::fail(&lane.identity)
+                        // Failed builds recover current evidence before returning; combo
+                        // finalization must not relift a success-only output afterward.
+                        let destination = diagnostics.join(format!("e2e-{}", lane.identity));
+                        finish_build_with(
+                            BuildCompletion {
+                                step_name: &lane.identity,
+                                installable: ".#checks.fixture",
+                                log_path: "fixture-build.log",
+                                diagnostic_failed: false,
+                                capture: BuildCaptureOutcome::default(),
+                                outcome: Ok(Outcome::Exited(1)),
+                            },
+                            || Ok("fixture-failure-excerpt.log".to_owned()),
+                            || {
+                                !super::copy_e2e_diagnostics_between(&output, &destination)
+                                    .failures
+                                    .is_empty()
+                            },
+                            || panic!("a failed build cannot report successful realization"),
+                            &mut Vec::new(),
+                        )
                     } else {
                         StepResult::ok(&lane.identity)
                     };
