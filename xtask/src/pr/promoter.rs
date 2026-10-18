@@ -180,7 +180,7 @@ pub trait PromoterPrRead {
 
 pub trait PromoterPrWrite {
     fn create_pull_request(&self) -> Result<()>;
-    fn arm_auto_merge(&self, number: PrNumber) -> Result<()>;
+    fn arm_auto_merge(&self, number: PrNumber, expected_head: &str) -> Result<()>;
     fn close_pull_request(&self, number: PrNumber) -> Result<()>;
 }
 
@@ -553,13 +553,15 @@ impl PromoterPrWrite for GhPromoterPr {
         Ok(())
     }
 
-    fn arm_auto_merge(&self, number: PrNumber) -> Result<()> {
+    fn arm_auto_merge(&self, number: PrNumber, expected_head: &str) -> Result<()> {
         let subject = Subject {
             owner: self.owner.clone(),
             repo: self.repo.clone(),
             number,
         };
-        GhArmer.arm_auto_merge(&subject).map_err(github_error)?;
+        GhArmer
+            .arm_auto_merge(&subject, expected_head)
+            .map_err(github_error)?;
         Ok(())
     }
 
@@ -714,7 +716,7 @@ fn arm_verified<R: PromoterPrRead, W: PromoterPrWrite>(
     number: PrNumber,
     expected_head: &str,
 ) -> Result<()> {
-    let arm = write.arm_auto_merge(number);
+    let arm = write.arm_auto_merge(number, expected_head);
     let (owner, _) = read.repository()?;
     let pr = read
         .pull_request(number)?
@@ -1091,6 +1093,7 @@ mod tests {
         writes: RefCell<Vec<&'static str>>,
         trace: Rc<RefCell<Vec<&'static str>>>,
         arm_to_queue: bool,
+        arm_expected_heads: RefCell<Vec<String>>,
         head_after_arm: Option<String>,
         snapshot_mergeable: Mergeable,
         snapshot_status: MergeStateStatus,
@@ -1117,6 +1120,7 @@ mod tests {
                 writes: RefCell::new(Vec::new()),
                 trace: Rc::new(RefCell::new(Vec::new())),
                 arm_to_queue: false,
+                arm_expected_heads: RefCell::new(Vec::new()),
                 head_after_arm: None,
                 snapshot_mergeable: Mergeable::Mergeable,
                 snapshot_status: MergeStateStatus::Clean,
@@ -1223,7 +1227,10 @@ mod tests {
             Ok(())
         }
 
-        fn arm_auto_merge(&self, number: PrNumber) -> Result<()> {
+        fn arm_auto_merge(&self, number: PrNumber, expected_head: &str) -> Result<()> {
+            self.arm_expected_heads
+                .borrow_mut()
+                .push(expected_head.into());
             self.writes.borrow_mut().push("arm");
             self.trace.borrow_mut().push("arm");
             let mut pulls = self.pulls.borrow_mut();
@@ -1231,6 +1238,12 @@ mod tests {
                 .iter_mut()
                 .find(|pr| pr.number == number)
                 .ok_or_else(|| anyhow!("missing PR"))?;
+            if pr.head_sha != expected_head {
+                bail!(
+                    "head mismatch: expected {expected_head}, observed {}",
+                    pr.head_sha
+                );
+            }
             if self.arm_to_queue {
                 pr.in_merge_queue = true;
             } else {
@@ -1809,9 +1822,23 @@ mod tests {
 
         assert_eq!(outcome, PromoterOutcome::Created(PrNumber(742)));
         assert_eq!(*github.writes.borrow(), ["create", "arm"]);
+        assert_eq!(*github.arm_expected_heads.borrow(), ["promoted-head"]);
         let pulls = github.pulls.borrow();
         assert_eq!(pulls[0].head_sha, "promoted-head");
         assert!(pulls[0].auto_merge_armed);
+    }
+
+    #[test]
+    fn promoter_mutation_is_conditioned_on_the_callers_expected_head() {
+        let github = FakeGithub::empty();
+        github
+            .pulls
+            .borrow_mut()
+            .push(promoter_pr("replacement-head"));
+        let error = arm_verified(&github, &github, PrNumber(742), "approved-head").unwrap_err();
+        assert!(format!("{error:#}").contains("head mismatch"));
+        assert_eq!(*github.arm_expected_heads.borrow(), ["approved-head"]);
+        assert!(!github.pulls.borrow()[0].auto_merge_armed);
     }
 
     #[test]

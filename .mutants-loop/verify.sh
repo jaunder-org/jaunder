@@ -33,8 +33,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 slug="$(echo "$file" | tr '/.' '--')"
 out="$TMPDIR/verify-$slug"
-rm -rf "$out"
-mkdir -p "$out"
+if ! { rm -rf "$out" && mkdir -p "$out"; }; then
+  echo "ERROR: verification failed: cannot prepare fresh output: $out" >&2
+  exit 1
+fi
 
 echo "verifying $pkg :: $file"
 echo "  output: $out"
@@ -42,31 +44,8 @@ echo "  output: $out"
 run_mutants --package "$pkg" --file "$file" --output "$out"
 status=$?
 
-echo
-echo "--- $file ---"
-for f in missed caught unviable timeout; do
-  path="$out/mutants.out/$f.txt"
-  if [ -s "$path" ]; then
-    echo "$f: $(wc -l <"$path")"
-  else
-    echo "$f: 0"
-  fi
-done
-
-if [ -s "$out/mutants.out/missed.txt" ]; then
-  echo
-  echo "STILL ALIVE:"
-  cat "$out/mutants.out/missed.txt"
-fi
-
-# cargo-mutants exits non-zero when mutants survive; that is a result, not a
-# tool failure. Exit 4 (baseline failed) is a real failure and must not be
-# mistaken for "nothing survived".
-if [ "$status" -eq 4 ]; then
-  echo
-  echo "ERROR: unmutated baseline FAILED — nothing was tested." >&2
-  echo "Do not read the zeros above as success. See PROTOCOL.md." >&2
-  exit 4
-fi
-
-exit 0
+# One native consumer owns all evidence policy and reporting. Propagate its
+# outcome, including launcher failures, rather than interpreting partial output.
+cargo xtask mutants verify-evidence --package "$pkg" --file "$file" \
+  --output "$out" --producer-status "$status"
+exit $?
