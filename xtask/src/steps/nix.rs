@@ -439,7 +439,7 @@ fn sentinel_detail(status: &coverage::status::CoverageStatus) -> String {
     }
 }
 
-/// Realize every enabled E2E lane concurrently. Each build retains its own GC
+/// Realize every enabled E2E lane with invocation-local admission. Each build retains its own GC
 /// root and lane-qualified diagnostics; the shared catalog is the sole retained
 /// topology authority.
 ///
@@ -450,7 +450,24 @@ fn unsplit_lane(backend: &str, browser: &str) -> String {
     format!("{backend}-{browser}-unsplit")
 }
 
-pub fn e2e(result: &mut CommandResult) -> E2eOutcome {
+pub fn e2e(result: &mut CommandResult, jobs: Option<std::num::NonZeroUsize>) -> E2eOutcome {
+    e2e_with_build(result, jobs, Path::new(".xtask/diagnostics"), |lane| {
+        let check = format!("e2e-{}", lane.identity);
+        (
+            build_check(&format!("nix-{check}"), &check),
+            Path::new(".xtask/gcroots").join(check),
+        )
+    })
+}
+
+/// Exercise the full host evidence/verdict path with only Nix realization
+/// replaced at its build seam and a caller-selected diagnostic root.
+fn e2e_with_build(
+    result: &mut CommandResult,
+    jobs: Option<std::num::NonZeroUsize>,
+    diagnostics_root: &Path,
+    build: impl Fn(&crate::e2e_lanes::Lane) -> (StepResult, std::path::PathBuf) + Sync,
+) -> E2eOutcome {
     let combo_start = result.steps.len();
     let catalog = match crate::e2e_lanes::catalog() {
         Ok(catalog) => catalog,
@@ -459,30 +476,35 @@ pub fn e2e(result: &mut CommandResult) -> E2eOutcome {
             return E2eOutcome::from_combo_steps(&result.steps[combo_start..]);
         }
     };
-    // Local validate intentionally derives its retained lane set from the same
-    // catalog CI will consume after Task 5, rather than carrying a second list.
+    // Local validation and distributed CI must require the same lane population.
     let enabled = catalog
         .lanes
         .iter()
         .filter(|lane| lane.enabled)
         .cloned()
         .collect::<Vec<_>>();
-    let builds = build_candidate_lanes(enabled, |lane| {
-        let check = format!("e2e-{}", lane.identity);
-        build_check(&format!("nix-{check}"), &check)
-    });
+    let concurrency = crate::result::E2eConcurrency::new(jobs, enabled.len());
+    eprintln!("xtask: {}", concurrency.render());
+    result.e2e_concurrency = Some(concurrency);
+    let builds = build_candidate_lanes(enabled, jobs, build);
     let mut phase_groups = Vec::new();
-    for (lane_spec, build) in builds {
-        let check = format!("e2e-{}", lane_spec.identity);
+    for (lane_spec, (build, output)) in builds {
         let lane = lane_spec.identity.clone();
-        let diagnostics = Path::new(".xtask/diagnostics").join(format!("e2e-{lane}"));
+        let diagnostics = diagnostics_root.join(format!("e2e-{lane}"));
         finish_e2e_combo(
             result,
             build,
             || {
-                lift_e2e_diagnostics(Path::new(&format!(".xtask/gcroots/{check}")), &diagnostics);
+                lift_e2e_diagnostics(&output, &diagnostics);
             },
-            || validate_lifted_e2e_combo(&lane_spec.backend, &lane_spec.browser, &lane),
+            || {
+                validate_lifted_e2e_combo(
+                    &lane_spec.backend,
+                    &lane_spec.browser,
+                    &lane,
+                    &diagnostics,
+                )
+            },
         );
         if let Some(phases) =
             read_e2e_phase_records(&diagnostics, &lane_spec.backend, &lane_spec.browser, &lane)
@@ -490,7 +512,7 @@ pub fn e2e(result: &mut CommandResult) -> E2eOutcome {
             phase_groups.push(phases);
         }
     }
-    result.record_parallel_phases(phase_groups);
+    record_e2e_phases(result, phase_groups, concurrency);
     for backend in ["sqlite", "postgres"] {
         let lanes = catalog
             .lanes
@@ -507,7 +529,7 @@ pub fn e2e(result: &mut CommandResult) -> E2eOutcome {
             .map(|lane| {
                 candidate_lane_evidence(
                     lane,
-                    &Path::new(".xtask/diagnostics").join(format!("e2e-{}", lane.identity)),
+                    &diagnostics_root.join(format!("e2e-{}", lane.identity)),
                 )
             })
             .collect::<Vec<_>>();
@@ -519,6 +541,35 @@ pub fn e2e(result: &mut CommandResult) -> E2eOutcome {
         }
     }
     E2eOutcome::from_combo_steps(&result.steps[combo_start..])
+}
+
+/// Lane sidecars have durations but no shared host-clock intervals. Once
+/// admission is bounded, their maximum cannot represent aggregate elapsed time.
+fn record_e2e_phases(
+    result: &mut CommandResult,
+    groups: Vec<Vec<PhaseRecord>>,
+    concurrency: crate::result::E2eConcurrency,
+) {
+    let names = groups
+        .iter()
+        .flatten()
+        .map(|phase| phase.name)
+        .collect::<Vec<_>>();
+    result.record_parallel_phases(groups);
+    if concurrency.effective < concurrency.enabled {
+        for phase in &mut result.phases {
+            if names.contains(&phase.name) {
+                phase.duration_ms = None;
+                if phase.outcome != PhaseOutcome::Failed {
+                    phase.outcome = PhaseOutcome::Unavailable;
+                }
+                phase.detail = format!(
+                    "aggregate elapsed time unavailable: bounded E2E lane admission has no shared timing boundary; lane sidecars retained; {}",
+                    phase.detail
+                );
+            }
+        }
+    }
 }
 
 /// Outcome of one candidate realization after every build has been awaited.
@@ -602,7 +653,7 @@ pub fn e2e_control(result: &mut CommandResult, backend: &str, workers: u8) {
                 &diagnostics,
             );
         },
-        || validate_lifted_e2e_combo(backend, "firefox", &lane),
+        || validate_lifted_e2e_combo(backend, "firefox", &lane, &diagnostics),
     );
     if let Some(phases) = read_e2e_phase_records(&diagnostics, backend, "firefox", &lane) {
         result.record_phases(phases);
@@ -649,7 +700,9 @@ pub fn e2e_lane(result: &mut CommandResult, identity: &str) {
     result.push(build);
     lift_e2e_diagnostics(Path::new(&format!(".xtask/gcroots/{check}")), &diagnostics);
     if succeeded {
-        for step in validate_lifted_e2e_combo(&lane.backend, &lane.browser, &lane.identity) {
+        for step in
+            validate_lifted_e2e_combo(&lane.backend, &lane.browser, &lane.identity, &diagnostics)
+        {
             result.push(step);
         }
     } else {
@@ -766,7 +819,7 @@ pub fn e2e_experimental(result: &mut CommandResult, backend: &str) {
         );
         return;
     }
-    let builds = build_candidate_lanes(lanes.into_iter().cloned(), |lane| {
+    let builds = build_candidate_lanes(lanes.into_iter().cloned(), None, |lane| {
         let installable = format!(".#checks.x86_64-linux.e2e-{}", lane.identity);
         match Command::new("nix")
             .args([
@@ -837,31 +890,50 @@ pub fn e2e_experimental(result: &mut CommandResult, backend: &str) {
     }
 }
 
-/// Launch every independent candidate build before waiting for any result.
+/// Keep lane admission local to this invocation. Workers take another lane only
+/// after build completion (including recovery) returns, so slow earlier lanes
+/// cannot block refill and ordinary failed outcomes cannot discard pending work.
 fn build_candidate_lanes<T: Send>(
     lanes: impl IntoIterator<Item = crate::e2e_lanes::Lane>,
+    jobs: Option<std::num::NonZeroUsize>,
     build: impl Fn(&crate::e2e_lanes::Lane) -> T + Sync,
 ) -> Vec<(crate::e2e_lanes::Lane, T)> {
-    std::thread::scope(|scope| {
-        let workers = lanes
-            .into_iter()
-            .map(|lane| {
-                let build = &build;
+    let lanes = lanes.into_iter().collect::<Vec<_>>();
+    let count = jobs
+        .map_or(lanes.len(), std::num::NonZeroUsize::get)
+        .min(lanes.len());
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut completed = std::thread::scope(|scope| {
+        let workers = (0..count)
+            .map(|_| {
+                let (lanes, next, build) = (&lanes, &next, &build);
                 scope.spawn(move || {
-                    let result = build(&lane);
-                    (lane, result)
+                    let mut completed = Vec::new();
+                    loop {
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(lane) = lanes.get(index) else { break };
+                        let result = build(lane);
+                        completed.push((index, lane.clone(), result));
+                    }
+                    completed
                 })
             })
             .collect::<Vec<_>>();
         workers
             .into_iter()
-            .map(|worker| {
+            .flat_map(|worker| {
                 worker
                     .join()
                     .expect("candidate build worker must not panic")
             })
-            .collect()
-    })
+            .collect::<Vec<_>>()
+    });
+    // Presentation follows the catalog, independently of admission/completion.
+    completed.sort_by_key(|(index, _, _)| *index);
+    completed
+        .into_iter()
+        .map(|(_, lane, result)| (lane, result))
+        .collect()
 }
 
 pub fn e2e_combo(result: &mut CommandResult, backend: &str, browser: &str) {
@@ -876,7 +948,7 @@ pub fn e2e_combo(result: &mut CommandResult, backend: &str, browser: &str) {
         || {
             lift_e2e_diagnostics(Path::new(&format!(".xtask/gcroots/{check}")), &diagnostics);
         },
-        || validate_lifted_e2e_combo(backend, browser, &lane),
+        || validate_lifted_e2e_combo(backend, browser, &lane, &diagnostics),
     );
     if let Some(phases) = read_e2e_phase_records(&diagnostics, backend, browser, &lane) {
         result.record_phases(phases);
@@ -887,10 +959,38 @@ pub fn e2e_combo(result: &mut CommandResult, backend: &str, browser: &str) {
 ///
 /// Both aggregate and single-combination orchestration use this seam so the
 /// duration verdict always precedes boot-decomposition coverage.
-fn validate_lifted_e2e_combo(backend: &str, browser: &str, lane: &str) -> [StepResult; 2] {
+fn validate_lifted_e2e_combo(
+    backend: &str,
+    browser: &str,
+    lane: &str,
+    diagnostics: &Path,
+) -> [StepResult; 2] {
+    // Path ownership and command-result adaptation belong to orchestration;
+    // each evidence consumer owns only its distinct reconciliation semantics.
+    let report = diagnostics.join(format!("playwright-report-{lane}.json"));
+    let step = |name: &str, context: &str, verdict: Result<String, String>| match verdict {
+        Ok(detail) => StepResult::ok(name).detail(detail),
+        Err(error) => StepResult::fail(name).detail(format!(
+            "e2e {backend}/{browser} {context} is unavailable or inconsistent: {error}"
+        )),
+    };
     [
-        crate::steps::duration_budget::validate_lifted_combo(backend, browser, lane),
-        crate::steps::boot_decomposition_coverage::validate_lifted_combo(backend, browser, lane),
+        step(
+            "e2e-duration-budget",
+            "duration-budget input",
+            crate::steps::duration_budget::validate_files(
+                &report,
+                &diagnostics.join(format!("duration-budget-manifest-{lane}.json")),
+            ),
+        ),
+        step(
+            "e2e-boot-decomposition-coverage",
+            "boot-decomposition evidence",
+            crate::steps::boot_decomposition_coverage::validate_files(
+                &report,
+                &diagnostics.join(format!("capture-{lane}.tar.gz")),
+            ),
+        ),
     ]
 }
 
@@ -1725,6 +1825,7 @@ fn rescue_emitted_diagnostics(check: &str, destination: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};
+    use std::fs;
     use std::io::{self, Write};
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
@@ -3345,7 +3446,7 @@ else:
         let release = Arc::new(AtomicBool::new(false));
         let worker_release = Arc::clone(&release);
         let worker = std::thread::spawn(move || {
-            build_candidate_lanes(lanes, move |_| {
+            build_candidate_lanes(lanes, None, move |_| {
                 started_tx.send(()).unwrap();
                 while !worker_release.load(Ordering::Acquire) {
                     std::thread::park_timeout(Duration::from_millis(10));
@@ -3359,6 +3460,332 @@ else:
             "all candidate builds must start before any result is awaited"
         );
         assert_eq!(worker.join().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn lifted_e2e_validation_preserves_order_paths_and_failure_context() {
+        let root = tempfile::tempdir().unwrap();
+        let lane = "sqlite-chromium-unsplit";
+        let report = root.path().join(format!("playwright-report-{lane}.json"));
+        for malformed in [false, true] {
+            if malformed {
+                fs::write(&report, "not json").unwrap();
+            }
+            let steps = super::validate_lifted_e2e_combo("sqlite", "chromium", lane, root.path());
+            assert_eq!(steps[0].name, "e2e-duration-budget");
+            assert_eq!(steps[1].name, "e2e-boot-decomposition-coverage");
+            for (step, context) in steps.iter().zip([
+                "e2e sqlite/chromium duration-budget input is unavailable or inconsistent:",
+                "e2e sqlite/chromium boot-decomposition evidence is unavailable or inconsistent:",
+            ]) {
+                assert!(!step.ok);
+                let detail = step.detail.as_ref().unwrap();
+                assert!(detail.starts_with(context), "{detail}");
+                if !malformed {
+                    assert!(detail.contains(report.to_str().unwrap()), "{detail}");
+                }
+            }
+            if malformed {
+                assert!(
+                    steps[0]
+                        .detail
+                        .as_ref()
+                        .unwrap()
+                        .contains("reading manifest")
+                );
+                assert!(
+                    steps[1]
+                        .detail
+                        .as_ref()
+                        .unwrap()
+                        .contains("opening capture")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bounded_e2e_phase_timing_does_not_fabricate_elapsed_or_hide_failure() {
+        for bound in [1, 8] {
+            let mut result = CommandResult::new("validate");
+            let phase = crate::result::PhaseRecord {
+                name: PhaseName::GateExecution,
+                duration_ms: Some(10),
+                outcome: PhaseOutcome::Failed,
+                detail: "injected failed producer phase".into(),
+                nix: None,
+            };
+            super::record_e2e_phases(
+                &mut result,
+                vec![vec![phase]],
+                crate::result::E2eConcurrency::new(std::num::NonZeroUsize::new(bound), 8),
+            );
+            let phase = result
+                .phases
+                .iter()
+                .find(|phase| phase.name == PhaseName::GateExecution)
+                .unwrap();
+            assert_eq!(phase.outcome, PhaseOutcome::Failed);
+            assert_eq!(phase.duration_ms, if bound == 1 { None } else { Some(10) });
+            assert!(phase.detail.contains("injected failed producer phase"));
+        }
+    }
+
+    #[test]
+    fn bounded_full_e2e_preserves_real_lift_validators_and_reconciliation() {
+        let fixtures = tempfile::tempdir().unwrap();
+        let evidence = crate::e2e_evidence::tests::fixture(fixtures.path());
+        for failed_identity in [
+            None,
+            Some("sqlite-chromium-unsplit"),
+            Some("sqlite-firefox-ordinary-1-of-2"),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let outputs = root.path().join("outputs");
+            let diagnostics = root.path().join("diagnostics");
+            let mut result = CommandResult::new("validate");
+            let attempted = std::sync::Mutex::new(Vec::new());
+            let outcome = super::e2e_with_build(
+                &mut result,
+                std::num::NonZeroUsize::new(2),
+                &diagnostics,
+                |lane| {
+                    attempted.lock().unwrap().push(lane.identity.clone());
+                    let index = match (lane.partition.as_str(), lane.shard_index) {
+                        ("ordinary", Some(2)) => 1,
+                        ("serial-special", _) => 2,
+                        _ => 0,
+                    };
+                    let source = &evidence[index];
+                    let output = outputs.join(&lane.identity);
+                    fs::create_dir_all(&output).unwrap();
+                    let project = |raw: String| {
+                        let raw = raw.replace("sqlite", &lane.backend);
+                        if lane.browser == "chromium" {
+                            raw.replace("firefox-ordinary", "chromium")
+                                .replace("firefox", "chromium")
+                                .replace("chromium-ordinary-1-of-2", "chromium-unsplit")
+                        } else {
+                            raw
+                        }
+                    };
+                    for (source_path, name) in [
+                        (&source.census, "e2e-census"),
+                        (&source.report, "playwright-report"),
+                        (&source.lane_manifest, "e2e-lane-manifest"),
+                        (&source.duration_manifest, "duration-budget-manifest"),
+                        (&source.phase, "e2e-phase"),
+                    ] {
+                        fs::write(
+                            output.join(format!("{name}-{}.json", lane.identity)),
+                            project(fs::read_to_string(source_path).unwrap()),
+                        )
+                        .unwrap();
+                    }
+                    let trace =
+                        project(crate::traces::run::read_trace_member(&source.capture).unwrap());
+                    crate::e2e_evidence::tests::write_capture(
+                        &output.join(format!("capture-{}.tar.gz", lane.identity)),
+                        &trace,
+                    );
+                    let step = if failed_identity == Some(lane.identity.as_str()) {
+                        StepResult::fail(&lane.identity)
+                    } else {
+                        StepResult::ok(&lane.identity)
+                    };
+                    (step, output)
+                },
+            );
+            let expected = crate::e2e_lanes::catalog()
+                .unwrap()
+                .lanes
+                .into_iter()
+                .filter(|lane| lane.enabled)
+                .map(|lane| lane.identity)
+                .collect::<Vec<_>>();
+            let mut attempted = attempted.into_inner().unwrap();
+            attempted.sort();
+            let mut sorted_expected = expected.clone();
+            sorted_expected.sort();
+            assert_eq!(attempted, sorted_expected);
+            assert_eq!(
+                outcome.combinations_ok,
+                failed_identity.is_none(),
+                "{:?}",
+                result
+                    .steps
+                    .iter()
+                    .filter(|step| !step.ok)
+                    .map(|step| &step.detail)
+                    .collect::<Vec<_>>()
+            );
+            let builds = result
+                .steps
+                .iter()
+                .filter(|step| expected.contains(&step.name))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                builds.iter().map(|step| &step.name).collect::<Vec<_>>(),
+                expected.iter().collect::<Vec<_>>()
+            );
+            for identity in &expected {
+                let destination = diagnostics.join(format!("e2e-{identity}"));
+                assert!(
+                    destination
+                        .join(format!("capture-{identity}.tar.gz"))
+                        .is_file()
+                );
+                assert!(
+                    destination
+                        .join(format!("e2e-phase-{identity}.json"))
+                        .is_file()
+                );
+                assert_eq!(
+                    fs::read(destination.join(format!("e2e-phase-{identity}.json"))).unwrap(),
+                    fs::read(
+                        outputs
+                            .join(identity)
+                            .join(format!("e2e-phase-{identity}.json"))
+                    )
+                    .unwrap(),
+                    "lane sidecars must remain byte-exact",
+                );
+                let index = result
+                    .steps
+                    .iter()
+                    .position(|step| step.name == *identity)
+                    .unwrap();
+                if failed_identity != Some(identity.as_str()) {
+                    assert_eq!(result.steps[index + 1].name, "e2e-duration-budget");
+                    assert!(result.steps[index + 1].ok);
+                    assert_eq!(
+                        result.steps[index + 2].name,
+                        "e2e-boot-decomposition-coverage"
+                    );
+                    assert!(result.steps[index + 2].ok);
+                }
+            }
+            let reconciliations = result
+                .steps
+                .iter()
+                .filter(|step| step.name == "e2e-firefox-reconcile")
+                .collect::<Vec<_>>();
+            assert_eq!(reconciliations.len(), 2);
+            assert!(
+                reconciliations.iter().all(|step| step.ok),
+                "{:?}",
+                reconciliations
+            );
+            let readback = result.e2e_concurrency.unwrap();
+            assert_eq!(
+                (readback.requested, readback.enabled, readback.effective),
+                (Some(2), 8, 2)
+            );
+            for phase in &result.phases {
+                if [
+                    PhaseName::GateExecution,
+                    PhaseName::ResultLift,
+                    PhaseName::PostGateChecks,
+                ]
+                .contains(&phase.name)
+                {
+                    assert_eq!(phase.duration_ms, None);
+                    assert_eq!(phase.outcome, PhaseOutcome::Unavailable);
+                    assert!(phase.detail.contains("bounded E2E lane admission"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bounded_e2e_builds_refill_and_settle_in_catalog_order() {
+        for bound in [1, 2, 8, 12] {
+            let lanes = crate::e2e_lanes::catalog()
+                .unwrap()
+                .lanes
+                .into_iter()
+                .filter(|lane| lane.enabled)
+                .collect::<Vec<_>>();
+            let expected = lanes
+                .iter()
+                .map(|lane| lane.identity.clone())
+                .collect::<Vec<_>>();
+            let count = expected.len();
+            let effective = bound.min(count);
+            let (started_tx, started_rx) = mpsc::channel();
+            let releases = (0..count)
+                .map(|_| Arc::new(AtomicBool::new(false)))
+                .collect::<Vec<_>>();
+            let worker_releases = releases.clone();
+            let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let peak = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let worker_active = Arc::clone(&active);
+            let worker_peak = Arc::clone(&peak);
+            let worker = std::thread::spawn(move || {
+                let indices = lanes
+                    .iter()
+                    .map(|lane| lane.identity.clone())
+                    .collect::<Vec<_>>();
+                build_candidate_lanes(lanes, std::num::NonZeroUsize::new(bound), |lane| {
+                    let index = indices
+                        .iter()
+                        .position(|identity| *identity == lane.identity)
+                        .unwrap();
+                    let now = worker_active.fetch_add(1, Ordering::SeqCst) + 1;
+                    worker_peak.fetch_max(now, Ordering::SeqCst);
+                    started_tx.send(index).unwrap();
+                    while !worker_releases[index].load(Ordering::Acquire) {
+                        std::thread::park_timeout(Duration::from_millis(1));
+                    }
+                    worker_active.fetch_sub(1, Ordering::SeqCst);
+                    if index == 0 {
+                        StepResult::fail("injected-build")
+                    } else {
+                        StepResult::ok("build")
+                    }
+                })
+            });
+            let mut started = Vec::new();
+            for _ in 0..effective {
+                if let Ok(index) = started_rx.recv_timeout(Duration::from_secs(5)) {
+                    started.push(index);
+                }
+            }
+            // Finish the last admitted operation while the earlier ones remain
+            // blocked: a new lane must use that slot, not wait for catalog order.
+            if let Some(index) = started.last() {
+                releases[*index].store(true, Ordering::Release);
+            }
+            let refill = if effective < count {
+                started_rx.recv_timeout(Duration::from_secs(5)).ok()
+            } else {
+                None
+            };
+            for release in &releases {
+                release.store(true, Ordering::Release);
+            }
+            let builds = worker.join().unwrap();
+            assert_eq!(
+                started.len(),
+                effective,
+                "bound {bound} admits parallel work"
+            );
+            if effective < count {
+                assert!(refill.is_some(), "a freed slot must refill");
+            }
+            assert_eq!(peak.load(Ordering::SeqCst), effective, "bound {bound}");
+            assert_eq!(active.load(Ordering::SeqCst), 0, "all operations settled");
+            assert_eq!(
+                builds
+                    .iter()
+                    .map(|(lane, _)| lane.identity.clone())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(builds.len(), count);
+            assert!(!builds[0].1.ok);
+            assert!(builds[1..].iter().all(|(_, step)| step.ok));
+        }
     }
 
     #[test]

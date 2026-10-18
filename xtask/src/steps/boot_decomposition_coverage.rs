@@ -20,31 +20,12 @@ use serde_json::Value;
 use crate::playwright_report::PlaywrightReport;
 use crate::traces::run::read_trace_member;
 
-use crate::StepResult;
 use crate::traces::{
     boot_phases::{
         BootDecompositionOutcome, boot_decomposition_outcome, page_boot_decomposition_outcome,
     },
     parse::{Filters, get_attr, parse_json_attr, parse_spans},
 };
-
-/// Validate one successful E2E combination's independently lifted execution
-/// population and trace evidence.
-///
-/// The Nix orchestration calls this only after lifting diagnostics and confirming
-/// the VM itself passed, preserving its primary failure if Playwright failed.
-pub(crate) fn validate_lifted_combo(backend: &str, browser: &str, lane: &str) -> StepResult {
-    let diagnostics = Path::new(".xtask/diagnostics").join(format!("e2e-{lane}"));
-    let report = diagnostics.join(format!("playwright-report-{lane}.json"));
-    let capture = diagnostics.join(format!("capture-{lane}.tar.gz"));
-
-    match validate_files(&report, &capture) {
-        Ok(detail) => StepResult::ok("e2e-boot-decomposition-coverage").detail(detail),
-        Err(error) => StepResult::fail("e2e-boot-decomposition-coverage").detail(format!(
-            "e2e {backend}/{browser} boot-decomposition evidence is unavailable or inconsistent: {error}"
-        )),
-    }
-}
 
 pub(crate) fn validate_files(report_path: &Path, capture_path: &Path) -> Result<String, String> {
     let report = std::fs::read_to_string(report_path).map_err(|error| {
