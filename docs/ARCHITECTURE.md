@@ -2425,7 +2425,7 @@ with focused subscriber/failure and both-backend Victoria proofs, not final
 browser-matrix/coverage/CI certification, production activation or merge
 approval.
 
-The canonical `nix/otel-processors.json` fragment supplies
+The canonical `nix/otel-processors.yaml` fragment supplies
 `transform/jaunder_privacy` before batch and every durable log/trace exporter.
 Production imports it; local/VM launchers load it as the second config.
 Closed-checker/module/launcher/source-closure inputs agree on explicit privacy →

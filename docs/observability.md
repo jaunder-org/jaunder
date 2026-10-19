@@ -114,20 +114,29 @@ approval provenance and precise producer-qualified policy. The stock bridge and
 shared policy are implemented and have focused seam proofs; this is not full
 matrix/coverage/CI certification or production activation.
 
-The canonical `nix/otel-processors.json` fragment supplies
+The canonical `nix/otel-processors.yaml` fragment supplies
 `transform/jaunder_privacy` before `batch` and every durable log/trace exporter.
-Production imports it; local and VM launchers load it as the second Collector
+Production imports the fragment's processor value into the ordinary NixOS
+`services.opentelemetry-collector.settings` surface, so operator tuning
+continues to merge normally. Importing this fixed trusted YAML requires
+evaluation-time IFD: a pinned build-platform `yq-go` converts only policy data
+to JSON, without interpolating environment placeholders. Evaluation therefore
+needs IFD enabled and a builder for the configuration's build platform; it does
+not run the Collector just to inspect settings. The upstream NixOS module
+generates, validates and runs one settings file with its normal hardening. Local
+and VM launchers load the canonical YAML directly as the second Collector
 configuration. Explicit arrays enforce privacy → batch; production metrics
-remain batch-only. The closed checker rejects missing/changed policy or bypass
-surface. Pinned Collector validation requires both base YAML and canonical JSON.
-Ordinary producers match `instrumentation_scope.name`; only facade scope `log`
-uses `log.target`. Retained fields are qualified by producer, never a global
-union. Unknown event fields, raw stack/header/request/body aggregates and
-secondary message copies are removed. Existing safe message/typed-error
-constructors remain trusted; unselected messages are not universally sanitized.
-Source-admitted operation spans/determinants, browser boot/test evidence,
-resources, metrics and IDs remain unchanged. Current link attributes are empty;
-no universal link sanitizer is required for this composition.
+remain batch-only. The closed checker parses YAML into the reviewed JSON value
+and rejects missing/changed policy or bypass surface. Pinned Collector
+validation uses the complete composed configuration. Ordinary producers match
+`instrumentation_scope.name`; only facade scope `log` uses `log.target`.
+Retained fields are qualified by producer, never a global union. Unknown event
+fields, raw stack/header/request/body aggregates and secondary message copies
+are removed. Existing safe message/typed-error constructors remain trusted;
+unselected messages are not universally sanitized. Source-admitted operation
+spans/determinants, browser boot/test evidence, resources, metrics and IDs
+remain unchanged. Current link attributes are empty; no universal link sanitizer
+is required for this composition.
 
 Exactly `html5ever::tokenizer`, `html5ever::tree_builder` and
 `html5ever::serialize` retain every log/trace-event occurrence at all severities
@@ -260,7 +269,7 @@ production fallback or a browser log-export feature.
 Validate the same merged Collector configuration the local launcher uses:
 
 ```bash
-devtool run -- otelcol-contrib validate --config end2end/otel-collector.yaml --config nix/otel-processors.json
+devtool run -- otelcol-contrib validate --config end2end/otel-collector.yaml --config nix/otel-processors.yaml
 ```
 
 For a changed browser flow, use the supported focused SQLite loop, for example
@@ -278,6 +287,39 @@ workload with no selected parser events cannot certify parser occurrence
 coverage; SDK isolation tests do not establish every workload's volume or
 resource behavior. Preserve a failed/incomplete lane as such and diagnose its
 owning source rather than treating an earlier green capture as current proof.
+
+### VictoriaMetrics metrics transport
+
+The supported NixOS stack sends metrics from the Collector through
+`otlphttp/victoriametrics` to
+`http://127.0.0.1:8428/metrics/opentelemetry/v1/metrics`. The exporter uses its
+pinned protobuf default; application → Collector OTLP is unchanged.
+VictoriaMetrics uses `-opentelemetry.usePrometheusNaming` so existing stored
+instrument names, unit suffixes and monotonic-counter suffixes remain available.
+No compatibility transform or synthetic metadata series is inserted.
+
+The operator-selected native OTLP metadata contract uses `service_name` and
+`scope_name` instead of remote-write's `job` and `otel_scope_name`. Queries that
+filter those labels must use the native names. Scope metadata includes
+`scope_version` (`unknown` when absent), and SDK resource attributes such as
+`telemetry_sdk_language`, `telemetry_sdk_name` and `telemetry_sdk_version` are
+labels on instrument series. Prometheus-generated `target_info` is absent by
+design; it is not an instrument-data series. Datapoint attributes such as
+bounded `kind` and `result` remain unchanged.
+
+Native protocol defaults promote resource attributes and scope metadata. This is
+not legacy-identical label/cardinality behavior or a universal bounded-label
+guarantee: keep resource/scope values within the existing trusted
+instrumentation discipline, and review new attributes before adding them. No
+global promotion option is added. Capture-only local/E2E profiles still have no
+metrics backend or metrics pipeline.
+
+The pinned Collector/VictoriaMetrics boundary is exercised with controlled
+points shaped like current host counters, gauges and cumulative histograms. That
+proves the selected stored schema and instrument-data comparison, not live Rust
+SDK emission, exhaustive datatype/temporality coverage, lossless delivery or
+clean draining. The routing decision is recorded in
+[ADR-0196](adr/0196-single-host-nixos-deployment-stack.md).
 
 ### Backend Saturation Gauges
 

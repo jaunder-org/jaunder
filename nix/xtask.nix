@@ -36,7 +36,7 @@ let
     || relative == "docs/production-baseline.schema.json"
     || relative == "end2end/e2e-lanes.json"
     || relative == "end2end/otel-collector.yaml"
-    || relative == "nix/otel-processors.json"
+    || relative == "nix/otel-processors.yaml"
     || pkgs.lib.hasPrefix "host/system_theme_sources/" relative;
   filteredSource = pkgs.lib.cleanSourceWith {
     src = craneLib.path ../.;

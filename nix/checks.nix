@@ -718,7 +718,7 @@ mkE2eCheck =
           jaunderBin
         ];
         environment.etc."jaunder-otel-collector.yaml".source = ../end2end/otel-collector.yaml;
-        environment.etc."jaunder-otel-processors.json".source = ./otel-processors.json;
+        environment.etc."jaunder-otel-processors.yaml".source = ./otel-processors.yaml;
 
         # The launcher creates this per-machine host exchange before QEMU starts.
         # Mapped metadata lets the guest's application user own private capture
@@ -738,7 +738,7 @@ mkE2eCheck =
           # directory through its environment providers.
           environment = e2eOtelCollectorEnv;
           serviceConfig = {
-            ExecStart = "${pkgs.opentelemetry-collector-contrib}/bin/otelcol-contrib --config /etc/jaunder-otel-collector.yaml --config /etc/jaunder-otel-processors.json";
+            ExecStart = "${pkgs.opentelemetry-collector-contrib}/bin/otelcol-contrib --config /etc/jaunder-otel-collector.yaml --config /etc/jaunder-otel-processors.yaml";
             Restart = "on-failure";
             RestartSec = "2s";
           };
@@ -1524,6 +1524,18 @@ mkWasmCoverageMeasurementProducer =
       })
     ];
   }).config.system.build.toplevel.drvPath).success;
+  tunedCollectorStacks = map (stack: {
+    base = stack;
+    tuned = stack.extendModules {
+      modules = [ {
+        services.opentelemetry-collector.settings.processors.batch.timeout = "2s";
+      } ];
+    };
+  }) [ sqliteStack postgresStack ];
+  collectorPolicy = builtins.fromJSON (builtins.readFile (pkgs.buildPackages.runCommand "jaunder-otel-policy.json" { } ''
+    ${pkgs.buildPackages.yq-go}/bin/yq -p=yaml -o=json ${./otel-processors.yaml} > "$out"
+  ''));
+
   jaunderStackModuleCheck =
     assert stackEvaluationSucceeds runtimeAuthStackOptions;
     assert stackEvaluationSucceeds (pkgs.lib.recursiveUpdate runtimeAuthStackOptions { observability.basicAuth.credentialsFileAlgorithm = "argon2id"; });
@@ -1573,7 +1585,7 @@ mkWasmCoverageMeasurementProducer =
     assert sqliteStack.config.services.victoriametrics.listenAddress == "127.0.0.1:8428";
     assert sqliteStack.config.services.victorialogs.listenAddress == "127.0.0.1:9428";
     assert sqliteStack.config.services.victoriatraces.listenAddress == "127.0.0.1:10428";
-    assert sqliteStack.config.services.victoriametrics.extraOptions == [ "-http.pathPrefix=/metrics" ];
+    assert sqliteStack.config.services.victoriametrics.extraOptions == [ "-http.pathPrefix=/metrics" "-opentelemetry.usePrometheusNaming" ];
     assert sqliteStack.config.services.victorialogs.extraOptions == [ "-http.pathPrefix=/logs" ];
     # Metrics and logs omit retention CLI arguments, retaining their native one-month and seven-day defaults.
     assert sqliteStack.config.services.victoriametrics.retentionPeriod == null;
@@ -1590,11 +1602,15 @@ mkWasmCoverageMeasurementProducer =
         service = stack.config.systemd.services.opentelemetry-collector.serviceConfig;
       in
       service.DynamicUser
+      && stack.config.services.opentelemetry-collector.validateConfigFile
+      && stack.config.services.opentelemetry-collector.configFile == null
+      && service.ExecStart == "${pkgs.opentelemetry-collector-contrib}/bin/otelcol-contrib --config=file:${stack.config.system.build.opentelemetryCollectorConfig}"
+      && builtins.attrNames settings == [ "exporters" "processors" "receivers" "service" ]
       && !(builtins.elem "systemd-journal" (service.SupplementaryGroups or [ ]))
       && builtins.attrNames settings.receivers == [ "otlp" ]
       && settings.receivers.otlp.protocols.grpc.endpoint == "127.0.0.1:4317"
       && settings.receivers.otlp.protocols.http.endpoint == "127.0.0.1:4318"
-      && settings.processors == ((builtins.fromJSON (builtins.readFile ./otel-processors.json)).processors // { batch = { }; })
+      && settings.processors == (collectorPolicy.processors // { batch = { }; })
       && settings.service.pipelines.logs == {
         receivers = [ "otlp" ];
         processors = [ "transform/jaunder_privacy" "batch" ];
@@ -1608,12 +1624,25 @@ mkWasmCoverageMeasurementProducer =
       && settings.service.pipelines.metrics == {
         receivers = [ "otlp" ];
         processors = [ "batch" ];
-        exporters = [ "prometheusremotewrite" ];
+        exporters = [ "otlphttp/victoriametrics" ];
       }
-      && builtins.attrNames settings.exporters == [ "otlphttp/victorialogs" "otlphttp/victoriatraces" "prometheusremotewrite" ]
+      && settings.exporters."otlphttp/victoriametrics" == {
+        metrics_endpoint = "http://127.0.0.1:8428/metrics/opentelemetry/v1/metrics";
+      }
+      && stack.config.services.victoriametrics.extraOptions == [ "-http.pathPrefix=/metrics" "-opentelemetry.usePrometheusNaming" ]
+      && builtins.attrNames settings.exporters == [ "otlphttp/victorialogs" "otlphttp/victoriametrics" "otlphttp/victoriatraces" ]
       && builtins.attrNames settings.service.pipelines == [ "logs" "metrics" "traces" ]
     ) [ sqliteStack postgresStack ];
-    assert sqliteStack.config.services.opentelemetry-collector.settings.exporters.prometheusremotewrite.endpoint == "http://127.0.0.1:8428/metrics/api/v1/write";
+    assert builtins.all (pair:
+      let
+        base = pair.base.config.services.opentelemetry-collector.settings;
+        tuned = pair.tuned.config.services.opentelemetry-collector;
+      in
+      tuned.settings == pkgs.lib.recursiveUpdate base { processors.batch.timeout = "2s"; }
+      && tuned.configFile == null
+      && tuned.validateConfigFile
+    ) tunedCollectorStacks;
+    assert sqliteStack.config.services.opentelemetry-collector.settings.exporters."otlphttp/victoriametrics".metrics_endpoint == "http://127.0.0.1:8428/metrics/opentelemetry/v1/metrics";
     assert sqliteStack.config.services.opentelemetry-collector.settings.exporters."otlphttp/victoriatraces".traces_endpoint == "http://127.0.0.1:10428/traces/insert/opentelemetry/v1/traces";
     assert sqliteStack.config.services.opentelemetry-collector.settings.exporters."otlphttp/victorialogs".logs_endpoint == "http://127.0.0.1:9428/logs/insert/opentelemetry/v1/logs";
     assert builtins.hasAttr "jaunder.example.test" bcryptStack.config.services.caddy.virtualHosts;
@@ -2405,7 +2434,7 @@ mkWasmCoverageMeasurementProducer =
         { name = "application"; relevant = "server/src/lib.rs"; excluded = "docs/README.md"; }
         { name = "e2e-package"; relevant = "end2end/tests/fixtures.ts"; excluded = "xtask/src/main.rs"; }
         { name = "nix-test-definition"; relevant = "nix/checks.nix"; excluded = "docs/README.md"; }
-        { name = "otel-privacy-policy"; relevant = "nix/otel-processors.json"; excluded = "docs/README.md"; }
+        { name = "otel-privacy-policy"; relevant = "nix/otel-processors.yaml"; excluded = "docs/README.md"; }
       ];
     };
   };
@@ -2638,7 +2667,7 @@ static-code =
         !(pkgs.lib.hasSuffix ".md" path)
         && (
           pkgs.lib.hasSuffix ".css" path
-          || pkgs.lib.hasSuffix "/nix/otel-processors.json" path
+          || pkgs.lib.hasSuffix "/nix/otel-processors.yaml" path
           || pkgs.lib.hasSuffix "/testdata/theme-repository/minimal/preview.png" path
           || (
             !isXtask
@@ -2679,7 +2708,7 @@ static-code =
       src = craneLib.path ../.;
       filter =
         assert staticCodeSourceFilter "/source/xtask/theme.css" "regular";
-        assert staticCodeSourceFilter "/source/nix/otel-processors.json" "regular";
+        assert staticCodeSourceFilter "/source/nix/otel-processors.yaml" "regular";
         assert staticCodeSourceFilter "/source/xtask" "directory";
         assert !(staticCodeSourceFilter "/source/xtask/src/lib.rs" "regular");
         assert (staticCodeSourceFilter "/source/testdata/theme-repository/minimal/preview.png" "regular");

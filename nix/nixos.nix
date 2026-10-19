@@ -115,6 +115,10 @@ let
     }:
     let
       cfg = config.services.jaunder.stack;
+      # Fixed trusted policy data needs a native build-platform parser during evaluation.
+      collectorPolicy = builtins.fromJSON (builtins.readFile (pkgs.buildPackages.runCommand "jaunder-otel-policy.json" { } ''
+        ${pkgs.buildPackages.yq-go}/bin/yq -p=yaml -o=json ${./otel-processors.yaml} > "$out"
+      ''));
       nonWhitespace = value: value != null && builtins.match "^[[:space:]]*$" value == null;
       caddyToken = value: builtins.match "^[A-Za-z0-9._-]+$" value != null;
       dnsHostName = value:
@@ -318,7 +322,7 @@ let
         services.victoriametrics = {
           enable = true;
           listenAddress = "127.0.0.1:8428";
-          extraOptions = [ "-http.pathPrefix=/metrics" ];
+          extraOptions = [ "-http.pathPrefix=/metrics" "-opentelemetry.usePrometheusNaming" ];
         };
         services.victorialogs = {
           enable = true;
@@ -344,11 +348,9 @@ let
                 http.endpoint = "127.0.0.1:4318";
               };
             };
-            processors = (builtins.fromJSON (builtins.readFile ./otel-processors.json)).processors // {
-              batch = { };
-            };
+            processors = collectorPolicy.processors // { batch = { }; };
             exporters = {
-              prometheusremotewrite.endpoint = "http://127.0.0.1:8428/metrics/api/v1/write";
+              "otlphttp/victoriametrics".metrics_endpoint = "http://127.0.0.1:8428/metrics/opentelemetry/v1/metrics";
               "otlphttp/victoriatraces".traces_endpoint = "http://127.0.0.1:10428/traces/insert/opentelemetry/v1/traces";
               "otlphttp/victorialogs".logs_endpoint = "http://127.0.0.1:9428/logs/insert/opentelemetry/v1/logs";
             };
@@ -356,7 +358,7 @@ let
               metrics = {
                 receivers = [ "otlp" ];
                 processors = [ "batch" ];
-                exporters = [ "prometheusremotewrite" ];
+                exporters = [ "otlphttp/victoriametrics" ];
               };
               traces = {
                 receivers = [ "otlp" ];

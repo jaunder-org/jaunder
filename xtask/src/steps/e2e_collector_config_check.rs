@@ -12,16 +12,16 @@ use crate::result::{CommandResult, StepResult};
 
 const STEP: &str = "e2e-collector-config";
 const CONFIG: &str = "end2end/otel-collector.yaml";
-const POLICY: &str = "nix/otel-processors.json";
+const POLICY: &str = "nix/otel-processors.yaml";
 // Digest of the reviewed JSON value (sorted object keys, compact encoding).
 // Policy changes need new semantic wire proof, not just a matching processor name.
 const POLICY_DIGEST: &str = "70f370a4dbf469027245f6ebc74dd3c664235bd19094d6c919f0b06d7c973f53";
 
 fn policy_problem(source: &str) -> Option<String> {
     use sha2::{Digest as _, Sha256};
-    let value: serde_json::Value = match serde_json::from_str(source) {
+    let value: serde_json::Value = match serde_yaml::from_str(source) {
         Ok(value) => value,
-        Err(error) => return Some(format!("{POLICY}: invalid JSON: {error}")),
+        Err(error) => return Some(format!("{POLICY}: invalid YAML: {error}")),
     };
     let bytes = match serde_json::to_vec(&value) {
         Ok(bytes) => bytes,
@@ -310,7 +310,7 @@ pub fn run(result: &mut CommandResult) {
 #[cfg(test)]
 mod tests {
     use super::{GRPC_ENDPOINT, HTTP_ENDPOINT};
-    const POLICY: &str = include_str!("../../../nix/otel-processors.json");
+    const POLICY: &str = include_str!("../../../nix/otel-processors.yaml");
     fn problems(config: &str, capture: &str) -> Option<String> {
         super::problems(config, capture, POLICY)
     }
@@ -449,6 +449,23 @@ service:
         ] {
             assert!(problems(&source, CAPTURE_SOURCE).is_some(), "{source}");
         }
+    }
+
+    #[test]
+    fn rejects_metrics_backends_in_the_capture_only_profile() {
+        for exporter in [
+            "prometheusremotewrite: {endpoint: 'http://127.0.0.1:8428/metrics/api/v1/write'}",
+            "otlphttp/victoriametrics: {metrics_endpoint: 'http://127.0.0.1:8428/metrics/opentelemetry/v1/metrics'}",
+        ] {
+            let source =
+                valid_config().replace("exporters:\n", &format!("exporters:\n  {exporter}\n"));
+            assert!(problems(&source, CAPTURE_SOURCE).is_some(), "{source}");
+        }
+        let source = valid_config().replace(
+            "  pipelines:\n",
+            "  pipelines:\n    metrics:\n      receivers: [otlp]\n      processors: [batch]\n      exporters: [otlphttp/victoriametrics]\n",
+        );
+        assert!(problems(&source, CAPTURE_SOURCE).is_some(), "{source}");
     }
 
     #[test]

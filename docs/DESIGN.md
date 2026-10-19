@@ -147,7 +147,7 @@ ssh -L 8428:127.0.0.1:8428 -L 9428:127.0.0.1:9428 -L 10428:127.0.0.1:10428 opera
 
 The qualified #1743 Collector amendment is implemented with stock appender
 0.32.0/SDK batching, without application privacy/admission visitors, Debug
-parsing or classifiers/decorators. The canonical `nix/otel-processors.json`
+parsing or classifiers/decorators. The canonical `nix/otel-processors.yaml`
 fragment supplies `transform/jaunder_privacy` before batch and every durable
 log/trace exporter in production and local/VM tests; metrics remain batch-only.
 The [decision](adr/drafts/native-otlp-process-logs.md) defines exact

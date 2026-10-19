@@ -49,7 +49,7 @@ filter, synthetic span or invented correlation ID is selected.
 
 One shared production/test policy precedes `batch` and every durable log/trace
 exporter; metrics are unchanged. The canonical shared fragment is
-`nix/otel-processors.json` with `transform/jaunder_privacy` and
+`nix/otel-processors.yaml` with `transform/jaunder_privacy` and
 `error_mode: propagate`. Closed checker, module assertions for both backends,
 launchers/VMs and source closures must agree on the effective merged pipelines;
 array merging must not silently bypass the policy.

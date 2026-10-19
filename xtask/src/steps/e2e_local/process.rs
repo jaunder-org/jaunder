@@ -40,7 +40,7 @@ impl CollectorGuard {
         http_endpoint: SocketAddr,
     ) -> Result<Self, CollectorStartError> {
         let config = root.join("end2end/otel-collector.yaml");
-        let privacy_policy = root.join("nix/otel-processors.json");
+        let privacy_policy = root.join("nix/otel-processors.yaml");
         let stderr_path = capture_dir.path().join("otelcol-contrib.stderr.log");
         let stderr = match File::create(&stderr_path).context("creating collector stderr capture") {
             Ok(stderr) => stderr,
