@@ -352,7 +352,11 @@ mod tests {
                     .with_writer(output.clone()),
             );
             tracing::subscriber::with_default(subscriber, || selected("Unavailable", -17));
-            assert_eq!(output.text(), expected);
+            let captured = output.text();
+            assert_eq!(captured, expected);
+            let mut writer = output.clone();
+            assert!(std::io::Write::flush(&mut writer).is_ok());
+            assert_eq!(output.text(), captured);
         }
     }
 

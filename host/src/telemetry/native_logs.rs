@@ -106,6 +106,13 @@ mod tests {
     }
     #[test]
     fn event_uses_owning_dispatch_when_another_dispatch_is_current() {
+        let metadata = tracing::callsite::Callsite::metadata(&CALLSITE);
+        assert!(std::ptr::eq(metadata, &raw const META));
+        tracing::callsite::Callsite::set_interest(
+            &CALLSITE,
+            tracing::subscriber::Interest::always(),
+        );
+
         let records = Records::default();
         let logs = SdkLoggerProvider::builder()
             .with_simple_exporter(records.clone())
@@ -121,11 +128,11 @@ mod tests {
         let expected = span.context().span().span_context().clone();
         let other = Dispatch::new(tracing_subscriber::registry());
         tracing::dispatcher::with_default(&other, || {
-            let field = META.fields().field("message").unwrap();
+            let field = metadata.fields().field("message").unwrap();
             let value: &dyn tracing::field::Value = &"owning event";
             let entries = [(&field, Some(value))];
-            let fields = META.fields().value_set(&entries);
-            owning.event(&Event::new_child_of(span.id(), &META, &fields));
+            let fields = metadata.fields().value_set(&entries);
+            owning.event(&Event::new_child_of(span.id(), metadata, &fields));
         });
         logs.force_flush().unwrap();
         let rows = records.0.lock().unwrap();

@@ -2960,11 +2960,8 @@ mod tests {
                 child.env_remove(key);
             }
             let output = child.output().unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "{stderr}");
             assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
             return;
         }
@@ -3062,11 +3059,8 @@ mod tests {
                 .env("OTEL_BLRP_SCHEDULE_DELAY", "60000")
                 .output()
                 .unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "{stderr}");
             assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
         }
     }
