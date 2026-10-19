@@ -12,6 +12,7 @@ mod doc_links;
 mod e2e_evidence;
 pub mod e2e_lanes;
 pub mod e2e_ownership;
+mod e2e_provenance;
 pub mod elisp_coverage;
 mod files;
 mod gate;

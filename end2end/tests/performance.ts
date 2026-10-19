@@ -8,6 +8,7 @@
  */
 
 import type { Browser, BrowserContext, Page, TestInfo } from "@playwright/test";
+import { markVisualTestStart } from "./visual-diagnostics";
 import {
   drainActionsForTest,
   setCurrentActionTestKey,
@@ -507,8 +508,10 @@ export async function applyTestTraceparent(
 }
 
 export const lifecycleStartFixture = [
-  async ({}, use: Use<number>) => {
-    await use(Date.now());
+  async ({}, use: Use<number>, testInfo: TestInfo) => {
+    const started = Date.now();
+    markVisualTestStart(testInfo, started);
+    await use(started);
   },
   { auto: true },
 ] satisfies AutoFixture<{}, number>;
