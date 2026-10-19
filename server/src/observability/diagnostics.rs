@@ -163,6 +163,10 @@ where
 {
     fmt::layer()
         .json()
+        .event_format(host::telemetry::SafeSdkFormat::new(
+            fmt::format().json(),
+            true,
+        ))
         .with_writer(make_writer)
         .with_filter(tracing::level_filters::LevelFilter::WARN)
 }

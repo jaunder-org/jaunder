@@ -1,6 +1,7 @@
 //! The `e2e-collector-config` static check: the shared collector configuration may
 //! expose only the two OTLP receivers whose host endpoints `e2e-local` supplies per
-//! invocation. Any broader component surface needs an explicit ownership decision.
+//! invocation, with separate trace/log file pipelines under the capture contract.
+//! Any broader component surface needs an explicit ownership decision.
 
 use std::collections::BTreeSet;
 
@@ -11,11 +12,33 @@ use crate::result::{CommandResult, StepResult};
 
 const STEP: &str = "e2e-collector-config";
 const CONFIG: &str = "end2end/otel-collector.yaml";
+const POLICY: &str = "nix/otel-processors.yaml";
+// Digest of the reviewed JSON value (sorted object keys, compact encoding).
+// Policy changes need new semantic wire proof, not just a matching processor name.
+const POLICY_DIGEST: &str = "70f370a4dbf469027245f6ebc74dd3c664235bd19094d6c919f0b06d7c973f53";
+
+fn policy_problem(source: &str) -> Option<String> {
+    use sha2::{Digest as _, Sha256};
+    let value: serde_json::Value = match serde_yaml::from_str(source) {
+        Ok(value) => value,
+        Err(error) => return Some(format!("{POLICY}: invalid YAML: {error}")),
+    };
+    let bytes = match serde_json::to_vec(&value) {
+        Ok(bytes) => bytes,
+        Err(error) => return Some(format!("{POLICY}: cannot encode JSON: {error}")),
+    };
+    (Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+        != POLICY_DIGEST)
+        .then(|| format!("{POLICY}: policy differs from the reviewed privacy transform"))
+}
 const CAPTURE_SOURCE: &str = "host/src/capture.rs";
 const GRPC_ENDPOINT: &str = "${env:OTELCOL_GRPC_ENDPOINT}";
 const HTTP_ENDPOINT: &str = "${env:OTELCOL_HTTP_ENDPOINT}";
 
-fn capture_exporter_path(source: &str) -> Result<String, String> {
+fn capture_exporter_path(source: &str, stream: &str) -> Result<String, String> {
     let file = syn::parse_file(source).map_err(|error| format!("invalid Rust: {error}"))?;
     let mut directory_env = None;
     let mut otel_filename = None;
@@ -57,7 +80,7 @@ fn capture_exporter_path(source: &str) -> Result<String, String> {
                             .iter()
                             .map(|segment| segment.ident.to_string())
                             .collect::<Vec<_>>();
-                        if segments.as_slice() != ["Stream", "Otel"] {
+                        if segments.as_slice() != ["Stream", stream] {
                             continue;
                         }
                         if let Expr::Lit(expression) = arm.body.as_ref()
@@ -75,7 +98,7 @@ fn capture_exporter_path(source: &str) -> Result<String, String> {
     let directory_env =
         directory_env.ok_or_else(|| "public `DIR_ENV` string constant not found".to_owned())?;
     let otel_filename =
-        otel_filename.ok_or_else(|| "`Stream::Otel` filename mapping not found".to_owned())?;
+        otel_filename.ok_or_else(|| format!("`Stream::{stream}` filename mapping not found"))?;
     Ok(format!("${{env:{directory_env}}}/{otel_filename}"))
 }
 
@@ -132,15 +155,33 @@ fn expect_sequence(value: &Value, path: &str, expected: &[&str], found: &mut Vec
 
 /// Return every collector-surface violation. Parsing and shape checks fail closed so
 /// malformed or newly broadened configuration cannot silently escape the host gate.
-pub fn problems(config_source: &str, capture_source: &str) -> Option<String> {
+pub fn problems(config_source: &str, capture_source: &str, policy_source: &str) -> Option<String> {
+    if let Some(problem) = policy_problem(policy_source) {
+        return Some(problem);
+    }
     let config: Value = match serde_yaml::from_str(config_source) {
         Ok(config) => config,
         Err(error) => return Some(format!("{CONFIG}: invalid YAML: {error}")),
     };
-    let capture_path = match capture_exporter_path(capture_source) {
+    let capture_path = match capture_exporter_path(capture_source, "Otel") {
         Ok(path) => path,
         Err(error) => return Some(format!("{CAPTURE_SOURCE}: {error}")),
     };
+    let log_path = match capture_exporter_path(capture_source, "OtelLogs") {
+        Ok(path) => path,
+        Err(error) => return Some(format!("{CAPTURE_SOURCE}: {error}")),
+    };
+    for stream in ["Otel", "Diag", "Mail", "WebSub"] {
+        let other_path = match capture_exporter_path(capture_source, stream) {
+            Ok(path) => path,
+            Err(error) => return Some(format!("{CAPTURE_SOURCE}: {error}")),
+        };
+        if other_path == log_path {
+            return Some(format!(
+                "{CAPTURE_SOURCE}: log capture must not share `Stream::{stream}` output"
+            ));
+        }
+    }
     let mut found = Vec::new();
 
     expect_keys(
@@ -181,52 +222,57 @@ pub fn problems(config_source: &str, capture_source: &str) -> Option<String> {
         &[],
         &mut found,
     );
-    expect_keys(&config["exporters"], "exporters", &["file"], &mut found);
     expect_keys(
-        &config["exporters"]["file"],
-        "exporters.file",
-        &["path"],
+        &config["exporters"],
+        "exporters",
+        &["file", "file/logs"],
         &mut found,
     );
-    expect_string(
-        &config["exporters"]["file"]["path"],
-        "exporters.file.path",
-        &capture_path,
-        &mut found,
-    );
+    for (exporter, path) in [("file", capture_path), ("file/logs", log_path)] {
+        let key = format!("exporters.{exporter}");
+        expect_keys(&config["exporters"][exporter], &key, &["path"], &mut found);
+        expect_string(
+            &config["exporters"][exporter]["path"],
+            &format!("{key}.path"),
+            &path,
+            &mut found,
+        );
+    }
 
     expect_keys(&config["service"], "service", &["pipelines"], &mut found);
     expect_keys(
         &config["service"]["pipelines"],
         "service.pipelines",
-        &["traces"],
+        &["traces", "logs"],
         &mut found,
     );
-    let traces = &config["service"]["pipelines"]["traces"];
-    expect_keys(
-        traces,
-        "service.pipelines.traces",
-        &["exporters", "processors", "receivers"],
-        &mut found,
-    );
-    expect_sequence(
-        &traces["receivers"],
-        "service.pipelines.traces.receivers",
-        &["otlp"],
-        &mut found,
-    );
-    expect_sequence(
-        &traces["processors"],
-        "service.pipelines.traces.processors",
-        &["batch"],
-        &mut found,
-    );
-    expect_sequence(
-        &traces["exporters"],
-        "service.pipelines.traces.exporters",
-        &["file"],
-        &mut found,
-    );
+    for (signal, exporter) in [("traces", "file"), ("logs", "file/logs")] {
+        let pipeline = &config["service"]["pipelines"][signal];
+        expect_keys(
+            pipeline,
+            &format!("service.pipelines.{signal}"),
+            &["exporters", "processors", "receivers"],
+            &mut found,
+        );
+        expect_sequence(
+            &pipeline["receivers"],
+            &format!("service.pipelines.{signal}.receivers"),
+            &["otlp"],
+            &mut found,
+        );
+        expect_sequence(
+            &pipeline["processors"],
+            &format!("service.pipelines.{signal}.processors"),
+            &["transform/jaunder_privacy", "batch"],
+            &mut found,
+        );
+        expect_sequence(
+            &pipeline["exporters"],
+            &format!("service.pipelines.{signal}.exporters"),
+            &[exporter],
+            &mut found,
+        );
+    }
 
     (!found.is_empty()).then(|| found.join("\n"))
 }
@@ -248,7 +294,14 @@ pub fn run(result: &mut CommandResult) {
             return;
         }
     };
-    match problems(&config_source, &capture_source) {
+    let policy_source = match std::fs::read_to_string(POLICY) {
+        Ok(source) => source,
+        Err(error) => {
+            result.push(StepResult::fail(STEP).detail(format!("cannot read {POLICY}: {error}")));
+            return;
+        }
+    };
+    match problems(&config_source, &capture_source, &policy_source) {
         Some(detail) => result.push(StepResult::fail(STEP).detail(detail)),
         None => result.push(StepResult::ok(STEP)),
     }
@@ -256,16 +309,23 @@ pub fn run(result: &mut CommandResult) {
 
 #[cfg(test)]
 mod tests {
-    use super::{GRPC_ENDPOINT, HTTP_ENDPOINT, problems};
+    use super::{GRPC_ENDPOINT, HTTP_ENDPOINT};
+    const POLICY: &str = include_str!("../../../nix/otel-processors.yaml");
+    fn problems(config: &str, capture: &str) -> Option<String> {
+        super::problems(config, capture, POLICY)
+    }
 
     const CAPTURE_SOURCE: &str = r#"
 pub const DIR_ENV: &str = "CAPTURE_ROOT";
-enum Stream { Mail, Otel }
+enum Stream { Mail, WebSub, Diag, Otel, OtelLogs }
 impl Stream {
     pub fn filename(self) -> &'static str {
         match self {
             Stream::Mail => "mail.jsonl",
+            Stream::WebSub => "websub.jsonl",
+            Stream::Diag => "diag.log",
             Stream::Otel => "traces.jsonl",
+            Stream::OtelLogs => "logs.jsonl",
         }
     }
 }
@@ -285,12 +345,18 @@ processors:
 exporters:
   file:
     path: ${{env:CAPTURE_ROOT}}/traces.jsonl
+  file/logs:
+    path: ${{env:CAPTURE_ROOT}}/logs.jsonl
 service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [batch]
+      processors: [transform/jaunder_privacy, batch]
       exporters: [file]
+    logs:
+      receivers: [otlp]
+      processors: [transform/jaunder_privacy, batch]
+      exporters: [file/logs]
 "#
         )
     }
@@ -298,6 +364,33 @@ service:
     #[test]
     fn accepts_the_owned_collector_surface() {
         assert_eq!(problems(&valid_config(), CAPTURE_SOURCE), None);
+    }
+
+    #[test]
+    fn rejects_missing_malformed_or_changed_policy_and_raw_bypasses() {
+        for policy in [
+            "",
+            "{",
+            "{}",
+            &POLICY.replace("propagate", "ignore"),
+            &POLICY.replace("host::error", "other::error"),
+        ] {
+            assert!(super::problems(&valid_config(), CAPTURE_SOURCE, policy).is_some());
+        }
+        for processors in [
+            "batch",
+            "batch, transform/jaunder_privacy",
+            "transform/jaunder_privacy",
+            "transform/jaunder_privacy, batch, other",
+        ] {
+            assert!(
+                problems(
+                    &valid_config().replace("transform/jaunder_privacy, batch", processors),
+                    CAPTURE_SOURCE
+                )
+                .is_some()
+            );
+        }
     }
 
     #[test]
@@ -325,6 +418,67 @@ service:
         );
         let detail = problems(&source, CAPTURE_SOURCE).expect("extension must fail");
         assert!(detail.contains("`root` keys"), "{detail}");
+    }
+
+    #[test]
+    fn accepts_the_repository_collector_and_capture_contract() {
+        assert_eq!(
+            problems(
+                include_str!("../../../end2end/otel-collector.yaml"),
+                include_str!("../../../host/src/capture.rs"),
+            ),
+            None,
+        );
+    }
+
+    #[test]
+    fn rejects_log_mixing_and_broadened_pipelines() {
+        for source in [
+            valid_config().replace("exporters: [file/logs]", "exporters: [file]"),
+            valid_config().replace(
+                "${env:CAPTURE_ROOT}/logs.jsonl",
+                "${env:CAPTURE_ROOT}/traces.jsonl",
+            ),
+            valid_config().replace("receivers: [otlp]", "receivers: [journald]"),
+            valid_config().replace(
+                "processors: [transform/jaunder_privacy, batch]",
+                "processors: [batch, transform]",
+            ),
+            valid_config().replace("    logs:\n", "    metrics:\n"),
+            valid_config().replace("  file/logs:\n", "  debug: {}\n  file/logs:\n"),
+        ] {
+            assert!(problems(&source, CAPTURE_SOURCE).is_some(), "{source}");
+        }
+    }
+
+    #[test]
+    fn rejects_metrics_backends_in_the_capture_only_profile() {
+        for exporter in [
+            "prometheusremotewrite: {endpoint: 'http://127.0.0.1:8428/metrics/api/v1/write'}",
+            "otlphttp/victoriametrics: {metrics_endpoint: 'http://127.0.0.1:8428/metrics/opentelemetry/v1/metrics'}",
+        ] {
+            let source =
+                valid_config().replace("exporters:\n", &format!("exporters:\n  {exporter}\n"));
+            assert!(problems(&source, CAPTURE_SOURCE).is_some(), "{source}");
+        }
+        let source = valid_config().replace(
+            "  pipelines:\n",
+            "  pipelines:\n    metrics:\n      receivers: [otlp]\n      processors: [batch]\n      exporters: [otlphttp/victoriametrics]\n",
+        );
+        assert!(problems(&source, CAPTURE_SOURCE).is_some(), "{source}");
+    }
+
+    #[test]
+    fn rejects_missing_or_shared_log_filename_contract() {
+        for source in [
+            CAPTURE_SOURCE.replace("Stream::OtelLogs => \"logs.jsonl\",", ""),
+            CAPTURE_SOURCE.replace("\"logs.jsonl\"", "\"traces.jsonl\""),
+            CAPTURE_SOURCE.replace("\"logs.jsonl\"", "\"diag.log\""),
+            CAPTURE_SOURCE.replace("\"logs.jsonl\"", "\"mail.jsonl\""),
+            CAPTURE_SOURCE.replace("\"logs.jsonl\"", "\"websub.jsonl\""),
+        ] {
+            assert!(problems(&valid_config(), &source).is_some(), "{source}");
+        }
     }
 
     #[test]

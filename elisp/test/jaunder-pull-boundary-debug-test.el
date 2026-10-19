@@ -59,8 +59,13 @@
                                                              :state 'server-ahead :local local :member member :local-sha256
                                                              (jaunder--reconcile-file-sha256 path) :remote-etag "\"old\""))
                                                        (jaunder-reconcile-report (jaunder--make-reconcile-report :root root))
-                                                       (requests 0))
-                                                  (cl-letf (((symbol-function 'jaunder--fetch-service-document)
+                                                       (requests 0)
+                                                       (installing nil)
+                                                       (stage-time (date-to-time "2026-10-19T00:32:54Z"))
+                                                       (install-time (date-to-time "2026-10-19T00:32:55Z")))
+                                                  (cl-letf (((symbol-function 'current-time)
+                                                             (lambda () (if installing install-time stage-time)))
+                                                            ((symbol-function 'jaunder--fetch-service-document)
                                                              (lambda (_) (jaunder--parse-service-document
                                                                           "<service xmlns=\"http://www.w3.org/2007/app\" xmlns:atom=\"http://www.w3.org/2005/Atom\"><workspace><atom:title>x</atom:title></workspace></service>")))
                                                             ((symbol-function 'jaunder--http-request)
@@ -79,25 +84,41 @@
                                                            (should (string-match-p "private-body" (plist-get staged :bytes)))
                                                            (should (plist-get (jaunder--reconcile-pull-remote-revalidation row "\"old\"") :ok))
                                                            (should-not (jaunder--reconcile-pull-preflight row staged))
+                                                           (setq installing t)
                                                            (let ((result (jaunder--reconcile-pull-install-staged
                                                                           row staged '(:http-status 200) path)))
                                                              (should (eq (plist-get result :outcome) 'success))
                                                              (should (equal (plist-get result :local-effect) 'renamed))
-                                                             (should (equal (plist-get staged :bytes)
-                                                                            (with-temp-buffer
-                                                                              (insert-file-contents (expand-file-name "remote.org" root))
-                                                                              (buffer-string)))))))))
-                                                    (should (= requests 2))
-                                                    (should (file-exists-p (expand-file-name "remote.org" root)))
-                                                    (should-not (file-exists-p path))
-                                                    (let ((text (jaunder-debug-boundary--text)))
-                                                      (dolist (label '("pull.stage" "pull.revalidate" "pull.install"))
-                                                        (should (= 2 (jaunder-debug-boundary--label-count label text))))
-                                                      ;; Direct preflight plus both install guards bracket Media finalization.
-                                                      (should (= 6 (jaunder-debug-boundary--label-count "pull.preflight" text)))
-                                                      (should (string-match-p "parent=" text))
-                                                      (should-not (string-match-p
-                                                                   "private.example\\|private-user\\|private-title\\|private-body\\|sha256" text))))))))
+                                                             (let* ((installed-path (expand-file-name "remote.org" root))
+                                                                    (installed (with-temp-buffer
+                                                                                 (insert-file-contents installed-path)
+                                                                                 (buffer-string)))
+                                                                    (staged-at (plist-get staged :synced-at))
+                                                                    (installed-at (plist-get result :synced-at))
+                                                                    (expected (replace-regexp-in-string
+                                                                               (concat "^#\\+PROPERTY: JAUNDER_SYNCED_AT "
+                                                                                       (regexp-quote staged-at) "$" )
+                                                                               (concat "#+PROPERTY: JAUNDER_SYNCED_AT " installed-at)
+                                                                               (plist-get staged :bytes) nil nil)))
+                                                               (should (equal staged-at "2026-10-19T00:32:54Z"))
+                                                               (should (equal installed-at "2026-10-19T00:32:55Z"))
+                                                               (should (equal installed expected))
+                                                               (should (equal installed-at
+                                                                              (format-time-string
+                                                                               "%Y-%m-%dT%H:%M:%SZ"
+                                                                               (file-attribute-modification-time
+                                                                                (file-attributes installed-path)) t))))))))))
+                                                  (should (= requests 2))
+                                                  (should (file-exists-p (expand-file-name "remote.org" root)))
+                                                  (should-not (file-exists-p path))
+                                                  (let ((text (jaunder-debug-boundary--text)))
+                                                    (dolist (label '("pull.stage" "pull.revalidate" "pull.install"))
+                                                      (should (= 2 (jaunder-debug-boundary--label-count label text))))
+                                                    ;; Direct preflight plus both install guards bracket Media finalization.
+                                                    (should (= 6 (jaunder-debug-boundary--label-count "pull.preflight" text)))
+                                                    (should (string-match-p "parent=" text))
+                                                    (should-not (string-match-p
+                                                                 "private.example\\|private-user\\|private-title\\|private-body\\|sha256" text)))))))
 
 (ert-deftest jaunder-pull-boundary-debug-preserves-errors-quit-and-disabled-work ()
   "Actual pull boundaries preserve signals and disabled calls avoid diagnostics."

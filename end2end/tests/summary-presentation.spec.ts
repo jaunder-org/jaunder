@@ -100,7 +100,9 @@ test("Post summaries retain deck hierarchy across public routes and content stat
     titlelessBody,
     "The titleless summary keeps the same semantic deck role.",
   );
-  await createPostViaApi(page, { body: "Summary absent body proof." });
+  const absent = await createPostViaApi(page, {
+    body: "Summary absent body proof.",
+  });
 
   const context = await tracedContext();
   try {
@@ -116,9 +118,11 @@ test("Post summaries retain deck hierarchy across public routes and content stat
           await publicPage.setViewportSize({ width: 390, height: 844 });
         }
         await goto(publicPage, route, { timeout: firstNav });
-        const titledPost = publicPage.locator(POST_HOOK).filter({
-          hasText: "Summary hierarchy proof",
-        });
+        // Local retains Posts from other tests and failed attempts; the created
+        // identity keeps this assertion on its own fixture without deleting data.
+        const titledPost = publicPage
+          .locator(`${POST_HOOK}#j-post-${titled.post_id}`)
+          .filter({ hasText: "Summary hierarchy proof" });
         const summary = titledPost.locator(SUMMARY_HOOK);
         await expect(summary).toHaveText(longSummary);
         await expect(summary).toBeVisible();
@@ -137,9 +141,9 @@ test("Post summaries retain deck hierarchy across public routes and content stat
               document.documentElement.clientWidth,
           );
           expect(horizontalOverflow).toBeLessThanOrEqual(0);
-          const titlelessPost = publicPage.locator(POST_HOOK).filter({
-            hasText: "Titleless body prose.",
-          });
+          const titlelessPost = publicPage
+            .locator(`${POST_HOOK}#j-post-${titleless.post_id}`)
+            .filter({ hasText: "Titleless body prose." });
           await expect(
             titlelessPost.locator(TITLE_HOOK).getByRole("link", {
               name: "Permalink",
@@ -158,9 +162,9 @@ test("Post summaries retain deck hierarchy across public routes and content stat
           );
           expect(order).toEqual(["post-summary", "post-body"]);
 
-          const absentPost = publicPage.locator(POST_HOOK).filter({
-            hasText: "Summary absent body proof.",
-          });
+          const absentPost = publicPage
+            .locator(`${POST_HOOK}#j-post-${absent.post_id}`)
+            .filter({ hasText: "Summary absent body proof." });
           await expect(absentPost.locator(SUMMARY_HOOK)).toHaveCount(0);
           await expect(absentPost.locator(BODY_HOOK)).toBeVisible();
         }

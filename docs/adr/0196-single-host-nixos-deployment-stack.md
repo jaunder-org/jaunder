@@ -100,3 +100,32 @@ PostgreSQL metrics are feasible future extensions, but are excluded until
 production evidence justifies their additional signal, credential, cardinality,
 and retention policy. Backing up Victoria data or promising VictoriaTraces
 upgrade compatibility likewise requires a separate decision.
+
+## Addendum (2026-10-19): native OTLP metrics transport
+
+The user selected uniform OTLP transport and explicitly accepted **native OTLP
+metadata** (JAU-1743-OTLP-METRICS-METADATA-001). The Collector's metrics
+exporter is `otlphttp/victoriametrics`, using the pinned protobuf default and
+the native prefixed endpoint
+`http://127.0.0.1:8428/metrics/opentelemetry/v1/metrics`. Application OTLP,
+receivers, batching, privacy processing, log/trace routes, service hardening and
+the ordinary NixOS settings/tuning surface remain unchanged.
+
+VictoriaMetrics enables only the necessary `-opentelemetry.usePrometheusNaming`
+option to preserve existing instrument names and unit/counter suffixes. Its
+native metadata labels (`service_name`, `scope_name`, `scope_version` and SDK
+resource labels) are accepted instead of remote-write's `job` and
+`otel_scope_name`; Prometheus-generated `target_info` is absent. No relabeling
+framework, compatibility transform or synthetic metadata series is selected.
+Native resource/scope promotion defaults remain in effect, so this is not a
+promise of identical legacy labels or cardinality. Current trusted
+instrumentation and review of new resource/scope attributes remain necessary.
+
+A controlled pinned Collector/VictoriaMetrics ingestion comparison establishes
+protobuf acceptance at the prefixed endpoint and representative stored counter,
+gauge and cumulative-histogram data with the accepted metadata delta. It is not
+actual Rust SDK emission, exhaustive datatype/temporality proof, lossless
+transport, clean-drain certification or production activation. The
+[observability guide](../observability.md#victoriametrics-metrics-transport)
+owns current query-label migration guidance. Capture-only E2E configurations do
+not acquire an invented metrics pipeline.

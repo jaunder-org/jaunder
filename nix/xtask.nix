@@ -25,7 +25,7 @@ let
       ) (members ++ [ "host/system_theme_sources" ])
       || builtins.any (directory:
         relative == directory || pkgs.lib.hasPrefix "${relative}/" directory
-      ) (manifestMembers ++ [ ".cargo" "csr" "server/assets" "docs" "end2end" ])
+      ) (manifestMembers ++ [ ".cargo" "csr" "server/assets" "docs" "end2end" "nix" ])
     else cargoMemberSource members "${root}/${relative}" type
     || relative == "xtask/Cargo.lock"
     || relative == "tools/Cargo.toml"
@@ -35,6 +35,8 @@ let
     || relative == "server/assets/jaunder.css"
     || relative == "docs/production-baseline.schema.json"
     || relative == "end2end/e2e-lanes.json"
+    || relative == "end2end/otel-collector.yaml"
+    || relative == "nix/otel-processors.yaml"
     || pkgs.lib.hasPrefix "host/system_theme_sources/" relative;
   filteredSource = pkgs.lib.cleanSourceWith {
     src = craneLib.path ../.;

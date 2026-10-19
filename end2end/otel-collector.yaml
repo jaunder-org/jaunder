@@ -10,9 +10,15 @@ processors:
 exporters:
   file:
     path: ${env:JAUNDER_CAPTURE_DIR}/otel-traces.jsonl
+  file/logs:
+    path: ${env:JAUNDER_CAPTURE_DIR}/otel-logs.jsonl
 service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [batch]
+      processors: [transform/jaunder_privacy, batch]
       exporters: [file]
+    logs:
+      receivers: [otlp]
+      processors: [transform/jaunder_privacy, batch]
+      exporters: [file/logs]
