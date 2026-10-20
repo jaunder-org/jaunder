@@ -37,6 +37,8 @@ pub use backend::{
     write_scope_with_commit_acknowledgement_loss,
 };
 
+pub use crate::media_manager::{TestMediaManagerParts, media_manager_for_test};
+
 pub use feed_cache::SeedFeedCache;
 pub use feeds::fp;
 pub use mail::noop_mailer;

@@ -20,6 +20,7 @@ use storage::{
     ProvenLocalMediaRefs, WriteScopeError,
 };
 
+use crate::helpers::image_privacy::{jpeg_oracle_bytes, jpeg_privacy_tags};
 use crate::helpers::{
     ForeignReferenceResolver, MultipartFile, create_user_and_session, make_app, post_form,
     post_multipart, post_server_fn, post_server_fn_with_media_ownership_resolver,
@@ -33,6 +34,8 @@ use common::test_support::{
 use storage::test_support::{
     Backend, SeedRawPost, backends, backends_matrix, noop_mailer, seed_media,
 };
+
+const CLEAN_JPEG: &[u8] = include_bytes!("../fixtures/image-privacy/jpeg-clean.jpg");
 
 async fn create_media(
     media: std::sync::Arc<dyn storage::MediaStorage>,
@@ -775,6 +778,498 @@ async fn delete_nested_request_force_can_break_owner_retained_history(#[case] ba
 
 #[apply(backends)]
 #[tokio::test]
+async fn upload_then_serve_removes_ordinary_jpeg_metadata(#[case] backend: Backend) {
+    let original = include_bytes!("../fixtures/image-privacy/jpeg-original.jpg");
+    let before = jpeg_privacy_tags(original);
+    let private_tags = [
+        "IFD0:Make",
+        "IFD0:Model",
+        "IFD0:Artist",
+        "IFD0:ImageDescription",
+        "ExifIFD:DateTimeOriginal",
+        "GPS:GPSLatitude",
+        "GPS:GPSLongitude",
+        "ExifIFD:UserComment",
+        "IPTC:Caption-Abstract",
+        "XMP-dc:Description",
+        "IFD1:ThumbnailOffset",
+    ];
+    for tag in private_tags {
+        assert!(before.contains_key(tag), "BEFORE witness absent: {tag}");
+    }
+    let env = backend.setup().await;
+    let storage = TempDir::new().expect("media root");
+    let app = make_app!(&env, &storage);
+    let session = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
+    let (status, body) = post_multipart(
+        app.clone(),
+        <web::media::Upload as ServerFn>::PATH,
+        MultipartFile {
+            filename: "photo.jpg",
+            content_type: "image/jpeg",
+            bytes: original,
+        },
+        Some(&session.cookie()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "upload failed: {body}");
+    let uploaded = confirmed_upload(&body);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(uploaded.url.as_ref())
+                .body(Body::empty())
+                .expect("public GET"),
+        )
+        .await
+        .expect("public response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "image/jpeg"
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get(header::ETAG)
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        host::etag::from_content_hash(&uploaded.sha256).as_ref()
+    );
+    let served = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("public bytes");
+    {
+        use sha2::Digest as _;
+        let actual = common::media::ContentHash::from_digest(sha2::Sha256::digest(&served).into());
+        assert_eq!(
+            uploaded.sha256, actual,
+            "stored identity describes public bytes"
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let path = storage
+            .path()
+            .join(uploaded.url.as_ref().trim_start_matches('/'));
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+    }
+    let after = jpeg_privacy_tags(&served);
+    for tag in private_tags {
+        assert!(
+            !after.contains_key(tag),
+            "public JPEG retains private tag: {tag}"
+        );
+    }
+    let profile = jpeg_oracle_bytes(original, &["-b", "-ICC_Profile"]);
+    assert!(!profile.is_empty(), "BEFORE needs a real ICC witness");
+    assert!(
+        profile == jpeg_oracle_bytes(&served, &["-b", "-ICC_Profile"]),
+        "ICC bytes changed"
+    );
+    // The independent editor removes metadata from copies only; equal normalized
+    // JPEGs witness identical encoded content without a new JPEG grammar in tests.
+    assert!(
+        jpeg_oracle_bytes(original, &["-all=", "-o", "-"])
+            == jpeg_oracle_bytes(&served, &["-all=", "-o", "-"]),
+        "encoded JPEG content changed"
+    );
+    let app = make_app!(&env, &storage);
+    for bytes in [original.as_slice(), served.as_ref()] {
+        let (status, body) = post_multipart(
+            app.clone(),
+            <web::media::Upload as ServerFn>::PATH,
+            MultipartFile {
+                filename: "photo.jpg",
+                content_type: "image/jpeg",
+                bytes,
+            },
+            Some(&session.cookie()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "repeat upload failed: {body}");
+        let repeated = confirmed_upload(&body);
+        assert_eq!(
+            repeated.sha256, uploaded.sha256,
+            "same input and clean reupload keep identity"
+        );
+        assert_eq!(repeated.size_bytes, uploaded.size_bytes);
+    }
+    assert_eq!(
+        uploaded.size_bytes.value(),
+        i64::try_from(served.len()).expect("served image size fits i64")
+    );
+    for content_type in ["image/jpeg", "IMAGE/JPEG", "text/plain"] {
+        let (status, body) = post_multipart(
+            app.clone(),
+            <web::media::Upload as ServerFn>::PATH,
+            MultipartFile {
+                filename: "invalid.jpg",
+                content_type,
+                bytes: b"not an image",
+            },
+            Some(&session.cookie()),
+        )
+        .await;
+        assert_ne!(
+            status,
+            StatusCode::OK,
+            "invalid image-labelled raster must not publish: {body}"
+        );
+    }
+    let (status, body) =
+        post_server_fn(app, &web::media::GetUsage {}, Some(&session.cookie())).await;
+    assert_eq!(status, StatusCode::OK);
+    let usage: UsageData = serde_json::from_str(&body).expect("usage");
+    assert_eq!(
+        usage.used_bytes, uploaded.size_bytes,
+        "rejection and dedup charge no extra quota"
+    );
+    assert!(
+        std::fs::read_dir(storage.path().join("media/tmp"))
+            .expect("private spools")
+            .next()
+            .is_none(),
+        "completed and rejected attempts leave no private files"
+    );
+}
+
+// Each case has independently observed positive BEFORE witnesses. The oracle's
+// metadata-only rewrite compares encoded content, not a sanitized golden or a
+// list of descriptive tags; rendering controls are checked separately.
+#[apply(backends_matrix)]
+#[case::png(
+    include_bytes!("../fixtures/image-privacy/png-original.png").as_slice(),
+    "image/png", true,
+    &["IFD0:Make", "IFD0:Model", "IFD0:Artist", "IFD0:ImageDescription", "IFD0:ModifyDate", "GPS:GPSLatitude", "GPS:GPSLongitude", "PNG:Author", "PNG:Comment", "PNG:XMLcomadobexmp", "PNG:ModifyDate"],
+    &[("PNG:ImageWidth", serde_json::json!(32)), ("PNG:ImageHeight", serde_json::json!(24)), ("IFD0:Orientation", serde_json::json!(6)), ("PNG:ColorType", serde_json::json!(6))]
+)]
+#[case::png_color(
+    include_bytes!("../fixtures/image-privacy/png-color-original.png").as_slice(),
+    "image/png", false, &["PNG:Author", "PNG:Comment", "PNG:XMLcomadobexmp", "PNG:ModifyDate", "GPS:GPSLatitude"],
+    &[("PNG:Gamma", serde_json::json!(2.2)), ("PNG:SRGBRendering", serde_json::json!(0)), ("IFD0:Orientation", serde_json::json!(6))]
+)]
+#[case::apng_default(
+    include_bytes!("../fixtures/image-privacy/apng-default-original.png").as_slice(),
+    "image/png", true, &["PNG:Author", "PNG:Comment", "PNG:XMLcomadobexmp", "PNG:ModifyDate", "GPS:GPSLatitude"],
+    &[("PNG:AnimationFrames", serde_json::json!(3)), ("PNG:AnimationPlays", serde_json::json!(2)), ("IFD0:Orientation", serde_json::json!(6)), ("PNG:ColorType", serde_json::json!(6))]
+)]
+#[case::apng_first(
+    include_bytes!("../fixtures/image-privacy/apng-first-original.png").as_slice(),
+    "image/png", true, &["PNG:Author", "PNG:Comment", "PNG:XMLcomadobexmp", "PNG:ModifyDate", "GPS:GPSLatitude"],
+    &[("PNG:AnimationFrames", serde_json::json!(3)), ("PNG:AnimationPlays", serde_json::json!(0)), ("IFD0:Orientation", serde_json::json!(6)), ("PNG:ColorType", serde_json::json!(6))]
+)]
+#[case::gif_animation(
+    include_bytes!("../fixtures/image-privacy/gif-animation-original.gif").as_slice(),
+    "image/gif", true, &["File:Comment"],
+    &[("GIF:ImageWidth", serde_json::json!(12)), ("GIF:ImageHeight", serde_json::json!(10)), ("GIF:TransparentColor", serde_json::json!(0)), ("GIF:FrameCount", serde_json::json!(3)), ("GIF:AnimationIterations", serde_json::json!(2)), ("GIF:Duration", serde_json::json!(0.35))]
+)]
+#[case::webp_animation(
+    include_bytes!("../fixtures/image-privacy/webp-animation-original.webp").as_slice(),
+    "image/webp", true, &["IFD0:Make", "IFD0:Model", "IFD0:Artist", "IFD0:ImageDescription", "IFD0:ModifyDate", "GPS:GPSLatitude", "GPS:GPSLongitude", "XMP-dc:Description"],
+    &[("RIFF:ImageWidth", serde_json::json!(32)), ("RIFF:ImageHeight", serde_json::json!(24)), ("IFD0:Orientation", serde_json::json!(6)), ("RIFF:AnimationLoopCount", serde_json::json!(2)), ("RIFF:Duration", serde_json::json!(0.35)), ("RIFF:BackgroundColor", serde_json::json!("29 19 9 39"))]
+)]
+#[case::heic(
+    include_bytes!("../fixtures/image-privacy/heic-original.heic").as_slice(),
+    "image/heif", false, &["IFD0:Make", "IFD0:Model", "IFD0:Artist", "IFD0:ImageDescription", "ExifIFD:DateTimeOriginal", "GPS:GPSLatitude", "GPS:GPSLongitude", "XMP-dc:Description", "XMP-exif:GPSLatitude", "XMP-exif:GPSLongitude"],
+    &[("File:FileType", serde_json::json!("HEIC")), ("File:ImageWidth", serde_json::json!(64)), ("File:ImageHeight", serde_json::json!(64)), ("QuickTime:CleanAperture", serde_json::json!("32 24 -16 -20")), ("QuickTime:ColorPrimaries", serde_json::json!(1)), ("QuickTime:TransferCharacteristics", serde_json::json!(13)), ("QuickTime:MatrixCoefficients", serde_json::json!(6)), ("QuickTime:VideoFullRangeFlag", serde_json::json!(1))]
+)]
+#[case::hdr_signal(
+    include_bytes!("../fixtures/image-privacy/hdr-signal.png").as_slice(),
+    "image/png", false, &["PNG:Comment"],
+    &[("PNG:ImageWidth", serde_json::json!(2)), ("PNG:ImageHeight", serde_json::json!(2)), ("PNG-cICP:ColorPrimaries", serde_json::json!(9)), ("PNG-cICP:TransferCharacteristics", serde_json::json!(16)), ("PNG-cICP:MatrixCoefficients", serde_json::json!(0)), ("PNG-cICP:VideoFullRangeFlag", serde_json::json!(1))]
+)]
+#[tokio::test]
+async fn upload_then_serve_preserves_image_fidelity(
+    backend: Backend,
+    #[case] original: &[u8],
+    #[case] mime: &str,
+    #[case] has_profile: bool,
+    #[case] private: &[&str],
+    #[case] rendering: &[(&str, serde_json::Value)],
+) {
+    use crate::helpers::image_privacy::{oracle_tags, rgba_frames};
+    use sha2::{Digest, Sha256};
+    let before = oracle_tags(original, &[]);
+    for tag in private {
+        assert!(
+            before.contains_key(*tag),
+            "BEFORE privacy witness absent: {tag}"
+        );
+    }
+    for (tag, expected) in rendering {
+        assert_eq!(
+            before.get(*tag),
+            Some(expected),
+            "BEFORE rendering witness: {tag}"
+        );
+    }
+    let profile = jpeg_oracle_bytes(original, &["-b", "-ICC_Profile"]);
+    assert_eq!(!profile.is_empty(), has_profile, "BEFORE ICC witness");
+    // HEIC container offsets and metadata extents can differ after two valid
+    // metadata rewrites. Ask the independent oracle for its actual image-data
+    // digest there, rather than treating container layout as encoded content.
+    let encoded_arguments: &[&str] = if mime == "image/heif" {
+        &["-b", "-api", "ImageHashType=SHA256", "-ImageDataHash"]
+    } else {
+        &["-all=", "-o", "-"]
+    };
+    let encoded = jpeg_oracle_bytes(original, encoded_arguments);
+    assert!(
+        !encoded.is_empty() && encoded.len() < original.len(),
+        "independent encoded-content witness absent"
+    );
+    if mime == "image/heif" {
+        assert_eq!(
+            encoded.as_slice(),
+            b"7e182f80de852f3219b82edb65159e3aab4388b184b7c6c3b43bf74ebd20e525",
+            "BEFORE independent SHA256 image-data witness"
+        );
+        // This one owned fixture's oracle identifies hvc1 at 0xfcf, length 63.
+        // Guard its identity and a byte inside that payload before corrupting a
+        // disposable copy: a constant/empty hash must not pass preservation.
+        assert_eq!(
+            common::media::ContentHash::from_digest(Sha256::digest(original).into()).as_ref(),
+            "32ef665e9e89f18e91985c79d8a1984b5375eec33e82be20137637ebb109c994"
+        );
+        assert_eq!(original[0xfd7], 0x80);
+        let mut changed = original.to_vec();
+        changed[0xfd7] ^= 1;
+        assert!(
+            encoded != jpeg_oracle_bytes(&changed, encoded_arguments),
+            "image-data observer missed a payload change"
+        );
+    }
+    let pixels = rgba_frames(original, mime);
+    if let Some(frames) = &pixels {
+        assert!(!frames.is_empty(), "BEFORE decoded frames absent");
+        if has_profile {
+            assert!(
+                frames
+                    .iter()
+                    .flat_map(|f| f.buffer().pixels())
+                    .any(|p| p.0[3] < 255),
+                "BEFORE needs actual transparent samples"
+            );
+            assert!(
+                frames
+                    .iter()
+                    .flat_map(|f| f.buffer().pixels())
+                    .any(|p| p.0[3] > 0),
+                "BEFORE must not be entirely transparent"
+            );
+        }
+        if mime == "image/webp" {
+            assert_eq!(frames.len(), 3, "BEFORE animated frames");
+        }
+    }
+    if before.contains_key("PNG:AnimationFrames") {
+        assert_eq!(pixels.as_ref().expect("APNG frames").len(), 3);
+    }
+    let env = backend.setup().await;
+    let storage = TempDir::new().unwrap();
+    let app = make_app!(&env, &storage);
+    let session = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
+    let filename = "misleading.jpg";
+    let (status, body) = post_multipart(
+        app.clone(),
+        <web::media::Upload as ServerFn>::PATH,
+        MultipartFile {
+            filename,
+            content_type: "application/octet-stream",
+            bytes: original,
+        },
+        Some(&session.cookie()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "upload failed: {body}");
+    let uploaded = confirmed_upload(&body);
+    assert_eq!(uploaded.filename.as_ref(), filename);
+    assert_eq!(uploaded.content_type.as_ref(), mime);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(uploaded.url.as_ref())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers().get(header::CONTENT_TYPE).unwrap(), mime);
+    assert_eq!(
+        response.headers().get(header::ETAG).unwrap(),
+        host::etag::from_content_hash(&uploaded.sha256).as_ref()
+    );
+    let served = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let hash = common::media::ContentHash::from_digest(Sha256::digest(&served).into());
+    assert_eq!(uploaded.sha256, hash);
+    assert_eq!(
+        uploaded.size_bytes.value(),
+        i64::try_from(served.len()).expect("served image size fits i64")
+    );
+    if let Some(before_frames) = pixels {
+        let after_frames = rgba_frames(&served, mime).expect("same public format decoder");
+        assert_eq!(
+            before_frames.len(),
+            after_frames.len(),
+            "decoded frame count changed"
+        );
+        for (before, after) in before_frames.iter().zip(&after_frames) {
+            assert_eq!(
+                before.buffer().dimensions(),
+                after.buffer().dimensions(),
+                "decoded dimensions changed"
+            );
+            assert!(before.buffer() == after.buffer(), "decoded RGBA changed");
+            assert_eq!(before.delay(), after.delay(), "frame timing changed");
+            assert_eq!(
+                (before.left(), before.top()),
+                (after.left(), after.top()),
+                "frame placement changed"
+            );
+        }
+    }
+    let after = oracle_tags(&served, &[]);
+    for tag in private {
+        assert!(
+            !after.contains_key(*tag),
+            "public bytes retain ordinary metadata: {tag}"
+        );
+    }
+    for (tag, expected) in rendering {
+        assert_eq!(
+            after.get(*tag),
+            Some(expected),
+            "public rendering control changed: {tag}"
+        );
+    }
+    assert!(
+        profile == jpeg_oracle_bytes(&served, &["-b", "-ICC_Profile"]),
+        "ICC bytes changed"
+    );
+    assert!(
+        encoded == jpeg_oracle_bytes(&served, encoded_arguments),
+        "encoded image/frame content changed"
+    );
+    let record = env
+        .media()
+        .get_media(
+            session.user_id,
+            &hash,
+            &uploaded.filename,
+            &MediaSource::Upload,
+        )
+        .await
+        .unwrap()
+        .expect("sanitized Media Record");
+    assert_eq!(record.size_bytes, uploaded.size_bytes);
+    assert_eq!(record.content_type.as_ref(), mime);
+    for bytes in [original, served.as_ref()] {
+        let (status, body) = post_multipart(
+            app.clone(),
+            <web::media::Upload as ServerFn>::PATH,
+            MultipartFile {
+                filename,
+                content_type: "image/jpeg",
+                bytes,
+            },
+            Some(&session.cookie()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "reupload failed: {body}");
+        let repeated = confirmed_upload(&body);
+        assert_eq!(repeated.sha256, hash);
+        assert_eq!(repeated.url, uploaded.url);
+        assert_eq!(repeated.size_bytes, uploaded.size_bytes);
+    }
+    assert_eq!(
+        env.media()
+            .get_user_upload_usage(session.user_id)
+            .await
+            .unwrap(),
+        uploaded.size_bytes
+    );
+    let original_hash = common::media::ContentHash::from_digest(Sha256::digest(original).into());
+    assert_ne!(
+        original_hash, hash,
+        "positive privacy witness must change identity"
+    );
+    let old_url = common::media::url(&MediaSource::Upload, &original_hash, &uploaded.filename);
+    assert_eq!(
+        app.oneshot(
+            Request::builder()
+                .uri(old_url.as_ref())
+                .body(Body::empty())
+                .unwrap()
+        )
+        .await
+        .unwrap()
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert!(
+        std::fs::read_dir(storage.path().join("media/tmp"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn upload_non_image_keeps_bytes_and_supplied_type(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let storage = TempDir::new().expect("media root");
+    let app = make_app!(&env, &storage);
+    let session = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
+    // A detected non-image stays outside the raster policy even under a misleading
+    // image label. This is not document validation or a new attachment allowlist.
+    let bytes = b"%PDF-1.7\nsynthetic non-personal document\n";
+    let (status, body) = post_multipart(
+        app.clone(),
+        <web::media::Upload as ServerFn>::PATH,
+        MultipartFile {
+            filename: "document.pdf",
+            content_type: "image/jpeg",
+            bytes,
+        },
+        Some(&session.cookie()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "non-image upload failed: {body}");
+    let uploaded = confirmed_upload(&body);
+    assert_eq!(uploaded.content_type, "image/jpeg");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(uploaded.url.as_ref())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "image/jpeg"
+    );
+    let served = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&served[..], bytes);
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn upload_media_stores_file_and_returns_metadata(#[case] backend: Backend) {
     let env = backend.setup().await;
     let storage = TempDir::new().unwrap();
@@ -794,7 +1289,7 @@ async fn upload_media_stores_file_and_returns_metadata(#[case] backend: Backend)
         MultipartFile {
             filename: "photo.jpg",
             content_type: "image/jpeg",
-            bytes: b"fake jpeg data",
+            bytes: CLEAN_JPEG,
         },
         Some(&cookie),
     )
@@ -821,9 +1316,11 @@ async fn upload_media_detects_content_type_when_field_omits_it(#[case] backend: 
     .cookie();
     let storage = TempDir::new().unwrap();
     let boundary = "----testboundary1234";
-    let body = format!(
-        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"photo.jpg\"\r\n\r\nfake jpeg data\r\n--{boundary}--\r\n"
-    );
+    let mut body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"photo.jpg\"\r\n\r\n"
+    ).into_bytes();
+    body.extend_from_slice(CLEAN_JPEG);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
     let response = make_app!(&env, &storage)
         .oneshot(
             Request::builder()
@@ -869,7 +1366,7 @@ async fn upload_then_serve_round_trips_a_filename_needing_encoding(#[case] backe
         MultipartFile {
             filename: "my photo.jpg",
             content_type: "image/jpeg",
-            bytes: b"fake jpeg data",
+            bytes: CLEAN_JPEG,
         },
         Some(&cookie),
     )
@@ -928,7 +1425,7 @@ async fn upload_then_serve_round_trips_a_filename_needing_encoding(#[case] backe
     let served = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("body should be readable");
-    assert_eq!(&served[..], b"fake jpeg data");
+    assert_eq!(&served[..], CLEAN_JPEG);
 }
 
 #[apply(backends)]
@@ -954,7 +1451,7 @@ async fn upload_then_serve_survives_a_name_too_long_to_store(#[case] backend: Ba
         MultipartFile {
             filename: &long_name,
             content_type: "image/jpeg",
-            bytes: b"long name content",
+            bytes: CLEAN_JPEG,
         },
         Some(&cookie),
     )
@@ -981,7 +1478,7 @@ async fn upload_then_serve_survives_a_name_too_long_to_store(#[case] backend: Ba
     let served = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("body should be readable");
-    assert_eq!(&served[..], b"long name content");
+    assert_eq!(&served[..], CLEAN_JPEG);
 }
 
 #[apply(backends)]
@@ -1104,75 +1601,120 @@ async fn upload_media_rejects_invalid_filename(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn upload_media_rejects_oversized_file(#[case] backend: Backend) {
-    // Cap the max file size at 5 bytes so a 14-byte upload trips PayloadTooLarge,
-    // exercising `map_media_error`'s PayloadTooLarge arm.
+    // A valid image exceeds a positive received-byte cap by exactly one byte;
+    // the typed result must be size policy, not an unrelated image failure.
     let env = backend
         .setup()
-        .media_limits("5".parse().unwrap(), UserQuota::default())
+        .media_limits(
+            (CLEAN_JPEG.len() - 1).to_string().parse().unwrap(),
+            UserQuota::default(),
+        )
         .await;
     let storage = TempDir::new().unwrap();
     let app = make_app!(&env, &storage);
-    let cookie = create_user_and_session(
-        std::sync::Arc::clone(&env.users()),
-        std::sync::Arc::clone(&env.sessions()),
-        env.write_scope(),
-    )
-    .await
-    .cookie();
+    let session = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
     let (status, body) = post_multipart(
-        app.clone(),
+        app,
         <web::media::Upload as ServerFn>::PATH,
         MultipartFile {
             filename: "big.jpg",
             content_type: "image/jpeg",
-            bytes: b"fake jpeg data",
+            bytes: CLEAN_JPEG,
         },
-        Some(&cookie),
+        Some(&session.cookie()),
     )
     .await;
-
-    assert_ne!(
-        status,
-        StatusCode::OK,
-        "oversized file must be rejected: {body}"
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+        serde_json::json!({"validation":{"message":"payload too large"}})
     );
+    assert_eq!(
+        env.media()
+            .get_user_upload_usage(session.user_id)
+            .await
+            .unwrap()
+            .value(),
+        0
+    );
+    assert!(
+        env.media()
+            .list_media(
+                session.user_id,
+                None,
+                RowLimit::at_most(10),
+                PageOffset::default()
+            )
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    for directory in ["media/upload", "media/tmp"] {
+        assert!(
+            std::fs::read_dir(storage.path().join(directory))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+    }
 }
 
 #[apply(backends)]
 #[tokio::test]
 async fn upload_media_rejects_over_quota_file(#[case] backend: Backend) {
-    // A 5-byte user quota with a 14-byte upload trips InsufficientStorage, exercising
-    // `map_media_error`'s InsufficientStorage arm.
+    // A positive quota smaller than a valid already-clean image must reach the
+    // actual stored-byte accounting boundary, not fail native image validation.
     let env = backend
         .setup()
         .media_limits(MaxFileSize::default(), "5".parse().unwrap())
         .await;
     let storage = TempDir::new().unwrap();
     let app = make_app!(&env, &storage);
-    let cookie = create_user_and_session(
-        std::sync::Arc::clone(&env.users()),
-        std::sync::Arc::clone(&env.sessions()),
-        env.write_scope(),
-    )
-    .await
-    .cookie();
+    let session = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
     let (status, body) = post_multipart(
-        app.clone(),
+        app,
         <web::media::Upload as ServerFn>::PATH,
         MultipartFile {
             filename: "big.jpg",
             content_type: "image/jpeg",
-            bytes: b"fake jpeg data",
+            bytes: CLEAN_JPEG,
         },
-        Some(&cookie),
+        Some(&session.cookie()),
     )
     .await;
-
-    assert_ne!(
-        status,
-        StatusCode::OK,
-        "over-quota file must be rejected: {body}"
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+        serde_json::json!({"validation":{"message":"insufficient storage"}})
     );
+    assert_eq!(
+        env.media()
+            .get_user_upload_usage(session.user_id)
+            .await
+            .unwrap()
+            .value(),
+        0
+    );
+    assert!(
+        env.media()
+            .list_media(
+                session.user_id,
+                None,
+                RowLimit::at_most(10),
+                PageOffset::default()
+            )
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    for directory in ["media/upload", "media/tmp"] {
+        assert!(
+            std::fs::read_dir(storage.path().join(directory))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+    }
 }
 
 #[apply(backends)]

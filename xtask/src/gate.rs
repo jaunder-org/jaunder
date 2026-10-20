@@ -118,6 +118,18 @@ impl HostGateStep {
         }
     }
 
+    fn diagnostic_name(&self) -> &'static str {
+        match self {
+            Self::StaticChecks(steps::static_checks::Phase::SourceConsistency) => {
+                "source-consistency"
+            }
+            Self::StaticChecks(steps::static_checks::Phase::CompileAndType) => "compile-and-type",
+            Self::StaticChecks(steps::static_checks::Phase::HostRuntime) => "host-runtime",
+            Self::ResultOnly { name, .. } => name,
+            Self::HostTests { .. } => "host-tests",
+        }
+    }
+
     fn markdown_eligible(&self, _mode: Mode) -> bool {
         match self {
             // The phase is a catalog container; its specs retain their own
@@ -157,6 +169,9 @@ pub(crate) fn run_static_phase_with(
         result,
         steps::static_checks::specs_for_phase(phase, mode),
         |spec, result| {
+            if result.command == "check" {
+                eprintln!("xtask-check-step-start: {}", spec.name);
+            }
             result.push(run(sh, &spec));
         },
     );
@@ -176,7 +191,12 @@ fn run_markdown_static_phase_with(
         steps::static_checks::specs_for_phase(phase, mode)
             .into_iter()
             .filter(|spec| spec.markdown_eligible),
-        |spec, result| result.push(run(sh, &spec)),
+        |spec, result| {
+            if result.command == "check" {
+                eprintln!("xtask-check-step-start: {}", spec.name);
+            }
+            result.push(run(sh, &spec));
+        },
     );
 }
 
@@ -342,6 +362,9 @@ pub(crate) fn run_host_steps_with<'a>(
     mut run_step: impl FnMut(&HostGateStep, &Shell, Mode, ExecutionPolicy, &mut CommandResult),
 ) {
     run_with_policy(policy, result, steps, |step, result| {
+        if result.command == "check" {
+            eprintln!("xtask-check-step-start: {}", step.diagnostic_name());
+        }
         run_step(step, sh, mode, policy, result);
     });
 }
@@ -707,6 +730,21 @@ mod tests {
     }
 
     #[test]
+    fn check_start_labels_follow_the_host_gate_order() {
+        let labels: Vec<_> = HOST_GATE_NON_TEST_STEPS
+            .iter()
+            .map(HostGateStep::diagnostic_name)
+            .collect();
+
+        assert_eq!(labels.first(), Some(&"source-consistency"));
+        assert_eq!(
+            &labels[labels.len() - 2..],
+            ["compile-and-type", "host-runtime"]
+        );
+        assert_eq!(HOST_TESTS_STEP.diagnostic_name(), "host-tests");
+    }
+
+    #[test]
     fn host_gate_order_prioritizes_cheap_actionable_feedback() {
         let names = host_gate_step_names_for_test(Mode::Check);
         let write_transaction_contract = position(&names, "write-transaction-contract");
@@ -859,6 +897,7 @@ mod tests {
             execution_policy(&Command::Validate {
                 no_e2e: true,
                 allow_dirty: false,
+                e2e_jobs: None,
             }),
             ExecutionPolicy::Exhaustive
         );
@@ -950,6 +989,7 @@ mod tests {
             execution_policy(&Command::Validate {
                 no_e2e: true,
                 allow_dirty: false,
+                e2e_jobs: None,
             }),
             false,
         );

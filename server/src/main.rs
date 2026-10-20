@@ -26,6 +26,24 @@ fn telemetry_config(verbose: bool) -> host::telemetry::TelemetryConfig {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Only the metadata-only worker may precede the cheap-KDF guard. This mode
+    // cannot open application storage, authenticate, serve HTTP or start logging.
+    let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    if arguments
+        .first()
+        .is_some_and(|arg| arg == host::image_privacy::WORKER_ARGUMENT)
+    {
+        if arguments.len() != 3 {
+            anyhow::bail!("invalid private image worker invocation");
+        }
+        let mime = arguments[2]
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("invalid worker type"))?;
+        if !host::image_privacy::run_worker(std::path::Path::new(&arguments[1]), mime)? {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     // Fail-closed: a production binary must never link host password hashing
     // with cheap test KDF parameters. Feature isolation keeps this false in
     // production; if it is ever true, refuse to start rather than hash weakly.

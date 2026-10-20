@@ -59,11 +59,17 @@ pub enum IssueCommand {
     },
 }
 
+// Match the project field spelling in help while retaining lowercase CLI compatibility.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ValueEnum)]
+#[value(rename_all = "UPPERCASE")]
 pub enum Priority {
+    #[value(alias = "p1")]
     P1,
+    #[value(alias = "p2")]
     P2,
+    #[value(alias = "p3")]
     P3,
+    #[value(alias = "p4")]
     P4,
 }
 
@@ -1397,40 +1403,52 @@ mod tests {
 
     #[test]
     fn create_uses_explicit_metadata_sets_priority_and_reports_body() {
-        let gh = FakeGithub::new(vec![
-            metadata_response(),
-            json!({"data":{"createIssue":{"issue":{"id":"I_1","number":1200,"title":"feat(xtask): add issue helpers","url":"https://github.com/jaunder-org/jaunder/issues/1200"}}}}),
-            json!({"data":{"addProjectV2ItemById":{"item":{"id":"PVTI_1"}}}}),
-            json!({"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"PVTI_1"}}}}),
-            json!({"data":{"repository":{"issue":{"body":"Body with <placeholder> and [brackets] plus {braces}"}}}}),
-        ]);
-        let body = temp_body("Body with <placeholder> and [brackets] plus {braces}");
+        // Pin the project contract independently of the enum's mapping implementation.
+        for (priority, project_value, option_id) in [
+            (Priority::P1, "P1", "2d6fa1d1"),
+            (Priority::P2, "P2", "be01f9da"),
+            (Priority::P3, "P3", "0bba09bc"),
+            (Priority::P4, "P4", "4b1f556c"),
+        ] {
+            let gh = FakeGithub::new(vec![
+                metadata_response(),
+                json!({"data":{"createIssue":{"issue":{"id":"I_1","number":1200,"title":"feat(xtask): add issue helpers","url":"https://github.com/jaunder-org/jaunder/issues/1200"}}}}),
+                json!({"data":{"addProjectV2ItemById":{"item":{"id":"PVTI_1"}}}}),
+                json!({"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"PVTI_1"}}}}),
+                json!({"data":{"repository":{"issue":{"body":"Body with <placeholder> and [brackets] plus {braces}"}}}}),
+            ]);
+            let body = temp_body("Body with <placeholder> and [brackets] plus {braces}");
 
-        let report = create(
-            &gh,
-            CreateInput {
-                title: "feat(xtask): add issue helpers".into(),
-                issue_type: "Task".into(),
-                milestone: "Developer tooling & DX".into(),
-                priority: Priority::P2,
-                labels: vec!["tooling".into(), "dx".into()],
-                body_file: body.path().into(),
-            },
-        )
-        .unwrap();
+            let report = create(
+                &gh,
+                CreateInput {
+                    title: "feat(xtask): add issue helpers".into(),
+                    issue_type: "Task".into(),
+                    milestone: "Developer tooling & DX".into(),
+                    priority,
+                    labels: vec!["tooling".into(), "dx".into()],
+                    body_file: body.path().into(),
+                },
+            )
+            .unwrap();
 
-        assert_eq!(report.issue.number, 1200);
-        assert_eq!(report.project.item_id, "PVTI_1");
-        assert_eq!(report.project.priority, "P2");
-        assert!(report.body.readback_matches);
-        let calls = gh.calls();
-        assert!(calls[1].iter().any(|arg| arg == "--input"));
-        assert!(calls[1].iter().any(|arg| {
-            arg.starts_with("stdin=")
-                && arg.contains("Body with <placeholder> and [brackets] plus {braces}")
-                && arg.contains("\"labelIds\":[\"L_tooling\",\"L_dx\"]")
-        }));
-        assert!(calls[3].iter().any(|arg| arg == "optionId=be01f9da"));
+            assert_eq!(report.issue.number, 1200);
+            assert_eq!(report.project.item_id, "PVTI_1");
+            assert_eq!(report.project.priority, project_value);
+            assert!(report.body.readback_matches);
+            let calls = gh.calls();
+            assert!(calls[1].iter().any(|arg| arg == "--input"));
+            assert!(calls[1].iter().any(|arg| {
+                arg.starts_with("stdin=")
+                    && arg.contains("Body with <placeholder> and [brackets] plus {braces}")
+                    && arg.contains("\"labelIds\":[\"L_tooling\",\"L_dx\"]")
+            }));
+            assert!(
+                calls[3]
+                    .iter()
+                    .any(|arg| arg == &format!("optionId={option_id}"))
+            );
+        }
     }
 
     #[test]

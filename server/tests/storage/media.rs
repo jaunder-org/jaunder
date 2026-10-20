@@ -23,6 +23,8 @@ use storage::{
     perform_post_creation_with_media_ownership,
 };
 
+const CLEAN_JPEG: &[u8] = include_bytes!("../fixtures/image-privacy/jpeg-clean.jpg");
+
 struct LocalMediaResolver;
 
 #[async_trait::async_trait]
@@ -168,7 +170,7 @@ async fn upload_race_media(manager: &MediaManager, source_owner: UserId) -> Medi
             source_owner,
             &parse_filename("serialized-race.jpg"),
             "image/jpeg".parse().unwrap(),
-            b"real media file",
+            CLEAN_JPEG,
         )
         .await
         .expect("real source upload");
@@ -691,14 +693,13 @@ async fn serialized_post_write_and_removal(backend: Backend, reclaim: bool, writ
         env.base.path().to_path_buf(),
     )));
     let reclaim_gate = Arc::new(ReclaimUnlinkGate::new());
-    let manager = MediaManager::new(
-        Arc::clone(&env.media()),
-        Arc::clone(&env.posts()),
-        Arc::clone(&env.site_config()),
-        env.write_scope(),
+    let manager = env.media_manager(
         Arc::clone(&locks),
         env.base.instance_id().clone(),
         Arc::new(LocalMediaResolver),
+        host::image_privacy::UploadPreparer::new(std::path::PathBuf::from(env!(
+            "CARGO_BIN_EXE_jaunder"
+        ))),
     );
     let manager = if reclaim {
         manager.with_reclaim_unlink_gate_for_test(Arc::clone(&reclaim_gate))

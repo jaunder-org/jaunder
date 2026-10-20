@@ -1,7 +1,7 @@
 # Observability
 
-This project emits OpenTelemetry traces from the backend, host-side seed
-processes, and end-to-end test runner.
+Native processes emit OpenTelemetry logs, traces and metrics through a shared
+Collector endpoint. The end-to-end test runner also emits correlated traces.
 
 ## Backend
 
@@ -15,7 +15,9 @@ processes, and end-to-end test runner.
 - In e2e VM checks, the running server, production `jaunder site-config set`
   seed steps, and the `test-support` seed binary export to the in-VM collector.
   The collector writes under the capture-dir contract (#332):
-  - `/var/lib/jaunder/capture/otel-traces.jsonl` (inside the VM)
+  - `/var/lib/jaunder/capture/otel-traces.jsonl` (traces inside the VM)
+  - `/var/lib/jaunder/capture/otel-logs.jsonl` (native logs, separate file
+    exporter)
   - lifted per lane inside `capture-<lane>.tar.gz` (the same bundle that carries
     `diag.log` and the mail/websub JSONL — see below)
 - `cargo xtask e2e-local` supervises the same collector pipeline on the host,
@@ -37,13 +39,16 @@ processes, and end-to-end test runner.
 ### Independent log and trace controls
 
 The server, production CLI commands and `test-support` resolve the same
-immutable telemetry policy at process startup. Ordinary logs still go to stdout;
-native OTLP log routing is separate work (#1743).
+immutable telemetry policy at process startup. Without a resolved OTLP endpoint,
+ordinary logs use the existing pretty/JSON stdout formatter and local filter.
+With an endpoint, ordinary logs use native OTLP records only, including when
+logger setup fails: stdout mirroring is not restored. CLI command results
+written to stdout remain separate and usable.
 
 | Control                               | Policy                                                                                           |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | `JAUNDER_LOG_FILTER`                  | Preferred local ordinary-log filter; otherwise `RUST_LOG`, then ordinary or `--verbose` defaults |
-| `JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT` | Preferred traces/metrics endpoint; otherwise `OTEL_EXPORTER_OTLP_ENDPOINT`                       |
+| `JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT` | Preferred logs/traces/metrics endpoint; otherwise `OTEL_EXPORTER_OTLP_ENDPOINT`                  |
 
 The local filter accepts tracing filter grammar, including levels, target/span
 selectors and `off`. Ordinary defaults remain WARN for application targets and
@@ -55,10 +60,12 @@ formats retain the same local-output policy.
 With an endpoint configured, the OTLP trace layer admits generated application
 spans and permitted span events at every level, including DEBUG and TRACE,
 without application-level severity, target or context filtering. For example,
-`JAUNDER_LOG_FILTER=warn` keeps local logs quiet while OTLP spans remain
-available; local `off` does not disable OTLP spans, metrics, independent WARN+
-diagnostic capture or the panic hook. No endpoint means no OTLP provider/export;
-local logs and diagnostic context remain available without a Collector.
+`JAUNDER_LOG_FILTER=warn` limits stdout when used without OTLP, but does not
+limit configured OTLP output. Native logs also offer all application severities,
+TRACE through ERROR, without a level/target/context filter. Local `off` does not
+disable native logs, OTLP spans, metrics, independent WARN+ diagnostic capture
+or the panic hook. No endpoint means no OTLP provider/export; local logs and
+diagnostic context remain available without a Collector.
 
 The SDK uses `Sampler::AlwaysOn` for Jaunder's spans, even when a valid incoming
 W3C parent's sampled flag is clear. Its trace ID and parent span ID are
@@ -71,8 +78,8 @@ binary, not instrumentation a compiler or dependency never generated.
 **Compatibility change:** `JAUNDER_LOG_FILTER`, `RUST_LOG` and `--verbose`
 control local output only, not OTLP retention. There is no application trace
 filter or sampling knob. Quiet local logs can accompany increased Collector
-volume, including DEBUG/TRACE spans and events. Budget Collector storage and
-configure Collector-side sampling, filtering and retention there.
+volume, including DEBUG/TRACE logs, spans and events. Budget Collector storage
+and configure Collector-side sampling, filtering and retention there.
 
 HTTP parent extraction/adoption follows the installed tracer/subscriber
 capability. Without a tracer, requests do not attempt assignment. With the
@@ -91,10 +98,228 @@ filtered or absent stdout in either pretty or JSON mode. Unfiltered output does
 not broaden privacy, redaction or sink-specific field admission: HTTP fields
 remain method, path-only URI, version and bounded trusted-proxy outcome, never
 queries, whole headers or raw parent input. Independent diagnostics are not OTLP
-logs; native OTLP logs and their lifetime/no-mirroring proof remain #1743 work.
+logs and must not be re-exported as ordinary application records.
 
 See the
-[Collector-owned retention decision](adr/drafts/independent-log-and-trace-filtering.md).
+[Collector-owned retention decision](adr/drafts/independent-log-and-trace-filtering.md)
+and [native OTLP process logs decision](adr/drafts/native-otlp-process-logs.md).
+
+### Shared Collector privacy policy
+
+The qualified #1743 amendment selects stock appender 0.32.0/SDK batching and
+removal of application privacy/admission visitors, Debug parsing, classifiers
+and the proposed SpanProcessor decorator. The
+[native OTLP decision](adr/drafts/native-otlp-process-logs.md) records the
+approval provenance and precise producer-qualified policy. The stock bridge and
+shared policy are implemented and have focused seam proofs; this is not full
+matrix/coverage/CI certification or production activation.
+
+The canonical `nix/otel-processors.yaml` fragment supplies
+`transform/jaunder_privacy` before `batch` and every durable log/trace exporter.
+Production imports the fragment's processor value into the ordinary NixOS
+`services.opentelemetry-collector.settings` surface, so operator tuning
+continues to merge normally. Importing this fixed trusted YAML requires
+evaluation-time IFD: a pinned build-platform `yq-go` converts only policy data
+to JSON, without interpolating environment placeholders. Evaluation therefore
+needs IFD enabled and a builder for the configuration's build platform; it does
+not run the Collector just to inspect settings. The upstream NixOS module
+generates, validates and runs one settings file with its normal hardening. Local
+and VM launchers load the canonical YAML directly as the second Collector
+configuration. Explicit arrays enforce privacy → batch; production metrics
+remain batch-only. The closed checker parses YAML into the reviewed JSON value
+and rejects missing/changed policy or bypass surface. Pinned Collector
+validation uses the complete composed configuration. Ordinary producers match
+`instrumentation_scope.name`; only facade scope `log` uses `log.target`.
+Retained fields are qualified by producer, never a global union. Unknown event
+fields, raw stack/header/request/body aggregates and secondary message copies
+are removed. Existing safe message/typed-error constructors remain trusted;
+unselected messages are not universally sanitized. Source-admitted operation
+spans/determinants, browser boot/test evidence, resources, metrics and IDs
+remain unchanged. Current link attributes are empty; no universal link sanitizer
+is required for this composition.
+
+Exactly `html5ever::tokenizer`, `html5ever::tree_builder` and
+`html5ever::serialize` retain every log/trace-event occurrence at all severities
+and context, but use `HTML parser diagnostic; text withheld` as complete body/
+event name, with only producer/location/level metadata. No parser-event dropping
+is selected. Safe state/EOF wording and future warning explanation are lost;
+`char_ref` is outside the exact selection. Span status descriptions are cleared,
+not status codes. Stock integer/string carriers remain, including decimal
+`%UserId` and overflow strings; custom integer/Debug-Option parsing retires.
+
+**Stored query interface:** VictoriaLogs exposes the native producer as
+`scope.name`, message as `_msg`, and IDs as `trace_id`/`span_id`. Query
+`scope.name:"tower_http::trace::on_response"` with a known `trace_id`, then
+match the log's exact span ID to the stored `request` span for
+URI/method/remote-parent context. Do not approximate by timestamps. Both real
+backend fixtures verify `_msg="finished processing request"`, severity
+`"INFO"`/`"9"` and status `"401"`. VictoriaLogs strings do not establish native
+OTLP value types. Neither `jaunder.target` nor `jaunder.request.uri` is
+exported. Explicit/contextual/root and sampled/unsampled parent semantics
+remain; roots legitimately have no request link.
+
+Raw application SDK data, OTLP transport and trusted Collector input are
+accepted processing locations, explicitly amending ADR-0011's pre-Collector
+privacy interpretation. Durable Victoria/file output **and persisted Collector
+error/debug/export-failure diagnostics** must exclude withheld data. Invalid
+policy fails startup without raw fallback. Disable raw debug exporters/context
+logging; `error_mode: propagate` is not diagnostic redaction and may
+reject/retry other batch data. Synthetic secondary-copy and failure-path proof
+is mandatory before delivery, not permission to share raw captures.
+
+The demonstrated composition retains an owning public event-context adapter,
+suppression-preserving Activation, an SDK-scope-only dynamic trace-layer gate
+and process-owned transport runtime. These are context/self-observation
+mechanics, not an application privacy/admission filter. Preserve process-owned
+bounded shutdown/one-shot draining, nonfatal outcomes,
+credential/endpoint/payload-safe and nonrecursive direct diagnostics. Exact
+private per-kind, coalescing and 256-byte promises retire. Collector policy
+cannot sanitize SDK stderr or stop client feedback/queue pressure, and
+guarantees neither volume recovery nor delivery. Local stdout, CLI results,
+SpanTrace fields and independent WARN+/panic capture remain separate.
+
+### Native log records and lifetime
+
+Stock appender 0.32.0 owns field/body/severity conversion without experimental
+metadata/span-map copying. There is no application privacy visitor, Debug/Option
+parser, target admission rule or direct-log path enrichment. The Collector owns
+the producer-qualified durable field profile described above.
+
+An explicit/formatted application message becomes the string body, not a dump of
+structured fields or the span stack. Native severity retains the actual tracing
+level. In the supported VictoriaLogs OTLP ingestion path, severity is stored as
+`severity_text` and `severity_number` (for INFO, `"INFO"` and `"9"`), not as a
+`severity` attribute. These are record severity fields, separate from the
+Collector's producer-qualified attribute profile:
+
+- `error.kind`, `error.class`, `error.public`, `error.source`, `error.context`,
+  `error.disposition`, `telemetry.origin`: reviewed `host::error` carriers only.
+- `db.system`: scalar from application/seed producers; `user.id`: audited
+  numeric identifier from registration, password-reset and email
+  credential-consumption events; `status`: reviewed Tower response-completion
+  target only.
+
+Stock scalar integers/strings retain their carriers; unsigned overflow retains
+exact decimal text instead of wrapping. Arbitrary event fields, Debug
+aggregates, inherited span maps, headers, request aggregates, credentials,
+bodies and raw stacks (including `error.span_trace`) are excluded at the shared
+Collector, not by an application visitor. Message and typed error-source
+constructors still owe ADR-0011's safe-text discipline; this is not blanket
+sanitization of arbitrary producer text.
+
+Trace/span correlation follows the event's resolved tracing parent: explicit
+parents win over current spans, contextual events use their active parent, and
+explicit roots or missing/unavailable tracer context acquire no fabricated or
+ambient SDK IDs. Repeated entries of the same tracing span exited out of order
+retain the pinned bridge's external-context/suppression limitation: arbitrary
+entry-instance restoration is not promised. This is an accepted limitation, not
+an additional caller-ordering rule.
+
+The event adapter resolves the actual parent via owning weak dispatch and public
+OTel context, even when a different dispatch is current. Activation preserves
+SDK suppression while entering application spans; the dynamic trace gate
+excludes only SDK-scope instrumentation from OTel, not local diagnostics. The
+two-worker/two-blocking-worker transport runtime uses the process-global
+subscriber; scoped worker-dispatch propagation is not promised.
+
+All providers share the process resource, endpoint and suppressed exporter
+runtime. Guard shutdown runs meter → tracer → logger → exporter runtime, keeping
+transport available for one-shot draining and server teardown. Logger shutdown
+uses the pinned SDK's five-second default, with no additional unbounded
+pre-shutdown flush. Runtime shutdown has its own five-second best-effort budget;
+neither is a whole-process deadline. Acknowledgment is not delivery proof, and
+residual blocking export work can outlive a timeout.
+
+Native batching receives a complete owned SDK `BatchConfig` snapshot resolved at
+initialization. The pinned public processor builder constructs a discarded
+environment-derived default before `with_batch_config` replaces it. That
+constructor-only third-party read cannot change effective policy; application
+callbacks, workers, reconnects and teardown do not resolve it again. Do not
+infer a literal zero-third-party-read guarantee. Ordinary pinned batching
+supports queue size, batch size and scheduled delay, not experimental async
+export-timeout policy. Without inherited overrides, SDK defaults bound the queue
+to 2048 records and batches to 512; saturation can drop records.
+
+`SafeSdkFormat` wraps both host fmt variants and the independent server WARN+
+JSON writer. At target `opentelemetry-otlp`, precisely
+`Tonic{Logs,Traces,Metrics}Client.{ExportFailed,PartialSuccess}` retain actual
+level/target/name, a closed set of 17 tonic code names or signed scalar rejected
+counts, and fixed `remote detail withheld` message/details. Selected records
+omit span copies; unrelated SDK/application records delegate unchanged,
+including normal filtered context. This is not universal SDK sanitization or
+global SDK hiding. Opaque setup and nonrecursive shutdown fallbacks remain.
+
+Stock partial-success semantics remain stock: rejection counts stay visible but
+are not promoted into a private exporter error. There is no per-kind/coalescing/
+256-byte contract. Source-input tapes exist only in tests, not production and
+not as diagnostic-output privacy exemptions. These best-effort failures do not
+change application results or exit status and do not restore ordinary stdout.
+See the
+[deployment procedures](DESIGN.md#native-log-routing-and-message-verification)
+for message queries and failure investigation.
+
+The shared E2E Collector writes logs only to `otel-logs.jsonl`, isolated from
+`otel-traces.jsonl`, `diag.log`, mail and WebSub evidence. Whole-directory
+retention carries both OTLP files without changing trace analysis, boot coverage
+or zero-panic consumers. `JAUNDER_CAPTURE_DIR` remains test-only; it is not a
+production fallback or a browser log-export feature.
+
+### Verifying telemetry changes
+
+Validate the same merged Collector configuration the local launcher uses:
+
+```bash
+devtool run -- otelcol-contrib validate --config end2end/otel-collector.yaml --config nix/otel-processors.yaml
+```
+
+For a changed browser flow, use the supported focused SQLite loop, for example
+`devtool run -- cargo xtask e2e-local auth.spec.ts`. This builds and validates
+current CSR assets and exercises a real server/Collector/browser lifecycle; it
+is not PostgreSQL parity, complete CSR lint, authoritative source coverage or a
+full matrix. Use `devtool run -- cargo xtask e2e postgres chromium` for that
+backend's full hermetic Chromium lane. Firefox uses the retained `e2e-lane`
+producers plus `e2e-reconcile`, not a serial-special result alone. The complete
+commands and final validation ladder remain in
+[CONTRIBUTING](../CONTRIBUTING.md#running-e2e-tests-locally).
+
+Inspect actual records and complete captures, not only acknowledgments. A live
+workload with no selected parser events cannot certify parser occurrence
+coverage; SDK isolation tests do not establish every workload's volume or
+resource behavior. Preserve a failed/incomplete lane as such and diagnose its
+owning source rather than treating an earlier green capture as current proof.
+
+### VictoriaMetrics metrics transport
+
+The supported NixOS stack sends metrics from the Collector through
+`otlphttp/victoriametrics` to
+`http://127.0.0.1:8428/metrics/opentelemetry/v1/metrics`. The exporter uses its
+pinned protobuf default; application → Collector OTLP is unchanged.
+VictoriaMetrics uses `-opentelemetry.usePrometheusNaming` so existing stored
+instrument names, unit suffixes and monotonic-counter suffixes remain available.
+No compatibility transform or synthetic metadata series is inserted.
+
+The operator-selected native OTLP metadata contract uses `service_name` and
+`scope_name` instead of remote-write's `job` and `otel_scope_name`. Queries that
+filter those labels must use the native names. Scope metadata includes
+`scope_version` (`unknown` when absent), and SDK resource attributes such as
+`telemetry_sdk_language`, `telemetry_sdk_name` and `telemetry_sdk_version` are
+labels on instrument series. Prometheus-generated `target_info` is absent by
+design; it is not an instrument-data series. Datapoint attributes such as
+bounded `kind` and `result` remain unchanged.
+
+Native protocol defaults promote resource attributes and scope metadata. This is
+not legacy-identical label/cardinality behavior or a universal bounded-label
+guarantee: keep resource/scope values within the existing trusted
+instrumentation discipline, and review new attributes before adding them. No
+global promotion option is added. Capture-only local/E2E profiles still have no
+metrics backend or metrics pipeline.
+
+The pinned Collector/VictoriaMetrics boundary is exercised with controlled
+points shaped like current host counters, gauges and cumulative histograms. That
+proves the selected stored schema and instrument-data comparison, not live Rust
+SDK emission, exhaustive datatype/temporality coverage, lossless delivery or
+clean draining. The routing decision is recorded in
+[ADR-0196](adr/0196-single-host-nixos-deployment-stack.md).
 
 ### Backend Saturation Gauges
 

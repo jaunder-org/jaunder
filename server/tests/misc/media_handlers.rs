@@ -2,6 +2,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode, header},
 };
+use std::sync::Arc;
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -18,6 +19,391 @@ use crate::helpers::{
     MultipartFile, body_string, confirmed_mutation, create_user_and_session, make_app,
     post_multipart,
 };
+
+const CLEAN_JPEG: &[u8] = include_bytes!("../fixtures/image-privacy/jpeg-clean.jpg");
+
+#[test]
+fn private_image_worker_rejects_invalid_invocation_before_application_startup() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_jaunder"))
+        .arg(host::image_privacy::WORKER_ARGUMENT)
+        .arg("private-spool")
+        .output()
+        .expect("launch application worker boundary");
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("invalid private image worker invocation")
+    );
+}
+
+async fn running_image_worker(
+    control: &host::image_privacy::WorkerTestControl,
+    spool: &std::path::Path,
+) -> u32 {
+    let pid = control.started().await.expect("real child PID");
+    let started = std::time::Instant::now();
+    while !spool.join(host::image_privacy::READY_FILE).exists() {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "real worker did not enter its controlled job"
+        );
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid.try_into().unwrap()), None).is_ok(),
+        "the witness needs a running child"
+    );
+    pid
+}
+
+fn assert_image_worker_reaped(pid: u32) {
+    assert_eq!(
+        nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid.try_into().unwrap()), None),
+        Err(nix::errno::Errno::ESRCH),
+        "owned child still exists after resource release"
+    );
+}
+
+#[rstest]
+#[case::cancelled_request(true)]
+#[case::shutdown(false)]
+// guard:no-backend — real same-binary child, no application storage.
+#[tokio::test(flavor = "current_thread")]
+async fn real_worker_cancellation_and_shutdown_reap_before_cleanup(#[case] cancel: bool) {
+    use host::image_privacy::{
+        PreparationError, UploadPreparer, WorkerTestControl, WorkerTestMode,
+    };
+    let root = TempDir::new().unwrap();
+    let control = WorkerTestControl::new(WorkerTestMode::Paused);
+    let preparer =
+        UploadPreparer::new_for_test(env!("CARGO_BIN_EXE_jaunder").into(), Arc::clone(&control));
+    let mut first = preparer.admit(root.path()).unwrap();
+    first.write(CLEAN_JPEG).unwrap();
+    let spool = first.output().parent().unwrap().to_path_buf();
+    let second = preparer.admit(root.path()).unwrap();
+    let mut caller = Some(tokio::spawn(async move {
+        let result = first.prepare("image/jpeg").await;
+        let cleanup = first.finish().await;
+        (result, cleanup)
+    }));
+    let pid = running_image_worker(&control, &spool).await;
+    if cancel {
+        let caller = caller.take().unwrap();
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+    } else {
+        preparer.stop();
+    }
+    control.waiting_for_reap().await;
+    if cancel {
+        assert!(matches!(
+            preparer.admit(root.path()),
+            Err(PreparationError::Busy)
+        ));
+    } else {
+        assert!(matches!(
+            preparer.admit(root.path()),
+            Err(PreparationError::Stopping)
+        ));
+    }
+    assert!(
+        spool.join("input").exists(),
+        "private input released before child wait"
+    );
+    control.release_reap();
+    if let Some(caller) = caller {
+        let (result, cleanup) = caller.await.unwrap();
+        assert!(matches!(result, Err(PreparationError::Stopping)));
+        cleanup.unwrap();
+    }
+    second.finish().await.unwrap();
+    preparer.shutdown().await.unwrap();
+    assert_image_worker_reaped(pid);
+    assert!(
+        std::fs::read_dir(root.path().join("media/tmp"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+}
+
+// guard:no-backend — advances only the application's real thirty-second timer around a real child.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn real_worker_deadline_uses_thirty_seconds_and_retains_owned_resources() {
+    use host::image_privacy::{
+        PreparationError, UploadPreparer, WorkerTestControl, WorkerTestMode,
+    };
+    let root = TempDir::new().unwrap();
+    let control = WorkerTestControl::new(WorkerTestMode::Paused);
+    let preparer =
+        UploadPreparer::new_for_test(env!("CARGO_BIN_EXE_jaunder").into(), Arc::clone(&control));
+    let mut first = preparer.admit(root.path()).unwrap();
+    first.write(CLEAN_JPEG).unwrap();
+    let spool = first.output().parent().unwrap().to_path_buf();
+    let second = preparer.admit(root.path()).unwrap();
+    let started = tokio::time::Instant::now();
+    let caller = tokio::spawn(async move {
+        let result = first.prepare("image/jpeg").await;
+        let cleanup = first.finish().await;
+        (result, cleanup)
+    });
+    let pid = running_image_worker(&control, &spool).await;
+    tokio::time::advance(std::time::Duration::from_secs(29)).await;
+    let mut reaping = Box::pin(control.waiting_for_reap());
+    assert!(
+        futures_util::poll!(&mut reaping).is_pending(),
+        "processing deadline fired before thirty seconds"
+    );
+    tokio::time::advance(std::time::Duration::from_secs(1)).await;
+    reaping.await;
+    assert_eq!(
+        tokio::time::Instant::now() - started,
+        std::time::Duration::from_secs(30),
+        "the production deadline must fire at thirty seconds, not later"
+    );
+    tokio::time::resume();
+    assert!(matches!(
+        preparer.admit(root.path()),
+        Err(PreparationError::Busy)
+    ));
+    assert!(
+        spool.join("input").exists(),
+        "deadline released private input before wait"
+    );
+    control.release_reap();
+    let (result, cleanup) = caller.await.unwrap();
+    assert!(matches!(result, Err(PreparationError::Deadline)));
+    cleanup.unwrap();
+    second.finish().await.unwrap();
+    preparer.shutdown().await.unwrap();
+    assert_image_worker_reaped(pid);
+    assert!(
+        std::fs::read_dir(root.path().join("media/tmp"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+}
+
+// guard:no-backend — a real owned child is crashed; only its execution owner performs wait/reap.
+#[tokio::test(flavor = "current_thread")]
+async fn real_worker_crash_retains_exit_status_and_cleans_owned_files() {
+    use host::image_privacy::{
+        PreparationError, UploadPreparer, WorkerTestControl, WorkerTestMode,
+    };
+    use std::os::unix::process::ExitStatusExt;
+    let root = TempDir::new().unwrap();
+    let control = WorkerTestControl::new(WorkerTestMode::Paused);
+    let preparer =
+        UploadPreparer::new_for_test(env!("CARGO_BIN_EXE_jaunder").into(), Arc::clone(&control));
+    let mut attempt = preparer.admit(root.path()).unwrap();
+    attempt.write(CLEAN_JPEG).unwrap();
+    let spool = attempt.output().parent().unwrap().to_path_buf();
+    let caller = tokio::spawn(async move {
+        let result = attempt.prepare("image/jpeg").await;
+        let cleanup = attempt.finish().await;
+        (result, cleanup)
+    });
+    let pid = running_image_worker(&control, &spool).await;
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(pid.try_into().unwrap()),
+        nix::sys::signal::Signal::SIGKILL,
+    )
+    .unwrap();
+    let (result, cleanup) = caller.await.unwrap();
+    assert!(
+        matches!(result, Err(PreparationError::WorkerExit(status)) if status.signal() == Some(nix::libc::SIGKILL))
+    );
+    cleanup.unwrap();
+    preparer.shutdown().await.unwrap();
+    assert_image_worker_reaped(pid);
+    assert!(!spool.exists());
+}
+
+// guard:no-backend — the actual child emits a response exceeding the production bound.
+#[tokio::test]
+async fn real_worker_response_bound_rejects_and_reaps_before_cleanup() {
+    use host::image_privacy::{
+        PreparationError, UploadPreparer, WorkerTestControl, WorkerTestMode,
+    };
+    let root = TempDir::new().unwrap();
+    let control = WorkerTestControl::new(WorkerTestMode::OversizedResponse);
+    let preparer =
+        UploadPreparer::new_for_test(env!("CARGO_BIN_EXE_jaunder").into(), Arc::clone(&control));
+    let mut attempt = preparer.admit(root.path()).unwrap();
+    attempt.write(CLEAN_JPEG).unwrap();
+    let result = attempt.prepare("image/jpeg").await;
+    let pid = control.started().await.unwrap();
+    assert!(matches!(result, Err(PreparationError::Protocol)));
+    attempt.finish().await.unwrap();
+    preparer.shutdown().await.unwrap();
+    assert_image_worker_reaped(pid);
+    assert!(
+        std::fs::read_dir(root.path().join("media/tmp"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+}
+
+// guard:no-backend — current-thread scheduling fixes start/stop ordering without sleeps.
+#[tokio::test(flavor = "current_thread")]
+async fn queued_image_preparation_returns_stopping_before_shutdown_waits_for_lease() {
+    use host::image_privacy::{PreparationError, UploadPreparer};
+    let root = TempDir::new().expect("media root");
+    let preparer = UploadPreparer::new(env!("CARGO_BIN_EXE_jaunder").into());
+    let mut attempt = preparer.admit(root.path()).expect("admitted attempt");
+    attempt.write(CLEAN_JPEG).expect("private input");
+    let mut preparing = Box::pin(attempt.prepare("image/jpeg"));
+    // The current-thread owner cannot run until we yield. This poll queues the
+    // start message; stop is made ready before the owner's first selection.
+    assert!(futures_util::poll!(&mut preparing).is_pending());
+    preparer.stop();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(2), preparing).await;
+    attempt.finish().await.expect("owned spool cleaned");
+    preparer.shutdown().await.expect("owner joined");
+    assert!(
+        matches!(result, Ok(Err(PreparationError::Stopping))),
+        "queued preparation did not return stopping before lease cleanup"
+    );
+    assert!(
+        std::fs::read_dir(root.path().join("media/tmp"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+}
+
+// guard:no-backend — private admission and shutdown own only files and job slots.
+#[tokio::test]
+async fn image_jobs_are_two_slot_private_and_shutdown_cleans_receiving_attempts() {
+    use host::image_privacy::{PreparationError, UploadPreparer};
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    let root = TempDir::new().expect("media root");
+    let preparer = UploadPreparer::new(env!("CARGO_BIN_EXE_jaunder").into());
+    let first = preparer.admit(root.path()).expect("first slot");
+    let second = preparer.admit(root.path()).expect("second slot");
+    assert!(matches!(
+        preparer.admit(root.path()),
+        Err(PreparationError::Busy)
+    ));
+    #[cfg(unix)]
+    {
+        let spool = first.output().parent().expect("owned spool");
+        assert_eq!(
+            std::fs::metadata(spool).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        for name in ["input", "output"] {
+            assert_eq!(
+                std::fs::metadata(spool.join(name))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+    }
+    preparer.stop();
+    first
+        .finish()
+        .await
+        .expect("first receiving attempt cleaned");
+    second
+        .finish()
+        .await
+        .expect("second receiving attempt cleaned");
+    preparer.shutdown().await.expect("all owners joined");
+    assert!(matches!(
+        preparer.admit(root.path()),
+        Err(PreparationError::Stopping)
+    ));
+    assert!(
+        std::fs::read_dir(root.path().join("media/tmp"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+}
+
+#[cfg(unix)]
+// guard:no-backend — filesystem fault injection observes owned cleanup and slot retention.
+#[tokio::test]
+async fn image_cleanup_failure_retains_slot_until_owned_spool_is_removed() {
+    use host::image_privacy::{PreparationError, UploadPreparer};
+    use std::os::unix::fs::PermissionsExt;
+    let root = TempDir::new().expect("media root");
+    let preparer = UploadPreparer::new(env!("CARGO_BIN_EXE_jaunder").into());
+    let mut first = preparer.admit(root.path()).expect("first slot");
+    first.write(CLEAN_JPEG).expect("private input");
+    let second = preparer.admit(root.path()).expect("second slot");
+    let spool = first.output().parent().unwrap().to_path_buf();
+    let temporary = root.path().join("media/tmp");
+    std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let finishing = tokio::spawn(first.finish());
+    // Deleting the input proves the owner attempted cleanup; removing the spool
+    // itself then needs write permission on its parent, which is faulted above.
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while spool.join("input").exists() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("cleanup reaches the injected parent failure");
+    let still_owned = matches!(preparer.admit(root.path()), Err(PreparationError::Busy));
+    // Restore permissions before assertions so a red test cannot strand its fixture.
+    std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let cleanup_error = finishing
+        .await
+        .unwrap()
+        .expect_err("retain the actual cleanup failure");
+    assert!(matches!(cleanup_error, PreparationError::Io(_)));
+    second.finish().await.expect("second attempt cleaned");
+    preparer.shutdown().await.expect("cleanup owners joined");
+    assert!(
+        still_owned,
+        "failed cleanup released its slot before removing the owned spool"
+    );
+    assert!(
+        !spool.exists(),
+        "owned spool remains after cleanup completion"
+    );
+}
+
+// guard:no-backend — the actual application worker returns a typed native I/O cause.
+#[tokio::test]
+async fn image_worker_native_io_failure_retains_source_and_cleans_private_input() {
+    use host::image_privacy::{PreparationError, UploadPreparer};
+    use std::error::Error as _;
+    let root = TempDir::new().expect("media root");
+    let preparer = UploadPreparer::new(env!("CARGO_BIN_EXE_jaunder").into());
+    let mut attempt = preparer.admit(root.path()).expect("slot");
+    attempt.write(CLEAN_JPEG).expect("private input");
+    std::fs::remove_file(attempt.output().with_file_name("input")).expect("inject missing input");
+    let error = attempt
+        .prepare("image/jpeg")
+        .await
+        .expect_err("worker must reject missing input");
+    assert!(matches!(error, PreparationError::Native(_)));
+    let source = error
+        .source()
+        .expect("native source")
+        .source()
+        .expect("native I/O cause")
+        .downcast_ref::<std::io::Error>()
+        .expect("typed I/O cause");
+    assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+    attempt.finish().await.expect("failed worker spool cleaned");
+    preparer.shutdown().await.expect("worker owner joined");
+    assert!(
+        std::fs::read_dir(root.path().join("media/tmp"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+}
 
 // ---------------------------------------------------------------------------
 // Serve tests
@@ -47,7 +433,7 @@ async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
         MultipartFile {
             filename: "serve_test.png",
             content_type: "image/png",
-            bytes: b"PNG_CONTENT_HERE",
+            bytes: CLEAN_JPEG,
         },
         Some(&cookie),
     )
@@ -151,7 +537,7 @@ async fn serve_returns_404_when_recorded_file_disappears_after_router_setup(
         MultipartFile {
             filename: "disappearing.png",
             content_type: "image/png",
-            bytes: b"DISAPPEARING_MEDIA",
+            bytes: CLEAN_JPEG,
         },
         Some(&cookie),
     )
@@ -307,7 +693,7 @@ async fn serve_returns_304_on_if_none_match(#[case] backend: Backend) {
         MultipartFile {
             filename: "etag_test.png",
             content_type: "image/png",
-            bytes: b"PNG_DATA",
+            bytes: CLEAN_JPEG,
         },
         Some(&cookie),
     )

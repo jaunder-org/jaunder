@@ -9,8 +9,9 @@ let
   captureEnv = {
     # The single capture-dir contract (#227): the server writes mail.jsonl,
     # websub.jsonl, and diag.log into this dir, and the e2e otel-collector writes
-    # otel-traces.jsonl (#332). Spliced into the jaunder.service and otel-collector
-    # service envs below; the whole dir is tarred out per combo in e2eRunAndCapture.
+    # separate otel-traces.jsonl (#332) and otel-logs.jsonl (#1743). Spliced into
+    # the jaunder.service and otel-collector service envs below; the whole dir is
+    # tarred out per combo in e2eRunAndCapture.
     JAUNDER_CAPTURE_DIR = "/var/lib/jaunder/capture";
   };
   e2eOtelCollectorEnv = captureEnv // {
@@ -114,6 +115,10 @@ let
     }:
     let
       cfg = config.services.jaunder.stack;
+      # Fixed trusted policy data needs a native build-platform parser during evaluation.
+      collectorPolicy = builtins.fromJSON (builtins.readFile (pkgs.buildPackages.runCommand "jaunder-otel-policy.json" { } ''
+        ${pkgs.buildPackages.yq-go}/bin/yq -p=yaml -o=json ${./otel-processors.yaml} > "$out"
+      ''));
       nonWhitespace = value: value != null && builtins.match "^[[:space:]]*$" value == null;
       caddyToken = value: builtins.match "^[A-Za-z0-9._-]+$" value != null;
       dnsHostName = value:
@@ -317,7 +322,7 @@ let
         services.victoriametrics = {
           enable = true;
           listenAddress = "127.0.0.1:8428";
-          extraOptions = [ "-http.pathPrefix=/metrics" ];
+          extraOptions = [ "-http.pathPrefix=/metrics" "-opentelemetry.usePrometheusNaming" ];
         };
         services.victorialogs = {
           enable = true;
@@ -330,6 +335,9 @@ let
           extraOptions = [ "-http.pathPrefix=/traces" ];
         };
 
+        # OTLP-only ingress needs no access to the host journal. The pinned
+        # Collector module otherwise grants this supplementary group unconditionally.
+        systemd.services.opentelemetry-collector.serviceConfig.SupplementaryGroups = lib.mkForce [ ];
         services.opentelemetry-collector = {
           enable = true;
           package = pkgs.opentelemetry-collector-contrib;
@@ -339,25 +347,10 @@ let
                 grpc.endpoint = "127.0.0.1:4317";
                 http.endpoint = "127.0.0.1:4318";
               };
-              journald.units = [ "jaunder.service" ];
             };
-            processors = {
-              batch = { };
-              "transform/jaunder-json".log_statements = [
-                {
-                  context = "log";
-                  statements = [
-                    "set(body, ParseJSON(body[\"MESSAGE\"])) where IsMatch(body[\"MESSAGE\"], \"^\\\\{\")"
-                    "set(attributes[\"jaunder.target\"], body[\"target\"]) where IsMap(body)"
-                    "set(attributes[\"jaunder.request.uri\"], body[\"span\"][\"uri\"]) where IsMap(body)"
-                    "delete_key(body, \"span\") where IsMap(body)"
-                    "delete_key(body, \"spans\") where IsMap(body)"
-                  ];
-                }
-              ];
-            };
+            processors = collectorPolicy.processors // { batch = { }; };
             exporters = {
-              prometheusremotewrite.endpoint = "http://127.0.0.1:8428/metrics/api/v1/write";
+              "otlphttp/victoriametrics".metrics_endpoint = "http://127.0.0.1:8428/metrics/opentelemetry/v1/metrics";
               "otlphttp/victoriatraces".traces_endpoint = "http://127.0.0.1:10428/traces/insert/opentelemetry/v1/traces";
               "otlphttp/victorialogs".logs_endpoint = "http://127.0.0.1:9428/logs/insert/opentelemetry/v1/logs";
             };
@@ -365,16 +358,16 @@ let
               metrics = {
                 receivers = [ "otlp" ];
                 processors = [ "batch" ];
-                exporters = [ "prometheusremotewrite" ];
+                exporters = [ "otlphttp/victoriametrics" ];
               };
               traces = {
                 receivers = [ "otlp" ];
-                processors = [ "batch" ];
+                processors = [ "transform/jaunder_privacy" "batch" ];
                 exporters = [ "otlphttp/victoriatraces" ];
               };
               logs = {
-                receivers = [ "journald" ];
-                processors = [ "transform/jaunder-json" "batch" ];
+                receivers = [ "otlp" ];
+                processors = [ "transform/jaunder_privacy" "batch" ];
                 exporters = [ "otlphttp/victorialogs" ];
               };
             };

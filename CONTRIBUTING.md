@@ -69,11 +69,16 @@ nix develop
 The default `.#default` and `.#ci` shells target `x86_64-linux`,
 `aarch64-linux`, and `aarch64-darwin` (Apple Silicon macOS). The pinned nixpkgs
 no longer supports Intel macOS (`x86_64-darwin`), so the flake does not
-advertise that platform. On Linux, Playwright uses the browsers pinned in Nix.
-On macOS, Nix supplies the Rust/WASM/Node/database host tooling while Playwright
-browser binaries live in a writable user cache whose path includes the pinned
-`@playwright/test` version; shell entry never downloads browsers. Provision them
-explicitly with:
+advertise that platform. Declared flake outputs are not production-target
+commitments: production targets `x86_64-linux`; ARM Linux is not a delivery
+requirement. Apple Silicon macOS targets the development environment only,
+checked periodically from committed changes rather than for each
+work-in-progress feature or as a production-package/merge prerequisite.
+
+On Linux, Playwright uses the browsers pinned in Nix. On macOS, Nix supplies the
+Rust/WASM/Node/database host tooling while Playwright browser binaries live in a
+writable user cache whose path includes the pinned `@playwright/test` version;
+shell entry never downloads browsers. Provision them explicitly with:
 
 ```bash
 nix develop -c playwright install chromium firefox webkit
@@ -94,9 +99,12 @@ Check platform output boundaries and native shell/package evaluation with:
 nix eval --impure --expr 'import ./nix/platform-contract.nix { flake = builtins.getFlake (toString ./.); }'
 ```
 
-Run this on each supported native platform: Cargo source preparation uses
-import-from-derivation, so foreign-system derivation evaluation requires a
-matching builder and is not forced by this check.
+Run this on the production `x86_64-linux` host and during periodic Apple Silicon
+macOS development-environment checks from committed changes. ARM Linux has no
+delivery-evaluation requirement. Cargo source preparation uses
+import-from-derivation, so this check forces derivation paths only for its
+native system; declared foreign outputs do not establish foreign-native
+execution.
 
 The default local backend remains SQLite. PostgreSQL development is also
 supported:
@@ -427,9 +435,9 @@ hermetic environment parity matters.
 
 ### Running e2e tests locally
 
-The host and the CI VM load the **same** `end2end/playwright.config.ts`, so
-"passes locally" now equals "passes in CI" — the difference is only how you
-invoke it.
+The host and the CI VM load the **same** `end2end/playwright.config.ts`, keeping
+browser-flow definitions shared. A focused host pass does not establish the
+hermetic backend/browser matrix verdict; CI remains authoritative.
 
 - **Fast local loop** — `cargo xtask e2e-local` owns the whole loop: it builds
   the CSR bundle + server, starts its own `jaunder serve` and OTLP collector on
@@ -465,7 +473,9 @@ invoke it.
   three producer artifacts arrive. Full `cargo xtask validate` runs and
   reconciles all eight retained lanes. Escalate to these when changed behavior
   depends on backend/browser parity, release-build behavior, or branch-boundary
-  confidence. The VM path is what green means before you push.
+  confidence. Run representative hermetic proof when that boundary is
+  load-bearing; it is not a universal prerequisite before every push. The normal
+  push hook remains `prepush`, and CI is the authoritative integration proof.
 - **Firefox reconciliation and controls** — Each Firefox producer lifts every
   available lane-qualified diagnostic even after failure. Host reconciliation
   fail-closed checks the independent census, report union, retries, duration
@@ -496,6 +506,37 @@ invoke it.
   This certifies trace evidence, not a boot time budget, source coverage, or
   `#[server]` request-flow coverage.
 
+#### Bounding full local E2E fan-out
+
+A deliberate full `cargo xtask validate` can limit its concurrently executing
+E2E lane-build operations with `--e2e-jobs <N>`. Choose a positive integer from
+actual CPU/RAM capacity admitted for this invocation; for example, a caller
+admitted for two lane builds can run `cargo xtask validate --e2e-jobs 2`.
+Omission preserves all-enabled-lanes fan-out, not a host-capacity guarantee.
+Values above the enabled lane count are accepted and effectively capped at that
+count. Invalid values and combining the option with `--no-e2e` are rejected
+before validation work starts. Other E2E commands keep their existing
+interfaces.
+
+Before lane dispatch, stderr reports requested/default, enabled and effective
+counts. The same values appear in the human summary and structured result's
+`e2e_concurrency` object (`requested: null` means omitted). Every enabled lane
+still runs, a settled build frees its slot immediately, and a failed build does
+not cancel healthy work or discard pending lanes. Lane artifacts, both Firefox
+reconciliations and authoritative flow-coverage verification remain required.
+Lane phase sidecars remain intact; bounded admission makes aggregate phase
+elapsed time unavailable without shared timing boundaries, so the summary
+reports that limitation rather than treating a maximum as total elapsed time.
+
+This is a host dispatch bound, not Nix's `max-jobs`/core scheduler or a limit on
+all host processes, guest workers, dependency builds, substitutions or builders.
+Nix settings and other invocations can further affect actual overlap. Current
+production lanes request two vCPUs, with 4 GiB for ordinary Firefox guests and 3
+GiB for other guests; these are configured guest sizes, not measured host use or
+proof that any particular cap is safe. Cross-checkout heavy-path admission is
+separate work in #1753, not a prerequisite. No global queue, automatic host
+threshold or resource-pressure cancellation is introduced.
+
 #### Visual snapshot workflow
 
 Visual coverage is deliberately five existing behavioral tests tagged `@visual`:
@@ -512,6 +553,22 @@ Comparisons are exact: zero differing pixels, pinned DejaVu/fontconfig, and
 screenshot-only animation/caret/font CSS. The public timeline masks only
 `.j-post-time`; other dynamic state must be made deterministic rather than
 masked or tolerated.
+
+Failed visual assertions attach bounded, time-limited `visual-failure-*` JSON
+through the existing Playwright artifacts. Geometry, computed font family and
+interaction state are observed **after failure**, not at the raster instant;
+selected rendered faces and initial pointer coordinates remain unmeasured. No
+additional pass-path browser observations or replacement screenshots are taken.
+An unavailable diagnostic must not replace the original screenshot failure.
+
+E2E diagnostic directories also retain `producer-checkout-<lane>.json` and the
+selected output's `producer-input-<lane>.json` when available. Host Git supplies
+actual HEAD, committed tree and raw parents; clean matching guest revision and
+selected-output identity qualify the input binding. Dirty source is
+committed-base-only. Reused outputs do not establish their original producing
+runtime or current execution. The clean revision intentionally identifies the
+final VM check, not product dependency derivations; distinct clean commits do
+not share a promised final test-verdict identity.
 
 The only supported baseline updater is:
 
@@ -716,23 +773,28 @@ different environments. They have the following explicit authority split
 root-workspace fence population in both directions; neither path may silently
 shrink it. Only the Nix path establishes the pinned sandbox/offline verdict.
 
-`cargo xtask check` is the normal agent/developer feedback command. Its product
-Rust test portion is implemented through the same host-native lane exposed as
-`cargo xtask test-local`, so repeated `check` runs reuse the normal local target
-directory and the shared `sccache` cache across worktrees. Use
-`cargo xtask test-local -- <nextest args>` directly only for a narrower
-red/green loop while editing. It intentionally sets `CARGO_INCREMENTAL=0`: that
-gives up same-target incremental reuse so `sccache` can share more compiler work
-between agents and checkouts.
+Focused `cargo xtask test-local -- <nextest args>` and
+`cargo xtask e2e-local <spec-or-file:line>` are the default feedback paths while
+editing. After a repair, rerun the same targeted proof before broadening the
+question. Do not run a broad gate as a routine per-helper or per-fix ritual.
+Normal pre-commit and pre-push hooks still enforce their documented boundaries;
+focused proof does not replace them, hermetic coverage/backend parity, or CI.
 
-`check` is the inner-loop fixer: it auto-fixes **formatting**, and nothing else.
-It has no coverage baseline to heal — the coverage gate is stateless (ADR-0050),
-as stated above — and since #714 no gate rewrites `web/src` either: the endpoint
-and span-name literals a gate used to write are now derived by
-`#[macros::server]`, so there is nothing left in source to correct. `validate`
-is the strict, never-mutating gate. Both commands write a machine-readable
-result to `.xtask/last-result.json` and a `xtask-done:` completion line to
-stderr.
+Choose `cargo xtask check --no-test` or `cargo xtask check` deliberately for a
+named broad diagnostic/integration question: for example, whether a shared
+interface change breaks host/static integration, or whether a repair affects
+other product Rust tests and the wasm/doctest surfaces. Use explicit
+`validate --no-e2e` for local non-e2e hermetic confidence and full `validate`
+when the complete local matrix is needed. CI remains the authoritative
+integration proof.
+
+`check` auto-fixes **formatting**, and nothing else; `validate` never mutates
+the tree. The coverage gate is stateless (ADR-0050), so there is no baseline to
+heal. Both commands write a machine-readable result to `.xtask/last-result.json`
+and a `xtask-done:` completion line to stderr. `check`'s product Rust tests use
+the same host-native lane as `test-local`, reusing the local target directory
+and shared `sccache` across worktrees. That lane sets `CARGO_INCREMENTAL=0` so
+`sccache` can share compiler work between agents and checkouts.
 
 CI does **not** run `cargo xtask validate` as a single job. It distributes the
 non-e2e surface across
@@ -1272,6 +1334,15 @@ prerequisite cost also applies to the shared product-test lane in `check` and
 `prepush`. After launcher realization, the product-test work remains host-native
 and does not invoke Nix check derivations.
 
+The same lane builds the locked host `jaunder` executable and supplies its
+absolute path as `JAUNDER_TEST_EXECUTABLE` to storage and seeding tests that
+launch the private image worker. HTTP integration tests use Cargo's explicit
+`CARGO_BIN_EXE_jaunder` instead. Hermetic coverage selects the corresponding
+instrumented executable; sandbox seeding receives its built server artifact.
+This is a test/seeding input, not a production upload setting. Direct test or
+seeder invocations must supply the matching real application executable; there
+is no test-harness executable, PATH-search or no-op fallback.
+
 An explicit `JAUNDER_CSR_BUNDLE_DIR` is intentional input: missing or invalid
 CSR manifest/representations, rendered shell, or system-artifact inventory fails
 before test compilation, with no fallback production. Supply it only from
@@ -1304,9 +1375,9 @@ avoids the issue entirely by discarding the whole cluster.
 ### Coverage and dependency policy
 
 - Coverage is gated **host-side by xtask**, which reads the Nix `coverage`
-  check's report. It is part of `cargo xtask check`, `cargo xtask validate`, and
-  CI. It is deliberately not part of `cargo xtask prepush`, so the local push
-  hook stays fast while CI remains the non-bypassable hermetic backstop.
+  check's report. It is part of `cargo xtask validate` (including `--no-e2e`)
+  and CI, not `cargo xtask check` or `cargo xtask prepush`. The local push hook
+  stays fast while CI remains the non-bypassable hermetic backstop.
 - `cargo deny check` verifies dependency policy, advisories, and licensing (run
   as one of the static checks).
 
@@ -1505,18 +1576,17 @@ aren't in the report). It evaluates the **committed (HEAD)** filter, so it
 guards what CI/PRs carry, not local uncommitted edits. Subtlety worth knowing: a
 _new_ file must be `git add`-ed to be measured — nix ignores untracked files
 even on a dirty tree. The probe runs in CI's `Validation coverage` job and on
-request; it is deliberately **not** part of per-commit `check`/`validate`
-(#241). **Playwright/WASM coverage evidence
-(`cargo xtask wasm-coverage probe`).** This manual host command realizes the
-independent Chromium and Firefox diagnostic producers before deciding its
-outcome. It retains each unpacked producer root under `.xtask/wasm-coverage/`,
-validates the `v1` status documents and complete digest manifests fail-closed,
-and writes the aggregate verdict to `.xtask/wasm-coverage/status.json` even when
-one browser fails. It only invokes the compiler-matched
-`llvm-profdata`/`llvm-cov` from `.#wasm-coverage-csr` to count-sum profiles when
-both browsers passed with matching module and toolchain identities; otherwise no
-merged evidence is produced. The command exits zero only for two source-mapped
-browser reports and a valid merged Rust-line report.
+request; it is deliberately **not** part of `check`/`validate` (#241).
+**Playwright/WASM coverage evidence (`cargo xtask wasm-coverage probe`).** This
+manual host command realizes the independent Chromium and Firefox diagnostic
+producers before deciding its outcome. It retains each unpacked producer root
+under `.xtask/wasm-coverage/`, validates the `v1` status documents and complete
+digest manifests fail-closed, and writes the aggregate verdict to
+`.xtask/wasm-coverage/status.json` even when one browser fails. It only invokes
+the compiler-matched `llvm-profdata`/`llvm-cov` from `.#wasm-coverage-csr` to
+count-sum profiles when both browsers passed with matching module and toolchain
+identities; otherwise no merged evidence is produced. The command exits zero
+only for two source-mapped browser reports and a valid merged Rust-line report.
 
 **WASM coverage overhead measurement
 (`cargo xtask wasm-coverage measure --quiescent-window '<coordinated window acknowledgement>'`).**

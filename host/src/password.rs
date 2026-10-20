@@ -47,7 +47,7 @@ pub enum PasswordError {
 ///
 /// Returns [`PasswordError::HashingFailed`] when Argon2 cannot create a hash.
 pub fn hash(password: &Password) -> Result<String, PasswordError> {
-    hash_with(password, hash_operation)
+    hash_with(password, HASH_OPERATION)
 }
 
 fn hash_with(password: &Password, operation: HashOperation) -> Result<String, PasswordError> {
@@ -83,27 +83,30 @@ fn verify_with(
 type HashOperation = fn(&Password) -> Result<String, argon2::password_hash::Error>;
 type VerifyOperation = fn(&Password, &str) -> Result<(), argon2::password_hash::Error>;
 
-fn hash_operation(password: &Password) -> Result<String, argon2::password_hash::Error> {
+#[cfg(feature = "cheap-kdf")]
+const HASH_OPERATION: HashOperation = cheap_hash_operation;
+#[cfg(not(feature = "cheap-kdf"))]
+const HASH_OPERATION: HashOperation = production_hash_operation;
+
+#[cfg(any(not(feature = "cheap-kdf"), test))]
+fn production_hash_operation(password: &Password) -> Result<String, argon2::password_hash::Error> {
     use argon2::PasswordHasher;
 
-    // `hash_password` obtains a fresh random salt through password-hash's
-    // getrandom-backed implementation for every invocation.
+    // Production uses the crate defaults (m=19456, t=2); verification derives
+    // cost from the stored hash and therefore needs no profile.
+    argon2::Argon2::default()
+        .hash_password(password.0.as_bytes())
+        .map(|hash| hash.to_string())
+}
 
-    // Production uses the crate defaults (m=19456, t=2). Under `cheap-kdf`
-    // (test builds only) use the minimum memory cost so the suite is not
-    // dominated by KDF time. `verify()` derives cost from the stored hash, so
-    // it needs no branch.
-    #[cfg(feature = "cheap-kdf")]
-    let hasher = {
-        use argon2::{Algorithm, Argon2, Params, Version};
-        let params = Params::new(Params::MIN_M_COST, 1, 1, None)
-            .map_err(argon2::password_hash::Error::from)?;
-        Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
-    };
-    #[cfg(not(feature = "cheap-kdf"))]
-    let hasher = argon2::Argon2::default();
+#[cfg(feature = "cheap-kdf")]
+fn cheap_hash_operation(password: &Password) -> Result<String, argon2::password_hash::Error> {
+    use argon2::{Algorithm, Argon2, Params, PasswordHasher, Version};
 
-    hasher
+    // Integration tests use minimum cost so the suite is not dominated by KDF time.
+    let params =
+        Params::new(Params::MIN_M_COST, 1, 1, None).map_err(argon2::password_hash::Error::from)?;
+    Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
         .hash_password(password.0.as_bytes())
         .map(|hash| hash.to_string())
 }
@@ -128,13 +131,9 @@ mod tests {
 
     #[test]
     fn production_params_verify_regardless_of_feature() {
-        use argon2::{Argon2, PasswordHasher};
-
         let password: Password = "password123".parse().expect("valid password");
-        let production_hash = Argon2::default()
-            .hash_password(password.as_ref().as_bytes())
-            .expect("default parameters hash")
-            .to_string();
+        let production_hash =
+            production_hash_operation(&password).expect("default parameters hash");
 
         assert!(production_hash.contains("m=19456"));
         assert!(verify(&password, &production_hash).expect("verification succeeds"));

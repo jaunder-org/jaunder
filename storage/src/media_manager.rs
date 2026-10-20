@@ -4,14 +4,15 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt, TryStreamExt, stream};
+use host::image_privacy::{PreparationError, UploadAttempt, UploadPreparer};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::fs;
-use tokio::io::AsyncWriteExt;
+use tracing::Instrument;
 
 #[cfg(any(test, feature = "test-utils"))]
 use tokio::sync::Notify;
@@ -46,6 +47,8 @@ pub enum MediaError {
     InsufficientStorage,
     #[error("media uploads are disabled")]
     UploadsDisabled,
+    #[error("media preparation is busy")]
+    Busy,
     #[error("Internal server error")]
     Internal(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
@@ -193,6 +196,83 @@ impl std::fmt::Debug for ReclaimUnlinkGate {
     }
 }
 
+/// Required dependencies for constructing an upload-ready manager.
+/// Consumed at construction, never retained as a runtime dependency bundle.
+struct MediaManagerArgs {
+    media: Arc<dyn MediaStorage>,
+    posts: Arc<dyn PostStorage>,
+    site_config: Arc<dyn SiteConfigStorage>,
+    write_scope: WriteScope,
+    content_locks: Arc<MediaContentLocks>,
+    instance_id: InstanceId,
+    ownership_resolver: Arc<dyn MediaReferenceOwnershipResolver>,
+    preparer: Arc<UploadPreparer>,
+}
+
+impl crate::StorageFactory {
+    /// Constructs an upload-ready manager at a composition root.
+    /// Runtime-owned locks, identity, resolver and preparer remain explicit.
+    #[must_use]
+    pub fn media_manager(
+        &self,
+        content_locks: Arc<MediaContentLocks>,
+        instance_id: InstanceId,
+        ownership_resolver: Arc<dyn MediaReferenceOwnershipResolver>,
+        preparer: Arc<UploadPreparer>,
+    ) -> MediaManager {
+        MediaManager::new(MediaManagerArgs {
+            media: self.media(),
+            posts: self.posts(),
+            site_config: self.site_config(),
+            write_scope: self.write_scope(),
+            content_locks,
+            instance_id,
+            ownership_resolver,
+            preparer,
+        })
+    }
+}
+
+/// Required explicit dependencies for fault-injected test composition only.
+#[cfg(any(test, feature = "test-support"))]
+pub struct TestMediaManagerParts {
+    pub media: Arc<dyn MediaStorage>,
+    pub posts: Arc<dyn PostStorage>,
+    pub site_config: Arc<dyn SiteConfigStorage>,
+    pub write_scope: WriteScope,
+    pub content_locks: Arc<MediaContentLocks>,
+    pub instance_id: InstanceId,
+    pub ownership_resolver: Arc<dyn MediaReferenceOwnershipResolver>,
+    pub preparer: Arc<UploadPreparer>,
+}
+
+/// Preserves explicit test overrides without exposing ordinary manager construction.
+#[cfg(any(test, feature = "test-support"))]
+#[must_use]
+pub fn media_manager_for_test(parts: TestMediaManagerParts) -> MediaManager {
+    let TestMediaManagerParts {
+        media,
+        posts,
+        site_config,
+        write_scope,
+        content_locks,
+        instance_id,
+        ownership_resolver,
+        preparer,
+    } = parts;
+    MediaManager::new(MediaManagerArgs {
+        media,
+        posts,
+        site_config,
+        write_scope,
+        content_locks,
+        instance_id,
+        ownership_resolver,
+        preparer,
+    })
+}
+
+#[derive(Clone)]
 pub struct MediaManager {
     media: Arc<dyn MediaStorage>,
     posts: Arc<dyn PostStorage>,
@@ -202,8 +282,12 @@ pub struct MediaManager {
     content_locks: Arc<MediaContentLocks>,
     instance_id: InstanceId,
     ownership_resolver: Arc<dyn MediaReferenceOwnershipResolver>,
+    preparer: Arc<UploadPreparer>,
+    finalizations: Arc<Mutex<tokio::task::JoinSet<()>>>,
     #[cfg(any(test, feature = "test-utils"))]
     reclaim_unlink_gate: Option<Arc<ReclaimUnlinkGate>>,
+    #[cfg(any(test, feature = "test-utils"))]
+    upload_placement_gate: Option<Arc<tokio::sync::Barrier>>,
 }
 
 /// File metadata for upload finalization.
@@ -233,17 +317,32 @@ impl TargetDisposition {
     }
 }
 
+async fn join_finalization_owners(mut owners: tokio::task::JoinSet<()>) -> anyhow::Result<()> {
+    let mut failure = None;
+    while let Some(result) = owners.join_next().await {
+        if let Err(error) = result {
+            failure = Some(error);
+        }
+    }
+    match failure {
+        Some(error) => Err(error.into()),
+        None => Ok(()),
+    }
+}
+
 impl MediaManager {
     #[must_use]
-    pub fn new(
-        media: Arc<dyn MediaStorage>,
-        posts: Arc<dyn PostStorage>,
-        site_config: Arc<dyn SiteConfigStorage>,
-        write_scope: WriteScope,
-        content_locks: Arc<MediaContentLocks>,
-        instance_id: InstanceId,
-        ownership_resolver: Arc<dyn MediaReferenceOwnershipResolver>,
-    ) -> Self {
+    fn new(args: MediaManagerArgs) -> Self {
+        let MediaManagerArgs {
+            media,
+            posts,
+            site_config,
+            write_scope,
+            content_locks,
+            instance_id,
+            ownership_resolver,
+            preparer,
+        } = args;
         Self {
             media,
             posts,
@@ -253,9 +352,39 @@ impl MediaManager {
             content_locks,
             instance_id,
             ownership_resolver,
+            preparer,
+            finalizations: Arc::new(Mutex::new(tokio::task::JoinSet::new())),
             #[cfg(any(test, feature = "test-utils"))]
             reclaim_unlink_gate: None,
+            #[cfg(any(test, feature = "test-utils"))]
+            upload_placement_gate: None,
         }
+    }
+
+    /// Refuses new work and cancels native processing. The root then drains HTTP.
+    pub fn stop_uploads(&self) {
+        self.preparer.stop();
+    }
+
+    /// Drains private owners first: a successful preparation keeps its lease
+    /// through owned finalization, so no finalizer can be registered after this
+    /// first drain. Then join every placement/registration/handback owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first native-owner, cleanup, or finalizer join error.
+    pub async fn shutdown_uploads(&self) -> anyhow::Result<()> {
+        let native = self.preparer.shutdown().await;
+        let finalizations = {
+            let mut owners = self
+                .finalizations
+                .lock()
+                .map_err(|_| anyhow::anyhow!(PreparationError::Protocol))?;
+            std::mem::take(&mut *owners)
+        };
+        let finalization = join_finalization_owners(finalizations).await;
+        native?;
+        finalization
     }
 
     /// Installs a per-manager test gate immediately before filesystem reclaim.
@@ -263,6 +392,14 @@ impl MediaManager {
     #[must_use]
     pub fn with_reclaim_unlink_gate_for_test(mut self, gate: Arc<ReclaimUnlinkGate>) -> Self {
         self.reclaim_unlink_gate = Some(gate);
+        self
+    }
+
+    /// Pauses after public placement and before registration for cancellation proofs.
+    #[cfg(any(test, feature = "test-utils"))]
+    #[must_use]
+    pub fn with_upload_placement_gate_for_test(mut self, gate: Arc<tokio::sync::Barrier>) -> Self {
+        self.upload_placement_gate = Some(gate);
         self
     }
 
@@ -334,25 +471,176 @@ impl MediaManager {
         S: Stream<Item = Result<Bytes, E>> + Unpin,
         E: std::error::Error + Send + Sync + 'static,
     {
+        self.upload_prepared(user_id, filename, content_type, stream, None)
+            .await
+    }
+
+    async fn upload_prepared<S, E, B>(
+        &self,
+        user_id: UserId,
+        filename: &Filename,
+        content_type: Option<ContentType>,
+        mut stream: S,
+        created_at: Option<UtcInstant>,
+    ) -> anyhow::Result<MutationOutcome<ManagedUpload>>
+    where
+        S: Stream<Item = Result<B, E>> + Unpin,
+        B: AsRef<[u8]>,
+        E: std::error::Error + Send + Sync + 'static,
+    {
         self.ensure_uploads_enabled().await?;
         let (max_file_size, user_quota) = self.get_limits().await?;
-
-        let content_type = content_type.unwrap_or_else(|| media::detect_content_type(filename));
-
-        let tmp_path = self.create_temp_file().await?;
-        let (sha256_hex, size_bytes) = self
-            .stream_to_temp(stream, &tmp_path, max_file_size)
-            .await?;
-
-        let metadata = UploadMetadata {
-            filename: filename.clone(),
-            content_type,
-            sha256_hex,
-            size_bytes,
+        let filename_type = media::detect_content_type(filename);
+        let supplied_type = content_type.unwrap_or_else(|| filename_type.clone());
+        let image_labeled = [supplied_type.as_ref(), filename_type.as_ref()]
+            .iter()
+            .any(|mime| {
+                let bytes = mime.as_bytes();
+                bytes.len() >= 6 && bytes[..6].eq_ignore_ascii_case(b"image/")
+            });
+        let mut attempt = self
+            .preparer
+            .admit(&self.storage_path)
+            .map_err(Self::preparation_error)?;
+        let result = async {
+            let mut received = 0u64;
+            let mut stopping = attempt.stopping();
+            loop {
+                let next = tokio::select! {
+                    biased;
+                    _ = stopping.wait_for(|value| *value) => return Err(Self::preparation_error(PreparationError::Stopping)),
+                    next = stream.next() => next,
+                };
+                let Some(chunk) = next else { break; };
+                let chunk = chunk?;
+                let chunk = chunk.as_ref();
+                received = received.saturating_add(chunk.len() as u64);
+                if received > max_file_size.value().unsigned_abs() {
+                    anyhow::bail!(MediaError::PayloadTooLarge);
+                }
+                attempt.write(chunk)?;
+            }
+            let detected = attempt.prepare(if image_labeled { "image/" } else { "application/octet-stream" }).await.map_err(Self::preparation_error)?;
+            let output = attempt.output();
+            let size = std::fs::metadata(output)?.len();
+            if size > max_file_size.value().unsigned_abs() {
+                anyhow::bail!(MediaError::PayloadTooLarge);
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(output, std::fs::Permissions::from_mode(0o600))?;
+            }
+            // Identity and quota are derived only after native post-read success.
+            let bytes = std::fs::read(output)?;
+            let metadata = UploadMetadata {
+                filename: filename.clone(),
+                content_type: detected.map_or(Ok(supplied_type), |mime| mime.parse())?,
+                sha256_hex: ContentHash::from_digest(Sha256::digest(&bytes).into()),
+                size_bytes: ByteSize::try_from(i64::try_from(bytes.len())?)?,
+            };
+            Ok::<_, anyhow::Error>(metadata)
+        }.await;
+        let metadata = match result {
+            Ok(metadata) => metadata,
+            Err(error) => return Self::finish_owned_attempt(attempt, Err(error)).await,
         };
+        let manager = self.clone();
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        {
+            let mut owners = self
+                .finalizations
+                .lock()
+                .map_err(|_| anyhow::anyhow!(PreparationError::Protocol))?;
+            while let Some(completed) = owners.try_join_next() {
+                completed?;
+            }
+            // From this point the request cannot abandon a public candidate or
+            // a commit acknowledgement. The tracked task owns the attempt and
+            // drives placement, registration and cleanup even without a receiver.
+            owners.spawn(
+                async move {
+                    let result = manager
+                        .finalize_upload_with_created_at(
+                            user_id,
+                            metadata,
+                            attempt.output(),
+                            user_quota,
+                            created_at,
+                        )
+                        .await;
+                    let result = Self::finish_owned_attempt(attempt, result).await;
+                    Self::deliver_finalized_upload(sender, result);
+                }
+                .instrument(tracing::Span::current()),
+            );
+        }
+        receiver.await?
+    }
 
-        self.finalize_upload(user_id, metadata, &tmp_path, user_quota)
-            .await
+    async fn finish_owned_attempt(
+        attempt: UploadAttempt,
+        result: anyhow::Result<MutationOutcome<ManagedUpload>>,
+    ) -> anyhow::Result<MutationOutcome<ManagedUpload>> {
+        let cleanup = attempt.finish().await;
+        Self::preserve_result_after_cleanup(result, cleanup)
+    }
+
+    fn deliver_finalized_upload(
+        sender: tokio::sync::oneshot::Sender<anyhow::Result<MutationOutcome<ManagedUpload>>>,
+        result: anyhow::Result<MutationOutcome<ManagedUpload>>,
+    ) {
+        if let Err(undelivered) = sender.send(result) {
+            Self::emit_failure_metric(&undelivered);
+            if let Err(_error) = undelivered {
+                host::error::report_swallowed(
+                    host::error::ErrorKind::Internal,
+                    host::error::ErrorClass::Transient,
+                    "media.upload.cancelled_handback",
+                    host::error::SwallowedSource::Redacted,
+                );
+            }
+        }
+    }
+
+    fn preserve_result_after_cleanup(
+        result: anyhow::Result<MutationOutcome<ManagedUpload>>,
+        cleanup: Result<(), PreparationError>,
+    ) -> anyhow::Result<MutationOutcome<ManagedUpload>> {
+        match (result, cleanup) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(error), cleanup) => {
+                if let Err(cleanup) = cleanup {
+                    host::error::report_swallowed(
+                        host::error::ErrorKind::Internal,
+                        host::error::ErrorClass::Transient,
+                        "media.upload.cleanup",
+                        host::error::SwallowedSource::Error(&cleanup),
+                    );
+                }
+                Err(error)
+            }
+            (Ok(value), Err(error)) => {
+                // Registration has already committed or is indeterminate. The
+                // owner retained its spool until removal succeeded; a recovered
+                // cleanup failure must not erase that database outcome.
+                host::error::report_swallowed(
+                    host::error::ErrorKind::Internal,
+                    host::error::ErrorClass::Transient,
+                    "media.upload.post_registration_cleanup",
+                    host::error::SwallowedSource::Error(&error),
+                );
+                Ok(value)
+            }
+        }
+    }
+
+    fn preparation_error(error: PreparationError) -> anyhow::Error {
+        match error {
+            PreparationError::Busy | PreparationError::Stopping => MediaError::Busy.into(),
+            PreparationError::InvalidImage => MediaError::BadRequest("invalid image".into()).into(),
+            error => MediaError::Internal(Box::new(error)).into(),
+        }
     }
 
     /// Validates a filename and returns a sanitized version. Callers on the
@@ -387,7 +675,7 @@ impl MediaManager {
             Some(MediaError::PayloadTooLarge) => UploadOutcome::TooLarge,
             Some(MediaError::InsufficientStorage) => UploadOutcome::QuotaExceeded,
             Some(MediaError::UploadsDisabled) => UploadOutcome::Disabled,
-            Some(MediaError::Internal(_)) | None => UploadOutcome::Error,
+            Some(MediaError::Internal(_) | MediaError::Busy) | None => UploadOutcome::Error,
         }
     }
 
@@ -406,13 +694,6 @@ impl MediaManager {
         let max_file_size = self.site_config.get_media_max_file_size().await?;
         let user_quota = self.site_config.get_media_user_quota().await?;
         Ok((max_file_size, user_quota))
-    }
-
-    async fn create_temp_file(&self) -> anyhow::Result<PathBuf> {
-        let tmp_dir = self.storage_path.join("media").join("tmp");
-        fs::create_dir_all(&tmp_dir).await?;
-        let tmp_id = uuid::Uuid::new_v4();
-        Ok(tmp_dir.join(tmp_id.to_string()))
     }
 
     async fn check_quota(
@@ -536,6 +817,24 @@ impl MediaManager {
             }
         };
 
+        #[cfg(any(test, feature = "test-utils"))]
+        if let Some(gate) = &self.upload_placement_gate {
+            gate.wait().await;
+            gate.wait().await;
+        }
+        #[cfg(unix)]
+        if disposition == TargetDisposition::FreshRename {
+            use std::os::unix::fs::PermissionsExt;
+            if let Err(error) =
+                fs::set_permissions(&target_path, std::fs::Permissions::from_mode(0o644)).await
+            {
+                return Self::finish_temp_cleanup(
+                    Err(error.into()),
+                    fs::remove_file(&target_path).await,
+                    "storage.media.public_mode_cleanup",
+                );
+            }
+        }
         let media = Arc::clone(&self.media);
         let outcome = self
             .write_scope
@@ -573,6 +872,7 @@ impl MediaManager {
     /// the cross-process content lock to serialize filesystem placement with a
     /// short database registration scope. Streaming, hashing, placement, and
     /// cleanup remain outside the database scope.
+    #[cfg(test)]
     async fn finalize_upload(
         &self,
         user_id: UserId,
@@ -741,30 +1041,14 @@ impl MediaManager {
         bytes: &[u8],
         created_at: Option<UtcInstant>,
     ) -> anyhow::Result<MutationOutcome<ManagedUpload>> {
-        self.ensure_uploads_enabled().await?;
-        let (max_file_size, user_quota) = self.get_limits().await?;
-        // `filename` and `content_type` were validated at their respective inbound
-        // boundaries, so neither needs revalidation in the persistence seam.
-
-        let size_bytes = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
-        if size_bytes > max_file_size.value() {
-            anyhow::bail!(MediaError::PayloadTooLarge);
-        }
-
-        let size_bytes = ByteSize::try_from(size_bytes)?;
-
-        let sha256_hex = ContentHash::from_digest(Sha256::digest(bytes).into());
-        let tmp_path = self.create_temp_file().await?;
-        fs::write(&tmp_path, bytes).await?;
-
-        let metadata = UploadMetadata {
-            filename: filename.clone(),
-            content_type,
-            sha256_hex,
-            size_bytes,
-        };
-        self.finalize_upload_with_created_at(user_id, metadata, &tmp_path, user_quota, created_at)
-            .await
+        self.upload_prepared(
+            user_id,
+            filename,
+            Some(content_type),
+            stream::iter([Ok::<_, io::Error>(bytes)]),
+            created_at,
+        )
+        .await
     }
 
     /// Deletes a media row and, under a storage-issued reclaim lease, unlinks its
@@ -889,37 +1173,6 @@ impl MediaManager {
         }
     }
 
-    async fn stream_to_temp<S, E>(
-        &self,
-        mut stream: S,
-        tmp_path: &Path,
-        max_file_size: MaxFileSize,
-    ) -> anyhow::Result<(ContentHash, ByteSize)>
-    where
-        S: Stream<Item = Result<Bytes, E>> + Unpin,
-        E: std::error::Error + Send + Sync + 'static,
-    {
-        let mut file = fs::File::create(tmp_path).await?;
-        let mut hasher = Sha256::new();
-        let mut bytes_written: i64 = 0;
-
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
-            bytes_written += i64::try_from(chunk.len()).unwrap_or(i64::MAX);
-            if bytes_written > max_file_size.value() {
-                anyhow::bail!(MediaError::PayloadTooLarge);
-            }
-            hasher.update(&chunk);
-            file.write_all(&chunk).await?;
-        }
-
-        file.flush().await?;
-        drop(file);
-
-        let sha256_hex = ContentHash::from_digest(hasher.finalize().into());
-        Ok((sha256_hex, ByteSize::try_from(bytes_written)?))
-    }
-
     async fn directory_entries(dir: &Path) -> io::Result<impl Stream<Item = io::Result<PathBuf>>> {
         let read_dir = fs::read_dir(dir).await?;
         Ok(stream::try_unfold(read_dir, |mut read_dir| async move {
@@ -964,8 +1217,8 @@ mod tests {
         MediaReferenceEvidence, MediaReferenceSnapshot, PersistedMediaReference,
     };
     use crate::test_support::{
-        Backend, SeedUser, backends, compiled_theme_fixture, confirmed, create_post_via_service,
-        create_site_theme, media_row_exists, media_url_for, seed_media,
+        Backend, SeedUser, backends, backends_matrix, compiled_theme_fixture, confirmed,
+        create_post_via_service, create_site_theme, media_row_exists, media_url_for, seed_media,
     };
     use crate::{
         ForeignEvidenceSink, MediaReferenceOwnershipResolver, ThemeManager, ThemeOwner,
@@ -1010,10 +1263,85 @@ mod tests {
         Arc::new(crate::MockPostStorage::new())
     }
 
+    async fn upload_clean_jpeg(
+        manager: Arc<MediaManager>,
+        user_id: common::ids::UserId,
+        filename: common::media::Filename,
+    ) -> anyhow::Result<MutationOutcome<common::media::UploadedMedia>> {
+        manager
+            .upload_bytes(
+                user_id,
+                &filename,
+                parse_content_type("image/jpeg"),
+                CLEAN_JPEG,
+            )
+            .await
+    }
+
+    // guard:no-backend — exercises owner JoinSet cancellation without storage.
+    #[tokio::test]
+    async fn finalization_drain_reports_cancelled_owned_tasks() {
+        let mut owners = tokio::task::JoinSet::new();
+        owners.spawn(std::future::pending::<()>());
+        owners.abort_all();
+        let error = join_finalization_owners(owners)
+            .await
+            .expect_err("cancelled finalizer remains visible at shutdown");
+        assert!(
+            error
+                .downcast_ref::<tokio::task::JoinError>()
+                .is_some_and(tokio::task::JoinError::is_cancelled)
+        );
+    }
+
+    #[test]
+    fn cancelled_failed_handback_is_reported_without_exposing_the_error() {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        drop(receiver);
+        let ((), trace) = crate::helpers::swallowed_test::capture(|| {
+            MediaManager::deliver_finalized_upload(
+                sender,
+                Err(anyhow::anyhow!("private image preparation detail")),
+            );
+        });
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "media.upload.cancelled_handback",
+        );
+        assert!(!trace.contains("private image preparation detail"));
+    }
+
+    #[test]
+    fn primary_upload_error_survives_private_cleanup_failure() {
+        let (result, trace) = crate::helpers::swallowed_test::capture(|| {
+            MediaManager::preserve_result_after_cleanup(
+                Err(anyhow::anyhow!("primary quota failure")),
+                Err(PreparationError::Protocol),
+            )
+        });
+        assert_eq!(result.unwrap_err().to_string(), "primary quota failure");
+        crate::helpers::swallowed_test::assert_one_report(&trace, "media.upload.cleanup");
+    }
+
     fn test_instance_id() -> InstanceId {
         "123e4567-e89b-12d3-a456-426614174000"
             .parse()
             .expect("canonical instance ID")
+    }
+
+    const CLEAN_JPEG: &[u8] =
+        include_bytes!("../../server/tests/fixtures/image-privacy/jpeg-clean.jpg");
+
+    fn test_preparer() -> Arc<UploadPreparer> {
+        let executable = PathBuf::from(
+            std::env::var_os("JAUNDER_TEST_EXECUTABLE")
+                .expect("test launcher supplies the real Jaunder executable"),
+        );
+        assert!(
+            executable.is_absolute(),
+            "test worker path must be absolute"
+        );
+        UploadPreparer::new(executable)
     }
 
     fn no_foreign_resolver() -> Arc<dyn MediaReferenceOwnershipResolver> {
@@ -1164,21 +1492,22 @@ mod tests {
         let content_locks = Arc::new(MediaContentLocks::new(Arc::new(
             env.base.path().to_path_buf(),
         )));
-        let manager = Arc::new(MediaManager::new(
-            env.media().clone(),
+        let manager = Arc::new(MediaManager::new(MediaManagerArgs {
+            media: env.media().clone(),
             posts,
-            env.site_config().clone(),
-            env.write_scope().clone(),
-            Arc::clone(&content_locks),
-            env.base.instance_id().clone(),
-            resolver,
-        ));
+            site_config: env.site_config().clone(),
+            write_scope: env.write_scope().clone(),
+            content_locks: Arc::clone(&content_locks),
+            instance_id: env.base.instance_id().clone(),
+            ownership_resolver: resolver,
+            preparer: test_preparer(),
+        }));
         let uploaded = manager
             .upload_bytes(
                 user_id,
                 &parse_filename("ordered.jpg"),
                 "image/jpeg".parse().unwrap(),
-                b"ordered",
+                CLEAN_JPEG,
             )
             .await
             .unwrap();
@@ -1273,15 +1602,16 @@ mod tests {
         );
 
         let temp = TempDir::new().unwrap();
-        let manager = MediaManager::new(
-            Arc::new(media),
-            Arc::new(posts),
-            Arc::new(site_config),
-            WriteScope::mock(),
-            Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: Arc::new(media),
+            posts: Arc::new(posts),
+            site_config: Arc::new(site_config),
+            write_scope: WriteScope::mock(),
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
             instance_id,
-            Arc::new(FirstForeignResolver),
-        );
+            ownership_resolver: Arc::new(FirstForeignResolver),
+            preparer: test_preparer(),
+        });
 
         let result = manager
             .delete_media(user_id, &media_ref, false)
@@ -1527,15 +1857,16 @@ mod tests {
             .times(1)
             .return_once(|| Ok(false));
         let temp = TempDir::new().unwrap();
-        let manager = MediaManager::new(
-            Arc::new(crate::MockMediaStorage::new()),
-            no_posts(),
-            Arc::new(site_config),
-            WriteScope::mock(),
-            Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
-            test_instance_id(),
-            no_foreign_resolver(),
-        );
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: Arc::new(crate::MockMediaStorage::new()),
+            posts: no_posts(),
+            site_config: Arc::new(site_config),
+            write_scope: WriteScope::mock(),
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+            instance_id: test_instance_id(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
         let polls = Arc::new(AtomicUsize::new(0));
         let stream = polling_empty_stream(Arc::clone(&polls));
 
@@ -1566,15 +1897,16 @@ mod tests {
             .times(1)
             .return_once(|| Ok(false));
         let temp = TempDir::new().unwrap();
-        let manager = MediaManager::new(
-            Arc::new(crate::MockMediaStorage::new()),
-            no_posts(),
-            Arc::new(site_config),
-            WriteScope::mock(),
-            Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
-            test_instance_id(),
-            no_foreign_resolver(),
-        );
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: Arc::new(crate::MockMediaStorage::new()),
+            posts: no_posts(),
+            site_config: Arc::new(site_config),
+            write_scope: WriteScope::mock(),
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+            instance_id: test_instance_id(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
 
         let err = manager
             .upload_bytes(
@@ -1605,15 +1937,16 @@ mod tests {
             .times(1)
             .return_once(|| Err(sqlx::Error::PoolTimedOut));
         let temp = TempDir::new().unwrap();
-        let manager = MediaManager::new(
-            Arc::new(crate::MockMediaStorage::new()),
-            no_posts(),
-            Arc::new(site_config),
-            WriteScope::mock(),
-            Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
-            test_instance_id(),
-            no_foreign_resolver(),
-        );
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: Arc::new(crate::MockMediaStorage::new()),
+            posts: no_posts(),
+            site_config: Arc::new(site_config),
+            write_scope: WriteScope::mock(),
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+            instance_id: test_instance_id(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
 
         let err = manager
             .upload_bytes(
@@ -1648,17 +1981,18 @@ mod tests {
             )
             .await
             .user_id;
-        let manager = Arc::new(MediaManager::new(
-            env.media().clone(),
-            env.posts().clone(),
-            env.site_config().clone(),
-            env.write_scope().clone(),
-            Arc::new(MediaContentLocks::new(Arc::new(
+        let manager = Arc::new(MediaManager::new(MediaManagerArgs {
+            media: env.media().clone(),
+            posts: env.posts().clone(),
+            site_config: env.site_config().clone(),
+            write_scope: env.write_scope().clone(),
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
-            env.base.instance_id().clone(),
-            no_foreign_resolver(),
-        ));
+            instance_id: env.base.instance_id().clone(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        }));
         let (admitted_tx, admitted_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = tokio::sync::oneshot::channel();
         let first_manager = Arc::clone(&manager);
@@ -1677,7 +2011,7 @@ mod tests {
                     Poll::Pending => Poll::Pending,
                     Poll::Ready(Ok(())) => {
                         sent = true;
-                        Poll::Ready(Some(Ok(Bytes::from_static(b"admitted"))))
+                        Poll::Ready(Some(Ok(Bytes::from_static(CLEAN_JPEG))))
                     }
                     Poll::Ready(Err(_)) => unreachable!("test must release admitted upload"),
                 }
@@ -1778,24 +2112,25 @@ mod tests {
             .expect_get_media_user_quota()
             .times(1)
             .return_once(|| Ok(UserQuota::default()));
-        let manager = MediaManager::new(
-            env.media().clone(),
-            env.posts().clone(),
-            Arc::new(site_config),
-            env.write_scope().clone(),
-            Arc::new(MediaContentLocks::new(Arc::new(
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: env.media().clone(),
+            posts: env.posts().clone(),
+            site_config: Arc::new(site_config),
+            write_scope: env.write_scope().clone(),
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
-            env.base.instance_id().clone(),
-            no_foreign_resolver(),
-        );
+            instance_id: env.base.instance_id().clone(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
 
         manager
             .upload_bytes(
                 user_id,
                 &parse_filename("admitted.png"),
                 parse_content_type("image/png"),
-                b"admitted",
+                CLEAN_JPEG,
             )
             .await
             .unwrap();
@@ -1868,15 +2203,16 @@ mod tests {
             source_url: None,
             created_at: UtcInstant::now(),
         };
-        let manager = MediaManager::new(
-            Arc::new(crate::MockMediaStorage::new()),
-            no_posts(),
-            Arc::new(crate::MockSiteConfigStorage::new()),
-            WriteScope::mock(),
-            Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
-            test_instance_id(),
-            no_foreign_resolver(),
-        );
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: Arc::new(crate::MockMediaStorage::new()),
+            posts: no_posts(),
+            site_config: Arc::new(crate::MockSiteConfigStorage::new()),
+            write_scope: WriteScope::mock(),
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+            instance_id: test_instance_id(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
 
         assert!(
             manager
@@ -1930,15 +2266,16 @@ mod tests {
         let pool = sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap();
         let write_scope = WriteScope::sqlite(pool.clone());
         pool.close().await;
-        let manager = MediaManager::new(
-            Arc::new(crate::MockMediaStorage::new()),
-            no_posts(),
-            Arc::new(crate::MockSiteConfigStorage::new()),
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: Arc::new(crate::MockMediaStorage::new()),
+            posts: no_posts(),
+            site_config: Arc::new(crate::MockSiteConfigStorage::new()),
             write_scope,
-            Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
-            test_instance_id(),
-            no_foreign_resolver(),
-        );
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+            instance_id: test_instance_id(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
 
         let error = manager
             .place_and_register(
@@ -1982,15 +2319,16 @@ mod tests {
             .expect_create_media()
             .times(1)
             .returning(|_, _| Err(CreateMediaError::Internal(sqlx::Error::PoolClosed)));
-        let manager = MediaManager::new(
-            Arc::new(media),
-            no_posts(),
-            Arc::new(crate::MockSiteConfigStorage::new()),
-            WriteScope::mock(),
-            Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
-            test_instance_id(),
-            no_foreign_resolver(),
-        );
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: Arc::new(media),
+            posts: no_posts(),
+            site_config: Arc::new(crate::MockSiteConfigStorage::new()),
+            write_scope: WriteScope::mock(),
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+            instance_id: test_instance_id(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
         let metadata = UploadMetadata {
             filename: parse_filename("failed.png"),
             content_type: parse_content_type("image/png"),
@@ -2035,15 +2373,16 @@ mod tests {
         let pool = sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap();
         let write_scope = WriteScope::sqlite(pool.clone());
         pool.close().await;
-        let manager = MediaManager::new(
-            Arc::new(media),
-            no_posts(),
-            Arc::new(crate::MockSiteConfigStorage::new()),
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: Arc::new(media),
+            posts: no_posts(),
+            site_config: Arc::new(crate::MockSiteConfigStorage::new()),
             write_scope,
-            Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
-            test_instance_id(),
-            no_foreign_resolver(),
-        );
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+            instance_id: test_instance_id(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
         let metadata = UploadMetadata {
             filename: parse_filename("begin-failed.png"),
             content_type: parse_content_type("image/png"),
@@ -2083,15 +2422,16 @@ mod tests {
             .expect_get_user_upload_usage()
             .times(1)
             .returning(|_| Ok(parse_byte_size("0")));
-        let manager = MediaManager::new(
-            Arc::new(media),
-            no_posts(),
-            Arc::new(crate::MockSiteConfigStorage::new()),
-            WriteScope::mock(),
-            Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
-            test_instance_id(),
-            no_foreign_resolver(),
-        );
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: Arc::new(media),
+            posts: no_posts(),
+            site_config: Arc::new(crate::MockSiteConfigStorage::new()),
+            write_scope: WriteScope::mock(),
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+            instance_id: test_instance_id(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
         let metadata = UploadMetadata {
             filename: parse_filename("content-lock-failed.png"),
             content_type: parse_content_type("image/png"),
@@ -2138,15 +2478,16 @@ mod tests {
             .expect_lock_media_reference()
             .times(1)
             .returning(|_, _| Err(sqlx::Error::PoolClosed));
-        let manager = MediaManager::new(
-            Arc::new(media),
-            no_posts(),
-            Arc::new(crate::MockSiteConfigStorage::new()),
-            WriteScope::mock(),
-            Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
-            test_instance_id(),
-            no_foreign_resolver(),
-        );
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: Arc::new(media),
+            posts: no_posts(),
+            site_config: Arc::new(crate::MockSiteConfigStorage::new()),
+            write_scope: WriteScope::mock(),
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+            instance_id: test_instance_id(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
         let metadata = UploadMetadata {
             filename: parse_filename("lock-failed.png"),
             content_type: parse_content_type("image/png"),
@@ -2192,15 +2533,16 @@ mod tests {
             .expect_create_media()
             .times(1)
             .returning(|_, _| Err(CreateMediaError::Internal(sqlx::Error::PoolClosed)));
-        let manager = MediaManager::new(
-            Arc::new(media),
-            no_posts(),
-            Arc::new(crate::MockSiteConfigStorage::new()),
-            WriteScope::mock(),
-            Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
-            test_instance_id(),
-            no_foreign_resolver(),
-        );
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: Arc::new(media),
+            posts: no_posts(),
+            site_config: Arc::new(crate::MockSiteConfigStorage::new()),
+            write_scope: WriteScope::mock(),
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(temp.path().to_path_buf()))),
+            instance_id: test_instance_id(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
         let metadata = UploadMetadata {
             filename: parse_filename("failed-link.png"),
             content_type: parse_content_type("image/png"),
@@ -2437,22 +2779,21 @@ mod tests {
             )
             .await
             .user_id;
-        let manager = MediaManager::new(
-            env.media().clone(),
-            env.posts().clone(),
-            env.site_config().clone(),
-            env.write_scope().clone(),
-            Arc::new(MediaContentLocks::new(Arc::new(
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: env.media().clone(),
+            posts: env.posts().clone(),
+            site_config: env.site_config().clone(),
+            write_scope: env.write_scope().clone(),
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
-            env.base.instance_id().clone(),
-            no_foreign_resolver(),
-        );
+            instance_id: env.base.instance_id().clone(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
 
-        // A tiny PNG signature + IHDR-ish bytes (content need not be a valid image).
-        let bytes: &[u8] = &[
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x01, 0x02, 0x03,
-        ];
+        // A real already-clean JPEG exercises a legitimate zero-edit upload.
+        let bytes = CLEAN_JPEG;
         let expected_sha = crate::backup::lowercase_hex(Sha256::digest(bytes));
 
         let first = manager
@@ -2467,7 +2808,7 @@ mod tests {
         assert!(!first.value().already_existed);
         assert_eq!(first.value().media.sha256.as_ref(), expected_sha.as_str());
         assert_eq!(first.value().media.filename, "pic.png");
-        assert_eq!(first.value().media.content_type, "image/png");
+        assert_eq!(first.value().media.content_type, "image/jpeg");
         assert_eq!(
             first.value().media.size_bytes,
             ByteSize::try_from(i64::try_from(bytes.len()).unwrap()).unwrap()
@@ -2488,6 +2829,314 @@ mod tests {
         assert_eq!(second.value().media.url, first.value().media.url);
     }
 
+    #[apply(backends_matrix)]
+    #[case::confirmed(false)]
+    #[case::indeterminate(true)]
+    #[tokio::test]
+    async fn cancelled_upload_retains_ownership_after_public_placement(
+        backend: Backend,
+        #[case] indeterminate: bool,
+    ) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let scope = if indeterminate {
+            env.write_scope()
+                .with_commit_acknowledgement_loss_after_commit_for_test()
+        } else {
+            env.write_scope()
+        };
+        let preparer = test_preparer();
+        let gate = Arc::new(tokio::sync::Barrier::new(2));
+        let manager = Arc::new(
+            MediaManager::new(MediaManagerArgs {
+                media: env.media(),
+                posts: env.posts(),
+                site_config: env.site_config(),
+                write_scope: scope,
+                content_locks: Arc::new(MediaContentLocks::new(Arc::new(
+                    env.base.path().to_path_buf(),
+                ))),
+                instance_id: env.base.instance_id().clone(),
+                ownership_resolver: no_foreign_resolver(),
+                preparer: Arc::clone(&preparer),
+            })
+            .with_upload_placement_gate_for_test(Arc::clone(&gate)),
+        );
+        let filename = parse_filename("owned-finalization.jpg");
+        let hash = ContentHash::from_digest(Sha256::digest(CLEAN_JPEG).into());
+        let public_path =
+            env.base
+                .path()
+                .join("media")
+                .join(media::path(&MediaSource::Upload, &hash, &filename));
+        let uploading = tokio::spawn(upload_clean_jpeg(
+            Arc::clone(&manager),
+            user_id,
+            filename.clone(),
+        ));
+        gate.wait().await;
+        assert!(
+            public_path.exists(),
+            "the witness must reach public placement"
+        );
+        uploading.abort();
+        assert!(uploading.await.unwrap_err().is_cancelled());
+        let released = tokio::time::timeout(std::time::Duration::from_secs(2), gate.wait()).await;
+        manager
+            .shutdown_uploads()
+            .await
+            .expect("private and finalization owners joined");
+        let record = env
+            .media()
+            .get_media(user_id, &hash, &filename, &MediaSource::Upload)
+            .await
+            .unwrap();
+        assert!(
+            !(public_path.exists() && record.is_none()),
+            "cancelled request abandoned a public unrecorded placement"
+        );
+        assert!(released.is_ok(), "tracked placement owner was abandoned");
+        assert!(
+            record.is_some(),
+            "the retained owner must resolve registration"
+        );
+        assert_eq!(
+            env.media()
+                .get_user_upload_usage(user_id)
+                .await
+                .unwrap()
+                .value(),
+            i64::try_from(CLEAN_JPEG.len()).expect("fixture length fits i64")
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn successful_upload_completes_after_public_placement_gate(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let preparer = test_preparer();
+        let gate = Arc::new(tokio::sync::Barrier::new(2));
+        let manager = Arc::new(
+            MediaManager::new(MediaManagerArgs {
+                media: env.media(),
+                posts: env.posts(),
+                site_config: env.site_config(),
+                write_scope: env.write_scope(),
+                content_locks: Arc::new(MediaContentLocks::new(Arc::new(
+                    env.base.path().to_path_buf(),
+                ))),
+                instance_id: env.base.instance_id().clone(),
+                ownership_resolver: no_foreign_resolver(),
+                preparer: Arc::clone(&preparer),
+            })
+            .with_upload_placement_gate_for_test(Arc::clone(&gate)),
+        );
+        let filename = parse_filename("completed-gated-upload.jpg");
+        let uploading = tokio::spawn(upload_clean_jpeg(
+            Arc::clone(&manager),
+            user_id,
+            filename.clone(),
+        ));
+        gate.wait().await;
+        gate.wait().await;
+        let result = uploading.await.unwrap().expect("upload completes");
+        assert_eq!(result.value().filename, filename);
+        manager.shutdown_uploads().await.unwrap();
+        assert!(
+            env.media()
+                .get_media(
+                    user_id,
+                    &result.value().sha256,
+                    &filename,
+                    &MediaSource::Upload,
+                )
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[cfg(unix)]
+    #[apply(backends)]
+    #[tokio::test]
+    async fn missing_fresh_candidate_at_public_mode_boundary_is_not_registered(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let root = env.base.path().to_path_buf();
+        let gate = Arc::new(tokio::sync::Barrier::new(2));
+        let manager = Arc::new(
+            MediaManager::new(MediaManagerArgs {
+                media: env.media(),
+                posts: env.posts(),
+                site_config: env.site_config(),
+                write_scope: env.write_scope(),
+                content_locks: Arc::new(MediaContentLocks::new(Arc::new(root.clone()))),
+                instance_id: env.base.instance_id().clone(),
+                ownership_resolver: no_foreign_resolver(),
+                preparer: test_preparer(),
+            })
+            .with_upload_placement_gate_for_test(Arc::clone(&gate)),
+        );
+        let filename = parse_filename("lost-fresh-candidate.jpg");
+        let hash = ContentHash::from_digest(Sha256::digest(CLEAN_JPEG).into());
+        let public_path =
+            root.join("media")
+                .join(media::path(&MediaSource::Upload, &hash, &filename));
+        let uploading = tokio::spawn({
+            let manager = Arc::clone(&manager);
+            let filename = filename.clone();
+            async move {
+                manager
+                    .upload_bytes(
+                        user_id,
+                        &filename,
+                        parse_content_type("image/jpeg"),
+                        CLEAN_JPEG,
+                    )
+                    .await
+            }
+        });
+
+        gate.wait().await;
+        assert!(
+            public_path.exists(),
+            "fresh candidate reaches the mode boundary"
+        );
+        std_fs::remove_file(&public_path).expect("controlled disappearance before mode update");
+        gate.wait().await;
+        let _error = uploading
+            .await
+            .unwrap()
+            .expect_err("a missing fresh candidate cannot be registered");
+        manager.shutdown_uploads().await.unwrap();
+        assert!(!public_path.exists());
+        assert!(
+            env.media()
+                .get_media(user_id, &hash, &filename, &MediaSource::Upload)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            env.media()
+                .get_user_upload_usage(user_id)
+                .await
+                .unwrap()
+                .value(),
+            0
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn cleanup_failure_preserves_indeterminate_upload_outcome(#[case] backend: Backend) {
+        use std::os::unix::fs::PermissionsExt;
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let manager = Arc::new(MediaManager::new(MediaManagerArgs {
+            media: env.media(),
+            posts: env.posts(),
+            site_config: env.site_config(),
+            write_scope: env
+                .write_scope()
+                .with_commit_acknowledgement_loss_after_commit_for_test(),
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(
+                env.base.path().to_path_buf(),
+            ))),
+            instance_id: env.base.instance_id().clone(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        }));
+        let temporary = env.base.path().join("media/tmp");
+        let faulted_parent = temporary.clone();
+        let admitted = Arc::new(tokio::sync::Notify::new());
+        let observed = Arc::new(tokio::sync::Notify::new());
+        let admitted_upload = Arc::clone(&admitted);
+        let observed_upload = Arc::clone(&observed);
+        let uploading = tokio::spawn(async move {
+            let stream = stream::once(async move {
+                // Admission owns nonempty private files. Let the observer see
+                // that state before allowing registration and cleanup to proceed.
+                std_fs::set_permissions(&faulted_parent, std_fs::Permissions::from_mode(0o500))
+                    .unwrap();
+                admitted_upload.notify_one();
+                observed_upload.notified().await;
+                Ok::<_, io::Error>(Bytes::from_static(CLEAN_JPEG))
+            });
+            let stream = std::pin::pin!(stream);
+            manager
+                .upload(
+                    user_id,
+                    &parse_filename("cleanup-indeterminate.jpg"),
+                    Some(parse_content_type("image/jpeg")),
+                    stream,
+                )
+                .await
+        });
+        let mut nonterminal_observations = 0;
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            admitted.notified().await;
+            // Observe the failed final directory removal: its private spool is
+            // empty but still owned until the parent permission is restored.
+            loop {
+                let paths: Vec<_> = std_fs::read_dir(&temporary)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .collect();
+                let spools: Vec<_> = paths
+                    .iter()
+                    .filter(|path| {
+                        path.file_name()
+                            .is_some_and(|name| name.to_string_lossy().starts_with("upload-"))
+                    })
+                    .collect();
+                assert!(spools.len() <= 1, "one upload owns one private spool");
+                if spools.len() == 1 && std_fs::read_dir(spools[0]).unwrap().next().is_none() {
+                    break;
+                }
+                nonterminal_observations += 1;
+                observed.notify_one();
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("cleanup failure retains an empty private spool until permissions recover");
+        assert!(
+            nonterminal_observations > 0,
+            "observe owned input before cleanup"
+        );
+        assert!(
+            env.media()
+                .get_user_upload_usage(user_id)
+                .await
+                .unwrap()
+                .value()
+                > 0
+        );
+        std_fs::set_permissions(&temporary, std_fs::Permissions::from_mode(0o700)).unwrap();
+        let outcome = uploading
+            .await
+            .unwrap()
+            .expect("cleanup must not erase the mutation outcome");
+        assert!(matches!(outcome, MutationOutcome::CommitIndeterminate(_)));
+        assert!(stored_path(env.base.path(), &upload_ref(&outcome)).exists());
+    }
+
     #[apply(backends)]
     #[tokio::test]
     async fn upload_bytes_retains_new_file_when_commit_is_indeterminate(#[case] backend: Backend) {
@@ -2499,25 +3148,27 @@ mod tests {
             )
             .await
             .user_id;
-        let manager = MediaManager::new(
-            env.media().clone(),
-            env.posts().clone(),
-            env.site_config().clone(),
-            env.write_scope()
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: env.media().clone(),
+            posts: env.posts().clone(),
+            site_config: env.site_config().clone(),
+            write_scope: env
+                .write_scope()
                 .with_commit_acknowledgement_loss_after_commit_for_test(),
-            Arc::new(MediaContentLocks::new(Arc::new(
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
-            env.base.instance_id().clone(),
-            no_foreign_resolver(),
-        );
+            instance_id: env.base.instance_id().clone(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
 
         let outcome = manager
             .upload_bytes(
                 user_id,
                 &parse_filename("indeterminate.png"),
                 "image/png".parse().unwrap(),
-                b"png-ish",
+                CLEAN_JPEG,
             )
             .await
             .unwrap();
@@ -2544,17 +3195,18 @@ mod tests {
             )
             .await
             .user_id;
-        let manager = MediaManager::new(
-            env.media().clone(),
-            env.posts().clone(),
-            env.site_config().clone(),
-            env.write_scope().clone(),
-            Arc::new(MediaContentLocks::new(Arc::new(
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: env.media().clone(),
+            posts: env.posts().clone(),
+            site_config: env.site_config().clone(),
+            write_scope: env.write_scope().clone(),
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
-            env.base.instance_id().clone(),
-            no_foreign_resolver(),
-        );
+            instance_id: env.base.instance_id().clone(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
 
         let err = manager
             .upload_bytes(
@@ -2574,9 +3226,7 @@ mod tests {
     #[apply(backends)]
     #[tokio::test]
     async fn upload_streams_to_a_content_addressed_path(#[case] backend: Backend) {
-        // The generic `stream_to_temp` path (multipart in production) had no host-level
-        // unit test before — it was e2e-only. Drive it with an in-memory chunk stream so
-        // the byte-stream branch stays covered.
+        // Chunk boundaries must not alter preparation or stored identity.
         let env = backend.setup().await;
         let user_id = SeedUser::new()
             .seed(
@@ -2585,21 +3235,22 @@ mod tests {
             )
             .await
             .user_id;
-        let manager = MediaManager::new(
-            env.media().clone(),
-            env.posts().clone(),
-            env.site_config().clone(),
-            env.write_scope().clone(),
-            Arc::new(MediaContentLocks::new(Arc::new(
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: env.media().clone(),
+            posts: env.posts().clone(),
+            site_config: env.site_config().clone(),
+            write_scope: env.write_scope().clone(),
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
-            env.base.instance_id().clone(),
-            no_foreign_resolver(),
-        );
+            instance_id: env.base.instance_id().clone(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
 
         let chunks = [
-            Bytes::from_static(&[0x89, 0x50, 0x4E, 0x47]),
-            Bytes::from_static(&[0x0D, 0x0A, 0x1A, 0x0A]),
+            Bytes::from_static(&CLEAN_JPEG[..8]),
+            Bytes::from_static(&CLEAN_JPEG[8..]),
         ];
         let mut hasher = Sha256::new();
         for chunk in &chunks {
@@ -2620,7 +3271,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.value().sha256, expected);
-        assert_eq!(resp.value().content_type, "image/png");
+        assert_eq!(resp.value().content_type, "image/jpeg");
         assert_eq!(
             resp.value().url,
             media::url(&MediaSource::Upload, &expected, &filename)
@@ -2638,24 +3289,25 @@ mod tests {
             )
             .await
             .user_id;
-        let manager = MediaManager::new(
-            env.media().clone(),
-            env.posts().clone(),
-            env.site_config().clone(),
-            env.write_scope().clone(),
-            Arc::new(MediaContentLocks::new(Arc::new(
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: env.media().clone(),
+            posts: env.posts().clone(),
+            site_config: env.site_config().clone(),
+            write_scope: env.write_scope().clone(),
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
-            env.base.instance_id().clone(),
-            no_foreign_resolver(),
-        );
+            instance_id: env.base.instance_id().clone(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
 
         let uploaded = manager
             .upload_bytes(
                 user_id,
                 &parse_filename("photo.jpg"),
                 "image/jpeg".parse().unwrap(),
-                b"jpeg-ish",
+                CLEAN_JPEG,
             )
             .await
             .unwrap();
@@ -2693,17 +3345,18 @@ mod tests {
             .user_id;
         let gate = Arc::new(ReclaimUnlinkGate::new());
         let manager = Arc::new(
-            MediaManager::new(
-                env.media().clone(),
-                env.posts().clone(),
-                env.site_config().clone(),
-                env.write_scope().clone(),
-                Arc::new(MediaContentLocks::new(Arc::new(
+            MediaManager::new(MediaManagerArgs {
+                media: env.media().clone(),
+                posts: env.posts().clone(),
+                site_config: env.site_config().clone(),
+                write_scope: env.write_scope().clone(),
+                content_locks: Arc::new(MediaContentLocks::new(Arc::new(
                     env.base.path().to_path_buf(),
                 ))),
-                env.base.instance_id().clone(),
-                no_foreign_resolver(),
-            )
+                instance_id: env.base.instance_id().clone(),
+                ownership_resolver: no_foreign_resolver(),
+                preparer: test_preparer(),
+            })
             .with_reclaim_unlink_gate_for_test(Arc::clone(&gate)),
         );
         let uploaded = manager
@@ -2711,7 +3364,7 @@ mod tests {
                 user_id,
                 &parse_filename("guarded-unlink.jpg"),
                 "image/jpeg".parse().unwrap(),
-                b"jpeg-ish",
+                CLEAN_JPEG,
             )
             .await
             .unwrap();
@@ -2751,40 +3404,43 @@ mod tests {
             )
             .await
             .user_id;
-        let confirmed_manager = MediaManager::new(
-            env.media().clone(),
-            env.posts().clone(),
-            env.site_config().clone(),
-            env.write_scope().clone(),
-            Arc::new(MediaContentLocks::new(Arc::new(
+        let confirmed_manager = MediaManager::new(MediaManagerArgs {
+            media: env.media().clone(),
+            posts: env.posts().clone(),
+            site_config: env.site_config().clone(),
+            write_scope: env.write_scope().clone(),
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
-            env.base.instance_id().clone(),
-            no_foreign_resolver(),
-        );
+            instance_id: env.base.instance_id().clone(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
         let uploaded = confirmed_manager
             .upload_bytes(
                 user_id,
                 &parse_filename("indeterminate.jpg"),
                 "image/jpeg".parse().unwrap(),
-                b"jpeg-ish",
+                CLEAN_JPEG,
             )
             .await
             .unwrap();
         let media = upload_ref(&uploaded);
         let file_path = stored_path(env.base.path(), &media);
-        let manager = MediaManager::new(
-            env.media().clone(),
-            env.posts().clone(),
-            env.site_config().clone(),
-            env.write_scope()
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: env.media().clone(),
+            posts: env.posts().clone(),
+            site_config: env.site_config().clone(),
+            write_scope: env
+                .write_scope()
                 .with_commit_acknowledgement_loss_after_commit_for_test(),
-            Arc::new(MediaContentLocks::new(Arc::new(
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
-            env.base.instance_id().clone(),
-            no_foreign_resolver(),
-        );
+            instance_id: env.base.instance_id().clone(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
 
         let outcome = manager
             .delete_media(user_id, &media, false)
@@ -2819,23 +3475,24 @@ mod tests {
             )
             .await
             .user_id;
-        let manager = MediaManager::new(
-            env.media().clone(),
-            env.posts().clone(),
-            env.site_config().clone(),
-            env.write_scope().clone(),
-            Arc::new(MediaContentLocks::new(Arc::new(
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: env.media().clone(),
+            posts: env.posts().clone(),
+            site_config: env.site_config().clone(),
+            write_scope: env.write_scope().clone(),
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
-            env.base.instance_id().clone(),
-            no_foreign_resolver(),
-        );
+            instance_id: env.base.instance_id().clone(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
         let uploaded = manager
             .upload_bytes(
                 owner,
                 &parse_filename("retain-on-error.jpg"),
                 "image/jpeg".parse().unwrap(),
-                b"jpeg-ish",
+                CLEAN_JPEG,
             )
             .await
             .unwrap();
@@ -2868,24 +3525,25 @@ mod tests {
             )
             .await
             .user_id;
-        let manager = MediaManager::new(
-            env.media().clone(),
-            env.posts().clone(),
-            env.site_config().clone(),
-            env.write_scope().clone(),
-            Arc::new(MediaContentLocks::new(Arc::new(
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: env.media().clone(),
+            posts: env.posts().clone(),
+            site_config: env.site_config().clone(),
+            write_scope: env.write_scope().clone(),
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
-            env.base.instance_id().clone(),
-            no_foreign_resolver(),
-        );
+            instance_id: env.base.instance_id().clone(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
 
         let uploaded = manager
             .upload_bytes(
                 user_id,
                 &parse_filename("blocked.jpg"),
                 "image/jpeg".parse().unwrap(),
-                b"jpeg-ish",
+                CLEAN_JPEG,
             )
             .await
             .unwrap();
@@ -2917,24 +3575,25 @@ mod tests {
             )
             .await
             .user_id;
-        let manager = MediaManager::new(
-            env.media().clone(),
-            env.posts().clone(),
-            env.site_config().clone(),
-            env.write_scope().clone(),
-            Arc::new(MediaContentLocks::new(Arc::new(
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: env.media().clone(),
+            posts: env.posts().clone(),
+            site_config: env.site_config().clone(),
+            write_scope: env.write_scope().clone(),
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
-            env.base.instance_id().clone(),
-            no_foreign_resolver(),
-        );
+            instance_id: env.base.instance_id().clone(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
 
         let uploaded = manager
             .upload_bytes(
                 user_id,
                 &parse_filename("photo.jpg"),
                 "image/jpeg".parse().unwrap(),
-                b"jpeg-ish",
+                CLEAN_JPEG,
             )
             .await
             .unwrap();
@@ -2982,24 +3641,25 @@ mod tests {
             )
             .await
             .user_id;
-        let manager = MediaManager::new(
-            env.media().clone(),
-            env.posts().clone(),
-            env.site_config().clone(),
-            env.write_scope().clone(),
-            Arc::new(MediaContentLocks::new(Arc::new(
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: env.media().clone(),
+            posts: env.posts().clone(),
+            site_config: env.site_config().clone(),
+            write_scope: env.write_scope().clone(),
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
-            env.base.instance_id().clone(),
-            no_foreign_resolver(),
-        );
+            instance_id: env.base.instance_id().clone(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
 
         let first = manager
             .upload_bytes(
                 first_user,
                 &parse_filename("photo.jpg"),
                 "image/jpeg".parse().unwrap(),
-                b"jpeg-ish",
+                CLEAN_JPEG,
             )
             .await
             .unwrap();
@@ -3008,7 +3668,7 @@ mod tests {
                 second_user,
                 &parse_filename("photo.jpg"),
                 "image/jpeg".parse().unwrap(),
-                b"jpeg-ish",
+                CLEAN_JPEG,
             )
             .await
             .unwrap();
@@ -3046,24 +3706,25 @@ mod tests {
             )
             .await
             .user_id;
-        let manager = MediaManager::new(
-            env.media().clone(),
-            env.posts().clone(),
-            env.site_config().clone(),
-            env.write_scope().clone(),
-            Arc::new(MediaContentLocks::new(Arc::new(
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: env.media().clone(),
+            posts: env.posts().clone(),
+            site_config: env.site_config().clone(),
+            write_scope: env.write_scope().clone(),
+            content_locks: Arc::new(MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
-            env.base.instance_id().clone(),
-            no_foreign_resolver(),
-        );
+            instance_id: env.base.instance_id().clone(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
 
         let first = manager
             .upload_bytes(
                 user_id,
                 &parse_filename("first.jpg"),
                 "image/jpeg".parse().unwrap(),
-                b"jpeg-ish",
+                CLEAN_JPEG,
             )
             .await
             .unwrap();
@@ -3072,7 +3733,7 @@ mod tests {
                 user_id,
                 &parse_filename("second.jpg"),
                 "image/jpeg".parse().unwrap(),
-                b"jpeg-ish",
+                CLEAN_JPEG,
             )
             .await
             .unwrap();
@@ -3138,15 +3799,16 @@ mod tests {
                 .unwrap(),
             MutationOutcome::Confirmed(())
         ));
-        let manager = MediaManager::new(
-            Arc::clone(&env.media()),
-            Arc::clone(&env.posts()),
-            Arc::clone(&env.site_config()),
-            env.write_scope().clone(),
-            locks,
-            env.base.instance_id().clone(),
-            no_foreign_resolver(),
-        );
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: Arc::clone(&env.media()),
+            posts: Arc::clone(&env.posts()),
+            site_config: Arc::clone(&env.site_config()),
+            write_scope: env.write_scope().clone(),
+            content_locks: locks,
+            instance_id: env.base.instance_id().clone(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
 
         let refused = manager.delete_media(actor, &media, false).await.unwrap();
         assert!(matches!(
@@ -3232,15 +3894,16 @@ mod tests {
                 .await
                 .expect("bind theme media"),
         );
-        let manager = MediaManager::new(
-            Arc::clone(&env.media()),
-            Arc::clone(&env.posts()),
-            Arc::clone(&env.site_config()),
-            env.write_scope().clone(),
-            locks,
-            env.base.instance_id().clone(),
-            no_foreign_resolver(),
-        );
+        let manager = MediaManager::new(MediaManagerArgs {
+            media: Arc::clone(&env.media()),
+            posts: Arc::clone(&env.posts()),
+            site_config: Arc::clone(&env.site_config()),
+            write_scope: env.write_scope().clone(),
+            content_locks: locks,
+            instance_id: env.base.instance_id().clone(),
+            ownership_resolver: no_foreign_resolver(),
+            preparer: test_preparer(),
+        });
 
         let (removal, deletion) = tokio::join!(
             themes.replace_role(

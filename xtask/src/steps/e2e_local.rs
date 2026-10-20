@@ -836,8 +836,13 @@ fn run_lifecycle(
         if cmd!(sh, "playwright")
             .args(&invocation.args)
             .env("JAUNDER_E2E_BASE_URL", &base_url)
+            .env(
+                "JAUNDER_E2E_PRODUCER_INPUT",
+                root.join(".xtask/diagnostics/e2e-host-local/producer-checkout-host-local.json"),
+            )
             .env("JAUNDER_DB", &db)
             .env("JAUNDER_STORAGE_PATH", storage.path())
+            .env("JAUNDER_TEST_EXECUTABLE", jaunder)
             .env("JAUNDER_CAPTURE_DIR", &capture)
             .env(
                 "JAUNDER_E2E_OTLP_HTTP_ENDPOINT",
@@ -897,6 +902,7 @@ pub fn run(
     // Resolve the whole Playwright environment before any subprocess. Missing
     // PATH is a configuration failure, not a late empty command search.
     let env_root = sh.current_dir();
+    let mut provenance = crate::e2e_provenance::Request::start(&env_root, "host-local");
     let Some((workers, path)) = resolve_e2e_env_for_run(
         result,
         &env_root,
@@ -904,18 +910,21 @@ pub fn run(
         env::var_os("PATH"),
         &mut std::io::stderr(),
     ) else {
+        provenance.completed(false);
         return;
     };
     let plan = e2e_local_plan(browser, test_filter, update_visual_snapshots);
     let Some(artifacts) =
         HostArtifacts::prepare(sh, result, HostArtifactConfig::e2e_local(plan.release_csr))
     else {
+        provenance.completed(false);
         return;
     };
 
     for lifecycle in &plan.lifecycles {
         run_lifecycle(sh, result, &artifacts, lifecycle, &workers, &path);
     }
+    provenance.completed(result.ok);
 }
 
 #[cfg(test)]

@@ -50,6 +50,8 @@ let
       devtoolBin
       emacsForCi
       pkgs.jq
+      # Independent metadata reads in upload privacy tests, never a runtime editor.
+      pkgs.exiftool
       leptosfmt
       # Rust's wasm32-unknown-unknown target invokes the generic `lld` driver on
       # Darwin; `cargo xtask e2e-local` owns the CSR wasm build, so the shell it

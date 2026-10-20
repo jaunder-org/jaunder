@@ -1,6 +1,11 @@
 import { test, expect } from "./fixtures";
-import { goto, signInAs } from "./helpers";
-import { openThemeAdvanced } from "./theme-helpers";
+import {
+  goto,
+  signInAs,
+  confirmedMutation,
+  type MutationOutcome,
+} from "./helpers";
+import { openThemeAdvanced, withSiteThemeSelection } from "./theme-helpers";
 
 const THEME_ENDPOINTS = {
   import_css: "/api/themes/import_css",
@@ -29,49 +34,61 @@ test("custom Theme surface reaches the public rail and scroll canvas", async ({
   page,
   tracedContext,
 }) => {
-  await signInAs(page, "testoperator");
-  await goto(page, "/themes");
-  await page.getByRole("button", { name: "Site theme", exact: true }).click();
-  await openThemeAdvanced(page);
-  const mutation = (endpoint: keyof typeof THEME_ENDPOINTS) =>
-    page.waitForResponse(
-      (response) =>
-        new URL(response.url()).pathname === THEME_ENDPOINTS[endpoint] &&
-        response.request().method() === "POST",
-    );
-  const form = page.locator("section").filter({ hasText: "Import CSS" });
-  await form.getByLabel("Theme name").fill("Continuous shell proof");
-  await form
-    .getByLabel("Stylesheet")
-    .fill(":root { background: rgb(1, 2, 3); }");
-  await Promise.all([
-    mutation("import_css"),
-    form.getByRole("button", { name: "Import CSS draft" }).click(),
-  ]);
-  await page.getByRole("button", { name: /Continuous shell proof/ }).click();
-  await Promise.all([
-    mutation("publish"),
-    page.getByRole("button", { name: "Publish", exact: true }).click(),
-  ]);
-  const selection = page.getByLabel("Use a saved version");
-  const id = await selection
-    .getByRole("option", { name: "Continuous shell proof" })
-    .getAttribute("value");
-  expect(id).not.toBeNull();
-  await Promise.all([mutation("select"), selection.selectOption(id!)]);
+  await withSiteThemeSelection(tracedContext, async (mutate) => {
+    await signInAs(page, "testoperator");
+    await goto(page, "/themes");
+    await page.getByRole("button", { name: "Site theme", exact: true }).click();
+    await openThemeAdvanced(page);
+    const mutation = (endpoint: keyof typeof THEME_ENDPOINTS) =>
+      page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === THEME_ENDPOINTS[endpoint] &&
+          response.request().method() === "POST",
+      );
+    const form = page.locator("section").filter({ hasText: "Import CSS" });
+    await form.getByLabel("Theme name").fill("Continuous shell proof");
+    await form
+      .getByLabel("Stylesheet")
+      .fill(":root { background: rgb(1, 2, 3); }");
+    await Promise.all([
+      mutation("import_css"),
+      form.getByRole("button", { name: "Import CSS draft" }).click(),
+    ]);
+    await page.getByRole("button", { name: /Continuous shell proof/ }).click();
+    await Promise.all([
+      mutation("publish"),
+      page.getByRole("button", { name: "Publish", exact: true }).click(),
+    ]);
+    const selection = page.getByLabel("Use a saved version");
+    const id = await selection
+      .getByRole("option", { name: "Continuous shell proof" })
+      .getAttribute("value");
+    expect(id).not.toBeNull();
+    await mutate(async () => {
+      const [response] = await Promise.all([
+        mutation("select"),
+        selection.selectOption(id!),
+      ]);
+      expect(response.status()).toBe(200);
+      confirmedMutation(
+        (await response.json()) as MutationOutcome<null>,
+        "themes::select",
+      );
+    });
 
-  const context = await tracedContext();
-  const publicPage = await context.newPage();
-  await goto(publicPage, "/");
-  await expect(publicPage.locator(".j-root")).toHaveAttribute(
-    "data-theme",
-    "custom",
-  );
-  for (const selector of [".j-sidebar", ".j-scroll"]) {
-    await expect(publicPage.locator(selector)).toHaveCSS(
-      "background-color",
-      "rgba(0, 0, 0, 0)",
+    const context = await tracedContext();
+    const publicPage = await context.newPage();
+    await goto(publicPage, "/");
+    await expect(publicPage.locator(".j-root")).toHaveAttribute(
+      "data-theme",
+      "custom",
     );
-  }
-  await context.close();
+    for (const selector of [".j-sidebar", ".j-scroll"]) {
+      await expect(publicPage.locator(selector)).toHaveCSS(
+        "background-color",
+        "rgba(0, 0, 0, 0)",
+      );
+    }
+    await context.close();
+  });
 });

@@ -157,13 +157,18 @@ impl SandboxProfile {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Inner loop (auto-fixes formatting): host static checks + clippy + the host
-    /// xtask/tools unit suites, then the host-native root-workspace nextest suite
-    /// under an ephemeral PostgreSQL and the Nix-only wasm/doctest checks. `--no-test`
-    /// skips the root-workspace and Nix-only test checks; static, clippy, and the
-    /// xtask/tools unit tests still run — as does the host-side `doctest-fences`
-    /// step, which gates the `xtask`/`tools` fence population that no Nix check can
-    /// see (#763).
+    /// Broad diagnostic/integration check (auto-fixes formatting).
+    ///
+    /// Use `test-local -- <nextest args>` or `e2e-local <spec-or-file:line>` first
+    /// while iterating; this is not routine per-helper proof. Run it to answer a
+    /// broad question, such as whether a shared change breaks host/static integration.
+    ///
+    /// Runs host static checks + clippy + xtask/tools unit suites, then the
+    /// host-native root-workspace nextest suite under ephemeral PostgreSQL and
+    /// Nix-only wasm/doctest checks. `--no-test` skips the root-workspace and
+    /// Nix-only test checks; static, clippy, xtask/tools unit tests and the
+    /// host-side `doctest-fences` step still run. Rust coverage/CRAP remains in
+    /// `validate` and CI; normal commit/push hooks remain the boundary gates.
     Check {
         /// Skip the root-workspace and Nix-only test checks — static + clippy +
         /// host xtask/tools unit tests only.
@@ -179,17 +184,24 @@ pub enum Command {
     /// is the local hook path; hermetic Nix coverage, wasm, and doctest checks stay
     /// in `validate --no-e2e` and CI.
     Prepush,
-    /// Full gate (never mutates the tree): static + clippy + the host xtask unit
-    /// suite (verify-only) + Nix coverage + the e2e VMs and authoritative
-    /// server-function coverage verification. `--no-e2e` skips the e2e VMs.
-    /// Refuses a dirty working tree unless `--allow-dirty`.
+    /// Full hermetic gate (verify-only); CI is the authoritative integration proof.
+    ///
+    /// Run deliberately for local full-gate confidence, not routine iteration.
+    /// Includes host/static checks + clippy + xtask/tools tests, Nix static proof,
+    /// wasm budget/tests, doctests, Rust coverage/CRAP and Elisp coverage, plus
+    /// e2e VMs/reconciliation and authoritative server-function coverage verification.
+    /// `--no-e2e` retains the non-e2e hermetic surface. Refuses a dirty working
+    /// tree unless `--allow-dirty`.
     Validate {
-        /// Skip the e2e VM checks — static + clippy + xtask tests + coverage only.
+        /// Skip e2e VMs and server-function coverage verification; retain all non-e2e checks.
         #[arg(long)]
         no_e2e: bool,
         /// Run even when the working tree is dirty (skip the clean-tree precheck).
         #[arg(long)]
         allow_dirty: bool,
+        /// Bound concurrent E2E lane builds for this invocation (default: all enabled lanes).
+        #[arg(long, conflicts_with = "no_e2e")]
+        e2e_jobs: Option<std::num::NonZeroUsize>,
     },
     /// Run one independently schedulable non-E2E CI validation lane. This is
     /// verify-only and always refuses a dirty working tree.
@@ -291,7 +303,14 @@ pub enum Command {
         #[arg(value_enum)]
         backend: E2eBackend,
     },
-    /// Run the host e2e loop, owning each lifecycle: build the CSR bundle +
+    /// Focused browser proof: use a spec or file:line selector while iterating.
+    ///
+    /// Rerun the same focused command after a fix. Use representative hermetic
+    /// `e2e <backend> <browser>` proof when backend/browser parity, release-build
+    /// behavior or the hermetic environment is load-bearing; local proof does not
+    /// replace CI/full validation.
+    ///
+    /// Owns each host lifecycle: build the CSR bundle +
     /// server, start `jaunder serve` on an ephemeral port with the VM's capture
     /// env + a per-run temp DB, seed via the shared `devtool seed-e2e`, run
     /// Playwright against the discovered URL, and tear the server down on every
@@ -312,8 +331,11 @@ pub enum Command {
         #[arg(long, conflicts_with = "test")]
         update_visual_snapshots: bool,
     },
-    /// Run host-native Rust tests through nextest with the shared sccache setup and
-    /// an isolated PostgreSQL lifecycle. Pass nextest filters after `--`.
+    /// Focused Rust proof: pass nextest selectors after `--` while iterating.
+    ///
+    /// Rerun the same focused command after a fix. This accelerates feedback;
+    /// normal commit/push hooks and CI retain their boundary authority.
+    /// Runs host-native tests with shared sccache and isolated PostgreSQL.
     #[command(after_help = "EXAMPLES:\n  \
         cargo xtask test-local\n  \
         cargo xtask test-local -- -p storage site_config_primitives_round_trip")]
@@ -820,6 +842,77 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    fn feedback_help_distinguishes_focused_proof_from_boundary_gates() {
+        // Exercise Clap's public help paths, including the summaries callers see
+        // before choosing a command; source comments alone do not prove the guidance.
+        for flag in ["-h", "--help"] {
+            let error = Cli::try_parse_from(["xtask", flag]).err().unwrap();
+            assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
+            let help = error.to_string();
+            for role in [
+                "Broad diagnostic",
+                "Focused Rust proof",
+                "Focused browser proof",
+                "commit-time gate",
+                "push-time gate",
+                "Full hermetic gate",
+            ] {
+                assert!(help.contains(role), "missing {role:?} in {flag}: {help}");
+            }
+            assert!(!help.contains("Inner loop"));
+        }
+    }
+
+    #[test]
+    fn feedback_command_help_redirects_iteration_without_replacing_gates() {
+        for (command, required) in [
+            (
+                "check",
+                &["Broad diagnostic", "test-local", "e2e-local", "not routine"][..],
+            ),
+            (
+                "test-local",
+                &["Focused Rust proof", "same focused command", "hooks", "CI"][..],
+            ),
+            (
+                "e2e-local",
+                &[
+                    "Focused browser proof",
+                    "same focused command",
+                    "hermetic",
+                    "parity",
+                ][..],
+            ),
+            ("validate", &["Full hermetic gate", "CI", "coverage"][..]),
+        ] {
+            for flag in ["-h", "--help"] {
+                let error = Cli::try_parse_from(["xtask", command, flag]).err().unwrap();
+                assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
+                let help = error.to_string();
+                assert!(help.contains(required[0]), "{command} {flag}: {help}");
+                if flag == "--help" {
+                    // Whitespace is presentation, not the cadence contract.
+                    let help = help.split_whitespace().collect::<Vec<_>>().join(" ");
+                    for phrase in required {
+                        assert!(help.contains(phrase), "missing {phrase:?}: {help}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn feedback_check_parsing_preserves_test_selection() {
+        for (args, expected) in [
+            (vec!["xtask", "check"], false),
+            (vec!["xtask", "check", "--no-test"], true),
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert!(matches!(cli.command, Command::Check { no_test } if no_test == expected));
+        }
+    }
+
+    #[test]
     fn e2e_lane_parses_as_a_production_command() {
         let cli =
             Cli::try_parse_from(["xtask", "e2e-lane", "sqlite-firefox-ordinary-1-of-2"]).unwrap();
@@ -945,27 +1038,29 @@ mod tests {
     }
 
     #[test]
-    fn issue_create_parses_required_metadata() {
+    fn issue_create_parses_complete_help_example() {
         let cli = Cli::try_parse_from([
             "xtask",
+            "--json",
             "issue",
             "create",
             "--title",
-            "feat(xtask): add issue helpers",
+            "feat(xtask): add helper",
             "--type",
             "Task",
             "--milestone",
             "Developer tooling & DX",
             "--priority",
-            "p2",
+            "P2",
             "--label",
             "tooling",
             "--label",
             "dx",
             "--body-file",
-            "/tmp/body.md",
+            "/tmp/issue.md",
         ])
         .unwrap();
+        assert!(cli.json);
         assert_eq!(cli.command_name(), "issue-create");
         match cli.command {
             Command::Issue(issue::IssueCommand::Create {
@@ -976,15 +1071,85 @@ mod tests {
                 labels,
                 body_file,
             }) => {
-                assert_eq!(title, "feat(xtask): add issue helpers");
+                assert_eq!(title, "feat(xtask): add helper");
                 assert_eq!(issue_type, "Task");
                 assert_eq!(milestone, "Developer tooling & DX");
                 assert_eq!(priority, issue::Priority::P2);
                 assert_eq!(labels, ["tooling", "dx"]);
-                assert_eq!(body_file, PathBuf::from("/tmp/body.md"));
+                assert_eq!(body_file, PathBuf::from("/tmp/issue.md"));
             }
             _ => panic!("expected issue create"),
         }
+    }
+
+    fn issue_create_args() -> Vec<&'static str> {
+        vec![
+            "xtask",
+            "issue",
+            "create",
+            "--title",
+            "feat(xtask): add helper",
+            "--type",
+            "Task",
+            "--milestone",
+            "Developer tooling & DX",
+            "--label",
+            "tooling",
+            "--body-file",
+            "/tmp/issue.md",
+        ]
+    }
+
+    #[test]
+    fn issue_create_accepts_uppercase_and_lowercase_priorities() {
+        for (spelling, expected) in [
+            ("P1", issue::Priority::P1),
+            ("p1", issue::Priority::P1),
+            ("P2", issue::Priority::P2),
+            ("p2", issue::Priority::P2),
+            ("P3", issue::Priority::P3),
+            ("p3", issue::Priority::P3),
+            ("P4", issue::Priority::P4),
+            ("p4", issue::Priority::P4),
+        ] {
+            let mut args = issue_create_args();
+            args.extend(["--priority", spelling]);
+            let cli = Cli::try_parse_from(args).unwrap();
+            match cli.command {
+                Command::Issue(issue::IssueCommand::Create { priority, .. }) => {
+                    assert_eq!(priority, expected, "{spelling}");
+                }
+                _ => panic!("expected issue create"),
+            }
+        }
+    }
+
+    #[test]
+    fn issue_create_rejects_invalid_priority_during_parsing() {
+        for spelling in ["P0", "P5", "urgent"] {
+            let mut args = issue_create_args();
+            args.extend(["--priority", spelling]);
+            let Err(error) = Cli::try_parse_from(args) else {
+                panic!("accepted invalid Priority {spelling}");
+            };
+            assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
+            let diagnostic = error.to_string();
+            assert!(diagnostic.contains("invalid value"));
+            assert!(diagnostic.contains(spelling));
+            assert!(diagnostic.contains("P1, P2, P3, P4"));
+        }
+    }
+
+    #[test]
+    fn issue_create_requires_explicit_priority() {
+        let Err(error) = Cli::try_parse_from(issue_create_args()) else {
+            panic!("accepted missing Priority");
+        };
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+        assert!(error.to_string().contains("--priority"));
     }
 
     #[test]
@@ -1003,11 +1168,60 @@ mod tests {
             Command::Validate {
                 no_e2e,
                 allow_dirty,
+                ..
             } => {
                 assert!(!no_e2e);
                 assert!(allow_dirty);
             }
             _ => panic!("expected validate"),
+        }
+    }
+
+    #[test]
+    fn validate_accepts_an_explicit_e2e_job_bound() {
+        for (arguments, expected) in [
+            (vec!["xtask", "validate"], None),
+            (vec!["xtask", "validate", "--e2e-jobs", "2"], Some(2)),
+            (vec!["xtask", "validate", "--e2e-jobs", "12"], Some(12)),
+        ] {
+            let cli = Cli::try_parse_from(arguments).unwrap();
+            match cli.command {
+                Command::Validate { e2e_jobs, .. } => {
+                    assert_eq!(e2e_jobs.map(std::num::NonZeroUsize::get), expected)
+                }
+                _ => panic!("expected validate"),
+            }
+        }
+    }
+
+    #[test]
+    fn validate_rejects_invalid_or_inapplicable_e2e_job_bounds() {
+        for value in [
+            "0",
+            "-1",
+            "one",
+            "1.5",
+            "99999999999999999999999999999999999999999",
+        ] {
+            assert!(
+                Cli::try_parse_from(["xtask", "validate", "--e2e-jobs", value]).is_err(),
+                "{value}"
+            );
+        }
+        for arguments in [
+            vec!["xtask", "validate", "--e2e-jobs"],
+            vec!["xtask", "validate", "--no-e2e", "--e2e-jobs", "2"],
+            vec!["xtask", "validate", "--e2e-jobs", "2", "--no-e2e"],
+            vec![
+                "xtask",
+                "e2e-lane",
+                "sqlite-chromium-unsplit",
+                "--e2e-jobs",
+                "2",
+            ],
+            vec!["xtask", "check", "--e2e-jobs", "2"],
+        ] {
+            assert!(Cli::try_parse_from(arguments).is_err());
         }
     }
 

@@ -1495,6 +1495,38 @@
                   :reuses nil :fallbacks nil)))
     (should-error (jaunder--pull-media-staged-with-reuse-fallbacks staged (list reuse)))))
 
+(ert-deftest jaunder-pull-media-finalize-reuses-existing-verified-fallback ()
+  "Finalizing retained staged evidence reuses a trusted Local Media Copy."
+  (let* ((bytes (string-as-unibyte "verified existing fallback bytes"))
+         (hash (secure-hash 'sha256 bytes)))
+    (jaunder-pull-media-test--with-root
+     root
+     (let* ((target (jaunder--pull-media-target-path root hash "image.png"))
+            (fallback (jaunder--make-pull-media-fallback
+                       :hash hash :leaf "image.png" :target target
+                       :native-target (format "local-media/%s/image.png" hash) :bytes bytes))
+            (staged (jaunder--make-pull-media-staged
+                     :plan (jaunder--make-pull-media-plan :format "org" :body "" :references nil)
+                     :reuses nil :fallbacks (list fallback))))
+       (jaunder-pull-media-test--write-bytes target bytes)
+       (let ((attributes (file-attributes target)))
+         ;; The caller may retain and finalize the same stage after a late failure.
+         (dotimes (_ 2)
+           (should-not (jaunder--pull-media-finalize-staged root staged))
+           (should (equal (file-attribute-inode-number (file-attributes target))
+                          (file-attribute-inode-number attributes)))
+           (should (equal (file-attribute-modification-time (file-attributes target))
+                          (file-attribute-modification-time attributes)))
+           (should (equal (with-temp-buffer
+                            (set-buffer-multibyte nil)
+                            (insert-file-contents-literally target)
+                            (buffer-string))
+                          bytes))
+           (should (equal (directory-files (file-name-directory target) nil
+                                           directory-files-no-dot-files-regexp)
+                          '("image.png")))
+           (should (equal (jaunder-pull-media-staged-fallbacks staged) (list fallback)))))))))
+
 (ert-deftest jaunder-pull-media-finalize-rejects-discrepant-installation-target ()
   "Fallback metadata cannot redirect final Local Media Copy installation."
   (let* ((bytes (string-as-unibyte "verified bytes"))

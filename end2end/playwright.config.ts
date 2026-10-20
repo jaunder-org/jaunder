@@ -123,6 +123,8 @@ export default defineConfig({
     screenshot: "only-on-failure",
     ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
   },
+  // Site Theme Package mutators and Studio-dependent observers share the
+  // serial configuration project; per-author contexts cannot isolate Local.
   // admin-site, backup, SMTP, theme, media, timeline-cls, invite, and
   // production-baseline mutate global site configuration or must restore it before
   // dependent projects. Playwright's
@@ -148,7 +150,7 @@ export default defineConfig({
     {
       name: "chromium",
       testIgnore: ignoreUnavailableSpecializedSpecs(
-        /(admin-site|backup|smtp|theme|invite|media|passkeys|timeline-cls|production-baseline-flow)\.spec\.ts/,
+        /(admin-site|backup|smtp|theme|theme-management|theme-presentation|responsive-shell|post-image-fit|invite|media|passkeys|timeline-cls|production-baseline-flow)\.spec\.ts/,
       ),
       grepInvert: visualTag,
       ...(diagnosticCoverage
@@ -163,7 +165,7 @@ export default defineConfig({
     {
       name: "chromium-admin-site",
       testMatch:
-        /(admin-site|backup|smtp|theme|media|passkeys|timeline-cls|production-baseline-flow)\.spec\.ts/,
+        /(admin-site|backup|smtp|theme|theme-management|theme-presentation|responsive-shell|post-image-fit|media|passkeys|timeline-cls|production-baseline-flow)\.spec\.ts/,
       grepInvert: visualTag,
       fullyParallel: false,
       workers: 1,
@@ -199,7 +201,7 @@ export default defineConfig({
     {
       name: "firefox",
       testIgnore: ignoreUnavailableSpecializedSpecs(
-        /(admin-site|backup|smtp|theme|invite|media|timeline-cls|production-baseline-flow)\.spec\.ts/,
+        /(admin-site|backup|smtp|theme|theme-management|theme-presentation|responsive-shell|post-image-fit|invite|media|timeline-cls|production-baseline-flow)\.spec\.ts/,
       ),
       grepInvert: visualTag,
       ...(diagnosticCoverage
@@ -213,7 +215,7 @@ export default defineConfig({
     {
       name: "firefox-admin-site",
       testMatch:
-        /(admin-site|backup|smtp|theme|media|timeline-cls|production-baseline-flow)\.spec\.ts/,
+        /(admin-site|backup|smtp|theme|theme-management|theme-presentation|responsive-shell|post-image-fit|media|timeline-cls|production-baseline-flow)\.spec\.ts/,
       grepInvert: visualTag,
       fullyParallel: false,
       workers: 1,
@@ -240,7 +242,7 @@ export default defineConfig({
     experimentalProject({
       name: "firefox-ordinary",
       testIgnore: ignoreUnavailableSpecializedSpecs(
-        /(admin-site|backup|smtp|theme|invite|media|timeline-cls|production-baseline-flow)\.spec\.ts/,
+        /(admin-site|backup|smtp|theme|theme-management|theme-presentation|responsive-shell|post-image-fit|invite|media|timeline-cls|production-baseline-flow)\.spec\.ts/,
       ),
       grepInvert: visualTag,
       use: {
@@ -265,7 +267,7 @@ export default defineConfig({
     experimentalProject({
       name: "firefox-special-global-configuration",
       testMatch:
-        /(admin-site|backup|smtp|theme|media|timeline-cls|production-baseline-flow)\.spec\.ts/,
+        /(admin-site|backup|smtp|theme|theme-management|theme-presentation|responsive-shell|post-image-fit|media|timeline-cls|production-baseline-flow)\.spec\.ts/,
       grepInvert: visualTag,
       fullyParallel: false,
       workers: 1,
@@ -287,14 +289,15 @@ export default defineConfig({
     {
       name: "webkit",
       testIgnore: ignoreUnavailableSpecializedSpecs(
-        /(admin-site|backup|smtp|theme|invite|media|timeline-cls|production-baseline-flow)\.spec\.ts/,
+        /(admin-site|backup|smtp|theme|theme-management|theme-presentation|responsive-shell|post-image-fit|invite|media|timeline-cls|production-baseline-flow)\.spec\.ts/,
       ),
       grepInvert: visualTag,
       use: { ...devices["Desktop Safari"] },
     },
     {
       name: "webkit-theme",
-      testMatch: /(backup|smtp|theme|media|timeline-cls)\.spec\.ts/,
+      testMatch:
+        /(backup|smtp|theme|theme-management|theme-presentation|responsive-shell|post-image-fit|media|timeline-cls)\.spec\.ts/,
       grepInvert: visualTag,
       fullyParallel: false,
       workers: 1,

@@ -80,6 +80,19 @@ pub async fn install_app_system_inventory(
 /// Router composition at a test root. The input expression supplies focused
 /// storage minting methods; the expanded router crosses only exact dependencies.
 macro_rules! make_app {
+    (@preparer $preparer:expr) => { $preparer };
+    (@preparer) => {
+        host::image_privacy::UploadPreparer::new(std::path::PathBuf::from(env!("CARGO_BIN_EXE_jaunder")))
+    };
+    ($env:expr, $storage:expr; preparer = $preparer:expr) => {
+        make_app!($env, $storage;
+            instance_id = storage::InstanceId::new(),
+            mailer = storage::test_support::noop_mailer(),
+            secure_cookies = false,
+            resolver = std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new()),
+            preparer = $preparer
+        )
+    };
     ($env:expr, $storage:expr) => {
         make_app!(
             @build $storage, ($env).write_scope(),
@@ -153,6 +166,7 @@ macro_rules! make_app {
         mailer = $mailer:expr,
         secure_cookies = $secure_cookies:expr,
         resolver = $resolver:expr
+        $(, preparer = $preparer:expr)?
     ) => {
         make_app!(
             @build $storage, ($env).write_scope(), $instance_id, $mailer, $secure_cookies, $resolver;
@@ -173,6 +187,7 @@ macro_rules! make_app {
             feed_cache = ($env).feed_cache(),
             feed_events = ($env).feed_events(),
             publisher = ($env).publisher(),
+            $(preparer = $preparer,)?
         )
     };
     ($env:expr, $storage:expr; override_write_scope = $write_scope:expr) => {
@@ -250,6 +265,7 @@ macro_rules! make_app {
         feed_cache = $feed_cache:expr,
         feed_events = $feed_events:expr,
         publisher = $publisher:expr,
+        $(preparer = $preparer:expr,)?
     ) => {{
         let themes: std::sync::Arc<dyn storage::ThemeStorage> = $themes;
         let application_stylesheet_url = $crate::helpers::install_app_system_inventory(
@@ -295,15 +311,16 @@ macro_rules! make_app {
                 publisher,
                 write_scope.clone(),
             ));
-            let media_manager = std::sync::Arc::new(storage::MediaManager::new(
-                media.clone(),
-                posts.clone(),
-                site_config.clone(),
-                write_scope.clone(),
-                std::sync::Arc::clone(&content_locks),
-                instance_id.clone(),
-                resolver,
-            ));
+            let media_manager = std::sync::Arc::new(storage::test_support::media_manager_for_test(storage::test_support::TestMediaManagerParts {
+                media: media.clone(),
+                posts: posts.clone(),
+                site_config: site_config.clone(),
+                write_scope: write_scope.clone(),
+                content_locks: std::sync::Arc::clone(&content_locks),
+                instance_id: instance_id.clone(),
+                ownership_resolver: resolver,
+                preparer: make_app!(@preparer $($preparer)?),
+            }));
             let theme_asset_manager = std::sync::Arc::new(storage::ThemeAssetManager::new(
                 themes.clone(),
                 write_scope.clone(),

@@ -6,6 +6,8 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+# Upstream v0.13.0 release tag, pinned to its immutable commit.
+exiftool-rs = { git = "https://github.com/Le-Syl21/exiftool-rs", rev = "863f9b8eb47f995eddef657e006e1a22b3a28334" }
 atom_syndication = { version = "0.13.0", default-features = false }
 argon2.workspace = true
 base64.workspace = true
@@ -15,6 +17,7 @@ html5ever.workspace = true
 html-escape.workspace = true
 ammonia.workspace = true
 opentelemetry.workspace = true
+opentelemetry-appender-tracing.workspace = true
 rand.workspace = true
 sha2.workspace = true
 unicode-casefold.workspace = true
@@ -88,11 +91,16 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 wuff = "=0.2.9"
 lightningcss = { version = "=1.0.0-alpha.72", default-features = false, features = ["serde", "visitor"] }
 rustix.workspace = true
+tempfile.workspace = true
 mp4parse = "=0.17.0"
 webauthn-rs.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+log.workspace = true
+# Existing pinned OTLP wire/transport types for owned loopback failure fixtures.
+opentelemetry-proto = { version = "=0.32.0", default-features = false, features = ["gen-tonic", "logs"] }
+tonic = { version = "=0.14.6", default-features = false, features = ["transport", "router"] }
 common = { path = "../common", features = ["test-support"] }
 tempfile = { workspace = true }
 tokio = { workspace = true }

@@ -75,25 +75,55 @@ and sink-specific field admission remain governed by
 SDK, exporter, configuration, formatter, parent and shutdown diagnostics stay
 outside failing/native export paths to avoid recursion.
 
-### Implemented SDK isolation and lifetime boundary
+### #1743 qualified Collector amendment
+
+The qualified human approval JAU-1743-COLLECTOR-AMENDMENT-001, acknowledged by
+Lead against technical contract SHA256
+`c5ee2ad723645acbff1cda627e3154282f95e468ff04991ae8a28cec879580f6` and the
+latest decision card, selects the
+[native OTLP Collector privacy revision](native-otlp-process-logs.md).
+Local-only filtering, AlwaysOn IDs, independent local fields/capture and
+process-owned bounded draining remain requirements. Application privacy
+visitors, Debug parsing, classifiers and proposed trace decorators are removed
+in favor of stock appender/SDK and one shared production/test policy before
+batch and durable export. Raw SDK/transport/Collector input is accepted;
+downstream outputs and persisted Collector diagnostics must exclude withheld
+data. This explicitly amends ADR-0011's pre-Collector privacy interpretation,
+not source-level span admission or browser contracts.
+
+The demonstrated stock integration retains an owning public event-context
+adapter, suppression-preserving Activation, an SDK-scope-only dynamic trace
+filter and a process-owned transport runtime. These address observed context and
+self-observation incompatibilities, not application retention. Six pinned
+remote-detail SDK diagnostics use `SafeSdkFormat` at both host fmt variants and
+the independent server WARN+ JSON writer; other events delegate unchanged. This
+is not universal SDK sanitization or a global SDK hide. Nonfatal,
+credential/endpoint/payload-safe and nonrecursive failure behavior remains;
+private per-kind/coalescing/256-byte guarantees retire. Collector policy cannot
+fix client feedback/queue pressure and promises no volume recovery. Focused
+proof does not replace final current-tree validation or authorize activation or
+merge.
+
+### Implemented SDK isolation and lifetime
 
 A fixed, non-configurable per-OTLP-layer SDK-context suppression guard isolates
 SDK self-observation, not application retention. Public context activation
 preserves suppression when SDK work enters an already-admitted application span.
-An owned private exporter-only runtime keeps transport workers and their
-connection/reconnect descendants in suppressed context. Ordinary trace and
-metric SDK builders use that runtime; ordinary application telemetry remains
-unfiltered. Local diagnostics stay independent of this OTLP-only boundary.
+An owned exporter-only runtime uses two workers/two blocking workers in
+suppressed context and the process-global subscriber. Scoped worker-dispatch
+propagation is not promised. Ordinary trace, metric and logger SDK builders use
+that runtime; ordinary application telemetry remains unfiltered. Local
+diagnostics stay independent of this OTLP-only boundary.
 
 `TelemetryGuard` shuts down the metric provider, then the trace provider, then
-the exporter runtime, keeping transport available through both provider flushes.
-Runtime destruction belongs to an ordinary owner thread so dropping the guard
-inside an application async task does not destroy a Tokio runtime there. Runtime
-shutdown uses a fixed five-second best-effort budget, with no configuration
-knob. Unfinished blocking work can remain until it returns or the process exits,
-including when the telemetry guard is dropped while the process continues.
-Joining the runtime owner does not prove that work stopped; Tokio's shutdown API
-reports no timeout outcome.
+the logger provider, then the exporter runtime, keeping transport available
+through every provider drain. Runtime destruction belongs to an ordinary owner
+thread so dropping the guard inside an application async task does not destroy a
+Tokio runtime there. Runtime shutdown uses a fixed five-second best-effort
+budget, with no configuration knob. Unfinished blocking work can remain until it
+returns or the process exits, including when the telemetry guard is dropped
+while the process continues. Joining the runtime owner does not prove that work
+stopped; Tokio's shutdown API reports no timeout outcome.
 
 Activation callbacks identify spans, not entry instances. Repeated entries of
 the same tracing span exited out of order can expose an interleaved external
@@ -114,6 +144,8 @@ SDK sampling; upstream recording preferences do not govern this installation.
 Proof must observe the actual production subscriber/provider, DEBUG/TRACE
 admission, sampled and unsampled upstream correlation, independent local output,
 field/diagnostic/privacy controls and short-lived export. Native all-severity
-logs and combined no-mirroring/shutdown proof belong to #1743 once that sink
-exists. Current operator guidance is updated with the implementation; no
-Collector deployment policy is part of this decision.
+logs and combined no-mirroring/shutdown proof belong to #1743. Current operator
+guidance projects its stock bridge and shared Collector policy, distinguishing
+focused seam proofs from final integrated-tree certification. The original #1742
+decision introduced no Collector deployment policy; #1743's qualified amendment
+separately selects the shared privacy policy, without production activation.

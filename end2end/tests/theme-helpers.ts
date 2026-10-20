@@ -9,8 +9,10 @@ import {
   BASE_URL,
   confirmedMutation,
   goto,
+  signInAs,
   type MutationOutcome,
 } from "./helpers";
+import { test, type NewTracedContext } from "./fixtures";
 
 export type ThemeAsset = { path: string; mime: string; bytes: Uint8Array };
 export type ThemePackage = {
@@ -236,6 +238,95 @@ export async function publishAndSelectTheme(
     "themes::select",
   );
   return themeId;
+}
+
+type SiteSelection =
+  | { kind: "built_in"; value: string }
+  | { kind: "custom"; value: number }
+  | null;
+
+/** Own Local's selection only inside the existing exclusive configuration project. */
+export async function withSiteThemeSelection(
+  tracedContext: NewTracedContext,
+  use: (mutate: <T>(action: () => Promise<T>) => Promise<T>) => Promise<void>,
+): Promise<void> {
+  const project = test.info().project;
+  expect([
+    "chromium-admin-site",
+    "firefox-admin-site",
+    "firefox-special-global-configuration",
+    "webkit-theme",
+  ]).toContain(project.name);
+  const context = await tracedContext();
+  const failures: unknown[] = [];
+  let original: SiteSelection | undefined;
+  let settled = true;
+  const mutate = async <T>(action: () => Promise<T>): Promise<T> => {
+    settled = false;
+    const result = await action();
+    settled = true;
+    return result;
+  };
+  try {
+    const operator = await context.newPage();
+    await signInAs(operator, "testoperator");
+    const read = async (): Promise<SiteSelection> => {
+      const response = await operator.request.post(
+        `${BASE_URL}/api/themes/get_selection`,
+        { form: { scope: "site" } },
+      );
+      expect(response.status()).toBe(200);
+      return (await response.json()) as SiteSelection;
+    };
+    const select = async (selection: SiteSelection) => {
+      const form: Record<string, string> = { scope: "site" };
+      if (selection !== null) {
+        form["selection[kind]"] = selection.kind;
+        form["selection[value]"] = String(selection.value);
+      }
+      const response = await operator.request.post(
+        `${BASE_URL}${THEME_ENDPOINTS.select}`,
+        { form },
+      );
+      expect(response.status()).toBe(200);
+      confirmedMutation(
+        (await response.json()) as MutationOutcome<null>,
+        "themes::select",
+      );
+      expect(await read()).toEqual(selection);
+    };
+    original = await read();
+    try {
+      await mutate(() => select({ kind: "built_in", value: "studio" }));
+      await use(mutate);
+    } catch (error) {
+      failures.push(error);
+    } finally {
+      // Every callback site-selection write must await its existing confirmed
+      // mutation boundary inside mutate. An uncertain write forbids restoration.
+      if (settled) {
+        try {
+          await select(original);
+        } catch (error) {
+          failures.push(error);
+        }
+      } else {
+        failures.push(
+          new Error("Site selection not restored: mutation outcome uncertain"),
+        );
+      }
+    }
+  } catch (error) {
+    failures.push(error);
+  } finally {
+    try {
+      await context.close();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0)
+    throw new AggregateError(failures, "Site Theme fixture failed");
 }
 
 /** Read a ZIP member without extracting it, keeping export checks portable. */

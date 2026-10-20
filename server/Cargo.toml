@@ -79,7 +79,11 @@ csr_bundle = { path = "../tools/csr_bundle" }
 host = { path = "../host" }
 
 [dev-dependencies]
+# Independent pixel observations use the existing pinned decoder, never upload editing.
+image = { version = "0.25.10", default-features = false, features = ["png", "webp"] }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
+opentelemetry-proto = { version = "=0.32.0", default-features = false, features = ["gen-tonic", "logs", "trace", "metrics"] }
+tonic = { version = "=0.14.6", default-features = false, features = ["transport", "router"] }
 axum = { workspace = true }
 base64 = { workspace = true }
 # `test-support` is declared explicitly rather than inherited: it reached this

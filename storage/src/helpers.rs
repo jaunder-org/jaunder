@@ -308,13 +308,14 @@ pub(crate) async fn hash_password(password: password::Password) -> io::Result<St
 pub(crate) type HashPasswordOperation =
     fn(&password::Password) -> Result<String, password::PasswordError>;
 
-pub(crate) fn hash_password_operation(password: &password::Password) -> HashPasswordOperation {
+pub(crate) fn hash_password_operation(
+    #[cfg(any(test, feature = "test-utils"))] password: &password::Password,
+    #[cfg(not(any(test, feature = "test-utils")))] _: &password::Password,
+) -> HashPasswordOperation {
     #[cfg(any(test, feature = "test-utils"))]
     if password.as_ref() == "force-hash-error-for-test-coverage" {
         return forced_hash_failure;
     }
-    #[cfg(not(any(test, feature = "test-utils")))]
-    let _ = password;
 
     password::hash
 }

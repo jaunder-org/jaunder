@@ -19,7 +19,10 @@ pub enum Stream {
     Mail,
     WebSub,
     Diag,
+    /// Collector-written traces; existing trace consumers use this stream.
     Otel,
+    /// Collector-written native logs, isolated from traces and server diagnostics.
+    OtelLogs,
 }
 
 /// A directory supplied for capture output could not be made ready.
@@ -122,6 +125,7 @@ impl Stream {
             Stream::WebSub => "websub.jsonl",
             Stream::Diag => "diag.log",
             Stream::Otel => "otel-traces.jsonl",
+            Stream::OtelLogs => "otel-logs.jsonl",
         }
     }
 
@@ -134,6 +138,7 @@ impl Stream {
             "websub" => Some(Stream::WebSub),
             "diag" => Some(Stream::Diag),
             "otel" => Some(Stream::Otel),
+            "otel-logs" => Some(Stream::OtelLogs),
             _ => None,
         }
     }
@@ -213,6 +218,10 @@ mod tests {
             capture.path(Stream::Otel),
             directory.join("otel-traces.jsonl")
         );
+        assert_eq!(
+            capture.path(Stream::OtelLogs),
+            directory.join("otel-logs.jsonl")
+        );
         assert!(
             !directory.exists(),
             "path() must not recreate the directory"
@@ -225,6 +234,7 @@ mod tests {
         assert_eq!(Stream::parse("websub"), Some(Stream::WebSub));
         assert_eq!(Stream::parse("diag"), Some(Stream::Diag));
         assert_eq!(Stream::parse("otel"), Some(Stream::Otel));
+        assert_eq!(Stream::parse("otel-logs"), Some(Stream::OtelLogs));
         assert_eq!(Stream::parse("bogus"), None);
         assert_eq!(Stream::parse(""), None);
     }

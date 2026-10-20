@@ -16,7 +16,7 @@ exclude = ["xtask"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "GPL-3.0-only"
+license = "GPL-3.0-or-later"
 publish = false
 
 # need to be applied only to wasm build
@@ -71,6 +71,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "jso
 tracing-opentelemetry = "0.33.0"
 tracing-error = "0.2.1"
 opentelemetry = "0.32.0"
+opentelemetry-appender-tracing = "=0.32.0"
 opentelemetry_sdk = { version = "0.32.1", features = ["rt-tokio", "metrics", "testing"] }
 opentelemetry-otlp = { version = "0.32.0", features = ["grpc-tonic", "metrics"] }
 sqlx = { version = "0.9.0", features = ["sqlite", "postgres", "migrate", "runtime-tokio"] }

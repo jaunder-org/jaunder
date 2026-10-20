@@ -15,7 +15,7 @@ import { navigateInApp } from "./navigate";
 import type { Locator, Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { seedConfigViaTool } from "./seed";
-import { uploadMedia } from "./media-helpers";
+import { cleanImage, uploadMedia } from "./media-helpers";
 
 function countMediaRequests(page: Page): {
   capabilityRequests: () => number;
@@ -87,7 +87,7 @@ test.describe("Media upload and serving", () => {
 
     // Drive `media::upload` directly — the session cookie is in the page's
     // cookie jar and the helper unwraps its confirmed mutation payload.
-    const fileContent = Buffer.from("fake image content for testing");
+    const fileContent = cleanImage();
     const json = await uploadMedia(page, "test-image.jpg", fileContent);
     expect(json.filename).toBe("test-image.jpg");
     expect(json.url).toContain("/media/upload/");
@@ -109,7 +109,7 @@ test.describe("Media upload and serving", () => {
     // stack it is also the one place the whole chain is exercised: the URL the server
     // derives, the name it wrote on disk, and the request the browser sends back for it
     // (#675). Before the fix the derived URL carried a raw space.
-    const fileContent = Buffer.from("spaced filename content");
+    const fileContent = cleanImage();
     const json = await uploadMedia(page, "my holiday photo.jpg", fileContent);
     // Since #720 the wire field carries the canonical encoded spelling — it is a lookup
     // key, not a display value, so it matches the URL segment and the on-disk name byte
@@ -120,7 +120,7 @@ test.describe("Media upload and serving", () => {
 
     const serveResponse = await page.request.get(BASE_URL + json.url);
     expect(serveResponse.status()).toBe(200);
-    expect(await serveResponse.text()).toBe("spaced filename content");
+    expect(await serveResponse.body()).toEqual(cleanImage());
   });
 
   test("proxy canonicalizes a media source URL without following its redirect", async ({
@@ -158,11 +158,7 @@ test.describe("Media upload and serving", () => {
     await signInAsNewUser(page);
     await goto(page, "/app");
 
-    await uploadMedia(
-      page,
-      "my holiday photo.jpg",
-      Buffer.from("spaced filename content"),
-    );
+    await uploadMedia(page, "my holiday photo.jpg", cleanImage());
 
     // Reached via the nav link and pinned on the page's own landmark, matching the
     // sibling media-page tests below — a bare `goto` races the CSR shell's mount.
@@ -278,7 +274,7 @@ test.describe("Media upload and serving", () => {
     const selectedFile = {
       name: "progress.png",
       mimeType: "image/png",
-      buffer: Buffer.from("progress"),
+      buffer: cleanImage(),
     };
     await fileInput.setInputFiles(selectedFile);
     await expect(media).toContainText("Uploading…");
@@ -308,7 +304,7 @@ test.describe("Media upload and serving", () => {
     const selectedPhoto = {
       name: "failed.png",
       mimeType: "image/png",
-      buffer: Buffer.from("failed"),
+      buffer: cleanImage(),
     };
     await expect(media).toHaveAttribute("aria-expanded", "false");
     await photoInput.setInputFiles(selectedPhoto);
@@ -333,7 +329,7 @@ test.describe("Media upload and serving", () => {
           file: {
             name: "indeterminate.png",
             mimeType: "image/png",
-            buffer: Buffer.from("indeterminate"),
+            buffer: cleanImage(),
           },
         },
       },
@@ -362,7 +358,7 @@ test.describe("Media upload and serving", () => {
     const selectedFile = {
       name: "indeterminate.png",
       mimeType: "image/png",
-      buffer: Buffer.from("indeterminate"),
+      buffer: cleanImage(),
     };
     await fileInput.setInputFiles(selectedFile);
     await expect(page.locator(".j-composer-media > .error")).toContainText(
@@ -407,14 +403,14 @@ test.describe("Media upload and serving", () => {
     await fileInput.setInputFiles({
       name: "first image.png",
       mimeType: "image/png",
-      buffer: Buffer.from("first image"),
+      buffer: cleanImage(),
     });
     await expect(page.locator(".j-composer-media-row")).toHaveCount(1);
     await expect(media).toContainText("first image.png");
     await fileInput.setInputFiles({
       name: "second-image.png",
       mimeType: "image/png",
-      buffer: Buffer.from("second image"),
+      buffer: cleanImage(),
     });
     const rows = page.locator(".j-composer-media-row");
     await expect(rows).toHaveCount(2);
@@ -469,7 +465,7 @@ test.describe("Media upload and serving", () => {
     await fileInput.setInputFiles({
       name: "home-image.png",
       mimeType: "image/png",
-      buffer: Buffer.from("home image"),
+      buffer: cleanImage(),
     });
     await expect(page.locator(".j-composer-media-row")).toContainText(
       "home-image.png",
@@ -492,7 +488,7 @@ test.describe("Media upload capability", () => {
     const existing = await uploadMedia(
       page,
       "read-only-media.jpg",
-      Buffer.from("media remains available while uploads are disabled"),
+      cleanImage(),
     );
     await seedConfigViaTool("media.uploads_enabled", "false");
 
@@ -583,7 +579,7 @@ test.describe("Media upload capability", () => {
     await photoInput.setInputFiles({
       name: "desktop-photo.jpg",
       mimeType: "image/jpeg",
-      buffer: Buffer.from("desktop photo fallback"),
+      buffer: cleanImage(),
     });
     await expect.poll(counts.uploadRequests).toBe(1);
     await expect(
@@ -680,7 +676,7 @@ test.describe("Media delete guard", () => {
     tracedContext,
   }) => {
     await signInAsNewUser(page);
-    const content = "delete guard content";
+    const content = cleanImage();
     const sha = createHash("sha256").update(content).digest("hex");
     const url = `/media/upload/${sha.slice(0, 2)}/${sha.slice(2, 4)}/${sha}/guarded.jpg`;
     // Create the foreign reference while there is no canonical source:
