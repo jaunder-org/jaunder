@@ -264,8 +264,15 @@ mod tests {
                 entered_tx
                     .send(())
                     .expect("unit-test owner observes the actual pause arm");
-                release_rx.recv().expect("unit-test owner releases pause");
-                true
+                let release: bool = release_rx
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .expect("unit-test owner answers pause predicate");
+                if !release {
+                    // Set the token after channel synchronization, so channel
+                    // internals cannot consume the next loop's unpark token.
+                    std::thread::current().unpark();
+                }
+                release
             });
             (result, output)
         });
@@ -273,13 +280,23 @@ mod tests {
         // The unpark token is retained if the worker has not reached park yet.
         worker.thread().unpark();
         entered_rx
-            .recv()
+            .recv_timeout(std::time::Duration::from_secs(5))
             .expect("ready marker is written and the Paused arm reaches its park");
         assert_eq!(
             std::fs::read(root.path().join(READY_FILE)).unwrap(),
             b"ready"
         );
-        release_tx.send(()).expect("release the actual paused arm");
+        release_tx.send(false).expect("retain the paused worker");
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("false release parks the same worker again");
+        assert!(
+            !worker.is_finished(),
+            "false release cannot complete preparation"
+        );
+        release_tx
+            .send(true)
+            .expect("release the actual paused arm");
         let (result, output) = worker.join().expect("paused unit worker exits cleanly");
         assert_eq!(result.unwrap(), Some(false));
         assert!(output.is_empty());

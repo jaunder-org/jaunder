@@ -3064,16 +3064,21 @@ mod tests {
         }));
         let temporary = env.base.path().join("media/tmp");
         let faulted_parent = temporary.clone();
+        let admitted = Arc::new(tokio::sync::Notify::new());
+        let observed = Arc::new(tokio::sync::Notify::new());
+        let admitted_upload = Arc::clone(&admitted);
+        let observed_upload = Arc::clone(&observed);
         let uploading = tokio::spawn(async move {
-            let stream = stream::iter([Ok::<_, io::Error>(Bytes::from_static(CLEAN_JPEG))]).map(
-                move |chunk| {
-                    // Admission already owns its private spool; only final spool
-                    // removal needs the parent permission faulted at this point.
-                    std_fs::set_permissions(&faulted_parent, std_fs::Permissions::from_mode(0o500))
-                        .unwrap();
-                    chunk
-                },
-            );
+            let stream = stream::once(async move {
+                // Admission owns nonempty private files. Let the observer see
+                // that state before allowing registration and cleanup to proceed.
+                std_fs::set_permissions(&faulted_parent, std_fs::Permissions::from_mode(0o500))
+                    .unwrap();
+                admitted_upload.notify_one();
+                observed_upload.notified().await;
+                Ok::<_, io::Error>(Bytes::from_static(CLEAN_JPEG))
+            });
+            let stream = std::pin::pin!(stream);
             manager
                 .upload(
                     user_id,
@@ -3083,21 +3088,12 @@ mod tests {
                 )
                 .await
         });
+        let mut nonterminal_observations = 0;
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            while env
-                .media()
-                .get_user_upload_usage(user_id)
-                .await
-                .unwrap()
-                .value()
-                == 0
-            {
-                tokio::task::yield_now().await;
-            }
+            admitted.notified().await;
             // Observe the failed final directory removal: its private spool is
             // empty but still owned until the parent permission is restored.
             loop {
-                tokio::task::yield_now().await;
                 let paths: Vec<_> = std_fs::read_dir(&temporary)
                     .unwrap()
                     .map(|entry| entry.unwrap().path())
@@ -3113,10 +3109,25 @@ mod tests {
                 if spools.len() == 1 && std_fs::read_dir(spools[0]).unwrap().next().is_none() {
                     break;
                 }
+                nonterminal_observations += 1;
+                observed.notify_one();
+                tokio::task::yield_now().await;
             }
         })
         .await
         .expect("cleanup failure retains an empty private spool until permissions recover");
+        assert!(
+            nonterminal_observations > 0,
+            "observe owned input before cleanup"
+        );
+        assert!(
+            env.media()
+                .get_user_upload_usage(user_id)
+                .await
+                .unwrap()
+                .value()
+                > 0
+        );
         std_fs::set_permissions(&temporary, std_fs::Permissions::from_mode(0o700)).unwrap();
         let outcome = uploading
             .await

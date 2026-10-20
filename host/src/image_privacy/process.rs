@@ -221,13 +221,10 @@ impl UploadPreparer {
         if let Some(control) = &self.test_control {
             control.before_reap().await;
         }
-        loop {
-            if let Some(result) =
-                reap_wait_result(&mut failure, child.wait().await.map(|_| ())).await
-            {
-                return result;
-            }
-        }
+        reap_until_exit(child, failure, |child| {
+            Box::pin(async move { child.wait().await.map(|_| ()) })
+        })
+        .await
     }
 
     /// Refuses new uploads, cancels native jobs, and drains every tracked owner.
@@ -294,6 +291,21 @@ fn initial_reap_state(
         Ok(Some(_)) => (true, None),
         Ok(None) => (false, None),
         Err(error) => (false, Some(error)),
+    }
+}
+
+type ReapWait<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>> + Send + 'a>>;
+
+async fn reap_until_exit(
+    child: &mut Child,
+    mut failure: Option<io::Error>,
+    mut wait: impl for<'a> FnMut(&'a mut Child) -> ReapWait<'a>,
+) -> io::Result<()> {
+    loop {
+        if let Some(result) = reap_wait_result(&mut failure, wait(child).await).await {
+            return result;
+        }
     }
 }
 
@@ -508,7 +520,7 @@ mod tests {
     use super::{
         PreparationError, UploadAttempt, UploadPreparer, decode_response, initial_reap_state,
         join_finalizations, preserve_first_reap_failure, preserve_primary_after_reap,
-        reap_wait_result, report_unobserved_cleanup_if_needed,
+        reap_until_exit, reap_wait_result, report_unobserved_cleanup_if_needed,
     };
     use std::error::Error as _;
     use std::os::unix::process::ExitStatusExt;
@@ -735,6 +747,116 @@ mod tests {
             reap_wait_result(&mut failure, Ok(())).await,
             Some(Err(error)) if error.to_string() == "first wait failure"
         ));
+    }
+
+    #[tokio::test]
+    async fn owning_reap_loop_retains_resources_until_retry_acknowledges_exit() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let mut child = tokio::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let spool = tempfile::tempdir().unwrap();
+        let private_path = spool.path().to_path_buf();
+        let slots = Arc::new(tokio::sync::Semaphore::new(2));
+        let permit = slots.clone().try_acquire_owned().unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let waiting = Arc::new(tokio::sync::Notify::new());
+        let (ack, acknowledged) = tokio::sync::oneshot::channel();
+        let acknowledged = Arc::new(tokio::sync::Mutex::new(acknowledged));
+        let started = tokio::time::Instant::now();
+        let scenario = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            child.start_kill().map_err(|error| error.to_string())?;
+            let reaping = async {
+                let _spool = spool;
+                let _permit = permit;
+                reap_until_exit(&mut child, None, |child| {
+                    let calls = calls.clone();
+                    let waiting = waiting.clone();
+                    let acknowledged = acknowledged.clone();
+                    Box::pin(async move {
+                        if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                            Err(std::io::Error::other("first wait failure"))
+                        } else {
+                            waiting.notify_one();
+                            (&mut *acknowledged.lock().await).await
+                                .map_err(std::io::Error::other)?;
+                            child.wait().await.map(|_| ())
+                        }
+                    })
+                })
+                .await
+            };
+            tokio::pin!(reaping);
+            tokio::select! {
+                result = &mut reaping => return Err(format!("returned before acknowledgment: {result:?}")),
+                () = waiting.notified() => {}
+            }
+            let retained = private_path.exists() && slots.available_permits() == 1;
+            let delayed = started.elapsed() >= std::time::Duration::from_millis(100);
+            ack.send(()).map_err(|()| "lost acknowledgment receiver".to_owned())?;
+            let result = reaping.await;
+            Ok((retained, delayed, result))
+        })
+        .await;
+        let reaped_before_fixture_cleanup = child.id().is_none();
+        // Always kill AND wait, including timeout/error paths, before assertions.
+        let _ = child.start_kill();
+        let exit = child.wait().await.unwrap();
+        let (retained, delayed, result) = scenario.expect("bounded reap scenario").unwrap();
+        assert!(
+            retained,
+            "spool and permit remain owned before acknowledgment"
+        );
+        assert!(delayed);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(result.unwrap_err().to_string(), "first wait failure");
+        assert!(
+            reaped_before_fixture_cleanup,
+            "the owning loop acknowledged the real child exit"
+        );
+        assert!(!exit.success());
+        assert!(child.try_wait().unwrap().is_some());
+        assert!(!private_path.exists());
+        assert_eq!(slots.available_permits(), 2);
+        assert!(
+            reap_until_exit(&mut child, None, |child| {
+                Box::pin(async move { child.wait().await.map(|_| ()) })
+            })
+            .await
+            .is_ok()
+        );
+        let error = reap_until_exit(
+            &mut child,
+            Some(std::io::Error::other("kill failure")),
+            |child| Box::pin(async move { child.wait().await.map(|_| ()) }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.to_string(), "kill failure");
+    }
+
+    #[tokio::test]
+    async fn real_child_without_test_control_is_killed_and_reaped() {
+        let preparer = UploadPreparer::state("unused executable".into());
+        let mut child = tokio::process::Command::new("sleep")
+            .arg("60")
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            preparer.stop_and_wait(&mut child),
+        )
+        .await;
+        let reaped_before_fixture_cleanup = child.id().is_none();
+        let _ = child.start_kill();
+        let exit = child.wait().await.unwrap();
+        result.expect("owner reaps child").unwrap();
+        assert!(reaped_before_fixture_cleanup);
+        assert!(!exit.success());
+        assert!(child.try_wait().unwrap().is_some());
+        preparer.stop_and_wait(&mut child).await.unwrap();
     }
 
     #[derive(Clone)]
