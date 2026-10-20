@@ -13,7 +13,7 @@
 > authoritative. Earlier installed-preview and Copy/name approvals remain
 > intact.
 
-## Scope and proposed contracts
+## Approved scope and contracts
 
 In: one normal unsaved editor for Name, Style and Logo/Header; preview all its
 current values; one Save for all. Active custom Theme Save publishes the new
@@ -34,7 +34,8 @@ image even when a package default exists, and PackageAsset/Media choices use
 existing authorization; Preview and Save must interpret these identically. Reuse
 existing preview DTO, validators/compiler, renderer, Media authorization,
 WriteScope and immutable-file lifecycle. Existing upload/copy naming and
-preview-installed APIs remain unchanged. No contract is approved yet.
+preview-installed APIs remain unchanged. These contracts are approved under
+`JAU-1750-EDITOR-WORKFLOW-001`; this does not approve merging.
 
 ## Task outline
 

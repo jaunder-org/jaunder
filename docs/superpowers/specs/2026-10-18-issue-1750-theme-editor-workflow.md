@@ -123,9 +123,8 @@ separate custom Theme under the already-approved Copy contract.
 
 ## Approval boundary
 
-The User approved this product workflow, not the proposed preview/save wire
-contracts or transaction design. Lead cold-reviews the linked outline and source
-facts, then routes one exact qualified interface/write-contract question through
-the established direct User channel. This is not a layout reinterview, testing
-seam request, or merge approval. No product implementation is authorized by this
-proposed text.
+The User approved the preview/save wire contracts and transaction design in this
+spec and its linked outline under `JAU-1750-EDITOR-WORKFLOW-001`. This approval
+authorizes implementation of that scope; it is not merge approval or approval
+for any scope/contract change. This is not a layout reinterview or testing-seam
+request.
