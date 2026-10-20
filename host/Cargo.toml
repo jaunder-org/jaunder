@@ -6,7 +6,8 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-exiftool-rs = { git = "https://github.com/Le-Syl21/exiftool-rs", rev = "b60a78446730bb7d25fdb367df4e1a7d9cb3c461" }
+# Upstream v0.13.0 release tag, pinned to its immutable commit.
+exiftool-rs = { git = "https://github.com/Le-Syl21/exiftool-rs", rev = "863f9b8eb47f995eddef657e006e1a22b3a28334" }
 atom_syndication = { version = "0.13.0", default-features = false }
 argon2.workspace = true
 base64.workspace = true

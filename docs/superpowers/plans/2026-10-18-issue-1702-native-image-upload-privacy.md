@@ -20,11 +20,15 @@ hashes and stores the finished bytes.
 ## Work and checks
 
 - [x] 1. Make one small picture-cleaning operation work before expanding tests.
-  - Following the subsequent explicit user source direction, temporarily pin
-    upstream `https://github.com/Le-Syl21/exiftool-rs` at full revision
-    `b60a78446730bb7d25fdb367df4e1a7d9cb3c461` (unreleased, package version
-    0.12.0), with its empty default feature set and no GUI features. Verify the
-    package, license and normal Cargo/Nix pinning; no automatic release switch.
+  - Following the user's explicit release switch decision, use upstream
+    `https://github.com/Le-Syl21/exiftool-rs` v0.13.0 at the release tag's full
+    commit `863f9b8eb47f995eddef657e006e1a22b3a28334`, with its empty default
+    feature set and no GUI features, through normal Cargo/Nix Git resolution
+    (not a claim of crates.io publication). This release directly follows the
+    previously approved unreleased PNG fix
+    `b60a78446730bb7d25fdb367df4e1a7d9cb3c461` (package version 0.12.0), with
+    only version/changelog/lock metadata changes. Verify the package, license
+    and normal pinning; future automatic release switches remain unauthorized.
   - Remove planted ordinary EXIF/XMP/IPTC location, device, date, author,
     description, comment and preview data. Keep encoded picture/frame data,
     orientation, dimensions, intact ICC profiles, HDR information, transparency

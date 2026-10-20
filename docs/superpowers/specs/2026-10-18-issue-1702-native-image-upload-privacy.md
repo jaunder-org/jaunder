@@ -27,16 +27,19 @@ unchanged.
 - Preserve source format, encoded image/frame content, orientation/displayed
   dimensions, intact ICC/color profiles, representative HDR signaling, animation
   and transparency. No lossy re-encoding, resizing or automatic HEIF conversion.
-- Under the subsequent explicit user source direction, temporarily use upstream
-  `exiftool-rs` at immutable Git revision
-  `b60a78446730bb7d25fdb367df4e1a7d9cb3c461` from
-  `https://github.com/Le-Syl21/exiftool-rs`, through normal Cargo/Nix
-  resolution. Its package version remains 0.12.0, with an empty default feature
-  set and no GUI features. This unreleased fix follows release commit
-  `c29c4b7a794de4b8d48fb3cabb1c22e10abf72ce`. The original registry checksum
-  `84c238979b31bd4e0fb6d4d56c0128f4c71cf1d751872b40474a7e865a549733` identifies
-  only the historical registry package, not the Git source. Neither identity is
-  execution proof; no automatic release switch is authorized.
+- Following the user's explicit release switch decision, use upstream
+  `exiftool-rs` v0.13.0 from `https://github.com/Le-Syl21/exiftool-rs`, pinned
+  to the release tag's immutable commit
+  `863f9b8eb47f995eddef657e006e1a22b3a28334` through normal Cargo/Nix
+  resolution, with its empty default feature set and no GUI features. This
+  GitHub release directly follows the previously approved unreleased PNG fix
+  `b60a78446730bb7d25fdb367df4e1a7d9cb3c461` (package version 0.12.0), itself
+  following release commit `c29c4b7a794de4b8d48fb3cabb1c22e10abf72ce`; only
+  version/changelog/lock metadata changed. The historical registry checksum
+  `84c238979b31bd4e0fb6d4d56c0128f4c71cf1d751872b40474a7e865a549733` does not
+  identify this Git release, and no crates.io publication is claimed. Source
+  identity is not execution proof; future automatic release switches remain
+  unauthorized.
 - Accept #21's zero-length-as-empty compatibility, not ignored legacy-empty byte
   recovery. Already-absent deletion `Ok(0)` is legitimate; no request count
   proves privacy. Perform supported post-edit ordinary-metadata reads; failed
