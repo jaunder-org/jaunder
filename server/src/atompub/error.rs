@@ -285,8 +285,12 @@ impl From<anyhow::Error> for HandlerError {
             return HandlerError::UploadsDisabled;
         }
 
-        tracing::error!(error = %err, "AtomPub media upload failed");
-        HandlerError::Status(crate::media::map_error(&err))
+        let status = crate::media::map_error(&err);
+        if status == StatusCode::INTERNAL_SERVER_ERROR {
+            internal_anyhow(err)
+        } else {
+            HandlerError::Status(status)
+        }
     }
 }
 

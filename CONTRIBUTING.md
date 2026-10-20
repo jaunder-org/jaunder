@@ -69,11 +69,16 @@ nix develop
 The default `.#default` and `.#ci` shells target `x86_64-linux`,
 `aarch64-linux`, and `aarch64-darwin` (Apple Silicon macOS). The pinned nixpkgs
 no longer supports Intel macOS (`x86_64-darwin`), so the flake does not
-advertise that platform. On Linux, Playwright uses the browsers pinned in Nix.
-On macOS, Nix supplies the Rust/WASM/Node/database host tooling while Playwright
-browser binaries live in a writable user cache whose path includes the pinned
-`@playwright/test` version; shell entry never downloads browsers. Provision them
-explicitly with:
+advertise that platform. Declared flake outputs are not production-target
+commitments: production targets `x86_64-linux`; ARM Linux is not a delivery
+requirement. Apple Silicon macOS targets the development environment only,
+checked periodically from committed changes rather than for each
+work-in-progress feature or as a production-package/merge prerequisite.
+
+On Linux, Playwright uses the browsers pinned in Nix. On macOS, Nix supplies the
+Rust/WASM/Node/database host tooling while Playwright browser binaries live in a
+writable user cache whose path includes the pinned `@playwright/test` version;
+shell entry never downloads browsers. Provision them explicitly with:
 
 ```bash
 nix develop -c playwright install chromium firefox webkit
@@ -94,9 +99,12 @@ Check platform output boundaries and native shell/package evaluation with:
 nix eval --impure --expr 'import ./nix/platform-contract.nix { flake = builtins.getFlake (toString ./.); }'
 ```
 
-Run this on each supported native platform: Cargo source preparation uses
-import-from-derivation, so foreign-system derivation evaluation requires a
-matching builder and is not forced by this check.
+Run this on the production `x86_64-linux` host and during periodic Apple Silicon
+macOS development-environment checks from committed changes. ARM Linux has no
+delivery-evaluation requirement. Cargo source preparation uses
+import-from-derivation, so this check forces derivation paths only for its
+native system; declared foreign outputs do not establish foreign-native
+execution.
 
 The default local backend remains SQLite. PostgreSQL development is also
 supported:
@@ -1318,6 +1326,15 @@ historical local producer took about 620 seconds; this roughly ten-minute
 prerequisite cost also applies to the shared product-test lane in `check` and
 `prepush`. After launcher realization, the product-test work remains host-native
 and does not invoke Nix check derivations.
+
+The same lane builds the locked host `jaunder` executable and supplies its
+absolute path as `JAUNDER_TEST_EXECUTABLE` to storage and seeding tests that
+launch the private image worker. HTTP integration tests use Cargo's explicit
+`CARGO_BIN_EXE_jaunder` instead. Hermetic coverage selects the corresponding
+instrumented executable; sandbox seeding receives its built server artifact.
+This is a test/seeding input, not a production upload setting. Direct test or
+seeder invocations must supply the matching real application executable; there
+is no test-harness executable, PATH-search or no-op fallback.
 
 An explicit `JAUNDER_CSR_BUNDLE_DIR` is intentional input: missing or invalid
 CSR manifest/representations, rendered shell, or system-artifact inventory fails

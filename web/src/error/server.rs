@@ -81,6 +81,9 @@ pub(crate) fn project(kind: ErrorKind, public_message: &str) -> WebError {
     match kind {
         ErrorKind::Auth => WebError::Unauthorized,
         ErrorKind::Forbidden => WebError::forbidden(public_message),
+        ErrorKind::Unavailable => WebError::Unavailable {
+            message: public_message.to_owned(),
+        },
         ErrorKind::NotFound => WebError::NotFound {
             message: public_message.to_string(),
         },

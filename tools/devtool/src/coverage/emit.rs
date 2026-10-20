@@ -21,7 +21,7 @@ use crate::pg;
 const JUNIT_PATH: &str = "/tmp/jaunder-coverage-junit.xml";
 const CSR_BUNDLE_FILENAME_REGEX: &str = r"(^|.*/)tools/csr_bundle/";
 const CSR_BUNDLE_PACKAGE_PATH: &str = "tools/csr_bundle";
-const LLVM_COV_ENVIRONMENT_SCRIPT: &str = r#"environment="$(cargo llvm-cov show-env --export-prefix)" || exit; eval "$environment" || exit; exec "$@""#;
+const LLVM_COV_ENVIRONMENT_SCRIPT: &str = r#"environment="$(cargo llvm-cov show-env --export-prefix)" || exit; eval "$environment" || exit; : "${CARGO_TARGET_DIR:?instrumented Cargo target directory required}"; export JAUNDER_TEST_EXECUTABLE="$CARGO_TARGET_DIR/debug/jaunder"; exec "$@""#;
 
 fn is_csr_bundle_package_path(path: &str) -> bool {
     match path.strip_prefix(CSR_BUNDLE_PACKAGE_PATH) {

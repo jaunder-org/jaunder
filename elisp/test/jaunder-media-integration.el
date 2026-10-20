@@ -15,7 +15,11 @@
   (jaunder-test--with-live-server
    (jaunder-test--with-temp-directory (dir "jaunder-media-")
                                       (let ((img (expand-file-name "pic.png" dir)))
-                                        (with-temp-file img (insert "PNG-BYTES-abc"))
+                                        (with-temp-file img
+                                          (set-buffer-multibyte nil)
+                                          (insert (jaunder-test--image-bytes t)))
+                                        (dolist (tag '("IFD0:Make" "GPS:GPSLatitude" "ExifIFD:UserComment" "XMP-dc:Description" "IFD1:ThumbnailImage"))
+                                          (should (assoc tag (jaunder-test--image-private-tags img))))
                                         (with-temp-buffer
                                           (insert (format "#+TITLE: T\n\nHere [[file:%s]] ok.\n" img))
                                           (org-mode)
@@ -25,7 +29,9 @@
                                             (should (string-match-p "/media/upload/" out))
                                             (should (string-match-p "pic.png" out))
                                             (should-not (string-match-p (regexp-quote img) out))
-                                            (should (equal (buffer-string) before))))))))
+                                            (should (equal (buffer-string) before))
+                                            (should (equal (jaunder--pull-media-read-bytes img)
+                                                           (jaunder-test--image-bytes t)))))))))
 
 (ert-deftest jaunder-media-upload-is-idempotent ()
   "Re-uploading identical bytes returns HTTP 200 (existed) and the same URL.
@@ -35,7 +41,8 @@ the 200 (vs 201) distinguishes the `existed' branch (media.rs)."
   (jaunder-test--with-live-server
    (jaunder-test--with-temp-directory (dir "jaunder-media-")
                                       (let ((img (expand-file-name "same.png" dir)))
-                                        (with-temp-file img (insert "IDEMPOTENT"))
+                                        (with-temp-file img (set-buffer-multibyte nil)
+                                                        (insert (jaunder-test--image-bytes)))
                                         (let* ((u1 (jaunder--upload-media img "image/png"))
                                                (resp2 (jaunder--http-request
                                                        "POST"
@@ -75,7 +82,8 @@ credentials, so `require_user_match' fails deterministically (403)."
                                       (let* ((attach (expand-file-name "att" dir))
                                              (img (expand-file-name "a.png" attach)))
                                         (make-directory attach t)
-                                        (with-temp-file img (insert "ATTACH"))
+                                        (with-temp-file img (set-buffer-multibyte nil)
+                                                        (insert (jaunder-test--image-bytes)))
                                         (with-temp-buffer
                                           (org-mode)
                                           (insert (format "* H\n:PROPERTIES:\n:DIR: %s\n:END:\n\n[[attachment:a.png]]\n"

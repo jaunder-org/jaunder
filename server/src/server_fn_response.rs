@@ -50,9 +50,10 @@ pub(crate) async fn normalize(response: impl IntoResponse) -> Response {
     let (status, remove_location) = match status {
         400 => (StatusCode::BAD_REQUEST, true),
         403 => (StatusCode::FORBIDDEN, false),
-        // `WebError::server_fn_error_status` only returns `Some(400)`, `Some(403)`, or
-        // `None`; the preceding `let Some` has already excluded `None`.
-        _ => unreachable!("server function error status is limited to 400 or 403"),
+        503 => (StatusCode::SERVICE_UNAVAILABLE, false),
+        // The typed application projection emits only 400, 403 or 503; `None`
+        // has already passed through without changing the framework response.
+        _ => unreachable!("server function error status is limited to 400, 403 or 503"),
     };
     parts.status = status;
     if remove_location {
@@ -116,6 +117,22 @@ mod tests {
         let response = normalize(response).await;
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(WebError::de(body), expected);
+    }
+
+    #[tokio::test]
+    async fn busy_application_error_becomes_unavailable_without_rewriting_body() {
+        let expected = WebError::Unavailable {
+            message: "media preparation is busy".to_owned(),
+        };
+        let response = Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .header(SERVER_FN_ERROR_HEADER, "/api/media/upload")
+            .body(Body::from(expected.clone().ser()))
+            .unwrap();
+        let response = normalize(response).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert_eq!(WebError::de(body), expected);
     }

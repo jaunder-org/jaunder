@@ -3,7 +3,7 @@ name = "performance"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
-license = "GPL-3.0-only"
+license = "GPL-3.0-or-later"
 
 [lints]
 workspace = true

@@ -15,6 +15,41 @@
 (require 'subr-x)
 (require 'cl-lib)
 
+(defconst jaunder-test--image-directory
+  (or (getenv "JAUNDER_TEST_IMAGE_DIR")
+      (expand-file-name "../../server/tests/fixtures/image-privacy"
+                        (file-name-directory load-file-name)))
+  "Owned image inputs; the hermetic test composition supplies their store path.")
+
+(defun jaunder-test--image-bytes (&optional original)
+  "Read the owned JPEG INPUT literally; ORIGINAL selects planted metadata."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally
+     (expand-file-name (if original "jpeg-original.jpg" "jpeg-clean.jpg")
+                       jaunder-test--image-directory))
+    (buffer-string)))
+
+(defun jaunder-test--image-private-tags (path)
+  "Independently read ordinary metadata at PATH using TEST-only ExifTool."
+  (with-temp-buffer
+    (should (eq 0 (call-process "exiftool" nil t nil "-j" "-G1"
+                                "-Make" "-GPSLatitude" "-UserComment"
+                                "-Description" "-ThumbnailImage" path)))
+    (let ((json-object-type 'alist) (json-array-type 'list)
+          (json-key-type 'string))
+      (car (json-read-from-string (buffer-string))))))
+
+(defun jaunder-test--served-image (url)
+  "Read actual public URL bytes, headers and ordinary tags without editing them."
+  (let ((path (make-temp-file "jaunder-public-image-")))
+    (unwind-protect
+        (let ((response (jaunder--pull-media-get url path)))
+          (list :response response
+                :tags (jaunder-test--image-private-tags path)
+                :bytes (jaunder--pull-media-read-bytes path)))
+      (delete-file path))))
+
 (defconst jaunder-test--connect-timeout 2
   "Per-attempt `plz' connect timeout (seconds) for the readiness polls.  Short so
 a hung connect on a loaded VM can't consume the wall-clock poll budget (#628).")

@@ -120,12 +120,22 @@ nine members (`client`, `common`, `csr`, `host`, `macros`, `server`, `storage`,
 `test-support`, and `web`). The independent `tools/` workspace owns its version,
 edition, and non-publish setting for `coverage`, `devtool`, and `doctests`;
 `diagnostic-coverage-runtime` repeats those values directly for the copied-crate
-constraint above. The tools workspace has no workspace license. `xtask/` is a
-standalone single-package workspace, so its package metadata remains direct.
-Likewise, `test-support` keeps its release exception — direct `publish = false`
-— rather than inheriting the root's publish policy. These ownership points
-follow the three workspace roots; they are not one repository-wide metadata
-workspace.
+constraint above. The tools workspace also owns the license inherited by
+`coverage`, `devtool`, and `doctests`; the other tools declare it directly.
+`xtask/` is a standalone single-package workspace, so its package metadata
+remains direct. Likewise, `test-support` keeps its release exception — direct
+`publish = false` — rather than inheriting the root's publish policy. These
+ownership points follow the three workspace roots; they are not one
+repository-wide metadata workspace.
+
+Jaunder-owned code is GNU GPL version 3 or (at the recipient's option) any later
+version (`GPL-3.0-or-later`). The root README grants these terms; Cargo and
+Jaunder's Nix package metadata agree. The GNU license text and third-party or
+separately licensed data notices remain unchanged. Dependency policy retains
+`GPL-3.0-only` and additionally allows `GPL-3.0-or-later`; it does not waive
+source or advisory checks
+([project licensing decision](adr/drafts/project-license-or-later.md)). This
+software license is unrelated to a User's publication Content License.
 
 Across every one of those trees, a `mod.rs` states its module's surface and
 holds nothing else: `mod`/`pub mod` declarations, `use`/`pub use` re-exports,
@@ -796,6 +806,35 @@ come from that same locked decision. The
 [per-user Media Record policy](adr/0183-per-user-media-records-from-local-post-references.md)
 retains ADR-0136's owner history guard: web force may knowingly delete the
 owner's final record past it, but never overrides global safety.
+
+**Image uploads are prepared privately before stored identity is assigned.** The
+explicitly injected MediaManager preparer is mandatory for Web and AtomPub. Its
+composition-root `StorageFactory::media_manager` call mints the three storage
+ports and WriteScope while requiring explicit content locks, serving identity,
+ownership resolver and preparer. All eight dependencies enter one private
+initialization seam and remain individual manager fields; no factory or parts
+bundle is retained. Test-only explicit parts preserve fault-injected ports and
+scopes through the existing test-support boundary. Byte detection governs
+covered image MIME, and hashing/size/quota, public placement and registration
+use only the checked result. The native adapter uses one upstream editor,
+temporarily Git-pinned at `b60a78446730bb7d25fdb367df4e1a7d9cb3c461` (package
+0.12.0). PNG ordinary text/tIME use group removal plus same-write restoration of
+only present Gamma/sRGB controls; fresh reads verify their supported numeric
+gamma and named intent representations. EXIF/XMP removal remains selective. This
+is not image re-encoding or a forensic cleanup policy. Successful removal with
+rendering and encoded-content preservation remains required for every covered
+format; a native capability gap is not an accepted format exclusion. See the
+[private preparation decision](adr/drafts/native-image-upload-preparation.md).
+
+A same-executable worker owns two immediate shared slots (503 when busy), one
+30-second processing deadline and a 128 KiB status bound. Its owner retains
+private spools/permits through kill-and-wait/reap and cleanup. Tracked
+finalization outlives caller cancellation through placement, short registration
+scopes and handback, retaining committed/indeterminate objects. Root shutdown
+drains these owners before releasing the runtime lock. Existing immutable Media
+is not rewritten; the [replacement procedure](media-replacement.md) separates
+supported current-reference updates and deletion refusals from historical-byte
+retirement.
 
 **Media is content-addressed, and the layout is spelled once.**
 `common::media::path` (storage-owned in `common/src/media/storage.rs`) is the
@@ -2870,7 +2909,7 @@ it disables the dev-only auto-initialization of a missing database on `serve`
 **What the flake ships.** `flake.nix` exports `packages.jaunder` (the deployable
 server binary), `packages.site`, the narrow `nixosModules.jaunder` module, the
 single-host `nixosModules.jaunder-stack` module, and, for each explicitly
-supported system (`x86_64-linux`, `aarch64-linux`, `aarch64-darwin`),
+declared output system (`x86_64-linux`, `aarch64-linux`, `aarch64-darwin`),
 `emacsPackages.${system}.jaunder` (a standalone Emacs Protocol Client package
 for installed-package lists such as Home Manager's
 `programs.emacs.extraPackages`). The Protocol Client package contains the
@@ -2881,13 +2920,17 @@ immutable Nix-store curl executable reference, so the Protocol Client adds no
 separate curl PATH propagation
 ([Emacs Protocol Client flake package output](adr/0191-emacs-protocol-client-flake-package-output.md)).
 The system boundary reflects the pinned nixpkgs: Intel Darwin is not advertised.
-Portable server, CSR, and development-tool packages are exposed on the supported
-systems. Development shells retain Nix-pinned browsers and fonts on Linux;
-Darwin explicitly provisions browsers matching the pinned Playwright version
-into a writable versioned cache, without downloads on shell entry. NixOS VM
-checks, ELF patching, diagnostic coverage producers, canonical screenshot
-updates, and theme thumbnails remain Linux-only. Actual Safari investigation is
-separate from Playwright WebKit and from mobile-device proof
+Portable server, CSR, and development-tool packages are exposed on those
+systems; output availability is not a production-target commitment. Production
+targets `x86_64-linux`; ARM Linux is not a delivery requirement. Apple Silicon
+macOS is a development-environment target checked periodically from committed
+changes, not a per-WIP production package, worker or merge prerequisite.
+Development shells retain Nix-pinned browsers and fonts on Linux; Darwin
+explicitly provisions browsers matching the pinned Playwright version into a
+writable versioned cache, without downloads on shell entry. NixOS VM checks, ELF
+patching, diagnostic coverage producers, canonical screenshot updates, and theme
+thumbnails remain Linux-only. Actual Safari investigation is separate from
+Playwright WebKit and from mobile-device proof
 ([supported Nix platform and browser boundaries](adr/drafts/supported-nix-platform-and-browser-boundaries.md)).
 `packages.jaunder` remains the deployable server-binary output. `packages.site`
 is **no longer a deployment artifact** — the binary embeds the bundle — and is

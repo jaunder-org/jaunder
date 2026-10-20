@@ -57,7 +57,10 @@ craneLib.buildPackage {
   src = source;
   pname = "jaunder-xtask";
   version = "0.1.0";
-  meta.mainProgram = "xtask";
+  meta = {
+    mainProgram = "xtask";
+    license = pkgs.lib.licenses.gpl3Plus;
+  };
   passthru = { inherit sourceAdmits; };
   cargoVendorDir = vendor;
   cargoArtifacts = null;

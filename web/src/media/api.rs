@@ -218,6 +218,11 @@ fn map_media_error(err: anyhow::Error) -> InternalError {
             ErrorClass::Client,
             "insufficient storage".to_owned(),
         ),
+        Some(MediaError::Busy) => (
+            ErrorKind::Unavailable,
+            ErrorClass::Transient,
+            "media preparation is busy".to_owned(),
+        ),
         Some(MediaError::Internal(_)) | None => (
             ErrorKind::Internal,
             ErrorClass::Bug,

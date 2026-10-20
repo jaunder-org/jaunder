@@ -556,19 +556,25 @@ async fn cmd_seed_sandbox_profile(
             .await?
         }
         SandboxProfile::Demo => {
+            let executable =
+                std::path::PathBuf::from(std::env::var_os("JAUNDER_TEST_EXECUTABLE").ok_or_else(
+                    || anyhow::anyhow!("seeding requires an explicit Jaunder executable"),
+                )?);
+            anyhow::ensure!(
+                executable.is_absolute(),
+                "seeding worker path must be absolute"
+            );
+            let preparer = host::image_privacy::UploadPreparer::new(executable);
             let storage_path = std::sync::Arc::new(storage_path.to_path_buf());
-            let media_manager = storage::MediaManager::new(
-                factory.media(),
-                factory.posts(),
-                factory.site_config(),
-                factory.write_scope(),
+            let media_manager = factory.media_manager(
                 std::sync::Arc::new(storage::MediaContentLocks::new(std::sync::Arc::clone(
                     &storage_path,
                 ))),
                 opened.instance_id,
                 std::sync::Arc::new(SandboxMediaOwnershipResolver),
+                preparer.clone(),
             );
-            seed_demo_sandbox_profile(
+            let result = seed_demo_sandbox_profile(
                 factory.site_config(),
                 factory.users(),
                 factory.posts(),
@@ -576,7 +582,9 @@ async fn cmd_seed_sandbox_profile(
                 &media_manager,
                 sandbox_profile_anchor(),
             )
-            .await?
+            .await;
+            media_manager.shutdown_uploads().await?;
+            result?
         }
     };
     println!("{}", serde_json::to_string(&manifest.to_json())?);

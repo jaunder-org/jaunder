@@ -19,10 +19,12 @@ hashes and stores the finished bytes.
 
 ## Work and checks
 
-- [ ] 1. Make one small picture-cleaning operation work before expanding tests.
-  - Use exactly native `exiftool-rs` 0.12.0 inside Jaunder, with its empty
-    default feature set and no GUI features. Verify the package, license and
-    Cargo/Nix pinning.
+- [x] 1. Make one small picture-cleaning operation work before expanding tests.
+  - Following the subsequent explicit user source direction, temporarily pin
+    upstream `https://github.com/Le-Syl21/exiftool-rs` at full revision
+    `b60a78446730bb7d25fdb367df4e1a7d9cb3c461` (unreleased, package version
+    0.12.0), with its empty default feature set and no GUI features. Verify the
+    package, license and normal Cargo/Nix pinning; no automatic release switch.
   - Remove planted ordinary EXIF/XMP/IPTC location, device, date, author,
     description, comment and preview data. Keep encoded picture/frame data,
     orientation, dimensions, intact ICC profiles, HDR information, transparency
@@ -36,7 +38,7 @@ hashes and stores the finished bytes.
     bytes.
   - Start with a non-personal JPEG; inspect output with TEST-only ExifTool and
     data comparisons.
-- [ ] 2. Run cleaning in a process Jaunder can stop and wait for.
+- [x] 2. Run cleaning in a process Jaunder can stop and wait for.
   - Check upload permission/current positive size limits. Immediately take one
     of TWO shared work slots or return HTTP 503 Busy, without a waiting queue.
     This busy rule also applies to SVG/non-image uploads, without changing their
@@ -75,7 +77,7 @@ hashes and stores the finished bytes.
     wait-before-cleanup, response bounds, actual error causes, zero-count
     success and cleanup failures. No detached native work or fallback
     publication of the original.
-- [ ] 3. Give Web and AtomPub the same cleaning-and-saving path.
+- [x] 3. Give Web and AtomPub the same cleaning-and-saving path.
   - Require cleaning whenever an upload-ready MediaManager is constructed. Pass
     the cleaning step explicitly at server startup; neither streamed nor
     in-memory uploads may skip it.
@@ -92,7 +94,7 @@ hashes and stores the finished bytes.
   - Prove real success/failure through both routes before expanding coverage.
     Partial uploads/write/check/cancellation failures leave no private input;
     rejection leaves no public original, new record or quota charge.
-- [ ] 4. Check pictures and real users' workflows.
+- [x] 4. Check pictures and real users' workflows.
   - Small owned JPEG, PNG/APNG, GIF, WebP, HEIC/HEIF fixtures prove actual
     removal in each, retained ICC/HDR/orientation/frames/transparency,
     misleading labels, invalid images and stable same-input/already-clean
@@ -113,9 +115,12 @@ hashes and stores the finished bytes.
     two sensitive images, covering local copies/stale sources/caches/backups; do
     not run it in production. Actual historical-original retirement/script stays
     in #1714; remote copies cannot be recalled.
-  - Record non-obvious decisions in ADR/current architecture docs. Check native
-    packaging, licenses, Cargo/Nix and current-main fixes. Use normal hooks,
-    independent review and exact-head CI before scoped human merge approval;
-    tick completed tasks before their commit gate. No rejected-code reuse, fork
-    restart, extra editor/vendor/path crate, framework, codec campaign, weaker
-    guarantee or extra production authority.
+  - Record non-obvious decisions in ADR/current architecture docs. Check
+    production `x86_64-linux` packaging, licenses, Cargo/Nix and current-main
+    fixes. ARM Linux is not a delivery requirement; Apple Silicon macOS targets
+    only the development environment, checked periodically from committed
+    changes rather than as a per-WIP production/worker or merge prerequisite.
+    Use normal hooks, independent review and exact-head CI before scoped human
+    merge approval; tick completed tasks before their commit gate. No
+    rejected-code reuse, fork restart, extra editor/vendor/path crate,
+    framework, codec campaign, weaker guarantee or extra production authority.

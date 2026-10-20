@@ -1439,16 +1439,17 @@ mod sandbox_profile_tests {
         let users = env.users();
         let posts = env.posts();
         let media = env.media();
-        let media_manager = MediaManager::new(
-            Arc::clone(&media),
-            Arc::clone(&posts),
-            env.site_config(),
-            env.write_scope(),
+        let media_manager = env.media_manager(
             Arc::new(storage::MediaContentLocks::new(Arc::new(
                 env.base.path().to_path_buf(),
             ))),
             env.base.instance_id().clone(),
             Arc::new(SandboxMediaOwnershipResolver),
+            host::image_privacy::UploadPreparer::new(
+                std::env::var_os("JAUNDER_TEST_EXECUTABLE")
+                    .expect("test launcher supplies Jaunder executable")
+                    .into(),
+            ),
         );
         let anchor = "2026-09-06T12:34:00Z".parse().expect("fixed minute anchor");
         let actual = seed_demo_sandbox_profile(

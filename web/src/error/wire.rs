@@ -17,6 +17,8 @@ pub enum WebError {
     #[error("{message}")]
     Forbidden { message: String },
     #[error("{message}")]
+    Unavailable { message: String },
+    #[error("{message}")]
     NotFound { message: String },
     #[error("{message}")]
     Validation { message: String },
@@ -87,6 +89,7 @@ impl WebError {
         match error {
             Self::ServerFunctionInput { .. } => Some(400),
             Self::Forbidden { .. } => Some(403),
+            Self::Unavailable { .. } => Some(503),
             _ => None,
         }
     }

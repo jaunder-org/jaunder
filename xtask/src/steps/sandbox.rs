@@ -880,6 +880,7 @@ fn prepare_workspace(
         let seed = Process::start(
             processkit::Command::new(support)
                 .args(["seed-sandbox-profile", "--db"])
+                .env("JAUNDER_TEST_EXECUTABLE", &artifacts.jaunder)
                 .arg(database_url(workspace))
                 .args(["--profile", profile.as_str(), "--storage-path"])
                 .arg(workspace)

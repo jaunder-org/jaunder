@@ -35,6 +35,9 @@ pub fn run(sh: &Shell, result: &mut CommandResult) {
     // Doctests run only in `doctest-fences`, where captured output can be
     // reconciled with the source population rather than discarded.
     for (name, args) in auxiliary_test_commands() {
+        if result.command == "check" {
+            eprintln!("xtask-check-step-start: {name}");
+        }
         result.push(resources::run(sh, name, "cargo", args));
     }
 }

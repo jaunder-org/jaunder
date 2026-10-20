@@ -337,6 +337,7 @@ let
 
   commonArgs = {
     inherit src cargoVendorDir;
+    meta.license = pkgs.lib.licenses.gpl3Plus;
     pname = "jaunder";
     version = "0.1.0";
     strictDeps = true;
@@ -559,6 +560,7 @@ let
     src = toolsSrc;
     pname = "jaunder-tools";
     version = "0.1.0";
+    meta.license = pkgs.lib.licenses.gpl3Plus;
     strictDeps = true;
     cargoExtraArgs = "--manifest-path tools/Cargo.toml";
     cargoLock = "${toolsSrc}/tools/Cargo.lock";

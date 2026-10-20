@@ -32,6 +32,268 @@ const PNG: &[u8] = &[
     0x42, 0x60, 0x82,
 ];
 
+#[apply(backends_matrix)]
+#[case::jpeg(
+    include_bytes!("../fixtures/image-privacy/jpeg-original.jpg").as_slice(),
+    "image/jpeg",
+    &["IFD0:Make", "IFD0:Artist", "GPS:GPSLatitude", "GPS:GPSLongitude", "ExifIFD:DateTimeOriginal", "ExifIFD:UserComment", "IPTC:Caption-Abstract", "XMP-dc:Description", "IFD1:ThumbnailOffset"]
+)]
+#[case::png(
+    include_bytes!("../fixtures/image-privacy/png-original.png").as_slice(),
+    "image/png",
+    &["IFD0:Make", "IFD0:Artist", "GPS:GPSLatitude", "GPS:GPSLongitude", "PNG:Author", "PNG:Comment", "PNG:XMLcomadobexmp", "PNG:ModifyDate"]
+)]
+#[tokio::test]
+async fn atompub_image_preparation_serves_sanitized_identity_and_rejects_invalid_input(
+    backend: Backend,
+    #[case] original: &[u8],
+    #[case] mime: &str,
+    #[case] private_tags: &[&str],
+) {
+    use crate::helpers::image_privacy::{jpeg_oracle_bytes, oracle_tags, rgba_frames};
+    use common::media::{ByteSize, ContentHash, MediaSource};
+    use sha2::{Digest, Sha256};
+    let before = oracle_tags(original, &[]);
+    for tag in private_tags {
+        assert!(before.contains_key(*tag), "BEFORE witness absent: {tag}");
+    }
+    let env = backend.setup().await;
+    let session = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
+    let storage = TempDir::new().unwrap();
+    let app = make_app!(&env, &storage);
+    let filename = parse_filename("misleading.png");
+    let response = app
+        .clone()
+        .oneshot(
+            atompub(&session, Method::POST, "media")
+                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .header("slug", filename.as_ref())
+                .body(Body::from(original.to_vec()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let member = response
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let entry = body_string(response)
+        .await
+        .parse::<host::atompub::Entry>()
+        .expect("media Entry");
+    let content = entry.content().expect("authoritative content");
+    assert_eq!(content.content_type(), Some(mime));
+    let source = content
+        .src()
+        .expect("authoritative sanitized URL")
+        .to_owned();
+    let public_url = atompub_location(&source);
+    assert_eq!(
+        entry
+            .links()
+            .iter()
+            .find(|link| link.rel() == "edit-media")
+            .unwrap()
+            .href(),
+        source
+    );
+    let response = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(public_url.as_ref())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers().get(header::CONTENT_TYPE).unwrap(), mime);
+    let etag = response
+        .headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let served = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let hash = ContentHash::from_digest(Sha256::digest(&served).into());
+    assert_eq!(etag, host::etag::from_content_hash(&hash).as_ref());
+    assert!(source.contains(hash.as_ref()) && member.contains(hash.as_ref()));
+    assert!(
+        source.ends_with(filename.as_ref()),
+        "canonical filename must remain unchanged"
+    );
+    let after = oracle_tags(&served, &[]);
+    for tag in private_tags {
+        assert!(
+            !after.contains_key(*tag),
+            "public image retains private tag: {tag}"
+        );
+    }
+    if mime == "image/png" {
+        for (tag, expected) in [
+            ("PNG:ImageWidth", serde_json::json!(32)),
+            ("PNG:ImageHeight", serde_json::json!(24)),
+            ("IFD0:Orientation", serde_json::json!(6)),
+            ("PNG:ColorType", serde_json::json!(6)),
+        ] {
+            assert_eq!(before.get(tag), Some(&expected), "BEFORE control: {tag}");
+            assert_eq!(after.get(tag), Some(&expected), "public control: {tag}");
+        }
+    }
+    if let Some(frames) = rgba_frames(original, mime) {
+        assert!(!frames.is_empty(), "BEFORE decoded frames absent");
+        assert!(
+            frames
+                .iter()
+                .flat_map(|f| f.buffer().pixels())
+                .any(|p| p.0[3] < 255),
+            "BEFORE transparency witness absent"
+        );
+        let public_frames = rgba_frames(&served, mime).expect("same public format");
+        assert_eq!(frames.len(), public_frames.len());
+        for (before, after) in frames.iter().zip(&public_frames) {
+            assert!(before.buffer() == after.buffer(), "decoded RGBA changed");
+            assert_eq!(before.delay(), after.delay(), "frame timing changed");
+            assert_eq!((before.left(), before.top()), (after.left(), after.top()));
+        }
+    }
+    let profile = jpeg_oracle_bytes(original, &["-b", "-ICC_Profile"]);
+    assert!(!profile.is_empty(), "BEFORE ICC witness absent");
+    assert!(
+        profile == jpeg_oracle_bytes(&served, &["-b", "-ICC_Profile"]),
+        "ICC bytes changed"
+    );
+    assert!(
+        jpeg_oracle_bytes(original, &["-all=", "-o", "-"])
+            == jpeg_oracle_bytes(&served, &["-all=", "-o", "-"]),
+        "encoded image content changed"
+    );
+    let size = ByteSize::try_from(i64::try_from(served.len()).expect("served image size fits i64"))
+        .unwrap();
+    let record = env
+        .media()
+        .get_media(session.user_id, &hash, &filename, &MediaSource::Upload)
+        .await
+        .unwrap()
+        .expect("persisted sanitized Media Record");
+    assert_eq!(record.size_bytes, size);
+    assert_eq!(record.content_type, mime);
+    for bytes in [original, served.as_ref()] {
+        let response = app
+            .clone()
+            .oneshot(
+                atompub(&session, Method::POST, "media")
+                    .header(header::CONTENT_TYPE, "image/png")
+                    .header("slug", filename.as_ref())
+                    .body(Body::from(bytes.to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "same identity is an idempotent reupload"
+        );
+        let repeated = body_string(response)
+            .await
+            .parse::<host::atompub::Entry>()
+            .unwrap();
+        assert_eq!(repeated.content().unwrap().src(), Some(source.as_str()));
+    }
+    let original_hash = ContentHash::from_digest(Sha256::digest(original).into());
+    assert_ne!(
+        hash, original_hash,
+        "planted metadata must change the stored identity"
+    );
+    let old_url = common::media::url(&MediaSource::Upload, &original_hash, &filename);
+    assert_eq!(
+        app.clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(old_url.as_ref())
+                    .body(Body::empty())
+                    .unwrap()
+            )
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    for (bytes, expected) in [
+        (b"not an image".as_slice(), StatusCode::BAD_REQUEST),
+        (
+            b"\xff\xd8\xff\xe1\x00\x20broken".as_slice(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                atompub(&session, Method::POST, "media")
+                    .header(header::CONTENT_TYPE, "image/jpeg")
+                    .header("slug", "rejected.jpg")
+                    .body(Body::from(bytes))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            expected,
+            "invalid input must not publish an original"
+        );
+        assert!(response.headers().get(header::LOCATION).is_none());
+        let rejected_hash = ContentHash::from_digest(Sha256::digest(bytes).into());
+        assert!(
+            env.media()
+                .get_media(
+                    session.user_id,
+                    &rejected_hash,
+                    &parse_filename("rejected.jpg"),
+                    &MediaSource::Upload
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+    assert_eq!(
+        env.media()
+            .get_user_upload_usage(session.user_id)
+            .await
+            .unwrap(),
+        size
+    );
+    assert_eq!(
+        env.media()
+            .list_media(
+                session.user_id,
+                None,
+                RowLimit::at_most(10),
+                PageOffset::default()
+            )
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        std::fs::read_dir(storage.path().join("media/tmp"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+}
+
 const OWNER_RETAINED_DETAIL: &str = "Media is referenced by retained Posts or revisions. Use Jaunder's web media library to review references before deleting.";
 const GLOBAL_SAFETY_DETAIL: &str = "Media deletion is blocked because Jaunder cannot prove that removing this record would preserve referenced media.";
 
@@ -333,7 +595,9 @@ async fn upload_accepts_pdf_content_type(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
-async fn upload_without_content_type_defaults_to_octet_stream(#[case] backend: Backend) {
+async fn upload_without_content_type_detects_images_and_preserves_non_image_defaults(
+    #[case] backend: Backend,
+) {
     let env = backend.setup().await;
     let session = create_user_and_session(
         std::sync::Arc::clone(&env.users()),
@@ -344,22 +608,31 @@ async fn upload_without_content_type_defaults_to_octet_stream(#[case] backend: B
     let storage = TempDir::new().unwrap();
     let app = make_app!(&env, &storage);
 
-    let response = app
-        .oneshot(
-            atompub(&session, Method::POST, "media")
-                .header("slug", "upload.bin")
-                .body(Body::from(PNG))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::CREATED);
-    assert!(
-        body_string(response)
+    for (bytes, filename, expected) in [
+        (PNG, "upload.bin", "image/png"),
+        (
+            b"%PDF-1.7\nsynthetic document\n".as_slice(),
+            "document.bin",
+            "application/octet-stream",
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                atompub(&session, Method::POST, "media")
+                    .header("slug", filename)
+                    .body(Body::from(bytes))
+                    .unwrap(),
+            )
             .await
-            .contains("type=\"application/octet-stream\"")
-    );
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let entry = body_string(response)
+            .await
+            .parse::<host::atompub::Entry>()
+            .unwrap();
+        assert_eq!(entry.content().unwrap().content_type(), Some(expected));
+    }
 }
 
 #[apply(backends)]

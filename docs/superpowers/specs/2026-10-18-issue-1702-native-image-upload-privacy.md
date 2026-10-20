@@ -27,11 +27,16 @@ unchanged.
 - Preserve source format, encoded image/frame content, orientation/displayed
   dimensions, intact ICC/color profiles, representative HDR signaling, animation
   and transparency. No lossy re-encoding, resizing or automatic HEIF conversion.
-- Use exact published `exiftool-rs` 0.12.0, empty default feature set; no GUI
-  features enabled, through normal Cargo/Nix resolution. Release commit is
-  `c29c4b7a794de4b8d48fb3cabb1c22e10abf72ce`; registry checksum is
-  `84c238979b31bd4e0fb6d4d56c0128f4c71cf1d751872b40474a7e865a549733`. These
-  supplied identities are candidates for local acceptance, not execution proof.
+- Under the subsequent explicit user source direction, temporarily use upstream
+  `exiftool-rs` at immutable Git revision
+  `b60a78446730bb7d25fdb367df4e1a7d9cb3c461` from
+  `https://github.com/Le-Syl21/exiftool-rs`, through normal Cargo/Nix
+  resolution. Its package version remains 0.12.0, with an empty default feature
+  set and no GUI features. This unreleased fix follows release commit
+  `c29c4b7a794de4b8d48fb3cabb1c22e10abf72ce`. The original registry checksum
+  `84c238979b31bd4e0fb6d4d56c0128f4c71cf1d751872b40474a7e865a549733` identifies
+  only the historical registry package, not the Git source. Neither identity is
+  execution proof; no automatic release switch is authorized.
 - Accept #21's zero-length-as-empty compatibility, not ignored legacy-empty byte
   recovery. Already-absent deletion `Ok(0)` is legitimate; no request count
   proves privacy. Perform supported post-edit ordinary-metadata reads; failed
@@ -104,10 +109,13 @@ unchanged.
    upload/verified pull/reuse/republish preserve originals and Local Media Copy
    trust. Disposable replacement/refusal rehearsal and reviewed procedure
    satisfy the above.
-5. Verify dependency bytes/license, Cargo/Nix pinning, supported-platform
-   packaging, focused proofs, hooks and current exact-head hermetic CI. Linux
-   platform checks are not foreign-native execution proof. Landing requires
-   scoped human PR approval.
+5. Verify dependency bytes/license, Cargo/Nix pinning, production `x86_64-linux`
+   packaging, focused proofs, hooks and current exact-head hermetic CI. ARM
+   Linux is not a delivery requirement. Apple Silicon macOS is a
+   development-environment target checked periodically from committed changes,
+   not a per-WIP production package/worker or merge prerequisite. Host checks do
+   not assert foreign-native execution. Landing requires scoped human PR
+   approval.
 
 ## Boundaries
 

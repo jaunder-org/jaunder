@@ -89,6 +89,16 @@ let
     || pkgs.lib.hasPrefix "storage/migrations/" relative
     || pkgs.lib.hasPrefix "host/system_theme_sources/" relative
     || relative == "testdata/theme-repository/minimal/preview.png"
+    || relative == "server/tests/fixtures/image-privacy/jpeg-original.jpg"
+    || relative == "server/tests/fixtures/image-privacy/jpeg-clean.jpg"
+    || relative == "server/tests/fixtures/image-privacy/png-original.png"
+    || relative == "server/tests/fixtures/image-privacy/png-color-original.png"
+    || relative == "server/tests/fixtures/image-privacy/apng-default-original.png"
+    || relative == "server/tests/fixtures/image-privacy/apng-first-original.png"
+    || relative == "server/tests/fixtures/image-privacy/gif-animation-original.gif"
+    || relative == "server/tests/fixtures/image-privacy/webp-animation-original.webp"
+    || relative == "server/tests/fixtures/image-privacy/heic-original.heic"
+    || relative == "server/tests/fixtures/image-privacy/hdr-signal.png"
     || pkgs.lib.hasPrefix "server/tests/misc/backup_corpus/" relative;
   coverageSrc =
     # Pure source-filter negative case: excluded auxiliary assets cannot perturb
@@ -473,6 +483,7 @@ e2eRunAndCapture =
       + " JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture"
       + " JAUNDER_DB=${jaunderDb}"
       + " JAUNDER_STORAGE_PATH=/var/lib/jaunder/data"
+      + " JAUNDER_TEST_IMAGE_DIR=${../server/tests/fixtures/image-privacy}"
       + " JAUNDER_E2E_LANE=${identity}"
       + " JAUNDER_E2E_BACKEND=${backend}"
       + " JAUNDER_E2E_BROWSER=${browser}"
@@ -714,6 +725,8 @@ mkE2eCheck =
           devtoolBin
           # Theme-package export assertions use this pinned ZIP reader in the VM.
           pkgs.unzip
+          # Independent TEST-only image metadata observations, not a runtime editor.
+          pkgs.exiftool
           # `jaunder site-config set` seed steps resolve bare `jaunder` here.
           jaunderBin
         ];
@@ -2325,6 +2338,7 @@ mkWasmCoverageMeasurementProducer =
           cargo-crap
           pkgs.cargo-llvm-cov
           pkgs.cargo-nextest
+          pkgs.exiftool
           # devtool runs the whole test suite under an ephemeral
           # PostgreSQL (via devtool pg) so
           # storage/src/postgres/* gets instrumented coverage. The
@@ -2597,6 +2611,7 @@ e2eGateChecks
         emacsForCi
         jaunderBin
         pkgs.curl
+        pkgs.exiftool
       ];
     };
     testScript = ''
@@ -2605,6 +2620,7 @@ e2eGateChecks
       machine.succeed("mkdir -p /tmp/elisp-coverage")
       machine.succeed(
           "JAUNDER_TEST_BINARY=${jaunderBin}/bin/jaunder "
+          + "JAUNDER_TEST_IMAGE_DIR=${../server/tests/fixtures/image-privacy} "
           + "JAUNDER_ELISP_COVERAGE_DIR=/tmp/elisp-coverage "
           + "emacs --batch -Q -l ${emacsSrc}/scripts/run-coverage.el"
       )
