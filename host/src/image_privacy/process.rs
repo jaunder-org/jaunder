@@ -71,9 +71,7 @@ impl UploadPreparer {
                 tokio::sync::TryAcquireError::NoPermits => PreparationError::Busy,
             })?;
         let mut owners = self.owners.lock().map_err(|_| PreparationError::Protocol)?;
-        if self.slots.is_closed() {
-            return Err(PreparationError::Stopping);
-        }
+        self.ensure_accepting()?;
         while let Some(result) = owners.try_join_next() {
             result?;
         }
@@ -144,13 +142,8 @@ impl UploadPreparer {
             }
             let cleanup = cleanup_spool(spool).await;
             drop(permit);
-            if let Err(Err(error)) = done_tx.send(cleanup) {
-                crate::error::report_swallowed(
-                    crate::error::ErrorKind::Internal,
-                    crate::error::ErrorClass::Transient,
-                    "media.private_spool.cleanup",
-                    crate::error::SwallowedSource::Error(&error),
-                );
+            if let Err(Err(_error)) = done_tx.send(cleanup) {
+                report_unobserved_cleanup();
             }
         });
         Ok(UploadAttempt {
@@ -162,6 +155,14 @@ impl UploadPreparer {
             output,
             stopping: self.shutdown.subscribe(),
         })
+    }
+
+    fn ensure_accepting(&self) -> Result<(), PreparationError> {
+        if self.slots.is_closed() {
+            Err(PreparationError::Stopping)
+        } else {
+            Ok(())
+        }
     }
 
     async fn process(
@@ -203,44 +204,35 @@ impl UploadPreparer {
             Err(primary) => {
                 // start_kill alone is not reaping. Preserve both failures, but
                 // return neither until actual process exit has been acknowledged.
-                match self.stop_and_wait(&mut child).await {
-                    Ok(()) => Err(primary),
-                    Err(reap) => Err(PreparationError::Reap {
-                        primary: Box::new(primary),
-                        reap,
-                    }),
-                }
+                Err(preserve_primary_after_reap(
+                    primary,
+                    self.stop_and_wait(&mut child).await,
+                ))
             }
             success => success,
         }
     }
 
     async fn stop_and_wait(&self, child: &mut Child) -> io::Result<()> {
-        let mut failure = match child.try_wait() {
-            Ok(Some(_)) => return Ok(()),
-            Ok(None) => None,
-            Err(error) => Some(error),
+        let mut failure = match classify_try_wait(child.try_wait()) {
+            TryWait::Exited => return Ok(()),
+            TryWait::Running => None,
+            TryWait::Failed(error) => Some(error),
         };
-        if let Err(error) = child.start_kill() {
-            failure.get_or_insert(error);
-        }
+        failure = preserve_first_reap_failure(failure, child.start_kill());
         #[cfg(any(test, feature = "test-utils"))]
         if let Some(control) = &self.test_control {
             control.before_reap().await;
         }
         loop {
-            match child.wait().await {
-                Ok(_) => {
-                    return match failure {
-                        Some(error) => Err(error),
-                        None => Ok(()),
-                    };
-                }
-                Err(error) => {
-                    failure.get_or_insert(error);
+            match classify_reap_wait(failure, child.wait().await.map(|_| ())) {
+                ReapWait::Exited(None) => return Ok(()),
+                ReapWait::Exited(Some(error)) => return Err(error),
+                ReapWait::Retry(error) => {
+                    failure = Some(error);
                     // An uncertain wait is not an exit acknowledgement. Retain
                     // the child, spool and permit while retrying only reaping.
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    retry_reap_delay().await;
                 }
             }
         }
@@ -261,17 +253,11 @@ impl UploadPreparer {
     /// owned job panicked.
     pub async fn shutdown(&self) -> Result<(), PreparationError> {
         self.stop();
-        let mut owners = {
+        let owners = {
             let mut guard = self.owners.lock().map_err(|_| PreparationError::Protocol)?;
             std::mem::take(&mut *guard)
         };
-        let mut failure = None;
-        while let Some(result) = owners.join_next().await {
-            if let Err(error) = result {
-                failure = Some(error);
-            }
-        }
-        match failure {
+        match join_finalizations(owners).await {
             Some(error) => Err(error.into()),
             None => Ok(()),
         }
@@ -307,6 +293,78 @@ async fn cleanup_spool(spool: tempfile::TempDir) -> io::Result<()> {
         Some(error) => Err(error),
         None => Ok(()),
     }
+}
+
+enum TryWait {
+    Exited,
+    Running,
+    Failed(io::Error),
+}
+
+fn classify_try_wait(result: io::Result<Option<std::process::ExitStatus>>) -> TryWait {
+    match result {
+        Ok(Some(_)) => TryWait::Exited,
+        Ok(None) => TryWait::Running,
+        Err(error) => TryWait::Failed(error),
+    }
+}
+
+enum ReapWait {
+    Exited(Option<io::Error>),
+    Retry(io::Error),
+}
+
+fn classify_reap_wait(previous: Option<io::Error>, result: io::Result<()>) -> ReapWait {
+    match result {
+        Ok(()) => ReapWait::Exited(previous),
+        Err(error) => ReapWait::Retry(previous.unwrap_or(error)),
+    }
+}
+
+fn preserve_first_reap_failure(
+    previous: Option<io::Error>,
+    result: io::Result<()>,
+) -> Option<io::Error> {
+    match result {
+        Ok(()) => previous,
+        Err(error) => Some(previous.unwrap_or(error)),
+    }
+}
+
+fn preserve_primary_after_reap(
+    primary: PreparationError,
+    reap: io::Result<()>,
+) -> PreparationError {
+    match reap {
+        Ok(()) => primary,
+        Err(reap) => PreparationError::Reap {
+            primary: Box::new(primary),
+            reap,
+        },
+    }
+}
+
+async fn retry_reap_delay() {
+    tokio::time::sleep(Duration::from_millis(100)).await;
+}
+
+async fn join_finalizations(mut owners: JoinSet<()>) -> Option<tokio::task::JoinError> {
+    let mut failure = None;
+    while let Some(result) = owners.join_next().await {
+        if let Err(error) = result {
+            failure = Some(error);
+        }
+    }
+    failure
+}
+
+fn report_unobserved_cleanup() {
+    crate::error::report_swallowed(
+        crate::error::ErrorKind::Internal,
+        crate::error::ErrorClass::Transient,
+        "media.private_spool.cleanup",
+        crate::error::SwallowedSource::Redacted,
+    );
 }
 
 async fn stopped(receiver: &mut watch::Receiver<bool>) {
@@ -446,10 +504,15 @@ impl Drop for UploadAttempt {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::{PreparationError, decode_response};
+    use super::{
+        PreparationError, ReapWait, TryWait, UploadAttempt, UploadPreparer, classify_reap_wait,
+        classify_try_wait, decode_response, join_finalizations, preserve_first_reap_failure,
+        preserve_primary_after_reap, report_unobserved_cleanup, retry_reap_delay,
+    };
     use std::error::Error as _;
     use std::os::unix::process::ExitStatusExt;
     use std::process::ExitStatus;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn worker_wire_requires_valid_version_mime_and_exit_agreement() {
@@ -531,5 +594,172 @@ mod tests {
             .unwrap();
         assert_eq!(io.kind(), std::io::ErrorKind::PermissionDenied);
         assert_eq!(io.raw_os_error(), Some(13));
+    }
+
+    #[test]
+    fn process_state_classifiers_preserve_the_first_reap_failure() {
+        assert!(matches!(
+            classify_try_wait(Ok(Some(ExitStatus::from_raw(0)))),
+            TryWait::Exited
+        ));
+        assert!(matches!(classify_try_wait(Ok(None)), TryWait::Running));
+        assert!(matches!(
+            classify_try_wait(Err(std::io::Error::other("query"))),
+            TryWait::Failed(error) if error.to_string() == "query"
+        ));
+
+        assert!(matches!(
+            classify_reap_wait(None, Ok(())),
+            ReapWait::Exited(None)
+        ));
+        assert!(matches!(
+            classify_reap_wait(Some(std::io::Error::other("kill")), Ok(())),
+            ReapWait::Exited(Some(error)) if error.to_string() == "kill"
+        ));
+        assert!(matches!(
+            classify_reap_wait(Some(std::io::Error::other("kill")), Err(std::io::Error::other("wait"))),
+            ReapWait::Retry(error) if error.to_string() == "kill"
+        ));
+        assert!(matches!(
+            classify_reap_wait(None, Err(std::io::Error::other("wait"))),
+            ReapWait::Retry(error) if error.to_string() == "wait"
+        ));
+
+        let first = preserve_first_reap_failure(None, Err(std::io::Error::other("kill")));
+        let first = preserve_first_reap_failure(first, Err(std::io::Error::other("wait")));
+        assert_eq!(first.unwrap().to_string(), "kill");
+        assert!(preserve_first_reap_failure(None, Ok(())).is_none());
+    }
+
+    #[test]
+    fn primary_and_reap_failures_remain_both_typed() {
+        assert!(matches!(
+            preserve_primary_after_reap(PreparationError::Deadline, Ok(()),),
+            PreparationError::Deadline
+        ));
+        assert!(matches!(
+            preserve_primary_after_reap(
+                PreparationError::Stopping,
+                Err(std::io::Error::other("wait failed")),
+            ),
+            PreparationError::Reap { primary, reap }
+                if matches!(*primary, PreparationError::Stopping)
+                    && reap.to_string() == "wait failed"
+        ));
+    }
+
+    #[test]
+    fn closed_admission_is_rejected_and_process_does_not_spawn_after_shutdown() {
+        let preparer = UploadPreparer::state("unused executable".into());
+        assert!(preparer.ensure_accepting().is_ok());
+        preparer.slots.close();
+        assert!(matches!(
+            preparer.ensure_accepting(),
+            Err(PreparationError::Stopping)
+        ));
+    }
+
+    #[tokio::test]
+    async fn process_observes_shutdown_before_spawning_a_worker() {
+        let preparer = UploadPreparer::state("unused executable".into());
+        let (_shutdown_tx, mut shutdown) = tokio::sync::watch::channel(true);
+        let (_lease_tx, mut lease) = tokio::sync::oneshot::channel();
+        let error = preparer
+            .process(
+                std::path::Path::new("unused spool"),
+                "image/jpeg".into(),
+                &mut lease,
+                &mut shutdown,
+            )
+            .await
+            .expect_err("shutdown prevents child admission");
+        assert!(matches!(error, PreparationError::Stopping));
+    }
+
+    #[tokio::test]
+    async fn finalization_drain_returns_join_failures_after_draining_all_owners() {
+        let mut owners = tokio::task::JoinSet::new();
+        owners.spawn(async {});
+        owners.spawn(std::future::pending::<()>());
+        owners.abort_all();
+        let failure = join_finalizations(owners)
+            .await
+            .expect("cancelled finalizer is reported");
+        assert!(failure.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn retry_reaping_retains_process_ownership_during_the_retry_delay() {
+        let started = tokio::time::Instant::now();
+        retry_reap_delay().await;
+        assert!(started.elapsed() >= std::time::Duration::from_millis(100));
+    }
+
+    #[derive(Clone)]
+    struct CapturedWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CapturedWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for CapturedWriter {
+        type Writer = Self;
+
+        fn make_writer(&'writer self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    #[test]
+    fn unobserved_cleanup_errors_report_bounded_context_without_private_text() {
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_ansi(false)
+            .with_writer(CapturedWriter(output.clone()))
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            report_unobserved_cleanup();
+        });
+        let trace = String::from_utf8_lossy(
+            &output
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+        .into_owned();
+        assert!(trace.contains("media.private_spool.cleanup"));
+        assert!(trace.contains("swallowed"));
+        assert!(trace.contains("redacted"));
+        assert!(!trace.contains("upload-secret"));
+    }
+
+    #[tokio::test]
+    async fn upload_attempt_can_observe_an_already_completed_owner_result_without_a_file() {
+        let (start, _start_rx) = tokio::sync::oneshot::channel();
+        let (lease, _lease_rx) = tokio::sync::oneshot::channel();
+        let (result_tx, result) = tokio::sync::oneshot::channel();
+        result_tx.send(Ok(None)).unwrap();
+        let (done_tx, done) = tokio::sync::oneshot::channel();
+        done_tx.send(Ok(())).unwrap();
+        let mut attempt = UploadAttempt {
+            file: None,
+            start: Some(start),
+            lease: Some(lease),
+            result: Some(result),
+            done: Some(done),
+            output: std::path::PathBuf::new(),
+            stopping: tokio::sync::watch::channel(false).1,
+        };
+        assert_eq!(attempt.prepare("image/jpeg").await.unwrap(), None);
     }
 }

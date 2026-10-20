@@ -317,6 +317,19 @@ impl TargetDisposition {
     }
 }
 
+async fn join_finalization_owners(mut owners: tokio::task::JoinSet<()>) -> anyhow::Result<()> {
+    let mut failure = None;
+    while let Some(result) = owners.join_next().await {
+        if let Err(error) = result {
+            failure = Some(error);
+        }
+    }
+    match failure {
+        Some(error) => Err(error.into()),
+        None => Ok(()),
+    }
+}
+
 impl MediaManager {
     #[must_use]
     fn new(args: MediaManagerArgs) -> Self {
@@ -362,24 +375,16 @@ impl MediaManager {
     /// Returns the first native-owner, cleanup, or finalizer join error.
     pub async fn shutdown_uploads(&self) -> anyhow::Result<()> {
         let native = self.preparer.shutdown().await;
-        let mut finalizations = {
+        let finalizations = {
             let mut owners = self
                 .finalizations
                 .lock()
                 .map_err(|_| anyhow::anyhow!(PreparationError::Protocol))?;
             std::mem::take(&mut *owners)
         };
-        let mut failure = None;
-        while let Some(result) = finalizations.join_next().await {
-            if let Err(error) = result {
-                failure = Some(error);
-            }
-        }
+        let finalization = join_finalization_owners(finalizations).await;
         native?;
-        match failure {
-            Some(error) => Err(error.into()),
-            None => Ok(()),
-        }
+        finalization
     }
 
     /// Installs a per-manager test gate immediately before filesystem reclaim.
@@ -565,17 +570,7 @@ impl MediaManager {
                         )
                         .await;
                     let result = Self::finish_owned_attempt(attempt, result).await;
-                    if let Err(undelivered) = sender.send(result) {
-                        Self::emit_failure_metric(&undelivered);
-                        if let Err(error) = undelivered {
-                            host::error::report_swallowed(
-                                host::error::ErrorKind::Internal,
-                                host::error::ErrorClass::Transient,
-                                "media.upload.cancelled_handback",
-                                host::error::SwallowedSource::Error(error.as_ref()),
-                            );
-                        }
-                    }
+                    Self::deliver_finalized_upload(sender, result);
                 }
                 .instrument(tracing::Span::current()),
             );
@@ -588,6 +583,30 @@ impl MediaManager {
         result: anyhow::Result<MutationOutcome<ManagedUpload>>,
     ) -> anyhow::Result<MutationOutcome<ManagedUpload>> {
         let cleanup = attempt.finish().await;
+        Self::preserve_result_after_cleanup(result, cleanup)
+    }
+
+    fn deliver_finalized_upload(
+        sender: tokio::sync::oneshot::Sender<anyhow::Result<MutationOutcome<ManagedUpload>>>,
+        result: anyhow::Result<MutationOutcome<ManagedUpload>>,
+    ) {
+        if let Err(undelivered) = sender.send(result) {
+            Self::emit_failure_metric(&undelivered);
+            if let Err(_error) = undelivered {
+                host::error::report_swallowed(
+                    host::error::ErrorKind::Internal,
+                    host::error::ErrorClass::Transient,
+                    "media.upload.cancelled_handback",
+                    host::error::SwallowedSource::Redacted,
+                );
+            }
+        }
+    }
+
+    fn preserve_result_after_cleanup(
+        result: anyhow::Result<MutationOutcome<ManagedUpload>>,
+        cleanup: Result<(), PreparationError>,
+    ) -> anyhow::Result<MutationOutcome<ManagedUpload>> {
         match (result, cleanup) {
             (Ok(value), Ok(())) => Ok(value),
             (Err(error), cleanup) => {
@@ -1242,6 +1261,51 @@ mod tests {
 
     fn no_posts() -> Arc<dyn PostStorage> {
         Arc::new(crate::MockPostStorage::new())
+    }
+
+    // guard:no-backend — exercises owner JoinSet cancellation without storage.
+    #[tokio::test]
+    async fn finalization_drain_reports_cancelled_owned_tasks() {
+        let mut owners = tokio::task::JoinSet::new();
+        owners.spawn(std::future::pending::<()>());
+        owners.abort_all();
+        let error = join_finalization_owners(owners)
+            .await
+            .expect_err("cancelled finalizer remains visible at shutdown");
+        assert!(
+            error
+                .downcast_ref::<tokio::task::JoinError>()
+                .is_some_and(tokio::task::JoinError::is_cancelled)
+        );
+    }
+
+    #[test]
+    fn cancelled_failed_handback_is_reported_without_exposing_the_error() {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        drop(receiver);
+        let ((), trace) = crate::helpers::swallowed_test::capture(|| {
+            MediaManager::deliver_finalized_upload(
+                sender,
+                Err(anyhow::anyhow!("private image preparation detail")),
+            );
+        });
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "media.upload.cancelled_handback",
+        );
+        assert!(!trace.contains("private image preparation detail"));
+    }
+
+    #[test]
+    fn primary_upload_error_survives_private_cleanup_failure() {
+        let (result, trace) = crate::helpers::swallowed_test::capture(|| {
+            MediaManager::preserve_result_after_cleanup(
+                Err(anyhow::anyhow!("primary quota failure")),
+                Err(PreparationError::Protocol),
+            )
+        });
+        assert_eq!(result.unwrap_err().to_string(), "primary quota failure");
+        crate::helpers::swallowed_test::assert_one_report(&trace, "media.upload.cleanup");
     }
 
     fn test_instance_id() -> InstanceId {
@@ -2840,6 +2904,141 @@ mod tests {
                 .unwrap()
                 .value(),
             i64::try_from(CLEAN_JPEG.len()).expect("fixture length fits i64")
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn successful_upload_completes_after_public_placement_gate(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let preparer = test_preparer();
+        let gate = Arc::new(tokio::sync::Barrier::new(2));
+        let manager = Arc::new(
+            MediaManager::new(MediaManagerArgs {
+                media: env.media(),
+                posts: env.posts(),
+                site_config: env.site_config(),
+                write_scope: env.write_scope(),
+                content_locks: Arc::new(MediaContentLocks::new(Arc::new(
+                    env.base.path().to_path_buf(),
+                ))),
+                instance_id: env.base.instance_id().clone(),
+                ownership_resolver: no_foreign_resolver(),
+                preparer: Arc::clone(&preparer),
+            })
+            .with_upload_placement_gate_for_test(Arc::clone(&gate)),
+        );
+        let filename = parse_filename("completed-gated-upload.jpg");
+        let uploading = tokio::spawn({
+            let manager = Arc::clone(&manager);
+            let filename = filename.clone();
+            async move {
+                manager
+                    .upload_bytes(
+                        user_id,
+                        &filename,
+                        parse_content_type("image/jpeg"),
+                        CLEAN_JPEG,
+                    )
+                    .await
+            }
+        });
+        gate.wait().await;
+        gate.wait().await;
+        let result = uploading.await.unwrap().expect("upload completes");
+        assert_eq!(result.value().filename, filename);
+        manager.shutdown_uploads().await.unwrap();
+        assert!(
+            env.media()
+                .get_media(
+                    user_id,
+                    &result.value().sha256,
+                    &filename,
+                    &MediaSource::Upload,
+                )
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[cfg(unix)]
+    #[apply(backends)]
+    #[tokio::test]
+    async fn missing_fresh_candidate_at_public_mode_boundary_is_not_registered(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let root = env.base.path().to_path_buf();
+        let gate = Arc::new(tokio::sync::Barrier::new(2));
+        let manager = Arc::new(
+            MediaManager::new(MediaManagerArgs {
+                media: env.media(),
+                posts: env.posts(),
+                site_config: env.site_config(),
+                write_scope: env.write_scope(),
+                content_locks: Arc::new(MediaContentLocks::new(Arc::new(root.clone()))),
+                instance_id: env.base.instance_id().clone(),
+                ownership_resolver: no_foreign_resolver(),
+                preparer: test_preparer(),
+            })
+            .with_upload_placement_gate_for_test(Arc::clone(&gate)),
+        );
+        let filename = parse_filename("lost-fresh-candidate.jpg");
+        let hash = ContentHash::from_digest(Sha256::digest(CLEAN_JPEG).into());
+        let public_path =
+            root.join("media")
+                .join(media::path(&MediaSource::Upload, &hash, &filename));
+        let uploading = tokio::spawn({
+            let manager = Arc::clone(&manager);
+            let filename = filename.clone();
+            async move {
+                manager
+                    .upload_bytes(
+                        user_id,
+                        &filename,
+                        parse_content_type("image/jpeg"),
+                        CLEAN_JPEG,
+                    )
+                    .await
+            }
+        });
+
+        gate.wait().await;
+        assert!(
+            public_path.exists(),
+            "fresh candidate reaches the mode boundary"
+        );
+        std_fs::remove_file(&public_path).expect("controlled disappearance before mode update");
+        gate.wait().await;
+        let _error = uploading
+            .await
+            .unwrap()
+            .expect_err("a missing fresh candidate cannot be registered");
+        manager.shutdown_uploads().await.unwrap();
+        assert!(!public_path.exists());
+        assert!(
+            env.media()
+                .get_media(user_id, &hash, &filename, &MediaSource::Upload)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            env.media()
+                .get_user_upload_usage(user_id)
+                .await
+                .unwrap()
+                .value(),
+            0
         );
     }
 

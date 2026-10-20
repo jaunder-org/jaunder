@@ -212,8 +212,7 @@ e2eOtelTestHelpers = identity: ''
     machine.wait_for_open_port(4318, timeout=30)
 
   def retain_e2e_capture():
-    import hashlib
-    import tarfile
+    import importlib.util
 
     # Keep every available failure artifact; only the final success path requires
     # a quiesced, byte-exact snapshot. Earlier seed-failure callers ignore errors.
@@ -222,7 +221,6 @@ e2eOtelTestHelpers = identity: ''
     for label, command in [
       ("hash", "find /var/lib/jaunder/capture -type f -exec sha256sum {} +"),
       ("size", "find /var/lib/jaunder/capture -type f -printf '%s %p\\n'"),
-      ("tar", "test -d /var/lib/jaunder/capture && tar czf /tmp/capture-${identity}.tar.gz -C /var/lib/jaunder capture"),
     ]:
       try:
         results[label] = machine.execute(command)
@@ -233,17 +231,21 @@ e2eOtelTestHelpers = identity: ''
       print(output)
       if status != 0:
         errors.append("capture " + label + " failed")
-    copied = False
+    archived = False
+    capture_module = None
     try:
-      if machine.execute("test -e /tmp/capture-${identity}.tar.gz")[0] == 0:
-        machine.copy_from_machine("/tmp/capture-${identity}.tar.gz", "")
-        copied = True
-      else:
-        errors.append("capture archive missing")
+      capture_spec = importlib.util.spec_from_file_location("e2e_capture", "${./e2e_capture.py}")
+      assert capture_spec is not None and capture_spec.loader is not None, "capture helper unavailable"
+      capture_module = importlib.util.module_from_spec(capture_spec)
+      capture_spec.loader.exec_module(capture_module)
+      # The launcher sets TMPDIR=state_dir; shared_dir is the separate copy exchange.
+      capture_module.archive_capture(machine.state_dir / "xchg", machine.out_dir / "capture-${identity}.tar.gz")
+      archived = True
+      print("capture-host-archive complete")
     except Exception as error:
-      errors.append("capture copy failed: " + str(error))
+      errors.append("capture archive failed: " + str(error))
     try:
-      assert not errors and copied, "capture inventory/archive/lift failed"
+      assert not errors and archived and capture_module is not None, "capture inventory/archive/lift failed"
       source_hashes = {}
       source_sizes = {}
       prefix = "/var/lib/jaunder/"
@@ -261,28 +263,9 @@ e2eOtelTestHelpers = identity: ''
         source_sizes[name] = int(size)
       assert source_hashes and source_hashes.keys() == source_sizes.keys(), "source populations differ or empty"
       print("capture-source-manifest", json.dumps({"hashes": source_hashes, "bytes": source_sizes}, sort_keys=True))
-      actual_hashes = {}
-      actual_sizes = {}
-      with tarfile.open(machine.out_dir / "capture-${identity}.tar.gz", "r|gz") as archive:
-        for member in archive:
-          assert not any(part.startswith(".virtfs_metadata") for part in member.name.split("/")), "backend metadata exposed"
-          if member.isdir():
-            continue
-          assert member.isfile() and member.name not in actual_hashes, "nonregular or duplicate capture member"
-          data = archive.extractfile(member)
-          assert data is not None, "missing regular capture member"
-          sha = hashlib.sha256()
-          count = 0
-          while True:
-            chunk = data.read(65536)
-            if not chunk:
-              break
-            sha.update(chunk)
-            count += len(chunk)
-          actual_hashes[member.name] = sha.hexdigest()
-          actual_sizes[member.name] = count
-          assert count == member.size, "archive declared size mismatch"
-      assert actual_hashes == source_hashes and actual_sizes == source_sizes, "source/lift member/byte/SHA mismatch"
+      actual_hashes, actual_sizes = capture_module.verify_capture_archive(
+        machine.out_dir / "capture-${identity}.tar.gz", source_hashes, source_sizes,
+      )
       print("capture-integrity-complete", json.dumps({"hashes": actual_hashes, "bytes": actual_sizes}, sort_keys=True))
     except Exception as error:
       errors.append("capture integrity failed: " + str(error))

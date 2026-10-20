@@ -22,6 +22,20 @@ use crate::helpers::{
 
 const CLEAN_JPEG: &[u8] = include_bytes!("../fixtures/image-privacy/jpeg-clean.jpg");
 
+#[test]
+fn private_image_worker_rejects_invalid_invocation_before_application_startup() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_jaunder"))
+        .arg(host::image_privacy::WORKER_ARGUMENT)
+        .arg("private-spool")
+        .output()
+        .expect("launch application worker boundary");
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("invalid private image worker invocation")
+    );
+}
+
 async fn running_image_worker(
     control: &host::image_privacy::WorkerTestControl,
     spool: &std::path::Path,

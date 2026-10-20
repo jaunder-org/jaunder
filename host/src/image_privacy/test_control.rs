@@ -94,9 +94,14 @@ fn private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     options.open(path)?.write_all(bytes)
 }
 
+/// Park one child thread so its execution owner can test cancellation and reaping.
+fn park_worker_once() {
+    std::thread::park();
+}
+
 /// A fixed test-owned marker controls only the private worker, not uploads or
 /// the program selected by a caller. Real successful privacy tests set no marker.
-pub(super) fn worker_override(spool: &Path) -> io::Result<Option<bool>> {
+pub(super) fn worker_override(spool: &Path, output: &mut impl Write) -> io::Result<Option<bool>> {
     let mode = match std::fs::read_to_string(spool.join(MODE_FILE)) {
         Ok(mode) => mode,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -105,15 +110,14 @@ pub(super) fn worker_override(spool: &Path) -> io::Result<Option<bool>> {
     private_file(&spool.join(READY_FILE), b"ready")?;
     match mode.as_str() {
         "pause" => loop {
-            std::thread::park();
+            park_worker_once();
         },
         "oversize" => {
             // The JSON is otherwise usable. Invalid JSON would let a parser
             // failure pass the bound test even if the byte limit were absent.
-            let mut stdout = io::stdout().lock();
-            stdout.write_all(&vec![b' '; 128 * 1024])?;
-            stdout.write_all(br#"{"version":1,"result":{"Ok":null}}"#)?;
-            stdout.flush()?;
+            output.write_all(&vec![b' '; 128 * 1024])?;
+            output.write_all(br#"{"version":1,"result":{"Ok":null}}"#)?;
+            output.flush()?;
             Ok(Some(true))
         }
         "expanded-output" | "verification-failure" => {
@@ -130,14 +134,134 @@ pub(super) fn worker_override(spool: &Path) -> io::Result<Option<bool>> {
                 Err(Failure::Verification)
             };
             let succeeded = result.is_ok();
-            let mut stdout = io::stdout().lock();
-            serde_json::to_writer(&mut stdout, &Status { version: 1, result })?;
-            stdout.flush()?;
+            serde_json::to_writer(&mut *output, &Status { version: 1, result })?;
+            output.flush()?;
             Ok(Some(succeeded))
         }
         _ => Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "unknown image worker test control",
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        MODE_FILE, READY_FILE, WorkerTestControl, WorkerTestMode, park_worker_once, private_file,
+        worker_override,
+    };
+    use std::io;
+    use std::sync::mpsc;
+
+    fn spool() -> tempfile::TempDir {
+        tempfile::tempdir().expect("private test spool")
+    }
+
+    fn set_mode(root: &std::path::Path, mode: &str) {
+        private_file(&root.join(MODE_FILE), mode.as_bytes()).expect("write controlled mode");
+    }
+
+    #[test]
+    fn missing_or_unreadable_control_marker_is_handled_explicitly() {
+        let root = spool();
+        let mut output = Vec::new();
+        assert_eq!(worker_override(root.path(), &mut output).unwrap(), None);
+        assert!(output.is_empty());
+
+        std::fs::create_dir(root.path().join(MODE_FILE)).expect("directory blocks marker read");
+        let error = worker_override(root.path(), &mut output).expect_err("read failure propagates");
+        assert_eq!(error.kind(), io::ErrorKind::IsADirectory);
+    }
+
+    #[test]
+    fn override_refuses_an_existing_ready_marker() {
+        let root = spool();
+        set_mode(root.path(), "oversize");
+        std::fs::write(root.path().join(READY_FILE), b"already owned").expect("ready marker");
+        let error = worker_override(root.path(), &mut Vec::new())
+            .expect_err("the fixed marker must not be overwritten");
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    }
+
+    #[test]
+    fn oversized_control_emits_valid_json_after_the_bounded_prefix() {
+        let root = spool();
+        set_mode(root.path(), "oversize");
+        let mut output = Vec::new();
+        assert_eq!(
+            worker_override(root.path(), &mut output).unwrap(),
+            Some(true)
+        );
+        assert_eq!(&output[..128 * 1024], vec![b' '; 128 * 1024]);
+        let status: serde_json::Value = serde_json::from_slice(&output[128 * 1024..])
+            .expect("oversized response still has valid wire JSON");
+        assert_eq!(status["version"], 1);
+        assert_eq!(status["result"]["Ok"], serde_json::Value::Null);
+        assert!(root.path().join(READY_FILE).exists());
+    }
+
+    #[test]
+    fn output_growth_and_verification_faults_use_the_worker_wire() {
+        for (mode, expected_success) in [("expanded-output", true), ("verification-failure", false)]
+        {
+            let root = spool();
+            set_mode(root.path(), mode);
+            std::fs::write(root.path().join("input"), b"private image bytes")
+                .expect("controlled input");
+            let mut output = Vec::new();
+            assert_eq!(
+                worker_override(root.path(), &mut output).unwrap(),
+                Some(expected_success)
+            );
+            let status: serde_json::Value =
+                serde_json::from_slice(&output).expect("controlled response is valid JSON");
+            if expected_success {
+                assert_eq!(
+                    std::fs::read(root.path().join("output")).unwrap(),
+                    b"private image bytes\0"
+                );
+                assert_eq!(status["result"]["Ok"], "image/jpeg");
+            } else {
+                assert_eq!(status["result"]["Err"], "Verification");
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_control_is_rejected_and_pause_can_be_released_in_a_unit_test() {
+        let root = spool();
+        set_mode(root.path(), "unknown");
+        assert_eq!(
+            worker_override(root.path(), &mut Vec::new())
+                .expect_err("closed test control set rejects unknown markers")
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+
+        let (ready, started) = mpsc::channel();
+        let parked = std::thread::spawn(move || {
+            ready.send(()).unwrap();
+            park_worker_once();
+        });
+        started.recv().unwrap();
+        parked.thread().unpark();
+        parked.join().expect("one park is released cleanly");
+    }
+
+    #[test]
+    fn every_test_mode_installs_one_fixed_marker() {
+        for mode in [
+            WorkerTestMode::Paused,
+            WorkerTestMode::OversizedResponse,
+            WorkerTestMode::ExpandedOutput,
+            WorkerTestMode::VerificationFailure,
+        ] {
+            let root = spool();
+            WorkerTestControl::new(mode)
+                .install(root.path())
+                .expect("fixed enum mode installs");
+            assert!(root.path().join(MODE_FILE).is_file());
+        }
     }
 }

@@ -146,7 +146,7 @@ impl From<PreparationError> for Failure {
                     Self::TruncatedData { expected, actual }
                 }
                 NativeError::ConversionError(_) => Self::Conversion,
-                _ => Self::Protocol,
+                _ => unreachable!("review new native variants against the pinned worker protocol"),
             },
             _ => Self::Protocol,
         }
@@ -188,24 +188,248 @@ impl From<Failure> for PreparationError {
 
 #[cfg(test)]
 mod tests {
-    use super::{Failure, io_failure};
+    use super::{Failure, PreparationError, io_failure, private_io};
+    use exiftool_rs::Error as NativeError;
+    use serde_json::{Value as JsonValue, json};
     use std::io;
 
+    fn wire_value(failure: Failure) -> JsonValue {
+        serde_json::to_value(failure).expect("wire failure serializes")
+    }
+
     #[test]
-    fn io_failure_borrows_and_redacts_private_error_detail() {
+    fn worker_errors_map_to_closed_pii_free_failures() {
+        let private = "private /media/tmp/upload-secret";
+        let cases = [
+            (PreparationError::InvalidImage, json!("InvalidImage")),
+            (PreparationError::Verification, json!("Verification")),
+            (
+                PreparationError::Io(io::Error::new(io::ErrorKind::PermissionDenied, private)),
+                json!({"Io": {"kind": "PermissionDenied", "os": null}}),
+            ),
+            (
+                PreparationError::Native(NativeError::Io(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    private,
+                ))),
+                json!({"NativeIo": {"kind": "NotFound", "os": null}}),
+            ),
+            (
+                PreparationError::Native(NativeError::UnsupportedFileType(private.into())),
+                json!("Unsupported"),
+            ),
+            (
+                PreparationError::Native(NativeError::InvalidData(private.into())),
+                json!("InvalidData"),
+            ),
+            (
+                PreparationError::Native(NativeError::TagNotFound(private.into())),
+                json!("TagNotFound"),
+            ),
+            (
+                PreparationError::Native(NativeError::InvalidTiffHeader),
+                json!("InvalidTiffHeader"),
+            ),
+            (
+                PreparationError::Native(NativeError::InvalidExif(private.into())),
+                json!("InvalidExif"),
+            ),
+            (
+                PreparationError::Native(NativeError::InvalidIptc(private.into())),
+                json!("InvalidIptc"),
+            ),
+            (
+                PreparationError::Native(NativeError::InvalidXmp(private.into())),
+                json!("InvalidXmp"),
+            ),
+            (
+                PreparationError::Native(NativeError::TruncatedData {
+                    expected: 20,
+                    actual: 12,
+                }),
+                json!({"TruncatedData": {"expected": 20, "actual": 12}}),
+            ),
+            (
+                PreparationError::Native(NativeError::ConversionError(private.into())),
+                json!("Conversion"),
+            ),
+            (PreparationError::Busy, json!("Protocol")),
+            (PreparationError::Stopping, json!("Protocol")),
+            (PreparationError::Deadline, json!("Protocol")),
+            (PreparationError::Protocol, json!("Protocol")),
+        ];
+
+        for (error, expected) in cases {
+            let actual = wire_value(Failure::from(error));
+            assert_eq!(actual, expected);
+            assert!(!actual.to_string().contains(private));
+        }
+    }
+
+    #[test]
+    fn private_io_walks_wrapped_sources_and_redacts_path_text() {
+        #[derive(Debug)]
+        struct Wrapped(io::Error);
+        impl std::fmt::Display for Wrapped {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                self.0.fmt(formatter)
+            }
+        }
+        impl std::error::Error for Wrapped {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        let nested = io::Error::other(Wrapped(io::Error::from_raw_os_error(13)));
+        let redacted = private_io(&nested);
+        assert_eq!(redacted.raw_os_error(), Some(13));
+        assert!(!redacted.to_string().contains("upload-secret"));
+
+        let no_code = private_io(&io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "private upload-secret path",
+        ));
+        assert_eq!(no_code.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            no_code.to_string(),
+            "private image filesystem operation failed"
+        );
+    }
+
+    #[test]
+    fn wire_io_kinds_restore_without_os_codes_and_unknown_kinds_fail_closed() {
+        let kinds = [
+            ("NotFound", io::ErrorKind::NotFound),
+            ("PermissionDenied", io::ErrorKind::PermissionDenied),
+            ("AlreadyExists", io::ErrorKind::AlreadyExists),
+            ("InvalidInput", io::ErrorKind::InvalidInput),
+            ("InvalidData", io::ErrorKind::InvalidData),
+            ("UnexpectedEof", io::ErrorKind::UnexpectedEof),
+            ("WriteZero", io::ErrorKind::WriteZero),
+            ("Interrupted", io::ErrorKind::Interrupted),
+            ("OutOfMemory", io::ErrorKind::OutOfMemory),
+            ("StorageFull", io::ErrorKind::StorageFull),
+            ("TimedOut", io::ErrorKind::TimedOut),
+            ("BrokenPipe", io::ErrorKind::BrokenPipe),
+            ("ConnectionRefused", io::ErrorKind::ConnectionRefused),
+            ("ConnectionReset", io::ErrorKind::ConnectionReset),
+            ("ConnectionAborted", io::ErrorKind::ConnectionAborted),
+            ("NotConnected", io::ErrorKind::NotConnected),
+            ("AddrInUse", io::ErrorKind::AddrInUse),
+            ("AddrNotAvailable", io::ErrorKind::AddrNotAvailable),
+            ("WouldBlock", io::ErrorKind::WouldBlock),
+            ("NotADirectory", io::ErrorKind::NotADirectory),
+            ("IsADirectory", io::ErrorKind::IsADirectory),
+            ("DirectoryNotEmpty", io::ErrorKind::DirectoryNotEmpty),
+            ("ReadOnlyFilesystem", io::ErrorKind::ReadOnlyFilesystem),
+            ("Unsupported", io::ErrorKind::Unsupported),
+            ("Other", io::ErrorKind::Other),
+        ];
+
+        for (name, expected_kind) in kinds {
+            let ordinary = Failure::Io {
+                kind: name.into(),
+                os: None,
+            };
+            assert!(
+                matches!(
+                    PreparationError::from(ordinary),
+                    PreparationError::Io(error) if error.kind() == expected_kind
+                ),
+                "ordinary {name} must restore its I/O kind"
+            );
+
+            let native = Failure::NativeIo {
+                kind: name.into(),
+                os: None,
+            };
+            assert!(
+                matches!(
+                    PreparationError::from(native),
+                    PreparationError::Native(NativeError::Io(error))
+                        if error.kind() == expected_kind
+                ),
+                "native {name} must restore its I/O kind"
+            );
+        }
+
+        for failure in [
+            Failure::Io {
+                kind: "FutureKind".into(),
+                os: None,
+            },
+            Failure::NativeIo {
+                kind: "FutureKind".into(),
+                os: None,
+            },
+        ] {
+            assert!(matches!(
+                PreparationError::from(failure),
+                PreparationError::Protocol
+            ));
+        }
+    }
+
+    #[test]
+    fn worker_failures_restore_their_typed_causes() {
+        let cases = [
+            Failure::InvalidImage,
+            Failure::Verification,
+            Failure::Protocol,
+            Failure::Unsupported,
+            Failure::InvalidData,
+            Failure::TagNotFound,
+            Failure::InvalidTiffHeader,
+            Failure::InvalidExif,
+            Failure::InvalidIptc,
+            Failure::InvalidXmp,
+            Failure::TruncatedData {
+                expected: 20,
+                actual: 12,
+            },
+            Failure::Conversion,
+        ];
+        for failure in cases {
+            let restored = PreparationError::from(failure);
+            assert!(matches!(
+                restored,
+                PreparationError::InvalidImage
+                    | PreparationError::Verification
+                    | PreparationError::Protocol
+                    | PreparationError::Native(_)
+            ));
+        }
+        assert!(matches!(
+            PreparationError::from(Failure::Io {
+                kind: "PermissionDenied".into(),
+                os: Some(13),
+            }),
+            PreparationError::Io(error) if error.raw_os_error() == Some(13)
+        ));
+        assert!(matches!(
+            PreparationError::from(Failure::NativeIo {
+                kind: "PermissionDenied".into(),
+                os: Some(13),
+            }),
+            PreparationError::Native(NativeError::Io(error)) if error.raw_os_error() == Some(13)
+        ));
+    }
+
+    #[test]
+    fn io_failure_redacts_raw_private_detail() {
         let error = io::Error::new(
             io::ErrorKind::PermissionDenied,
             "private spool /media/tmp/upload-secret",
         );
         let failure = io_failure(&error, false);
+        let serialized = wire_value(failure);
 
         assert_eq!(error.to_string(), "private spool /media/tmp/upload-secret");
-        match failure {
-            Failure::Io { kind, os } => {
-                assert_eq!(kind, "PermissionDenied");
-                assert_eq!(os, None);
-            }
-            _ => panic!("ordinary I/O must retain its worker failure kind"),
-        }
+        assert_eq!(
+            serialized,
+            json!({"Io": {"kind": "PermissionDenied", "os": null}})
+        );
+        assert!(!serialized.to_string().contains("upload-secret"));
     }
 }

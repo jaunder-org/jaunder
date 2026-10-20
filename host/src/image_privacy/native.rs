@@ -18,7 +18,8 @@ pub const WORKER_ARGUMENT: &str = "--internal-image-privacy-worker";
 /// be serialized or flushed to stdout.
 pub fn run_worker(spool: &Path, supplied_mime: &str) -> io::Result<bool> {
     #[cfg(any(test, feature = "test-utils"))]
-    if let Some(succeeded) = super::test_control::worker_override(spool)? {
+    if let Some(succeeded) = super::test_control::worker_override(spool, &mut io::stdout().lock())?
+    {
         return Ok(succeeded);
     }
     let result = prepare(spool, supplied_mime);
@@ -204,15 +205,23 @@ fn prepare(spool: &Path, supplied_mime: &str) -> Result<Option<String>, Preparat
     let after = reader()
         .extract_info(&output)
         .map_err(PreparationError::Native)?;
-    if get_file_type(&output).map_err(PreparationError::Native)? != detected
-        || after.iter().any(private_tag)
-    {
+    let output_type = get_file_type(&output).map_err(PreparationError::Native)?;
+    verify_output(detected, output_type, &before, &after)?;
+    Ok(Some(detected.mime_type().into()))
+}
+
+// The native editor may drop EXIF directories containing only mandatory
+// bookkeeping. Verify only privacy and display controls that the upload contract
+// promises to retain, using the same ordinary metadata reader as production.
+fn verify_output(
+    detected: FileType,
+    output_type: FileType,
+    before: &[Tag],
+    after: &[Tag],
+) -> Result<(), PreparationError> {
+    if output_type != detected || after.iter().any(private_tag) {
         return Err(PreparationError::Verification);
     }
-    // The native editor may drop EXIF directories containing only mandatory
-    // bookkeeping (ExifVersion, ComponentsConfiguration, resolution defaults).
-    // Those are not JPEG display dimensions or the intact ICC profile. Protect
-    // the actual display controls rather than requiring bookkeeping to persist.
     for original in before.iter().filter(|tag| {
         tag.group.family0 == "ICC_Profile"
             || png_rendering(tag)
@@ -229,5 +238,168 @@ fn prepare(spool: &Path, supplied_mime: &str) -> Result<Option<String>, Preparat
             return Err(PreparationError::Verification);
         }
     }
-    Ok(Some(detected.mime_type().into()))
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        FileType, PreparationError, png_rendering, png_rendering_value, private_tag, private_xmp,
+        verify_output,
+    };
+    use exiftool_rs::{Error as NativeError, Tag, TagGroup, TagId, Value};
+
+    fn tag(family0: &str, family1: &str, family2: &str, name: &str, raw_value: Value) -> Tag {
+        Tag {
+            id: TagId::Text(name.into()),
+            name: name.into(),
+            description: name.into(),
+            group: TagGroup {
+                family0: family0.into(),
+                family1: family1.into(),
+                family2: family2.into(),
+                family3: "Main".into(),
+            },
+            print_value: raw_value.to_display_string(),
+            raw_value,
+            priority: 0,
+        }
+    }
+
+    fn text_tag(family0: &str, family1: &str, family2: &str, name: &str) -> Tag {
+        tag(
+            family0,
+            family1,
+            family2,
+            name,
+            Value::String("fixture value".into()),
+        )
+    }
+
+    #[test]
+    fn private_xmp_classifies_group_location_gps_and_named_private_fields() {
+        assert!(private_xmp(&text_tag("XMP", "XMP-dc", "Other", "Keywords")));
+        assert!(private_xmp(&text_tag("XMP", "Other", "Location", "City")));
+        assert!(private_xmp(&text_tag(
+            "XMP",
+            "Other",
+            "Other",
+            "GPSLatitude"
+        )));
+        assert!(private_xmp(&text_tag(
+            "XMP",
+            "Other",
+            "Other",
+            "CreatorTool"
+        )));
+        assert!(!private_xmp(&text_tag(
+            "EXIF",
+            "Other",
+            "Other",
+            "CreatorTool"
+        )));
+        assert!(!private_xmp(&text_tag(
+            "XMP",
+            "Other",
+            "Other",
+            "Unrelated"
+        )));
+    }
+
+    #[test]
+    fn private_tag_preserves_icc_comment_and_rendering_controls() {
+        assert!(private_tag(&text_tag("EXIF", "IFD0", "Image", "Make")));
+        assert!(!private_tag(&text_tag(
+            "EXIF",
+            "IFD0",
+            "Image",
+            "Orientation"
+        )));
+        assert!(private_tag(&text_tag("PNG", "PNG", "Text", "Author")));
+        assert!(!private_tag(&text_tag("PNG", "PNG", "Text", "Unrelated")));
+        assert!(private_tag(&text_tag(
+            "XMP",
+            "Other",
+            "Other",
+            "CreatorTool"
+        )));
+        assert!(private_tag(&text_tag("EXIF", "IFD0", "Image", "Comment")));
+        assert!(!private_tag(&text_tag(
+            "ICC_Profile",
+            "ICC_Profile",
+            "Image",
+            "Comment"
+        )));
+    }
+
+    #[test]
+    fn png_rendering_values_accept_only_supported_native_representations() {
+        let gamma = tag("PNG", "PNG", "Image", "Gamma", Value::F64(0.45455));
+        assert_eq!(png_rendering_value(&gamma).unwrap(), "0.45455");
+        for intent in [
+            "Perceptual",
+            "Relative Colorimetric",
+            "Saturation",
+            "Absolute Colorimetric",
+        ] {
+            let rendering = text_tag("PNG", "PNG", "Image", "SRGBRendering");
+            let rendering = Tag {
+                raw_value: Value::String(intent.into()),
+                print_value: intent.into(),
+                ..rendering
+            };
+            assert_eq!(png_rendering_value(&rendering).unwrap(), intent);
+            assert!(png_rendering(&rendering));
+        }
+        for invalid in [
+            tag("PNG", "PNG", "Image", "Gamma", Value::F64(0.0)),
+            tag("PNG", "PNG", "Image", "Gamma", Value::F64(f64::INFINITY)),
+            text_tag("PNG", "PNG", "Image", "SRGBRendering"),
+        ] {
+            assert!(matches!(
+                png_rendering_value(&invalid),
+                Err(PreparationError::Native(NativeError::ConversionError(_)))
+            ));
+        }
+    }
+
+    #[test]
+    fn output_verification_rejects_wrong_type_private_residue_and_lost_fidelity() {
+        let orientation = tag("EXIF", "IFD0", "Image", "Orientation", Value::U16(6));
+        let icc = text_tag("ICC_Profile", "ICC_Profile", "Image", "ProfileDescription");
+        let gamma = tag("PNG", "PNG", "Image", "Gamma", Value::F64(0.45));
+        let before = [orientation.clone(), icc.clone(), gamma.clone()];
+        assert!(verify_output(FileType::Png, FileType::Png, &before, &before).is_ok());
+        assert!(matches!(
+            verify_output(FileType::Png, FileType::Jpeg, &before, &before),
+            Err(PreparationError::Verification)
+        ));
+        let private = text_tag("PNG", "PNG", "Text", "Author");
+        assert!(matches!(
+            verify_output(FileType::Png, FileType::Png, &before, &[private]),
+            Err(PreparationError::Verification)
+        ));
+        for missing in 0..before.len() {
+            let after = before
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != missing)
+                .map(|(_, tag)| tag.clone())
+                .collect::<Vec<_>>();
+            assert!(matches!(
+                verify_output(FileType::Png, FileType::Png, &before, &after),
+                Err(PreparationError::Verification)
+            ));
+        }
+        let changed_gamma = tag("PNG", "PNG", "Image", "Gamma", Value::F64(0.46));
+        assert!(matches!(
+            verify_output(
+                FileType::Png,
+                FileType::Png,
+                &before,
+                &[orientation, icc, changed_gamma],
+            ),
+            Err(PreparationError::Verification)
+        ));
+    }
 }
