@@ -427,9 +427,9 @@ hermetic environment parity matters.
 
 ### Running e2e tests locally
 
-The host and the CI VM load the **same** `end2end/playwright.config.ts`, so
-"passes locally" now equals "passes in CI" — the difference is only how you
-invoke it.
+The host and the CI VM load the **same** `end2end/playwright.config.ts`, keeping
+browser-flow definitions shared. A focused host pass does not establish the
+hermetic backend/browser matrix verdict; CI remains authoritative.
 
 - **Fast local loop** — `cargo xtask e2e-local` owns the whole loop: it builds
   the CSR bundle + server, starts its own `jaunder serve` and OTLP collector on
@@ -465,7 +465,9 @@ invoke it.
   three producer artifacts arrive. Full `cargo xtask validate` runs and
   reconciles all eight retained lanes. Escalate to these when changed behavior
   depends on backend/browser parity, release-build behavior, or branch-boundary
-  confidence. The VM path is what green means before you push.
+  confidence. Run representative hermetic proof when that boundary is
+  load-bearing; it is not a universal prerequisite before every push. The normal
+  push hook remains `prepush`, and CI is the authoritative integration proof.
 - **Firefox reconciliation and controls** — Each Firefox producer lifts every
   available lane-qualified diagnostic even after failure. Host reconciliation
   fail-closed checks the independent census, report union, retries, duration
@@ -763,23 +765,28 @@ different environments. They have the following explicit authority split
 root-workspace fence population in both directions; neither path may silently
 shrink it. Only the Nix path establishes the pinned sandbox/offline verdict.
 
-`cargo xtask check` is the normal agent/developer feedback command. Its product
-Rust test portion is implemented through the same host-native lane exposed as
-`cargo xtask test-local`, so repeated `check` runs reuse the normal local target
-directory and the shared `sccache` cache across worktrees. Use
-`cargo xtask test-local -- <nextest args>` directly only for a narrower
-red/green loop while editing. It intentionally sets `CARGO_INCREMENTAL=0`: that
-gives up same-target incremental reuse so `sccache` can share more compiler work
-between agents and checkouts.
+Focused `cargo xtask test-local -- <nextest args>` and
+`cargo xtask e2e-local <spec-or-file:line>` are the default feedback paths while
+editing. After a repair, rerun the same targeted proof before broadening the
+question. Do not run a broad gate as a routine per-helper or per-fix ritual.
+Normal pre-commit and pre-push hooks still enforce their documented boundaries;
+focused proof does not replace them, hermetic coverage/backend parity, or CI.
 
-`check` is the inner-loop fixer: it auto-fixes **formatting**, and nothing else.
-It has no coverage baseline to heal — the coverage gate is stateless (ADR-0050),
-as stated above — and since #714 no gate rewrites `web/src` either: the endpoint
-and span-name literals a gate used to write are now derived by
-`#[macros::server]`, so there is nothing left in source to correct. `validate`
-is the strict, never-mutating gate. Both commands write a machine-readable
-result to `.xtask/last-result.json` and a `xtask-done:` completion line to
-stderr.
+Choose `cargo xtask check --no-test` or `cargo xtask check` deliberately for a
+named broad diagnostic/integration question: for example, whether a shared
+interface change breaks host/static integration, or whether a repair affects
+other product Rust tests and the wasm/doctest surfaces. Use explicit
+`validate --no-e2e` for local non-e2e hermetic confidence and full `validate`
+when the complete local matrix is needed. CI remains the authoritative
+integration proof.
+
+`check` auto-fixes **formatting**, and nothing else; `validate` never mutates
+the tree. The coverage gate is stateless (ADR-0050), so there is no baseline to
+heal. Both commands write a machine-readable result to `.xtask/last-result.json`
+and a `xtask-done:` completion line to stderr. `check`'s product Rust tests use
+the same host-native lane as `test-local`, reusing the local target directory
+and shared `sccache` across worktrees. That lane sets `CARGO_INCREMENTAL=0` so
+`sccache` can share compiler work between agents and checkouts.
 
 CI does **not** run `cargo xtask validate` as a single job. It distributes the
 non-e2e surface across
@@ -1351,9 +1358,9 @@ avoids the issue entirely by discarding the whole cluster.
 ### Coverage and dependency policy
 
 - Coverage is gated **host-side by xtask**, which reads the Nix `coverage`
-  check's report. It is part of `cargo xtask check`, `cargo xtask validate`, and
-  CI. It is deliberately not part of `cargo xtask prepush`, so the local push
-  hook stays fast while CI remains the non-bypassable hermetic backstop.
+  check's report. It is part of `cargo xtask validate` (including `--no-e2e`)
+  and CI, not `cargo xtask check` or `cargo xtask prepush`. The local push hook
+  stays fast while CI remains the non-bypassable hermetic backstop.
 - `cargo deny check` verifies dependency policy, advisories, and licensing (run
   as one of the static checks).
 
@@ -1552,18 +1559,17 @@ aren't in the report). It evaluates the **committed (HEAD)** filter, so it
 guards what CI/PRs carry, not local uncommitted edits. Subtlety worth knowing: a
 _new_ file must be `git add`-ed to be measured — nix ignores untracked files
 even on a dirty tree. The probe runs in CI's `Validation coverage` job and on
-request; it is deliberately **not** part of per-commit `check`/`validate`
-(#241). **Playwright/WASM coverage evidence
-(`cargo xtask wasm-coverage probe`).** This manual host command realizes the
-independent Chromium and Firefox diagnostic producers before deciding its
-outcome. It retains each unpacked producer root under `.xtask/wasm-coverage/`,
-validates the `v1` status documents and complete digest manifests fail-closed,
-and writes the aggregate verdict to `.xtask/wasm-coverage/status.json` even when
-one browser fails. It only invokes the compiler-matched
-`llvm-profdata`/`llvm-cov` from `.#wasm-coverage-csr` to count-sum profiles when
-both browsers passed with matching module and toolchain identities; otherwise no
-merged evidence is produced. The command exits zero only for two source-mapped
-browser reports and a valid merged Rust-line report.
+request; it is deliberately **not** part of `check`/`validate` (#241).
+**Playwright/WASM coverage evidence (`cargo xtask wasm-coverage probe`).** This
+manual host command realizes the independent Chromium and Firefox diagnostic
+producers before deciding its outcome. It retains each unpacked producer root
+under `.xtask/wasm-coverage/`, validates the `v1` status documents and complete
+digest manifests fail-closed, and writes the aggregate verdict to
+`.xtask/wasm-coverage/status.json` even when one browser fails. It only invokes
+the compiler-matched `llvm-profdata`/`llvm-cov` from `.#wasm-coverage-csr` to
+count-sum profiles when both browsers passed with matching module and toolchain
+identities; otherwise no merged evidence is produced. The command exits zero
+only for two source-mapped browser reports and a valid merged Rust-line report.
 
 **WASM coverage overhead measurement
 (`cargo xtask wasm-coverage measure --quiescent-window '<coordinated window acknowledgement>'`).**
