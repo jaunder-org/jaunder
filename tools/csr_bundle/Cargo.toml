@@ -3,7 +3,7 @@ name = "csr_bundle"
 version = "0.1.0"
 edition = "2024"
 publish = false
-license = "GPL-3.0-only"
+license = "GPL-3.0-or-later"
 
 [lints]
 workspace = true

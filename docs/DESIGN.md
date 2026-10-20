@@ -526,5 +526,10 @@ source (see [ADR-0009](adr/0009-edit-delete-policy.md)).
 ### Media Handling
 
 User-uploaded media is served directly by the binary (see
-[ADR-0003](adr/0003-asset-management.md)). Media linked in external content can
-be optionally cached per-user to protect against link rot.
+[ADR-0003](adr/0003-asset-management.md)). New image uploads require private
+metadata preparation before their stored identity/accounting and public
+placement; author originals and existing immutable Media are not rewritten.
+Operators preparing replacement of existing images should use the
+[replacement/refusal procedure](media-replacement.md), not treat record deletion
+as historical-byte retirement. Media linked in external content can be
+optionally cached per-user to protect against link rot.

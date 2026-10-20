@@ -5,5 +5,6 @@ mod cli_subprocess;
 mod client_telemetry;
 mod commands;
 mod media_handlers;
+mod media_upload_boundaries;
 mod postgres;
 mod static_assets;

@@ -2,6 +2,7 @@ import { test, expect } from "./fixtures";
 import { expectAccessible } from "./accessibility";
 import {
   failServerFn,
+  BASE_URL,
   confirmedMutation,
   type MutationOutcome,
   goto,
@@ -9,7 +10,10 @@ import {
   signInAsNewUser,
   stallServerFn,
 } from "./helpers";
-import { uploadMedia } from "./media-helpers";
+import { imageFixtureDirectory, uploadMedia } from "./media-helpers";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { createHash } from "node:crypto";
 import {
   packageMember,
   packageMemberDigests,
@@ -186,28 +190,41 @@ test("author completes the custom theme lifecycle through Studio", async ({
     Buffer.from(ASSET_BYTES),
     "image/png",
   );
-  const headerOneBytes = Buffer.from([
-    ...ASSET_BYTES.slice(0, -12),
-    1,
-    ...ASSET_BYTES.slice(-11),
-  ]);
-  const headerTwoBytes = Buffer.from([
-    ...ASSET_BYTES.slice(0, -12),
-    2,
-    ...ASSET_BYTES.slice(-11),
-  ]);
+  // Owned BEFORE inputs differ in retained color controls, not private metadata.
+  const headerOneInput = readFileSync(
+    resolve(imageFixtureDirectory, "png-original.png"),
+  );
+  const headerTwoInput = readFileSync(
+    resolve(imageFixtureDirectory, "png-color-original.png"),
+  );
   const headerOne = await uploadMedia(
     page,
     "header-one.png",
-    headerOneBytes,
+    headerOneInput,
     "image/png",
   );
   const headerTwo = await uploadMedia(
     page,
     "header-two.png",
-    headerTwoBytes,
+    headerTwoInput,
     "image/png",
   );
+  // Theme bindings must retain these exact prepared identities and public bytes.
+  const headerOneResponse = await page.request.get(BASE_URL + headerOne.url);
+  const headerTwoResponse = await page.request.get(BASE_URL + headerTwo.url);
+  expect(headerOneResponse.status()).toBe(200);
+  expect(headerTwoResponse.status()).toBe(200);
+  const headerOneBytes = await headerOneResponse.body();
+  const headerTwoBytes = await headerTwoResponse.body();
+  const headerOneHash = createHash("sha256")
+    .update(headerOneBytes)
+    .digest("hex");
+  const headerTwoHash = createHash("sha256")
+    .update(headerTwoBytes)
+    .digest("hex");
+  expect(headerOneHash).not.toBe(headerTwoHash);
+  expect(headerOne.url).toContain(headerOneHash);
+  expect(headerTwo.url).toContain(headerTwoHash);
   for (let index = 0; index < 50; index += 1) {
     await uploadMedia(
       page,

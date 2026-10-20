@@ -277,15 +277,18 @@ mod tests {
             env.base.instance_id().clone(),
             env.site_config(),
         );
-        let media_manager = Arc::new(MediaManager::new(
-            env.media(),
-            env.posts(),
-            env.site_config(),
-            env.write_scope(),
-            Arc::clone(&content_locks),
-            env.base.instance_id().clone(),
-            resolver,
-        ));
+        let media_manager = Arc::new(
+            env.media_manager(
+                Arc::clone(&content_locks),
+                env.base.instance_id().clone(),
+                resolver,
+                host::image_privacy::UploadPreparer::new(
+                    std::env::var_os("JAUNDER_TEST_EXECUTABLE")
+                        .expect("test launcher supplies Jaunder executable")
+                        .into(),
+                ),
+            ),
+        );
         let theme_asset_manager = Arc::new(ThemeAssetManager::new(
             env.themes(),
             env.write_scope(),

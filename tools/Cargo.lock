@@ -748,7 +748,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 3.0.5",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -1093,6 +1093,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "exiftool-rs"
+version = "0.13.0"
+source = "git+https://github.com/Le-Syl21/exiftool-rs?rev=863f9b8eb47f995eddef657e006e1a22b3a28334#863f9b8eb47f995eddef657e006e1a22b3a28334"
+dependencies = [
+ "brotli",
+ "byteorder",
+ "encoding_rs",
+ "filetime",
+ "flate2",
+ "memmap2",
+ "regex-lite",
+ "tempfile",
+ "thiserror 2.0.20",
+ "unicode-width",
+ "xml",
+]
+
+[[package]]
 name = "fallible_collections"
 version = "0.4.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1430,6 +1448,7 @@ dependencies = [
  "atom_syndication 0.13.0",
  "base64 0.23.1",
  "common",
+ "exiftool-rs",
  "html-escape",
  "html5ever 0.39.0",
  "http",
@@ -1455,6 +1474,7 @@ dependencies = [
  "sqlx",
  "strum 0.28.0",
  "syntastica-queries",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -2108,6 +2128,15 @@ name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+
+[[package]]
+name = "memmap2"
+version = "0.9.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "memoffset"
@@ -3241,6 +3270,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "regex-lite"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cab834c73d247e67f4fae452806d17d3c7501756d98c8808d7c9c7aa7d18f973"
+
+[[package]]
 name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4022,7 +4057,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys",
@@ -5309,6 +5344,12 @@ dependencies = [
  "libc",
  "rustix",
 ]
+
+[[package]]
+name = "xml"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f45bb2c13fec6a6cb4c0f76a7e94839e110a14ec803ec2940777a94c347bc52"
 
 [[package]]
 name = "yoke"

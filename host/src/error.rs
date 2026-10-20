@@ -25,6 +25,7 @@ pub type InternalResult<T> = Result<T, InternalError>;
 pub enum ErrorKind {
     Auth,
     Forbidden,
+    Unavailable,
     NotFound,
     Validation,
     Conflict,
@@ -42,6 +43,7 @@ impl ErrorKind {
         match self {
             ErrorKind::Auth => "auth",
             ErrorKind::Forbidden => "forbidden",
+            ErrorKind::Unavailable => "unavailable",
             ErrorKind::NotFound => "not_found",
             ErrorKind::Validation => "validation",
             ErrorKind::Conflict => "conflict",

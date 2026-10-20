@@ -62,9 +62,25 @@ fn run_with_producer(
     // The shared producer can replace target/site; retain ownership until the
     // wrapped nextest command has finished all consumer compilation.
     let _bundle_env = sh.push_env("JAUNDER_CSR_BUNDLE_DIR", &root);
+    let (env, cache_detail) = compile_cache::cargo_compile_env();
+    // Storage and seeding tests need the application worker, not their test
+    // harness executable. Build it even when nextest selects only storage.
+    let worker_build = step_with_env(
+        sh,
+        "test-local-image-worker",
+        "cargo",
+        &["build", "--locked", "-p", "jaunder", "--bin", "jaunder"],
+        &env,
+    );
+    let worker_ok = worker_build.ok;
+    result.push(worker_build);
+    if !worker_ok {
+        return;
+    }
+    let executable = sh.current_dir().join("target/debug/jaunder");
+    let _worker_env = sh.push_env("JAUNDER_TEST_EXECUTABLE", executable);
     let args = args_for(nextest_args);
     let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    let (env, cache_detail) = compile_cache::cargo_compile_env();
     let mut step = step_with_env(sh, "test-local", "cargo", &refs, &env);
     if let Some(cache_detail) = cache_detail {
         step.detail = Some(match step.detail.take() {
@@ -221,9 +237,11 @@ if [ "$1" = producer ]; then
     printf 'producer\n' >> "$CALLS"
     mkdir -p target
     cp -R "$FIXTURE" target/site
+elif [ "$1" = build ]; then
+    printf 'worker-build\n' >> "$CALLS"
 else
     printf 'consumer\n' >> "$CALLS"
-    printf '%s\n' "$JAUNDER_CSR_BUNDLE_DIR" "$RUSTC_WRAPPER" "$CARGO_INCREMENTAL" "$@" > "$OBSERVED"
+    printf '%s\n' "$JAUNDER_CSR_BUNDLE_DIR" "$RUSTC_WRAPPER" "$CARGO_INCREMENTAL" "$JAUNDER_TEST_EXECUTABLE" "$@" > "$OBSERVED"
     if [ "$FAIL_CONSUMER" = yes ]; then echo 'controlled consumer failure' >&2; exit 8; fi
 fi
 "#,
@@ -283,9 +301,9 @@ fi
                     assert_eq!(
                         fs::read_to_string(temp.path().join("calls")).unwrap(),
                         if explicit {
-                            "consumer\n"
+                            "worker-build\nconsumer\n"
                         } else {
-                            "producer\nconsumer\n"
+                            "producer\nworker-build\nconsumer\n"
                         }
                     );
                     let root = if explicit {
@@ -298,7 +316,11 @@ fi
                     assert_eq!(lines[0], root.canonicalize().unwrap().to_str().unwrap());
                     assert_eq!(&lines[1..3], &["sccache", "0"]);
                     assert_eq!(
-                        &lines[3..],
+                        std::path::Path::new(lines[3]),
+                        temp.path().join("target/debug/jaunder")
+                    );
+                    assert_eq!(
+                        &lines[4..],
                         args_for(&args)
                             .iter()
                             .map(String::as_str)

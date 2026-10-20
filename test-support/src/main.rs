@@ -556,19 +556,18 @@ async fn cmd_seed_sandbox_profile(
             .await?
         }
         SandboxProfile::Demo => {
+            let executable = explicit_test_executable(std::env::var_os("JAUNDER_TEST_EXECUTABLE"))?;
+            let preparer = host::image_privacy::UploadPreparer::new(executable);
             let storage_path = std::sync::Arc::new(storage_path.to_path_buf());
-            let media_manager = storage::MediaManager::new(
-                factory.media(),
-                factory.posts(),
-                factory.site_config(),
-                factory.write_scope(),
+            let media_manager = factory.media_manager(
                 std::sync::Arc::new(storage::MediaContentLocks::new(std::sync::Arc::clone(
                     &storage_path,
                 ))),
                 opened.instance_id,
                 std::sync::Arc::new(SandboxMediaOwnershipResolver),
+                preparer.clone(),
             );
-            seed_demo_sandbox_profile(
+            let result = seed_demo_sandbox_profile(
                 factory.site_config(),
                 factory.users(),
                 factory.posts(),
@@ -576,12 +575,27 @@ async fn cmd_seed_sandbox_profile(
                 &media_manager,
                 sandbox_profile_anchor(),
             )
-            .await?
+            .await;
+            media_manager.shutdown_uploads().await?;
+            result?
         }
     };
     println!("{}", serde_json::to_string(&manifest.to_json())?);
     eprintln!("seeded sandbox profile {}", profile_name(profile));
     Ok(())
+}
+
+fn explicit_test_executable(
+    value: Option<std::ffi::OsString>,
+) -> anyhow::Result<std::path::PathBuf> {
+    let executable = std::path::PathBuf::from(
+        value.ok_or_else(|| anyhow::anyhow!("seeding requires an explicit Jaunder executable"))?,
+    );
+    anyhow::ensure!(
+        executable.is_absolute(),
+        "seeding worker path must be absolute"
+    );
+    Ok(executable)
 }
 
 fn profile_name(profile: SandboxProfile) -> &'static str {
@@ -778,6 +792,26 @@ mod tests {
 
     fn cli(command: Commands) -> Cli {
         Cli { command }
+    }
+
+    #[test]
+    fn demo_worker_path_requires_an_explicit_absolute_executable() {
+        let missing = explicit_test_executable(None).expect_err("missing worker is refused");
+        assert_eq!(
+            missing.to_string(),
+            "seeding requires an explicit Jaunder executable"
+        );
+
+        let relative = explicit_test_executable(Some("target/debug/jaunder".into()))
+            .expect_err("relative worker path is refused");
+        assert_eq!(relative.to_string(), "seeding worker path must be absolute");
+
+        let absolute = explicit_test_executable(Some("/store/jaunder/bin/jaunder".into()))
+            .expect("absolute worker path is accepted");
+        assert_eq!(
+            absolute,
+            std::path::PathBuf::from("/store/jaunder/bin/jaunder")
+        );
     }
 
     #[test]

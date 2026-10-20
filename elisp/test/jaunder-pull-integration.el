@@ -190,7 +190,7 @@
   (jaunder-test--with-live-server
    (let* ((root (make-temp-file "jaunder-web-copy-pull-" t))
           (image (expand-file-name "web image.png" root))
-          (bytes "WEB-COPIED-MEDIA")
+          (bytes (jaunder-test--image-bytes))
           (jaunder-blogs
            (list (cons (file-name-as-directory root)
                        (list :base-url jaunder-test-base-url
@@ -199,7 +199,7 @@
          (jaunder--call-with-blog
           root
           (lambda ()
-            (with-temp-file image (insert bytes))
+            (with-temp-file image (set-buffer-multibyte nil) (insert bytes))
             (let* ((absolute (jaunder--upload-media image "image/png"))
                    ;; media.spec.ts proves Copy writes the thumbnail's src;
                    ;; this live AtomPub/Emacs leg exercises that same public route.
@@ -231,6 +231,7 @@
                     (jaunder-reconcile-pull-selected)))
                 (should (equal gets (list absolute))))
               (should (equal (with-temp-buffer
+                               (set-buffer-multibyte nil)
                                (insert-file-contents-literally copy)
                                (buffer-string)) bytes))
               (should (equal (with-temp-buffer
@@ -251,14 +252,15 @@
   (jaunder-test--with-live-server
    (let* ((root (make-temp-file "jaunder-pull-media-live-" t))
           (image (expand-file-name "source image.png" root))
-          (source-bytes "PULL-MEDIA-BYTES")
+          (source-bytes (jaunder-test--image-bytes t))
           (jaunder-blogs
            (list (cons (file-name-as-directory root)
                        (list :base-url jaunder-test-base-url
                              :username jaunder-test-username)))))
      (unwind-protect
          (progn
-           (with-temp-file image (insert source-bytes))
+           (with-temp-file image (set-buffer-multibyte nil) (insert source-bytes))
+           (should (assoc "GPS:GPSLatitude" (jaunder-test--image-private-tags image)))
            (let ((real-get (symbol-function 'jaunder--pull-media-get))
                  (real-install (symbol-function 'jaunder--install-pulled-bytes))
                  (real-http (symbol-function 'jaunder--http-request))
@@ -279,6 +281,8 @@
                          (error "injected final Post install failure")
                        (funcall real-install path bytes staged-synced-at)))))
                (jaunder--call-with-blog root (lambda () (let* ((media-url (jaunder--upload-media image "image/png"))
+                                                               (served (jaunder-test--served-image media-url))
+                                                               (served-bytes (plist-get served :bytes))
                                                                (first
                                                                 (jaunder-pull-integration--create-server-only-member
                                                                  root (format "[[%s]]" media-url)))
@@ -290,6 +294,13 @@
                                                                   (match-string 1 media-url)))
                                                                (copy (expand-file-name
                                                                       (concat "local-media/" hash "/source image.png") root)))
+                                                          (should-not (equal source-bytes served-bytes))
+                                                          (should (equal (secure-hash 'sha256 served-bytes) hash))
+                                                          (should (equal (jaunder--pull-media-header-values (plist-get served :response) "ETag")
+                                                                         (list (concat "\"sha256-" hash "\""))))
+                                                          (dolist (tag '("IFD0:Make" "GPS:GPSLatitude" "ExifIFD:UserComment" "XMP-dc:Description" "IFD1:ThumbnailImage"))
+                                                            (should-not (assoc tag (plist-get served :tags))))
+                                                          (should (equal (jaunder--pull-media-read-bytes image) source-bytes))
                                                           (setq counted-url media-url)
                                                           (let ((failure (should-error (jaunder--pull-member root first))))
                                                             (should (equal (error-message-string failure)
@@ -299,9 +310,10 @@
                                                             (expand-file-name
                                                              (concat (jaunder-inventory-member-slug first) ".org") root)))
                                                           (should (equal (with-temp-buffer
+                                                                           (set-buffer-multibyte nil)
                                                                            (insert-file-contents-literally copy)
                                                                            (buffer-string))
-                                                                         source-bytes))
+                                                                         served-bytes))
                                                           (should (= gets 1))
                                                           (jaunder-reconcile root)
                                                           (with-current-buffer "*Jaunder Reconcile*"
@@ -317,6 +329,7 @@
                                                                         (concat (jaunder-inventory-member-slug first) ".org")
                                                                         root))
                                                                  (before (with-temp-buffer
+                                                                           (set-buffer-multibyte nil)
                                                                            (insert-file-contents-literally copy)
                                                                            (buffer-string)))
                                                                  (native-body
@@ -357,6 +370,7 @@
                                                                      native-body))
                                                             (should (equal before
                                                                            (with-temp-buffer
+                                                                             (set-buffer-multibyte nil)
                                                                              (insert-file-contents-literally copy)
                                                                              (buffer-string)))))
                                                           ;; Republish must store the authoritative server URL,
@@ -378,7 +392,8 @@
                                                             (should (eq (jaunder-pull-result-status
                                                                          (jaunder--pull-member root second))
                                                                         'pulled))
-                                                            (should (= gets 1)))))))))
+                                                            (should (= gets 1))
+                                                            (should (equal (jaunder--pull-media-read-bytes image) source-bytes)))))))))
        (delete-directory root t)))))
 
 (ert-deftest jaunder-pull-local-media-preview-survives-isolated-server-shutdown ()
@@ -390,12 +405,12 @@
         (progn
           (jaunder-test--bind-from state
                                    (let* ((image (expand-file-name "offline source.png" root))
-                                          (source "OFFLINE-PULL-BYTES")
+                                          (source (jaunder-test--image-bytes))
                                           (jaunder-blogs
                                            (list (cons (file-name-as-directory root)
                                                        (list :base-url jaunder-test-base-url
                                                              :username jaunder-test-username)))))
-                                     (with-temp-file image (insert source))
+                                     (with-temp-file image (set-buffer-multibyte nil) (insert source))
                                      (jaunder--call-with-blog root (lambda () (let* ((media-url (jaunder--upload-media image "image/png"))
                                                                                      (member
                                                                                       (jaunder-pull-integration--create-server-only-member
@@ -421,6 +436,7 @@
           (should (string-prefix-p "file:local-media/" native-link))
           (should (equal
                    (with-temp-buffer
+                     (set-buffer-multibyte nil)
                      (insert-file-contents-literally copy-path)
                      (buffer-string))
                    source-bytes)))

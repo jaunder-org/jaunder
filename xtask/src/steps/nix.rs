@@ -2878,6 +2878,29 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         std::fs::remove_dir_all(&dir).ok();
     }
     #[test]
+    fn e2e_capture_host_transport_behavior() {
+        let output = std::process::Command::new("python3")
+            .args([
+                "-B",
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                "nix",
+                "-p",
+                "test_e2e_capture.py",
+            ])
+            .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join(".."))
+            .output()
+            .expect("run host capture transport tests");
+        assert!(
+            output.status.success(),
+            "capture transport tests failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
     fn e2e_panic_gate_verifies_the_lane_qualified_journal() {
         let checks = std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -2947,6 +2970,17 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         assert!(checks.contains("revision = self.rev or null;"));
         assert!(checks.contains("JAUNDER_E2E_PRODUCER_INPUT=/tmp/e2e/producer-input.json"));
         assert!(!checks.contains("/var/lib/jaunder/capture/producer-input"));
+        let writers_stopped = checks
+            .find("retention_errors = stop_e2e_capture_writers()")
+            .expect("capture writers drain before retention");
+        let capture_retained = checks
+            .find("retention_errors.extend(retain_e2e_capture())")
+            .expect("complete capture retained");
+        assert!(writers_stopped < capture_retained && capture_retained < assertion_at);
+        assert!(
+            checks.contains("for service in [\"jaunder.service\", \"otel-collector.service\"]:")
+        );
+        assert!(checks.contains("machine.state_dir / \"xchg\""));
     }
 
     fn generated_seed_trace_helper() -> String {
@@ -2967,6 +3001,13 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         source
             .replace("${identity}", "sqlite")
             .replace("${toString e2eSeedTraceTimeout}", "30")
+            .replace(
+                "${./e2e_capture.py}",
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../nix/e2e_capture.py")
+                    .to_str()
+                    .expect("capture helper path"),
+            )
     }
 
     fn run_seed_timeout_harness(timed_out_command: &str) -> serde_json::Value {
@@ -2975,17 +3016,31 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
             r#"
 import contextlib
 import json
+from pathlib import Path
 import sys
+import tarfile
+import tempfile
 import textwrap
+
+temporary = tempfile.TemporaryDirectory()
 
 class FakeMachine:
   def __init__(self):
     self.actions = []
+    self.state_dir = Path(temporary.name) / "vm-state-machine"
+    self.out_dir = Path(temporary.name) / "output"
+    (self.state_dir / "xchg").mkdir(parents=True)
+    self.out_dir.mkdir()
+    (self.state_dir / "xchg" / "diag.log").write_bytes(b"abc")
 
   def execute(self, command, timeout=None):
     self.actions.append(["execute", command, timeout])
     if command == {timed_out_command:?}:
       return (124, "")
+    if "sha256sum" in command:
+      return (0, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  /var/lib/jaunder/capture/diag.log\\n")
+    if "-printf" in command:
+      return (0, "3 /var/lib/jaunder/capture/diag.log\\n")
     return (0, "")
 
   def copy_from_machine(self, path, target):
@@ -3007,12 +3062,17 @@ try:
   with contextlib.redirect_stdout(sys.stderr):
     assert_seed_storage_spans()
 except AssertionError as error:
-  print(json.dumps({{"error": str(error), "actions": machine.actions}}))
+  with tarfile.open(machine.out_dir / "capture-sqlite.tar.gz") as archive:
+    payload = archive.extractfile("capture/diag.log").read().decode()
+  print(json.dumps({{"error": str(error), "actions": machine.actions, "capture_bytes": payload}}))
 else:
   raise AssertionError("seed timeout harness unexpectedly succeeded")
+finally:
+  temporary.cleanup()
 "#
         );
         let output = std::process::Command::new("python3")
+            .arg("-B")
             .arg("-c")
             .arg(script)
             .output()
@@ -3048,24 +3108,16 @@ else:
             .find(|action| action[0] == "execute" && action[1] == timed_out_command)
             .expect("timed out command");
         assert_eq!(timeout[2], 30);
-        let tar = actions
-            .iter()
-            .position(|action| {
-                action[0] == "execute"
-                    && action[1].as_str().is_some_and(|command| {
-                        command.starts_with(
-                        "test -d /var/lib/jaunder/capture && tar czf /tmp/capture-sqlite.tar.gz",
-                    )
-                    })
-            })
-            .expect("capture tar action");
-        let copy = actions
-            .iter()
-            .position(|action| {
-                action[0] == "copy_from_machine" && action[1] == "/tmp/capture-sqlite.tar.gz"
-            })
-            .expect("capture copy action");
-        assert!(tar < copy, "capture tar must precede copy");
+        assert_eq!(result["capture_bytes"], "abc");
+        assert!(
+            !actions.iter().any(|action| {
+                action[0] == "copy_from_machine"
+                    || action[1]
+                        .as_str()
+                        .is_some_and(|command| command.contains("tar czf"))
+            }),
+            "capture must be archived directly from the host exchange: {actions:?}"
+        );
         assert!(
             !actions
                 .iter()

@@ -11,6 +11,7 @@
 mod atompub;
 pub(crate) mod error_signal;
 mod http;
+pub(crate) mod image_privacy;
 mod posts;
 mod registrar;
 mod session;

@@ -549,6 +549,19 @@ impl TestEnv {
         self.factory.media()
     }
 
+    /// Constructs an upload-ready manager without exposing the private factory.
+    #[must_use]
+    pub fn media_manager(
+        &self,
+        content_locks: Arc<crate::MediaContentLocks>,
+        instance_id: crate::InstanceId,
+        ownership_resolver: Arc<dyn crate::MediaReferenceOwnershipResolver>,
+        preparer: Arc<host::image_privacy::UploadPreparer>,
+    ) -> crate::MediaManager {
+        self.factory
+            .media_manager(content_locks, instance_id, ownership_resolver, preparer)
+    }
+
     /// Mints user-configuration storage for this test's backend.
     #[must_use]
     pub fn user_config(&self) -> Arc<dyn UserConfigStorage> {

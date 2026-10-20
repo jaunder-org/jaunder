@@ -418,6 +418,55 @@ fn emit_reports(
     Ok(())
 }
 
+fn instrumented_executable(build_output: &str) -> Result<PathBuf> {
+    let mut executable = None;
+    for line in build_output.lines() {
+        let message: Value = serde_json::from_str(line).context("parsing Cargo build event")?;
+        if message["reason"] == "compiler-artifact"
+            && message["target"]["name"] == "jaunder"
+            && message["target"]["kind"] == serde_json::json!(["bin"])
+            && let Some(path) = message["executable"].as_str()
+        {
+            let path = PathBuf::from(path);
+            if !path.is_absolute() || executable.replace(path).is_some() {
+                bail!("expected one absolute instrumented Jaunder executable");
+            }
+        }
+    }
+    executable.context("Cargo did not report the instrumented Jaunder executable")
+}
+
+fn run_instrumented_tests(run: &CommandSpec, diag: &Path) -> Result<CapturedCommand> {
+    // Cargo's artifact event owns the path, including configured target/profile
+    // layout. Build under the same LLVM environment as nextest, never a release SUT.
+    let build = run_capture(Command::new("sh").args([
+        "-c",
+        LLVM_COV_ENVIRONMENT_SCRIPT,
+        "--",
+        "cargo",
+        "build",
+        "--locked",
+        "--package",
+        "jaunder",
+        "--bin",
+        "jaunder",
+        "--message-format=json",
+    ]))?;
+    write_diagnostic(diag, "instrumented-executable-build.log", &build.output);
+    if !build.status.success() {
+        return Ok(build);
+    }
+    let executable = instrumented_executable(&build.stdout)?;
+    pg::with_ephemeral(|env| {
+        let mut command = Command::new(run.program);
+        command
+            .args(&run.arguments)
+            .env("JAUNDER_TEST_EXECUTABLE", &executable);
+        env.configure_command(&mut command);
+        run_capture(&mut command)
+    })
+}
+
 /// Run the instrumented suite and emit reports + status + diagnostics into `out`.
 ///
 /// Required stages always leave a validated, red `status.json` when they can be
@@ -509,12 +558,7 @@ pub fn run(out: &str) -> Result<()> {
 
     let run = &commands[2];
     let test_run_started = Instant::now();
-    let test_run = pg::with_ephemeral(|env| {
-        let mut command = Command::new(run.program);
-        command.args(&run.arguments);
-        env.configure_command(&mut command);
-        run_capture(&mut command)
-    });
+    let test_run = run_instrumented_tests(run, &diag);
     let instrumented_outcome = match test_run {
         Ok(test_run) => {
             let outcome = command_outcome(test_run.status);
@@ -1697,6 +1741,56 @@ fn normalize_crap_paths(raw: &str, abs_root: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn census_and_reports_do_not_require_a_test_runtime_executable() {
+        for arguments in [
+            required_stage_commands()[1].arguments.clone(),
+            coverage_report_arguments("--text").to_vec(),
+        ] {
+            let script = format!(
+                "cargo() {{ printf '%s\\n' 'export CARGO_LLVM_COV=1'; }}; {}",
+                arguments[1]
+            );
+            let status = Command::new("sh")
+                .args([
+                    "-c",
+                    &script,
+                    "--",
+                    "sh",
+                    "-c",
+                    "test \"$CARGO_LLVM_COV\" = 1 && test -z \"${JAUNDER_TEST_EXECUTABLE+x}\"",
+                ])
+                .env_remove("CARGO_TARGET_DIR")
+                .env_remove("JAUNDER_TEST_EXECUTABLE")
+                .status()
+                .expect("run coverage environment script");
+            assert!(status.success());
+        }
+    }
+
+    #[test]
+    fn instrumented_worker_uses_cargos_actual_executable_artifact() {
+        let events = concat!(
+            "{\"reason\":\"compiler-artifact\",\"target\":{\"name\":\"other\",\"kind\":[\"bin\"]},\"executable\":\"/build/other\"}\n",
+            "{\"reason\":\"compiler-artifact\",\"target\":{\"name\":\"jaunder\",\"kind\":[\"lib\"]},\"executable\":null}\n",
+            "{\"reason\":\"compiler-artifact\",\"target\":{\"name\":\"jaunder\",\"kind\":[\"bin\"]},\"executable\":\"/build/custom-target/x86_64-unknown-linux-gnu/debug/jaunder\"}\n",
+            "{\"reason\":\"build-finished\",\"success\":true}\n",
+        );
+        assert_eq!(
+            instrumented_executable(events).unwrap(),
+            PathBuf::from("/build/custom-target/x86_64-unknown-linux-gnu/debug/jaunder")
+        );
+        for invalid in ["", "not json", "{\"reason\":\"build-finished\"}"] {
+            assert!(instrumented_executable(invalid).is_err());
+        }
+        let artifact = "{\"reason\":\"compiler-artifact\",\"target\":{\"name\":\"jaunder\",\"kind\":[\"bin\"]},\"executable\":\"/build/jaunder\"}\n";
+        assert!(
+            instrumented_executable(&artifact.replace("/build/jaunder", "relative/jaunder"))
+                .is_err()
+        );
+        assert!(instrumented_executable(&artifact.repeat(2)).is_err());
+    }
 
     #[test]
     fn report_commands_exclude_only_csr_bundle_with_the_same_regex() {

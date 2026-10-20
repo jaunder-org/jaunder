@@ -1,5 +1,12 @@
 # Jaunder
 
+## License
+
+Jaunder's own code is licensed under the GNU General Public License, version 3
+or (at your option) any later version (`GPL-3.0-or-later`). See
+[LICENSE](LICENSE) for the unmodified GNU GPL version 3 text. Third-party code
+and separately licensed data retain their own notices and terms.
+
 ## Overview
 
 `Jaunder` is an easily-hosted, multi-protocol social media application written

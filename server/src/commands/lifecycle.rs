@@ -268,6 +268,7 @@ pub struct PreparedServer {
     /// The fully wired application router.
     pub router: Router,
     workers: BackgroundWorkers,
+    upload_manager: Arc<MediaManager>,
     /// Owns the OS-backed startup lock and removes the runtime-info file on drop.
     runtime_guard: RuntimeGuard,
     pub saturation_metrics: Option<PreparedSaturationMetrics>,
@@ -514,16 +515,23 @@ fn publisher_service(
 ) -> Arc<PublisherService> {
     Arc::new(PublisherService::new(storage_path, publisher, write_scope))
 }
-fn media_ownership(
+fn compose_media_services(
+    factory: &storage::StorageFactory,
+    storage_path: Arc<PathBuf>,
     instance_id: InstanceId,
-    site_config: Arc<dyn SiteConfigStorage>,
+    preparer: Arc<host::image_privacy::UploadPreparer>,
 ) -> (
-    Arc<dyn storage::MediaReferenceOwnershipResolver>,
+    Arc<MediaContentLocks>,
     PostMediaOwnership,
+    Arc<MediaManager>,
 ) {
+    let locks = Arc::new(MediaContentLocks::new(storage_path));
     let resolver = Arc::new(crate::media_ownership::LiveMediaReferenceOwnershipResolver::new());
-    let ownership = PostMediaOwnership::new(resolver.clone(), instance_id, site_config);
-    (resolver, ownership)
+    let ownership =
+        PostMediaOwnership::new(resolver.clone(), instance_id.clone(), factory.site_config());
+    let manager =
+        Arc::new(factory.media_manager(Arc::clone(&locks), instance_id, resolver, preparer));
+    (locks, ownership, manager)
 }
 
 fn database_maintenance(
@@ -556,25 +564,6 @@ fn feed_worker(
     )
 }
 
-fn media_manager(
-    media: Arc<dyn MediaStorage>,
-    posts: Arc<dyn PostStorage>,
-    site_config: Arc<dyn SiteConfigStorage>,
-    write_scope: WriteScope,
-    content_locks: Arc<MediaContentLocks>,
-    instance_id: InstanceId,
-    ownership_resolver: Arc<dyn storage::MediaReferenceOwnershipResolver>,
-) -> Arc<MediaManager> {
-    Arc::new(MediaManager::new(
-        media,
-        posts,
-        site_config,
-        write_scope,
-        content_locks,
-        instance_id,
-        ownership_resolver,
-    ))
-}
 fn theme_asset_manager(
     themes: Arc<dyn storage::ThemeStorage>,
     write_scope: WriteScope,
@@ -583,13 +572,15 @@ fn theme_asset_manager(
     Arc::new(ThemeAssetManager::new(themes, write_scope, storage_path))
 }
 
-fn theme_manager(
-    themes: Arc<dyn storage::ThemeStorage>,
-    media: Arc<dyn MediaStorage>,
-    write_scope: WriteScope,
-    content_locks: Arc<MediaContentLocks>,
-) -> Arc<ThemeManager> {
-    Arc::new(ThemeManager::new(themes, media, write_scope, content_locks))
+impl ServeStorage {
+    fn theme_manager(&self, content_locks: Arc<MediaContentLocks>) -> Arc<ThemeManager> {
+        Arc::new(ThemeManager::new(
+            Arc::clone(&self.themes),
+            Arc::clone(&self.media),
+            self.write_scope.clone(),
+            content_locks,
+        ))
+    }
 }
 
 fn publisher_context(
@@ -626,42 +617,33 @@ struct ServeHttpPolicy {
 }
 
 fn compose_server_router(
-    dependencies: &ServeStorage,
+    factory: &storage::StorageFactory,
     application_stylesheet_url: common::root_relative_url::RootRelativeUrl,
     storage_path: PathBuf,
     instance_id: &InstanceId,
     mailer: Arc<dyn common::mailer::MailSender>,
     http_policy: ServeHttpPolicy,
-) -> Router {
+    preparer: Arc<host::image_privacy::UploadPreparer>,
+) -> (Router, Arc<MediaManager>) {
+    let dependencies = &ServeStorage::from_factory(factory);
     let storage_path = Arc::new(storage_path);
-    let locks = Arc::new(MediaContentLocks::new(Arc::clone(&storage_path)));
-    let (resolver, ownership) =
-        media_ownership(instance_id.clone(), dependencies.site_config.clone());
+    let (locks, ownership, manager) = compose_media_services(
+        factory,
+        Arc::clone(&storage_path),
+        instance_id.clone(),
+        preparer,
+    );
     let publisher = publisher_service(
         (*storage_path).clone(),
         Arc::clone(&dependencies.publisher),
         dependencies.write_scope.clone(),
-    );
-    let manager = media_manager(
-        Arc::clone(&dependencies.media),
-        Arc::clone(&dependencies.posts),
-        Arc::clone(&dependencies.site_config),
-        dependencies.write_scope.clone(),
-        Arc::clone(&locks),
-        instance_id.clone(),
-        resolver,
     );
     let asset_manager = theme_asset_manager(
         Arc::clone(&dependencies.themes),
         dependencies.write_scope.clone(),
         Arc::clone(&storage_path),
     );
-    let manager_themes = theme_manager(
-        Arc::clone(&dependencies.themes),
-        Arc::clone(&dependencies.media),
-        dependencies.write_scope.clone(),
-        Arc::clone(&locks),
-    );
+    let manager_themes = dependencies.theme_manager(Arc::clone(&locks));
     let contexts = combine_context_providers(
         crate::context::account_context_provider(
             Arc::clone(&dependencies.users),
@@ -704,7 +686,13 @@ fn compose_server_router(
         contexts,
         public_projector(dependencies, application_stylesheet_url),
     );
-    let app = crate::context::with_media_extensions(app, ownership, manager, locks, storage_path);
+    let app = crate::context::with_media_extensions(
+        app,
+        ownership,
+        Arc::clone(&manager),
+        locks,
+        storage_path,
+    );
     let app = crate::context::with_post_account_extensions(
         app,
         Arc::clone(&dependencies.posts),
@@ -726,13 +714,14 @@ fn compose_server_router(
         Arc::clone(&dependencies.sessions),
         dependencies.write_scope.clone(),
     );
-    create_router_with_trusted_proxies(
+    let router = create_router_with_trusted_proxies(
         app,
         instance_id,
         http_policy.prod,
         http_policy.trace_parent_enabled,
         http_policy.trusted_proxies,
-    )
+    );
+    (router, manager)
 }
 
 async fn install_and_reconcile_system_artifact_inventory(
@@ -914,8 +903,9 @@ async fn prepare_server_with_trusted_proxies(
         capture.map(|paths| paths.mail.clone()),
     )
     .await?;
-    let router = compose_server_router(
-        &dependencies,
+    let upload_preparer = host::image_privacy::UploadPreparer::new(std::env::current_exe()?);
+    let (router, upload_manager) = compose_server_router(
+        &factory,
         application_stylesheet_url,
         storage.storage_path.clone(),
         &instance_id,
@@ -925,6 +915,7 @@ async fn prepare_server_with_trusted_proxies(
             trace_parent_enabled: otel_tracing_enabled,
             trusted_proxies,
         },
+        Arc::clone(&upload_preparer),
     );
 
     let listener = tokio::net::TcpListener::bind(bind).await?;
@@ -941,6 +932,7 @@ async fn prepare_server_with_trusted_proxies(
         listener,
         router,
         workers,
+        upload_manager,
         runtime_guard,
         saturation_metrics,
     })
@@ -1182,6 +1174,7 @@ pub(crate) async fn cmd_serve_with_trusted_proxies(
         listener,
         router,
         mut workers,
+        upload_manager,
         runtime_guard,
         saturation_metrics,
     } = prepare_server_with_trusted_proxies(
@@ -1197,8 +1190,11 @@ pub(crate) async fn cmd_serve_with_trusted_proxies(
 
     tracing::info!(bind = %bind, prod, "starting HTTP server");
     #[cfg(unix)]
+    let stop_uploads = Arc::clone(&upload_manager);
+    #[cfg(unix)]
     let mut serve_result = serve_with_shutdown(listener, router, async move {
         let _ = shutdown_rx.await;
+        stop_uploads.stop_uploads();
     })
     .await;
     #[cfg(not(unix))]
@@ -1211,6 +1207,11 @@ pub(crate) async fn cmd_serve_with_trusted_proxies(
     // current saturation sample must finish while both the storage lock and the
     // SIGINT forced-exit supervisor remain live.
     workers.stop();
+    merge_worker_shutdown(
+        &mut serve_result,
+        upload_manager.shutdown_uploads().await,
+        "server.media.shutdown",
+    );
     if let Some(metrics) = saturation_metrics {
         let saturation_shutdown = metrics.shutdown().await;
         merge_worker_shutdown(
@@ -1632,6 +1633,11 @@ mod tests {
     }
 
     async fn shutdown_prepared_server(mut prepared: PreparedServer) {
+        prepared
+            .upload_manager
+            .shutdown_uploads()
+            .await
+            .expect("media jobs drained");
         if let Some(metrics) = prepared.saturation_metrics.take() {
             metrics
                 .shutdown()
