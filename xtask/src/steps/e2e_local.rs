@@ -842,6 +842,7 @@ fn run_lifecycle(
             )
             .env("JAUNDER_DB", &db)
             .env("JAUNDER_STORAGE_PATH", storage.path())
+            .env("JAUNDER_TEST_EXECUTABLE", jaunder)
             .env("JAUNDER_CAPTURE_DIR", &capture)
             .env(
                 "JAUNDER_E2E_OTLP_HTTP_ENDPOINT",

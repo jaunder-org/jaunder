@@ -484,6 +484,7 @@ e2eRunAndCapture =
       + " JAUNDER_DB=${jaunderDb}"
       + " JAUNDER_STORAGE_PATH=/var/lib/jaunder/data"
       + " JAUNDER_TEST_IMAGE_DIR=${../server/tests/fixtures/image-privacy}"
+      + " JAUNDER_TEST_EXECUTABLE=${jaunderBin}/bin/jaunder"
       + " JAUNDER_E2E_LANE=${identity}"
       + " JAUNDER_E2E_BACKEND=${backend}"
       + " JAUNDER_E2E_BROWSER=${browser}"
