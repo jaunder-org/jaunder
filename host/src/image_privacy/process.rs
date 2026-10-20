@@ -142,9 +142,7 @@ impl UploadPreparer {
             }
             let cleanup = cleanup_spool(spool).await;
             drop(permit);
-            if let Err(Err(_error)) = done_tx.send(cleanup) {
-                report_unobserved_cleanup();
-            }
+            report_unobserved_cleanup_if_needed(done_tx.send(cleanup));
         });
         Ok(UploadAttempt {
             file: Some(file),
@@ -214,26 +212,20 @@ impl UploadPreparer {
     }
 
     async fn stop_and_wait(&self, child: &mut Child) -> io::Result<()> {
-        let mut failure = match classify_try_wait(child.try_wait()) {
-            TryWait::Exited => return Ok(()),
-            TryWait::Running => None,
-            TryWait::Failed(error) => Some(error),
-        };
+        let (exited, mut failure) = initial_reap_state(child.try_wait());
+        if exited {
+            return Ok(());
+        }
         failure = preserve_first_reap_failure(failure, child.start_kill());
         #[cfg(any(test, feature = "test-utils"))]
         if let Some(control) = &self.test_control {
             control.before_reap().await;
         }
         loop {
-            match classify_reap_wait(failure, child.wait().await.map(|_| ())) {
-                ReapWait::Exited(None) => return Ok(()),
-                ReapWait::Exited(Some(error)) => return Err(error),
-                ReapWait::Retry(error) => {
-                    failure = Some(error);
-                    // An uncertain wait is not an exit acknowledgement. Retain
-                    // the child, spool and permit while retrying only reaping.
-                    retry_reap_delay().await;
-                }
+            if let Some(result) =
+                reap_wait_result(&mut failure, child.wait().await.map(|_| ())).await
+            {
+                return result;
             }
         }
     }
@@ -295,29 +287,32 @@ async fn cleanup_spool(spool: tempfile::TempDir) -> io::Result<()> {
     }
 }
 
-enum TryWait {
-    Exited,
-    Running,
-    Failed(io::Error),
-}
-
-fn classify_try_wait(result: io::Result<Option<std::process::ExitStatus>>) -> TryWait {
+fn initial_reap_state(
+    result: io::Result<Option<std::process::ExitStatus>>,
+) -> (bool, Option<io::Error>) {
     match result {
-        Ok(Some(_)) => TryWait::Exited,
-        Ok(None) => TryWait::Running,
-        Err(error) => TryWait::Failed(error),
+        Ok(Some(_)) => (true, None),
+        Ok(None) => (false, None),
+        Err(error) => (false, Some(error)),
     }
 }
 
-enum ReapWait {
-    Exited(Option<io::Error>),
-    Retry(io::Error),
-}
-
-fn classify_reap_wait(previous: Option<io::Error>, result: io::Result<()>) -> ReapWait {
+async fn reap_wait_result(
+    failure: &mut Option<io::Error>,
+    result: io::Result<()>,
+) -> Option<io::Result<()>> {
     match result {
-        Ok(()) => ReapWait::Exited(previous),
-        Err(error) => ReapWait::Retry(previous.unwrap_or(error)),
+        Ok(()) => Some(match failure.take() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }),
+        Err(error) => {
+            *failure = Some(failure.take().unwrap_or(error));
+            // An uncertain wait is not an exit acknowledgement. Retain the child,
+            // spool and permit while retrying only reaping.
+            retry_reap_delay().await;
+            None
+        }
     }
 }
 
@@ -356,6 +351,12 @@ async fn join_finalizations(mut owners: JoinSet<()>) -> Option<tokio::task::Join
         }
     }
     failure
+}
+
+fn report_unobserved_cleanup_if_needed(delivery: Result<(), io::Result<()>>) {
+    if let Err(Err(_error)) = delivery {
+        report_unobserved_cleanup();
+    }
 }
 
 fn report_unobserved_cleanup() {
@@ -505,9 +506,9 @@ impl Drop for UploadAttempt {
 #[cfg(all(test, unix))]
 mod tests {
     use super::{
-        PreparationError, ReapWait, TryWait, UploadAttempt, UploadPreparer, classify_reap_wait,
-        classify_try_wait, decode_response, join_finalizations, preserve_first_reap_failure,
-        preserve_primary_after_reap, report_unobserved_cleanup, retry_reap_delay,
+        PreparationError, UploadAttempt, UploadPreparer, decode_response, initial_reap_state,
+        join_finalizations, preserve_first_reap_failure, preserve_primary_after_reap,
+        reap_wait_result, report_unobserved_cleanup_if_needed,
     };
     use std::error::Error as _;
     use std::os::unix::process::ExitStatusExt;
@@ -596,33 +597,46 @@ mod tests {
         assert_eq!(io.raw_os_error(), Some(13));
     }
 
-    #[test]
-    fn process_state_classifiers_preserve_the_first_reap_failure() {
+    #[tokio::test]
+    async fn process_state_classifiers_preserve_the_first_reap_failure() {
         assert!(matches!(
-            classify_try_wait(Ok(Some(ExitStatus::from_raw(0)))),
-            TryWait::Exited
+            initial_reap_state(Ok(Some(ExitStatus::from_raw(0)))),
+            (true, None)
         ));
-        assert!(matches!(classify_try_wait(Ok(None)), TryWait::Running));
+        assert!(matches!(initial_reap_state(Ok(None)), (false, None)));
         assert!(matches!(
-            classify_try_wait(Err(std::io::Error::other("query"))),
-            TryWait::Failed(error) if error.to_string() == "query"
+            initial_reap_state(Err(std::io::Error::other("query"))),
+            (false, Some(error)) if error.to_string() == "query"
         ));
 
+        let mut failure = None;
         assert!(matches!(
-            classify_reap_wait(None, Ok(())),
-            ReapWait::Exited(None)
+            reap_wait_result(&mut failure, Ok(())).await,
+            Some(Ok(()))
         ));
+        assert!(failure.is_none());
+
+        failure = Some(std::io::Error::other("kill"));
+        assert!(
+            reap_wait_result(&mut failure, Err(std::io::Error::other("wait")))
+                .await
+                .is_none()
+        );
+        assert_eq!(failure.as_ref().unwrap().to_string(), "kill");
         assert!(matches!(
-            classify_reap_wait(Some(std::io::Error::other("kill")), Ok(())),
-            ReapWait::Exited(Some(error)) if error.to_string() == "kill"
+            reap_wait_result(&mut failure, Ok(())).await,
+            Some(Err(error)) if error.to_string() == "kill"
         ));
+
+        failure = None;
+        assert!(
+            reap_wait_result(&mut failure, Err(std::io::Error::other("wait")))
+                .await
+                .is_none()
+        );
         assert!(matches!(
-            classify_reap_wait(Some(std::io::Error::other("kill")), Err(std::io::Error::other("wait"))),
-            ReapWait::Retry(error) if error.to_string() == "kill"
-        ));
-        assert!(matches!(
-            classify_reap_wait(None, Err(std::io::Error::other("wait"))),
-            ReapWait::Retry(error) if error.to_string() == "wait"
+            reap_wait_result(&mut failure, Ok(())).await,
+            Some(Err(error)) if error.to_string() == "wait"
         ));
 
         let first = preserve_first_reap_failure(None, Err(std::io::Error::other("kill")));
@@ -689,10 +703,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retry_reaping_retains_process_ownership_during_the_retry_delay() {
+    async fn shutdown_reports_the_join_error_from_its_owned_finalizers() {
+        let preparer = UploadPreparer::state("unused executable".into());
+        {
+            let mut owners = preparer.owners.lock().unwrap();
+            owners.spawn(async { panic!("owned finalizer panic witness") });
+            owners.spawn(async {});
+        }
+        let error = preparer
+            .shutdown()
+            .await
+            .expect_err("shutdown reports an owned finalizer panic");
+        assert!(matches!(error, PreparationError::Owner(join) if join.is_panic()));
+    }
+
+    #[tokio::test]
+    async fn retry_reaping_retains_the_first_failure_until_exit_acknowledgement() {
+        let mut failure = None;
         let started = tokio::time::Instant::now();
-        retry_reap_delay().await;
+        assert!(
+            reap_wait_result(
+                &mut failure,
+                Err(std::io::Error::other("first wait failure")),
+            )
+            .await
+            .is_none()
+        );
         assert!(started.elapsed() >= std::time::Duration::from_millis(100));
+        assert_eq!(failure.as_ref().unwrap().to_string(), "first wait failure");
+        assert!(matches!(
+            reap_wait_result(&mut failure, Ok(())).await,
+            Some(Err(error)) if error.to_string() == "first wait failure"
+        ));
     }
 
     #[derive(Clone)]
@@ -721,26 +763,41 @@ mod tests {
     }
 
     #[test]
-    fn unobserved_cleanup_errors_report_bounded_context_without_private_text() {
-        let output = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::fmt()
-            .json()
-            .with_ansi(false)
-            .with_writer(CapturedWriter(output.clone()))
-            .finish();
-        tracing::subscriber::with_default(subscriber, || {
-            report_unobserved_cleanup();
-        });
-        let trace = String::from_utf8_lossy(
-            &output
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )
-        .into_owned();
-        assert!(trace.contains("media.private_spool.cleanup"));
+    fn unobserved_cleanup_reports_only_disconnected_cleanup_failures() {
+        let capture = |delivery: Result<(), std::io::Result<()>>| {
+            let output = Arc::new(Mutex::new(Vec::new()));
+            let subscriber = tracing_subscriber::fmt()
+                .json()
+                .with_ansi(false)
+                .with_writer(CapturedWriter(output.clone()))
+                .finish();
+            let mut writer = CapturedWriter(output.clone());
+            std::io::Write::flush(&mut writer).expect("captured diagnostic writer flushes");
+            tracing::subscriber::with_default(subscriber, || {
+                report_unobserved_cleanup_if_needed(delivery);
+            });
+            String::from_utf8_lossy(
+                &output
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            )
+            .into_owned()
+        };
+
+        assert!(capture(Ok(())).is_empty(), "successful handback is silent");
+        assert!(
+            capture(Err(Ok(()))).is_empty(),
+            "disconnected receiver with successful cleanup is silent"
+        );
+
+        let trace = capture(Err(Err(std::io::Error::other(
+            "private upload /media/tmp/upload-secret cleanup failure",
+        ))));
+        assert_eq!(trace.matches("media.private_spool.cleanup").count(), 1);
         assert!(trace.contains("swallowed"));
         assert!(trace.contains("redacted"));
         assert!(!trace.contains("upload-secret"));
+        assert!(!trace.contains("private upload"));
     }
 
     #[tokio::test]

@@ -11,6 +11,11 @@ import stat
 import tarfile
 
 
+def _is_backend_metadata(name):
+    return (".virtfs_metadata" in PurePosixPath(name).parts
+            or name == "capture/.virtfs_metadata_root")
+
+
 def _require_population(hashes, sizes):
     if not hashes or hashes.keys() != sizes.keys():
         raise ValueError("source populations differ or empty")
@@ -18,7 +23,7 @@ def _require_population(hashes, sizes):
         path = PurePosixPath(name)
         if (path.is_absolute() or not name.startswith("capture/")
                 or ".." in path.parts
-                or any(p.startswith(".virtfs_metadata") for p in path.parts)):
+                or _is_backend_metadata(name)):
             raise ValueError("unexpected capture member")
 
 
@@ -29,7 +34,7 @@ def verify_capture_archive(destination, source_hashes, source_sizes):
     actual_sizes = {}
     with tarfile.open(destination, "r|gz") as archive:
         for member in archive:
-            if any(p.startswith(".virtfs_metadata") for p in member.name.split("/")):
+            if _is_backend_metadata(member.name):
                 raise ValueError("backend metadata exposed")
             if member.isdir():
                 continue
@@ -71,7 +76,8 @@ def archive_capture(backing, destination):
     for root, dirs, names in os.walk(backing, onerror=walk_error, followlinks=False):
         for name in list(dirs):
             path = Path(root) / name
-            if not stat.S_ISDIR(path.lstat().st_mode):
+            if (not stat.S_ISDIR(path.lstat().st_mode)
+                    or path.relative_to(backing).as_posix() == ".virtfs_metadata_root"):
                 raise ValueError("nonregular capture directory")
             if name == ".virtfs_metadata":
                 dirs.remove(name)
@@ -79,8 +85,11 @@ def archive_capture(backing, destination):
                 directories.append("capture/" + path.relative_to(backing).as_posix())
         for name in names:
             path = Path(root) / name
-            if not stat.S_ISREG(path.lstat().st_mode):
+            if not stat.S_ISREG(path.lstat().st_mode) or name == ".virtfs_metadata":
                 raise ValueError("nonregular capture file")
+            # QEMU mapped-file stores export-root attributes outside its metadata directories.
+            if path.relative_to(backing).as_posix() == ".virtfs_metadata_root":
+                continue
             files["capture/" + path.relative_to(backing).as_posix()] = path
     # Exclusive, private output preserves any earlier evidence on failure.
     with os.fdopen(os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output:

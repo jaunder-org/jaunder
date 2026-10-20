@@ -281,6 +281,10 @@ mod tests {
             }
         }
 
+        assert_eq!(
+            Wrapped(io::Error::other("wrapped detail")).to_string(),
+            "wrapped detail"
+        );
         let nested = io::Error::other(Wrapped(io::Error::from_raw_os_error(13)));
         let redacted = private_io(&nested);
         assert_eq!(redacted.raw_os_error(), Some(13));

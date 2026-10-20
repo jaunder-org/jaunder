@@ -1263,6 +1263,21 @@ mod tests {
         Arc::new(crate::MockPostStorage::new())
     }
 
+    async fn upload_clean_jpeg(
+        manager: Arc<MediaManager>,
+        user_id: common::ids::UserId,
+        filename: common::media::Filename,
+    ) -> anyhow::Result<MutationOutcome<common::media::UploadedMedia>> {
+        manager
+            .upload_bytes(
+                user_id,
+                &filename,
+                parse_content_type("image/jpeg"),
+                CLEAN_JPEG,
+            )
+            .await
+    }
+
     // guard:no-backend — exercises owner JoinSet cancellation without storage.
     #[tokio::test]
     async fn finalization_drain_reports_cancelled_owned_tasks() {
@@ -2857,20 +2872,11 @@ mod tests {
                 .path()
                 .join("media")
                 .join(media::path(&MediaSource::Upload, &hash, &filename));
-        let uploading = tokio::spawn({
-            let manager = Arc::clone(&manager);
-            let filename = filename.clone();
-            async move {
-                manager
-                    .upload_bytes(
-                        user_id,
-                        &filename,
-                        parse_content_type("image/jpeg"),
-                        CLEAN_JPEG,
-                    )
-                    .await
-            }
-        });
+        let uploading = tokio::spawn(upload_clean_jpeg(
+            Arc::clone(&manager),
+            user_id,
+            filename.clone(),
+        ));
         gate.wait().await;
         assert!(
             public_path.exists(),
@@ -2933,20 +2939,11 @@ mod tests {
             .with_upload_placement_gate_for_test(Arc::clone(&gate)),
         );
         let filename = parse_filename("completed-gated-upload.jpg");
-        let uploading = tokio::spawn({
-            let manager = Arc::clone(&manager);
-            let filename = filename.clone();
-            async move {
-                manager
-                    .upload_bytes(
-                        user_id,
-                        &filename,
-                        parse_content_type("image/jpeg"),
-                        CLEAN_JPEG,
-                    )
-                    .await
-            }
-        });
+        let uploading = tokio::spawn(upload_clean_jpeg(
+            Arc::clone(&manager),
+            user_id,
+            filename.clone(),
+        ));
         gate.wait().await;
         gate.wait().await;
         let result = uploading.await.unwrap().expect("upload completes");
@@ -3097,20 +3094,29 @@ mod tests {
             {
                 tokio::task::yield_now().await;
             }
-            // Observe that cleanup reached the fault, not merely registration.
+            // Observe the failed final directory removal: its private spool is
+            // empty but still owned until the parent permission is restored.
             loop {
+                tokio::task::yield_now().await;
                 let paths: Vec<_> = std_fs::read_dir(&temporary)
                     .unwrap()
                     .map(|entry| entry.unwrap().path())
                     .collect();
-                if paths.iter().all(|path| !path.join("input").exists()) {
+                let spools: Vec<_> = paths
+                    .iter()
+                    .filter(|path| {
+                        path.file_name()
+                            .is_some_and(|name| name.to_string_lossy().starts_with("upload-"))
+                    })
+                    .collect();
+                assert!(spools.len() <= 1, "one upload owns one private spool");
+                if spools.len() == 1 && std_fs::read_dir(spools[0]).unwrap().next().is_none() {
                     break;
                 }
-                tokio::task::yield_now().await;
             }
         })
         .await
-        .expect("upload reaches committed registration and private cleanup");
+        .expect("cleanup failure retains an empty private spool until permissions recover");
         std_fs::set_permissions(&temporary, std_fs::Permissions::from_mode(0o700)).unwrap();
         let outcome = uploading
             .await

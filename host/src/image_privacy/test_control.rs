@@ -102,6 +102,14 @@ fn park_worker_once() {
 /// A fixed test-owned marker controls only the private worker, not uploads or
 /// the program selected by a caller. Real successful privacy tests set no marker.
 pub(super) fn worker_override(spool: &Path, output: &mut impl Write) -> io::Result<Option<bool>> {
+    worker_override_with_pause_release(spool, output, || false)
+}
+
+fn worker_override_with_pause_release(
+    spool: &Path,
+    output: &mut impl Write,
+    mut pause_release: impl FnMut() -> bool,
+) -> io::Result<Option<bool>> {
     let mode = match std::fs::read_to_string(spool.join(MODE_FILE)) {
         Ok(mode) => mode,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -111,6 +119,9 @@ pub(super) fn worker_override(spool: &Path, output: &mut impl Write) -> io::Resu
     match mode.as_str() {
         "pause" => loop {
             park_worker_once();
+            if pause_release() {
+                return Ok(Some(false));
+            }
         },
         "oversize" => {
             // The JSON is otherwise usable. Invalid JSON would let a parser
@@ -148,8 +159,8 @@ pub(super) fn worker_override(spool: &Path, output: &mut impl Write) -> io::Resu
 #[cfg(test)]
 mod tests {
     use super::{
-        MODE_FILE, READY_FILE, WorkerTestControl, WorkerTestMode, park_worker_once, private_file,
-        worker_override,
+        MODE_FILE, READY_FILE, WorkerTestControl, WorkerTestMode, private_file, worker_override,
+        worker_override_with_pause_release,
     };
     use std::io;
     use std::sync::mpsc;
@@ -229,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_control_is_rejected_and_pause_can_be_released_in_a_unit_test() {
+    fn unknown_control_is_rejected() {
         let root = spool();
         set_mode(root.path(), "unknown");
         assert_eq!(
@@ -238,15 +249,40 @@ mod tests {
                 .kind(),
             io::ErrorKind::InvalidInput
         );
+    }
 
-        let (ready, started) = mpsc::channel();
-        let parked = std::thread::spawn(move || {
-            ready.send(()).unwrap();
-            park_worker_once();
+    #[test]
+    fn paused_override_releases_only_through_its_private_unit_test_predicate() {
+        let root = spool();
+        set_mode(root.path(), "pause");
+        let spool = root.path().to_path_buf();
+        let (entered_tx, entered_rx) = mpsc::sync_channel(0);
+        let (release_tx, release_rx) = mpsc::sync_channel(0);
+        let worker = std::thread::spawn(move || {
+            let mut output = Vec::new();
+            let result = worker_override_with_pause_release(&spool, &mut output, || {
+                entered_tx
+                    .send(())
+                    .expect("unit-test owner observes the actual pause arm");
+                release_rx.recv().expect("unit-test owner releases pause");
+                true
+            });
+            (result, output)
         });
-        started.recv().unwrap();
-        parked.thread().unpark();
-        parked.join().expect("one park is released cleanly");
+
+        // The unpark token is retained if the worker has not reached park yet.
+        worker.thread().unpark();
+        entered_rx
+            .recv()
+            .expect("ready marker is written and the Paused arm reaches its park");
+        assert_eq!(
+            std::fs::read(root.path().join(READY_FILE)).unwrap(),
+            b"ready"
+        );
+        release_tx.send(()).expect("release the actual paused arm");
+        let (result, output) = worker.join().expect("paused unit worker exits cleanly");
+        assert_eq!(result.unwrap(), Some(false));
+        assert!(output.is_empty());
     }
 
     #[test]

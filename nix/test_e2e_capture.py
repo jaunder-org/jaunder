@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import os
 from pathlib import Path
 import tarfile
 import tempfile
@@ -32,6 +33,9 @@ class CaptureTransportTest(unittest.TestCase):
         return verify_capture_archive(self.output, self.hashes, self.sizes)
 
     def test_complete_payload_excludes_only_mapped_file_backend_metadata(self):
+        root_metadata = self.backing / ".virtfs_metadata_root"
+        ownership = b"virtfs.uid=1000\nvirtfs.gid=100\nvirtfs.mode=16832\n"
+        root_metadata.write_bytes(ownership)
         metadata = self.backing / ".virtfs_metadata"
         metadata.mkdir()
         (metadata / "otel-traces.jsonl").write_bytes(b"guest ownership metadata")
@@ -49,14 +53,22 @@ class CaptureTransportTest(unittest.TestCase):
         self.assertEqual(actual_sizes, self.sizes)
         self.assertEqual(self.output.stat().st_mode & 0o777, 0o600)
         with tarfile.open(self.output) as archive:
+            members = archive.getmembers()
+            self.assertFalse(any(".virtfs_metadata" in m.name for m in members))
+            for member in members:
+                self.assertEqual((member.uid, member.gid), (0, 0))
+                self.assertEqual((member.uname, member.gname), ("", ""))
+                self.assertEqual(member.mode, 0o700 if member.isdir() else 0o600)
             files = {m.name: archive.extractfile(m).read()
-                     for m in archive if m.isfile()}
+                     for m in members if m.isfile()}
             self.assertEqual(files, {
                 "capture/otel-traces.jsonl": b"abc",
                 "capture/nested/extra.jsonl": b"complete additional stream",
             })
-            self.assertFalse(any(".virtfs_metadata" in m.name for m in archive))
         self.assertEqual((self.backing / "otel-traces.jsonl").read_bytes(), b"abc")
+        self.assertEqual(root_metadata.read_bytes(), ownership)
+        self.assertEqual((metadata / "otel-traces.jsonl").read_bytes(), b"guest ownership metadata")
+        self.assertEqual((nested / ".virtfs_metadata" / "extra.jsonl").read_bytes(), b"metadata")
 
     def test_multiple_read_chunks_preserve_the_complete_stream(self):
         payload = bytes(range(256)) * 769 + b"tail"
@@ -99,6 +111,44 @@ class CaptureTransportTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.archive()
 
+    def test_metadata_lookalikes_remain_in_the_complete_guest_population(self):
+        names = [".virtfs_metadata-other", ".virtfs_metadata_root-extra",
+                 "nested/.virtfs_metadata_root", ".virtfs_metadata-dir/stream.jsonl"]
+        for name in names:
+            path = self.backing / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"abc")
+            self.hashes["capture/" + name] = self.hashes["capture/otel-traces.jsonl"]
+            self.sizes["capture/" + name] = 3
+        self.archive()
+        with tarfile.open(self.output) as archive:
+            self.assertEqual({m.name for m in archive if m.isfile()}, set(self.hashes))
+            for name in self.hashes:
+                self.assertEqual(archive.extractfile(name).read(), b"abc")
+
+    def test_backend_metadata_wrong_types_fail_before_archive_creation(self):
+        for name, kind in [(".virtfs_metadata_root", "directory"),
+                           (".virtfs_metadata_root", "symlink"),
+                           (".virtfs_metadata_root", "fifo"),
+                           (".virtfs_metadata", "file"),
+                           (".virtfs_metadata", "symlink")]:
+            with self.subTest(name=name, kind=kind):
+                backing = self.root / (name + "-" + kind)
+                backing.mkdir()
+                self.output = self.root / (name + "-" + kind + ".tar.gz")
+                path = backing / name
+                if kind == "directory":
+                    path.mkdir()
+                elif kind == "symlink":
+                    path.symlink_to(self.backing / "otel-traces.jsonl")
+                elif kind == "fifo":
+                    os.mkfifo(path)
+                else:
+                    path.write_bytes(b"unknown data")
+                with self.assertRaises(ValueError):
+                    archive_capture(backing, self.output)
+                self.assertFalse(self.output.exists())
+
     def test_nonregular_backing_member_fails(self):
         (self.backing / "link").symlink_to("otel-traces.jsonl")
         with self.assertRaises(ValueError):
@@ -115,6 +165,20 @@ class CaptureTransportTest(unittest.TestCase):
             with self.subTest(hashes=hashes, sizes=sizes):
                 with self.assertRaises(ValueError):
                     verify_capture_archive(self.output, hashes, sizes)
+
+    def test_archived_backend_metadata_is_rejected_even_without_payload_bytes(self):
+        for index, name in enumerate(["capture/.virtfs_metadata/secret",
+                                      "capture/nested/.virtfs_metadata/secret",
+                                      "capture/.virtfs_metadata_root"]):
+            with self.subTest(name=name):
+                output = self.root / ("metadata-%d.tar.gz" % index)
+                with tarfile.open(output, "w:gz") as archive:
+                    archive.addfile(tarfile.TarInfo(name))
+                with self.assertRaisesRegex(ValueError, "backend metadata exposed"):
+                    verify_capture_archive(output, self.hashes, self.sizes)
+                with self.assertRaisesRegex(ValueError, "unexpected capture member"):
+                    verify_capture_archive(output, {name: self.hashes["capture/otel-traces.jsonl"]},
+                                           {name: 3})
 
     def test_archive_verification_rejects_duplicate_and_nonregular_members(self):
         for kind in ("duplicate", "symlink", "wrong-bytes", "metadata"):
