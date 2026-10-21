@@ -15,7 +15,7 @@ use rstest::*;
 use rstest_reuse::*;
 use server_fn::ServerFn;
 use sha2::{Digest, Sha256};
-use storage::test_support::{Backend, TestEnv, backends};
+use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -191,10 +191,13 @@ async fn received_input_cap_rejects_a_valid_atompub_image(#[case] backend: Backe
     unpublished(&env, &app, root.path(), &session, 0).await;
 }
 
-#[apply(backends)]
+#[apply(backends_matrix)]
+#[case::web(true)]
+#[case::atompub(false)]
 #[tokio::test]
 async fn sanitized_output_cap_rejects_a_real_child_output_larger_than_its_admitted_input(
-    #[case] backend: Backend,
+    backend: Backend,
+    #[case] web: bool,
 ) {
     let env = backend
         .setup()
@@ -211,8 +214,13 @@ async fn sanitized_output_cap_rejects_a_real_child_output_larger_than_its_admitt
     let session = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
     // Input equals the positive cap. The fixed child fault copies that valid input
     // and appends exactly one byte, so only the distinct output cap can reject it.
-    let (status, body) = upload(&app, &session, true, "rejected.jpg", "image/jpeg", JPEG).await;
-    web_size_error(status, &body);
+    let (status, body) = upload(&app, &session, web, "rejected.jpg", "image/jpeg", JPEG).await;
+    if web {
+        web_size_error(status, &body);
+    } else {
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(body.is_empty());
+    }
     tokio::time::timeout(Duration::from_secs(2), control.started())
         .await
         .expect("input was rejected before the real output-producing child launched")

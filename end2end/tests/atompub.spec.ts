@@ -493,6 +493,32 @@ Rejected body</content>
   // are asserted — none may contain whitespace.
   expect(spacedBody).not.toMatch(/(?:href|src)="[^"]*\s[^"]*"/);
 
+  // 6c. A Protocol Client can upload above 2 MiB within the site's default
+  // 50 MiB media setting, and retrieve the exact stored non-image bytes.
+  const largeBytes = Buffer.alloc(2 * 1024 * 1024 + 1, 0x78);
+  const large = await request.post(`${BASE_URL}/atompub/${username}/media`, {
+    headers: {
+      authorization: auth,
+      "content-type": "application/octet-stream",
+      slug: "e2e-large.bin",
+    },
+    data: largeBytes,
+  });
+  expect(large.status()).toBe(201);
+  const largeBody = await large.text();
+  expect(largeBody).toContain('rel="edit-media"');
+  expect(largeBody).toContain('type="application/octet-stream"');
+  const source = largeBody.match(/<content[^>]*src="([^"]+)"/)?.[1];
+  expect(source).toBeTruthy();
+  const stored = await request.get(onServer(source!));
+  expect(stored.status()).toBe(200);
+  expect(await stored.body()).toEqual(largeBytes);
+  const largeMember = await request.get(onServer(large.headers()["location"]), {
+    headers: { authorization: auth },
+  });
+  expect(largeMember.status()).toBe(200);
+  expect(await largeMember.text()).toContain("e2e-large.bin");
+
   // 7. Delete the post; it is then gone.
   const del = await request.delete(memberUrl, {
     headers: { authorization: auth },

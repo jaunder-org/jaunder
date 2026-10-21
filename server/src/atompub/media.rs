@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use axum::Extension;
-use axum::body::Bytes;
-use axum::extract::Path;
+use axum::body::to_bytes;
+use axum::extract::{Path, Request};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
@@ -86,9 +86,25 @@ pub async fn collection_post(
     auth_user: auth::User,
     Path(username): Path<Username>,
     headers: HeaderMap,
-    body: Bytes,
+    request: Request,
 ) -> Result<Response, HandlerError> {
     super::require_user_match(&auth_user, &username)?;
+
+    // Bound this protocol's raw body by the shared input setting, including small
+    // limits, before buffering. The manager still checks prepared output separately.
+    let max_size = site_config.get_media_max_file_size().await?;
+    let limit = usize::try_from(max_size.value()).map_err(|error| internal_anyhow(error.into()))?;
+    let body = to_bytes(request.into_body(), limit)
+        .await
+        .map_err(|error| {
+            if std::error::Error::source(&error)
+                .is_some_and(<dyn std::error::Error>::is::<http_body_util::LengthLimitError>)
+            {
+                HandlerError::Status(StatusCode::PAYLOAD_TOO_LARGE)
+            } else {
+                internal_anyhow(error.into())
+            }
+        })?;
 
     let raw_name = headers
         .get("slug")

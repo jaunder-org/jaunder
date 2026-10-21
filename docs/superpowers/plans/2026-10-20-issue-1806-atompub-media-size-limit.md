@@ -24,7 +24,7 @@ Out:
 
 ## Task outline
 
-- [ ] Task 1: Align AtomPub media POST request handling with the configured
+- [x] Task 1: Align AtomPub media POST request handling with the configured
       limit and prove the full protocol behavior.
   - Contract: the effective finite request bound is the existing
     `media.max_file_size_bytes`, including when below Axum's 2 MiB default; no
