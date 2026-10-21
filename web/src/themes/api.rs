@@ -666,6 +666,36 @@ pub async fn create(
     }))
 }
 
+/// Validates the canonical bytes and exact installed asset identity before any copy write.
+#[cfg(feature = "server")]
+fn canonical_copy_draft(
+    archive: &[u8],
+    manifest: &[u8],
+    assets: &[storage::ThemePackageAsset],
+) -> Result<(String, ThemeDraft), InternalError> {
+    let package = theme_package::validate_theme_package(archive, ThemePackageLimits::default())
+        .map_err(|error| {
+            InternalError::validation_source("invalid canonical theme package", error)
+        })?;
+    let name = package.name().to_owned();
+    let draft = draft_from_validated_archive(ThemeId::from(0), package)?;
+    if manifest != draft.manifest
+        || assets.len() != draft.assets.len()
+        || assets.iter().any(|asset| {
+            !draft.assets.iter().any(|source| {
+                source.path == asset.path
+                    && source.mime == asset.mime
+                    && source.digest == asset.digest
+            })
+        })
+    {
+        return Err(InternalError::server_message(
+            "installed theme metadata does not match canonical source",
+        ));
+    }
+    Ok((name, draft))
+}
+
 /// Copies an installed original or the complete latest saved source in this library.
 #[macros::server(skip_all)]
 pub async fn copy_theme(
@@ -710,29 +740,11 @@ pub async fn copy_theme(
                     "installed theme does not match canonical source",
                 ));
             }
-            let package = theme_package::validate_theme_package(
+            let (name, draft) = canonical_copy_draft(
                 package.package_bytes(),
-                ThemePackageLimits::default(),
-            )
-            .map_err(|error| {
-                InternalError::validation_source("invalid canonical theme package", error)
-            })?;
-            let name = package.name().to_owned();
-            let draft = draft_from_validated_archive(ThemeId::from(0), package)?;
-            if installed.manifest != draft.manifest
-                || installed.assets.len() != draft.assets.len()
-                || installed.assets.iter().any(|asset| {
-                    !draft.assets.iter().any(|source| {
-                        source.path == asset.path
-                            && source.mime == asset.mime
-                            && source.digest == asset.digest
-                    })
-                })
-            {
-                return Err(InternalError::server_message(
-                    "installed theme metadata does not match canonical source",
-                ));
-            }
+                &installed.manifest,
+                &installed.assets,
+            )?;
             let scope = expect_context::<WriteScope>();
             scope
                 .run(move |transaction| {
@@ -1645,7 +1657,7 @@ mod tests {
         theme_operations::{ThemeOperationCoordinator, ThemeOperationRejected},
         theme_package,
     };
-    use leptos::prelude::{Owner, provide_context};
+    use leptos::prelude::{GetUntracked, Owner, provide_context};
     use std::{collections::BTreeMap, sync::Arc};
     use storage::{
         MediaContentLocks, MockMediaStorage, MockThemeStorage, ReplaceDraftError, ThemeAssetError,
@@ -1660,6 +1672,136 @@ mod tests {
                 message: message.into()
             }
         );
+    }
+
+    // guard:no-backend — dispatches the real page-owned Action into the unauthenticated API boundary.
+    #[tokio::test]
+    async fn editor_preview_action_returns_its_captured_snapshot_and_auth_failure() {
+        // Leptos-Axum's supported setup installs the native executor used by Actions.
+        let _ = leptos_axum::generate_route_list(|| ());
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let owner = Owner::new();
+                owner.set();
+                let (parts, ()) = http::Request::new(()).into_parts();
+                provide_context(parts);
+                let page = super::super::page_state::ThemePageState::default();
+                let editor = page.editor(None, "Local".into(), "body {}".into(), false);
+                let snapshot = editor.snapshot();
+                editor.preview.dispatch(snapshot.clone());
+                // The auth rejection completes synchronously when the spawned Action is polled.
+                tokio::task::yield_now().await;
+                let (captured, result) = editor
+                    .preview_value
+                    .get_untracked()
+                    .expect("dispatched preview completed");
+                assert_eq!(captured, snapshot);
+                assert_eq!(result, Err(WebError::Unauthorized));
+                assert!(!editor.preview_pending.get_untracked());
+                assert_eq!(editor.name.get_untracked(), "Local");
+                assert_eq!(editor.target.get_untracked(), None);
+                owner.cleanup();
+            })
+            .await;
+    }
+
+    #[test]
+    fn canonical_copy_validates_bytes_and_each_installed_asset_identity_field() {
+        let manifest = br#"{"schema":1,"name":"Ocean","style_contract":1,"assets":{"assets/logo.png":"image/png"},"defaults":{}}"#.to_vec();
+        let png = b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d\x49\x48\x44\x52\x00\x00\x00\x01\x00\x00\x00\x01\x08\x04\x00\x00\x00\xb5\x1c\x0c\x02\x00\x00\x00\x0b\x49\x44\x41\x54\x78\xda\x63\x64\xf8\x0f\x00\x01\x05\x01\x01\x27\x18\xe3\x66\x00\x00\x00\x00\x49\x45\x4e\x44\xae\x42\x60\x82".to_vec();
+        let archive = theme_package::export_theme_package(
+            &manifest,
+            b"body {}",
+            &BTreeMap::from([("assets/logo.png".into(), png)]),
+        )
+        .unwrap();
+        let draft = draft_from_archive(ThemeId::from(0), &archive).unwrap();
+        let assets: Vec<_> = draft
+            .assets
+            .iter()
+            .map(|asset| storage::ThemePackageAsset {
+                path: asset.path.clone(),
+                mime: asset.mime.clone(),
+                digest: asset.digest.clone(),
+            })
+            .collect();
+        let (name, copied) =
+            super::canonical_copy_draft(&archive, &draft.manifest, &assets).unwrap();
+        assert_eq!(name, "Ocean");
+        assert_eq!(copied, draft);
+        assert_validation(
+            &super::canonical_copy_draft(b"invalid archive", &draft.manifest, &assets).unwrap_err(),
+            "invalid canonical theme package",
+        );
+        for mismatch in ["manifest", "count", "path", "mime", "digest"] {
+            let mut manifest = draft.manifest.clone();
+            let mut assets = assets.clone();
+            match mismatch {
+                "manifest" => manifest.push(b' '),
+                "count" => assets.clear(),
+                "path" => assets[0].path = "other.png".into(),
+                "mime" => assets[0].mime = "image/jpeg".into(),
+                _ => assets[0].digest = "a".repeat(64).parse().unwrap(),
+            }
+            let error = super::canonical_copy_draft(&archive, &manifest, &assets).unwrap_err();
+            assert_eq!(error.public_message(), "server operation failed");
+        }
+    }
+
+    // guard:no-backend — a real editor request rejects an owned non-image record before mutation.
+    #[tokio::test]
+    async fn editor_preview_rejects_non_image_media_owned_by_the_actor() {
+        let reactive_owner = Owner::new();
+        reactive_owner.set();
+        let actor = UserId::from(7);
+        provide_context(auth_parts(actor, "author"));
+        provide_context(Arc::new(ThemeOperationCoordinator::new()));
+        let root = std::env::temp_dir().join("unused-theme-editor-nonimage");
+        provide_context(Arc::new(ThemeManager::new(
+            Arc::new(MockThemeStorage::new()),
+            Arc::new(MockMediaStorage::new()),
+            mock_write_scope(),
+            Arc::new(MediaContentLocks::new(Arc::new(root))),
+        )));
+        let reference = ThemeMediaInput {
+            source: MediaSource::Upload,
+            sha256: "a".repeat(64).parse().unwrap(),
+            filename: "document.txt".parse().unwrap(),
+        };
+        let mut media = MockMediaStorage::new();
+        media
+            .expect_get_media()
+            .once()
+            .withf(move |user, _, _, _| *user == actor)
+            .returning(move |_, hash, filename, source| {
+                Ok(Some(storage::MediaRecord {
+                    user_id: actor,
+                    sha256: hash.clone(),
+                    filename: filename.clone(),
+                    source: *source,
+                    content_type: "text/plain".parse().unwrap(),
+                    size_bytes: 1_i64.try_into().unwrap(),
+                    source_url: None,
+                    created_at: common::time::UtcInstant::now(),
+                }))
+            });
+        provide_context(Arc::new(media) as Arc<dyn storage::MediaStorage>);
+        let error = super::preview_editor(
+            OwnershipScope::Author,
+            None,
+            super::ThemeEditorInput {
+                name: "Local".into(),
+                stylesheet: "body {}".into(),
+                logo: super::ThemeEditorPatch::Set(ThemeBindingInput::Media(reference)),
+                header: super::ThemeEditorPatch::Set(ThemeBindingInput::PackagedDefault),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(error, WebError::Validation { message } if message == "Media must be an image")
+        );
+        reactive_owner.cleanup();
     }
 
     #[test]
@@ -1847,6 +1989,10 @@ mod tests {
             WebError::NotFound {
                 message: "theme not found".into()
             }
+        );
+        assert_validation(
+            &manager_error(anyhow::Error::from(ReplaceDraftError::QuotaExceeded)),
+            "theme draft quota exceeded",
         );
         let missing_manager = manager_error(anyhow::Error::from(sqlx::Error::RowNotFound));
         assert_eq!(

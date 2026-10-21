@@ -88,14 +88,15 @@ pub fn validate_automatic_theme_name_base(name: &str) -> Result<String, ThemeCat
     }
 }
 
-fn allocate_theme_name(base: &str, keys: &BTreeSet<String>) -> Result<String, sqlx::Error> {
+fn allocate_theme_name(base: &str, keys: &BTreeSet<String>) -> String {
     if validate_theme_catalog_name(base).is_ok() && !keys.contains(&canonical_theme_name_key(base))
     {
-        return Ok(base.to_owned());
+        return base.to_owned();
     }
-    // At most one candidate per stored name can be occupied. The extra candidate
-    // also accounts for a reserved base, without transaction replay on conflicts.
-    for number in 2..=keys.len().saturating_add(2) {
+    // Distinct numbered candidates outnumber the finite stored keys. A u128 counter
+    // has room for every usize-sized catalog plus the reserved base and next suffix.
+    let mut number = 2_u128;
+    loop {
         let suffix = format!(" {number}");
         let stem = base
             .chars()
@@ -105,12 +106,24 @@ fn allocate_theme_name(base: &str, keys: &BTreeSet<String>) -> Result<String, sq
         if validate_theme_catalog_name(&candidate).is_ok()
             && !keys.contains(&canonical_theme_name_key(&candidate))
         {
-            return Ok(candidate);
+            return candidate;
         }
+        number += 1;
     }
-    Err(sqlx::Error::Protocol(
-        "automatic theme namespace exhausted".into(),
-    ))
+}
+
+/// Locked selection reads retain corruption as a protocol error, never inheritance.
+fn decode_theme_selection_row(
+    (builtin, custom): (Option<String>, Option<i64>),
+) -> Result<PublicThemeSelection, sqlx::Error> {
+    match (builtin, custom) {
+        (None, Some(id)) => Ok(PublicThemeSelection::Custom(ThemeId::from(id))),
+        (Some(token), None) => token
+            .parse()
+            .map(PublicThemeSelection::BuiltIn)
+            .map_err(|_| sqlx::Error::Protocol("invalid selected theme".into())),
+        _ => Err(sqlx::Error::Protocol("invalid theme selection".into())),
+    }
 }
 
 /// One validated package member retained with a mutable theme draft.
@@ -651,7 +664,7 @@ macro_rules! impl_theme_storage {
                 sqlx::query("UPDATE theme_site_quota SET retained_revisions = retained_revisions WHERE singleton = 1").execute(&mut *connection).await?;
                 let keys: Vec<(String,)> = sqlx::query_as("SELECT name_key FROM themes WHERE catalog_owner_key = $1").bind(catalog_owner_key(owner)).fetch_all(&mut *connection).await?;
                 let keys = keys.into_iter().map(|(key,)| key).collect::<BTreeSet<_>>();
-                let name = allocate_theme_name(&base, &keys)?;
+                let name = allocate_theme_name(&base, &keys);
                 let id = self.create_theme(transaction, owner, &name, draft, limits).await?;
                 Ok(ThemeCatalogEntry { id, owner, name, current_revision: None })
             }
@@ -803,11 +816,7 @@ macro_rules! impl_theme_storage {
                 sqlx::query("UPDATE theme_site_quota SET retained_revisions = retained_revisions WHERE singleton = 1").execute(&mut *connection).await?;
                 let row: Option<(Option<String>, Option<i64>)> = sqlx::query_as("SELECT builtin_theme, theme_id FROM theme_selections WHERE catalog_owner_key = $1")
                     .bind(catalog_owner_key(owner)).fetch_optional(&mut *connection).await?;
-                row.map(|(builtin, custom)| match (builtin, custom) {
-                    (None, Some(id)) => Ok(PublicThemeSelection::Custom(ThemeId::from(id))),
-                    (Some(token), None) => token.parse().map(PublicThemeSelection::BuiltIn).map_err(|_| sqlx::Error::Protocol("invalid selected theme".into())),
-                    _ => Err(sqlx::Error::Protocol("invalid theme selection".into())),
-                }).transpose()
+                row.map(decode_theme_selection_row).transpose()
             }
             async fn selection(&self, owner: ThemeOwner) -> Result<Option<PublicThemeSelection>, sqlx::Error> {
                 let row: Option<(Option<String>, Option<i64>)> = sqlx::query_as(
@@ -3072,6 +3081,26 @@ mod tests {
             error
                 .as_database_error()
                 .is_some_and(sqlx::error::DatabaseError::is_check_violation)
+        );
+    }
+
+    #[test]
+    fn locked_selection_decoder_preserves_identity_and_rejects_corrupt_shapes() {
+        assert_eq!(
+            decode_theme_selection_row((None, Some(42))).unwrap(),
+            PublicThemeSelection::Custom(ThemeId::from(42))
+        );
+        assert_eq!(
+            decode_theme_selection_row((Some("reader".into()), None)).unwrap(),
+            PublicThemeSelection::BuiltIn(Theme::Reader)
+        );
+        for row in [(None, None), (Some("reader".into()), Some(42))] {
+            assert!(
+                matches!(decode_theme_selection_row(row), Err(sqlx::Error::Protocol(message)) if message == "invalid theme selection")
+            );
+        }
+        assert!(
+            matches!(decode_theme_selection_row((Some("unknown".into()), None)), Err(sqlx::Error::Protocol(message)) if message == "invalid selected theme")
         );
     }
 

@@ -21,7 +21,10 @@ use crate::{
     topbar::Topbar,
 };
 
-use super::editor_inputs::{draft_package_editor_text, normal_media_options, staged_media_token};
+use super::editor_inputs::{
+    draft_package_editor_text, editor_catalog_name, image_patch_token, kept_image_label,
+    normal_media_options, require_editor_lifetime, staged_media_token, tab_destination,
+};
 use super::page_state::{
     self, EditorState, Feedback, MutationStage, Revalidation, ScopeAvailability, ThemeChoice,
     ThemePageState,
@@ -362,17 +365,8 @@ fn ThemeScopeTab(
 }
 
 fn theme_tab_key(page: ThemePageState, current: OwnershipScope, event: &web_sys::KeyboardEvent) {
-    if page.pending.get_untracked() {
+    let Some(next) = tab_destination(page.pending.get_untracked(), current, &event.key()) else {
         return;
-    }
-    let next = match event.key().as_str() {
-        "ArrowLeft" | "ArrowRight" => match current {
-            OwnershipScope::Author => OwnershipScope::Site,
-            OwnershipScope::Site => OwnershipScope::Author,
-        },
-        "Home" => OwnershipScope::Author,
-        "End" => OwnershipScope::Site,
-        _ => return,
     };
     event.prevent_default();
     page.select_scope(next);
@@ -1072,35 +1066,32 @@ async fn load_editor(
     catalog: ThemeCatalogResource,
 ) -> Result<(EditorState, super::Draft), WebError> {
     let lifetime = page.lifetime();
+    let (source, current) = load_editor_source(&lifetime, draft, presentation).await?;
+    let name = load_editor_name(target, catalog).await?;
+    require_editor_lifetime(&lifetime)?;
+    page.loaded_editor(scope, target, name, source, current.as_ref())
+}
+
+async fn load_editor_source(
+    lifetime: &std::sync::atomic::AtomicBool,
+    draft: Resource<Result<super::Draft, WebError>>,
+    presentation: ThemePresentationResource,
+) -> Result<(super::Draft, Option<ThemePresentation>), WebError> {
     let source = draft.await?;
+    require_editor_lifetime(lifetime)?;
     let current = presentation.await?;
-    let name = match target {
-        Some(id) => {
-            catalog
-                .await?
-                .into_iter()
-                .find(|entry| entry.id == id)
-                .ok_or_else(|| WebError::server_message("Theme is no longer available"))?
-                .name
-        }
-        None => String::new(),
-    };
-    if !lifetime.load(std::sync::atomic::Ordering::Acquire) {
-        return Err(WebError::server_message("Theme editor has closed"));
+    require_editor_lifetime(lifetime)?;
+    Ok((source, current))
+}
+
+async fn load_editor_name(
+    target: Option<ThemeId>,
+    catalog: ThemeCatalogResource,
+) -> Result<String, WebError> {
+    match target {
+        Some(id) => editor_catalog_name(id, &catalog.await?),
+        None => Ok(String::new()),
     }
-    let choice = target.map_or(ThemeChoice::New, ThemeChoice::Custom);
-    if page.scope.get_untracked() != scope || page.selected.get_untracked() != Some(choice) {
-        return Err(WebError::server_message("Theme editor has changed"));
-    }
-    let editor = page.editor(
-        target,
-        name,
-        String::from_utf8_lossy(&source.stylesheet).into_owned(),
-        current
-            .as_ref()
-            .is_some_and(|current| current.shuffle_seed.is_some()),
-    );
-    Ok((editor, source))
 }
 
 #[component]
@@ -1243,7 +1234,12 @@ fn NormalImagePicker(
                 )
             >
                 <Show when=move || editor.target.get().is_some()>
-                    <option value="keep">{move || kept_image_label(role, presentation)}</option>
+                    <option value="keep">
+                        {move || kept_image_label(
+                            role,
+                            presentation.get().and_then(Result::ok).flatten(),
+                        )}
+                    </option>
                 </Show>
                 <option value="package-default">"Theme default"</option>
                 <option value="none">"No image"</option>
@@ -1288,38 +1284,6 @@ fn NormalImagePicker(
                 </span>
             </Show>
         </label>
-    }
-}
-
-fn kept_image_label(role: ThemeImageRole, presentation: ThemePresentationResource) -> String {
-    let current = presentation.get().and_then(Result::ok).flatten();
-    let Some(current) = current else {
-        return "Keep current image".into();
-    };
-    if role == ThemeImageRole::Header && current.shuffle_seed.is_some() {
-        return "Keep rotating header images".into();
-    }
-    let binding = match role {
-        ThemeImageRole::Logo => current.logo,
-        ThemeImageRole::Header => current.header,
-    };
-    match binding {
-        None | Some(ThemeBindingInput::PackagedDefault) => "Keep theme default".into(),
-        Some(ThemeBindingInput::ExplicitAbsent) => "Keep no image".into(),
-        Some(ThemeBindingInput::PackageAsset(path)) => format!("Keep theme image: {path}"),
-        Some(ThemeBindingInput::Media(media)) => format!("Keep current image: {}", media.filename),
-    }
-}
-
-fn image_patch_token(patch: &ThemeEditorPatch<ThemeBindingInput>) -> String {
-    match patch {
-        ThemeEditorPatch::Keep => "keep".into(),
-        ThemeEditorPatch::Set(ThemeBindingInput::PackagedDefault) => "package-default".into(),
-        ThemeEditorPatch::Set(ThemeBindingInput::ExplicitAbsent) => "none".into(),
-        ThemeEditorPatch::Set(ThemeBindingInput::PackageAsset(asset_path)) => {
-            format!("package-asset:{asset_path}")
-        }
-        ThemeEditorPatch::Set(ThemeBindingInput::Media(media)) => staged_media_token(media),
     }
 }
 
@@ -1431,60 +1395,32 @@ fn save_normal_editor(page: ThemePageState, editor: EditorState) {
         if !lifetime.load(std::sync::atomic::Ordering::Acquire) {
             return;
         }
-        if page.editor_is_current(&snapshot) {
-            let receipt = page_state::mutation_receipt(&result);
-            match result {
-                Ok(MutationOutcome::Confirmed(saved)) => {
-                    let clean = editor.confirm(&snapshot, &saved);
-                    if editor.target.get_untracked() == Some(saved.id) {
-                        page.selected.set(Some(ThemeChoice::Custom(saved.id)));
-                    }
-                    page.feedback.set(Feedback::Success);
-                    let mut message = if saved.applied {
-                        "Changes saved. Public appearance updated.".to_owned()
-                    } else {
-                        "Changes saved.".to_owned()
-                    };
-                    if !clean {
-                        message.push_str(" Newer edits are still unsaved.");
-                    }
-                    page.status.set(Some(message));
-                }
-                Ok(MutationOutcome::CommitIndeterminate(saved)) => {
-                    page.feedback.set(Feedback::Error);
-                    page.status.set(Some("The server could not confirm the save. Your edits are still here. Check the saved theme before trying again; no automatic retry ran.".into()));
-                    // One diagnostic reread, never adopt the uncertain ID or replay the write.
-                    let diagnostic = api::get_draft(snapshot.scope, saved.id).await;
-                    if !lifetime.load(std::sync::atomic::Ordering::Acquire) {
-                        return;
-                    }
-                    if let Err(error) = diagnostic {
-                        page.status.update(|message| {
-                            if let Some(message) = message {
-                                use std::fmt::Write as _;
-                                let _ =
-                                    write!(message, " Saved content could not be checked: {error}");
-                            }
-                        });
-                    }
-                }
-                Err(error) => {
-                    page.feedback.set(Feedback::Error);
-                    let message = if matches!(receipt, page_state::Receipt::Rejected(_)) {
-                        format!("Save was rejected: {error}. Your edits are still here.")
-                    } else {
-                        format!(
-                            "The server could not confirm the save. It may already have been saved. Your edits are still here. Check available themes and your current setting before trying again; no automatic retry ran. {error}"
-                        )
-                    };
-                    page.status.set(Some(message));
-                }
-            }
-            // Revalidate owner catalog/selection without inventing an uncertain target ID.
-            page.refresh.notify();
+        if !page.editor_is_current(&snapshot) {
+            page.pending.set(false);
+            return;
         }
-        page.pending.set(false);
+        finish_normal_save(page, editor, &snapshot, &result, &lifetime).await;
     });
+}
+
+async fn finish_normal_save(
+    page: ThemePageState,
+    editor: EditorState,
+    snapshot: &page_state::EditorSnapshot,
+    result: &Result<MutationOutcome<super::ThemeEditorSaveResult>, WebError>,
+    lifetime: &std::sync::atomic::AtomicBool,
+) {
+    if let Some(id) = page.save_feedback(editor, snapshot, result) {
+        // One diagnostic reread, never adopt the uncertain ID or replay the write.
+        let diagnostic = api::get_draft(snapshot.scope, id).await;
+        if !lifetime.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+        page.save_diagnostic(&diagnostic);
+    }
+    // Revalidate owner catalog/selection without inventing an uncertain target ID.
+    page.refresh.notify();
+    page.pending.set(false);
 }
 
 #[component]
@@ -1758,26 +1694,35 @@ fn dispatch_use(page: ThemePageState, scope: OwnershipScope, id: ThemeId) {
             }
             set_mutation_feedback(page, MutationStage::Apply { published: true }, &applied);
         }
-        // Each owner-scoped stage belongs to this mounted page; sent writes may still commit.
-        let catalog = api::list(scope).await;
-        if !lifetime.load(std::sync::atomic::Ordering::Acquire) {
-            return;
-        }
-        let selection = api::get_selection(scope).await;
-        if !lifetime.load(std::sync::atomic::Ordering::Acquire) {
-            return;
-        }
-        let message_from_rereads =
-            page_state::reconciliation_message(scope, &catalog, &selection, Some(id));
-        page.status.update(|message| {
-            if let Some(message) = message {
-                message.push(' ');
-                message.push_str(&message_from_rereads);
-            }
-        });
-        page.refresh.notify();
-        page.pending.set(false);
+        reconcile_live_owner(page, scope, id, &lifetime).await;
     });
+}
+
+/// Each reread belongs to the mounted page; sent writes may still commit after teardown.
+async fn reconcile_live_owner(
+    page: ThemePageState,
+    scope: OwnershipScope,
+    id: ThemeId,
+    lifetime: &std::sync::atomic::AtomicBool,
+) {
+    let catalog = api::list(scope).await;
+    if !lifetime.load(std::sync::atomic::Ordering::Acquire) {
+        return;
+    }
+    let selection = api::get_selection(scope).await;
+    if !lifetime.load(std::sync::atomic::Ordering::Acquire) {
+        return;
+    }
+    let message_from_rereads =
+        page_state::reconciliation_message(scope, &catalog, &selection, Some(id));
+    page.status.update(|message| {
+        if let Some(message) = message {
+            message.push(' ');
+            message.push_str(&message_from_rereads);
+        }
+    });
+    page.refresh.notify();
+    page.pending.set(false);
 }
 
 async fn reconcile_owner(

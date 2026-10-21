@@ -817,6 +817,36 @@ mod tests {
     use leptos::prelude::{GetUntracked, Owner, Set};
 
     #[test]
+    fn confirmation_from_another_scope_or_target_does_not_touch_the_buffer() {
+        Owner::new().with(|| {
+            let editor = super::EditorState::new(
+                OwnershipScope::Author,
+                Some(common::ids::ThemeId::from(42)),
+                "Local".into(),
+                "unsaved".into(),
+                true,
+            );
+            let original = editor.snapshot();
+            let saved = crate::themes::ThemeEditorSaveResult {
+                id: common::ids::ThemeId::from(43),
+                name: "Foreign".into(),
+                applied: true,
+            };
+            for scope in [OwnershipScope::Author, OwnershipScope::Site] {
+                let mut stale = original.clone();
+                stale.scope = scope;
+                stale.target = Some(saved.id);
+                assert!(!editor.confirm(&stale, &saved));
+                assert_eq!(editor.snapshot(), original);
+            }
+            let mut foreign_scope = original.clone();
+            foreign_scope.scope = OwnershipScope::Site;
+            assert!(!editor.confirm(&foreign_scope, &saved));
+            assert_eq!(editor.snapshot(), original);
+        });
+    }
+
+    #[test]
     fn confirmed_new_save_retains_id_and_newer_edits_without_marking_them_clean() {
         let owner = Owner::new();
         owner.with(|| {

@@ -907,6 +907,236 @@ mod tests {
         )
     }
 
+    fn copy_fixture() -> crate::ThemeCopySnapshot {
+        let compiled = compiled_theme_fixture();
+        crate::ThemeCopySnapshot {
+            entry: crate::ThemeCatalogEntry {
+                id: ThemeId::from(1),
+                owner: ThemeOwner::Site,
+                name: "Source".into(),
+                current_revision: None,
+            },
+            draft: ThemeDraft {
+                theme_id: ThemeId::from(1),
+                manifest: compiled.canonical_manifest().to_vec(),
+                stylesheet: b"body { color: black; }".to_vec(),
+                source_digest: "a".repeat(64).parse().unwrap(),
+                assets: compiled
+                    .assets()
+                    .map(|(path, mime, bytes, digest)| crate::ThemeDraftAsset {
+                        path: path.into(),
+                        mime: mime.into(),
+                        bytes: bytes.to_vec(),
+                        digest: common::theme::ThemeAssetDigest::from_digest(digest),
+                    })
+                    .collect(),
+            },
+            bindings: Vec::new(),
+            header_pool: Vec::new(),
+        }
+    }
+
+    fn media_pool_entry(actor: UserId) -> crate::ThemeHeaderPoolEntry {
+        crate::ThemeHeaderPoolEntry {
+            ordinal: 0,
+            package_path: None,
+            media_user_id: Some(actor),
+            media_source: Some("upload".into()),
+            media_digest: Some("a".repeat(64).parse().unwrap()),
+            media_filename: Some("header.png".into()),
+        }
+    }
+
+    // guard:no-backend — strict empty mocks prove rejection precedes storage mutation.
+    #[tokio::test]
+    async fn editor_and_copy_reject_changed_package_and_foreign_media_before_writes() {
+        let root = tempfile::tempdir().unwrap();
+        let themes: Arc<dyn ThemeStorage> = Arc::new(crate::MockThemeStorage::new());
+        let scope = crate::test_support::mock_write_scope();
+        let assets = ThemeAssetManager::new(
+            themes.clone(),
+            scope.clone(),
+            Arc::new(root.path().to_path_buf()),
+        );
+        let manager = ThemeManager::new(
+            themes,
+            Arc::new(crate::MockMediaStorage::new()),
+            scope,
+            Arc::new(MediaContentLocks::new(Arc::new(root.path().to_path_buf()))),
+        );
+        let actor = UserId::from(7);
+        let snapshot = copy_fixture();
+        let mut wrong_draft = snapshot.draft.clone();
+        wrong_draft.stylesheet.push(b' ');
+        assert!(
+            manager
+                .copy_saved(actor, ThemeOwner::Site, snapshot.clone(), wrong_draft)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("validated package")
+        );
+        let mut foreign = snapshot.clone();
+        foreign.header_pool.push(media_pool_entry(UserId::from(8)));
+        assert!(
+            manager
+                .copy_saved(actor, ThemeOwner::Site, foreign.clone(), foreign.draft)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("another user's Media")
+        );
+        for reason in ["context", "media", "pool"] {
+            let mut snapshot = copy_fixture();
+            snapshot.header_pool.push(media_pool_entry(actor));
+            let (mut change, compiled) = editor_change(snapshot);
+            match reason {
+                "context" => change.draft.manifest.push(b' '),
+                "media" => change.replacements.push(ThemeRoleBinding::Media {
+                    theme_id: ThemeId::from(1),
+                    role: ThemeImageRole::Logo,
+                    user_id: UserId::from(8),
+                    media: reference_from_fields(
+                        Some("upload".into()),
+                        Some("a".repeat(64).parse().unwrap()),
+                        Some("header.png".into()),
+                    )
+                    .unwrap(),
+                }),
+                _ => change.replacements.push(ThemeRoleBinding::HeaderPool {
+                    theme_id: ThemeId::from(1),
+                    pool_revision: "a".repeat(64).parse().unwrap(),
+                    shuffle_seed: [0; 32],
+                }),
+            }
+            let error = manager
+                .save_editor(
+                    actor,
+                    ThemeOwner::Site,
+                    change,
+                    &assets,
+                    &compiled,
+                    crate::ThemeQuotaLimits::production(),
+                )
+                .await
+                .unwrap_err();
+            let expected = match reason {
+                "context" => "saved package context",
+                "media" => "belong to the actor",
+                _ => "not normal editor input",
+            };
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
+
+    // guard:no-backend — complete owned pool identity passes through the transactional coordinator.
+    #[tokio::test]
+    async fn copy_preserves_owned_media_pool_identity_in_one_new_private_entry() {
+        let actor = UserId::from(7);
+        let mut snapshot = copy_fixture();
+        snapshot.header_pool.push(media_pool_entry(actor));
+        let expected = snapshot.clone();
+        let mut themes = crate::MockThemeStorage::new();
+        themes
+            .expect_copy_snapshot()
+            .once()
+            .returning(move |_, _, _| Ok(expected.clone()));
+        themes
+            .expect_create_theme_automatic()
+            .once()
+            .returning(|_, owner, _, _, _| {
+                Ok(crate::ThemeCatalogEntry {
+                    id: ThemeId::from(2),
+                    owner,
+                    name: "Source 2".into(),
+                    current_revision: None,
+                })
+            });
+        themes
+            .expect_replace_header_pool()
+            .once()
+            .withf(move |_, owner, id, pool| {
+                *owner == ThemeOwner::Site
+                    && *id == ThemeId::from(2)
+                    && pool == [media_pool_entry(actor)]
+            })
+            .returning(|_, _, _, _| Ok(()));
+        let mut media = crate::MockMediaStorage::new();
+        media
+            .expect_lock_media_reference()
+            .once()
+            .withf(|_, reference| reference.filename.as_ref() == "header.png")
+            .returning(|_, _| Ok(()));
+        let root = tempfile::tempdir().unwrap();
+        let manager = ThemeManager::new(
+            Arc::new(themes),
+            Arc::new(media),
+            crate::test_support::mock_write_scope(),
+            Arc::new(MediaContentLocks::new(Arc::new(root.path().to_path_buf()))),
+        );
+        let draft = snapshot.draft.clone();
+        let entry = confirmed(
+            manager
+                .copy_saved(actor, ThemeOwner::Site, snapshot, draft)
+                .await
+                .unwrap(),
+        );
+        assert_eq!(entry.id, ThemeId::from(2));
+        assert!(entry.current_revision.is_none());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn editor_rejects_stale_saved_source_without_overwriting_newer_fields(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let compiled = compiled_theme_fixture();
+        let id = create_site_theme(env.themes(), env.write_scope(), &compiled).await;
+        let manager = ThemeManager::new(
+            env.themes(),
+            env.media(),
+            env.write_scope(),
+            Arc::new(env.media_content_locks()),
+        );
+        let snapshot = manager.copy_source(ThemeOwner::Site, id).await.unwrap();
+        let original = snapshot.draft.clone();
+        let (change, compiled) = editor_change(snapshot);
+        let themes = env.themes();
+        env.write_scope()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    themes
+                        .rename_theme(transaction, ThemeOwner::Site, id, "Newer name")
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+        let assets = ThemeAssetManager::new(
+            env.themes(),
+            env.write_scope(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+        let error = manager
+            .save_editor(
+                UserId::from(0),
+                ThemeOwner::Site,
+                change,
+                &assets,
+                &compiled,
+                crate::ThemeQuotaLimits::production(),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("source changed"), "{error}");
+        let after = manager.copy_source(ThemeOwner::Site, id).await.unwrap();
+        assert_eq!(after.entry.name, "Newer name");
+        assert_eq!(after.draft, original);
+        assert!(after.bindings.is_empty());
+        assert!(after.entry.current_revision.is_none());
+    }
+
     #[apply(backends)]
     #[tokio::test]
     async fn editor_revalidates_selection_after_media_lock_wait(#[case] backend: Backend) {
@@ -1115,52 +1345,60 @@ mod tests {
     // guard:no-backend — injected acknowledgement loss proves one creation and one reconciliation, never replay.
     #[tokio::test]
     async fn editor_commit_acknowledgement_loss_remains_uncertain_without_replay() {
-        let mut themes = crate::MockThemeStorage::new();
-        themes
-            .expect_create_theme()
-            .once()
-            .returning(|_, _, _, _, _| Ok(ThemeId::from(42)));
-        themes.expect_get_draft().once().returning(|_, _| Ok(None));
-        let root = tempfile::tempdir().unwrap();
-        let themes: Arc<dyn ThemeStorage> = Arc::new(themes);
-        let scope = crate::test_support::mock_write_scope_with_commit_acknowledgement_loss();
-        let assets = ThemeAssetManager::new(
-            themes.clone(),
-            scope.clone(),
-            Arc::new(root.path().to_path_buf()),
-        );
-        let manager = ThemeManager::new(
-            themes,
-            Arc::new(crate::MockMediaStorage::new()),
-            scope,
-            Arc::new(MediaContentLocks::new(Arc::new(root.path().to_path_buf()))),
-        );
-        let draft = crate::ThemeDraft {
-            theme_id: ThemeId::from(0),
-            manifest: b"{}".to_vec(),
-            stylesheet: Vec::new(),
-            source_digest: "a".repeat(64).parse().unwrap(),
-            assets: Vec::new(),
-        };
-        let outcome = manager
-            .save_editor(
-                UserId::from(0),
-                ThemeOwner::Site,
-                ThemeEditorChange {
-                    name: "Unknown new".into(),
-                    expected: None,
-                    draft,
-                    replacements: Vec::new(),
-                },
-                &assets,
-                &compiled_theme_fixture(),
-                crate::ThemeQuotaLimits::production(),
-            )
-            .await
-            .unwrap();
-        assert!(
-            matches!(outcome, MutationOutcome::CommitIndeterminate(ThemeEditorSaved {id, applied:false,..}) if id == ThemeId::from(42))
-        );
+        for fail_read in [false, true] {
+            let mut themes = crate::MockThemeStorage::new();
+            themes
+                .expect_create_theme()
+                .once()
+                .returning(|_, _, _, _, _| Ok(ThemeId::from(42)));
+            themes.expect_get_draft().once().returning(move |_, _| {
+                if fail_read {
+                    Err(sqlx::Error::Protocol("reconciliation unavailable".into()))
+                } else {
+                    Ok(None)
+                }
+            });
+            let root = tempfile::tempdir().unwrap();
+            let themes: Arc<dyn ThemeStorage> = Arc::new(themes);
+            let scope = crate::test_support::mock_write_scope_with_commit_acknowledgement_loss();
+            let assets = ThemeAssetManager::new(
+                themes.clone(),
+                scope.clone(),
+                Arc::new(root.path().to_path_buf()),
+            );
+            let manager = ThemeManager::new(
+                themes,
+                Arc::new(crate::MockMediaStorage::new()),
+                scope,
+                Arc::new(MediaContentLocks::new(Arc::new(root.path().to_path_buf()))),
+            );
+            let draft = crate::ThemeDraft {
+                theme_id: ThemeId::from(0),
+                manifest: b"{}".to_vec(),
+                stylesheet: Vec::new(),
+                source_digest: "a".repeat(64).parse().unwrap(),
+                assets: Vec::new(),
+            };
+            let outcome = manager
+                .save_editor(
+                    UserId::from(0),
+                    ThemeOwner::Site,
+                    ThemeEditorChange {
+                        name: "Unknown new".into(),
+                        expected: None,
+                        draft,
+                        replacements: Vec::new(),
+                    },
+                    &assets,
+                    &compiled_theme_fixture(),
+                    crate::ThemeQuotaLimits::production(),
+                )
+                .await
+                .unwrap();
+            assert!(
+                matches!(outcome, MutationOutcome::CommitIndeterminate(ThemeEditorSaved {id, applied:false,..}) if id == ThemeId::from(42))
+            );
+        }
     }
 
     // guard:no-backend — lost acknowledgement must retain active staged bytes without repeating publication.
