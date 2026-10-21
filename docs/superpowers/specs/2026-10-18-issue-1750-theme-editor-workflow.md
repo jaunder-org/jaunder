@@ -2,8 +2,7 @@
 
 **APPROVED for implementation; not merge approval.** User's direct answer
 **“approved”** resolves `JAU-1750-EDITOR-WORKFLOW-001` for the exact read/write
-contracts and outline below. Lead acknowledgement:
-`51e03446-a8b8-4315-a0ce-daa671184145`; Manager receipt:
+contracts and outline below. Lead acknowledgement / Manager receipt:
 `0d46ad21-67a4-4c70-aa58-789017273df7`. Approval provenance was added without
 changing the contract. Pre-approval document SHA256 values:
 `dd4e74a1c3ebf01578c4e746f4bd0a93cfe21ef7032f44b9838b905e3545515f` (this spec)

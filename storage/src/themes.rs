@@ -76,6 +76,43 @@ pub fn validate_theme_catalog_name(name: &str) -> Result<String, ThemeCatalogNam
     Ok(name.to_owned())
 }
 
+/// Validates an automatic seed without allowing a reserved final catalog label.
+///
+/// # Errors
+/// Returns an error for blank or overlong seeds; automatic suffixes alone may shorten a stem.
+pub fn validate_automatic_theme_name_base(name: &str) -> Result<String, ThemeCatalogNameError> {
+    match validate_theme_catalog_name(name) {
+        Ok(name) => Ok(name),
+        Err(ThemeCatalogNameError::Reserved) => Ok(name.trim().to_owned()),
+        Err(error) => Err(error),
+    }
+}
+
+fn allocate_theme_name(base: &str, keys: &BTreeSet<String>) -> Result<String, sqlx::Error> {
+    if validate_theme_catalog_name(base).is_ok() && !keys.contains(&canonical_theme_name_key(base))
+    {
+        return Ok(base.to_owned());
+    }
+    // At most one candidate per stored name can be occupied. The extra candidate
+    // also accounts for a reserved base, without transaction replay on conflicts.
+    for number in 2..=keys.len().saturating_add(2) {
+        let suffix = format!(" {number}");
+        let stem = base
+            .chars()
+            .take(THEME_CATALOG_NAME_MAX_LENGTH - suffix.chars().count())
+            .collect::<String>();
+        let candidate = format!("{}{suffix}", stem.trim_end());
+        if validate_theme_catalog_name(&candidate).is_ok()
+            && !keys.contains(&canonical_theme_name_key(&candidate))
+        {
+            return Ok(candidate);
+        }
+    }
+    Err(sqlx::Error::Protocol(
+        "automatic theme namespace exhausted".into(),
+    ))
+}
+
 /// One validated package member retained with a mutable theme draft.
 ///
 /// Draft reads return assets in canonical lexical path order.
@@ -120,6 +157,15 @@ fn draft_asset_from_columns(
         (None, None, None, None) => Some(DraftAssetColumns::Empty),
         _ => None,
     }
+}
+
+/// A saved editable source, including owner-bearing presentation state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ThemeCopySnapshot {
+    pub entry: ThemeCatalogEntry,
+    pub draft: ThemeDraft,
+    pub bindings: Vec<ThemeRoleBinding>,
+    pub header_pool: Vec<ThemeHeaderPoolEntry>,
 }
 
 /// One immutable published theme revision.
@@ -322,6 +368,12 @@ pub trait ThemeStorage: Send + Sync {
         &self,
         theme: Theme,
     ) -> Result<Option<SystemThemeRevision>, sqlx::Error>;
+    /// Revalidates a canonical Copy source under the system admission lock.
+    async fn validate_system_copy_source(
+        &self,
+        transaction: &mut WriteTransaction,
+        expected: &SystemThemeRevision,
+    ) -> Result<(), sqlx::Error>;
     async fn system_application_content(
         &self,
     ) -> Result<Option<ThemeContentEligibility>, sqlx::Error>;
@@ -347,12 +399,28 @@ pub trait ThemeStorage: Send + Sync {
         draft: &ThemeDraft,
         limits: ThemeQuotaLimits,
     ) -> Result<ThemeId, sqlx::Error>;
+    /// Allocates an owner-local automatic label and admits its draft atomically.
+    async fn create_theme_automatic(
+        &self,
+        transaction: &mut WriteTransaction,
+        owner: ThemeOwner,
+        base: &str,
+        draft: &ThemeDraft,
+        limits: ThemeQuotaLimits,
+    ) -> Result<ThemeCatalogEntry, sqlx::Error>;
     async fn list_themes(&self, owner: ThemeOwner) -> Result<Vec<ThemeCatalogEntry>, sqlx::Error>;
     async fn get_draft(
         &self,
         owner: ThemeOwner,
         theme_id: ThemeId,
     ) -> Result<Option<ThemeDraft>, sqlx::Error>;
+    /// Reads a complete saved source under the common namespace/admission lock.
+    async fn copy_snapshot(
+        &self,
+        transaction: &mut WriteTransaction,
+        owner: ThemeOwner,
+        theme_id: ThemeId,
+    ) -> Result<ThemeCopySnapshot, sqlx::Error>;
     /// Replaces a draft only after atomically admitting its new byte delta.
     async fn replace_draft(
         &self,
@@ -404,6 +472,12 @@ pub trait ThemeStorage: Send + Sync {
         owner: ThemeOwner,
         selection: Option<PublicThemeSelection>,
     ) -> Result<(), sqlx::Error>;
+    /// Reads selection under the same site serialization lock held by every selection writer.
+    async fn selection_for_update(
+        &self,
+        transaction: &mut WriteTransaction,
+        owner: ThemeOwner,
+    ) -> Result<Option<PublicThemeSelection>, sqlx::Error>;
     async fn selection(
         &self,
         owner: ThemeOwner,
@@ -535,6 +609,9 @@ macro_rules! impl_theme_storage {
             async fn system_theme_revision(&self, theme: Theme) -> Result<Option<SystemThemeRevision>, sqlx::Error> {
                 crate::system_themes::$queries::revision(&self.pool, theme).await
             }
+            async fn validate_system_copy_source(&self, transaction: &mut WriteTransaction, expected: &SystemThemeRevision) -> Result<(), sqlx::Error> {
+                crate::system_themes::$queries::validate_copy_source($conn(transaction)?, expected).await
+            }
             async fn system_application_content(&self) -> Result<Option<ThemeContentEligibility>, sqlx::Error> {
                 crate::system_themes::$queries::application(&self.pool).await
             }
@@ -567,6 +644,16 @@ macro_rules! impl_theme_storage {
                 sqlx::query("INSERT INTO theme_draft_charges (theme_id, source_digest, logical_bytes, physical_bytes) VALUES ($1, $2, $3, $3)").bind(id).bind(draft.source_digest.as_ref()).bind(bytes).execute(&mut *connection).await?;
                 for asset in &draft.assets { sqlx::query("INSERT INTO theme_draft_assets (theme_id, path, mime, bytes, digest) VALUES ($1, $2, $3, $4, $5)").bind(id).bind(&asset.path).bind(&asset.mime).bind(&asset.bytes).bind(asset.digest.as_ref()).execute(&mut *connection).await?; }
                 Ok(ThemeId::from(id))
+            }
+            async fn create_theme_automatic(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, base: &str, draft: &ThemeDraft, limits: ThemeQuotaLimits) -> Result<ThemeCatalogEntry, sqlx::Error> {
+                let base = validate_automatic_theme_name_base(base).map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+                let connection = $conn(transaction)?;
+                sqlx::query("UPDATE theme_site_quota SET retained_revisions = retained_revisions WHERE singleton = 1").execute(&mut *connection).await?;
+                let keys: Vec<(String,)> = sqlx::query_as("SELECT name_key FROM themes WHERE catalog_owner_key = $1").bind(catalog_owner_key(owner)).fetch_all(&mut *connection).await?;
+                let keys = keys.into_iter().map(|(key,)| key).collect::<BTreeSet<_>>();
+                let name = allocate_theme_name(&base, &keys)?;
+                let id = self.create_theme(transaction, owner, &name, draft, limits).await?;
+                Ok(ThemeCatalogEntry { id, owner, name, current_revision: None })
             }
             async fn list_themes(&self, owner: ThemeOwner) -> Result<Vec<ThemeCatalogEntry>, sqlx::Error> {
                 let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as("SELECT id, name, current_revision_digest FROM themes WHERE catalog_owner_key = $1 ORDER BY name_key, id")
@@ -602,6 +689,22 @@ macro_rules! impl_theme_storage {
                 assets.sort_by(|left, right| left.path.cmp(&right.path));
                 Ok(Some(ThemeDraft { theme_id: ThemeId::from(id), manifest, stylesheet, source_digest, assets }))
             }
+            async fn copy_snapshot(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, theme_id: ThemeId) -> Result<ThemeCopySnapshot, sqlx::Error> {
+                let connection = $conn(transaction)?;
+                // Every editable-source mutation joins this same serialization boundary.
+                sqlx::query("UPDATE theme_site_quota SET retained_revisions = retained_revisions WHERE singleton = 1").execute(&mut *connection).await?;
+                let (name, current_revision, manifest, stylesheet, source_digest): (String, Option<String>, Vec<u8>, Vec<u8>, String) = sqlx::query_as("SELECT t.name, t.current_revision_digest, d.manifest, d.stylesheet, d.source_digest FROM themes t JOIN theme_drafts d ON t.id = d.theme_id WHERE t.id = $1 AND t.catalog_owner_key = $2").bind(i64::from(theme_id)).bind(catalog_owner_key(owner)).fetch_one(&mut *connection).await?;
+                let rows: Vec<(String, String, Vec<u8>, String)> = sqlx::query_as("SELECT path, mime, bytes, digest FROM theme_draft_assets WHERE theme_id = $1 ORDER BY path").bind(i64::from(theme_id)).fetch_all(&mut *connection).await?;
+                let assets = rows.into_iter().map(|(path, mime, bytes, digest)| Ok(ThemeDraftAsset { path, mime, bytes, digest: digest.parse().map_err(|_| sqlx::Error::Protocol("invalid draft asset digest".into()))? })).collect::<Result<Vec<_>, sqlx::Error>>()?;
+                let mut bindings = Vec::new();
+                for role in [ThemeImageRole::Logo, ThemeImageRole::Header] {
+                    let row: Option<ThemeRoleBindingRow> = sqlx::query_as("SELECT mode, package_path, media_user_id, media_source, media_digest, media_filename, pool_revision_digest AS pool_revision, shuffle_seed FROM theme_role_bindings WHERE theme_id = $1 AND role = $2").bind(i64::from(theme_id)).bind(role.token()).fetch_optional(&mut *connection).await?;
+                    if let Some(row) = row { bindings.push(binding_from_row(theme_id, role, row)?); }
+                }
+                let rows: Vec<(i64, Option<String>, Option<i64>, Option<String>, Option<String>, Option<String>)> = sqlx::query_as("SELECT entry_ordinal, package_path, media_user_id, media_source, media_digest, media_filename FROM theme_header_pool WHERE theme_id = $1 ORDER BY entry_ordinal").bind(i64::from(theme_id)).fetch_all(&mut *connection).await?;
+                let header_pool = rows.into_iter().map(|(ordinal, package_path, media_user_id, media_source, media_digest, media_filename)| Ok(ThemeHeaderPoolEntry { ordinal, package_path, media_user_id: media_user_id.map(UserId::from), media_source, media_digest: media_digest.map(|value| value.parse().map_err(|_| sqlx::Error::Protocol("invalid pool digest".into()))).transpose()?, media_filename })).collect::<Result<Vec<_>, sqlx::Error>>()?;
+                Ok(ThemeCopySnapshot { entry: ThemeCatalogEntry { id: theme_id, owner, name, current_revision: current_revision.map(|value| value.parse().map_err(|_| sqlx::Error::Protocol("invalid revision digest".into()))).transpose()? }, draft: ThemeDraft { theme_id, manifest, stylesheet, source_digest: source_digest.parse().map_err(|_| sqlx::Error::Protocol("invalid source digest".into()))?, assets }, bindings, header_pool })
+            }
             async fn replace_draft(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, draft: &ThemeDraft, limits: ThemeQuotaLimits) -> Result<(), ReplaceDraftError> {
                 let connection = $conn(transaction)?;
                 let owner_key = catalog_owner_key(owner);
@@ -635,12 +738,14 @@ macro_rules! impl_theme_storage {
                     .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
                 let name_key = canonical_theme_name_key(&name);
                 let connection = $conn(transaction)?;
+                sqlx::query("UPDATE theme_site_quota SET retained_revisions = retained_revisions WHERE singleton = 1").execute(&mut *connection).await?;
                 let result = sqlx::query("UPDATE themes SET name = $1, name_key = $2 WHERE id = $3 AND catalog_owner_key = $4").bind(&name).bind(name_key).bind(i64::from(theme_id)).bind(catalog_owner_key(owner)).execute(&mut *connection).await?;
                 if result.rows_affected() == 0 { return Err(sqlx::Error::RowNotFound); }
                 Ok(())
             }
             async fn record_revision(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, revision: &ThemeRevision, assets: &[ThemePackageAsset]) -> Result<(), sqlx::Error> {
                 let connection = $conn(transaction)?;
+                sqlx::query("UPDATE theme_site_quota SET retained_revisions = retained_revisions WHERE singleton = 1").execute(&mut *connection).await?;
                 let owned: (bool,) = sqlx::query_as("SELECT EXISTS (SELECT 1 FROM themes WHERE id = $1 AND catalog_owner_key = $2)")
                     .bind(i64::from(revision.theme_id)).bind(catalog_owner_key(owner)).fetch_one(&mut *connection).await?;
                 if !owned.0 { return Err(sqlx::Error::RowNotFound); }
@@ -671,6 +776,8 @@ macro_rules! impl_theme_storage {
             async fn set_selection(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, selection: Option<PublicThemeSelection>) -> Result<(), sqlx::Error> {
                 let catalog_owner_key = catalog_owner_key(owner);
                 let connection = $conn(transaction)?;
+                // Also serializes built-in and inheritance changes with conditional editor publication.
+                sqlx::query("UPDATE theme_site_quota SET retained_revisions = retained_revisions WHERE singleton = 1").execute(&mut *connection).await?;
                 if let Some(PublicThemeSelection::Custom(theme_id)) = selection {
                     let selectable: (bool,) = sqlx::query_as(
                         "SELECT EXISTS (SELECT 1 FROM themes WHERE id = $1 AND catalog_owner_key = $2 AND current_revision_digest IS NOT NULL)",
@@ -690,6 +797,17 @@ macro_rules! impl_theme_storage {
                         .bind(&catalog_owner_key).bind(builtin_theme).bind(theme_id).execute(&mut *connection).await?;
                 }
                 Ok(())
+            }
+            async fn selection_for_update(&self, transaction: &mut WriteTransaction, owner: ThemeOwner) -> Result<Option<PublicThemeSelection>, sqlx::Error> {
+                let connection = $conn(transaction)?;
+                sqlx::query("UPDATE theme_site_quota SET retained_revisions = retained_revisions WHERE singleton = 1").execute(&mut *connection).await?;
+                let row: Option<(Option<String>, Option<i64>)> = sqlx::query_as("SELECT builtin_theme, theme_id FROM theme_selections WHERE catalog_owner_key = $1")
+                    .bind(catalog_owner_key(owner)).fetch_optional(&mut *connection).await?;
+                row.map(|(builtin, custom)| match (builtin, custom) {
+                    (None, Some(id)) => Ok(PublicThemeSelection::Custom(ThemeId::from(id))),
+                    (Some(token), None) => token.parse().map(PublicThemeSelection::BuiltIn).map_err(|_| sqlx::Error::Protocol("invalid selected theme".into())),
+                    _ => Err(sqlx::Error::Protocol("invalid theme selection".into())),
+                }).transpose()
             }
             async fn selection(&self, owner: ThemeOwner) -> Result<Option<PublicThemeSelection>, sqlx::Error> {
                 let row: Option<(Option<String>, Option<i64>)> = sqlx::query_as(
@@ -759,6 +877,7 @@ macro_rules! impl_theme_storage {
                     return Err(sqlx::Error::RowNotFound);
                 }
                 let connection = $conn(transaction)?;
+                sqlx::query("UPDATE theme_site_quota SET retained_revisions = retained_revisions WHERE singleton = 1").execute(&mut *connection).await?;
                 let owned: (bool,) = sqlx::query_as("SELECT EXISTS (SELECT 1 FROM themes WHERE id = $1 AND catalog_owner_key = $2)")
                     .bind(i64::from(binding.theme_id())).bind(catalog_owner_key(owner)).fetch_one(&mut *connection).await?;
                 if !owned.0 { return Err(sqlx::Error::RowNotFound); }
@@ -804,6 +923,7 @@ macro_rules! impl_theme_storage {
                     return Err(sqlx::Error::RowNotFound);
                 }
                 let connection = $conn(transaction)?;
+                sqlx::query("UPDATE theme_site_quota SET retained_revisions = retained_revisions WHERE singleton = 1").execute(&mut *connection).await?;
                 let owned: (bool,) = sqlx::query_as("SELECT EXISTS (SELECT 1 FROM themes WHERE id = $1 AND catalog_owner_key = $2)").bind(i64::from(theme_id)).bind(catalog_owner_key(owner)).fetch_one(&mut *connection).await?;
                 if !owned.0 { return Err(sqlx::Error::RowNotFound); }
                 let mut canonical = Vec::with_capacity(entries.len());
@@ -837,6 +957,7 @@ macro_rules! impl_theme_storage {
             }
             async fn locked_media_references(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, theme_id: ThemeId) -> Result<Vec<ThemeMediaReference>, sqlx::Error> {
                 let connection = $conn(transaction)?;
+                sqlx::query("UPDATE theme_site_quota SET retained_revisions = retained_revisions WHERE singleton = 1").execute(&mut *connection).await?;
                 let locked = sqlx::query("UPDATE themes SET id = id WHERE id = $1 AND catalog_owner_key = $2")
                     .bind(i64::from(theme_id))
                     .bind(catalog_owner_key(owner))
@@ -864,6 +985,7 @@ macro_rules! impl_theme_storage {
             }
             async fn shuffle_header_pool(&self, transaction: &mut WriteTransaction, owner: ThemeOwner, theme_id: ThemeId, shuffle_seed: [u8; 32]) -> Result<(), sqlx::Error> {
                 let connection = $conn(transaction)?;
+                sqlx::query("UPDATE theme_site_quota SET retained_revisions = retained_revisions WHERE singleton = 1").execute(&mut *connection).await?;
                 let updated = sqlx::query("UPDATE theme_role_bindings SET shuffle_seed = $1 WHERE theme_id = $2 AND role = 'header' AND mode = 'pool' AND EXISTS (SELECT 1 FROM themes WHERE id = $2 AND catalog_owner_key = $3)")
                     .bind(Vec::from(shuffle_seed)).bind(i64::from(theme_id)).bind(catalog_owner_key(owner)).execute(&mut *connection).await?;
                 if updated.rows_affected() != 1 { return Err(sqlx::Error::RowNotFound); }
@@ -1313,6 +1435,172 @@ fn canonical_theme_name_key(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    async fn automatic_entry(
+        env: &crate::test_support::TestEnv,
+        base: &str,
+    ) -> Result<crate::ThemeCatalogEntry, crate::WriteScopeError<sqlx::Error>> {
+        let themes = env.themes();
+        let base = base.to_owned();
+        let draft = super::ThemeDraft {
+            theme_id: common::ids::ThemeId::from(0),
+            manifest: b"{}".to_vec(),
+            stylesheet: b"body{}".to_vec(),
+            source_digest: "a".repeat(64).parse().unwrap(),
+            assets: Vec::new(),
+        };
+        env.write_scope()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    themes
+                        .create_theme_automatic(
+                            transaction,
+                            super::ThemeOwner::Site,
+                            &base,
+                            &draft,
+                            super::ThemeQuotaLimits::production(),
+                        )
+                        .await
+                })
+            })
+            .await
+            .map(crate::test_support::confirmed)
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn automatic_names_fit_reserved_numeric_and_unicode_seeds(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        assert_eq!(
+            automatic_entry(&env, " Reader ").await.unwrap().name,
+            "Reader 2"
+        );
+        assert_eq!(
+            automatic_entry(&env, "Name 2").await.unwrap().name,
+            "Name 2"
+        );
+        assert_eq!(
+            automatic_entry(&env, "Name 2").await.unwrap().name,
+            "Name 2 2"
+        );
+        let long = "界".repeat(100);
+        assert_eq!(automatic_entry(&env, &long).await.unwrap().name, long);
+        assert_eq!(
+            automatic_entry(&env, &long).await.unwrap().name,
+            format!("{} 2", "界".repeat(98))
+        );
+        let spaced = format!("{} x", "a".repeat(98));
+        automatic_entry(&env, &spaced).await.unwrap();
+        assert_eq!(
+            automatic_entry(&env, &spaced).await.unwrap().name,
+            format!("{} 2", "a".repeat(98))
+        );
+        for invalid in ["  ".to_owned(), "é".repeat(101)] {
+            assert!(automatic_entry(&env, &invalid).await.is_err());
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn automatic_names_fill_gaps_without_reinterpreting_numeric_endings(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        automatic_entry(&env, "Paper").await.unwrap();
+        automatic_entry(&env, "Paper 3").await.unwrap();
+        assert_eq!(
+            automatic_entry(&env, "Paper").await.unwrap().name,
+            "Paper 2"
+        );
+        assert_eq!(
+            automatic_entry(&env, "Paper").await.unwrap().name,
+            "Paper 4"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn automatic_names_serialize_with_strict_create_and_rename(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        automatic_entry(&env, "Paper").await.unwrap();
+        let other = automatic_entry(&env, "Other").await.unwrap();
+        let rename = async {
+            let themes = env.themes();
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .rename_theme(transaction, ThemeOwner::Site, other.id, "Paper 3")
+                            .await
+                    })
+                })
+                .await
+        };
+        let strict = async {
+            let themes = env.themes();
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        let draft = ThemeDraft {
+                            theme_id: ThemeId::from(0),
+                            manifest: b"{}".to_vec(),
+                            stylesheet: b"body{}".to_vec(),
+                            source_digest: "a".repeat(64).parse().unwrap(),
+                            assets: Vec::new(),
+                        };
+                        themes
+                            .create_theme(
+                                transaction,
+                                ThemeOwner::Site,
+                                "Paper 2",
+                                &draft,
+                                ThemeQuotaLimits::production(),
+                            )
+                            .await
+                    })
+                })
+                .await
+        };
+        let (first, second, strict, renamed) = tokio::join!(
+            automatic_entry(&env, "Paper"),
+            automatic_entry(&env, "paper"),
+            strict,
+            rename
+        );
+        let first = first.unwrap();
+        let second = second.unwrap();
+        assert_ne!(first.id, second.id);
+        assert_ne!(first.name.to_lowercase(), second.name.to_lowercase());
+        for result in [strict.map(|_| ()), renamed.map(|_| ())] {
+            if let Err(crate::WriteScopeError::Operation(sqlx::Error::Database(error))) = &result {
+                assert!(error.is_unique_violation());
+            } else {
+                result.unwrap();
+            }
+        }
+        let entries = env.themes().list_themes(ThemeOwner::Site).await.unwrap();
+        let keys = entries
+            .iter()
+            .map(|entry| entry.name.to_lowercase())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(keys.len(), entries.len());
+        assert!(keys.contains("paper") && keys.contains("paper 2") && keys.contains("paper 3"));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn automatic_names_allocate_casefolded_collisions(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        assert_eq!(automatic_entry(&env, "Paper").await.unwrap().name, "Paper");
+        assert_eq!(
+            automatic_entry(&env, "paper").await.unwrap().name,
+            "paper 2"
+        );
+        assert_eq!(
+            automatic_entry(&env, "Paper").await.unwrap().name,
+            "Paper 3"
+        );
+    }
+
     use std::sync::Arc;
 
     use common::{

@@ -311,9 +311,12 @@ test("a late bundled stylesheet cannot overwrite a newer public presentation", a
       audience: "public",
     });
     await goto(owner, "/themes");
-    const selection = owner.getByLabel("Public selection");
-    await selection.selectOption("terminal");
-    await expect(selection).toHaveValue("terminal");
+    const selected = owner.getByRole("button", {
+      name: "Use terminal",
+      exact: true,
+    });
+    await selected.click();
+    await expect(selected).toHaveAttribute("aria-pressed", "true");
 
     const anonymousContext = await tracedContext();
     const page = await anonymousContext.newPage();

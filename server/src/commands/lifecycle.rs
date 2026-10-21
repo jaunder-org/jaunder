@@ -596,14 +596,17 @@ fn publisher_context(
 
 fn public_projector(
     dependencies: &ServeStorage,
-    application_stylesheet_url: common::root_relative_url::RootRelativeUrl,
+    system_inventory: &host::system_theme::SystemArtifactInventory,
 ) -> crate::projector::PublicProjector {
     crate::projector::PublicProjector::new(
         Arc::clone(&dependencies.posts),
         Arc::clone(&dependencies.users),
         Arc::clone(&dependencies.themes),
         Arc::clone(&dependencies.site_config),
-        application_stylesheet_url,
+        system_inventory
+            .application()
+            .content_digest()
+            .content_url(),
         crate::projector::Shell(crate::site::shell_html()),
     )
 }
@@ -618,7 +621,7 @@ struct ServeHttpPolicy {
 
 fn compose_server_router(
     factory: &storage::StorageFactory,
-    application_stylesheet_url: common::root_relative_url::RootRelativeUrl,
+    system_inventory: Arc<host::system_theme::SystemArtifactInventory>,
     storage_path: PathBuf,
     instance_id: &InstanceId,
     mailer: Arc<dyn common::mailer::MailSender>,
@@ -644,6 +647,7 @@ fn compose_server_router(
         Arc::clone(&storage_path),
     );
     let manager_themes = dependencies.theme_manager(Arc::clone(&locks));
+    let projector = public_projector(dependencies, &system_inventory);
     let contexts = combine_context_providers(
         crate::context::account_context_provider(
             Arc::clone(&dependencies.users),
@@ -665,7 +669,7 @@ fn compose_server_router(
             Arc::clone(&dependencies.site_config),
             Arc::clone(&dependencies.passkeys),
         ),
-        crate::context::theme_context_provider(Arc::clone(&dependencies.themes)),
+        crate::context::theme_context_provider(Arc::clone(&dependencies.themes), system_inventory),
         crate::context::post_media_ownership_context_provider(ownership.clone()),
         publisher_context(Arc::clone(&publisher), dependencies),
         crate::context::service_context_provider(
@@ -684,7 +688,7 @@ fn compose_server_router(
             dependencies.write_scope.clone(),
         ),
         contexts,
-        public_projector(dependencies, application_stylesheet_url),
+        projector,
     );
     let app = crate::context::with_media_extensions(
         app,
@@ -752,11 +756,14 @@ async fn install_and_reconcile_system_artifacts(
     themes: Arc<dyn storage::ThemeStorage>,
     write_scope: WriteScope,
     storage_path: Arc<PathBuf>,
-) -> anyhow::Result<common::root_relative_url::RootRelativeUrl> {
-    let inventory = crate::system_artifacts::load()
-        .context("embedded system-artifact inventory failed verification")?;
+) -> anyhow::Result<Arc<host::system_theme::SystemArtifactInventory>> {
+    let inventory = Arc::new(
+        crate::system_artifacts::load()
+            .context("embedded system-artifact inventory failed verification")?,
+    );
     install_and_reconcile_system_artifact_inventory(&inventory, themes, write_scope, storage_path)
-        .await
+        .await?;
+    Ok(inventory)
 }
 
 fn prepare_background_worker_setup(
@@ -881,7 +888,7 @@ async fn prepare_server_with_trusted_proxies(
         .await
         .context("current Post projection refresh failed")?;
     let dependencies = ServeStorage::from_factory(&factory);
-    let application_stylesheet_url = install_and_reconcile_system_artifacts(
+    let system_inventory = install_and_reconcile_system_artifacts(
         Arc::clone(&dependencies.themes),
         dependencies.write_scope.clone(),
         Arc::new(storage.storage_path.clone()),
@@ -906,7 +913,7 @@ async fn prepare_server_with_trusted_proxies(
     let upload_preparer = host::image_privacy::UploadPreparer::new(std::env::current_exe()?);
     let (router, upload_manager) = compose_server_router(
         &factory,
-        application_stylesheet_url,
+        system_inventory,
         storage.storage_path.clone(),
         &instance_id,
         mailer,

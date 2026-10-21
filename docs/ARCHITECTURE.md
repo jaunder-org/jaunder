@@ -525,17 +525,21 @@ Details in the testing section.
   ([structural write scopes and mutation outcomes](adr/0164-structural-write-scopes-and-mutation-outcomes.md)).
   Its explicit `run` boundary supplies a sealed mutable `WriteTransaction`
   capability, never storage lookup or arbitrary SQL. The closed audited
-  application surface has exactly 98 declarations: Audience (5), Email
+  application surface has exactly 102 declarations: Audience (5), Email
   Verification (2), Feed Cache (2), Feed Event (12), Invite (2), Media (2),
   Password Reset (2), Passkey (11), Post (12), Publisher (5), Session (5), Site
-  Config (11), Subscription (2), User Config (2), Theme (18), and User (5).
-  Cross-store account mutations compose these capability-taking primitives as
-  storage-owned functions
+  Config (11), Subscription (2), User Config (2), Theme (22), and User (5).
+  Theme Copy and editor Save include audited source validation
+  (`validate_system_copy_source`), coherent saved-source and serialized
+  selection reads (`copy_snapshot`, `selection_for_update`), and atomic
+  automatic-name, quota and draft creation (`create_theme_automatic`) in the
+  caller's scope. Cross-store account mutations compose these capability-taking
+  primitives as storage-owned functions
   ([account mutations compose storage primitives](adr/0166-account-mutations-compose-storage-primitives.md)).
   Each declaration takes `&mut WriteTransaction`; there are no pool-backed,
   auto-committing, standalone, or compatibility mutation paths. The structural
   gate derives the observed declarations, compares them with the closed
-  98-method list, rejects unknown, missing, and duplicate declarations, and
+  102-method list, rejects unknown, missing, and duplicate declarations, and
   rejects production transaction starts that bypass the
   `WriteScope`/`WriteTransaction` composition. It excludes administrative
   lifecycle work, dialect code, and internal helpers. Callback failure is

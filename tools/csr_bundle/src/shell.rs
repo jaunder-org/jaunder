@@ -37,8 +37,9 @@ pub fn validate_rendered_shell(
         .ok_or_else(|| {
             ShellValidationError("staged shell is missing the early WASM fetch".into())
         })?;
-    let application_stylesheet =
-        format!(r#"<link rel="stylesheet" href="{application_stylesheet_url}" />"#);
+    let application_stylesheet = format!(
+        r#"<link rel="stylesheet" href="{application_stylesheet_url}" data-jaunder-application-stylesheet />"#
+    );
     let (Some(stylesheet), 1) = (
         shell.find(&application_stylesheet),
         shell.matches(&application_stylesheet).count(),
@@ -80,7 +81,7 @@ mod tests {
         let application_url = application_url();
         format!(
             r#"<script>const __jaunderWasmUrl = "{wasm}"; window.__jaunderWasmFetch = fetch(__jaunderWasmUrl);</script>
-<link rel="stylesheet" href="{application_url}" />
+<link rel="stylesheet" href="{application_url}" data-jaunder-application-stylesheet />
 <script type="module">import {{initMeasured}} from "{glue}"; performance.mark("jaunder.module.before_init"); initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl);</script>"#
         )
     }
@@ -95,6 +96,13 @@ mod tests {
         assert!(
             validate_rendered_shell(&shell(glue, wasm), glue, wasm, &wrong_application_url)
                 .expect_err("wrong application digest")
+                .to_string()
+                .contains("verified application stylesheet URL")
+        );
+        let unmarked = shell(glue, wasm).replace(" data-jaunder-application-stylesheet", "");
+        assert!(
+            validate_rendered_shell(&unmarked, glue, wasm, &application_url())
+                .expect_err("application asset must be discoverable by previews")
                 .to_string()
                 .contains("verified application stylesheet URL")
         );
@@ -113,7 +121,7 @@ mod tests {
                 .contains("exactly one glue URL")
         );
         let misordered = format!(
-            r#"<link rel="stylesheet" href="{}" />window.__jaunderWasmFetch = fetch import {{initMeasured}} performance.mark initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl) {glue} {wasm}"#,
+            r#"<link rel="stylesheet" href="{}" data-jaunder-application-stylesheet />window.__jaunderWasmFetch = fetch import {{initMeasured}} performance.mark initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl) {glue} {wasm}"#,
             application_url()
         );
         assert!(

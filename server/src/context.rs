@@ -101,8 +101,12 @@ pub fn media_configuration_context_provider(
 /// Captures Theme storage for one server-function request.
 pub fn theme_context_provider(
     themes: Arc<dyn ThemeStorage>,
+    system_inventory: Arc<host::system_theme::SystemArtifactInventory>,
 ) -> impl Fn() + Clone + Send + Sync + 'static {
-    move || provide_context::<Arc<dyn ThemeStorage>>(themes.clone())
+    move || {
+        provide_context::<Arc<dyn ThemeStorage>>(themes.clone());
+        provide_context(Arc::clone(&system_inventory));
+    }
 }
 
 /// Captures server-owned operation services for one server-function request.
@@ -238,7 +242,10 @@ mod tests {
             env.site_config(),
             env.passkeys(),
         );
-        let themes = theme_context_provider(env.themes());
+        let themes = theme_context_provider(
+            env.themes(),
+            Arc::new(host::system_theme::compile_system_artifact_inventory().unwrap()),
+        );
         let owner = Owner::new();
 
         owner.with(|| {

@@ -30,7 +30,7 @@ sharing, copy, Save-autoapply, global fonts, #1791 and merge approval.
 
 ## Task outline
 
-- [ ] **1. Complete a built-in/custom selected-preview tracer bullet.**
+- [x] **1. Complete a built-in/custom selected-preview tracer bullet.**
   - Contract: factor existing `preview`'s saved-draft path and real owner
     `PageSeed`/route construction without changing its observable contract.
     Generic custom requests reuse that behavior. Built-ins use installed
@@ -53,7 +53,7 @@ sharing, copy, Save-autoapply, global fonts, #1791 and merge approval.
     and manager tests use `#[apply(backends)]` for SQLite/PostgreSQL parity;
     focused endpoint lane:
     `devtool run -- cargo xtask test-local -- -p jaunder web::themes`.
-- [ ] **2. Complete isolation, failure and owner/choice coverage.**
+- [x] **2. Complete isolation, failure and owner/choice coverage.**
   - Contract: all three built-ins and saved custom drafts render through
     existing `preview_document`/titled `sandbox=""` iframe. Label saved-draft
     versus unsaved edits accurately. Clear obsolete documents and discard late

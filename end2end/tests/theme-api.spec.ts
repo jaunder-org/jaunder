@@ -34,6 +34,8 @@ const THEME_ENDPOINTS = {
   import_package: "/api/themes/import_package",
   list: "/api/themes/list",
   preview: "/api/themes/preview",
+  preview_editor: "/api/themes/preview_editor",
+  save_editor: "/api/themes/save_editor",
   publish: "/api/themes/publish",
   remove: "/api/themes/remove",
   rename: "/api/themes/rename",
@@ -498,4 +500,94 @@ test("theme API transport preserves package bindings, deterministic pools, and d
   );
   expect(malformedZip.status()).toBe(500);
   expect(await malformedZip.text()).toContain("invalid theme package");
+});
+
+function editorForm(name: string, stylesheet: string, target?: number) {
+  const form = new URLSearchParams({
+    scope: "author",
+    "input[name]": name,
+    "input[stylesheet]": stylesheet,
+  });
+  if (target !== undefined) form.set("target", String(target));
+  for (const role of ["logo", "header"]) {
+    form.set(`input[${role}][kind]`, "set");
+    form.set(`input[${role}][value][kind]`, "explicit_absent");
+  }
+  return form;
+}
+
+test("editor wire previews all unsaved fields without creation and saves one private target", async ({
+  page,
+  tracedContext,
+}) => {
+  const input = editorForm(
+    "Meadow",
+    '[data-jaunder-part="main"] { color: teal; }',
+  );
+  const anonymous = await postForm(page, "preview_editor", input);
+  expect(anonymous.ok()).toBe(false);
+  await signInAsNewUser(page);
+  const preview = await postForm(page, "preview_editor", input);
+  expect(preview.status()).toBe(200);
+  expect(preview.headers()["cache-control"]).toBe("private, no-store");
+  const rendered = (await preview.json()) as ThemePreview;
+  expect(rendered.css).toContain("teal");
+  expect(rendered.html).toContain("data-jaunder-theme-surface");
+  const catalog = await postForm(page, "list", scopedForm("author"));
+  expect(await catalog.json()).toEqual([]);
+  const selection = await postForm(page, "get_selection", scopedForm("author"));
+  expect(await selection.json()).toBeNull();
+  const created = await postForm(page, "save_editor", input);
+  expect(created.status()).toBe(200);
+  expect(created.headers()["cache-control"]).toBe("private, no-store");
+  const saved = confirmedMutation(
+    (await created.json()) as MutationOutcome<{
+      id: number;
+      name: string;
+      applied: boolean;
+    }>,
+    "editor create",
+  );
+  expect(saved).toMatchObject({ name: "Meadow", applied: false });
+  const changed = editorForm(
+    "Meadow revised",
+    '[data-jaunder-part="main"] { color: navy; }',
+    saved.id,
+  );
+  changed.set("input[logo][kind]", "keep");
+  changed.delete("input[logo][value][kind]");
+  const update = await postForm(page, "save_editor", changed);
+  expect(update.status()).toBe(200);
+  expect(
+    confirmedMutation(
+      (await update.json()) as MutationOutcome<{
+        id: number;
+        applied: boolean;
+      }>,
+      "editor update",
+    ),
+  ).toMatchObject({ id: saved.id, applied: false });
+  const draft = await postForm(
+    page,
+    "get_draft",
+    scopedForm("author", saved.id),
+  );
+  expect(Buffer.from((await draft.json()).stylesheet).toString()).toContain(
+    "navy",
+  );
+  const catalogAfter = await postForm(page, "list", scopedForm("author"));
+  expect(await catalogAfter.json()).toEqual([
+    { id: saved.id, name: "Meadow revised", published: false },
+  ]);
+  const stranger = await tracedContext();
+  try {
+    const p = await stranger.newPage();
+    await signInAsNewUser(p);
+    const denied = await postForm(p, "preview_editor", changed);
+    expect(denied.ok()).toBe(false);
+    const deniedSave = await postForm(p, "save_editor", changed);
+    expect(deniedSave.ok()).toBe(false);
+  } finally {
+    await stranger.close();
+  }
 });

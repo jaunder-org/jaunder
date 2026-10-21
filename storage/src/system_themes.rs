@@ -163,6 +163,18 @@ macro_rules! system_queries {
                 Ok(Some(SystemThemeRevision { theme, digest: parse_digest(&digest)?, source_digest: parse_digest(&source_digest)?, stylesheet_digest: parse_digest(&stylesheet_digest)?, manifest, assets }))
             }
 
+            pub(crate) async fn validate_copy_source(connection: &mut $connection, expected: &SystemThemeRevision) -> Result<(), sqlx::Error> {
+                // System installation and Copy share the site admission lock, so
+                // neither the current revision nor its asset set can change here.
+                sqlx::query("UPDATE theme_site_quota SET retained_revisions = retained_revisions WHERE singleton = 1").execute(&mut *connection).await?;
+                let row: (String, String, String, Vec<u8>) = sqlx::query_as("SELECT r.revision_digest, r.source_digest, r.stylesheet_digest, r.manifest FROM system_theme_current c JOIN system_theme_revisions r ON r.theme_token = c.theme_token AND r.revision_digest = c.revision_digest WHERE c.theme_token = $1").bind(expected.theme.token()).fetch_one(&mut *connection).await?;
+                let rows: Vec<(String, String, String)> = sqlx::query_as("SELECT path, digest, mime FROM system_theme_revision_assets WHERE theme_token = $1 AND revision_digest = $2 ORDER BY path").bind(expected.theme.token()).bind(&row.0).fetch_all(&mut *connection).await?;
+                let assets = rows.into_iter().map(|(path, digest, mime)| Ok(ThemePackageAsset { path, digest: parse_digest(&digest)?, mime })).collect::<Result<Vec<_>, sqlx::Error>>()?;
+                let current = SystemThemeRevision { theme: expected.theme, digest: parse_digest(&row.0)?, source_digest: parse_digest(&row.1)?, stylesheet_digest: parse_digest(&row.2)?, manifest: row.3, assets };
+                if &current != expected { return Err(sqlx::Error::Protocol("installed Copy source changed".into())); }
+                Ok(())
+            }
+
             pub(crate) async fn admit(connection: &mut $connection, admission: &SystemThemeAdmission) -> Result<(), sqlx::Error> {
                 // The existing site admission lock serializes system, custom, and
                 // collection SQL without charging system content to custom quotas.
@@ -243,6 +255,60 @@ system_queries!(postgres, sqlx::PgConnection, sqlx::PgPool);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{Backend, backends};
+    use rstest::*;
+    use rstest_reuse::*;
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn canonical_copy_source_revalidation_rejects_changed_identity(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let inventory = host::system_theme::compile_system_artifact_inventory().unwrap();
+        let manager = crate::ThemeAssetManager::new(
+            env.themes(),
+            env.write_scope(),
+            std::sync::Arc::new(env.base.path().to_path_buf()),
+        );
+        manager.install_system(&inventory, 0).await.unwrap();
+        let expected = env
+            .themes()
+            .system_theme_revision(Theme::Studio)
+            .await
+            .unwrap()
+            .unwrap();
+        let themes = env.themes();
+        let checked = expected.clone();
+        env.write_scope()
+            .run(move |transaction| {
+                Box::pin(async move {
+                    themes
+                        .validate_system_copy_source(transaction, &checked)
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+        let mut stale = expected.clone();
+        stale.source_digest = ThemeSourceDigest::from_digest([9; 32]);
+        let themes = env.themes();
+        assert!(
+            env.write_scope()
+                .run(move |transaction| Box::pin(async move {
+                    themes
+                        .validate_system_copy_source(transaction, &stale)
+                        .await
+                }))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            env.themes()
+                .system_theme_revision(Theme::Studio)
+                .await
+                .unwrap(),
+            Some(expected)
+        );
+    }
 
     #[test]
     fn shared_content_counts_references_and_rejects_mime_conflicts_without_mutation() {

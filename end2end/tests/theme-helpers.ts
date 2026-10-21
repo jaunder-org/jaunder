@@ -80,15 +80,30 @@ function appendBytes(form: URLSearchParams, prefix: string, bytes: Uint8Array) {
     form.append(`${prefix}[${index}]`, String(byte));
 }
 
-/** Opt into the source/package/media authoring controls without weakening their assertions. */
+/** Open the existing expert disclosures without changing normal editor state. */
 export async function openThemeAdvanced(page: Page): Promise<void> {
-  const disclosure = page.getByRole("button", {
-    name: "Advanced",
-    exact: true,
-  });
-  if ((await disclosure.getAttribute("aria-expanded")) !== "true")
-    await disclosure.click();
-  await expect(disclosure).toHaveAttribute("aria-expanded", "true");
+  if (await page.locator('.j-theme-catalog-item[aria-expanded="true"]').count())
+    await expect(page.locator(".j-theme-expert-tools > summary")).toBeVisible();
+  for (const label of [
+    "Theme tools",
+    "Images",
+    "Theme Package (developer tools)",
+    "Manage Theme",
+    "Theme authoring guide",
+    "Published versions",
+  ]) {
+    const summary = page
+      .locator("summary")
+      .filter({ hasText: new RegExp(`^${label.replace(/[()]/g, "\\$&")}$`) });
+    if (await summary.count()) {
+      if (
+        !(await summary.evaluate(
+          (node) => (node.parentElement as HTMLDetailsElement).open,
+        ))
+      )
+        await summary.click();
+    }
+  }
 }
 
 /** Drive the default import form with a real exporter-backed package. */
@@ -100,10 +115,9 @@ export async function importMinimalTheme(page: Page): Promise<void> {
     mimeType: "application/zip",
     buffer: archive,
   });
-  await page.getByRole("button", { name: "Upload theme", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "Intake fixture", exact: true }),
-  ).toHaveAttribute("aria-pressed", "true");
+    page.getByRole("button", { name: "Edit Intake fixture", exact: true }),
+  ).toHaveAttribute("aria-expanded", "true");
 }
 
 /** Build a minimal import fixture with the maintained exporter, then remove its source draft. */

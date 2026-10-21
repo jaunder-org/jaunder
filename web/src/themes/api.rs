@@ -75,6 +75,31 @@ pub enum ThemeBindingInput {
     Media(ThemeMediaInput),
 }
 
+/// A normal editor field either preserves its exact saved provenance or replaces it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum ThemeEditorPatch<T> {
+    Keep,
+    Set(T),
+}
+
+/// All unsaved normal fields; package authoring remains a separate operation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeEditorInput {
+    pub name: String,
+    pub stylesheet: String,
+    pub logo: ThemeEditorPatch<ThemeBindingInput>,
+    pub header: ThemeEditorPatch<ThemeBindingInput>,
+}
+
+/// A save receipt distinguishes private edits from an advanced public revision.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeEditorSaveResult {
+    pub id: ThemeId,
+    pub name: String,
+    pub applied: bool,
+}
+
 /// Caller-selected source for one explicit header-pool member.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
@@ -404,6 +429,16 @@ fn import_theme_name(name: &str) -> Result<String, InternalError> {
 
 #[cfg(feature = "server")]
 fn manager_error(error: anyhow::Error) -> InternalError {
+    if matches!(error.downcast_ref::<sqlx::Error>(), Some(sqlx::Error::Database(database)) if database.is_unique_violation())
+    {
+        return InternalError::conflict("theme name already exists");
+    }
+    if matches!(
+        error.downcast_ref::<ReplaceDraftError>(),
+        Some(ReplaceDraftError::QuotaExceeded)
+    ) {
+        return InternalError::validation("theme draft quota exceeded");
+    }
     if matches!(
         error.downcast_ref::<sqlx::Error>(),
         Some(sqlx::Error::RowNotFound)
@@ -631,6 +666,100 @@ pub async fn create(
     }))
 }
 
+/// Copies an installed original or the complete latest saved source in this library.
+#[macros::server(skip_all)]
+pub async fn copy_theme(
+    scope: OwnershipScope,
+    source: PublicThemeSelection,
+) -> WebResult<MutationOutcome<CatalogEntry>> {
+    no_store();
+    let (actor, owner) = owner(scope).await?;
+    let coordinator = expect_context::<Arc<ThemeOperationCoordinator>>();
+    let _permit = coordinator.acquire(actor).map_err(admission_error)?;
+    match source {
+        PublicThemeSelection::Custom(theme_id) => {
+            let manager = expect_context::<Arc<ThemeManager>>();
+            let snapshot = manager
+                .copy_source(owner, theme_id)
+                .await
+                .map_err(manager_error)?;
+            let draft = draft_from_input(ThemeId::from(0), draft_wire(snapshot.draft.clone()))?;
+            manager
+                .copy_saved(actor, owner, snapshot, draft)
+                .await
+                .map(|outcome| outcome.map(catalog))
+                .map_err(manager_error)
+        }
+        PublicThemeSelection::BuiltIn(theme) => {
+            let inventory = use_context::<Arc<host::system_theme::SystemArtifactInventory>>()
+                .ok_or_else(|| {
+                    InternalError::server_message("canonical system inventory unavailable")
+                })?;
+            let package = inventory.theme(theme);
+            let themes = expect_context::<Arc<dyn ThemeStorage>>();
+            let installed = themes
+                .system_theme_revision(theme)
+                .await
+                .map_err(InternalError::storage)?
+                .ok_or_else(|| InternalError::not_found("theme"))?;
+            if installed.source_digest != package.source_digest()
+                || installed.digest != package.revision_digest()
+                || installed.stylesheet_digest != package.stylesheet_digest()
+            {
+                return Err(InternalError::server_message(
+                    "installed theme does not match canonical source",
+                ));
+            }
+            let package = theme_package::validate_theme_package(
+                package.package_bytes(),
+                ThemePackageLimits::default(),
+            )
+            .map_err(|error| {
+                InternalError::validation_source("invalid canonical theme package", error)
+            })?;
+            let name = package.name().to_owned();
+            let draft = draft_from_validated_archive(ThemeId::from(0), package)?;
+            if installed.manifest != draft.manifest
+                || installed.assets.len() != draft.assets.len()
+                || installed.assets.iter().any(|asset| {
+                    !draft.assets.iter().any(|source| {
+                        source.path == asset.path
+                            && source.mime == asset.mime
+                            && source.digest == asset.digest
+                    })
+                })
+            {
+                return Err(InternalError::server_message(
+                    "installed theme metadata does not match canonical source",
+                ));
+            }
+            let scope = expect_context::<WriteScope>();
+            scope
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        themes
+                            .validate_system_copy_source(transaction, &installed)
+                            .await
+                            .map_err(InternalError::storage)?;
+                        themes
+                            .create_theme_automatic(
+                                transaction,
+                                owner,
+                                &name,
+                                &draft,
+                                ThemeQuotaLimits::production(),
+                            )
+                            .await
+                            .map(catalog)
+                            .map_err(create_storage_error)
+                    })
+                })
+                .await
+                .map_err(error::from_write_scope_error)
+        }
+    }
+}
+
 /// Replaces an existing draft from a complete plain-CSS/package editor payload.
 #[macros::server(skip_all)]
 pub async fn import_package(
@@ -693,33 +822,47 @@ pub async fn import_zip(data: MultipartData) -> WebResult<MutationOutcome<Catalo
         "author" => ThemeOwner::Author(actor.user_id),
         _ => return Err(InternalError::validation("invalid theme ownership scope")),
     };
-    let (name, draft) = read_import_archive(&mut multipart).await?;
+    let (name, draft, automatic) = read_import_archive(&mut multipart).await?;
     let themes = expect_context::<Arc<dyn ThemeStorage>>();
     let write_scope = expect_context::<WriteScope>();
-    let name_for_write = name.clone();
     let outcome = write_scope
         .run(move |transaction| {
             Box::pin(async move {
-                themes
-                    .create_theme(
-                        transaction,
-                        owner,
-                        &name_for_write,
-                        &draft,
-                        ThemeQuotaLimits::production(),
-                    )
-                    .await
-                    .map_err(import_storage_error)
+                if automatic {
+                    themes
+                        .create_theme_automatic(
+                            transaction,
+                            owner,
+                            &name,
+                            &draft,
+                            ThemeQuotaLimits::production(),
+                        )
+                        .await
+                        .map(catalog)
+                        .map_err(import_storage_error)
+                } else {
+                    let id = themes
+                        .create_theme(
+                            transaction,
+                            owner,
+                            &name,
+                            &draft,
+                            ThemeQuotaLimits::production(),
+                        )
+                        .await
+                        .map_err(import_storage_error)?;
+                    Ok(CatalogEntry {
+                        id,
+                        name,
+                        published: false,
+                    })
+                }
             })
         })
         .await
         .map_err(error::from_write_scope_error)?;
     no_store();
-    Ok(outcome.map(|id| CatalogEntry {
-        id,
-        name,
-        published: false,
-    }))
+    Ok(outcome)
 }
 
 /// Reads the ordered override/archive fields only after principal and scope admission.
@@ -727,7 +870,7 @@ pub async fn import_zip(data: MultipartData) -> WebResult<MutationOutcome<Catalo
 #[cfg(feature = "server")]
 async fn read_import_archive(
     multipart: &mut multer::Multipart<'_>,
-) -> Result<(String, ThemeDraft), InternalError> {
+) -> Result<(String, ThemeDraft, bool), InternalError> {
     let next = multipart
         .next_field()
         .await
@@ -773,11 +916,13 @@ async fn read_import_archive(
         .map_err(|error| InternalError::validation_source("invalid theme package", error))?;
     let manifest_name = package.name().to_owned();
     let draft = draft_from_validated_archive(ThemeId::from(0), package)?;
+    let automatic = name.is_none();
     let name = match name {
         Some(name) => name,
-        None => import_theme_name(&manifest_name)?,
+        None => storage::validate_automatic_theme_name_base(&manifest_name)
+            .map_err(|error| InternalError::validation(error.to_string()))?,
     };
-    Ok((name, draft))
+    Ok((name, draft, automatic))
 }
 
 /// Imports plain CSS as a new private version-1 package draft with no assets.
@@ -1090,6 +1235,238 @@ pub async fn shuffle(
         .map_err(manager_error)
 }
 
+#[cfg(feature = "server")]
+async fn prepare_editor(
+    actor: common::ids::UserId,
+    owner: ThemeOwner,
+    target: Option<ThemeId>,
+    input: ThemeEditorInput,
+) -> Result<storage::ThemeEditorChange, InternalError> {
+    let name = theme_name(&input.name)?;
+    let manager = expect_context::<Arc<ThemeManager>>();
+    let expected = match target {
+        Some(id) => Some(
+            manager
+                .copy_source(owner, id)
+                .await
+                .map_err(manager_error)?,
+        ),
+        None => None,
+    };
+    let id = target.unwrap_or_else(|| ThemeId::from(0));
+    let mut source = match &expected {
+        Some(snapshot) => draft_wire(snapshot.draft.clone()),
+        None => Draft {
+            manifest: plain_css_manifest(&name)?,
+            stylesheet: Vec::new(),
+            assets: Vec::new(),
+        },
+    };
+    source.stylesheet = input.stylesheet.into_bytes();
+    let draft = draft_from_input(id, source)?;
+    let mut replacements = Vec::new();
+    for (role, patch) in [
+        (ThemeImageRole::Logo, input.logo),
+        (ThemeImageRole::Header, input.header),
+    ] {
+        let value = match patch {
+            ThemeEditorPatch::Keep if target.is_some() => continue,
+            ThemeEditorPatch::Keep => {
+                return Err(InternalError::validation(
+                    "new theme cannot keep a saved image",
+                ));
+            }
+            ThemeEditorPatch::Set(value) => value,
+        };
+        let binding = match value {
+            ThemeBindingInput::PackagedDefault => {
+                storage::ThemeRoleBinding::PackagedDefault { theme_id: id, role }
+            }
+            ThemeBindingInput::ExplicitAbsent => {
+                storage::ThemeRoleBinding::ExplicitAbsent { theme_id: id, role }
+            }
+            ThemeBindingInput::PackageAsset(path) => {
+                if !draft
+                    .assets
+                    .iter()
+                    .any(|asset| asset.path == path && asset.mime.starts_with("image/"))
+                {
+                    return Err(InternalError::validation(
+                        "image not found in theme package",
+                    ));
+                }
+                storage::ThemeRoleBinding::PackageAsset {
+                    theme_id: id,
+                    role,
+                    package_path: path,
+                }
+            }
+            ThemeBindingInput::Media(reference) => {
+                let media = expect_context::<Arc<dyn storage::MediaStorage>>();
+                let record = media
+                    .get_media(
+                        actor,
+                        &reference.sha256,
+                        &reference.filename,
+                        &reference.source,
+                    )
+                    .await
+                    .map_err(InternalError::storage)?
+                    .ok_or_else(|| InternalError::validation("image not found in your Media"))?;
+                if !record.content_type.as_ref().starts_with("image/") {
+                    return Err(InternalError::validation("Media must be an image"));
+                }
+                storage::ThemeRoleBinding::Media {
+                    theme_id: id,
+                    role,
+                    user_id: actor,
+                    media: MediaRef {
+                        source: reference.source,
+                        sha256: reference.sha256,
+                        filename: reference.filename,
+                    },
+                }
+            }
+        };
+        replacements.push(binding);
+    }
+    Ok(storage::ThemeEditorChange {
+        name,
+        expected,
+        draft,
+        replacements,
+    })
+}
+
+/// Saves normal fields together, applying a public revision only for the active theme.
+#[macros::server(skip_all)]
+pub async fn save_editor(
+    scope: OwnershipScope,
+    target: Option<ThemeId>,
+    input: ThemeEditorInput,
+) -> WebResult<MutationOutcome<ThemeEditorSaveResult>> {
+    let (actor, owner) = owner(scope).await?;
+    no_store();
+    let coordinator = expect_context::<Arc<ThemeOperationCoordinator>>();
+    let _permit = coordinator.acquire(actor).map_err(admission_error)?;
+    let editor = prepare_editor(actor, owner, target, input).await?;
+    let archive = theme_package::export_theme_package(
+        &editor.draft.manifest,
+        &editor.draft.stylesheet,
+        &editor
+            .draft
+            .assets
+            .iter()
+            .map(|asset| (asset.path.clone(), asset.bytes.clone()))
+            .collect(),
+    )
+    .map_err(InternalError::server)?;
+    let package = theme_package::validate_theme_package(&archive, ThemePackageLimits::default())
+        .map_err(|error| InternalError::validation_source("invalid theme package", error))?;
+    let urls = package_asset_urls(&package)?;
+    let compiled = package
+        .compile(&urls, ThemePackageLimits::default())
+        .map_err(|error| InternalError::validation_source("invalid theme package", error))?;
+    let manager = expect_context::<Arc<ThemeManager>>();
+    let assets = expect_context::<Arc<ThemeAssetManager>>();
+    manager
+        .save_editor(
+            actor,
+            owner,
+            editor,
+            assets.as_ref(),
+            &compiled,
+            ThemeQuotaLimits::production(),
+        )
+        .await
+        .map(|outcome| {
+            outcome.map(|saved| ThemeEditorSaveResult {
+                id: saved.id,
+                name: saved.name,
+                applied: saved.applied,
+            })
+        })
+        .map_err(manager_error)
+}
+
+/// Explicitly previews all normal fields without admitting a draft or changing images.
+#[macros::server(skip_all)]
+pub async fn preview_editor(
+    scope: OwnershipScope,
+    target: Option<ThemeId>,
+    input: ThemeEditorInput,
+) -> WebResult<ThemePreview> {
+    let (actor, owner) = owner(scope).await?;
+    no_store();
+    let coordinator = expect_context::<Arc<ThemeOperationCoordinator>>();
+    let _permit = coordinator.acquire(actor).map_err(admission_error)?;
+    let editor = prepare_editor(actor, owner, target, input).await?;
+    let archive = theme_package::export_theme_package(
+        &editor.draft.manifest,
+        &editor.draft.stylesheet,
+        &editor
+            .draft
+            .assets
+            .iter()
+            .map(|asset| (asset.path.clone(), asset.bytes.clone()))
+            .collect(),
+    )
+    .map_err(InternalError::server)?;
+    let package = theme_package::validate_theme_package(&archive, ThemePackageLimits::default())
+        .map_err(|error| InternalError::validation_source("invalid theme package", error))?;
+    let urls = draft_asset_urls(&package, editor.draft.theme_id);
+    let identity_urls = package_asset_urls(&package)?;
+    // Rotation must use the revision Save would publish, not the private draft URLs.
+    let (compiled, revision) = package
+        .compile_with_identity_asset_urls(&urls, &identity_urls, ThemePackageLimits::default())
+        .map_err(|error| InternalError::validation_source("invalid theme package", error))?;
+    let revision = common::theme::ThemeRevisionDigest::from_digest(revision);
+    let binding = |role| {
+        editor
+            .replacements
+            .iter()
+            .find(|binding| binding.role() == role)
+            .or_else(|| {
+                editor.expected.as_ref().and_then(|snapshot| {
+                    snapshot
+                        .bindings
+                        .iter()
+                        .find(|binding| binding.role() == role)
+                })
+            })
+    };
+    let (page, route) = preview_page(owner).await?;
+    let (logo_url, header_url) = storage::resolve_editor_theme_images(
+        &editor.draft.manifest,
+        &urls,
+        &revision,
+        &route,
+        binding(ThemeImageRole::Logo),
+        binding(ThemeImageRole::Header),
+        editor
+            .expected
+            .as_ref()
+            .map(|snapshot| snapshot.header_pool.as_slice()),
+    )
+    .map_err(theme_storage_error)?;
+    let presentation = common::seed::PublicPresentation {
+        theme: common::theme::PublishedThemePresentation {
+            identity: common::theme::PublishedThemeIdentity::Custom(editor.draft.theme_id),
+            revision: Some(revision),
+            stylesheet_url: format!("/theme/{}", "0".repeat(64))
+                .parse()
+                .map_err(|_| InternalError::server_message("preview stylesheet URL"))?,
+            logo_url,
+            header_url,
+        },
+        page,
+    };
+    Ok(ThemePreview {
+        html: crate::app::render_shell(&presentation).into_string(),
+        css: String::from_utf8(compiled.css().bytes().to_vec()).map_err(InternalError::server)?,
+    })
+}
+
 /// Renders an owned draft through the real Style Contract renderer without changing selection.
 #[macros::server(skip_all)]
 pub async fn preview(scope: OwnershipScope, theme_id: ThemeId) -> WebResult<ThemePreview> {
@@ -1097,6 +1474,46 @@ pub async fn preview(scope: OwnershipScope, theme_id: ThemeId) -> WebResult<Them
     no_store();
     let coordinator = expect_context::<Arc<ThemeOperationCoordinator>>();
     let _permit = coordinator.acquire(actor).map_err(admission_error)?;
+    preview_custom(owner, theme_id).await
+}
+
+/// Reads a saved installed theme into the isolated renderer without changing selection.
+#[macros::server(skip_all)]
+pub async fn preview_installed(
+    scope: OwnershipScope,
+    theme: PublicThemeSelection,
+) -> WebResult<ThemePreview> {
+    let (actor, owner) = owner(scope).await?;
+    no_store();
+    let coordinator = expect_context::<Arc<ThemeOperationCoordinator>>();
+    let _permit = coordinator.acquire(actor).map_err(admission_error)?;
+    match theme {
+        PublicThemeSelection::Custom(id) => preview_custom(owner, id).await,
+        PublicThemeSelection::BuiltIn(theme) => {
+            let manager = expect_context::<Arc<ThemeAssetManager>>();
+            let (revision, css) = manager
+                .read_system_stylesheet(theme)
+                .await
+                .map_err(InternalError::server)?
+                .ok_or_else(|| InternalError::not_found("theme"))?;
+            let css = String::from_utf8(css).map_err(InternalError::server)?;
+            let (page, route) = preview_page(owner).await?;
+            let theme = storage::resolve_system_revision(&revision, &route)
+                .map_err(InternalError::storage)?;
+            Ok(ThemePreview {
+                html: crate::app::render_shell(&common::seed::PublicPresentation { theme, page })
+                    .into_string(),
+                css,
+            })
+        }
+    }
+}
+
+#[cfg(feature = "server")]
+async fn preview_custom(
+    owner: ThemeOwner,
+    theme_id: ThemeId,
+) -> Result<ThemePreview, InternalError> {
     let themes = expect_context::<Arc<dyn ThemeStorage>>();
     let draft = themes
         .get_draft(owner, theme_id)
@@ -1121,51 +1538,7 @@ pub async fn preview(scope: OwnershipScope, theme_id: ThemeId) -> WebResult<Them
         .to_string()
         .parse()
         .map_err(|_| InternalError::server_message("preview revision"))?;
-    let viewer = common::visibility::ViewerIdentity::Anonymous;
-    let (page, route) = match owner {
-        ThemeOwner::Site => (
-            common::seed::PageSeed::SiteTimeline {
-                identity: expect_context::<Arc<dyn SiteConfigStorage>>()
-                    .get_identity()
-                    .await?,
-                registration_policy: expect_context::<Arc<dyn SiteConfigStorage>>()
-                    .get_registration_policy()
-                    .await?,
-                order: common::seed::TimelineOrder::Newest,
-                page: crate::timeline::fetch_local_timeline(
-                    expect_context::<Arc<dyn PostStorage>>().as_ref(),
-                    None,
-                    common::seed::TimelineOrder::Newest,
-                    None,
-                )
-                .await?,
-            },
-            common::theme::PublicThemeRoute::site(),
-        ),
-        ThemeOwner::Author(user_id) => {
-            let user = expect_context::<Arc<dyn UserStorage>>()
-                .get_user(user_id)
-                .await
-                .map_err(InternalError::storage)?
-                .ok_or_else(|| InternalError::not_found("user"))?;
-            (
-                common::seed::PageSeed::Profile {
-                    username: user.username.clone(),
-                    order: common::seed::TimelineOrder::Newest,
-                    page: crate::timeline::fetch_user_posts(
-                        expect_context::<Arc<dyn PostStorage>>().as_ref(),
-                        &viewer,
-                        &user.username,
-                        None,
-                        common::seed::TimelineOrder::Newest,
-                        None,
-                    )
-                    .await?,
-                },
-                common::theme::PublicThemeRoute::author(&user.username),
-            )
-        }
-    };
+    let (page, route) = preview_page(owner).await?;
     let (logo_url, header_url) = storage::resolve_draft_theme_images(
         owner,
         theme_id,
@@ -1193,6 +1566,58 @@ pub async fn preview(scope: OwnershipScope, theme_id: ThemeId) -> WebResult<Them
         html: crate::app::render_shell(&presentation).into_string(),
         css: String::from_utf8(compiled.css().bytes().to_vec())
             .map_err(|_| InternalError::server_message("compiler emitted non-UTF-8 CSS"))?,
+    })
+}
+
+#[cfg(feature = "server")]
+async fn preview_page(
+    owner: ThemeOwner,
+) -> Result<(common::seed::PageSeed, common::theme::PublicThemeRoute), InternalError> {
+    let posts = expect_context::<Arc<dyn PostStorage>>();
+    let viewer = common::visibility::ViewerIdentity::Anonymous;
+    Ok(match owner {
+        ThemeOwner::Site => {
+            let site = expect_context::<Arc<dyn SiteConfigStorage>>();
+            (
+                common::seed::PageSeed::SiteTimeline {
+                    identity: site.get_identity().await?,
+                    registration_policy: site.get_registration_policy().await?,
+                    order: common::seed::TimelineOrder::Newest,
+                    page: crate::timeline::fetch_local_timeline(
+                        posts.as_ref(),
+                        None,
+                        common::seed::TimelineOrder::Newest,
+                        None,
+                    )
+                    .await?,
+                },
+                common::theme::PublicThemeRoute::site(),
+            )
+        }
+        ThemeOwner::Author(user_id) => {
+            let users = expect_context::<Arc<dyn UserStorage>>();
+            let user = users
+                .get_user(user_id)
+                .await
+                .map_err(InternalError::storage)?
+                .ok_or_else(|| InternalError::not_found("user"))?;
+            (
+                common::seed::PageSeed::Profile {
+                    username: user.username.clone(),
+                    order: common::seed::TimelineOrder::Newest,
+                    page: crate::timeline::fetch_user_posts(
+                        posts.as_ref(),
+                        &viewer,
+                        &user.username,
+                        None,
+                        common::seed::TimelineOrder::Newest,
+                        None,
+                    )
+                    .await?,
+                },
+                common::theme::PublicThemeRoute::author(&user.username),
+            )
+        }
     })
 }
 

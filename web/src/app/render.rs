@@ -149,7 +149,7 @@ pub fn render_head(
         // NO wasm preload here — a measured decision with a fired abort rule, not
         // an oversight (#866; docs/adr/0121-no-wasm-preload.md). Do not re-add
         // without reading that draft; `crossorigin` would be mandatory.
-        link rel="stylesheet" href=(application_stylesheet_url);
+        link rel="stylesheet" href=(application_stylesheet_url) data-jaunder-application-stylesheet;
         @if matches!(seed, PageSeed::SiteTimeline { .. }) {
             title data-jaunder-projected-local-metadata { (title) }
             meta data-jaunder-projected-local-metadata name="description" content=(description);
@@ -525,7 +525,7 @@ mod tests {
         )
         .into_string();
         let style = head
-            .find(r#"<link rel="stylesheet" href="/theme/application">"#)
+            .find(r#"<link rel="stylesheet" href="/theme/application" data-jaunder-application-stylesheet>"#)
             .expect("base stylesheet");
         assert!(head.starts_with(starter) && starter.len() < style, "{head}");
     }

@@ -4,7 +4,13 @@
 //! mutation revalidation explicit so an uncertain write can never leave stale catalog
 //! state presented as authoritative.
 
-use std::str::FromStr;
+use std::{
+    str::FromStr,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use common::{
     MutationOutcome,
@@ -12,7 +18,87 @@ use common::{
 };
 
 use common::ids::ThemeId;
-use leptos::prelude::{GetUntracked, RwSignal, Set};
+
+use leptos::prelude::{
+    Action, Get, GetUntracked, GetValue, MappedSignal, Memo, Owner, RwSignal, Set, StoredValue,
+    Update, WithValue, on_cleanup,
+};
+
+/// An editor choice is not a persisted public selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThemeChoice {
+    New,
+    FollowSite,
+    Bundled(Theme),
+    Custom(ThemeId),
+}
+
+impl ThemeChoice {
+    #[must_use]
+    pub const fn custom_id(self) -> Option<ThemeId> {
+        match self {
+            Self::Custom(id) => Some(id),
+            Self::New | Self::FollowSite | Self::Bundled(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn selection(self) -> Option<PublicThemeSelection> {
+        match self {
+            Self::New | Self::FollowSite => None,
+            Self::Bundled(theme) => Some(PublicThemeSelection::BuiltIn(theme)),
+            Self::Custom(id) => Some(PublicThemeSelection::Custom(id)),
+        }
+    }
+}
+
+/// The owner, installed choice and saved-state generation captured for one preview.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreviewTarget {
+    pub scope: OwnershipScope,
+    pub theme: PublicThemeSelection,
+    pub generation: u32,
+}
+
+/// Inheritance is guidance, not an installed theme or a cross-owner preview read.
+#[must_use]
+pub fn preview_target(
+    scope: OwnershipScope,
+    choice: Option<ThemeChoice>,
+    generation: u32,
+) -> Option<PreviewTarget> {
+    Some(PreviewTarget {
+        scope,
+        theme: choice?.selection()?,
+        generation,
+    })
+}
+
+/// Late reads may only supply output for the exact current owner/choice/save generation.
+#[must_use]
+pub fn preview_is_current(
+    current: Option<PreviewTarget>,
+    completed: Option<PreviewTarget>,
+) -> bool {
+    current.is_some() && current == completed
+}
+
+/// Only confirmed reads may mark a card current. The site resolver uses Studio
+/// for an unset site selection; a failed read never implies that default.
+#[must_use]
+pub fn choice_is_current(
+    choice: ThemeChoice,
+    scope: OwnershipScope,
+    selection: Option<&Result<Option<PublicThemeSelection>, WebError>>,
+) -> bool {
+    match selection {
+        Some(Ok(None)) if scope == OwnershipScope::Site => {
+            choice == ThemeChoice::Bundled(Theme::Studio)
+        }
+        Some(Ok(value)) => choice.selection() == *value,
+        None | Some(Err(_)) => false,
+    }
+}
 
 use super::OwnershipScope;
 use crate::{error::WebError, reactive::Invalidator};
@@ -67,6 +153,149 @@ pub enum Feedback {
     Error,
 }
 
+/// One source-bound local normal form. Stored image values are never resubmitted as grants.
+#[derive(Clone, Copy)]
+pub struct EditorState {
+    pub scope: OwnershipScope,
+    pub target: RwSignal<Option<ThemeId>>,
+    pub name: RwSignal<String>,
+    pub stylesheet: RwSignal<String>,
+    pub logo: RwSignal<super::ThemeEditorPatch<super::ThemeBindingInput>>,
+    pub header: RwSignal<super::ThemeEditorPatch<super::ThemeBindingInput>>,
+    pub generation: RwSignal<u64>,
+    pub saved: RwSignal<super::ThemeEditorInput>,
+    pub rotating: RwSignal<bool>,
+    /// Preview state shares the cached form's lifetime, including rekey teardown.
+    pub preview: Action<EditorSnapshot, EditorPreviewResult>,
+    pub preview_pending: Memo<bool>,
+    pub preview_value: MappedSignal<Option<EditorPreviewResult>>,
+}
+
+impl EditorState {
+    #[must_use]
+    pub fn new(
+        scope: OwnershipScope,
+        target: Option<ThemeId>,
+        name: String,
+        stylesheet: String,
+        rotating: bool,
+    ) -> Self {
+        let patch = if target.is_some() {
+            super::ThemeEditorPatch::Keep
+        } else {
+            super::ThemeEditorPatch::Set(super::ThemeBindingInput::PackagedDefault)
+        };
+        let saved = super::ThemeEditorInput {
+            name: name.clone(),
+            stylesheet: stylesheet.clone(),
+            logo: patch.clone(),
+            header: patch.clone(),
+        };
+        let preview = Action::new(|snapshot: &EditorSnapshot| {
+            let snapshot = snapshot.clone();
+            async move {
+                let result = super::api::preview_editor(
+                    snapshot.scope,
+                    snapshot.target,
+                    snapshot.input.clone(),
+                )
+                .await;
+                (snapshot, result)
+            }
+        });
+        Self {
+            scope,
+            target: RwSignal::new(target),
+            name: RwSignal::new(name),
+            stylesheet: RwSignal::new(stylesheet),
+            logo: RwSignal::new(patch.clone()),
+            header: RwSignal::new(patch),
+            generation: RwSignal::new(0),
+            saved: RwSignal::new(saved),
+            rotating: RwSignal::new(rotating),
+            preview_pending: preview.pending(),
+            preview_value: preview.value(),
+            preview,
+        }
+    }
+
+    #[must_use]
+    pub fn input(self) -> super::ThemeEditorInput {
+        super::ThemeEditorInput {
+            name: self.name.get(),
+            stylesheet: self.stylesheet.get(),
+            logo: self.logo.get(),
+            header: self.header.get(),
+        }
+    }
+
+    pub fn changed(self) {
+        self.generation
+            .update(|value| *value = value.wrapping_add(1));
+    }
+
+    #[must_use]
+    pub fn snapshot(self) -> EditorSnapshot {
+        EditorSnapshot {
+            scope: self.scope,
+            target: self.target.get_untracked(),
+            input: self.input(),
+            generation: self.generation.get_untracked(),
+        }
+    }
+
+    #[must_use]
+    pub fn matches(self, snapshot: &EditorSnapshot) -> bool {
+        self.scope == snapshot.scope
+            && self.target.get_untracked() == snapshot.target
+            && self.generation.get_untracked() == snapshot.generation
+            && self.input() == snapshot.input
+    }
+
+    /// Retain the confirmed identity, but only mark the exact acknowledged buffer clean.
+    pub fn confirm(self, snapshot: &EditorSnapshot, saved: &super::ThemeEditorSaveResult) -> bool {
+        let clean = self.matches(snapshot);
+        if self.scope != snapshot.scope || self.target.get_untracked() != snapshot.target {
+            return false;
+        }
+        self.target.set(Some(saved.id));
+        if !clean {
+            // A confirmed creation must not remain an unsaved target on the next Save.
+            let mut acknowledged = snapshot.input.clone();
+            acknowledged.name.clone_from(&saved.name);
+            self.saved.set(acknowledged);
+            return false;
+        }
+        self.name.set(saved.name.clone());
+        if matches!(snapshot.input.header, super::ThemeEditorPatch::Set(_)) {
+            self.rotating.set(false);
+        }
+        self.logo.set(super::ThemeEditorPatch::Keep);
+        self.header.set(super::ThemeEditorPatch::Keep);
+        self.saved.set(self.input());
+        self.changed();
+        true
+    }
+}
+
+pub type EditorPreviewResult = (EditorSnapshot, Result<super::ThemePreview, WebError>);
+
+/// All request fields are captured before the first await.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EditorSnapshot {
+    pub scope: OwnershipScope,
+    pub target: Option<ThemeId>,
+    pub input: super::ThemeEditorInput,
+    pub generation: u64,
+}
+
+const fn scope_index(scope: OwnershipScope) -> usize {
+    match scope {
+        OwnershipScope::Author => 0,
+        OwnershipScope::Site => 1,
+    }
+}
+
 /// Reactive private-page identity state kept separate from browser-only controls.
 #[derive(Clone, Copy, Debug)]
 pub struct ThemePageState {
@@ -75,7 +304,7 @@ pub struct ThemePageState {
     /// The server-authorized catalog scope selected by the owner.
     pub scope: RwSignal<OwnershipScope>,
     /// The draft currently being edited.
-    pub selected: RwSignal<Option<ThemeId>>,
+    pub selected: RwSignal<Option<ThemeChoice>>,
     /// Invalidates every owner-state read after a write acknowledgement.
     pub refresh: Invalidator,
     /// The accessible feedback message for the last write.
@@ -84,10 +313,22 @@ pub struct ThemePageState {
     pub feedback_in_import: RwSignal<bool>,
     /// Distinguishes confirmed completion from progress and failed or uncertain operations.
     pub feedback: RwSignal<Feedback>,
+    /// Copy source selection never changes the editor or public selection.
+    pub copy_open: RwSignal<bool>,
+    pub copy_source: RwSignal<Option<PublicThemeSelection>>,
+    /// Local buffers survive owner navigation and catalog revalidation.
+    pub editors: RwSignal<Vec<EditorState>>,
+    // Cached buffers belong to the page, not a refetchable Suspend or keyed editor view.
+    editor_owner: StoredValue<Owner>,
+    alive: StoredValue<Arc<AtomicBool>>,
+    pub owner_choices: RwSignal<[Option<ThemeChoice>; 2]>,
 }
 
 impl Default for ThemePageState {
     fn default() -> Self {
+        let alive = Arc::new(AtomicBool::new(true));
+        let cleanup_alive = Arc::clone(&alive);
+        on_cleanup(move || cleanup_alive.store(false, Ordering::Release));
         Self {
             pending: RwSignal::new(false),
             scope: RwSignal::new(OwnershipScope::Author),
@@ -96,18 +337,132 @@ impl Default for ThemePageState {
             status: RwSignal::new(None),
             feedback_in_import: RwSignal::new(false),
             feedback: RwSignal::new(Feedback::Progress),
+            copy_open: RwSignal::new(false),
+            copy_source: RwSignal::new(None),
+            editors: RwSignal::new(Vec::new()),
+            editor_owner: StoredValue::new(Owner::new()),
+            alive: StoredValue::new(alive),
+            owner_choices: RwSignal::new([None, None]),
         }
     }
 }
 
 impl ThemePageState {
+    /// Capture before awaiting; a detached callback must not touch disposed page handles.
+    #[must_use]
+    pub fn lifetime(self) -> Arc<AtomicBool> {
+        self.alive.get_value()
+    }
+
+    /// Reopening a target preserves its local buffer instead of reseeding from a refresh.
+    #[must_use]
+    pub fn editor(
+        self,
+        target: Option<ThemeId>,
+        name: String,
+        stylesheet: String,
+        rotating: bool,
+    ) -> EditorState {
+        let scope = self.scope.get_untracked();
+        if let Some(editor) = self
+            .editors
+            .get_untracked()
+            .into_iter()
+            .find(|editor| editor.scope == scope && editor.target.get_untracked() == target)
+        {
+            // Saved presentation metadata changes independently of the staged normal fields.
+            editor.rotating.set(rotating);
+            return editor;
+        }
+        let editor = self.editor_owner.with_value(|owner| {
+            owner.with(|| EditorState::new(scope, target, name, stylesheet, rotating))
+        });
+        self.editors.update(|editors| editors.push(editor));
+        editor
+    }
+
+    /// Revalidate an explicit saved-context operation without adopting normal form values.
+    pub fn context_revalidation<T>(
+        self,
+        scope: OwnershipScope,
+        target: ThemeId,
+        result: Result<MutationOutcome<T>, WebError>,
+    ) -> Revalidation {
+        let outcome = revalidation(result);
+        if matches!(
+            outcome,
+            Revalidation::Confirmed | Revalidation::Indeterminate
+        ) {
+            for editor in self.editors.get_untracked() {
+                if editor.scope == scope && editor.target.get_untracked() == Some(target) {
+                    editor.changed();
+                }
+            }
+        }
+        outcome
+    }
+
+    #[must_use]
+    pub fn editor_is_current(self, snapshot: &EditorSnapshot) -> bool {
+        let choice = snapshot
+            .target
+            .map_or(ThemeChoice::New, ThemeChoice::Custom);
+        self.scope.get_untracked() == snapshot.scope
+            && self.selected.get_untracked() == Some(choice)
+    }
+
+    /// Opens the source chooser without retargeting the editor.
+    pub fn open_copy(self) {
+        if !self.pending.get_untracked() {
+            self.copy_source.set(None);
+            self.copy_open.set(true);
+        }
+    }
+
+    pub fn choose_copy(self, source: PublicThemeSelection) {
+        if self.copy_open.get_untracked() && !self.pending.get_untracked() {
+            self.copy_source.set(Some(source));
+        }
+    }
+
+    pub fn close_copy(self) {
+        if !self.pending.get_untracked() {
+            self.copy_open.set(false);
+            self.copy_source.set(None);
+        }
+    }
+
+    /// Captures one explicit same-library intent; uncertainty cannot replay it.
+    #[must_use]
+    pub fn begin_copy(self) -> Option<(OwnershipScope, PublicThemeSelection)> {
+        if !self.copy_open.get_untracked() {
+            return None;
+        }
+        let source = self.copy_source.get_untracked()?;
+        self.begin_mutation()
+            .then_some((self.scope.get_untracked(), source))
+    }
+
+    /// Opening a card only changes the editor; a write in flight holds its context.
+    pub fn select_choice(self, choice: ThemeChoice) {
+        if !self.pending.get_untracked() {
+            self.selected.set(Some(choice));
+        }
+    }
+
     /// Changes catalog scope and drops state that cannot cross owner boundaries.
     pub fn select_scope(self, scope: OwnershipScope) {
         if self.pending.get_untracked() {
             return;
         }
+        let previous = scope_index(self.scope.get_untracked());
+        self.owner_choices
+            .update(|choices| choices[previous] = self.selected.get_untracked());
         self.scope.set(scope);
-        self.selected.set(None);
+        self.copy_open.set(false);
+        self.copy_source.set(None);
+        self.selected
+            .set(self.owner_choices.get_untracked()[scope_index(scope)]);
         self.status.set(None);
         self.feedback_in_import.set(false);
         self.feedback.set(Feedback::Progress);
@@ -131,7 +486,7 @@ impl ThemePageState {
         if self.pending.get_untracked() {
             return None;
         }
-        let id = self.selected.get_untracked()?;
+        let id = self.selected.get_untracked()?.custom_id()?;
         self.begin_mutation()
             .then_some((self.scope.get_untracked(), id))
     }
@@ -150,7 +505,7 @@ pub fn current_theme_summary(
         Some(Err(_)) => "Current theme could not be checked".into(),
         Some(Ok(None)) => match scope {
             OwnershipScope::Author => "Using the site theme".into(),
-            OwnershipScope::Site => "Site theme has not been set".into(),
+            OwnershipScope::Site => "studio (site default)".into(),
         },
         Some(Ok(Some(PublicThemeSelection::BuiltIn(theme)))) => theme.to_string(),
         Some(Ok(Some(PublicThemeSelection::Custom(id)))) => match catalog {
@@ -225,12 +580,6 @@ pub fn selection_from_token(token: &str) -> Option<PublicThemeSelection> {
     }
 }
 
-/// Blank UI overrides omit the multipart field, allowing the validated manifest default.
-#[must_use]
-pub fn import_name_override(value: &str) -> Option<&str> {
-    (!value.trim().is_empty()).then_some(value)
-}
-
 /// Selection is allowed only after the server confirms publication.
 #[must_use]
 pub fn publication_confirmed<T, E>(result: &Result<MutationOutcome<T>, E>) -> bool {
@@ -249,6 +598,7 @@ pub enum Receipt {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MutationStage {
     Import,
+    Copied,
     Publish,
     PublishOnly,
     Apply { published: bool },
@@ -287,11 +637,20 @@ pub fn mutation_receipt<T>(result: &Result<MutationOutcome<T>, WebError>) -> Rec
 #[must_use]
 pub fn mutation_message(stage: MutationStage, receipt: &Receipt) -> String {
     let message = match (stage, receipt) {
+        (MutationStage::Copied, Receipt::Confirmed) => {
+            "Theme copied privately. Choose its tile to Use it."
+        }
+        (MutationStage::Copied, Receipt::Rejected(_)) => {
+            "Copy rejected. No destination was confirmed. Check that the saved theme and all its images are available to you."
+        }
+        (MutationStage::Copied, Receipt::Uncertain(_)) => {
+            "The Copy outcome is uncertain. Check available themes before copying again; no automatic retry ran."
+        }
         (MutationStage::Import, Receipt::Confirmed) => {
-            "Theme saved. Review your choice, then choose Use this theme."
+            "Theme saved privately. Choose its tile to Use it."
         }
         (MutationStage::Import, Receipt::Rejected(_)) => {
-            "Upload rejected. Choose a valid theme ZIP file; use Advanced to change a reserved, too-long or duplicate theme name."
+            "Upload rejected. Choose a valid theme ZIP file and check its manifest name."
         }
         (MutationStage::Import, Receipt::Uncertain(_)) => {
             "The upload outcome is uncertain. Check available themes before uploading again; no automatic retry ran."
@@ -450,12 +809,308 @@ pub fn revalidation<T, E: ToString>(result: Result<MutationOutcome<T>, E>) -> Re
 #[cfg(test)]
 mod tests {
     use super::{
-        Feedback, Revalidation, ScopeAvailability, ThemePageState, draft_from_editor,
-        import_name_override, publication_confirmed, revalidation,
+        Feedback, Revalidation, ScopeAvailability, ThemeChoice, ThemePageState, draft_from_editor,
+        publication_confirmed, revalidation,
     };
     use crate::themes::OwnershipScope;
     use common::MutationOutcome;
     use leptos::prelude::{GetUntracked, Owner, Set};
+
+    #[test]
+    fn confirmed_new_save_retains_id_and_newer_edits_without_marking_them_clean() {
+        let owner = Owner::new();
+        owner.with(|| {
+            let page = ThemePageState::default();
+            page.select_choice(ThemeChoice::New);
+            let editor = page.editor(None, "River".into(), "original".into(), false);
+            let snapshot = editor.snapshot();
+            editor.name.set("River revised".into());
+            editor.stylesheet.set("newer".into());
+            editor.changed();
+            let id = common::ids::ThemeId::from(43);
+            assert!(!editor.confirm(
+                &snapshot,
+                &crate::themes::ThemeEditorSaveResult {
+                    id,
+                    name: "River".into(),
+                    applied: false,
+                }
+            ));
+            assert_eq!(editor.target.get_untracked(), Some(id));
+            assert_eq!(editor.name.get_untracked(), "River revised");
+            assert_eq!(editor.stylesheet.get_untracked(), "newer");
+            assert_eq!(editor.saved.get_untracked(), snapshot.input);
+            assert_ne!(editor.input(), editor.saved.get_untracked());
+            assert_eq!(editor.snapshot().target, Some(id));
+        });
+    }
+
+    #[test]
+    fn saved_context_revalidation_stales_only_affected_preview_and_preserves_buffers() {
+        use crate::themes::{ThemeBindingInput, ThemeEditorPatch};
+        Owner::new().with(|| {
+            let page = ThemePageState::default();
+            let id = common::ids::ThemeId::from(42);
+            let other = common::ids::ThemeId::from(43);
+            let editor = page.editor(Some(id), "Local".into(), "saved".into(), false);
+            let other_editor = page.editor(Some(other), "Other".into(), "other".into(), false);
+            page.select_scope(OwnershipScope::Site);
+            let site_editor = page.editor(Some(id), "Site".into(), "site".into(), false);
+            page.select_scope(OwnershipScope::Author);
+            page.select_choice(ThemeChoice::Custom(id));
+            editor.stylesheet.set("unsaved CSS".into());
+            editor
+                .logo
+                .set(ThemeEditorPatch::Set(ThemeBindingInput::ExplicitAbsent));
+            let input = editor.input();
+            let baseline = editor.saved.get_untracked();
+            let untouched = [other_editor.snapshot(), site_editor.snapshot()];
+            for result in [
+                Ok(MutationOutcome::Confirmed(())),
+                Ok(MutationOutcome::CommitIndeterminate(())),
+            ] {
+                let preview = editor.snapshot();
+                page.context_revalidation(OwnershipScope::Author, id, result);
+                assert!(
+                    !editor.matches(&preview),
+                    "saved context must invalidate the old preview"
+                );
+                assert_eq!(editor.input(), input);
+                assert_eq!(editor.saved.get_untracked(), baseline);
+                assert_eq!(page.selected.get_untracked(), Some(ThemeChoice::Custom(id)));
+                assert!(other_editor.matches(&untouched[0]));
+                assert!(site_editor.matches(&untouched[1]));
+            }
+            let preview = editor.snapshot();
+            page.context_revalidation::<()>(
+                OwnershipScope::Author,
+                id,
+                Err(crate::error::WebError::server_message("Rejected")),
+            );
+            assert!(editor.matches(&preview));
+            let reopened = page.editor(Some(id), "server name".into(), "server CSS".into(), true);
+            assert!(reopened.rotating.get_untracked());
+            assert_eq!(reopened.input(), input);
+            assert_eq!(reopened.saved.get_untracked(), baseline);
+        });
+    }
+
+    #[test]
+    fn cached_preview_survives_new_target_rekey_and_page_cleanup_fences_save() {
+        let owner = Owner::new();
+        let (page, editor, lifetime) = owner.with(|| {
+            let page = ThemePageState::default();
+            page.select_choice(ThemeChoice::New);
+            let loading_owner = Owner::new();
+            let editor =
+                loading_owner.with(|| page.editor(None, "River".into(), "style".into(), false));
+            let preview = editor.preview;
+            let snapshot = editor.snapshot();
+            assert!(editor.confirm(
+                &snapshot,
+                &crate::themes::ThemeEditorSaveResult {
+                    id: common::ids::ThemeId::from(43),
+                    name: "River".into(),
+                    applied: false,
+                }
+            ));
+            page.selected
+                .set(Some(ThemeChoice::Custom(common::ids::ThemeId::from(43))));
+            // The removed form's pending/value readers can run at the rekey boundary.
+            loading_owner.cleanup();
+            assert!(!editor.preview_pending.get_untracked());
+            assert!(editor.preview_value.get_untracked().is_none());
+            let reopened = page.editor(
+                Some(common::ids::ThemeId::from(43)),
+                "ignored".into(),
+                String::new(),
+                false,
+            );
+            assert_eq!(reopened.preview_pending, editor.preview_pending);
+            assert!(!preview.pending().get_untracked());
+            assert!(!page.editor_is_current(&snapshot));
+            let lifetime = page.lifetime();
+            assert!(lifetime.load(std::sync::atomic::Ordering::Acquire));
+            (page, editor, lifetime)
+        });
+        owner.cleanup();
+        assert!(!lifetime.load(std::sync::atomic::Ordering::Acquire));
+        assert!(page.pending.try_get_untracked().is_none());
+        assert!(editor.target.try_get_untracked().is_none());
+    }
+
+    #[test]
+    fn cached_editor_survives_loading_owner_cleanup_and_reopens_after_save() {
+        let owner = Owner::new();
+        owner.with(|| {
+            let page = ThemePageState::default();
+            let loading_owner = Owner::new();
+            let id = common::ids::ThemeId::from(42);
+            let editor =
+                loading_owner.with(|| page.editor(Some(id), "Ocean".into(), "style".into(), false));
+            loading_owner.cleanup();
+            assert_eq!(editor.target.try_get_untracked(), Some(Some(id)));
+            page.select_choice(ThemeChoice::Custom(id));
+            let snapshot = editor.snapshot();
+            assert!(editor.confirm(
+                &snapshot,
+                &crate::themes::ThemeEditorSaveResult {
+                    id,
+                    name: "Ocean".into(),
+                    applied: true,
+                }
+            ));
+            assert_eq!(
+                page.editor(Some(id), "ignored".into(), String::new(), false)
+                    .input(),
+                editor.input()
+            );
+            page.select_choice(ThemeChoice::New);
+            let new = page.editor(None, String::new(), String::new(), false);
+            assert_eq!(new.target.get_untracked(), None);
+            assert!(new.name.get_untracked().is_empty());
+        });
+    }
+
+    #[test]
+    fn copy_source_and_cancel_preserve_editor_and_capture_one_owner_intent() {
+        use common::theme::{PublicThemeSelection, Theme};
+        Owner::new().with(|| {
+            let page = ThemePageState::default();
+            let editor = ThemeChoice::Custom(common::ids::ThemeId::from(42));
+            let source = PublicThemeSelection::BuiltIn(Theme::Reader);
+            page.select_choice(editor);
+            assert_eq!(page.begin_copy(), None);
+            page.open_copy();
+            assert_eq!(page.begin_copy(), None);
+            page.choose_copy(source);
+            assert_eq!(page.selected.get_untracked(), Some(editor));
+            page.close_copy();
+            assert_eq!(page.begin_copy(), None);
+            assert_eq!(page.selected.get_untracked(), Some(editor));
+            page.open_copy();
+            page.choose_copy(source);
+            assert_eq!(page.begin_copy(), Some((OwnershipScope::Author, source)));
+            assert_eq!(page.begin_copy(), None);
+            page.select_scope(OwnershipScope::Site);
+            page.close_copy();
+            page.choose_copy(PublicThemeSelection::Custom(common::ids::ThemeId::from(7)));
+            assert_eq!(page.scope.get_untracked(), OwnershipScope::Author);
+            assert_eq!(page.copy_source.get_untracked(), Some(source));
+            page.pending.set(false);
+            page.select_scope(OwnershipScope::Site);
+            assert!(!page.copy_open.get_untracked());
+            assert_eq!(page.copy_source.get_untracked(), None);
+            page.open_copy();
+            page.choose_copy(source);
+            assert_eq!(page.begin_copy(), Some((OwnershipScope::Site, source)));
+        });
+    }
+
+    #[test]
+    fn preview_results_cannot_cross_owner_choice_or_saved_state() {
+        use super::{preview_is_current, preview_target};
+        use common::{ids::ThemeId, theme::Theme};
+        let choice = Some(ThemeChoice::Bundled(Theme::Studio));
+        let author = preview_target(OwnershipScope::Author, choice, 1);
+        assert!(preview_is_current(author, author));
+        assert!(!preview_is_current(
+            preview_target(OwnershipScope::Site, choice, 1),
+            author
+        ));
+        assert!(!preview_is_current(
+            preview_target(
+                OwnershipScope::Author,
+                Some(ThemeChoice::Bundled(Theme::Reader)),
+                1
+            ),
+            author
+        ));
+        assert!(!preview_is_current(
+            preview_target(
+                OwnershipScope::Author,
+                Some(ThemeChoice::Custom(ThemeId::from(42))),
+                1
+            ),
+            author
+        ));
+        assert!(!preview_is_current(
+            preview_target(OwnershipScope::Author, choice, 2),
+            author
+        ));
+        assert!(!preview_is_current(author, None));
+        assert!(!preview_is_current(None, author));
+        assert!(!preview_is_current(None, None));
+        assert_eq!(preview_target(OwnershipScope::Author, None, 0), None);
+        assert_eq!(
+            preview_target(OwnershipScope::Author, Some(ThemeChoice::FollowSite), 0),
+            None
+        );
+    }
+
+    #[test]
+    fn grid_current_and_editing_are_independent_and_unknown_never_highlights() {
+        use super::{ThemeChoice, choice_is_current};
+        use crate::error::WebError;
+        use common::{
+            ids::ThemeId,
+            theme::{PublicThemeSelection, Theme},
+        };
+        let custom = ThemeChoice::Custom(ThemeId::from(42));
+        assert!(!choice_is_current(
+            custom,
+            OwnershipScope::Author,
+            Some(&Ok(None))
+        ));
+        assert!(choice_is_current(
+            ThemeChoice::FollowSite,
+            OwnershipScope::Author,
+            Some(&Ok(None))
+        ));
+        assert!(choice_is_current(
+            ThemeChoice::Bundled(Theme::Studio),
+            OwnershipScope::Site,
+            Some(&Ok(None))
+        ));
+        assert!(!choice_is_current(
+            ThemeChoice::Bundled(Theme::Studio),
+            OwnershipScope::Site,
+            None
+        ));
+        assert!(choice_is_current(
+            ThemeChoice::Bundled(Theme::Reader),
+            OwnershipScope::Author,
+            Some(&Ok(Some(PublicThemeSelection::BuiltIn(Theme::Reader))))
+        ));
+        assert_eq!(ThemeChoice::FollowSite.custom_id(), None);
+        assert_eq!(ThemeChoice::Bundled(Theme::Reader).custom_id(), None);
+        assert!(!choice_is_current(
+            ThemeChoice::FollowSite,
+            OwnershipScope::Author,
+            Some(&Err(WebError::server_function("read failed")))
+        ));
+        assert!(choice_is_current(
+            custom,
+            OwnershipScope::Author,
+            Some(&Ok(Some(PublicThemeSelection::Custom(ThemeId::from(42)))))
+        ));
+        let owner = Owner::new();
+        owner.with(|| {
+            let page = ThemePageState::default();
+            page.select_choice(custom);
+            assert_eq!(page.selected.get_untracked(), Some(custom));
+            assert!(page.begin_mutation());
+            page.select_choice(ThemeChoice::Bundled(Theme::Reader));
+            page.select_scope(OwnershipScope::Site);
+            assert_eq!(page.selected.get_untracked(), Some(custom));
+            assert_eq!(page.scope.get_untracked(), OwnershipScope::Author);
+            page.pending.set(false);
+            page.select_choice(ThemeChoice::Bundled(Theme::Reader));
+            assert_eq!(page.begin_use(), None);
+            page.select_scope(OwnershipScope::Site);
+            assert_eq!(page.selected.get_untracked(), None);
+        });
+    }
 
     #[test]
     fn saved_version_control_selects_only_an_available_published_custom_id() {
@@ -542,7 +1197,7 @@ mod tests {
         );
         assert_eq!(
             current_theme_summary(OwnershipScope::Site, Some(&inherited), None),
-            "Site theme has not been set"
+            "studio (site default)"
         );
         assert_eq!(
             current_theme_summary(
@@ -667,7 +1322,7 @@ mod tests {
     fn selecting_scope_resets_draft_identity_and_feedback() {
         Owner::new().with(|| {
             let page = ThemePageState::default();
-            page.selected.set(Some(common::ids::ThemeId::from(42)));
+            page.select_choice(ThemeChoice::Custom(common::ids::ThemeId::from(42)));
             page.status.set(Some("saved".into()));
             page.feedback_in_import.set(true);
             page.feedback.set(Feedback::Success);
@@ -686,7 +1341,7 @@ mod tests {
     fn pending_use_keeps_its_catalog_scope_and_draft_target() {
         Owner::new().with(|| {
             let page = ThemePageState::default();
-            page.selected.set(Some(common::ids::ThemeId::from(42)));
+            page.select_choice(ThemeChoice::Custom(common::ids::ThemeId::from(42)));
             page.pending.set(true);
             page.feedback_in_import.set(true);
             page.feedback.set(Feedback::Error);
@@ -694,7 +1349,7 @@ mod tests {
             assert_eq!(page.scope.get_untracked(), OwnershipScope::Author);
             assert_eq!(
                 page.selected.get_untracked(),
-                Some(common::ids::ThemeId::from(42))
+                Some(ThemeChoice::Custom(common::ids::ThemeId::from(42)))
             );
             assert!(page.feedback_in_import.get_untracked());
             assert_eq!(page.feedback.get_untracked(), Feedback::Error);
@@ -706,6 +1361,7 @@ mod tests {
         use super::{MutationStage, Receipt, mutation_feedback};
         for (stage, expected) in [
             (MutationStage::Import, Feedback::Success),
+            (MutationStage::Copied, Feedback::Success),
             (MutationStage::Publish, Feedback::Progress),
             (MutationStage::PublishOnly, Feedback::Success),
             (MutationStage::Apply { published: false }, Feedback::Success),
@@ -726,19 +1382,12 @@ mod tests {
     }
 
     #[test]
-    fn blank_import_override_omits_name_but_explicit_input_is_preserved() {
-        assert_eq!(import_name_override(""), None);
-        assert_eq!(import_name_override(" \t\n"), None);
-        assert_eq!(import_name_override("  My label  "), Some("  My label  "));
-    }
-
-    #[test]
     fn use_captures_one_target_and_refuses_duplicate_dispatch() {
         Owner::new().with(|| {
             let page = ThemePageState::default();
             assert_eq!(page.begin_use(), None);
             assert!(!page.pending.get_untracked());
-            page.selected.set(Some(common::ids::ThemeId::from(42)));
+            page.select_choice(ThemeChoice::Custom(common::ids::ThemeId::from(42)));
             assert_eq!(
                 page.begin_use(),
                 Some((OwnershipScope::Author, common::ids::ThemeId::from(42)))
@@ -746,7 +1395,7 @@ mod tests {
             assert_eq!(page.begin_use(), None);
             page.pending.set(false);
             page.select_scope(OwnershipScope::Site);
-            page.selected.set(Some(common::ids::ThemeId::from(7)));
+            page.select_choice(ThemeChoice::Custom(common::ids::ThemeId::from(7)));
             assert_eq!(
                 page.begin_use(),
                 Some((OwnershipScope::Site, common::ids::ThemeId::from(7)))
@@ -758,7 +1407,7 @@ mod tests {
     fn pending_draft_operation_blocks_activation_and_other_operations() {
         Owner::new().with(|| {
             let page = ThemePageState::default();
-            page.selected.set(Some(common::ids::ThemeId::from(42)));
+            page.select_choice(ThemeChoice::Custom(common::ids::ThemeId::from(42)));
             page.feedback.set(Feedback::Success);
             page.feedback_in_import.set(true);
             assert!(page.begin_mutation());
@@ -869,6 +1518,7 @@ mod tests {
         use super::{MutationStage, Receipt, mutation_message};
         for (stage, expected) in [
             (MutationStage::Import, "Theme saved"),
+            (MutationStage::Copied, "Theme copied privately"),
             (MutationStage::Publish, "Applying your theme"),
             (MutationStage::PublishOnly, "Publication confirmed"),
             (

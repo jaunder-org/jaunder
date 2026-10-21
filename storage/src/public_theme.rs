@@ -162,7 +162,12 @@ async fn resolve_custom(
     }))
 }
 
-fn resolve_system_revision(
+/// Resolves installed system defaults for an explicit route without consulting selection.
+///
+/// # Errors
+///
+/// Returns a protocol error for invalid installed metadata or missing default assets.
+pub fn resolve_system_revision(
     revision: &SystemThemeRevision,
     route: &PublicThemeRoute,
 ) -> Result<PublishedThemePresentation, sqlx::Error> {
@@ -298,7 +303,11 @@ fn resolve_role(
 }
 
 fn role_is_invalid(binding: Option<&ThemeRoleBinding>, url: Option<&RootRelativeUrl>) -> bool {
-    binding.is_some_and(|binding| !binding.is_explicit_absent() && url.is_none())
+    binding.is_some_and(|binding| {
+        !binding.is_explicit_absent()
+            && !matches!(binding, ThemeRoleBinding::PackagedDefault { .. })
+            && url.is_none()
+    })
 }
 
 /// Resolves the effective logo and header for an owned draft preview.
@@ -329,6 +338,30 @@ pub async fn resolve_draft_theme_images(
     } else {
         None
     };
+    resolve_editor_theme_images(
+        manifest,
+        package_asset_urls,
+        revision,
+        route,
+        logo.as_ref(),
+        header.as_ref(),
+        header_pool.as_deref(),
+    )
+}
+
+/// Resolves an in-memory editor presentation with the same policy as saved drafts.
+///
+/// # Errors
+/// Rejects an unresolved explicit image or corrupt header-pool binding.
+pub fn resolve_editor_theme_images(
+    manifest: &[u8],
+    package_asset_urls: &std::collections::BTreeMap<String, String>,
+    revision: &ThemeRevisionDigest,
+    route: &PublicThemeRoute,
+    logo: Option<&ThemeRoleBinding>,
+    header: Option<&ThemeRoleBinding>,
+    header_pool: Option<&[crate::ThemeHeaderPoolEntry]>,
+) -> Result<(Option<RootRelativeUrl>, Option<RootRelativeUrl>), sqlx::Error> {
     let defaults = manifest_defaults(manifest);
     let logo_default = defaults
         .as_ref()
@@ -342,31 +375,29 @@ pub async fn resolve_draft_theme_images(
             .and_then(|url| url.parse::<RootRelativeUrl>().ok())
     };
     let logo_url = resolve_role_with_package_url(
-        logo.as_ref(),
+        logo,
         &package_url,
         revision,
         route,
         None,
         logo_default.map(std::slice::from_ref),
     );
-    let header_url = match header.as_ref() {
+    let header_url = match header {
         None
         | Some(ThemeRoleBinding::PackagedDefault {
             role: ThemeImageRole::Header,
             ..
         }) => resolve_packaged_header_default(header_defaults, &package_url, revision, route),
         _ => resolve_role_with_package_url(
-            header.as_ref(),
+            header,
             &package_url,
             revision,
             route,
-            header_pool.as_deref(),
+            header_pool,
             header_defaults,
         ),
     };
-    if role_is_invalid(logo.as_ref(), logo_url.as_ref())
-        || role_is_invalid(header.as_ref(), header_url.as_ref())
-    {
+    if role_is_invalid(logo, logo_url.as_ref()) || role_is_invalid(header, header_url.as_ref()) {
         return Err(sqlx::Error::RowNotFound);
     }
     Ok((logo_url, header_url))

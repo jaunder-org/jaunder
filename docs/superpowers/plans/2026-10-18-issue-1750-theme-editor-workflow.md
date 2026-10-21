@@ -2,13 +2,13 @@
 
 > **APPROVED for implementation; not merge approval.** User's direct answer
 > **“approved”** resolves `JAU-1750-EDITOR-WORKFLOW-001` for this outline and
-> its linked spec. Lead acknowledgement: `51e03446-a8b8-4315-a0ce-daa671184145`;
-> Manager receipt: `0d46ad21-67a4-4c70-aa58-789017273df7`. Pre-approval SHA256:
-> spec `dd4e74a1c3ebf01578c4e746f4bd0a93cfe21ef7032f44b9838b905e3545515f`;
-> outline `9f84abc069f78898c9f46c04daaaa4e13df5ae6b2583e89fd98f1a2aa0966190`.
-> Triggers: browser-callable read/write interfaces, coordinated publication,
-> Media authorization and selection concurrency. Execute with
-> **jaunder-iterate** / **jaunder-dispatch**. The linked
+> its linked spec. Lead acknowledgement / Manager receipt:
+> `0d46ad21-67a4-4c70-aa58-789017273df7`. Pre-approval SHA256: spec
+> `dd4e74a1c3ebf01578c4e746f4bd0a93cfe21ef7032f44b9838b905e3545515f`; outline
+> `9f84abc069f78898c9f46c04daaaa4e13df5ae6b2583e89fd98f1a2aa0966190`. Triggers:
+> browser-callable read/write interfaces, coordinated publication, Media
+> authorization and selection concurrency. Execute with **jaunder-iterate** /
+> **jaunder-dispatch**. The linked
 > [addendum](../specs/2026-10-18-issue-1750-theme-editor-workflow.md) is
 > authoritative. Earlier installed-preview and Copy/name approvals remain
 > intact.

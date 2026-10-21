@@ -6,15 +6,20 @@ server behavior.
 
 Theme management lives at `/themes`:
 
-- **User theme** opens the signed-in author's view: how visitors see their
-  public pages, not their private workspace. Ordinary users see only this view.
-- Operators can navigate explicitly between **User theme** and **Site theme**.
-  Site theme controls public site pages and user pages using the site theme.
-- Each view shows its current theme near the top, before adding or choosing.
-  Confirmed author inheritance reads **Using the site theme**; failed reads say
-  **Current theme could not be checked**, not an invented name or default. An
-  unset site setting is identified as unset, without pretending to have read its
-  effective name.
+- One workspace edits **User theme** or **Site theme**. Operators use the
+  **Editing setting** control; these are independent settings, so an operator
+  can keep a personal theme different from the site theme. Switching targets
+  resets local inputs, not either stored selection. Ordinary users manage only
+  their own User theme.
+- User theme controls visitors' public user pages; Site theme controls public
+  site pages and user pages following it. Neither changes Home or private
+  Studio.
+- **Available themes** combines bundled choices with only the current owner's
+  custom themes. The whole current tile is highlighted only after confirmed
+  reads. Its **Use** button's pressed state is independent of the editor target.
+  Confirmed author inheritance marks **Follow site theme**; a confirmed unset
+  site setting marks Studio, the resolver's default. Failed reads say **Current
+  theme could not be checked** and mark no card current.
 - Author and site themes never cross owners implicitly. Move a theme between
   owners or instances by exporting and importing its Theme Package.
 
@@ -36,38 +41,77 @@ rules.
 
 ## Choose a starting point
 
-The default workflow needs only a Theme Package ZIP:
+The workspace has two sections:
 
-1. **Add or choose a theme**: choose the **Theme ZIP file** and press **Upload
-   theme**, or open one of the **Available themes**. Jaunder validates the ZIP
-   and uses `theme.json.name` as its name. The filename is never a fallback.
-2. **Review your choice**: opening a choice does not activate it. **Saved, not
-   live yet** is shown only for a known unused, unpublished choice. **Currently
-   in use** requires a confirmed matching Theme ID. Unknown current state is
-   identified explicitly; choosing never implies the theme is already live.
-3. **Use this theme** prepares the chosen theme, then switches to it. Compare
-   the current theme shown above and verify public appearance in a fresh
-   signed-out browser. Preparing an already-used theme can update public pages
-   even if switching later fails.
+1. **Available themes** is a responsive grid. Each theme tile is an explicit
+   **Use** action. Separate pencil **Edit** and eye **Preview** buttons open
+   custom and read-only bundled content without applying it. **Upload theme**
+   and **Copy theme** are peer action tiles. Upload opens the native ZIP picker;
+   choosing a file validates and uploads it once, while cancel writes nothing.
+   It uses `theme.json.name`, never the filename, with no name form.
+2. **Theme editor** shows the explicitly opened custom theme's stylesheet and
+   **Save**. Save replaces only draft CSS, preserving the manifest and assets;
+   it does not publish, select, or update the public revision. Choosing the
+   custom theme's **Use** tile makes saved edits live by publishing and then
+   selecting the same captured Theme ID and owner, including when already in
+   use. Using another tile preserves unrelated unsaved editor input.
 
-**Advanced** is initially closed. Open it for **Theme name (optional)**,
-empty-draft creation, plain CSS import, package/source editing, presentation
-Media, isolated preview, export, rename, or delete. A blank or whitespace-only
-UI override omits the name field and uses the validated manifest name. A
-nonblank override is authoritative.
+**Copy theme** first asks for a bundled or owned custom source in the current
+library. It copies saved content, not unsaved editor buffers, and preserves the
+package and complete saved presentation. Choosing/cancelling a source does not
+change the editor or public selection. Confirmed Copy opens the returned new
+private, unpublished, unselected theme. Any unavailable or unauthorized image
+rejects the whole Copy. An uncertain outcome rechecks the library/current
+setting without claiming success, retargeting the editor or automatically
+replaying Copy. Follow site theme is inheritance, not a Copy source.
+
+**Preview saved theme** displays the selected built-in or owner-visible custom
+theme in an isolated visual preview. It reads saved content without selecting,
+publishing or applying it. For a custom theme, Save edits first, then preview
+again; unsaved editor text is not previewed. Switching choice/owner or saving
+clears obsolete output; loading and errors never leave another theme's preview
+shown. Preview is explicit rather than eager work for every card or catalog
+refresh, and uses the existing operation-admission limits without automatic
+retries.
+
+This is a rendered preview, not a packaged PNG thumbnail. Installed Theme
+Packages currently contain no standard thumbnail field; a repository's
+`preview.png` is not a package member. Built-in cards remain immutable and Save
+is disabled, without stale custom CSS. Follow site theme remains inheritance
+guidance, not an installed-theme preview input. Built-in and inheritance Use
+actions change selection only.
+
+**Saved, not live yet** requires a known unused, unpublished custom choice;
+**Currently in use** requires a confirmed matching Theme ID. Unknown state is
+identified explicitly. Publishing an already-used ID advances its public
+revision before the subsequent selection, even if switching fails. Verify
+appearance in a fresh signed-out browser.
+
+**Advanced** is initially closed. It contains empty-draft creation, CSS import,
+complete package editing, presentation Media, isolated preview, export, rename,
+delete, standalone publication and last-published-version selection. Hiding it
+preserves unsaved input. Its `style.css` field and the basic stylesheet editor
+share the same editable CSS, so either shows edits made in the other. Advanced
+create and rename retain their explicit, strict names; Upload always omits its
+optional API name field.
 
 Catalog labels are trimmed, nonempty, and limited to 100 Unicode scalar values.
-Studio, Terminal and Reader are reserved case-insensitively; catalog collisions
-are rejected. Use the Advanced override to choose a valid distinct label rather
-than expecting a filename fallback, truncation, suffix, or automatic rename.
-Malformed packages still fail even with a valid override. Error feedback remains
-outside Advanced, beside import or application actions.
+Studio, Terminal and Reader are reserved case-insensitively. Automatic Upload
+and Copy allocation uses the base when available, otherwise the lowest available
+` 2`, ` 3`, etc. Reserved bases are automatic seeds, never final labels. Numeric
+endings are literal (`Name 2` copies to `Name 2 2`); only a generated stem may
+shorten to fit the scalar limit. Explicit names never truncate or gain suffixes,
+and invalid names/collisions still reject. Malformed packages still fail. One
+sticky live status reports progress, confirmed success, rejection or uncertainty
+outside Advanced.
 
 The existing multipart import API remains compatible: `scope` and `archive`
 retain their meanings; `name` is optional. Only an omitted `name` defaults from
 validated manifest metadata. An explicitly supplied invalid or blank name fails
 without fallback; valid supplied names and existing response shapes are
-unchanged. Package validation precedes manifest-default naming.
+unchanged. Omitted-name automatic allocation occurs transactionally with
+insertion, and returns the actual allocated ID/name. Package validation precedes
+manifest-default naming.
 
 Creating or importing by any starting point remains private and unselected; it
 never changes public selection. Use plain CSS while establishing a layout, and a

@@ -105,7 +105,7 @@ pub(crate) mod tests {
         let application = inventory.application().content_digest().content_url();
         fs::write(root.join("index.html"), format!(
             r#"const __jaunderWasmUrl = "/{wasm}"; window.__jaunderWasmFetch = fetch(__jaunderWasmUrl);
-<link rel="stylesheet" href="{application}" />
+<link rel="stylesheet" href="{application}" data-jaunder-application-stylesheet />
 import {{initMeasured}} from "/{glue}"; performance.mark("before_init");
 initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl)"#,
         )).unwrap();
