@@ -93,7 +93,9 @@ pub async fn collection_post(
     // Bound this protocol's raw body by the shared input setting, including small
     // limits, before buffering. The manager still checks prepared output separately.
     let max_size = site_config.get_media_max_file_size().await?;
-    let limit = usize::try_from(max_size.value()).map_err(|error| internal_anyhow(error.into()))?;
+    // A positive configured bound can exceed usize only on narrower targets;
+    // keep extraction finite at the largest body size that target can represent.
+    let limit = usize::try_from(max_size.value()).unwrap_or(usize::MAX);
     let body = to_bytes(request.into_body(), limit)
         .await
         .map_err(|error| {
