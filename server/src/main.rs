@@ -598,8 +598,14 @@ mod tests {
 
     #[tokio::test]
     async fn run_serve_dev_auto_inits() {
+        #[derive(serde::Deserialize)]
+        struct RuntimeAddress {
+            port: u16,
+        }
+
         let base = TempDir::new().unwrap();
         let storage = test_storage_args(&base);
+        let runtime_path = storage.storage_path.join("runtime.json");
         let bind: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
         let cli = test_cli(Commands::Serve {
             storage,
@@ -608,10 +614,39 @@ mod tests {
             trusted_proxies: vec![],
         });
 
-        let task = tokio::spawn(run(cli));
+        let mut task = tokio::spawn(run(cli));
 
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // Port zero is a startup reservation; a bound port is published only
+        // after Serve preparation.
+        let ready = async {
+            loop {
+                match std::fs::read(&runtime_path) {
+                    Ok(contents) => {
+                        let runtime: RuntimeAddress = serde_json::from_slice(&contents)?;
+                        if runtime.port != 0 {
+                            return Ok::<(), anyhow::Error>(());
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        };
+        let readiness = tokio::select! {
+            biased;
+            result = &mut task => panic!("Serve exited before readiness: {result:?}"),
+            result = tokio::time::timeout(std::time::Duration::from_secs(5), ready) => result,
+        };
         task.abort();
+        let shutdown = task.await;
+        assert!(
+            matches!(&shutdown, Err(error) if error.is_cancelled()),
+            "Serve must cancel and join after readiness observation: {shutdown:?}"
+        );
+        readiness
+            .expect("Serve must publish readiness within five seconds")
+            .expect("read Serve runtime readiness");
 
         // Verify that the database was created by auto-init.
         assert!(base.path().join("test.db").exists());
