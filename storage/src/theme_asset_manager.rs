@@ -2375,7 +2375,7 @@ mod tests {
         );
     }
 
-    // guard:no-backend — filesystem materialization fails before any database operation
+    // guard:no-backend — mocked eligibility permits cleanup without database admission
     #[tokio::test]
     async fn materialize_failure_precedes_database_visibility() {
         let fixture = TempDir::new().expect("create fixture");
@@ -2389,7 +2389,20 @@ mod tests {
             .join(digest.as_ref());
         fs::create_dir_all(&path).expect("make target a directory");
         let mut storage = MockThemeStorage::new();
-        storage.expect_content_eligibility().never();
+        let asset_digest = ThemeAssetManager::digest(
+            compiled
+                .assets()
+                .next()
+                .expect("fixture has one PNG asset")
+                .3,
+        )
+        .expect("valid asset digest");
+        let cleanup_digest = asset_digest.clone();
+        storage
+            .expect_content_eligibility()
+            .withf(move |digest| digest == &cleanup_digest)
+            .once()
+            .returning(|_| Ok(None));
         storage.expect_admit_publication().never();
         let manager = ThemeAssetManager::new(
             Arc::new(storage),
@@ -2397,7 +2410,7 @@ mod tests {
             Arc::new(fixture.path().to_path_buf()),
         );
 
-        assert!(
+        assert!(matches!(
             manager
                 .publish(
                     ThemeOwner::Site,
@@ -2406,9 +2419,11 @@ mod tests {
                     limits(i64::MAX),
                     0,
                 )
-                .await
-                .is_err()
-        );
+                .await,
+            Err(ThemeAssetError::Filesystem(_))
+        ));
+        assert!(!manager.content_path(asset_digest.as_ref()).exists());
+        assert!(path.is_dir());
     }
 
     // guard:no-backend — mocked storage isolates confirmed transaction rollback cleanup
