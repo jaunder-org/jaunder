@@ -22,21 +22,9 @@ pub const WASM_RAW_ACHIEVED_BYTES: u64 = 4_009_656;
 
 /// The ceiling `cargo xtask validate` enforces.
 ///
-/// Headroom remains **3.1%** over [`WASM_RAW_ACHIEVED_BYTES`]. The achieved
-/// value was deliberately recalibrated when #1625 added the authenticated
-/// Manage Posts workspace and its client-side selection and confirmation state:
-///
-/// | build                      | raw bytes     |
-/// | -------------------------- | ------------- |
-/// | `-Oz` (achieved)           | 4 009 656     |
-/// | **ceiling**                | **4 134 000** |
-///
-/// `cargo xtask audit-wasm --breakdown` attributes 516 KiB of the pre-bindgen
-/// code section to `web`; the new workspace is intentional product code rather
-/// than an optimizer or dependency regression.
-///
-/// Lower it deliberately, in the same commit as the win that earned it.
-pub const WASM_RAW_CEILING_BYTES: u64 = 4_134_000;
+/// Decimal 5 MB, not 5 MiB: #1750 accepts additional feature headroom.
+/// See ADR-0106's amendment for the tradeoff; the achieved baseline stays historical.
+pub const WASM_RAW_CEILING_BYTES: u64 = 5_000_000;
 
 #[derive(Debug, Serialize)]
 pub struct BudgetVerdict {
@@ -85,12 +73,13 @@ mod tests {
     #[test]
     fn exactly_at_ceiling_passes() {
         // Inclusive: a build that exactly hits the ceiling is not a regression.
-        assert!(!check(2_000, 2_000).over);
+        assert_eq!(WASM_RAW_CEILING_BYTES, 5_000_000);
+        assert!(!check(5_000_000, WASM_RAW_CEILING_BYTES).over);
     }
 
     #[test]
     fn over_ceiling_fails() {
-        assert!(check(2_001, 2_000).over);
+        assert!(check(5_000_001, WASM_RAW_CEILING_BYTES).over);
     }
 
     #[test]
@@ -107,9 +96,7 @@ mod tests {
 
     /// Raw bytes of the shipped wasm at the weaker `wasm-opt` levels, remeasured
     /// after #1625 added the Manage Posts workspace.
-    /// `NO_WASM_OPT_BYTES` retains the
-    /// pre-#836 historical guard. The next three tests run the real predicate
-    /// over them.
+    /// These historical measurements are not sizes of the current bundle.
     const NO_WASM_OPT_BYTES: u64 = 5_350_591;
     const O2_LEVEL_BYTES: u64 = 4_252_496;
     const OS_LEVEL_BYTES: u64 = 4_191_207;
@@ -128,17 +115,16 @@ mod tests {
     }
 
     #[test]
-    fn a_downgrade_of_the_optimisation_level_fails_the_budget() {
-        // The headroom is bounded on the far side too. Losing `-Oz` is the
-        // likeliest way this win evaporates, so both weaker levels must land
-        // above the ceiling rather than inside the tolerance.
+    fn historical_weaker_optimisation_sizes_fit_the_approved_budget() {
+        // ADR-0106's #1750 amendment accepts this lost size-only guard;
+        // the production optimiser remains -Oz.
         assert!(
-            check(OS_LEVEL_BYTES, WASM_RAW_CEILING_BYTES).over,
-            "a -Os build must not fit under the ceiling"
+            !check(OS_LEVEL_BYTES, WASM_RAW_CEILING_BYTES).over,
+            "the historical -Os size fits the approved 5 MB ceiling"
         );
         assert!(
-            check(O2_LEVEL_BYTES, WASM_RAW_CEILING_BYTES).over,
-            "a -O2 build must not fit under the ceiling"
+            !check(O2_LEVEL_BYTES, WASM_RAW_CEILING_BYTES).over,
+            "the historical -O2 size fits the approved 5 MB ceiling"
         );
     }
 
@@ -146,7 +132,7 @@ mod tests {
     fn the_pre_836_bundle_would_fail_todays_budget() {
         assert!(
             check(NO_WASM_OPT_BYTES, WASM_RAW_CEILING_BYTES).over,
-            "losing wasm-opt entirely must fail the gate"
+            "the historical pre-#836 size must fail the gate"
         );
     }
 }

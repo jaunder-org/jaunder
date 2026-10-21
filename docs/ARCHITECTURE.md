@@ -1937,13 +1937,15 @@ one early fetch, the fallback target, and initialization ordering without fixed
 The WASM artifact carries a hard budget
 ([ADR-0106](adr/0106-wasm-raw-size-budget.md)): `cargo xtask validate` resolves
 the manifest's WASM role and fails when its **raw** byte count exceeds
-`WASM_RAW_CEILING_BYTES` (3 200 000 today, `xtask/src/wasm_budget.rs:39`). Raw,
-not compressed, because the artifact is a compiler input rather than a download;
-the ceiling keeps explicit headroom that sits below what the next weaker
-optimisation level would produce, and a unit test asserts that relationship so
-widening it is deliberate. The recalibration required by the
-[proposed Jiff time model](adr/0182-jiff-time-model.md) admits the bundled IANA
-TZDB while retaining that optimisation-level guard.
+`WASM_RAW_CEILING_BYTES` (5,000,000 bytes: decimal 5 MB, not 5 MiB, in
+`xtask/src/wasm_budget.rs`). Raw, not compressed, because the artifact is a
+compiler input rather than a download. The #1750 amendment accepts additional
+feature headroom while preserving the historical 4,009,656-byte achieved
+baseline for drift reporting. The historical weaker optimisation-level sizes now
+fit, so this size ceiling does not guarantee detection of an optimisation
+downgrade; production still uses `wasm-opt -Oz`. Unit tests enforce the
+inclusive limit and failure one byte above it. The higher ceiling is not
+evidence of measured or benign startup/download impact.
 
 ### Module layout — the per-vertical file split
 
