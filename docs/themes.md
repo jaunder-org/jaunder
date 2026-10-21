@@ -6,11 +6,9 @@ server behavior.
 
 Theme management lives at `/themes`:
 
-- One workspace edits **User theme** or **Site theme**. Operators use the
-  **Editing setting** control; these are independent settings, so an operator
-  can keep a personal theme different from the site theme. Switching targets
-  resets local inputs, not either stored selection. Ordinary users manage only
-  their own User theme.
+- One workspace edits **User** or **Site** settings through tabs. Operators can
+  keep personal and site selections separate; switching tabs preserves
+  independent editor buffers. Ordinary users manage only their own User theme.
 - User theme controls visitors' public user pages; Site theme controls public
   site pages and user pages following it. Neither changes Home or private
   Studio.
@@ -43,57 +41,58 @@ rules.
 
 The workspace has two sections:
 
-1. **Available themes** is a responsive grid. Each theme tile is an explicit
-   **Use** action. Separate pencil **Edit** and eye **Preview** buttons open
-   custom and read-only bundled content without applying it. **Upload theme**
-   and **Copy theme** are peer action tiles. Upload opens the native ZIP picker;
-   choosing a file validates and uploads it once, while cancel writes nothing.
-   It uses `theme.json.name`, never the filename, with no name form.
-2. **Theme editor** shows the explicitly opened custom theme's stylesheet and
-   **Save**. Save replaces only draft CSS, preserving the manifest and assets;
-   it does not publish, select, or update the public revision. Choosing the
-   custom theme's **Use** tile makes saved edits live by publishing and then
-   selecting the same captured Theme ID and owner, including when already in
-   use. Using another tile preserves unrelated unsaved editor input.
+1. **Available themes** is a responsive grid. Custom cards offer **Use**,
+   **Edit**, and per-item **Copy**; built-in cards are read-only and offer
+   **Preview** and **Copy**. Copy immediately copies that saved source without a
+   chooser. **Create theme** opens a local Name/Style/Logo/Header form. **Upload
+   theme ZIP** opens the native ZIP picker; a chosen file uploads once, while
+   cancel writes nothing. The validated manifest name seeds automatic
+   allocation, never the filename.
+2. **Theme editor** edits Name, Style (CSS), Logo, and Header image together.
+   One **Preview** renders all current unsaved fields in isolation; **Save
+   changes** persists the complete form. A new theme remains private and
+   unpublished. An inactive existing theme saves a draft without advancing its
+   published revision or changing selection. Saving a changed active theme also
+   publishes that revision; public pages using it update without another Use
+   action, and the existing selection is preserved.
 
-**Copy theme** first asks for a bundled or owned custom source in the current
-library. It copies saved content, not unsaved editor buffers, and preserves the
-package and complete saved presentation. Choosing/cancelling a source does not
-change the editor or public selection. Confirmed Copy opens the returned new
-private, unpublished, unselected theme. Any unavailable or unauthorized image
-rejects the whole Copy. An uncertain outcome rechecks the library/current
-setting without claiming success, retargeting the editor or automatically
-replaying Copy. Follow site theme is inheritance, not a Copy source.
+**Copy** is a permanent per-item action on eligible bundled and custom cards. It
+copies saved content, not unsaved editor buffers, and preserves the package and
+saved presentation. The confirmed result is a new private, unpublished,
+unselected theme. Any unavailable or unauthorized image rejects the whole Copy.
+An uncertain outcome rechecks owner state without claiming success or
+automatically replaying Copy. Follow site theme is inheritance, not a Copy
+source. Copy leaves the source editor buffer untouched; only after confirmation
+does the editor open the new private copy.
 
-**Preview saved theme** displays the selected built-in or owner-visible custom
-theme in an isolated visual preview. It reads saved content without selecting,
-publishing or applying it. For a custom theme, Save edits first, then preview
-again; unsaved editor text is not previewed. Switching choice/owner or saving
-clears obsolete output; loading and errors never leave another theme's preview
-shown. Preview is explicit rather than eager work for every card or catalog
-refresh, and uses the existing operation-admission limits without automatic
-retries.
+**Preview** renders the complete current editor form—including unsaved Name,
+Style and image choices—in an isolated visual preview. It does not save, publish
+or select. Switching choice/owner or saving clears obsolete output; loading and
+errors never leave another theme's preview shown. Preview is explicit rather
+than eager work for every card or catalog refresh and does not automatically
+retry.
 
 This is a rendered preview, not a packaged PNG thumbnail. Installed Theme
 Packages currently contain no standard thumbnail field; a repository's
-`preview.png` is not a package member. Built-in cards remain immutable and Save
-is disabled, without stale custom CSS. Follow site theme remains inheritance
-guidance, not an installed-theme preview input. Built-in and inheritance Use
+`preview.png` is not a package member. Built-in cards remain immutable and
+read-only, without exposing editable custom CSS. Follow site theme remains
+inheritance guidance, not a theme preview input. Built-in and inheritance Use
 actions change selection only.
 
-**Saved, not live yet** requires a known unused, unpublished custom choice;
-**Currently in use** requires a confirmed matching Theme ID. Unknown state is
-identified explicitly. Publishing an already-used ID advances its public
-revision before the subsequent selection, even if switching fails. Verify
-appearance in a fresh signed-out browser.
+The current-theme summary is based on confirmed reads; unknown reads never imply
+a selected theme. Saving a changed active theme advances its public revision
+directly. Using another custom theme publishes and then selects its captured
+Theme ID; if selection fails after publication, the published revision is not
+rolled back.
 
-**Advanced** is initially closed. It contains empty-draft creation, CSS import,
-complete package editing, presentation Media, isolated preview, export, rename,
-delete, standalone publication and last-published-version selection. Hiding it
-preserves unsaved input. Its `style.css` field and the basic stylesheet editor
-share the same editable CSS, so either shows edits made in the other. Advanced
-create and rename retain their explicit, strict names; Upload always omits its
-optional API name field.
+The **Theme tools** disclosure contains developer-focused package authoring and
+export/import tools; it is separate from the everyday editor. **Images**
+provides explicit presentation-media operations, including header-pool rotation.
+**Published versions** separately selects a custom theme's current published
+version using **Use published version**; it does not publish newer draft edits.
+These tools do not replace the normal form's Preview and Save changes. Upload
+uses the manifest name for automatic allocation; explicit API names remain
+strict.
 
 Catalog labels are trimmed, nonempty, and limited to 100 Unicode scalar values.
 Studio, Terminal and Reader are reserved case-insensitively. Automatic Upload
@@ -103,7 +102,7 @@ endings are literal (`Name 2` copies to `Name 2 2`); only a generated stem may
 shorten to fit the scalar limit. Explicit names never truncate or gain suffixes,
 and invalid names/collisions still reject. Malformed packages still fail. One
 sticky live status reports progress, confirmed success, rejection or uncertainty
-outside Advanced.
+outside the detail disclosures.
 
 The existing multipart import API remains compatible: `scope` and `archive`
 retain their meanings; `name` is optional. Only an omitted `name` defaults from
@@ -215,9 +214,8 @@ exact package. Installed-version metadata or update discovery would require a
 separately designed manifest revision.
 
 Uploading the ZIP into Studio still creates a private, unselected draft. Review
-it and choose **Use this theme** when ready; preview and standalone publication
-remain in Advanced. Repository automation does not import, publish, or select a
-theme.
+and edit it in the normal editor; use its card **Use** action when ready.
+Repository automation does not import, publish, or select a theme.
 
 ## Theme Package format
 
@@ -431,65 +429,58 @@ canonical validation path for a particular Theme Package.
 
 ## Modify a theme
 
-Choosing a catalog entry opens its draft without activation. Open **Advanced**
-to reveal its editor. Closing and reopening Advanced preserves unsaved values
-for that draft; save before changing the catalog entry or scope. Expanded bottom
-controls are reachable by ordinary scrolling and keyboard navigation.
+**Edit** opens a custom theme's editor without activation; **Use** activates the
+custom theme's saved content. Built-in themes are immutable: their card offers
+read-only Preview and Use, and they cannot be edited. The normal editor exposes
+Name, Style (CSS), Logo and Header image together. **Theme tools** holds
+developer-oriented package and management operations; **Images** exposes
+separate presentation-media controls, including header-pool rotation. Expanded
+controls remain reachable by ordinary scrolling and keyboard navigation.
 
-Available operations include:
+The developer **Theme Package** editor changes the manifest, shared stylesheet
+and lossless asset list separately from normal **Save changes**. **Manage
+Theme** contains export, publication and removal actions. Owner Media bindings
+are instance-local and are not included in an exported ZIP.
 
-- **Rename** changes the catalog label without changing the stable Theme ID.
-- **Save CSS** replaces the authored stylesheet while preserving the manifest
-  and package assets.
-- **Save complete draft package** changes `theme.json`, `style.css`, and the
-  lossless asset list together.
-- Presentation controls choose packaged defaults, an explicit package image,
-  owned Media, no image, or an explicit header pool.
-- **Export ZIP** downloads the current editable package. Owner Media bindings
-  are instance-local and are not included.
-
-Draft edits are private. They do not alter the currently published revision or
-public selection. Preview again after every material edit.
+Draft edits remain private until saved. Preview is an explicit read-only render
+of the current unsaved form; saving an inactive theme preserves its prior
+published revision and public selection. For each existing image binding,
+**Keep** preserves its saved value and original ownership/provenance, including
+a valid existing Site binding. **Theme default** restores the packaged default;
+**No image** explicitly hides the image, even when a default exists. Selecting a
+fixed Header image replaces a rotating header-image pool; the UI warns about
+that replacement.
 
 Keep exported, known-good ZIP packages in source control outside Jaunder. That
 provides reviewable history and a portable rollback input; the Studio UI does
 not select historical published revisions directly.
 
-## Publish and deploy
+## Saving, publishing and selecting
 
-**Use this theme**, outside Advanced, performs two existing separate operations:
+The everyday editor's **Save changes** saves the complete form. For an active
+custom theme, a changed saved revision is published immediately and public pages
+using that theme update without a separate Use action. For an inactive existing
+theme, Save changes its draft while preserving the prior published revision and
+selection. Creating a theme starts a private, unpublished theme. Save's
+`applied` receipt describes whether the public revision advanced; `false` does
+not imply the target is inactive.
 
-1. validate and publish the chosen draft as an immutable, content-addressed
-   revision;
-2. only after a confirmed publication acknowledgement, apply that same Theme ID
-   to the captured scope.
+The card's **Use** action for a custom theme publishes its saved draft and then,
+once publication is confirmed, selects the same captured Theme ID and scope.
+Publication and selection are distinct operations and are not atomic:
+publication may succeed even if selection fails. Built-in choices and **Follow
+site theme** change selection only. **Published versions** separately lets the
+user choose an already published revision through **Use published version**; it
+is not an editor Save/Publish action.
 
-Progress reads **Getting your theme ready…**, then **Applying your theme…**;
-only confirmed completion says **Your theme is now in use.** Feedback is shown
-beside the action, with one accessible live status: neutral progress, success
-for confirmation, and error for rejection, uncertainty or local failure. Pending
-controls cannot duplicate the operation or change its target/scope. These
-operations are not atomic: publication can succeed even if applying fails.
-Advanced still provides standalone **Publish** for authoring; it does not itself
-change public selection.
-
-After Review and Use, **Other theme choices** offers explicit **Use studio**,
-**Use terminal**, and **Use reader** recovery actions; User theme also offers
-**Use site theme**. In **Advanced**, **Use a saved version** switches to the
-last published version of a custom theme without preparing its editable draft.
-This expert control appears only when published custom themes are available. Its
-placeholder remains selected when the current theme is bundled, follows the site
-theme, is unknown, or does not match an available published custom theme; the
-separate Current theme summary still reports the actual setting. These paths use
-selection alone, never publication. They are disabled while the current-setting
-read is pending or failed, and during another operation. Selecting an author
-theme affects that author's public routes. Selecting a site theme affects site
-routes and authors using the site theme.
-
-Publishing a new revision of an already selected theme advances its stable Theme
-ID, so public pages adopt the new revision without another selection change.
-Later application failure cannot undo that publication. Explicit publication
-rejection prevents the application step; fix the draft before trying again.
+Pending actions cannot duplicate an operation or change their captured
+scope/target. Confirmed completion is distinguished from rejection and
+indeterminate acknowledgement. Uncertain writes stop chaining; catalog and
+selection are reread for current state, but those reads do not prove the write's
+outcome. Failed rereads leave state unknown. The UI never automatically replays
+a write. Custom public themes do not affect Home or private Studio, which retain
+protected application styling. Selecting a site theme affects site routes and
+authors using the site theme; a User theme affects that author's public routes.
 
 An indeterminate database acknowledgement, lost response, or undecodable
 response after dispatch stops chaining and reports uncertainty, not success,
@@ -501,15 +492,10 @@ or author inheritance uses selection alone and never publishes a custom draft.
 Home and private management retain protected application styling regardless of
 public selection.
 
-For a cautious rollout:
-
-1. export the current known-good package;
-2. save and preview the new draft;
-3. publish during a low-traffic window;
-4. verify from a fresh signed-out browser context;
-5. if necessary, immediately select a built-in theme or another published theme;
-6. re-import the known-good ZIP, publish it, and select it for package-level
-   rollback.
+For a cautious rollout, preserve a known-good Theme Package, edit and preview
+changes before saving, then verify the public result from a fresh signed-out
+browser context. If needed, select a built-in or other published theme as a
+separate recovery action.
 
 Deleting a selected site theme falls back to **Studio**. Deleting a selected
 author theme restores site inheritance. Previously issued immutable CSS and

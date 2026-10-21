@@ -7,12 +7,11 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#theme-management-api-transport`
 - `route:/themes`
 
 `/themes` is an authenticated Studio route. It begins in the session owner's
-author-owned **User theme** setting. Operators use **Editing setting** to
-address either **User theme** or **Site theme** with the same workspace. Both
-stored selections are independent, and User and Site editors retain separate
-page-owned buffers when switching settings. Ordinary users have no ownership
-chooser. The server remains authoritative for the selected scope and returns an
-authorization error if site operations are attempted without operator status.
+User setting. Operators use the **User** and **Site** tabs to address either
+independent setting in one workspace; their editor buffers remain separate when
+switching tabs. Ordinary users see only their User setting. The server remains
+authoritative for selected scope and rejects site operations without operator
+status.
 
 The route loads catalog, selection, draft and presentation data through the
 owner-authorized API. Its custom-theme preview is isolated from Studio: draft
@@ -23,24 +22,25 @@ separate **Create theme** and **Upload theme ZIP** actions remain in the page
 toolbar. No other owner's private catalog is discovered. The entire confirmed
 current tile is highlighted; its primary button is explicitly named **Use
 <theme>** with `aria-pressed` from the confirmed live selection, not the editor
-choice. Unknown reads never invent a current tile. Separate **Edit** and
-**Preview** controls open custom and read-only bundled content without applying
-it; inheritance has no editor or Copy source. Copy is a per-item action for
-eligible bundled/custom themes and uses the saved source directly, without a
-chooser. Expanded semantics identify the explicit editor target without a second
-tile highlight or visible badges. The normal **Theme editor** keeps Name, Style
-and Logo/Header together in one unsaved form. Explicit Preview submits the
-current form to `preview_editor` and renders it in the isolated sandbox without
-writing. Save submits the complete form through `save_editor`: a new theme
-remains private and unpublished; an inactive existing theme updates its draft
-without advancing its public revision; an active theme updates its draft and
-published revision without changing selection. Custom tile Use publishes then
-selects its captured saved Theme ID, even if it is already in use. It never
-replaces an unrelated editor selection or unsaved input. Uploading, opening
-editors and copying saved themes never activate a theme. A confirmed unused
-unpublished choice reads **Saved, not live yet**; a confirmed matching Theme ID
-reads **Currently in use**, with a warning that preparing an already-used theme
-can update public pages. Unknown reads never imply either state.
+choice. Unknown reads never invent a current tile. **Edit** opens a custom
+editor without activation; **Preview** shows a bundled theme read-only. Built-in
+themes are immutable but remain selectable through **Use**; inheritance has no
+editor or Copy source. Copy is a per-item action for eligible bundled/custom
+themes and uses the saved source directly, without a chooser. Expanded semantics
+identify the explicit editor target without a second tile highlight or visible
+badges. The normal **Theme editor** keeps Name, Style and Logo/Header together
+in one unsaved form. Explicit Preview submits the current form to
+`preview_editor` and renders it in the isolated sandbox without writing. Save
+submits the complete form through `save_editor`: a new theme remains private and
+unpublished; an inactive existing theme updates its draft without advancing its
+public revision; an active theme updates its draft and published revision
+without changing selection. Custom tile Use publishes then selects its captured
+saved Theme ID, even if it is already in use. Copy leaves the source editor
+buffer untouched and opens the destination editor only after confirmed
+completion; it does not activate the copied theme. Uploading and opening editors
+never activate a theme. The current-theme summary is based on confirmed reads;
+unknown reads never imply a selected theme. `save_editor`'s `applied=false`
+receipt is not evidence that the target is inactive.
 
 Upload opens the native ZIP picker; choosing a file uploads once, while cancel
 writes nothing. UI Upload always omits multipart `name`. The validated manifest
@@ -48,36 +48,35 @@ name seeds automatic owner-local allocation, never the filename. Copy uses the
 saved catalog label (canonical package name for a bundled theme). A collision or
 reserved base receives the lowest available ` 2`, ` 3`, etc.; existing numeric
 endings are literal. Only generated stems shorten to fit the 100-Unicode-scalar
-limit. Explicit-name API imports and Advanced create/rename stay strict.
+limit. Explicit-name API imports and developer package create/rename stay
+strict.
 
 Copy sends one `copy_theme` request with captured scope and source from that
 theme's per-item action; it does not open a source chooser or modify the editor
 buffer. Copy preserves the latest saved package and presentation, excludes
-unsaved buffers, and creates a private, unpublished, unselected destination.
+unsaved source buffers, and creates a private, unpublished, unselected
+destination. Only after confirmation does the editor open that destination.
 Unavailable or unauthorized image bindings reject the whole operation; no
 partial copy is claimed. Rejection and uncertain acknowledgement remain
-error-like, revalidate catalog/selection once, do not retarget the editor and
-never replay Copy, publish or select. Pending requests block owner switches and
-duplicates; switching settings retains the independent User/Site editor buffers.
+error-like, revalidate catalog/selection once, and never replay Copy, publish or
+select. Pending requests block owner switches and duplicates; switching settings
+retains the independent User/Site editor buffers.
 
 Explicit Edit opens a private draft without changing public selection. Built-in
-choices remain read-only with Save disabled, never exposing stale custom CSS.
-**Preview saved theme** explicitly reads only the selected authorized installed
-BuiltIn/Custom choice through `preview_installed`. The normal editor's explicit
-`preview_editor` instead renders all current unsaved fields in the same semantic
-renderer and titled sandboxed iframe, never inserting custom CSS into Studio.
-This is rendered content, not a packaged thumbnail PNG. Follow site theme has no
-author stylesheet and remains inheritance guidance, not an installed-theme
-preview input. Owner/choice/save-generation guards clear obsolete output and
-reject late results. Loading/error states are local to preview; theme choices
-remain available and no automatic retry or card-wide fanout runs. Advanced is
-initially closed and preserves unsaved inputs when toggled; its hidden controls
-cannot receive keyboard focus. Complete package/Media and expert authoring
-operations are opt-in; basic stylesheet editing and **Save** remain outside the
-disclosure; Use lives on the tile. A single sticky polite live status remains
-visible outside Advanced while scrolling. The standard scroll region makes Save
-and expanded bottom controls reachable, with focus scroll margins protecting
-bottom controls.
+choices remain immutable and read-only, never exposing editable custom CSS.
+Built-in cards offer a read-only **Preview** through `preview_installed`. The
+normal editor's explicit `preview_editor` renders all current unsaved fields in
+the same semantic renderer and titled sandboxed iframe, never inserting custom
+CSS into Studio. This is rendered content, not a packaged thumbnail PNG. Follow
+site theme has no author stylesheet and remains inheritance guidance, not an
+installed-theme preview input. Owner/choice/save-generation guards clear
+obsolete output and reject late results. Loading/error states are local to
+preview; theme choices remain available and no automatic retry or card-wide
+fanout runs. **Theme tools** contains developer package operations; **Images**
+exposes separate presentation-media actions; **Published versions** offers **Use
+published version** independently of the normal Save changes form. A single
+sticky polite live status remains visible while scrolling. The standard scroll
+region makes Save and expanded bottom controls reachable.
 
 ## Endpoint census
 
@@ -127,19 +126,15 @@ setting marks Studio as current, following the existing public-theme resolver
 default. A failed or unread selection never implies that fallback. Failed or
 pending selection reads disable ready-theme recovery actions, never implying
 inheritance. **Use site theme** and explicit bundled **Use** buttons are
-selection-only; **Use a saved version**, inside **Advanced** and only offered
-when published custom themes exist, selects a published custom version without
-preparing edits. Only a matching available published custom ID can select one of
-its options. All other settings select its visible placeholder, while the
-separate Current theme summary continues to report the actual setting. The
-controlled value is reapplied as the option list settles. Mutation feedback uses
-one sticky live region outside Advanced. **Getting your theme ready…** →
-**Applying your theme…** → **Your theme is now in use.** preserves the separate
-stages. Only confirmed completion has success styling; progress is neutral, and
-rejection, uncertainty and local failures use error styling. A single polite,
-atomic live status follows the action that produced it. Other
-confirmed/indeterminate authoring mutations request owner-state rereads rather
-than asserting that those reads succeeded.
+selection-only. **Published versions** separately offers **Use published
+version** when published custom themes exist; it selects an existing version
+without saving or preparing editor changes. Mutation feedback uses one sticky
+live region. **Getting your theme ready…** → **Applying your theme…** → **Your
+theme is now in use.** preserves the separate stages. Only confirmed completion
+has success styling; progress is neutral, and rejection, uncertainty and local
+failures use error styling. A single polite, atomic live status follows the
+action that produced it. Other confirmed/indeterminate authoring mutations
+request owner-state rereads rather than asserting that those reads succeeded.
 
 Installed previews authenticate through the same owner gate, including Site
 operator authorization for built-ins, and return private/no-store data. One
