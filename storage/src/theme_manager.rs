@@ -1029,6 +1029,82 @@ mod tests {
         }
     }
 
+    // guard:no-backend — strict mocks reject corrupt saved Media before any copy storage call.
+    #[tokio::test]
+    async fn copy_rejects_invalid_saved_pool_media_before_writes() {
+        let actor = UserId::from(7);
+        let mut snapshot = copy_fixture();
+        let mut entry = media_pool_entry(actor);
+        entry.media_source = Some("invalid-source".into());
+        snapshot.header_pool.push(entry);
+        let draft = snapshot.draft.clone();
+        let root = tempfile::tempdir().unwrap();
+        let manager = ThemeManager::new(
+            Arc::new(crate::MockThemeStorage::new()),
+            Arc::new(crate::MockMediaStorage::new()),
+            crate::test_support::mock_write_scope(),
+            Arc::new(MediaContentLocks::new(Arc::new(root.path().to_path_buf()))),
+        );
+
+        let error = manager
+            .copy_saved(actor, ThemeOwner::Site, snapshot, draft)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.to_string(), "media binding has invalid source");
+        assert!(
+            error
+                .downcast_ref::<common::media::InvalidMediaSource>()
+                .is_some()
+        );
+        assert_eq!(root.path().read_dir().unwrap().count(), 0);
+    }
+
+    // guard:no-backend — strict mocks reject corrupt saved Media before editor staging or admission.
+    #[tokio::test]
+    async fn editor_rejects_invalid_saved_pool_media_before_writes() {
+        let actor = UserId::from(7);
+        let mut snapshot = copy_fixture();
+        let mut entry = media_pool_entry(actor);
+        entry.media_source = Some("invalid-source".into());
+        snapshot.header_pool.push(entry);
+        let (change, compiled) = editor_change(snapshot);
+        let root = tempfile::tempdir().unwrap();
+        let themes: Arc<dyn ThemeStorage> = Arc::new(crate::MockThemeStorage::new());
+        let scope = crate::test_support::mock_write_scope();
+        let assets = ThemeAssetManager::new(
+            themes.clone(),
+            scope.clone(),
+            Arc::new(root.path().to_path_buf()),
+        );
+        let manager = ThemeManager::new(
+            themes,
+            Arc::new(crate::MockMediaStorage::new()),
+            scope,
+            Arc::new(MediaContentLocks::new(Arc::new(root.path().to_path_buf()))),
+        );
+
+        let error = manager
+            .save_editor(
+                actor,
+                ThemeOwner::Site,
+                change,
+                &assets,
+                &compiled,
+                crate::ThemeQuotaLimits::production(),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.to_string(), "media binding has invalid source");
+        assert!(
+            error
+                .downcast_ref::<common::media::InvalidMediaSource>()
+                .is_some()
+        );
+        assert_eq!(root.path().read_dir().unwrap().count(), 0);
+    }
+
     // guard:no-backend — complete owned pool identity passes through the transactional coordinator.
     #[tokio::test]
     async fn copy_preserves_owned_media_pool_identity_in_one_new_private_entry() {
