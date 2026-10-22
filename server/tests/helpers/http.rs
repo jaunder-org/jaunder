@@ -334,6 +334,7 @@ macro_rules! make_app {
                 write_scope.clone(),
                 std::sync::Arc::clone(&content_locks),
             ));
+            let system_inventory = std::sync::Arc::new(host::system_theme::compile_system_artifact_inventory().expect("compile test startup inventory"));
             let provide_contexts = {
                 let users = users.clone();
                 let sessions = sessions.clone();
@@ -373,6 +374,7 @@ macro_rules! make_app {
                     leptos::prelude::provide_context::<std::sync::Arc<dyn storage::UserConfigStorage>>(user_config.clone());
                     leptos::prelude::provide_context::<std::sync::Arc<dyn storage::SiteConfigStorage>>(site_config.clone());
                     leptos::prelude::provide_context::<std::sync::Arc<dyn storage::ThemeStorage>>(themes.clone());
+                    leptos::prelude::provide_context(system_inventory.clone());
                     leptos::prelude::provide_context::<std::sync::Arc<dyn storage::FeedEventStorage>>(feed_events.clone());
                     leptos::prelude::provide_context(publisher_service.clone());
                     leptos::prelude::provide_context::<std::sync::Arc<dyn web::websub::WebsubPublisher>>(publisher_service.clone());

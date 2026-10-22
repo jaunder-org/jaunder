@@ -201,9 +201,12 @@ test("a theme-hidden Post anchor recovers through Studio", async ({
     const recoveryPage = await page.context().newPage();
     try {
       await goto(recoveryPage, "/themes", { timeout: firstNav });
-      const publicSelection = recoveryPage.getByLabel("Public selection");
-      await publicSelection.selectOption("studio");
-      await expect(publicSelection).toHaveValue("studio");
+      await recoveryPage
+        .getByRole("button", { name: "Use studio", exact: true })
+        .click();
+      await expect(
+        recoveryPage.getByLabel("Current theme", { exact: true }),
+      ).toHaveAttribute("data-theme-selection", "studio");
     } finally {
       await recoveryPage.close();
     }

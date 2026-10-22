@@ -127,6 +127,7 @@ wire_contract! {
     web::themes::GetPresentation => "themes" / "get_presentation",
     web::themes::GetSelection => "themes" / "get_selection",
     web::themes::Create => "themes" / "create",
+    web::themes::CopyTheme => "themes" / "copy_theme",
     web::themes::ImportPackage => "themes" / "import_package",
     web::themes::ImportZip => "themes" / "import_zip",
     web::themes::ImportCss => "themes" / "import_css",
@@ -140,6 +141,9 @@ wire_contract! {
     web::themes::ReplacePool => "themes" / "replace_pool",
     web::themes::Shuffle => "themes" / "shuffle",
     web::themes::Preview => "themes" / "preview",
+    web::themes::PreviewInstalled => "themes" / "preview_installed",
+    web::themes::PreviewEditor => "themes" / "preview_editor",
+    web::themes::SaveEditor => "themes" / "save_editor",
     // The five timeline listings (#714). Their vertical is the whole reason
     // these assertions exist: nothing in source says `timeline`, only the file
     // path does.

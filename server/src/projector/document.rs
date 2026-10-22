@@ -319,7 +319,7 @@ mod tests {
             .find("window.__jaunderWasmFetch = fetch")
             .expect("early fetch");
         let stylesheet = doc
-            .find(r#"<link rel="stylesheet" href="/theme/application">"#)
+            .find(r#"<link rel="stylesheet" href="/theme/application" data-jaunder-application-stylesheet>"#)
             .expect("stylesheet");
         assert!(!doc.contains("/style/"), "{doc}");
         let import = doc.find("import {initMeasured}").expect("glue import");

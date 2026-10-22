@@ -96,7 +96,7 @@ fn shell(glue: &str, wasm: &str) -> String {
     let application_url = application_url();
     format!(
         r#"<script>const __jaunderWasmUrl = "{wasm}"; window.__jaunderWasmFetch = fetch(__jaunderWasmUrl);</script>
-<link rel="stylesheet" href="{application_url}" />
+<link rel="stylesheet" href="{application_url}" data-jaunder-application-stylesheet />
 <script type="module">import {{initMeasured}} from "{glue}"; performance.mark("jaunder.module.before_init"); initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl);</script>"#
     )
 }

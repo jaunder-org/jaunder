@@ -596,10 +596,42 @@ mod tests {
         );
     }
 
+    fn serve_runtime_is_ready(path: &std::path::Path) -> anyhow::Result<bool> {
+        #[derive(serde::Deserialize)]
+        struct RuntimeAddress {
+            port: u16,
+        }
+
+        match std::fs::read(path) {
+            Ok(contents) => {
+                let runtime: RuntimeAddress = serde_json::from_slice(&contents)?;
+                Ok(runtime.port != 0)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    #[test]
+    fn serve_runtime_read_error_is_propagated() {
+        let base = TempDir::new().unwrap();
+        let runtime_path = base.path().join("runtime.json");
+        // A directory cannot be read as a runtime publication, even with root privileges.
+        std::fs::create_dir(&runtime_path).unwrap();
+        let expected = std::fs::read(&runtime_path).unwrap_err();
+        assert_ne!(expected.kind(), std::io::ErrorKind::NotFound);
+
+        let error = serve_runtime_is_ready(&runtime_path).unwrap_err();
+        let source = error.downcast_ref::<std::io::Error>().unwrap();
+        assert_eq!(source.kind(), expected.kind());
+        assert_eq!(source.raw_os_error(), expected.raw_os_error());
+    }
+
     #[tokio::test]
     async fn run_serve_dev_auto_inits() {
         let base = TempDir::new().unwrap();
         let storage = test_storage_args(&base);
+        let runtime_path = storage.storage_path.join("runtime.json");
         let bind: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
         let cli = test_cli(Commands::Serve {
             storage,
@@ -608,10 +640,32 @@ mod tests {
             trusted_proxies: vec![],
         });
 
-        let task = tokio::spawn(run(cli));
+        let mut task = tokio::spawn(run(cli));
 
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // Port zero is a startup reservation; a bound port is published only
+        // after Serve preparation.
+        let ready = async {
+            loop {
+                if serve_runtime_is_ready(&runtime_path)? {
+                    return Ok::<(), anyhow::Error>(());
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        };
+        let readiness = tokio::select! {
+            biased;
+            result = &mut task => panic!("Serve exited before readiness: {result:?}"),
+            result = tokio::time::timeout(std::time::Duration::from_secs(5), ready) => result,
+        };
         task.abort();
+        let shutdown = task.await;
+        assert!(
+            matches!(&shutdown, Err(error) if error.is_cancelled()),
+            "Serve must cancel and join after readiness observation: {shutdown:?}"
+        );
+        readiness
+            .expect("Serve must publish readiness within five seconds")
+            .expect("read Serve runtime readiness");
 
         // Verify that the database was created by auto-init.
         assert!(base.path().join("test.db").exists());

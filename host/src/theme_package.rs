@@ -165,6 +165,7 @@ pub enum ThemePackageError {
 /// Source bytes that passed the closed package validator. Only this module can mint it.
 #[derive(Debug)]
 pub struct ValidatedThemePackage {
+    name: String,
     manifest: Vec<u8>,
     css: Vec<u8>,
     assets: BTreeMap<String, ThemeAsset>,
@@ -342,6 +343,7 @@ pub fn validate_theme_package(
     }
     let source_digest = source_digest(&canonical, &css, &assets);
     Ok(ValidatedThemePackage {
+        name: manifest.name,
         manifest: canonical,
         css,
         assets,
@@ -564,6 +566,12 @@ fn export_package_members<'a>(
 }
 
 impl ValidatedThemePackage {
+    /// The manifest label, validated as nonblank but not as a catalog name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     #[must_use]
     pub fn source_digest(&self) -> [u8; 32] {
         self.source_digest
@@ -1212,10 +1220,31 @@ mod tests {
             "body { color: black; }",
         );
         let validated = validate_theme_package(&package, ThemePackageLimits::default()).unwrap();
+        assert_eq!(validated.name(), "Paper");
         assert_eq!(
             validated.canonical_manifest(),
             br#"{"assets":{},"defaults":{},"name":"Paper","schema":1,"style_contract":1}"#
         );
+    }
+
+    #[test]
+    fn theme_package_name_preserves_validated_manifest_text_and_rejects_blank_names() {
+        let archive = package(
+            r#"{"schema":1,"name":"  紙  ","style_contract":1,"assets":{},"defaults":{}}"#,
+            "body {}",
+        );
+        let validated = validate_theme_package(&archive, ThemePackageLimits::default()).unwrap();
+        assert_eq!(validated.name(), "  紙  ");
+        for name in ["", " \t "] {
+            let manifest = serde_json::json!({
+                "schema": 1, "name": name, "style_contract": 1, "assets": {}, "defaults": {}
+            });
+            let archive = package(&manifest.to_string(), "body {}");
+            assert!(matches!(
+                validate_theme_package(&archive, ThemePackageLimits::default()),
+                Err(ThemePackageError::Manifest(_))
+            ));
+        }
     }
 
     #[test]

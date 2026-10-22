@@ -94,6 +94,21 @@ backup/restore, and PostgreSQL bootstrap, retain their top-level transaction or
 connection ownership. It does not create a distributed transaction across the
 database and filesystem, SMTP, WebSub, or any other remote system.
 
+## Addendum (2026-10-21): Theme Copy and editor scoped capabilities (#1750)
+
+The approved Theme Copy and editor Save work added four audited `ThemeStorage`
+capabilities: `validate_system_copy_source` revalidated installed
+revision/assets; `copy_snapshot` read a coherent saved package and presentation;
+`selection_for_update` serialized the selection read with selection writers for
+conditional publication; and `create_theme_automatic` composed owner-local name
+allocation, quota admission and draft creation. All four used the sealed mutable
+`WriteTransaction` within a caller-owned `WriteScope`, not independent commits
+or internal-capability exclusions. The audit adaptation increased ThemeStorage
+from 18 to 22 methods and the then-current global census from 98 to 102, without
+changing capability, exclusion or bypass rules. The original 48-method Decision
+above remained the historical record. Current state:
+[Storage](../ARCHITECTURE.md#storage).
+
 <!--
 Shipping an ADR includes updating docs/ARCHITECTURE.md (and CONTEXT.md when
 the ubiquitous language changes) in the same change — the view is the home

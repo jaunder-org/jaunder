@@ -15,23 +15,88 @@ async function expectPostActionsTextAlignment(page: Page, post: Locator) {
   await expect(slot).toHaveCount(1);
   await expect(time).toHaveCount(1);
 
-  const anchorName = await slot.evaluate((element) =>
-    (element as HTMLElement).style.getPropertyValue("anchor-name"),
+  const { anchorName, controlIndex, diagnostic } = await slot.evaluate(
+    (element) => {
+      const anchorName = (element as HTMLElement).style.getPropertyValue(
+        "anchor-name",
+      );
+      const controls = Array.from(
+        document.querySelectorAll(".j-post-action-control"),
+      );
+      const compared: string[] = [];
+      // Decide with the original predicate before any additional diagnostic style reads.
+      const controlIndex = controls.findIndex((control) => {
+        const positionAnchor = (
+          getComputedStyle(control) as CSSStyleDeclaration & {
+            positionAnchor: string;
+          }
+        ).positionAnchor;
+        compared.push(positionAnchor);
+        return positionAnchor === anchorName;
+      });
+      if (controlIndex >= 0)
+        return { anchorName, controlIndex, diagnostic: null };
+      const identity = (node: Element | null) =>
+        node ? { tag: node.tagName, id: node.id, class: node.className } : null;
+      const describe = (node: Element) => {
+        const style = getComputedStyle(node);
+        return {
+          node: identity(node),
+          parent: identity(node.parentElement),
+          grandparent: identity(node.parentElement?.parentElement ?? null),
+          article: identity(node.closest("article")),
+          inlineAnchorName: (node as HTMLElement).style.getPropertyValue(
+            "anchor-name",
+          ),
+          inlinePositionAnchor: (node as HTMLElement).style.getPropertyValue(
+            "position-anchor",
+          ),
+          inlineAnchorScope: (node as HTMLElement).style.getPropertyValue(
+            "anchor-scope",
+          ),
+          anchorName: style.getPropertyValue("anchor-name"),
+          positionAnchor: style.getPropertyValue("position-anchor"),
+          anchorScope: style.getPropertyValue("anchor-scope"),
+          display: style.display,
+          connected: node.isConnected,
+        };
+      };
+      return {
+        anchorName,
+        controlIndex,
+        diagnostic: {
+          compared,
+          time: performance.now(),
+          readyState: document.readyState,
+          fonts: document.fonts.status,
+          support: {
+            anchorName: CSS.supports("anchor-name", "--j-post-actions-1"),
+            positionAnchor: CSS.supports(
+              "position-anchor",
+              "--j-post-actions-1",
+            ),
+            anchorScope: CSS.supports("anchor-scope", "all"),
+          },
+          slot: describe(element),
+          controls: controls.map((node) => ({
+            ...describe(node),
+            triggers: Array.from(
+              node.querySelectorAll(".j-post-action-trigger"),
+              identity,
+            ),
+          })),
+        },
+      };
+    },
   );
+  if (controlIndex < 0) {
+    await test.info().attach("post-action-anchor-values", {
+      body: JSON.stringify({ anchorName, controlIndex, diagnostic }, null, 2),
+      contentType: "application/json",
+    });
+  }
   expect(anchorName).toMatch(/^--j-post-actions-\d+$/);
-  const controlIndex = await page.locator(".j-post-action-control").evaluateAll(
-    (controls, anchor) =>
-      controls.findIndex(
-        (control) =>
-          (
-            getComputedStyle(control) as CSSStyleDeclaration & {
-              positionAnchor: string;
-            }
-          ).positionAnchor === anchor,
-      ),
-    anchorName,
-  );
-  expect(controlIndex).toBeGreaterThanOrEqual(0);
+  expect(controlIndex, JSON.stringify(diagnostic)).toBeGreaterThanOrEqual(0);
   const control = page.locator(".j-post-action-control").nth(controlIndex);
   const trigger = control.locator(".j-post-action-trigger");
   await expect(trigger).toHaveText("Actions");

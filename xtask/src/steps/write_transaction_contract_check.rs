@@ -16,7 +16,7 @@ use crate::steps::scan::run_source_scan;
 
 const POLICED_ROOTS: &[&str] = &["storage/src", "server/src", "web/src"];
 
-/// The authoritative, closed application-mutation census. Counts add to 98.
+/// The authoritative, closed application-mutation census. Counts add to 102.
 const AUDITED_TRAITS: &[(&str, &[&str])] = &[
     (
         "AudienceStorage",
@@ -131,13 +131,17 @@ const AUDITED_TRAITS: &[(&str, &[&str])] = &[
         "ThemeStorage",
         &[
             "admit_system_inventory",
+            "validate_system_copy_source",
             "collect_system_content",
             "create_theme",
+            "create_theme_automatic",
+            "copy_snapshot",
             "replace_draft",
             "rename_theme",
             "record_revision",
             "upsert_content_eligibility",
             "set_selection",
+            "selection_for_update",
             "remove_theme",
             "replace_role_binding",
             "replace_header_pool",
@@ -562,6 +566,77 @@ mod tests {
             1,
         );
         assert!(problems(&fixture(&source)).is_none());
+    }
+
+    #[test]
+    fn theme_copy_and_editor_capabilities_are_exactly_audited() {
+        let methods = [
+            "validate_system_copy_source",
+            "create_theme_automatic",
+            "copy_snapshot",
+            "selection_for_update",
+        ];
+        let expected = super::expected_methods("ThemeStorage").unwrap();
+        assert_eq!(expected.len(), 22);
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../storage/src/themes.rs");
+        let file = syn::parse_file(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let declaration = file
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::Item::Trait(item) if item.ident == "ThemeStorage" => Some(item),
+                _ => None,
+            })
+            .unwrap();
+        let source = complete_census().replace(
+            &census(&[("ThemeStorage", expected)]),
+            &quote::ToTokens::to_token_stream(declaration).to_string(),
+        );
+        assert!(problems(&fixture(&source)).is_none());
+        assert_eq!(
+            super::AUDITED_TRAITS
+                .iter()
+                .map(|(_, names)| names.len())
+                .sum::<usize>(),
+            102
+        );
+        for method in methods {
+            assert!(expected.contains(&method));
+            assert!(!super::is_internal_exclusion("ThemeStorage", method));
+            let scoped = format!("async fn {method}(&self, transaction: &mut WriteTransaction);");
+            for replacement in [
+                String::new(),
+                format!("async fn {method}(&self, transaction: &WriteTransaction);"),
+                format!("async fn {method}(&self, other: &mut WriteTransaction);"),
+            ] {
+                let source = complete_census().replacen(&scoped, &replacement, 1);
+                assert!(
+                    problems(&fixture(&source))
+                        .unwrap()
+                        .contains(&format!("ThemeStorage::{method}"))
+                );
+            }
+        }
+        let extra = complete_census().replacen(
+            "trait ThemeStorage {",
+            "trait ThemeStorage { async fn compatibility_write(&self, transaction: &mut WriteTransaction);",
+            1,
+        );
+        assert!(
+            problems(&fixture(&extra))
+                .unwrap()
+                .contains("ThemeStorage::compatibility_write is an unapproved")
+        );
+        let unknown = format!(
+            "{} trait UnknownStorage {{ async fn copy_snapshot(&self, transaction: &mut WriteTransaction); }}",
+            complete_census()
+        );
+        assert!(
+            problems(&fixture(&unknown))
+                .unwrap()
+                .contains("UnknownStorage is an unapproved WriteTransaction trait")
+        );
     }
 
     #[test]

@@ -2901,6 +2901,77 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
     }
 
     #[test]
+    fn e2e_vm_deadline_accounts_for_the_full_lifecycle() {
+        let checks = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../nix/checks.nix"),
+        )
+        .expect("nix/checks.nix");
+        // Evaluate the actual source-owned budget and guard, not a mirrored formula
+        // or a flake/VM derivation (this needs only Nix's primitive evaluator).
+        let budgets = checks
+            .split_once("e2ePlaywrightTimeout =")
+            .expect("inner budget declaration")
+            .1
+            .split_once("# Performance producers")
+            .expect("budget section end")
+            .0;
+        let guard = checks
+            .split_once("    globalTimeout =\n")
+            .expect("VM deadline")
+            .1
+            .split_once("\n\n    nodes.machine")
+            .expect("VM deadline end")
+            .0;
+        for (producer, deadline, accepted) in [
+            ("null", 1920, true),
+            ("null", 1919, false),
+            ("null", 1680, false),
+            ("{}", 6000, true),
+        ] {
+            let expression = format!(
+                "let e2ePlaywrightTimeout ={budgets}\nproducer = {producer}; \
+                 vmGlobalTimeout = {deadline}; in \
+                 [ e2ePlaywrightTimeout e2eLifecycleAllowance e2eDeadlineReserve \
+                 e2eGlobalTimeout ({}) ]",
+                guard.trim().trim_end_matches(';')
+            );
+            let output = std::process::Command::new("nix-instantiate")
+                .args(["--eval", "--strict", "--json", "--expr", &expression])
+                .output()
+                .expect("primitive Nix budget evaluation");
+            assert_eq!(
+                output.status.success(),
+                accepted,
+                "producer={producer} deadline={deadline}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if accepted {
+                let values: serde_json::Value =
+                    serde_json::from_slice(&output.stdout).expect("budget values");
+                assert_eq!(values, serde_json::json!([1500, 300, 120, 1920, deadline]));
+            } else {
+                assert!(String::from_utf8_lossy(&output.stderr).contains("assertion"));
+            }
+        }
+        assert!(checks.contains("vmGlobalTimeout ? e2eGlobalTimeout,"));
+        assert_eq!(
+            checks
+                .matches("timeout=${toString e2ePlaywrightTimeout},")
+                .count(),
+            2
+        );
+        for obligation in [
+            "capture_module.verify_capture_archive(",
+            "assert source_hashes and source_hashes.keys() == source_sizes.keys()",
+            "assert panic_status == 0",
+            "assert not retention_errors",
+            "write_e2e_phase_manifest()",
+        ] {
+            assert!(checks.contains(obligation), "missing {obligation}");
+        }
+    }
+
+    #[test]
     fn e2e_panic_gate_verifies_the_lane_qualified_journal() {
         let checks = std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR"))

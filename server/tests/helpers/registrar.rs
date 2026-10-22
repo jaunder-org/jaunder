@@ -83,6 +83,7 @@ static REGISTRATIONS: LazyLock<()> = LazyLock::new(|| {
     server_fn::axum::register_explicit::<web::themes::GetPresentation>();
     server_fn::axum::register_explicit::<web::themes::GetSelection>();
     server_fn::axum::register_explicit::<web::themes::Create>();
+    server_fn::axum::register_explicit::<web::themes::CopyTheme>();
     server_fn::axum::register_explicit::<web::themes::ImportPackage>();
     server_fn::axum::register_explicit::<web::themes::ImportZip>();
     server_fn::axum::register_explicit::<web::themes::ImportCss>();
@@ -96,6 +97,9 @@ static REGISTRATIONS: LazyLock<()> = LazyLock::new(|| {
     server_fn::axum::register_explicit::<web::themes::ReplacePool>();
     server_fn::axum::register_explicit::<web::themes::Shuffle>();
     server_fn::axum::register_explicit::<web::themes::Preview>();
+    server_fn::axum::register_explicit::<web::themes::PreviewInstalled>();
+    server_fn::axum::register_explicit::<web::themes::PreviewEditor>();
+    server_fn::axum::register_explicit::<web::themes::SaveEditor>();
     server_fn::axum::register_explicit::<web::passkeys::Availability>();
     server_fn::axum::register_explicit::<web::passkeys::StartRegistration>();
     server_fn::axum::register_explicit::<web::passkeys::FinishRegistration>();
@@ -121,4 +125,4 @@ pub fn ensure_server_fns_registered() {
 /// fn in `web/src`; this constant tracks the list; and
 /// `server_fn_wire::every_server_fn_path_is_api_vertical_ident_and_distinct`
 /// checks itself against the constant. Each link is short enough to keep honest.
-pub const REGISTERED_SERVER_FN_COUNT: usize = 102;
+pub const REGISTERED_SERVER_FN_COUNT: usize = 106;

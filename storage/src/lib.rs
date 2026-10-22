@@ -122,7 +122,9 @@ pub use system_themes::{SystemThemeAdmission, SystemThemeContentReference, Syste
 pub use theme_asset_manager::{
     THEME_CONTENT_RETENTION_SECONDS, ThemeAssetError, ThemeAssetManager, ThemeContentReconciliation,
 };
-pub use theme_manager::{ThemeManager, ThemePoolInput, ThemeRoleInput};
+pub use theme_manager::{
+    ThemeEditorChange, ThemeEditorSaved, ThemeManager, ThemePoolInput, ThemeRoleInput,
+};
 pub use themes::*;
 pub use user_config::*;
 pub use users::*;

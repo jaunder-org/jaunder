@@ -525,17 +525,21 @@ Details in the testing section.
   ([structural write scopes and mutation outcomes](adr/0164-structural-write-scopes-and-mutation-outcomes.md)).
   Its explicit `run` boundary supplies a sealed mutable `WriteTransaction`
   capability, never storage lookup or arbitrary SQL. The closed audited
-  application surface has exactly 98 declarations: Audience (5), Email
+  application surface has exactly 102 declarations: Audience (5), Email
   Verification (2), Feed Cache (2), Feed Event (12), Invite (2), Media (2),
   Password Reset (2), Passkey (11), Post (12), Publisher (5), Session (5), Site
-  Config (11), Subscription (2), User Config (2), Theme (18), and User (5).
-  Cross-store account mutations compose these capability-taking primitives as
-  storage-owned functions
+  Config (11), Subscription (2), User Config (2), Theme (22), and User (5).
+  Theme Copy and editor Save include audited source validation
+  (`validate_system_copy_source`), coherent saved-source and serialized
+  selection reads (`copy_snapshot`, `selection_for_update`), and atomic
+  automatic-name, quota and draft creation (`create_theme_automatic`) in the
+  caller's scope. Cross-store account mutations compose these capability-taking
+  primitives as storage-owned functions
   ([account mutations compose storage primitives](adr/0166-account-mutations-compose-storage-primitives.md)).
   Each declaration takes `&mut WriteTransaction`; there are no pool-backed,
   auto-committing, standalone, or compatibility mutation paths. The structural
   gate derives the observed declarations, compares them with the closed
-  98-method list, rejects unknown, missing, and duplicate declarations, and
+  102-method list, rejects unknown, missing, and duplicate declarations, and
   rejects production transaction starts that bypass the
   `WriteScope`/`WriteTransaction` composition. It excludes administrative
   lifecycle work, dialect code, and internal helpers. Callback failure is
@@ -1933,13 +1937,15 @@ one early fetch, the fallback target, and initialization ordering without fixed
 The WASM artifact carries a hard budget
 ([ADR-0106](adr/0106-wasm-raw-size-budget.md)): `cargo xtask validate` resolves
 the manifest's WASM role and fails when its **raw** byte count exceeds
-`WASM_RAW_CEILING_BYTES` (3 200 000 today, `xtask/src/wasm_budget.rs:39`). Raw,
-not compressed, because the artifact is a compiler input rather than a download;
-the ceiling keeps explicit headroom that sits below what the next weaker
-optimisation level would produce, and a unit test asserts that relationship so
-widening it is deliberate. The recalibration required by the
-[proposed Jiff time model](adr/0182-jiff-time-model.md) admits the bundled IANA
-TZDB while retaining that optimisation-level guard.
+`WASM_RAW_CEILING_BYTES` (5,000,000 bytes: decimal 5 MB, not 5 MiB, in
+`xtask/src/wasm_budget.rs`). Raw, not compressed, because the artifact is a
+compiler input rather than a download. The #1750 amendment accepts additional
+feature headroom while preserving the historical 4,009,656-byte achieved
+baseline for drift reporting. The historical weaker optimisation-level sizes now
+fit, so this size ceiling does not guarantee detection of an optimisation
+downgrade; production still uses `wasm-opt -Oz`. Unit tests enforce the
+inclusive limit and failure one byte above it. The higher ceiling is not
+evidence of measured or benign startup/download impact.
 
 ### Module layout — the per-vertical file split
 

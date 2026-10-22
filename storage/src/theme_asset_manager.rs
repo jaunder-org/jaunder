@@ -9,7 +9,9 @@ use std::{collections::BTreeSet, io, path::PathBuf, sync::Arc};
 use common::{
     MutationOutcome,
     ids::ThemeId,
-    theme::{ThemeAssetDigest, ThemeContentDigest, ThemeRevisionDigest, ThemeStylesheetDigest},
+    theme::{
+        Theme, ThemeAssetDigest, ThemeContentDigest, ThemeRevisionDigest, ThemeStylesheetDigest,
+    },
 };
 use host::{system_theme::SystemArtifactInventory, theme_package::CompiledThemeRevision};
 use jiff::Timestamp;
@@ -18,9 +20,9 @@ use thiserror::Error;
 use tokio::{fs, io::AsyncWriteExt};
 
 use crate::{
-    SystemThemeAdmission, ThemeContentCharge, ThemeContentEligibility, ThemeOwner,
-    ThemePackageAsset, ThemePublicationAdmission, ThemeQuotaLimits, ThemeRevision, ThemeStorage,
-    WriteScope, WriteScopeError,
+    SystemThemeAdmission, SystemThemeRevision, ThemeContentCharge, ThemeContentEligibility,
+    ThemeOwner, ThemePackageAsset, ThemePublicationAdmission, ThemeQuotaLimits, ThemeRevision,
+    ThemeStorage, WriteScope, WriteScopeError,
 };
 
 /// The immutable-cache lifetime plus the public document freshness allowance.
@@ -59,6 +61,33 @@ pub enum ThemeAssetError {
     IneligibleContent(ThemeContentDigest),
 }
 
+/// Immutable bytes and their locks survive through the caller's database outcome.
+pub(crate) struct PreparedThemePublication {
+    _locks: Vec<std::fs::File>,
+    installed: Vec<ThemeContentDigest>,
+    pub(crate) revision: ThemeRevision,
+    assets: Vec<ThemePackageAsset>,
+    charges: Vec<ThemeContentCharge>,
+    eligibilities: Vec<ThemeContentEligibility>,
+}
+
+impl PreparedThemePublication {
+    pub(crate) fn admission(
+        &self,
+        owner: ThemeOwner,
+        limits: ThemeQuotaLimits,
+    ) -> ThemePublicationAdmission<'_> {
+        ThemePublicationAdmission {
+            owner,
+            limits,
+            revision: &self.revision,
+            assets: &self.assets,
+            eligibilities: &self.eligibilities,
+            charges: &self.charges,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Blob<'a> {
     digest: ThemeContentDigest,
@@ -86,6 +115,35 @@ impl ThemeAssetManager {
     fn with_unlink_failure_for_test(mut self) -> Self {
         self.fail_unlink_for_test = true;
         self
+    }
+
+    /// Reads one installed built-in stylesheet without applying or republishing it.
+    /// Only eligible digest-verified content may enter the isolated preview.
+    ///
+    /// # Errors
+    ///
+    /// Preserves storage, filesystem and integrity failures; only an absent installed
+    /// revision returns `None`.
+    pub async fn read_system_stylesheet(
+        &self,
+        theme: Theme,
+    ) -> Result<Option<(SystemThemeRevision, Vec<u8>)>, ThemeAssetError> {
+        let Some(revision) = self.themes.system_theme_revision(theme).await? else {
+            return Ok(None);
+        };
+        let Ok(digest) = revision
+            .stylesheet_digest
+            .as_ref()
+            .parse::<ThemeContentDigest>()
+        else {
+            unreachable!("a validated stylesheet digest is a content digest");
+        };
+        if self.themes.content_eligibility(&digest).await?.is_none() {
+            return Err(ThemeAssetError::IneligibleContent(digest));
+        }
+        let bytes = fs::read(self.content_path(digest.as_ref())).await?;
+        Self::verify(&bytes, &digest)?;
+        Ok(Some((revision, bytes)))
     }
 
     /// Reconciles the filesystem with durable serving eligibility before public
@@ -251,17 +309,42 @@ impl ThemeAssetManager {
         limits: ThemeQuotaLimits,
         now_unix_seconds: i64,
     ) -> Result<MutationOutcome<ThemeRevision>, ThemeAssetError> {
-        let blobs = Self::blobs(compiled)?;
-        let _locks = self
-            .acquire_locks(blobs.iter().map(|blob| &blob.digest))
-            .await?;
-        let mut installed = Vec::new();
-        for blob in &blobs {
-            if self.install(blob).await? {
-                installed.push(blob.digest.clone());
+        let prepared = Arc::new(
+            self.prepare_publication(theme_id, compiled, now_unix_seconds)
+                .await?,
+        );
+        let candidate = Arc::clone(&prepared);
+        let themes = Arc::clone(&self.themes);
+        let outcome = self
+            .write_scope
+            .run(move |transaction| {
+                Box::pin(async move {
+                    themes
+                        .admit_publication(transaction, candidate.admission(owner, limits))
+                        .await?;
+                    Ok(candidate.revision.clone())
+                })
+            })
+            .await;
+        match outcome {
+            Ok(outcome) => Ok(outcome),
+            Err(WriteScopeError::Operation(error) | WriteScopeError::Begin(error)) => {
+                self.discard_prepared(&prepared).await;
+                Err(ThemeAssetError::Storage(error))
             }
         }
+    }
 
+    pub(crate) async fn prepare_publication(
+        &self,
+        theme_id: ThemeId,
+        compiled: &CompiledThemeRevision,
+        now_unix_seconds: i64,
+    ) -> Result<PreparedThemePublication, ThemeAssetError> {
+        let blobs = Self::blobs(compiled)?;
+        let locks = self
+            .acquire_locks(blobs.iter().map(|blob| &blob.digest))
+            .await?;
         let revision = Self::revision(theme_id, compiled)?;
         let assets = Self::assets(compiled)?;
         let charges = Self::charges(&blobs)?;
@@ -272,37 +355,30 @@ impl ThemeAssetManager {
                 mime: blob.mime.to_owned(),
                 retained_until_unix_seconds: now_unix_seconds,
             })
-            .collect::<Vec<_>>();
-        let themes = Arc::clone(&self.themes);
-        let outcome = self
-            .write_scope
-            .run(move |transaction| {
-                Box::pin(async move {
-                    themes
-                        .admit_publication(
-                            transaction,
-                            ThemePublicationAdmission {
-                                owner,
-                                limits,
-                                revision: &revision,
-                                assets: &assets,
-                                eligibilities: &eligibilities,
-                                charges: &charges,
-                            },
-                        )
-                        .await?;
-                    Ok(revision)
-                })
-            })
-            .await;
-
-        match outcome {
-            Ok(outcome) => Ok(outcome),
-            Err(WriteScopeError::Operation(error) | WriteScopeError::Begin(error)) => {
-                self.cleanup_newly_installed(&installed).await;
-                Err(ThemeAssetError::Storage(error))
+            .collect();
+        let mut installed = Vec::new();
+        for blob in &blobs {
+            match self.install(blob).await {
+                Ok(true) => installed.push(blob.digest.clone()),
+                Ok(false) => {}
+                Err(error) => {
+                    self.cleanup_newly_installed(&installed).await;
+                    return Err(error);
+                }
             }
         }
+        Ok(PreparedThemePublication {
+            _locks: locks,
+            installed,
+            revision,
+            assets,
+            charges,
+            eligibilities,
+        })
+    }
+
+    pub(crate) async fn discard_prepared(&self, prepared: &PreparedThemePublication) {
+        self.cleanup_newly_installed(&prepared.installed).await;
     }
 
     /// Detaches database eligibility and quota accounting before unlinking an
@@ -872,6 +948,50 @@ mod tests {
                 .await
                 .expect("an absent content path is not an error")
         );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn installed_preview_reads_verified_system_bytes_without_writes(
+        #[case] backend: Backend,
+    ) {
+        use common::theme::Theme;
+        let env = backend.setup().await;
+        let manager = ThemeAssetManager::new(
+            env.themes(),
+            env.write_scope().clone(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+        assert!(
+            manager
+                .read_system_stylesheet(Theme::Studio)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let inventory = host::system_theme::compile_system_artifact_inventory().unwrap();
+        confirmed(manager.install_system(&inventory, 100).await.unwrap());
+        let before = env.themes().system_content_references().await.unwrap();
+        let quotas = env.themes().site_quota().await.unwrap();
+        for package in inventory.themes() {
+            let (revision, bytes) = manager
+                .read_system_stylesheet(package.theme())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(revision.theme, package.theme());
+            assert_eq!(bytes, package.revision().css().bytes());
+        }
+        assert_eq!(
+            env.themes().system_content_references().await.unwrap(),
+            before
+        );
+        assert_eq!(env.themes().site_quota().await.unwrap(), quotas);
+        env.base.close_pool().await;
+        assert!(matches!(
+            manager.read_system_stylesheet(Theme::Studio).await,
+            Err(ThemeAssetError::Storage(sqlx::Error::PoolClosed))
+        ));
     }
 
     #[apply(backends)]
@@ -2255,7 +2375,7 @@ mod tests {
         );
     }
 
-    // guard:no-backend — filesystem materialization fails before any database operation
+    // guard:no-backend — mocked eligibility permits cleanup without database admission
     #[tokio::test]
     async fn materialize_failure_precedes_database_visibility() {
         let fixture = TempDir::new().expect("create fixture");
@@ -2269,7 +2389,20 @@ mod tests {
             .join(digest.as_ref());
         fs::create_dir_all(&path).expect("make target a directory");
         let mut storage = MockThemeStorage::new();
-        storage.expect_content_eligibility().never();
+        let asset_digest = ThemeAssetManager::digest(
+            compiled
+                .assets()
+                .next()
+                .expect("fixture has one PNG asset")
+                .3,
+        )
+        .expect("valid asset digest");
+        let cleanup_digest = asset_digest.clone();
+        storage
+            .expect_content_eligibility()
+            .withf(move |digest| digest == &cleanup_digest)
+            .once()
+            .returning(|_| Ok(None));
         storage.expect_admit_publication().never();
         let manager = ThemeAssetManager::new(
             Arc::new(storage),
@@ -2277,7 +2410,7 @@ mod tests {
             Arc::new(fixture.path().to_path_buf()),
         );
 
-        assert!(
+        assert!(matches!(
             manager
                 .publish(
                     ThemeOwner::Site,
@@ -2286,9 +2419,11 @@ mod tests {
                     limits(i64::MAX),
                     0,
                 )
-                .await
-                .is_err()
-        );
+                .await,
+            Err(ThemeAssetError::Filesystem(_))
+        ));
+        assert!(!manager.content_path(asset_digest.as_ref()).exists());
+        assert!(path.is_dir());
     }
 
     // guard:no-backend — mocked storage isolates confirmed transaction rollback cleanup

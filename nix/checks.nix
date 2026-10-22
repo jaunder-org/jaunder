@@ -175,12 +175,15 @@ e2ePanicGate = backend: identity: ''
 # still run (that is why this uses `execute`, not `succeed`). If the driver's
 # `globalTimeout` expired first it would kill the VM outright and take every
 # diagnostic with it — the exact failure #123/#49 built this path to avoid.
-# The difference is the boot + seed + copy allowance; measured overhead is
-# ~40 s, so 180 s is ~4x headroom. Firefox 151 completes the 258-test suite in
-# 12.5 min alone but exhausted 17 min under the full validation matrix, so the
-# inner budget allows 25 min for that supported concurrent execution path.
+# Outside the full inner cap, allow boot/setup/seed/census, writer shutdown,
+# complete lossless capture + integrity reread, zero-panic and phase export.
+# Observed readiness ~19 s and result-lift ~145 s exclude other lifecycle work;
+# 300 s is a chosen allowance, not a measured bound. A separate 120 s reserve
+# covers variance/unmeasured work without promising completion (#1750).
 e2ePlaywrightTimeout = 1500;
-e2eGlobalTimeout = 1680;
+e2eLifecycleAllowance = 300;
+e2eDeadlineReserve = 120;
+e2eGlobalTimeout = e2ePlaywrightTimeout + e2eLifecycleAllowance + e2eDeadlineReserve;
 e2eSeedTraceTimeout = 30;
 
 # Performance producers seed larger profiles before measuring. Their browser
@@ -680,12 +683,13 @@ mkE2eCheck =
     name = checkName;
 
     # Caller-selected outer budget for boot, seed, execution, and artifact
-    # recovery. The ordinary gate defaults to 28 minutes; performance producers
+    # recovery. The ordinary gate defaults to 32 minutes; performance producers
     # extend it for canonical dataset seeding. Each inner execution timeout must
     # expire first so diagnostics remain recoverable.
     globalTimeout =
       assert e2eSeedTraceTimeout < e2ePlaywrightTimeout;
       assert e2eSeedTraceTimeout < vmGlobalTimeout;
+      assert producer != null || vmGlobalTimeout >= e2ePlaywrightTimeout + e2eLifecycleAllowance + e2eDeadlineReserve;
       vmGlobalTimeout;
 
     nodes.machine =
