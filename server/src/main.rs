@@ -596,13 +596,39 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn run_serve_dev_auto_inits() {
+    fn serve_runtime_is_ready(path: &std::path::Path) -> anyhow::Result<bool> {
         #[derive(serde::Deserialize)]
         struct RuntimeAddress {
             port: u16,
         }
 
+        match std::fs::read(path) {
+            Ok(contents) => {
+                let runtime: RuntimeAddress = serde_json::from_slice(&contents)?;
+                Ok(runtime.port != 0)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    #[test]
+    fn serve_runtime_read_error_is_propagated() {
+        let base = TempDir::new().unwrap();
+        let runtime_path = base.path().join("runtime.json");
+        // A directory cannot be read as a runtime publication, even with root privileges.
+        std::fs::create_dir(&runtime_path).unwrap();
+        let expected = std::fs::read(&runtime_path).unwrap_err();
+        assert_ne!(expected.kind(), std::io::ErrorKind::NotFound);
+
+        let error = serve_runtime_is_ready(&runtime_path).unwrap_err();
+        let source = error.downcast_ref::<std::io::Error>().unwrap();
+        assert_eq!(source.kind(), expected.kind());
+        assert_eq!(source.raw_os_error(), expected.raw_os_error());
+    }
+
+    #[tokio::test]
+    async fn run_serve_dev_auto_inits() {
         let base = TempDir::new().unwrap();
         let storage = test_storage_args(&base);
         let runtime_path = storage.storage_path.join("runtime.json");
@@ -620,15 +646,8 @@ mod tests {
         // after Serve preparation.
         let ready = async {
             loop {
-                match std::fs::read(&runtime_path) {
-                    Ok(contents) => {
-                        let runtime: RuntimeAddress = serde_json::from_slice(&contents)?;
-                        if runtime.port != 0 {
-                            return Ok::<(), anyhow::Error>(());
-                        }
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => return Err(error.into()),
+                if serve_runtime_is_ready(&runtime_path)? {
+                    return Ok::<(), anyhow::Error>(());
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             }

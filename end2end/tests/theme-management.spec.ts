@@ -768,9 +768,28 @@ test("late normal preview cannot cross custom, built-in or inheritance boundarie
     "data-theme",
     "reader",
   );
-  await page
-    .getByRole("button", { name: "Use site theme", exact: true })
-    .click();
+  // Hold owner reconciliation to distinguish selection success from read refresh.
+  const releaseOwnerRead = await stallServerFn(page, "themes/list");
+  const selected = response(page, "select");
+  const ownerRead = page.waitForRequest(
+    (request) => new URL(request.url()).pathname === THEME_ENDPOINTS.list,
+  );
+  const useSite = page.getByRole("button", {
+    name: "Use site theme",
+    exact: true,
+  });
+  try {
+    await useSite.click();
+    expect((await selected).status()).toBe(200);
+    await ownerRead;
+    await expect(frame.contentFrame().locator(".j-root")).toHaveAttribute(
+      "data-theme",
+      "reader",
+    );
+  } finally {
+    releaseOwnerRead();
+  }
+  await expect(useSite).toBeEnabled();
   await expect(frame.contentFrame().locator(".j-root")).toHaveAttribute(
     "data-theme",
     "reader",
@@ -779,6 +798,44 @@ test("late normal preview cannot cross custom, built-in or inheritance boundarie
     "data-theme-selection",
     "inherit",
   );
+});
+
+test("late saved preview cannot return after reopening the same card", async ({
+  page,
+}) => {
+  await signInAsNewUser(page);
+  await goto(page, "/themes");
+  await page
+    .getByRole("button", { name: "Preview reader", exact: true })
+    .click();
+  const release = await stallServerFn(page, "themes/preview_installed");
+  const pending = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/api/themes/preview_installed",
+  );
+  try {
+    await page.getByRole("button", { name: "Preview", exact: true }).click();
+    await expect(
+      page.getByText("Loading saved theme preview…", { exact: true }),
+    ).toBeVisible();
+    await page
+      .getByRole("button", { name: "Preview terminal", exact: true })
+      .click();
+    await page
+      .getByRole("button", { name: "Preview reader", exact: true })
+      .click();
+  } finally {
+    release();
+  }
+  await pending;
+  await expect(
+    page.getByText("Loading saved theme preview…", { exact: true }),
+  ).toHaveCount(0);
+  await expect(page.getByTitle("Saved theme preview")).toHaveCount(0);
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await expect(
+    page.getByTitle("Saved theme preview").contentFrame().locator(".j-root"),
+  ).toHaveAttribute("data-theme", "reader");
 });
 
 test("late personal preview cannot appear in the operator Site workspace", async ({

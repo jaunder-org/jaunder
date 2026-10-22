@@ -52,7 +52,7 @@ impl ThemeChoice {
     }
 }
 
-/// The owner, installed choice and saved-state generation captured for one preview.
+/// The owner, installed choice and validity generation captured for one preview.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PreviewTarget {
     pub scope: OwnershipScope,
@@ -74,7 +74,7 @@ pub fn preview_target(
     })
 }
 
-/// Late reads may only supply output for the exact current owner/choice/save generation.
+/// Late reads may only supply output for the exact current owner/choice validity generation.
 #[must_use]
 pub fn preview_is_current(
     current: Option<PreviewTarget>,
@@ -307,6 +307,8 @@ pub struct ThemePageState {
     pub selected: RwSignal<Option<ThemeChoice>>,
     /// Invalidates every owner-state read after a write acknowledgement.
     pub refresh: Invalidator,
+    // Bundled Theme source is immutable; leaving its owner/card invalidates the snapshot.
+    preview_selection: Invalidator,
     /// The accessible feedback message for the last write.
     pub status: RwSignal<Option<String>>,
     /// Places import feedback beside its picker rather than below Advanced authoring.
@@ -334,6 +336,7 @@ impl Default for ThemePageState {
             scope: RwSignal::new(OwnershipScope::Author),
             selected: RwSignal::new(None),
             refresh: Invalidator::new(),
+            preview_selection: Invalidator::new(),
             status: RwSignal::new(None),
             feedback_in_import: RwSignal::new(false),
             feedback: RwSignal::new(Feedback::Progress),
@@ -443,9 +446,22 @@ impl ThemePageState {
             .then_some((self.scope.get_untracked(), source))
     }
 
+    /// A bundled preview is bound to one visit, not to unrelated owner-read refreshes.
+    #[must_use]
+    pub fn bundled_preview_target(self) -> Option<PreviewTarget> {
+        let choice = self.selected.get();
+        if !matches!(choice, Some(ThemeChoice::Bundled(_))) {
+            return None;
+        }
+        preview_target(self.scope.get(), choice, self.preview_selection.track())
+    }
+
     /// Opening a card only changes the editor; a write in flight holds its context.
     pub fn select_choice(self, choice: ThemeChoice) {
         if !self.pending.get_untracked() {
+            if self.selected.get_untracked() != Some(choice) {
+                self.preview_selection.notify();
+            }
             self.selected.set(Some(choice));
         }
     }
@@ -454,6 +470,9 @@ impl ThemePageState {
     pub fn select_scope(self, scope: OwnershipScope) {
         if self.pending.get_untracked() {
             return;
+        }
+        if self.scope.get_untracked() != scope {
+            self.preview_selection.notify();
         }
         let previous = scope_index(self.scope.get_untracked());
         self.owner_choices
@@ -1034,6 +1053,38 @@ mod tests {
             page.open_copy();
             page.choose_copy(source);
             assert_eq!(page.begin_copy(), Some((OwnershipScope::Site, source)));
+        });
+    }
+
+    #[test]
+    fn bundled_preview_survives_owner_reads_but_not_a_card_or_owner_round_trip() {
+        Owner::new().with(|| {
+            let page = ThemePageState::default();
+            let reader = ThemeChoice::Bundled(common::theme::Theme::Reader);
+            page.select_choice(reader);
+            let completed = page.bundled_preview_target();
+            assert!(completed.is_some());
+            page.refresh.notify();
+            page.select_choice(reader);
+            assert_eq!(page.bundled_preview_target(), completed);
+
+            page.select_choice(ThemeChoice::Bundled(common::theme::Theme::Terminal));
+            page.select_choice(reader);
+            assert!(!super::preview_is_current(
+                page.bundled_preview_target(),
+                completed
+            ));
+            let reopened = page.bundled_preview_target();
+            page.select_scope(OwnershipScope::Site);
+            assert_eq!(page.bundled_preview_target(), None);
+            page.select_scope(OwnershipScope::Author);
+            assert!(!super::preview_is_current(
+                page.bundled_preview_target(),
+                reopened
+            ));
+
+            page.select_choice(ThemeChoice::Custom(common::ids::ThemeId::from(42)));
+            assert_eq!(page.bundled_preview_target(), None);
         });
     }
 

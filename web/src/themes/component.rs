@@ -239,9 +239,7 @@ fn editor_heading(page: ThemePageState, catalog: ThemeCatalogResource) -> String
 
 #[component]
 fn SelectedThemePreview(page: ThemePageState) -> impl IntoView {
-    let target = Signal::derive(move || {
-        page_state::preview_target(page.scope.get(), page.selected.get(), page.refresh.track())
-    });
+    let target = Signal::derive(move || page.bundled_preview_target());
     // Preview shares expensive-operation admission with writes, so reads are explicit,
     // not eager work triggered by every card, Save, publication or catalog refresh.
     let preview = Action::new(|target: &page_state::PreviewTarget| {
