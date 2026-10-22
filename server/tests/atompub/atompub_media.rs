@@ -566,6 +566,193 @@ async fn disabled_upload_is_forbidden_without_media_mutation(#[case] backend: Ba
 
 #[apply(backends)]
 #[tokio::test]
+async fn upload_above_two_mib_honors_configured_limit(#[case] backend: Backend) {
+    use common::media::{MediaSource, UserQuota};
+    let size = 2 * 1024 * 1024 + 1;
+    let env = backend
+        .setup()
+        .media_limits(size.to_string().parse().unwrap(), UserQuota::default())
+        .await;
+    let session = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
+    let storage = TempDir::new().unwrap();
+    let app = make_app!(&env, &storage);
+    let bytes = vec![b'x'; size];
+    let response = app
+        .oneshot(
+            atompub(&session, Method::POST, "media")
+                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .header("slug", "large.bin")
+                .body(Body::from(bytes.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert!(response.headers().get(header::LOCATION).is_some());
+    let entry = body_string(response)
+        .await
+        .parse::<host::atompub::Entry>()
+        .unwrap();
+    assert_eq!(
+        entry.content().unwrap().content_type(),
+        Some("application/octet-stream")
+    );
+    assert!(
+        entry
+            .content()
+            .unwrap()
+            .src()
+            .unwrap()
+            .ends_with("/large.bin")
+    );
+    let records = env
+        .media()
+        .list_media(
+            session.user_id,
+            None,
+            RowLimit::at_most(10),
+            PageOffset::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].size_bytes.value(), i64::try_from(size).unwrap());
+    assert_eq!(records[0].source, MediaSource::Upload);
+}
+
+#[apply(backends_matrix)]
+#[case::below_small_limit(1024, 1023, StatusCode::CREATED)]
+#[case::at_small_limit(1024, 1024, StatusCode::CREATED)]
+#[case::above_small_limit(1024, 1025, StatusCode::PAYLOAD_TOO_LARGE)]
+#[case::above_large_limit(3 * 1024 * 1024, 3 * 1024 * 1024 + 1, StatusCode::PAYLOAD_TOO_LARGE)]
+#[tokio::test]
+async fn upload_enforces_configured_input_boundary(
+    backend: Backend,
+    #[case] limit: usize,
+    #[case] size: usize,
+    #[case] expected: StatusCode,
+) {
+    use common::media::UserQuota;
+    let env = backend
+        .setup()
+        .media_limits(limit.to_string().parse().unwrap(), UserQuota::default())
+        .await;
+    let session = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
+    let storage = TempDir::new().unwrap();
+    let app = make_app!(&env, &storage);
+    let request = atompub(&session, Method::POST, "media").header("slug", "boundary.bin");
+    // An oversized request must be rejected during bounded extraction, before
+    // content-type parsing or the shared preparation/persistence path.
+    let request = if size > limit {
+        request.header(header::CONTENT_TYPE, "invalid")
+    } else {
+        request.header(header::CONTENT_TYPE, "application/octet-stream")
+    };
+    // Unknown-length chunks also obey the bound: extraction must stop at the
+    // oversized chunk, without reading the subsequent broken transport chunk.
+    let body = if size > limit {
+        Body::from_stream(futures_util::stream::iter([
+            Ok::<_, std::io::Error>(axum::body::Bytes::from(vec![b'x'; size])),
+            Err(std::io::Error::other("must not read past the limit")),
+        ]))
+    } else {
+        Body::from(vec![b'x'; size])
+    };
+    let response = app.oneshot(request.body(body).unwrap()).await.unwrap();
+    assert_eq!(response.status(), expected);
+    if expected == StatusCode::PAYLOAD_TOO_LARGE {
+        assert!(response.headers().get(header::LOCATION).is_none());
+        assert_eq!(body_string(response).await, "");
+    }
+    let records = env
+        .media()
+        .list_media(
+            session.user_id,
+            None,
+            RowLimit::at_most(10),
+            PageOffset::default(),
+        )
+        .await
+        .unwrap();
+    if size <= limit {
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].size_bytes.value(), i64::try_from(size).unwrap());
+    } else {
+        assert!(records.is_empty());
+        for dir in ["media/tmp", "media/upload"] {
+            assert!(
+                std::fs::read_dir(storage.path().join(dir))
+                    .unwrap()
+                    .next()
+                    .is_none()
+            );
+        }
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn upload_rejects_unauthorized_large_body_without_persistence(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let session = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
+    let storage = TempDir::new().unwrap();
+    let app = make_app!(&env, &storage);
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .method(Method::POST)
+                .uri(format!("/atompub/{}/media", session.username))
+                .body(Body::from(vec![b'x'; 2 * 1024 * 1024 + 1]))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        env.media()
+            .list_media(
+                session.user_id,
+                None,
+                RowLimit::at_most(10),
+                PageOffset::default()
+            )
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn upload_body_read_failure_is_not_a_size_error(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let session = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
+    let storage = TempDir::new().unwrap();
+    let app = make_app!(&env, &storage);
+    let body = Body::from_stream(futures_util::stream::once(async {
+        Err::<axum::body::Bytes, _>(std::io::Error::other("broken upload transport"))
+    }));
+    let response = app
+        .oneshot(atompub(&session, Method::POST, "media").body(body).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        env.media()
+            .list_media(
+                session.user_id,
+                None,
+                RowLimit::at_most(10),
+                PageOffset::default()
+            )
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn upload_accepts_pdf_content_type(#[case] backend: Backend) {
     let env = backend.setup().media_uploads_enabled(true).await;
     let session = create_user_and_session(
