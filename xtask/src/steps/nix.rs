@@ -1099,7 +1099,46 @@ fn is_e2e_diagnostic_artifact(name: &str) -> bool {
 }
 
 /// Marker freshness matters only to attribution, never to lane reconciliation.
-fn record_e2e_artifact_failure(name: &str, detail: String, failures: &mut Vec<String>) {
+fn e2e_diagnostic_lane(name: &str) -> String {
+    const PREFIXES: &[(&str, &str)] = &[
+        ("duration-budget-manifest-", ".json"),
+        ("playwright-report-", ".json"),
+        ("e2e-lane-manifest-", ".json"),
+        ("producer-input-", ".json"),
+        ("e2e-census-", ".json"),
+        ("e2e-phase-", ".json"),
+        ("playwright-artifacts-", ".tar.gz"),
+        ("capture-", ".tar.gz"),
+        ("jaunder-journal-", ".log"),
+        ("system-journal-", ".log"),
+    ];
+    PREFIXES
+        .iter()
+        .find_map(|(prefix, suffix)| {
+            name.strip_prefix(prefix)?
+                .strip_suffix(suffix)
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "unknown".to_owned())
+}
+
+fn e2e_artifact_failure_detail(name: &str, operation: &str, detail: &str) -> String {
+    format!(
+        "lane {} file {} operation {} failed: {}",
+        e2e_diagnostic_lane(name),
+        name,
+        operation,
+        detail
+    )
+}
+
+fn record_e2e_artifact_failure(
+    name: &str,
+    operation: &str,
+    detail: String,
+    failures: &mut Vec<String>,
+) {
+    let detail = e2e_artifact_failure_detail(name, operation, &detail);
     if name.starts_with("producer-input-") && name.ends_with(".json") {
         let _ = writeln!(
             io::stderr(),
@@ -1145,7 +1184,8 @@ fn clear_authoritative_e2e_inputs(
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => record_e2e_artifact_failure(
                 name,
-                format!("removing {}: {error}", path.display()),
+                "clear-stale-destination",
+                format!("removing {}: {:?}", path.display(), error.kind()),
                 failures,
             ),
         }
@@ -1205,7 +1245,8 @@ fn copy_e2e_diagnostics_with_ops(
             Err(error) => {
                 record_e2e_artifact_failure(
                     name,
-                    format!("removing {}: {error}", to.display()),
+                    "remove-destination",
+                    format!("removing {}: {:?}", to.display(), error.kind()),
                     &mut failures,
                 );
                 continue;
@@ -1216,7 +1257,12 @@ fn copy_e2e_diagnostics_with_ops(
                 if let Err(error) = set_permissions(&to, fs::Permissions::from_mode(0o644)) {
                     record_e2e_artifact_failure(
                         name,
-                        format!("setting permissions on {}: {error}", to.display()),
+                        "set-permissions",
+                        format!(
+                            "setting permissions on {}: {:?}",
+                            to.display(),
+                            error.kind()
+                        ),
                         &mut failures,
                     );
                 }
@@ -1224,7 +1270,13 @@ fn copy_e2e_diagnostics_with_ops(
             }
             Err(error) => record_e2e_artifact_failure(
                 name,
-                format!("copying {} to {}: {error}", from.display(), to.display()),
+                "copy",
+                format!(
+                    "copying {} to {}: {:?}",
+                    from.display(),
+                    to.display(),
+                    error.kind()
+                ),
                 &mut failures,
             ),
         }
@@ -1266,7 +1318,8 @@ fn report_diagnostics_copy(outcome: DiagnosticsCopy, stderr: &mut impl Write) ->
     if !outcome.failures.is_empty() {
         let _ = writeln!(
             stderr,
-            "xtask: warning: xtask.nix.e2e_diagnostics: ignored failure(s) while lifting e2e diagnostics"
+            "xtask: warning: xtask.nix.e2e_diagnostics: ignored failure(s) while lifting e2e diagnostics: {}",
+            outcome.failures.join("; ")
         );
     }
     outcome.copied
@@ -3072,73 +3125,215 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
     }
 
     #[test]
-    fn e2e_vm_captures_report_and_manifest_before_asserting_playwright_status() {
-        let checks = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("..")
-                .join("nix")
-                .join("checks.nix"),
-        )
-        .expect("nix/checks.nix");
-        let run_and_capture_arguments = checks
-            .split_once("${e2eRunAndCapture {")
-            .expect("e2eRunAndCapture invocation")
+    fn e2e_phase_timing_helper_nix_indentation_yields_valid_python() {
+        let checks =
+            fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../nix/checks.nix"))
+                .expect("nix/checks.nix");
+        let helper = checks
+            .split_once("e2ePhaseTimingHelpers = backend: browser: identity: ''\n")
+            .expect("production Nix helper start")
             .1
-            .split_once("jaunderDb = backendPolicy.jaunderDb;")
-            .expect("e2eRunAndCapture argument list")
-            .0;
-        assert!(run_and_capture_arguments.contains("expectedCensusTopology"));
-        let report_copy =
-            "cp /tmp/e2e/test-results/results.json /tmp/playwright-report-${identity}.json";
-        let report_grab = r#"_grab("/tmp/playwright-report-${identity}.json")"#;
-        let manifest_copy = "cp /tmp/e2e/test-results/duration-budget-manifest.json \
-                             /tmp/duration-budget-manifest-${identity}.json";
-        let manifest_grab = r#"_grab("/tmp/duration-budget-manifest-${identity}.json")"#;
-        let census_copy = "cp /tmp/e2e/test-results/e2e-expected-census.json \
-                           /tmp/e2e-census-${identity}.json";
-        let gate_start = "gate_started_at = time.monotonic()";
-        let census_grab = r#"_grab("/tmp/e2e-census-${identity}.json")"#;
-        let assertion = "assert pw_status == 0";
-
-        let report_copy_at = checks.find(report_copy).expect("report is copied");
-        let report_grab_at = checks.find(report_grab).expect("report is lifted");
-        let manifest_copy_at = checks.find(manifest_copy).expect("manifest is copied");
-        let manifest_grab_at = checks.find(manifest_grab).expect("manifest is lifted");
-        let census_copy_at = checks
-            .find(census_copy)
-            .expect("preflight census is preserved");
-        let gate_start_at = checks.find(gate_start).expect("Playwright gate starts");
-        let census_grab_at = checks.find(census_grab).expect("census is lifted");
-        let assertion_at = checks
-            .find(assertion)
-            .expect("Playwright status is asserted");
-
-        assert!(report_copy_at < report_grab_at && report_grab_at < assertion_at);
-        assert!(manifest_copy_at < manifest_grab_at && manifest_grab_at < assertion_at);
-        assert!(census_copy_at < gate_start_at);
-        assert!(gate_start_at < census_grab_at && census_grab_at < assertion_at);
-        let producer_before = checks
-            .find("cp ${producerInput} /tmp/e2e/producer-input.json")
-            .expect("producer marker before browser");
-        let producer_lift = checks
-            .find(r#"machine.copy_from_machine("/tmp/producer-input-${identity}.json", "")"#)
-            .expect("producer marker retained");
-        assert!(producer_before < gate_start_at);
-        assert!(gate_start_at < producer_lift && producer_lift < assertion_at);
-        assert!(checks.contains("revision = self.rev or null;"));
-        assert!(checks.contains("JAUNDER_E2E_PRODUCER_INPUT=/tmp/e2e/producer-input.json"));
-        assert!(!checks.contains("/var/lib/jaunder/capture/producer-input"));
-        let writers_stopped = checks
-            .find("retention_errors = stop_e2e_capture_writers()")
-            .expect("capture writers drain before retention");
-        let capture_retained = checks
-            .find("retention_errors.extend(retain_e2e_capture())")
-            .expect("complete capture retained");
-        assert!(writers_stopped < capture_retained && capture_retained < assertion_at);
+            .split_once("\n'';\n\ne2eRunAndCapture")
+            .expect("production Nix helper end")
+            .0
+            .replace("${backend}", "sqlite")
+            .replace("${browser}", "chromium")
+            .replace("${identity}", "sqlite-chromium-unsplit");
+        let expression = format!("''\n{helper}\n''");
+        let evaluated = std::process::Command::new("nix-instantiate")
+            .args(["--eval", "--strict", "--json", "--expr", &expression])
+            .output()
+            .expect("evaluate production Nix indented string");
         assert!(
-            checks.contains("for service in [\"jaunder.service\", \"otel-collector.service\"]:")
+            evaluated.status.success(),
+            "Nix evaluation failed: {}",
+            String::from_utf8_lossy(&evaluated.stderr)
         );
-        assert!(checks.contains("machine.state_dir / \"xchg\""));
+        let generated: String =
+            serde_json::from_slice(&evaluated.stdout).expect("evaluated Python script string");
+        let syntax = std::process::Command::new("python3")
+            .args(["-c", "import ast, sys; ast.parse(sys.argv[1])", &generated])
+            .output()
+            .expect("validate Nix-generated Python syntax");
+        assert!(
+            syntax.status.success(),
+            "Nix-generated Python is invalid: {}",
+            String::from_utf8_lossy(&syntax.stderr)
+        );
+    }
+
+    #[test]
+    fn e2e_result_capture_helper_exercises_source_transport_and_failure_precedence() {
+        let checks =
+            fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../nix/checks.nix"))
+                .expect("nix/checks.nix");
+        let helper = checks
+            .split_once("  # BEGIN result capture helper\n")
+            .expect("capture helper start")
+            .1
+            .split_once("  # END result capture helper")
+            .expect("capture helper end")
+            .0;
+        let script = r#"
+import json
+import os
+import shlex
+import shutil
+import subprocess
+import tempfile
+
+namespace = {"json": json, "shlex": shlex}
+exec("\n".join(line[2:] if line.startswith("  ") else line for line in __HELPER__.splitlines()), namespace)
+capture = namespace["capture_result_file"]
+assert_capture_outcome = namespace["assert_capture_outcome"]
+
+class Machine:
+  def __init__(self, root, fail_inspection=False, fail_stage=False, fail_output=False):
+    self.root = root
+    self.output = os.path.join(root, "retained")
+    os.makedirs(self.output, exist_ok=True)
+    self.fail_inspection = fail_inspection
+    self.fail_stage = fail_stage
+    self.fail_output = fail_output
+  def execute(self, command):
+    if command.startswith("python3 -c ") and self.fail_inspection:
+      return (2, "injected inspect failure")
+    if command.startswith("cp -- ") and self.fail_stage:
+      return (1, "injected stage failure")
+    result = subprocess.run(command, shell=True, capture_output=True, text=True)
+    return (result.returncode, result.stdout if result.returncode == 0 else result.stderr)
+  def copy_from_machine(self, path, target):
+    if self.fail_output:
+      raise OSError("injected output copy failure")
+    shutil.copyfile(path, os.path.join(self.output, os.path.basename(path)))
+
+with tempfile.TemporaryDirectory() as root:
+  def paths(name, payload):
+    source = os.path.join(root, name + ".source")
+    guest = os.path.join(root, name + ".guest")
+    with open(source, "wb") as stream:
+      stream.write(payload)
+    return source, guest
+
+  source, guest = paths("empty-ok", b"")
+  errors = []
+  result = capture(Machine(root), "sqlite-firefox-ordinary-1-of-2", "results.json", source, guest, errors)
+  assert result["source"]["condition"] == "empty"
+  assert result["source_to_guest"]["outcome"] == "copied"
+  assert result["guest_to_output"]["outcome"] == "copied", result
+  assert os.path.getsize(os.path.join(root, "retained", os.path.basename(guest))) == 0
+  assert not errors
+
+  source, guest = paths("empty-stage-fail", b"")
+  errors = []
+  result = capture(Machine(root, fail_stage=True), "sqlite-chromium-unsplit", "results.json", source, guest, errors)
+  assert result["source"]["condition"] == "empty"
+  assert result["source_to_guest"]["outcome"] == "copy-error"
+  assert result["guest_to_output"]["outcome"] == "not-applicable"
+  assert "lane sqlite-chromium-unsplit file results.json operation source-to-guest copy" in errors[0]
+
+  malformed = b"{\"partial\":"
+  source, guest = paths("malformed", malformed)
+  errors = []
+  result = capture(Machine(root), "sqlite-firefox-ordinary-1-of-2", "results.json", source, guest, errors)
+  assert result["source"]["condition"] == "nonempty"
+  assert open(os.path.join(root, "retained", os.path.basename(guest)), "rb").read() == malformed
+
+  missing = os.path.join(root, "does-not-exist")
+  result = capture(Machine(root), "sqlite-firefox-ordinary-1-of-2", "results.json", missing, guest, [])
+  assert result["source"]["condition"] == "missing"
+  assert result["source_to_guest"]["outcome"] == "not-applicable"
+  required_errors = []
+  capture(Machine(root), "sqlite-firefox-ordinary-1-of-2", "e2e-expected-census.json", missing, guest, required_errors, required=True)
+  assert "required source is missing" in required_errors[0]
+
+  source, guest = paths("empty-output-fail", b"")
+  errors = []
+  result = capture(Machine(root, fail_output=True), "sqlite-firefox-ordinary-1-of-2", "results.json", source, guest, errors)
+  assert result["source"]["condition"] == "empty"
+  assert result["guest_to_output"]["outcome"] == "copy-error"
+
+  source, guest = paths("inspection-error", b"data")
+  errors = []
+  result = capture(Machine(root, fail_inspection=True), "sqlite-firefox-ordinary-1-of-2", "results.json", source, guest, errors)
+  assert result["source"]["condition"] == "inspection-error"
+  assert "operation source inspection" in errors[0]
+
+  source, guest = paths("output-fail", b"{\"ok\":true}")
+  errors = []
+  result = capture(Machine(root, fail_output=True), "sqlite-firefox-ordinary-1-of-2", "results.json", source, guest, errors)
+  assert result["source_to_guest"]["outcome"] == "copied"
+  assert result["guest_to_output"]["outcome"] == "copy-error"
+  assert "operation guest-to-output copy" in errors[0]
+
+  try:
+    assert_capture_outcome(9, ["ancillary lift failed"], "sqlite-chromium-unsplit")
+  except AssertionError as error:
+    assert "Playwright failed (exit 9)" in str(error)
+    assert "capture retention failed" not in str(error)
+  else:
+    raise AssertionError("Playwright failure was lost")
+  try:
+    assert_capture_outcome(0, ["required lift failed"], "sqlite-chromium-unsplit")
+  except AssertionError as error:
+    assert "capture retention failed" in str(error)
+  else:
+    raise AssertionError("successful Playwright hid required lift failure")
+print("actual result-capture helper cases passed")
+"#
+        .replace("__HELPER__", &format!("{helper:?}"));
+        let output = std::process::Command::new("python3")
+            .args(["-B", "-c", &script])
+            .output()
+            .expect("launch capture helper harness");
+        assert!(
+            output.status.success(),
+            "capture helper harness failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout)
+                .contains("actual result-capture helper cases passed")
+        );
+    }
+
+    #[test]
+    fn e2e_vm_routes_result_files_through_capture_receipt_before_verdict() {
+        let checks =
+            fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../nix/checks.nix"))
+                .expect("nix/checks.nix");
+        let result_helper = checks
+            .find("# BEGIN result capture helper")
+            .expect("actual capture helper");
+        let census_capture = result_helper
+            + checks[result_helper..]
+                .find("/tmp/e2e/test-results/e2e-expected-census.json")
+                .expect("configured census source");
+        let gate_start = checks
+            .find("gate_started_at = time.monotonic()")
+            .expect("Playwright starts");
+        let report_capture = gate_start
+            + checks[gate_start..]
+                .find("/tmp/e2e/test-results/results.json")
+                .expect("Playwright report capture");
+        let duration_capture = report_capture
+            + checks[report_capture..]
+                .find("/tmp/e2e/test-results/duration-budget-manifest.json")
+                .expect("duration report capture");
+        let assertion = gate_start
+            + checks[gate_start..]
+                .find("assert_capture_outcome(pw_status, retention_errors")
+                .expect("Playwright/capture verdict policy");
+        assert!(result_helper < census_capture && census_capture < gate_start);
+        assert!(gate_start < report_capture && report_capture < duration_capture);
+        assert!(duration_capture < assertion);
+        assert!(checks.contains("\"result_captures\": e2e_result_captures"));
+        assert!(checks.contains("\"condition\": \"not-applicable\""));
+        assert!(checks.contains("/tmp/playwright-report-${identity}.json"));
+        assert!(checks.contains("/tmp/duration-budget-manifest-${identity}.json"));
+        assert!(checks.contains("/tmp/e2e-census-${identity}.json"));
+        assert!(checks.contains("retention_errors.extend(retain_e2e_capture())"));
+        assert!(checks.contains("assert panic_status == 0"));
     }
 
     fn generated_seed_trace_helper() -> String {
@@ -3350,13 +3545,33 @@ finally:
     }
 
     #[test]
+    fn e2e_artifact_failure_detail_keeps_cause_for_provenance_and_regular_files() {
+        for name in [
+            "capture-sqlite-firefox-ordinary-1-of-2.tar.gz",
+            "producer-input-sqlite-firefox-ordinary-1-of-2.json",
+        ] {
+            let detail = super::e2e_artifact_failure_detail(
+                name,
+                "copy",
+                "copying retained file: PermissionDenied",
+            );
+            assert!(detail.contains("lane sqlite-firefox-ordinary-1-of-2"));
+            assert!(detail.contains(name));
+            assert!(detail.contains("operation copy failed"));
+            assert!(detail.contains("PermissionDenied"));
+        }
+    }
+
+    #[test]
     fn copy_e2e_diagnostics_between_copies_journal_capture_playwright_and_manifest() {
         let tmp = std::env::temp_dir().join(format!("xtask-j-{}", std::process::id()));
         let src = tmp.join("src");
         let dest = tmp.join("dest");
         std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("jaunder-journal-sqlite.log"), b"j").unwrap();
-        std::fs::write(src.join("playwright-report-sqlite.json"), b"p").unwrap();
+        let malformed_report = b"{\"partial\":";
+        std::fs::write(src.join("playwright-report-sqlite.json"), malformed_report).unwrap();
+        std::fs::write(src.join("e2e-census-sqlite.json"), b"").unwrap();
         std::fs::write(src.join("duration-budget-manifest-sqlite.json"), b"m").unwrap();
         // #123/#49 failure-path artifacts: the trace/screenshot tarball and the
         // full system journal, copied out of the VM before the check is failed.
@@ -3376,12 +3591,21 @@ finally:
 
         assert!(outcome.failures.is_empty(), "{:?}", outcome.failures);
         assert_eq!(
-            outcome.copied, 6,
-            "journal + report + manifest + artifacts tarball + system journal + capture tarball \
+            outcome.copied, 7,
+            "journal + report + census + manifest + artifacts tarball + system journal + capture tarball \
              are copied; unrelated and in-tree artifact names are not"
         );
         assert!(dest.join("jaunder-journal-sqlite.log").exists());
-        assert!(dest.join("playwright-report-sqlite.json").exists());
+        assert_eq!(
+            std::fs::read(dest.join("playwright-report-sqlite.json")).unwrap(),
+            malformed_report
+        );
+        assert_eq!(
+            std::fs::metadata(dest.join("e2e-census-sqlite.json"))
+                .unwrap()
+                .len(),
+            0
+        );
         assert!(dest.join("duration-budget-manifest-sqlite.json").exists());
         assert!(dest.join("playwright-artifacts-sqlite.tar.gz").exists());
         assert!(dest.join("system-journal-sqlite.log").exists());
@@ -3549,18 +3773,35 @@ finally:
 
     #[test]
     fn copy_e2e_diagnostics_reports_a_file_it_could_not_copy() {
-        // A directory squatting on the destination name deterministically makes
-        // replacement fail without depending on host permissions.
+        // Inject a transport error so reporting is exercised independently of
+        // host filesystem permissions.
         let tmp = std::env::temp_dir().join(format!("xtask-copy-fail-{}", std::process::id()));
         let src = tmp.join("src");
         let dest = tmp.join("dest");
         std::fs::create_dir_all(&src).unwrap();
-        std::fs::create_dir_all(dest.join("capture-sqlite.tar.gz")).unwrap();
-        std::fs::write(src.join("capture-sqlite.tar.gz"), b"new").unwrap();
-        let outcome = super::copy_e2e_diagnostics_between(&src, &dest);
+        std::fs::create_dir_all(&dest).unwrap();
+        let name = "capture-sqlite-firefox-ordinary-1-of-2.tar.gz";
+        std::fs::write(src.join(name), b"new").unwrap();
+        let outcome = super::copy_e2e_diagnostics_with_ops(
+            &src,
+            &dest,
+            |_| Ok(()),
+            |_, _| Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+            |_, _| Ok(()),
+        );
         assert_eq!(outcome.copied, 0);
         assert_eq!(outcome.failures.len(), 1, "{:?}", outcome.failures);
-        assert!(outcome.failures[0].contains("capture-sqlite.tar.gz"));
+        assert!(outcome.failures[0].contains(
+            "lane sqlite-firefox-ordinary-1-of-2 file capture-sqlite-firefox-ordinary-1-of-2.tar.gz operation copy failed: copying"
+        ));
+        assert!(outcome.failures[0].contains("PermissionDenied"));
+        let mut stderr = Vec::new();
+        super::report_diagnostics_copy(outcome, &mut stderr);
+        let warning = String::from_utf8(stderr).unwrap();
+        assert!(warning.contains(
+            "lane sqlite-firefox-ordinary-1-of-2 file capture-sqlite-firefox-ordinary-1-of-2.tar.gz operation copy failed: copying"
+        ));
+        assert!(warning.contains("PermissionDenied"));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -3614,6 +3855,7 @@ finally:
             assert_eq!(warning.matches("xtask.nix.e2e_diagnostics").count(), 1);
             assert_eq!(warning.lines().count(), 1);
             assert!(!warning.contains("sensitive"));
+            assert!(warning.contains("PermissionDenied"));
             assert_eq!(serde_json::to_string(&primary).unwrap(), before);
         }
         let _ = std::fs::remove_dir_all(&tmp);
