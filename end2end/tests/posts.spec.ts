@@ -137,18 +137,18 @@ test("authenticated user can create a post through the UI", async ({
 });
 
 test("published Org source blocks are distinct and readable on narrow screens", async ({
+  page,
   registeredPage,
   tracedContext,
 }, testInfo) => {
-  const page = await registeredPage("/posts/new");
-  const summary = await composePost(page, {
+  // Rendering is the subject; arrange the Post before its cold permalink entry.
+  const { permalink } = await createPostViaApi(page, {
     body: "#+TITLE: Code sample\n\nIntro paragraph.\n\n#+begin_src emacs-lisp\n;; source line\n(use-package consult\n  :after (project)\n  :bind (([remap switch-to-buffer] . consult-buffer)))\n#+end_src\n\nOutro paragraph.",
     format: "org",
     audience: "public",
     publish: true,
   });
-  await followPermalink(page, summary);
-  const permalink = new URL(page.url()).pathname;
+  await registeredPage(permalink);
   const body = page.locator(".j-post-body");
   await expect(body).toContainText("Intro paragraph.");
   await expect(body).toContainText("Outro paragraph.");
@@ -257,19 +257,19 @@ for (const fixture of [
   },
 ] as const) {
   test(`${fixture.name} tokens appear on public, Local, and Home`, async ({
+    page,
     registeredPage,
     tracedContext,
   }, testInfo) => {
     setTestBudget(90_000);
-    const page = await registeredPage("/posts/new");
-    const summary = await composePost(page, {
+    // Token rendering needs a saved Post, not a composer interaction.
+    const { permalink } = await createPostViaApi(page, {
       body: fixture.body,
       format: fixture.format,
       audience: "public",
       publish: true,
     });
-    await followPermalink(page, summary);
-    const permalink = new URL(page.url()).pathname;
+    await registeredPage(permalink);
     const code = page.locator(".j-post-body pre code");
     await expect(code).toContainText(fixture.code);
     await expect(code.locator('span[class^="j-syn-"]').first()).toBeVisible();
@@ -1603,18 +1603,16 @@ test("a blurred blank body shows the newtype's own message", async ({
 // #860: the editor carried the same missing body clause — clearing the textarea left
 // Save enabled and silently inert.
 test("clearing the body in the editor disables save", async ({
+  page,
   registeredPage,
 }) => {
   test.slow();
-  // Create a draft, then reach its editor through the in-app permalink and
-  // PostCard Edit hops (#867): the subject is the editor's gate, not a cold boot.
-  const page = await registeredPage("/posts/new");
-  await page.fill(SEL.postBody, "# Gate Test\n\noriginal body");
-  await click(page, SEL.publishButton("false"));
-  await waitForSelector(page, SEL.saveSummary);
-
-  await followPermalink(page, page.locator(SEL.saveSummary));
-  await openEditor(page);
+  // Enter an existing draft directly to isolate the editor's body gate.
+  const { post_id } = await createPostViaApi(page, {
+    body: "# Gate Test\n\noriginal body",
+    publish: false,
+  });
+  await registeredPage(`/posts/${post_id}/edit`);
   await expect(page.locator(SEL.publishButton("true"))).toBeEnabled();
 
   await page.fill(SEL.postBody, "");
@@ -1709,35 +1707,17 @@ test("full composer: narrow layout stays reachable and format round-trips", asyn
   await expectRenderedFormat(page, "org");
 });
 
-test("published post renders at permalink", async ({ registeredPage }) => {
+test("published post renders at permalink", async ({
+  page,
+  registeredPage,
+}) => {
   test.slow();
-  // `composePost` fills the composer in place, so the entry is the composer.
-  const page = await registeredPage("/posts/new");
-  const summary = await composePost(page, {
+  // Make the permalink's cold render the only document entry.
+  const { permalink } = await createPostViaApi(page, {
     body: "# Permalink Story\n\n**hello permalink**",
     publish: true,
   });
-  await expect(summary).toContainText("Post published.");
-
-  const slugAttr = await summary
-    .locator('[data-test="slug-value"]')
-    .getAttribute("data-slug");
-  expect(slugAttr).toBeTruthy();
-
-  const permalinkLink = summary.locator('[data-test="permalink-link"]');
-  await expect(permalinkLink).toBeVisible();
-  const permalinkHref = await permalinkLink.getAttribute("href");
-  expect(permalinkHref).toBeTruthy();
-
-  const targetUrl = permalinkHref!;
-
-  // The cold render of the permalink is what this test asserts, so this load
-  // stays a document load rather than becoming an in-app move (#867).
-  allowSecondBoot(
-    page,
-    "the cold render of the permalink is what this test asserts",
-  );
-  await goto(page, targetUrl);
+  await registeredPage(permalink);
 
   await expect(page.locator("article h1")).toHaveText("Permalink Story");
   await expect(page.locator(".j-post-body")).toContainText("hello permalink");
