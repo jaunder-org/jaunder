@@ -33,7 +33,7 @@ of the approved spec.
     under the checkout; verify `pg_ctl -o` quoting and actual startup/bootstrap
     plus child TCP connectivity under a deeply nested/long TMPDIR. These are
     diagnostic proofs, not broad workload or final certification.
-- [ ] Task 2: Make supported development-shell entry establish the approved
+- [x] Task 2: Make supported development-shell entry establish the approved
       checkout-local TMPDIR contract.
   - Contract: default, CI, and mutants shells use an absolute
     `<checkout>/.xtask/tmp`, deliberately replace inherited entry TMPDIR,

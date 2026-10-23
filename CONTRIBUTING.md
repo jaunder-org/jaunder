@@ -66,6 +66,25 @@ Enter the development shell:
 nix develop
 ```
 
+Enter the default, CI, or mutants shell from the intended Git checkout. At
+entry, their shared startup hook creates and verifies the absolute
+`<checkout>/.xtask/tmp` directory and exports it as `TMPDIR`, deliberately
+replacing any inherited value before provisioning or user commands run. Failure
+to resolve the checkout or create/use that directory visibly stops shell
+startup; there is no `/tmp` fallback. The value stays bound to that entry
+checkout after `cd`; enter a new shell to bind to another checkout. A later
+command-local `TMPDIR=/absolute/override command` still wins for that command
+and its inheriting children.
+
+This routes host-tool temporary files, not their ownership or cleanup. Ignored
+`.xtask/` storage preserves existing unique leaves and cleanup owners; it does
+not collect leftovers. Tools with explicit temporary/output paths (including
+browser profiles and Playwright outputs), Nix daemon/build processes, and
+sandbox storage are not universally redirected. The focused regression
+`cargo test --locked --manifest-path xtask/Cargo.toml --test dev_shell_tmpdir`
+executes the evaluated hooks for all three shells in child Bash processes; it
+does not realize their complete tool environments.
+
 The default `.#default` and `.#ci` shells target `x86_64-linux`,
 `aarch64-linux`, and `aarch64-darwin` (Apple Silicon macOS). The pinned nixpkgs
 no longer supports Intel macOS (`x86_64-darwin`), so the flake does not
