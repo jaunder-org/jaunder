@@ -4324,13 +4324,31 @@ host-only sources are excluded. The broad product, coverage, and
 workspace-doctest source sets remain broad because their semantics require the
 full product graph.
 
-`cargo xtask nix probe-source` protects these boundaries without building them:
-it applies isolated tracked markers and evaluates the `.drv` identities only. It
-fails closed unless a docs marker changes only `static-docs`; a server marker
-changes `static-code` but neither wasm path; a web marker changes `static-code`
-and site but not wasm tests; and `common`/`macros` markers change every
-dependent checked boundary. CI runs this eval-only drift probe. It neither
-realizes outputs nor claims local/remote cache behavior.
+Tooling dependency preparation uses Crane-generated dummy workspaces and a
+file-scoped tools lockfile. Compiler/target/profile/features/configuration and
+native dependencies remain artifact inputs; real local source and embedded data
+remain final-consumer inputs. Nested tools Cargo and archive export/import share
+the repository-root target directory, and ordinary, documentation and
+qualification tool builds require a nonempty dependency archive. They share the
+same preparation/import constructor with `tooling-cargo-artifacts`, a maintained
+Linux-scoped check that executes changed leaf/shared implementations while
+requiring imported external artifacts to be fresh and real local packages to
+rebuild. `static-code` depends on this proof without replacing any compiling
+definition. Imported external artifacts do not justify treating changed local
+code as fresh. Release artifacts remain distinct from dev-profile clippy
+preparation.
+
+`cargo xtask nix probe-source` protects these boundaries by applying isolated
+tracked markers and evaluating `.drv` identities. It fails closed unless a docs
+marker changes only `static-docs`; a server marker changes `static-code` but
+neither wasm path; a web marker changes `static-code` and site but not wasm
+tests; and `common`/`macros` markers change every dependent final-consumer
+boundary. Tooling and shared implementation changes preserve compiled tooling
+dependency identity while invalidating their real consumer; tools
+lock/configuration changes invalidate the dependency graph. CI runs this drift
+probe. It does not build application/check outputs, though evaluation can
+require declared source preparation. Identity stability alone is not
+local/remote cache or compiler freshness evidence.
 
 The full `cargo xtask validate` is still the aggregate ship gate: its `--no-e2e`
 prefix builds both static groups and the Nix-backed test checks, then adds all

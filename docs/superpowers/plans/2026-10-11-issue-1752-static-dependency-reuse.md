@@ -14,9 +14,21 @@ source invalidation, preserved shared tools consumers, reproducible baseline.
 Out: product-cache expansion, per-unit migration, smaller static verdicts,
 custom fingerprints/provenance, host admission/retention owned by #1753.
 
+## Superseding campaign direction
+
+The current user campaign restart README and Manager clarification relayed for
+this corrective assignment supersede the original timing matrix/fixed samples:
+reuse the accepted frozen baseline and ordinary meaningful comparisons. This is
+not a new approval or completion claim. Current delivery is limited to the
+verified release artifact/source correction; benefit remains unestablished. No
+production dev-clippy layer is included. Correctness/configuration admission,
+consumer distinctions, hook-backed candidate verification and CI execution
+remain open as applicable. #1754 remains paused. The spec records the preserved
+campaign evidence provenance.
+
 ## Task outline
 
-- [ ] **Diagnose one real artifact path before choosing the repair.**
+- [x] **Diagnose one real artifact path before choosing the repair.**
   - Trace effective Cargo target/profile/features/configuration and every pinned
     setup/configure hook through tools dependency export and consumer import.
   - Prefer existing archive/log evidence. If unavailable, use a dependency-free
@@ -54,13 +66,16 @@ custom fingerprints/provenance, host admission/retention owned by #1753.
     subject to existing host checks; no release/clippy timing conflation.
   - Spec: acceptance 1, 3–5, 7, 9; no new authoritative subset check.
 - [ ] **Measure, review and hand off the reproducible baseline.**
-  - Both branches require baseline/diagnostic measurements and real-consumer
-    verification. An improved candidate adds matched comparisons and lower-cost
-    proof; the no-change branch does not stop after the dependency-free probe.
-  - Execute the approved measurement ceiling with one restored input per arm,
-    pre-run output validity and recorded resolved-feature graph changes. Stop or
-    postpone contaminated timing; exact commands/windows remain
-    coordinator-owned.
+  - Both branches retain accepted baseline/diagnostic evidence and require
+    real-consumer verification. Use ordinary meaningful comparisons if
+    authorized; the superseded timing matrix is not a prerequisite. The
+    no-change branch does not stop after a dependency-free probe, and benefit
+    remains unestablished without supporting evidence.
+  - Reuse the accepted baseline and authorized ordinary meaningful comparisons;
+    the original matrix/sample ceiling is superseded. Preserve exact source
+    restoration, pre-run output validity and genuinely distinct resolved-feature
+    evidence for correctness. Stop or postpone contaminated timing; no new
+    profiling campaign or performance claim is implied.
   - Use #1753's session observer/evidence with explicit host/Nix attribution
     limits. Its wrapper-free single-job calibration is resource exploration, not
     default/isolated throughput or warm-cache proof. Do not duplicate it.
@@ -69,8 +84,9 @@ custom fingerprints/provenance, host admission/retention owned by #1753.
     revision, exact command/configuration, identities, cache state, measurements
     and real-consumer proof (or explicit unchanged-baseline disposition).
   - Verification: cumulative Standards/Spec review, focused correctness and
-    matched measurement evidence, then applicable final certification. Publish
-    durable conclusions to current docs/issue; retain logs/probes transiently.
+    qualified ordinary comparison/reuse evidence, then applicable final
+    certification. Publish durable conclusions to current docs/issue; retain
+    logs/probes transiently.
   - Spec: acceptance 3, 6–10; final conformance precedes working-doc retirement.
 
 ## Risk checks

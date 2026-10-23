@@ -1,0 +1,16 @@
+[package.metadata.example]
+members = [
+    "client",
+    "web",
+]
+value = "untouched"
+
+[workspace]
+exclude = ["xtask"]
+members = [
+    "common",
+    "host",
+    "macros",
+    "storage",
+]
+resolver = "3"

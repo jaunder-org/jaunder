@@ -1661,9 +1661,19 @@ closed unless docs changes affect only `static-docs`; server changes affect
 `static-code` but neither wasm path; web changes affect `static-code` and
 `.#site` but not `wasm-tests`; and `common`, `macros`, and the shared
 performance contract affect the code, site, and wasm-test boundaries without
-invalidating `static-docs`. CI runs this eval-only drift probe. It neither
-builds outputs nor purges the store, and says nothing about remote-cache
-behavior.
+invalidating `static-docs`. It also protects `devtool` and its compiled tooling
+dependency boundary: implementation edits invalidate the real tool but preserve
+its dependency identity; tools lock/configuration edits invalidate the
+dependency graph. Tooling preparation uses generated dummy sources and a
+file-scoped lockfile, with repository-root target alignment and nonempty archive
+admission for ordinary, documentation and qualification consumers. The
+Linux-scoped `tooling-cargo-artifacts` Nix check uses their shared constructor
+to require imported external freshness and correct changed local behavior;
+`static-code` depends on this maintained proof. Release artifacts are not
+assumed to seed dev-profile clippy. CI runs the identity drift probe; it builds
+no application/check outputs, although evaluation can require declared source
+preparation. It never purges the store. Stable identity is not proof of compiler
+freshness or local/remote realization reuse.
 
 To reproduce the controlled measurements, run one unrecorded
 `devtool run -- cargo xtask --json validate --no-e2e --allow-dirty` warm-up,

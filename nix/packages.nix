@@ -578,15 +578,10 @@ let
     meta.license = pkgs.lib.licenses.gpl3Plus;
     strictDeps = true;
     cargoExtraArgs = "--manifest-path tools/Cargo.toml";
-    cargoLock = "${toolsSrc}/tools/Cargo.lock";
+    cargoLock = ../tools/Cargo.lock;
     postPatch = ''
       ln -sf ../Cargo.lock tools/Cargo.lock
-      substituteInPlace Cargo.toml \
-        --replace-fail '  "client",' "" \
-        --replace-fail '  "csr",' "" \
-        --replace-fail '  "server",' "" \
-        --replace-fail '  "test-support",' "" \
-        --replace-fail '  "web"' "";
+      bash ${./tooling-workspace-patch.sh} Cargo.toml
     '';
     nativeBuildInputs = [ pkgs.pkg-config ];
     buildInputs = [
@@ -606,7 +601,6 @@ let
     src = docsToolsSrc;
     pname = "jaunder-docs-devtool";
     cargoExtraArgs = "--manifest-path tools/Cargo.toml -p devtool --no-default-features";
-    cargoLock = "${docsToolsSrc}/tools/Cargo.lock";
     postPatch = ''
       ln -sf ../Cargo.lock tools/Cargo.lock
     '';
@@ -615,8 +609,11 @@ let
   docsToolsArgs = docsToolsBaseArgs // {
     cargoVendorDir = docsToolsCargoVendorDir;
   };
-  docsToolsCargoArtifacts = craneLib.buildDepsOnly (docsToolsArgs // { dummySrc = docsToolsSrc; });
-  toolsCargoArtifacts = craneLib.buildDepsOnly (toolsArgs // { dummySrc = toolsSrc; });
+  mkToolingCargo = import ./tooling-cargo.nix { inherit craneLib; };
+  # Generated dependency sources and the file-scoped lock keep implementation edits
+  # out of preparation, while every final consumer retains its complete real source.
+  toolsBuild = mkToolingCargo toolsArgs;
+  docsToolsBuild = mkToolingCargo docsToolsArgs;
   toolsOfflineCargoHome = mkOfflineCargoHome {
     name = "jaunder-tools";
     vendorDir = toolsCargoVendorDir;
@@ -634,63 +631,51 @@ let
       cargoExtraArgs =
         "${toolsArgs.cargoExtraArgs} -p devtool"
         + pkgs.lib.optionalString qualification " --features qualification";
-      cargoArtifacts =
+      tooling =
         if qualification then
-          craneLib.buildDepsOnly (
-            toolsArgs
-            // {
-              dummySrc = toolsSrc;
-              inherit cargoExtraArgs;
-            }
-          )
+          mkToolingCargo (toolsArgs // { inherit cargoExtraArgs; })
         else
-          toolsCargoArtifacts;
+          toolsBuild;
     in
-    craneLib.buildPackage (
-      toolsArgs
-      // {
-        inherit cargoArtifacts cargoExtraArgs pname;
-        doCheck = false;
-        installPhase = ''
-          mkdir -p $out/bin
-          cp tools/target/release/devtool $out/bin/devtool
-        '';
-        # `installPhase` copies a host-linked executable directly, bypassing
-        # Crane's normal cargo binary install path. Give the full producer an
-        # ELF runtime closure for its native host dependencies.
-        nativeBuildInputs =
-          toolsArgs.nativeBuildInputs
-          ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
-        postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-          patchelf --add-rpath \
-            "${
-              pkgs.lib.makeLibraryPath [
-                pkgs.openssl
-                pkgs.dav1d
-              ]
-            }" \
-            "$out/bin/devtool"
-        '';
-        doNotPostBuildInstallCargoBinaries = true;
-      }
-    );
+    tooling.buildPackage {
+      inherit cargoExtraArgs pname;
+      doCheck = false;
+      passthru.toolingDependencies = tooling.cargoArtifacts;
+      installPhase = ''
+        mkdir -p $out/bin
+        cp target/release/devtool $out/bin/devtool
+      '';
+      # `installPhase` copies a host-linked executable directly, bypassing
+      # Crane's normal cargo binary install path. Give the full producer an
+      # ELF runtime closure for its native host dependencies.
+      nativeBuildInputs =
+        toolsArgs.nativeBuildInputs
+        ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
+      postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+        patchelf --add-rpath \
+          "${
+            pkgs.lib.makeLibraryPath [
+              pkgs.openssl
+              pkgs.dav1d
+            ]
+          }" \
+          "$out/bin/devtool"
+      '';
+      doNotPostBuildInstallCargoBinaries = true;
+    };
   devtoolBin = mkDevtoolBin { };
   qualificationDevtoolBin = mkDevtoolBin {
     pname = "jaunder-system-artifact-qualification-devtool";
     qualification = true;
   };
-  docsDevtoolBin = craneLib.buildPackage (
-    docsToolsArgs
-    // {
-      cargoArtifacts = docsToolsCargoArtifacts;
-      doCheck = false;
-      installPhase = ''
-        mkdir -p $out/bin
-        cp tools/target/release/devtool $out/bin/devtool
-      '';
-      doNotPostBuildInstallCargoBinaries = true;
-    }
-  );
+  docsDevtoolBin = docsToolsBuild.buildPackage {
+    doCheck = false;
+    installPhase = ''
+      mkdir -p $out/bin
+      cp target/release/devtool $out/bin/devtool
+    '';
+    doNotPostBuildInstallCargoBinaries = true;
+  };
 
   cargo-crap = pkgs.callPackage (
     {
@@ -1210,6 +1195,7 @@ in
       testSupportBin
       devtoolBin
       docsDevtoolBin
+      mkToolingCargo
       cargo-crap
       wasm-bindgen-cli
       wasmTestWebdriverConfig

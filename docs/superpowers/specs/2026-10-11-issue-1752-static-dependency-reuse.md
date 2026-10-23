@@ -26,6 +26,10 @@ dependency path.
 - Preserve workspace-specific offline Cargo homes and hermetic sandbox
   execution. xtask executes only on the host; independent tools/xtask tests
   remain required.
+- Verdict-bearing fixture outputs and the affected static-code parent reject
+  substitution using the existing mechanism; dependency preparations stay
+  cacheable. This does not force reruns of locally valid outputs. CI must retain
+  actual executing-verdict evidence rather than infer it from availability.
 - Dependency preparation must export nonempty artifacts from the target actually
   compiled; consumers import them into the target they actually use. A suspected
   target-directory mismatch is a diagnosis to prove, not an assumed fix.
@@ -41,6 +45,23 @@ dependency path.
 - Generic package/source wiring remains Darwin-compatible. Linux-only static
   authority stays scoped as documented; x86_64-linux measurements do not prove
   macOS behavior or cross-platform artifact reuse.
+
+## Current campaign direction and delivery boundary
+
+The current user campaign restart README (preserved under
+`/home/mdorman/.pi/agent/manager-state/jaunder-7d43b9a1/campaign-1751-evidence/`)
+and the Manager clarification relayed in this corrective assignment supersede
+this document's original timing matrix and fixed sample counts. The frozen
+campaign baseline is accepted: use existing evidence and ordinary meaningful
+comparisons, not a new per-change matrix or profiling campaign. This records
+superseding direction, not a new spec approval or completed acceptance.
+
+Current delivery is narrowed to the verified release tooling artifact/source
+correction. Cost benefit remains **unestablished**. No production dev-clippy
+preparation layer is included; its absence is not proof of a correctness defect.
+Correctness, source/configuration admission, consumer distinctions and final
+verification remain mandatory and open where not yet evidenced. #1754 remains
+paused pending an accepted qualified handoff and explicit resumption.
 
 ## Acceptance
 
@@ -70,30 +91,25 @@ dependency path.
 5. Add maintained regression proof of the changed boundary and actual artifact
    consumption. Extend existing source-closure probes where suitable; an
    identity comparison alone is not proof that Cargo used an exported archive.
-6. Measure the baseline and, when present, a matched improved candidate with the
-   agreed protocol: named revision/configuration, warm no-op, docs, leaf
-   tooling, shared dependency source, one dependency-feature configuration
-   change and owner-operated reuse in a second existing checkout. Record
-   before/after resolved feature graphs: the configuration arm must genuinely
-   change that graph while preserving required defaults/behavior/populations; an
-   already unified feature is invalid. Label configuration invalidation, not a
-   version upgrade. Change exactly one input per arm and restore source bytes
-   between arms; do not purge shared caches or mutate another owner's checkout.
-   Record locally valid output identities before each run. Postpone timing work
-   during uncontrolled competing jobs; a granted window alone is not isolation.
-7. Respect the measurement ceiling: three no-op samples and at most two distinct
-   marker realizations per matched leaf/shared arm, with warm repeats. Reduce
-   expensive arms if first-arm pressure warrants. An executing warm no-op must
-   show freshness/no recompilation of unaffected dependencies. Classify cached
-   final-output lookup separately: it is not compiler-freshness or fresh-verdict
-   proof. Preserve unsuccessful arm outcomes.
-8. Report repetition count/spread, end-to-end wall time, retained/peak scratch,
-   host load/concurrent work and cache state. Attribute evaluation, transfer,
-   unpacking, compilation, linking and verdict execution only where observable;
-   label unavailable phases and sampled-memory limitations explicitly.
-9. An improved candidate demonstrates lower repeated compilation or cost without
-   reducing correctness. Both completion branches report setup/unpacking/scratch
-   tradeoffs and any disproved hypothesis honestly.
+6. Reuse the accepted frozen baseline. Retain named source/configuration and
+   input/output identities for ordinary meaningful comparisons where authorized;
+   no timing matrix or fixed sample count is required. Keep correctness evidence
+   for genuinely distinct resolved feature configurations, not whitespace,
+   lock-format changes or an already unified feature. Preserve required
+   defaults, behavior and populations. Restore source bytes after each
+   perturbation; do not purge caches or mutate another owner's checkout.
+7. Have the existing second checkout's assigned owner verify reuse of an
+   accepted compatible immutable output. Establish local validity before
+   admission; if it is unavailable, stop rather than silently authorize a cold
+   rebuild. Distinguish that reuse from current-source identity, compiler
+   freshness and fresh verdict execution. Preserve failed/unavailable outcomes.
+8. Report actual cache state and observable compilation, import, execution and
+   setup/unpacking/scratch tradeoffs. Ordinary durations are observations, not
+   controlled improvement evidence. Label unavailable attribution explicitly;
+   defer timing work under uncontrolled competing activity.
+9. Never infer benefit from stable identities or cached verdict lookup. Record
+   benefit as unestablished until supported; do not invent improvement or weaken
+   correctness to satisfy a performance claim.
 10. Hand #1754 the baseline source revision, exact release
     command/configuration, source/input/output identities, cache description,
     measurements and real consumer proof. Keep its release comparison distinct
