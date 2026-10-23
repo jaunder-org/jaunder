@@ -364,7 +364,13 @@ mod tests {
 
     #[test]
     fn e2e_provenance_acquisition_failures_are_context_not_absence() {
-        let root = tempfile::tempdir().unwrap();
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let temporary_root = checkout.join(".xtask/tmp");
+        std::fs::create_dir_all(&temporary_root).unwrap();
+        let root = tempfile::tempdir_in(&temporary_root).unwrap();
+        // Keep both reads unavailable despite writable sidecar persistence:
+        // absent local Git metadata blocks discovery of the ancestor checkout.
+        std::fs::write(root.path().join(".git"), "gitdir: unavailable-metadata\n").unwrap();
         let path;
         {
             let mut request = Request::start(root.path(), "test");
