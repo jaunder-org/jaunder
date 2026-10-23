@@ -559,7 +559,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         }
         Command::Pr(sub) => {
             let start = Instant::now();
-            let (operation, number, cfg) = match sub {
+            let (operation, number, cfg, reenqueue) = match sub {
                 PrCommand::Watch {
                     number,
                     interval,
@@ -576,8 +576,10 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                         stop_at_ready: until.is_none(),
                         ..Default::default()
                     },
+                    false,
                 ),
                 PrCommand::Land {
+                    reenqueue,
                     number,
                     interval,
                     timeout,
@@ -591,6 +593,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                         stop_at_ready: false,
                         ..Default::default()
                     },
+                    reenqueue,
                 ),
                 PrCommand::Cleanup { .. } => unreachable!("cleanup dispatches separately"),
             };
@@ -598,7 +601,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             // 2, no report). Every other failure — including `gh` being broken — is
             // a `watcher-error` report, so the outcome that most needs to be legible
             // always reaches the sidecar.
-            let report = pr::execute(number, cfg, operation.is_landing())?;
+            let report = pr::execute(number, cfg, operation.is_landing(), reenqueue)?;
             let mut result = pr::into_result(operation, report, start.elapsed());
             lifecycle::finalize(&mut result, start);
             Ok(result)

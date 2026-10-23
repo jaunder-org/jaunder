@@ -37,7 +37,12 @@ impl PrOperation {
 ///
 /// A four-line shim over [`execute_with`]: everything with a decision in it lives
 /// there, where a fake source, armer, and clock can reach it.
-pub fn execute(number: Option<u64>, cfg: watch::WatchConfig, landing: bool) -> Result<PrReport> {
+pub fn execute(
+    number: Option<u64>,
+    cfg: watch::WatchConfig,
+    landing: bool,
+    reenqueue: bool,
+) -> Result<PrReport> {
     // The event log streams to stderr as it happens, so `--json` keeps stdout to a
     // single parseable document and a human still sees progress live. The same events
     // are serialized into the report, so nothing here is stderr-only.
@@ -55,6 +60,7 @@ pub fn execute(number: Option<u64>, cfg: watch::WatchConfig, landing: bool) -> R
                     number,
                     cfg,
                     landing,
+                    reenqueue,
                 },
                 &mut sink,
             )
@@ -91,6 +97,7 @@ pub fn execute_with<
         number,
         cfg,
         landing,
+        reenqueue,
     } = inv;
     let subject = match source.resolve(number.map(PrNumber)) {
         Ok(s) => s,
@@ -198,7 +205,10 @@ pub fn execute_with<
             armer,
             clock,
             &subject,
-            &snap.head_sha,
+            land::LandRequest {
+                expected_head: &snap.head_sha,
+                reenqueue,
+            },
             cfg,
             sink,
         ));
@@ -332,6 +342,7 @@ mod tests {
             number: Some(731),
             cfg: cfg(),
             landing,
+            reenqueue: false,
         }
     }
 
@@ -385,11 +396,38 @@ mod tests {
                 number: None,
                 cfg: cfg(),
                 landing: false,
+                reenqueue: false,
             },
             &mut |_| {},
         )
         .expect_err("no PR for the branch must bail");
         assert!(err.to_string().contains("feature"), "{err}");
+    }
+
+    #[test]
+    fn reenqueue_dispatch_keeps_the_local_divergence_guard() {
+        for local in ["abc", "local-only"] {
+            let src = FakeSource::new(
+                vec![Ok(open(green())), Ok(open(green())), Ok(merged_snapshot())],
+                queue_rules(),
+            )
+            .with_ejection(Some(ejection("2026-07-30T14:30:00Z")));
+            let armer = SpyArmer::new();
+            let git = GitFacts {
+                branch: Some("feature".into()),
+                head_sha: Some(local.into()),
+            };
+            let mut inv = invocation(&git, true);
+            inv.reenqueue = true;
+            let result = execute_with(&src, &armer, &clock(), inv, &mut |_| {});
+            if local == "abc" {
+                assert_eq!(result.unwrap().outcome, Outcome::Merged);
+                assert_eq!(armer.calls.get(), 1);
+            } else {
+                assert!(result.unwrap_err().to_string().contains("local-only"));
+                assert_eq!(armer.calls.get(), 0);
+            }
+        }
     }
 
     #[test]
@@ -748,6 +786,7 @@ mod tests {
                 number: Some(731),
                 cfg: pending_cfg,
                 landing: false,
+                reenqueue: false,
             },
             &mut |_| {},
         )

@@ -408,6 +408,7 @@ pub(super) fn watch_with_progress<S: PrSource, C: Clock>(
             progress,
             emitted_optional_failure_ids: BTreeSet::new(),
             expected_head: None,
+            acknowledged_ejection: None,
         },
         sink,
     )
@@ -417,6 +418,8 @@ pub(super) struct WatchContinuation<'a> {
     pub progress: Progress,
     pub emitted_optional_failure_ids: BTreeSet<String>,
     pub expected_head: Option<&'a str>,
+    /// Only explicit one-shot recovery may acknowledge a historical failed run.
+    pub acknowledged_ejection: Option<&'a str>,
 }
 
 pub(super) fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
@@ -431,6 +434,7 @@ pub(super) fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
         mut progress,
         mut emitted_optional_failure_ids,
         expected_head,
+        acknowledged_ejection,
     } = continuation;
     let start = clock.now_unix();
     // Saturating: `--timeout` has no upper bound, and an absurd value should mean
@@ -517,8 +521,13 @@ pub(super) fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
             } else {
                 None
             };
+            // Keep the failed verdict intact; only this invocation's acknowledged
+            // run is ineligible to diagnose a new ejection. Fresh failures still end it.
+            let current_ejection = ejection
+                .as_ref()
+                .filter(|run| acknowledged_ejection != Some(run.url.as_str()));
             let classification =
-                classify_snapshot(source, subject, &snap, &req, ejection.as_ref(), &progress)?;
+                classify_snapshot(source, subject, &snap, &req, current_ejection, &progress)?;
             Ok(Polled {
                 required: req,
                 snapshot: snap,
