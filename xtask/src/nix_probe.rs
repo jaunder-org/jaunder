@@ -263,8 +263,8 @@ impl Arm {
                         | Self::ToolsLock,
                     Boundary::Devtool
                 )
-                // Static docs also depends on the docs-profile devtool executable.
-                | (Self::DevtoolSource, Boundary::StaticDocs | Boundary::StaticCode)
+                // Docs and site transitively depend on their devtool executables.
+                | (Self::DevtoolSource, Boundary::StaticDocs | Boundary::StaticCode | Boundary::Site)
                 | (
                     Self::ToolsLock,
                     Boundary::StaticCode | Boundary::Xtask | Boundary::ToolingDependencies
@@ -641,37 +641,75 @@ mod tests {
         changed.static_code = "code-2".to_owned();
         changed.devtool = "devtool-2".to_owned();
         changed.static_docs = "docs-2".to_owned();
+        changed.site = "site-2".to_owned();
         assert_eq!(compare_arm(&base, Arm::DevtoolSource, &changed), Ok(()));
-        let mut stale_docs = changed.clone();
-        stale_docs.static_docs = base.static_docs.clone();
-        assert!(matches!(
-            compare_arm(&base, Arm::DevtoolSource, &stale_docs),
-            Err(ProbeError::MissingChange {
-                boundary: "static-docs",
-                ..
-            })
-        ));
+        for (boundary, stale) in [
+            (
+                "static-docs",
+                DrvPaths {
+                    static_docs: base.static_docs.clone(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "static-code",
+                DrvPaths {
+                    static_code: base.static_code.clone(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "site",
+                DrvPaths {
+                    site: base.site.clone(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "devtool",
+                DrvPaths {
+                    devtool: base.devtool.clone(),
+                    ..changed.clone()
+                },
+            ),
+        ] {
+            assert!(matches!(
+                compare_arm(&base, Arm::DevtoolSource, &stale),
+                Err(ProbeError::MissingChange { boundary: actual, .. }) if actual == boundary
+            ));
+        }
         assert!(matches!(
             compare_arm(&base, Arm::DevtoolSource, &base),
             Err(ProbeError::MissingChange { .. })
         ));
-        let mut unrelated = changed.clone();
-        unrelated.site = "site-2".to_owned();
-        assert!(matches!(
-            compare_arm(&base, Arm::DevtoolSource, &unrelated),
-            Err(ProbeError::UnexpectedChange {
-                boundary: "site",
-                ..
-            })
-        ));
-        changed.tooling_dependencies = "tooling-dependencies-2".to_owned();
-        assert!(matches!(
-            compare_arm(&base, Arm::DevtoolSource, &changed),
-            Err(ProbeError::UnexpectedChange {
-                boundary: "tooling-dependencies",
-                ..
-            })
-        ));
+        for (boundary, unrelated) in [
+            (
+                "wasm-tests",
+                DrvPaths {
+                    wasm_tests: "wasm-2".to_owned(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "xtask",
+                DrvPaths {
+                    xtask: "xtask-2".to_owned(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "tooling-dependencies",
+                DrvPaths {
+                    tooling_dependencies: "tooling-dependencies-2".to_owned(),
+                    ..changed.clone()
+                },
+            ),
+        ] {
+            assert!(matches!(
+                compare_arm(&base, Arm::DevtoolSource, &unrelated),
+                Err(ProbeError::UnexpectedChange { boundary: actual, .. }) if actual == boundary
+            ));
+        }
     }
 
     #[test]
