@@ -24,7 +24,7 @@ of the approved spec.
 
 ## Task outline
 
-- [ ] Task 1: Keep Cargo metadata generation isolated and ephemeral PostgreSQL
+- [x] Task 1: Keep Cargo metadata generation isolated and ephemeral PostgreSQL
       usable with a deeply nested TMPDIR.
   - Contract: generated manifest has a producer-local empty `[workspace]`;
     disable only the unused ephemeral PostgreSQL Unix socket while retaining
