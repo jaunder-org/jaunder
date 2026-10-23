@@ -244,13 +244,14 @@ let
     "tools/csr_bundle"
     "tools/performance"
   ];
+  siteSourceFilter =
+    path: type:
+    cargoTargetSource siteCargoMembers path type || pkgs.lib.hasSuffix "csr/index.html" path;
   siteSrc =
     withWorkspacePlaceholders "jaunder-site-cargo-source"
       (pkgs.lib.cleanSourceWith {
         src = craneLib.path ../.;
-        filter =
-          path: type:
-          cargoTargetSource siteCargoMembers path type || pkgs.lib.hasSuffix "csr/index.html" path;
+        filter = siteSourceFilter;
       })
       [
         "host"
@@ -474,27 +475,41 @@ let
   # (ADR-0141): its lockfile and cargo artifacts stay independent, while the
   # performance producer links the selected typed product-storage closure.
   # Keep `xtask/` absent; it is host-only under ADR-0028.
+  # Share the producer's existing filter with live-checkout admission; do not
+  # duplicate or narrow its broad tooling closure to manufacture cache hits.
+  toolsSourceFilter =
+    path: type:
+    let
+      relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
+    in
+    type == "directory"
+    || relative == "tools/Cargo.lock"
+    || relative == "csr/index.html"
+    # Host system-artifact production needs both Theme Package inputs and
+    # trusted application CSS, not just Cargo-recognized host sources.
+    || relative == "server/assets/jaunder.css"
+    || pkgs.lib.hasPrefix "host/system_theme_sources/" relative
+    || pkgs.lib.hasPrefix "storage/migrations/" relative
+    || cargoMemberSource [ "common" "host" "macros" "storage" ] path type
+    || pkgs.lib.hasPrefix "tools/doctests/testdata/" relative
+    || (pkgs.lib.hasPrefix "tools/" relative && craneLib.filterCargoSources path type);
+  csrSourceAdmits =
+    relative: type:
+    let
+      path = "${toString ../.}/${relative}";
+    in
+    siteSourceFilter path type
+    || toolsSourceFilter path type
+    # Nix expressions and the lock select producer/toolchain/native dependencies,
+    # even when they are not copied into either Cargo source tree.
+    || relative == "flake.nix"
+    || relative == "flake.lock"
+    || pkgs.lib.hasPrefix "nix/" relative;
   toolsSrc =
     withWorkspacePlaceholders "jaunder-tools-cargo-source"
       (pkgs.lib.cleanSourceWith {
         src = craneLib.path ../.;
-        filter =
-          path: type:
-          let
-            relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
-          in
-          type == "directory"
-          || relative == "tools/Cargo.lock"
-          || relative == "csr/index.html"
-          # Host system-artifact production is also a devtool dependency. Keep
-          # its closed Theme Package inputs and trusted application source with
-          # the host crate rather than letting a tool build a partial producer.
-          || relative == "server/assets/jaunder.css"
-          || pkgs.lib.hasPrefix "host/system_theme_sources/" relative
-          || pkgs.lib.hasPrefix "storage/migrations/" relative
-          || cargoMemberSource [ "common" "host" "macros" "storage" ] path type
-          || pkgs.lib.hasPrefix "tools/doctests/testdata/" relative
-          || (pkgs.lib.hasPrefix "tools/" relative && craneLib.filterCargoSources path type);
+        filter = toolsSourceFilter;
       })
       [
         "client"
@@ -837,6 +852,7 @@ let
     }:
     pkgs.runCommand "jaunder-csr-wasm-bundle${pkgs.lib.optionalString (fixture != null) "-${fixture}"}"
       {
+        passthru.sourceAdmits = csrSourceAdmits;
         nativeBuildInputs = [
           devtool
           pkgs.binaryen

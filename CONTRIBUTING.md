@@ -1338,13 +1338,23 @@ cargo xtask test-local -- -p storage site_config_primitives_round_trip
 
 Before compiling or running product tests, `test-local` owns the checkout-local
 `.xtask/host-artifacts.lock` through consumer compilation and resolves one
-absolute `JAUNDER_CSR_BUNDLE_DIR`. Without an explicit input it runs the
-checked-out, locked `build-csr` producer in debug mode and validates the
-complete result, rather than accepting a possibly stale `target/site`. A
-historical local producer took about 620 seconds; this roughly ten-minute
-prerequisite cost also applies to the shared product-test lane in `check` and
-`prepush`. After launcher realization, the product-test work remains host-native
-and does not invoke Nix check derivations.
+absolute `JAUNDER_CSR_BUNDLE_DIR`. Without an explicit input it realizes the
+native-platform `.#csrBundle` from the evaluated checkout and validates the
+complete immutable output (not the incomplete `.#site`). Nix and the configured
+Cachix substituter own artifact identity/reuse; no cached test verdict is used.
+The ordinary `.xtask/csr-bundle` Nix GC root stays protected by the host
+artifact lock through worker compilation and nextest execution. Relevant
+nonignored untracked source/producer/Nix inputs are refused: use `git add -N` or
+`git add` to include them in the Git flake snapshot. Nothing is staged
+automatically; tracked dirty and intent-to-add inputs participate, unrelated
+notes do not. Admission, realization or validation failure prevents consumers,
+without fallback to an older root or `target/site`.
+
+This prerequisite is release-built, so browser debug assertions are omitted and
+a first cache miss can be expensive. Host tests and the actual image worker
+remain debug-built and execute freshly. `check` and `prepush` share this lane;
+`build-csr`, sandbox and default `e2e-local` retain their debug CSR workflows.
+Product-test work remains host-native and invokes no Nix check derivations.
 
 The same lane builds the locked host `jaunder` executable and supplies its
 absolute path as `JAUNDER_TEST_EXECUTABLE` to storage and seeding tests that
