@@ -475,6 +475,7 @@ mod tests {
     async fn run_serve() {
         let base = TempDir::new().unwrap();
         let storage = initialized_storage(&base).await;
+        let runtime_path = storage.storage_path.join("runtime.json");
 
         let bind: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
         let cli = test_cli(Commands::Serve {
@@ -484,12 +485,32 @@ mod tests {
             trusted_proxies: vec![],
         });
 
-        // Spawn-and-abort: this pins the dispatch arm, not the serve loop.
-        let task = tokio::spawn(run(cli));
+        let mut task = tokio::spawn(run(cli));
 
-        // Wait a bit for it to start.
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // A nonzero runtime port observes Serve preparation and listener binding.
+        let ready = async {
+            loop {
+                if serve_runtime_is_ready(&runtime_path)? {
+                    return Ok::<(), anyhow::Error>(());
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        };
+        let readiness = tokio::select! {
+            biased;
+            result = &mut task => panic!("Serve exited before readiness: {result:?}"),
+            result = tokio::time::timeout(std::time::Duration::from_secs(5), ready) => result,
+        };
         task.abort();
+        let shutdown = task.await;
+        // Join before reporting readiness failures, without letting cleanup mask them.
+        readiness
+            .expect("Serve must publish readiness within five seconds")
+            .expect("read Serve runtime readiness");
+        assert!(
+            matches!(&shutdown, Err(error) if error.is_cancelled()),
+            "Serve must cancel and join after readiness observation: {shutdown:?}"
+        );
     }
 
     // Covers the `Commands::CreatePgDb` dispatch arm.
