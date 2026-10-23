@@ -385,39 +385,89 @@ pub fn run(argv: &[String], cwd: Option<PathBuf>, timeout: Option<u64>) -> ! {
 mod tests {
     use super::*;
 
-    fn tmp() -> PathBuf {
+    // Keep the owner through every dependent assertion so captures share the
+    // fixture's ordinary scope-exit and panic-unwind cleanup.
+    fn tmp() -> tempfile::TempDir {
         tempfile::Builder::new()
             .prefix("devtool-run-test.")
             .tempdir()
             .unwrap()
-            .keep()
     }
 
     #[test]
     fn true_succeeds_with_empty_streams() {
-        let cwd = tmp();
-        let (r, code) = execute(&["true".into()], &cwd, None).unwrap();
-        assert_eq!(r.exit_code, Some(0));
-        assert!(r.ok);
-        assert_eq!(code, 0);
-        assert_eq!(r.stdout.bytes, 0);
-        assert_eq!(r.stderr.bytes, 0);
-        assert!(Path::new(&r.stdout.path).exists());
+        let fixture_path = {
+            let fixture = tmp();
+            let cwd = fixture.path();
+            let (r, code) = execute(&["true".into()], cwd, None).unwrap();
+            assert_eq!(r.exit_code, Some(0));
+            assert!(r.ok);
+            assert_eq!(code, 0);
+            assert_eq!(r.stdout.bytes, 0);
+            assert_eq!(r.stderr.bytes, 0);
+            assert!(cwd.is_dir());
+            assert!(Path::new(&r.stdout.path).is_file());
+            assert!(Path::new(&r.stderr.path).is_file());
+            cwd.to_owned()
+        };
+        assert!(
+            !fixture_path.exists(),
+            "fixture must be removed at scope exit"
+        );
     }
 
     #[test]
     fn false_fails_with_exit_one() {
-        let cwd = tmp();
-        let (r, code) = execute(&["false".into()], &cwd, None).unwrap();
-        assert_eq!(r.exit_code, Some(1));
-        assert!(!r.ok);
-        assert_eq!(code, 1);
+        let fixture_path = {
+            let fixture = tmp();
+            let cwd = fixture.path();
+            let (r, code) = execute(&["false".into()], cwd, None).unwrap();
+            assert_eq!(r.exit_code, Some(1));
+            assert!(!r.ok);
+            assert_eq!(code, 1);
+            assert!(cwd.is_dir());
+            assert!(Path::new(&r.stdout.path).is_file());
+            assert!(Path::new(&r.stderr.path).is_file());
+            cwd.to_owned()
+        };
+        assert!(
+            !fixture_path.exists(),
+            "fixture must be removed at scope exit"
+        );
+    }
+
+    #[test]
+    fn fixture_is_removed_on_panic_unwind() {
+        let mut fixture_path = None;
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // The owner must be created inside the unwinding scope.
+            let fixture = tmp();
+            let cwd = fixture.path();
+            fixture_path = Some(cwd.to_owned());
+            let (r, code) = execute(&["printf".into(), "captured\n".into()], cwd, None).unwrap();
+            assert!(r.ok);
+            assert_eq!(code, 0);
+            assert!(cwd.is_dir());
+            assert_eq!(fs::read_to_string(&r.stdout.path).unwrap(), "captured\n");
+            assert!(Path::new(&r.stderr.path).is_file());
+            std::panic::panic_any("fixture cleanup unwind probe");
+        }))
+        .expect_err("the cleanup probe must unwind");
+        assert_eq!(
+            panic.downcast_ref::<&str>(),
+            Some(&"fixture cleanup unwind probe")
+        );
+        assert!(
+            !fixture_path.unwrap().exists(),
+            "unwinding must remove the fixture"
+        );
     }
 
     #[cfg(unix)]
     #[test]
     fn signalled_child_reports_signal_and_shell_exit_code() {
-        let cwd = tmp();
+        let fixture = tmp();
+        let cwd = fixture.path();
         let executable = std::env::current_exe().unwrap();
         let argv = vec![
             executable.to_string_lossy().into_owned(),
@@ -425,7 +475,7 @@ mod tests {
             "run::tests::exit_via_sigterm".into(),
             "--ignored".into(),
         ];
-        let (r, code) = execute(&argv, &cwd, None).unwrap();
+        let (r, code) = execute(&argv, cwd, None).unwrap();
         assert_eq!(r.exit_code, None);
         assert!(!r.ok);
         assert_eq!(r.signal.as_deref(), Some("SIGTERM"));
@@ -443,8 +493,9 @@ mod tests {
 
     #[test]
     fn stdout_bytes_and_lines_counted() {
-        let cwd = tmp();
-        let (r, _) = execute(&["printf".into(), "a\nb\n".into()], &cwd, None).unwrap();
+        let fixture = tmp();
+        let cwd = fixture.path();
+        let (r, _) = execute(&["printf".into(), "a\nb\n".into()], cwd, None).unwrap();
         assert_eq!(r.stdout.bytes, 4);
         assert_eq!(r.stdout.lines, 2);
         assert_eq!(r.stderr.bytes, 0);
@@ -452,8 +503,9 @@ mod tests {
 
     #[test]
     fn stderr_captured_separately() {
-        let cwd = tmp();
-        let (r, _) = execute(&["ls".into(), "/no/such/path/xyzzy".into()], &cwd, None).unwrap();
+        let fixture = tmp();
+        let cwd = fixture.path();
+        let (r, _) = execute(&["ls".into(), "/no/such/path/xyzzy".into()], cwd, None).unwrap();
         assert!(!r.ok);
         assert!(r.stderr.bytes > 0);
         assert_eq!(r.stdout.bytes, 0);
@@ -501,8 +553,9 @@ mod tests {
 
     #[test]
     fn timeout_kills_and_reports() {
-        let cwd = tmp();
-        let (r, code) = execute(&["sleep".into(), "10".into()], &cwd, Some(1)).unwrap();
+        let fixture = tmp();
+        let cwd = fixture.path();
+        let (r, code) = execute(&["sleep".into(), "10".into()], cwd, Some(1)).unwrap();
         assert_eq!(r.exit_code, None);
         assert!(!r.ok);
         #[cfg(unix)]
@@ -525,15 +578,16 @@ mod tests {
 
     #[test]
     fn prune_keeps_newest_limit() {
-        let dir = tmp();
+        let fixture = tmp();
+        let dir = fixture.path();
         for i in 0..(RUN_HISTORY_LIMIT + 10) {
             let p = dir.join(format!("{i:04}.out"));
             std::fs::write(&p, b"x").unwrap();
             let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(i as u64);
             set_mtime(&p, t);
         }
-        prune(&dir);
-        let remaining = std::fs::read_dir(&dir).unwrap().count();
+        prune(dir);
+        let remaining = std::fs::read_dir(dir).unwrap().count();
         assert_eq!(remaining, RUN_HISTORY_LIMIT);
         assert!(!dir.join("0000.out").exists(), "oldest should be pruned");
         assert!(
@@ -545,7 +599,8 @@ mod tests {
 
     #[test]
     fn ancillary_history_warning_preserves_primary_code() {
-        let dir = tmp();
+        let fixture = tmp();
+        let dir = fixture.path();
         for i in 0..=RUN_HISTORY_LIMIT {
             let path = dir.join(format!("{i:04}.out"));
             std::fs::write(&path, b"x").unwrap();
@@ -557,7 +612,7 @@ mod tests {
         let primary_code = 124;
         let mut stderr = Vec::new();
         prune_with(
-            &dir,
+            dir,
             |_| {
                 Err(std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied,
@@ -574,7 +629,8 @@ mod tests {
     }
     #[test]
     fn ancillary_warning_history_population_failures_warn_once_per_attempt() {
-        let missing = tmp().join("missing");
+        let fixture = tmp();
+        let missing = fixture.path().join("missing");
         let mut stderr = Vec::new();
         prune_with(
             &missing,
@@ -648,7 +704,8 @@ mod tests {
             assert_eq!(warning.lines().count(), 1);
             assert!(!warning.contains("sensitive"));
         }
-        let missing = tmp().join("missing-output");
+        let fixture = tmp();
+        let missing = fixture.path().join("missing-output");
         let mut stderr = Vec::new();
         let stream = stream_of_with(
             &missing,
@@ -661,12 +718,13 @@ mod tests {
         assert_eq!(warning.matches("devtool.run.stream_summary").count(), 1);
         assert_eq!(warning.lines().count(), 1);
 
-        let unreadable = tmp();
+        let unreadable_fixture = tmp();
+        let unreadable = unreadable_fixture.path();
         let mut stderr = Vec::new();
         let stream = stream_of_with(
-            &unreadable,
-            || fs::metadata(&unreadable).map(|metadata| metadata.len()),
-            || count_lines(&unreadable),
+            unreadable,
+            || fs::metadata(unreadable).map(|metadata| metadata.len()),
+            || count_lines(unreadable),
             &mut stderr,
         );
         assert_eq!(stream.lines, 0);

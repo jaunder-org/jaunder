@@ -144,31 +144,79 @@ mod tests {
 
     #[tokio::test]
     async fn appends_one_json_line_per_ping() {
-        let dir = std::env::temp_dir().join(format!("websub-capture-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("create temp dir");
-        let path = dir.join("websub.jsonl");
-        let _ = std::fs::remove_file(&path);
+        let fixture_path = {
+            let fixture = tempfile::Builder::new()
+                .prefix("websub-capture-")
+                .tempdir()
+                .expect("create temp dir");
+            let dir = fixture.path();
+            let path = dir.join("websub.jsonl");
 
-        let client = FileCapturingWebSubClient::new(&path);
-        client
-            .send_publish(&hub_url(), &feed_url("alice"))
-            .await
-            .expect("first ping");
-        client
-            .send_publish(&hub_url(), &feed_url("bob"))
-            .await
-            .expect("second ping");
+            let client = FileCapturingWebSubClient::new(&path);
+            client
+                .send_publish(&hub_url(), &feed_url("alice"))
+                .await
+                .expect("first ping");
+            client
+                .send_publish(&hub_url(), &feed_url("bob"))
+                .await
+                .expect("second ping");
 
-        let contents = std::fs::read_to_string(&path).expect("read capture file");
-        let lines: Vec<&str> = contents.lines().filter(|l| !l.trim().is_empty()).collect();
-        assert_eq!(lines.len(), 2);
+            let contents = std::fs::read_to_string(&path).expect("read capture file");
+            let lines: Vec<&str> = contents.lines().filter(|l| !l.trim().is_empty()).collect();
+            assert_eq!(lines.len(), 2);
 
-        let first: serde_json::Value = serde_json::from_str(lines[0]).expect("valid json");
-        assert_eq!(first["hub_url"], "https://hub.example.com/");
-        assert_eq!(first["feed_url"], "https://site/~alice/feed.rss");
-        assert!(first["sent_at"].is_string());
+            let first: serde_json::Value = serde_json::from_str(lines[0]).expect("valid json");
+            assert_eq!(first["hub_url"], "https://hub.example.com/");
+            assert_eq!(first["feed_url"], "https://site/~alice/feed.rss");
+            assert!(first["sent_at"].is_string());
 
-        let _ = std::fs::remove_file(&path);
+            assert!(dir.is_dir());
+            assert!(path.is_file());
+            dir.to_owned()
+        };
+        assert!(
+            !fixture_path.exists(),
+            "fixture must be removed at scope exit"
+        );
+    }
+
+    #[test]
+    fn capture_fixture_is_removed_on_panic_unwind() {
+        let mut fixture_path = None;
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("create test runtime");
+            runtime.block_on(async {
+                // The fixture must be owned inside the future that unwinds.
+                let fixture = tempfile::Builder::new()
+                    .prefix("websub-capture-")
+                    .tempdir()
+                    .expect("create temp dir");
+                fixture_path = Some(fixture.path().to_owned());
+                let path = fixture.path().join("websub.jsonl");
+                let client = FileCapturingWebSubClient::new(&path);
+                client
+                    .send_publish(&hub_url(), &feed_url("alice"))
+                    .await
+                    .expect("capture ping before unwind");
+                assert!(fixture.path().is_dir());
+                let contents = std::fs::read_to_string(&path).expect("read capture file");
+                assert_eq!(contents.lines().count(), 1);
+                std::panic::panic_any("capture cleanup unwind probe");
+            });
+        }))
+        .expect_err("the cleanup probe must unwind");
+        assert_eq!(
+            panic.downcast_ref::<&str>(),
+            Some(&"capture cleanup unwind probe")
+        );
+        assert!(
+            !fixture_path.unwrap().exists(),
+            "unwinding must remove the fixture"
+        );
     }
 
     #[tokio::test]
