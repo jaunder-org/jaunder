@@ -263,7 +263,8 @@ impl Arm {
                         | Self::ToolsLock,
                     Boundary::Devtool
                 )
-                | (Self::DevtoolSource, Boundary::StaticCode)
+                // Static docs also depends on the docs-profile devtool executable.
+                | (Self::DevtoolSource, Boundary::StaticDocs | Boundary::StaticCode)
                 | (
                     Self::ToolsLock,
                     Boundary::StaticCode | Boundary::Xtask | Boundary::ToolingDependencies
@@ -639,7 +640,30 @@ mod tests {
         let mut changed = base.clone();
         changed.static_code = "code-2".to_owned();
         changed.devtool = "devtool-2".to_owned();
+        changed.static_docs = "docs-2".to_owned();
         assert_eq!(compare_arm(&base, Arm::DevtoolSource, &changed), Ok(()));
+        let mut stale_docs = changed.clone();
+        stale_docs.static_docs = base.static_docs.clone();
+        assert!(matches!(
+            compare_arm(&base, Arm::DevtoolSource, &stale_docs),
+            Err(ProbeError::MissingChange {
+                boundary: "static-docs",
+                ..
+            })
+        ));
+        assert!(matches!(
+            compare_arm(&base, Arm::DevtoolSource, &base),
+            Err(ProbeError::MissingChange { .. })
+        ));
+        let mut unrelated = changed.clone();
+        unrelated.site = "site-2".to_owned();
+        assert!(matches!(
+            compare_arm(&base, Arm::DevtoolSource, &unrelated),
+            Err(ProbeError::UnexpectedChange {
+                boundary: "site",
+                ..
+            })
+        ));
         changed.tooling_dependencies = "tooling-dependencies-2".to_owned();
         assert!(matches!(
             compare_arm(&base, Arm::DevtoolSource, &changed),

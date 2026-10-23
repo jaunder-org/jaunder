@@ -1662,9 +1662,12 @@ closed unless docs changes affect only `static-docs`; server changes affect
 `.#site` but not `wasm-tests`; and `common`, `macros`, and the shared
 performance contract affect the code, site, and wasm-test boundaries without
 invalidating `static-docs`. It also protects `devtool` and its compiled tooling
-dependency boundary: implementation edits invalidate the real tool but preserve
-its dependency identity; tools lock/configuration edits invalidate the
-dependency graph. Tooling preparation uses generated dummy sources and a
+dependency boundary: devtool implementation edits invalidate the real tool,
+`static-code`, and `static-docs` (through its `docsDevtoolBin` build input), but
+preserve the compiled tooling dependency identity. The documentation source
+filter remains narrow; derivation identity includes the tool input as well as
+the admitted documentation sources. Tools lock/configuration edits invalidate
+the dependency graph. Tooling preparation uses generated dummy sources and a
 file-scoped lockfile, with repository-root target alignment and nonempty archive
 admission for ordinary, documentation and qualification consumers. The
 Linux-scoped `tooling-cargo-artifacts` Nix check uses their shared constructor
