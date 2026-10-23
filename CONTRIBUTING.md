@@ -729,6 +729,14 @@ Compare identities directly; `reused` means the selected outputs were already
 locally valid, while `realized` means they became valid during the build.
 Neither state attributes compilation versus substitution.
 
+The procedure below is optional historical reproduction of the controlled
+invalidation measurement, not a required campaign for each change. For the
+current tooling dependency campaign, reuse the accepted frozen baseline and
+ordinary meaningful comparisons; no new timing matrix or fixed sample count is
+required. Durations, stable identities and cached verdicts do not establish
+benefit; retain cache/execution qualifications and label unavailable
+attribution.
+
 For a controlled record, use a disposable checkout at the comparison commit.
 Create `.xtask/measurements`, run this exact command once as an unrecorded
 warm-up, then run it once more:
@@ -1688,10 +1696,18 @@ application/check outputs, although evaluation can require declared source
 preparation. It never purges the store. Stable identity is not proof of compiler
 freshness or local/remote realization reuse.
 
-To reproduce the controlled measurements, run one unrecorded
-`devtool run -- cargo xtask --json validate --no-e2e --allow-dirty` warm-up,
-then run it again and copy the captured child stdout at the wrapper summary's
-`stdout.path` (or `.xtask/last-result.json`) to
+Artifact compatibility includes compiler, target, profile, resolved features,
+flags and native inputs; incompatible work must rebuild. Dependency preparations
+are cacheable build inputs, distinct from substitution-resistant verdict
+outputs. Substitution resistance does not force locally valid outputs to rerun;
+CI must preserve actual executing-verdict evidence rather than infer it from
+availability. Cache legitimate build inputs aggressively, but execute tests
+afresh; cached test verdicts are not execution evidence.
+
+For optional historical reproduction of the controlled measurements, run one
+unrecorded `devtool run -- cargo xtask --json validate --no-e2e --allow-dirty`
+warm-up, then run it again and copy the captured child stdout at the wrapper
+summary's `stdout.path` (or `.xtask/last-result.json`) to
 `.xtask/measurements/post-warm-baseline.json`; do not save the wrapper summary.
 Add exactly one marker from
 [Measuring Nix invalidation](#measuring-nix-invalidation), rerun that exact
