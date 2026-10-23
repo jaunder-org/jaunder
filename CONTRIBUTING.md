@@ -1667,17 +1667,26 @@ dependency boundary: devtool implementation edits invalidate the real tool,
 site (through `csrWasmBundle`'s `devtoolBin` build input), but preserve
 `wasm-tests`, `xtask`, and the compiled tooling dependency identity. The
 documentation and site source filters remain narrow; derivation identity
-includes transitive executable inputs as well as admitted sources. Tools
-lock/configuration edits invalidate the dependency graph. Tooling preparation
-uses generated dummy sources and a file-scoped lockfile, with repository-root
-target alignment and nonempty archive admission for ordinary, documentation and
-qualification consumers. The Linux-scoped `tooling-cargo-artifacts` Nix check
-uses their shared constructor to require imported external freshness and correct
-changed local behavior; `static-code` depends on this maintained proof. Release
-artifacts are not assumed to seed dev-profile clippy. CI runs the identity drift
-probe; it builds no application/check outputs, although evaluation can require
-declared source preparation. It never purges the store. Stable identity is not
-proof of compiler freshness or local/remote realization reuse.
+includes transitive executable inputs as well as admitted sources.
+`tools/Cargo.lock` invalidates ordinary devtool, its dependency preparation,
+`static-code`, `xtask`, `static-docs` through `docsDevtoolBin`, and site through
+`csrWasmBundle`; `wasm-tests` remains stable. `xtask/Cargo.lock` affects only
+`xtask` among these boundaries. Root Cargo build configuration affects code,
+site, `wasm-tests`, `xtask`, ordinary devtool and tooling dependencies, but not
+the docs-only tool. The four manifest arms (root, tools workspace, devtool and
+shared common manifest) and four embedded-input arms (server build script, CSR
+shell, Theme Package manifest and migration) guard only `static-code`, `devtool`
+and tooling dependencies; they make no runtime assertions for the other four
+boundaries. Tooling preparation uses generated dummy sources and a file-scoped
+lockfile, with repository-root target alignment and nonempty archive admission
+for ordinary, documentation and qualification consumers. The Linux-scoped
+`tooling-cargo-artifacts` Nix check uses their shared constructor to require
+imported external freshness and correct changed local behavior; `static-code`
+depends on this maintained proof. Release artifacts are not assumed to seed
+dev-profile clippy. CI runs the identity drift probe; it builds no
+application/check outputs, although evaluation can require declared source
+preparation. It never purges the store. Stable identity is not proof of compiler
+freshness or local/remote realization reuse.
 
 To reproduce the controlled measurements, run one unrecorded
 `devtool run -- cargo xtask --json validate --no-e2e --allow-dirty` warm-up,

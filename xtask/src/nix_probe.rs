@@ -267,7 +267,11 @@ impl Arm {
                 | (Self::DevtoolSource, Boundary::StaticDocs | Boundary::StaticCode | Boundary::Site)
                 | (
                     Self::ToolsLock,
-                    Boundary::StaticCode | Boundary::Xtask | Boundary::ToolingDependencies
+                    Boundary::StaticDocs
+                        | Boundary::StaticCode
+                        | Boundary::Site
+                        | Boundary::Xtask
+                        | Boundary::ToolingDependencies
                 )
                 | (Self::BuildConfig, Boundary::ToolingDependencies)
                 | (
@@ -715,8 +719,7 @@ mod tests {
     #[test]
     fn tools_lock_changes_invalidate_the_tooling_dependency_graph() {
         let base = paths("docs", "code", "site", "wasm");
-        let mut changed = base.clone();
-        changed.static_code = "code-2".to_owned();
+        let mut changed = paths("docs-2", "code-2", "site-2", "wasm");
         changed.xtask = "xtask-2".to_owned();
         changed.devtool = "devtool-2".to_owned();
         assert!(matches!(
@@ -728,6 +731,67 @@ mod tests {
         ));
         changed.tooling_dependencies = "tooling-dependencies-2".to_owned();
         assert_eq!(compare_arm(&base, Arm::ToolsLock, &changed), Ok(()));
+        for (boundary, stale) in [
+            (
+                "static-docs",
+                DrvPaths {
+                    static_docs: base.static_docs.clone(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "static-code",
+                DrvPaths {
+                    static_code: base.static_code.clone(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "site",
+                DrvPaths {
+                    site: base.site.clone(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "xtask",
+                DrvPaths {
+                    xtask: base.xtask.clone(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "devtool",
+                DrvPaths {
+                    devtool: base.devtool.clone(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "tooling-dependencies",
+                DrvPaths {
+                    tooling_dependencies: base.tooling_dependencies.clone(),
+                    ..changed.clone()
+                },
+            ),
+        ] {
+            assert!(matches!(
+                compare_arm(&base, Arm::ToolsLock, &stale),
+                Err(ProbeError::MissingChange { boundary: actual, .. }) if actual == boundary
+            ));
+        }
+        assert!(matches!(
+            compare_arm(&base, Arm::ToolsLock, &base),
+            Err(ProbeError::MissingChange { .. })
+        ));
+        changed.wasm_tests = "wasm-2".to_owned();
+        assert!(matches!(
+            compare_arm(&base, Arm::ToolsLock, &changed),
+            Err(ProbeError::UnexpectedChange {
+                boundary: "wasm-tests",
+                ..
+            })
+        ));
     }
 
     #[test]
