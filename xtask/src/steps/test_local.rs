@@ -10,7 +10,28 @@ pub fn run(sh: &Shell, result: &mut CommandResult, nextest_args: &[String]) {
         result,
         nextest_args,
         sh.var_os("JAUNDER_CSR_BUNDLE_DIR"),
-        |sh, result| super::build_csr::run(sh, result, false),
+        |sh, result| {
+            let started = std::time::Instant::now();
+            let resolve = || -> anyhow::Result<()> {
+                crate::host_tooling::admit_untracked_inputs(
+                    &sh.current_dir(),
+                    ".#csrBundle.sourceAdmits",
+                )?;
+                let root = sh.current_dir().join(".xtask/csr-bundle");
+                sh.create_dir(root.parent().unwrap())?;
+                crate::nix_build::build_rooted(sh, "csrBundle", &root)?;
+                Ok(())
+            };
+            result.push(
+                (match resolve() {
+                    Ok(()) => StepResult::ok("test-local-csr-bundle"),
+                    Err(error) => {
+                        StepResult::fail("test-local-csr-bundle").detail(format!("{error:#}"))
+                    }
+                })
+                .with_duration(started.elapsed()),
+            );
+        },
     );
 }
 
@@ -44,7 +65,7 @@ fn run_with_producer(
             {
                 return;
             }
-            sh.current_dir().join("target/site")
+            sh.current_dir().join(".xtask/csr-bundle")
         }
     };
     let root = match super::csr_prerequisite::validate(&input) {
@@ -59,8 +80,8 @@ fn run_with_producer(
         StepResult::ok("test-local-csr-prerequisite")
             .detail(format!("verified CSR bundle {}", root.display())),
     );
-    // The shared producer can replace target/site; retain ownership until the
-    // wrapped nextest command has finished all consumer compilation.
+    // Nix's ordinary checkout-local out-link remains rooted. Keep the shared
+    // lock through compilation/execution so peers cannot replace the active root.
     let _bundle_env = sh.push_env("JAUNDER_CSR_BUNDLE_DIR", &root);
     let (env, cache_detail) = compile_cache::cargo_compile_env();
     // Storage and seeding tests need the application worker, not their test
@@ -124,6 +145,142 @@ mod tests {
     use super::*;
 
     static ORCHESTRATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    #[cfg(unix)]
+    fn implicit_bundle_is_nix_selected_and_rooted_through_both_consumers() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        let _serial = ORCHESTRATION.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        assert!(
+            crate::git::at(temp.path())
+                .args(["init", "--quiet"])
+                .status()
+                .unwrap()
+                .success()
+        );
+        fs::write(temp.path().join(".git/info/exclude"), "*\n").unwrap();
+        let fixture = temp.path().join("bundle");
+        super::super::csr_prerequisite::tests::write_bundle(&fixture);
+        let calls = temp.path().join("calls");
+        for (name, script) in [
+            (
+                "nix",
+                r#"#!/bin/sh
+set -eu
+printf '%s\n' "$@" >> "$CALLS"
+[ "${FAIL_BUILD:-no}" = no ] || exit 37
+[ "$1" = build ] || exit 31
+while [ "$1" != --out-link ]; do shift; done
+ln -sfn "$FIXTURE" "$2"
+printf '/nix/store/fixture\n'
+"#,
+            ),
+            (
+                "cargo",
+                r#"#!/bin/sh
+[ -L .xtask/csr-bundle ] || exit 32
+[ "$JAUNDER_CSR_BUNDLE_DIR" = "$FIXTURE" ] || exit 33
+printf 'consumer %s\n' "$1" >> "$CALLS"
+"#,
+            ),
+        ] {
+            let path = temp.path().join(name);
+            fs::write(&path, script).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let sh = Shell::new().unwrap();
+        sh.change_dir(temp.path());
+        sh.set_var(
+            "PATH",
+            format!(
+                "{}:{}",
+                temp.path().display(),
+                std::env::var("PATH").unwrap()
+            ),
+        );
+        sh.set_var("FIXTURE", &fixture);
+        sh.set_var("CALLS", &calls);
+        assert!(sh.var_os("JAUNDER_CSR_BUNDLE_DIR").is_none());
+        let mut result = CommandResult::new("test-local");
+        run(&sh, &mut result, &[]);
+        assert!(result.ok, "{:?}", result.steps);
+        let observed = fs::read_to_string(&calls).unwrap();
+        assert!(observed.contains(".#csrBundle\n"), "{observed}");
+        assert!(
+            observed.ends_with("consumer build\nconsumer run\n"),
+            "{observed}"
+        );
+        assert!(!temp.path().join("target/site").exists());
+
+        // A prior root must not become a fallback if realization fails.
+        fs::write(&calls, "").unwrap();
+        sh.set_var("FAIL_BUILD", "yes");
+        let mut failed = CommandResult::new("test-local");
+        run(&sh, &mut failed, &[]);
+        assert!(!failed.ok);
+        assert!(!fs::read_to_string(&calls).unwrap().contains("consumer"));
+
+        fs::write(&calls, "").unwrap();
+        sh.set_var("FAIL_BUILD", "no");
+        fs::write(fixture.join("manifest.json"), "corrupt").unwrap();
+        let mut corrupt = CommandResult::new("test-local");
+        run(&sh, &mut corrupt, &[]);
+        assert!(!corrupt.ok);
+        assert!(!fs::read_to_string(calls).unwrap().contains("consumer"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn omitted_source_blocks_realization_and_consumers() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        let _serial = ORCHESTRATION.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            assert!(
+                crate::git::at(temp.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        git(&["init", "--quiet"]);
+        fs::write(
+            temp.path().join("flake.nix"),
+            r#"{
+          outputs = { self }: { packages = builtins.listToAttrs (map (name: {
+            inherit name;
+            value.csrBundle.sourceAdmits = path: kind: path == "new.rs";
+          }) [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ]); };
+        }"#,
+        )
+        .unwrap();
+        git(&["add", "flake.nix"]);
+        fs::write(temp.path().join("new.rs"), "omitted source").unwrap();
+        for program in ["cargo", "nix"] {
+            let path = temp.path().join(program);
+            fs::write(
+                &path,
+                "#!/bin/sh\nprintf 'unexpected subprocess' >> \"$CALLS\"\n",
+            )
+            .unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let sh = Shell::new().unwrap();
+        sh.change_dir(temp.path());
+        sh.set_var("PATH", temp.path());
+        sh.set_var("CALLS", temp.path().join("calls"));
+        let mut result = CommandResult::new("test-local");
+        // The production resolver must refuse before invoking either producer
+        // or consumers, rather than accepting an available stale bundle.
+        run(&sh, &mut result, &[]);
+        assert!(!result.ok);
+        assert!(result.steps[0].detail.as_ref().unwrap().contains("new.rs"));
+        assert!(!temp.path().join("calls").exists());
+    }
 
     #[test]
     #[cfg(unix)]
@@ -235,8 +392,8 @@ status=$?
 if [ "$status" -ne 73 ]; then echo "expected lock contention, got $status" >&2; exit 42; fi
 if [ "$1" = producer ]; then
     printf 'producer\n' >> "$CALLS"
-    mkdir -p target
-    cp -R "$FIXTURE" target/site
+    mkdir -p .xtask
+    cp -R "$FIXTURE" .xtask/csr-bundle
 elif [ "$1" = build ]; then
     printf 'worker-build\n' >> "$CALLS"
 else
@@ -309,7 +466,7 @@ fi
                     let root = if explicit {
                         fixture
                     } else {
-                        temp.path().join("target/site")
+                        temp.path().join(".xtask/csr-bundle")
                     };
                     let observed = fs::read_to_string(temp.path().join("observed")).unwrap();
                     let lines = observed.lines().collect::<Vec<_>>();
@@ -364,7 +521,7 @@ fi
         let _serial = ORCHESTRATION.lock().unwrap();
         for explicit in [false, true] {
             let temp = tempfile::tempdir().unwrap();
-            let input = temp.path().join("target/site");
+            let input = temp.path().join(".xtask/csr-bundle");
             fs::create_dir_all(&input).unwrap();
             fs::write(input.join("manifest.json"), b"corrupt").unwrap();
             let cargo = temp.path().join("cargo");

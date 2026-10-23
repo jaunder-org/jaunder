@@ -292,6 +292,26 @@ pub fn build_out_path(attr: &str) -> Result<String> {
     .with_context(|| format!("`nix build {flake_ref}` produced no store path"))
 }
 
+/// Realize and root a native checkout package in one Nix operation. The caller
+/// holds the host artifact lock until every consumer has finished with this root.
+pub(crate) fn build_rooted(
+    sh: &xshell::Shell,
+    attr: &str,
+    root: &std::path::Path,
+) -> Result<String> {
+    let installable = format!(".#{attr}");
+    let out = xshell::cmd!(
+        sh,
+        "nix build {installable} --out-link {root} --print-out-paths"
+    )
+    .output()
+    .with_context(|| format!("realizing {installable}"))?;
+    store_path_from_streams(
+        &String::from_utf8_lossy(&out.stdout),
+        &String::from_utf8_lossy(&out.stderr),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::io;
