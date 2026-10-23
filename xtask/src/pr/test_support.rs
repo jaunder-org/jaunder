@@ -235,7 +235,8 @@ pub struct FakeSource {
     snaps: RefCell<VecDeque<Result<PrSnapshot, ApiError>>>,
     last: RefCell<Option<Result<PrSnapshot, ApiError>>>,
     req: RequiredChecks,
-    ejection: Result<Option<RunRef>, ApiError>,
+    ejection: RefCell<Result<Option<RunRef>, ApiError>>,
+    ejection_script: RefCell<VecDeque<Result<Option<RunRef>, ApiError>>>,
     actions_evidence: RefCell<VecDeque<Result<ActionsEvidence, ApiError>>>,
     last_actions_evidence: RefCell<Option<Result<ActionsEvidence, ApiError>>>,
     resolve: Result<Subject, ApiError>,
@@ -251,7 +252,8 @@ impl FakeSource {
             snaps: RefCell::new(snaps.into()),
             last: RefCell::new(None),
             req,
-            ejection: Ok(None),
+            ejection: RefCell::new(Ok(None)),
+            ejection_script: RefCell::new(VecDeque::new()),
             actions_evidence: RefCell::new(VecDeque::from([Err(ApiError::Malformed(
                 "fake Actions evidence was not scripted".into(),
             ))])),
@@ -327,13 +329,19 @@ impl FakeSource {
     /// What the merge-group probe finds. Without this the probe path is only ever
     /// driven with `None`, so a dropped result would pass the whole suite.
     pub fn with_ejection(mut self, run: Option<RunRef>) -> Self {
-        self.ejection = Ok(run);
+        self.ejection = RefCell::new(Ok(run));
+        self
+    }
+
+    /// Script old and fresh merge-group visibility independently of PR snapshots.
+    pub fn with_ejection_script(mut self, script: Vec<Result<Option<RunRef>, ApiError>>) -> Self {
+        self.ejection_script = RefCell::new(script.into());
         self
     }
 
     /// Make the probe itself fail, so "probe failure is a poll failure" is testable.
     pub fn with_ejection_error(mut self, err: ApiError) -> Self {
-        self.ejection = Err(err);
+        self.ejection = RefCell::new(Err(err));
         self
     }
 }
@@ -375,7 +383,10 @@ impl PrSource for FakeSource {
     }
 
     fn ejection_run(&self, _subject: &Subject) -> Result<Option<RunRef>, ApiError> {
-        self.ejection.clone()
+        if let Some(next) = self.ejection_script.borrow_mut().pop_front() {
+            *self.ejection.borrow_mut() = next;
+        }
+        self.ejection.borrow().clone()
     }
 }
 

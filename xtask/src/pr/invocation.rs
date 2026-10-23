@@ -68,6 +68,7 @@ pub struct Invocation<'a> {
     pub cfg: watch::WatchConfig,
     /// `true` for `pr land` — the only mode that may mutate anything.
     pub landing: bool,
+    pub reenqueue: bool,
 }
 
 #[cfg(test)]

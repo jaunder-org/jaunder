@@ -4811,6 +4811,18 @@ Distinguishing outcomes — including `ready-to-land`, `ejected`, `dequeued`,
 — live in `pr.outcome` in the result envelope; success is command-specific
 rather than a global synonym for merged.
 
+Default `land` refuses ejection. Explicit `land <PR> --reenqueue` permits at
+most one existing armer call after an observed ejection, refusing queued or
+auto-merge-armed PRs. Current required checks, merge readiness, local and remote
+head guards, mutation-head matching and GitHub queue rules remain authoritative.
+After arming, only the acknowledged historical run URL is disregarded as an
+ejection discriminator, without changing its failed verdict. Delayed fresh
+visibility uses the normal observation deadline; a distinct fresh failure is
+terminal. Uncertainty never falls back to ordinary rearming, and existing queue
+and check outcomes remain intact. This narrowly refines ADR-0087 decision 4;
+`watch` gains no mutation capability (decision:
+`docs/adr/drafts/explicit-one-shot-pr-reenqueue.md`).
+
 **Post-land checkout cleanup.** After a confirmed merge,
 `cargo xtask pr cleanup [N]` is the explicit local-only cleanup command
 ([docs/adr/0171-explicit-post-land-cleanup-command.md](adr/0171-explicit-post-land-cleanup-command.md)).

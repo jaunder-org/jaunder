@@ -496,8 +496,8 @@ pub enum PrWatchUntil {
 ///
 /// The split is the point: `watch` cannot merge anything, so running `land` **is**
 /// the merge approval. Every other action in the sequence — re-running a red job,
-/// rebasing, re-enqueueing after an ejection — needs a judgement call and stays with
-/// the human; these two only turn the crank.
+/// rebasing, or explicitly requesting one re-enqueue after an ejection — needs a
+/// judgement call and stays with the human.
 #[derive(Subcommand)]
 pub enum PrCommand {
     /// Observe a PR until the next caller-actionable outcome. Never merges,
@@ -531,12 +531,16 @@ pub enum PrCommand {
     /// Arm auto-merge, verify the arm actually took, then watch it to `merged`.
     ///
     /// Running this command is the merge approval. It refuses when invoked from the
-    /// PR's own branch with unpushed local commits, and never re-enqueues after an
-    /// ejection — that needs a human to decide the ejection was noise.
+    /// PR's own branch with unpushed local commits. An ejected PR is refused unless
+    /// --reenqueue explicitly permits one new enqueue; it never retries that arm.
     #[command(after_help = "EXAMPLES:\n  \
         cargo xtask pr land\n  \
-        cargo xtask pr land 731")]
+        cargo xtask pr land 731\n  \
+        cargo xtask pr land 731 --reenqueue")]
     Land {
+        /// Permit one enqueue after an observed ejection. Refuses queued or armed PRs.
+        #[arg(long)]
+        reenqueue: bool,
         /// PR number. Omitted: the open PR whose head is the current branch.
         number: Option<u64>,
         /// Seconds between polls.
@@ -1657,6 +1661,28 @@ mod tests {
     #[test]
     fn pr_watch_rejects_unknown_until_value() {
         assert!(Cli::try_parse_from(["xtask", "pr", "watch", "--until", "ready"]).is_err());
+    }
+
+    #[test]
+    fn pr_land_accepts_explicit_reenqueue_only_for_land() {
+        let explicit = Cli::try_parse_from(["xtask", "pr", "land", "731", "--reenqueue"]).unwrap();
+        assert!(matches!(
+            explicit.command,
+            Command::Pr(PrCommand::Land {
+                number: Some(731),
+                reenqueue: true,
+                ..
+            })
+        ));
+        let default = Cli::try_parse_from(["xtask", "pr", "land", "731"]).unwrap();
+        assert!(matches!(
+            default.command,
+            Command::Pr(PrCommand::Land {
+                reenqueue: false,
+                ..
+            })
+        ));
+        assert!(Cli::try_parse_from(["xtask", "pr", "watch", "731", "--reenqueue"]).is_err());
     }
 
     #[test]

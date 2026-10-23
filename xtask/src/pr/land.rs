@@ -98,9 +98,8 @@ pub fn divergence_message(local: &str, remote: &str) -> String {
 
 /// The merge-group probe, in the one state where ejection is possible.
 ///
-/// `land` must not arm a PR it cannot prove was *not* ejected, so a probe failure
-/// propagates rather than degrading to "no ejection found" — the difference between
-/// refusing to re-enqueue and silently re-enqueueing a failing PR.
+/// Both ordinary landing and explicit recovery need trustworthy ejection evidence.
+/// A probe failure must not degrade to "no ejection found" and authorize a mutation.
 fn probe<S: PrSource>(
     source: &S,
     subject: &Subject,
@@ -183,6 +182,12 @@ fn pending_classification_report(
     )
 }
 
+/// Approval-bound head and explicit recovery intent for this invocation only.
+pub struct LandRequest<'a> {
+    pub expected_head: &'a str,
+    pub reenqueue: bool,
+}
+
 /// Arm the merge and drive it to a terminal outcome.
 ///
 /// Like [`watch`](super::watch::watch), never returns `Err` — a failure to arm is a
@@ -192,10 +197,11 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
     armer: &A,
     clock: &C,
     subject: &Subject,
-    expected_head: &str,
+    request: LandRequest<'_>,
     cfg: WatchConfig,
     sink: &mut dyn FnMut(&Event),
 ) -> PrReport {
+    let expected_head = request.expected_head;
     let mut events: Vec<Event> = Vec::new();
     let mut emitted_optional_failure_ids = BTreeSet::new();
 
@@ -238,10 +244,18 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
             events,
         );
     }
-    // Including the ejection probe. Without it an already-ejected PR — open, green,
-    // unqueued — classifies as merely not-yet-armed, and `land` would re-enqueue it:
-    // the one action this tool explicitly refuses, because requeuing a genuinely
-    // failing PR loops forever.
+    if request.reenqueue && arm_is_verified(snap.auto_merge_armed, snap.queue.in_queue) {
+        return report(
+            subject,
+            snap.head_sha,
+            Outcome::Blocked,
+            Some("refusing --reenqueue: the PR is already queued or auto-merge armed".into()),
+            None,
+            events,
+        );
+    }
+    // Recovery requires an observed ejection, never an inference from an unarmed PR.
+    // A failed probe cannot authorize either ordinary arming or explicit recovery.
     let ejection = match probe(source, subject, &snap, &req) {
         Ok(run) => run,
         Err(e) => {
@@ -258,7 +272,7 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
             );
         }
     };
-    let (step, optional_failures) = match watch::classify_snapshot(
+    let (mut step, optional_failures) = match watch::classify_snapshot(
         source,
         subject,
         &snap,
@@ -294,6 +308,90 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
         &optional_failures,
         &mut emitted_optional_failure_ids,
     );
+    if request.reenqueue {
+        if !matches!(
+            step,
+            Step::Terminal {
+                outcome: Outcome::Ejected,
+                ..
+            }
+        ) {
+            // Explicit recovery must never fall back to the ordinary arming path.
+            if !matches!(step, Step::Terminal { .. }) {
+                return report(
+                    subject,
+                    snap.head_sha,
+                    Outcome::Blocked,
+                    Some("refusing --reenqueue: no prior ejection was established".into()),
+                    None,
+                    events,
+                );
+            }
+        } else {
+            // Ejection precedes readiness in the classifier. Acknowledging it must
+            // not hide GitHub's blocked or indeterminate merge state.
+            step = decide::classify(&snap, &req, None, &Progress::default());
+            if matches!(step, Step::Ready) {
+                let Some(old_run) = ejection.as_ref().filter(|run| !run.url.is_empty()) else {
+                    return report(
+                        subject,
+                        snap.head_sha,
+                        Outcome::WatcherError,
+                        Some("refusing --reenqueue: the failed run has no stable URL".into()),
+                        None,
+                        events,
+                    );
+                };
+                push(
+                    &mut events,
+                    sink,
+                    clock.now_rfc3339(),
+                    EventKind::Phase,
+                    format!("reenqueueing once after failed run {}", old_run.url),
+                );
+                if let Err(e) = armer.arm_auto_merge(subject, expected_head) {
+                    return report(
+                        subject,
+                        snap.head_sha,
+                        Outcome::WatcherError,
+                        Some(format!("could not arm auto-merge: {}", e.detail())),
+                        None,
+                        events,
+                    );
+                }
+                // Visibility may lag the mutation. Observe within the normal budget;
+                // uncertainty can never acquire another mutation opportunity.
+                let mut watch_cfg = cfg;
+                watch_cfg.stop_at_ready = false;
+                let mut result = watch::watch_with_progress_and_optional_failures(
+                    source,
+                    clock,
+                    subject,
+                    watch_cfg,
+                    watch::WatchContinuation {
+                        progress: Progress::default(),
+                        emitted_optional_failure_ids,
+                        expected_head: Some(expected_head),
+                        acknowledged_ejection: Some(&old_run.url),
+                    },
+                    sink,
+                );
+                events.extend(std::mem::take(&mut result.events));
+                result.events = events;
+                return result;
+            }
+            if matches!(step, Step::Continue { .. }) {
+                return report(
+                    subject,
+                    snap.head_sha,
+                    Outcome::Pending,
+                    Some("refusing --reenqueue: readiness is not established".into()),
+                    None,
+                    events,
+                );
+            }
+        }
+    }
     if let Step::Terminal {
         outcome,
         detail,
@@ -391,6 +489,7 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
                     progress,
                     emitted_optional_failure_ids,
                     expected_head: Some(expected_head),
+                    acknowledged_ejection: None,
                 },
                 sink,
             );
@@ -505,7 +604,256 @@ mod tests {
         cfg: WatchConfig,
         sink: &mut dyn FnMut(&Event),
     ) -> PrReport {
-        super::land(source, armer, clock, subject, "abc", cfg, sink)
+        super::land(
+            source,
+            armer,
+            clock,
+            subject,
+            LandRequest {
+                expected_head: "abc",
+                reenqueue: false,
+            },
+            cfg,
+            sink,
+        )
+    }
+
+    #[test]
+    fn reenqueue_old_failure_waits_for_merge_without_rearming() {
+        let old = ejection("2026-07-30T14:30:00Z");
+        let src = FakeSource::new(
+            vec![Ok(open(green())), Ok(open(green())), Ok(merged_snapshot())],
+            queue_rules(),
+        )
+        .with_ejection(Some(old));
+        let armer = CountingArmer::new();
+        let report = super::land(
+            &src,
+            &armer,
+            &clock(),
+            &subject(),
+            LandRequest {
+                expected_head: "abc",
+                reenqueue: true,
+            },
+            cfg(),
+            &mut |_| {},
+        );
+        assert_eq!(report.outcome, Outcome::Merged);
+        assert_eq!(armer.calls.get(), 1);
+    }
+
+    fn reenqueue(source: &FakeSource, armer: &impl PrArmer) -> PrReport {
+        super::land(
+            source,
+            armer,
+            &clock(),
+            &subject(),
+            LandRequest {
+                expected_head: "abc",
+                reenqueue: true,
+            },
+            cfg(),
+            &mut |_| {},
+        )
+    }
+
+    #[test]
+    fn reenqueue_distinguishes_old_failure_from_fresh_pending_pass_and_failure() {
+        let old = ejection("2026-07-30T14:30:00Z");
+        for (conclusion, expected) in [
+            ("", Outcome::Merged),
+            ("success", Outcome::Merged),
+            ("failure", Outcome::Ejected),
+        ] {
+            let fresh = RunRef {
+                url: "https://github.com/o/r/actions/runs/10".into(),
+                conclusion: conclusion.into(),
+                ..old.clone()
+            };
+            let src = FakeSource::new(
+                vec![
+                    Ok(open(green())),
+                    Ok(open(green())),
+                    Ok(open(green())),
+                    Ok(open(green())),
+                    Ok(merged_snapshot()),
+                ],
+                queue_rules(),
+            )
+            .with_ejection_script(vec![
+                Ok(Some(old.clone())),
+                Ok(Some(old.clone())),
+                Ok(None),
+                Ok(Some(fresh)),
+            ]);
+            let armer = CountingArmer::new();
+            let report = reenqueue(&src, &armer);
+            assert_eq!(report.outcome, expected, "{conclusion}");
+            assert_eq!(armer.calls.get(), 1);
+            assert_eq!(*armer.expected_heads.borrow(), ["abc"]);
+            if expected == Outcome::Ejected {
+                assert_eq!(
+                    report.pointer.as_deref(),
+                    Some("https://github.com/o/r/actions/runs/10")
+                );
+            }
+            assert_eq!(old.conclusion, "failure");
+        }
+    }
+
+    #[test]
+    fn reenqueue_uncertainty_or_timeout_never_rearms() {
+        let old = ejection("2026-07-30T14:30:00Z");
+        for (next, expected) in [
+            (Ok(Some(old.clone())), Outcome::TimedOut),
+            (Ok(None), Outcome::TimedOut),
+            (
+                Err(ApiError::Transport("probe unavailable".into())),
+                Outcome::WatcherError,
+            ),
+            (
+                Err(ApiError::Malformed("invalid run".into())),
+                Outcome::WatcherError,
+            ),
+        ] {
+            let src = FakeSource::new(vec![Ok(open(green()))], queue_rules())
+                .with_ejection_script(vec![Ok(Some(old.clone())), next]);
+            let armer = CountingArmer::new();
+            let report = reenqueue(&src, &armer);
+            assert_eq!(report.outcome, expected);
+            assert_eq!(armer.calls.get(), 1);
+        }
+        let src = FakeSource::new(
+            vec![
+                Ok(open(green())),
+                Err(ApiError::Transport("readback unavailable".into())),
+            ],
+            queue_rules(),
+        )
+        .with_ejection(Some(old));
+        let armer = CountingArmer::new();
+        let report = reenqueue(&src, &armer);
+        assert_eq!(report.outcome, Outcome::WatcherError);
+        assert_eq!(armer.calls.get(), 1);
+    }
+
+    #[test]
+    fn reenqueue_never_erases_failed_checks_or_retries_a_rejected_mutation() {
+        let old = ejection("2026-07-30T14:30:00Z");
+        let mut failed = open(green());
+        failed.checks[0].state = CheckState::Failure;
+        let src = FakeSource::new(vec![Ok(open(green())), Ok(failed)], queue_rules())
+            .with_ejection(Some(old.clone()));
+        let armer = CountingArmer::new();
+        assert_eq!(reenqueue(&src, &armer).outcome, Outcome::ChecksFailed);
+        assert_eq!(armer.calls.get(), 1);
+
+        struct RejectHead(std::cell::Cell<u32>);
+        impl PrArmer for RejectHead {
+            fn arm_auto_merge(&self, _: &Subject, expected: &str) -> Result<(), ApiError> {
+                assert_eq!(expected, "abc");
+                self.0.set(self.0.get() + 1);
+                Err(ApiError::Transport(
+                    "head does not match replacement".into(),
+                ))
+            }
+        }
+        let src = FakeSource::new(vec![Ok(open(green()))], queue_rules()).with_ejection(Some(old));
+        let armer = RejectHead(std::cell::Cell::new(0));
+        let report = reenqueue(&src, &armer);
+        assert_eq!(report.outcome, Outcome::WatcherError);
+        assert!(report.detail.unwrap().contains("head does not match"));
+        assert_eq!(armer.0.get(), 1);
+    }
+
+    #[test]
+    fn reenqueue_requires_ejection_and_refuses_queued_or_armed() {
+        for snap in [
+            open(green()),
+            open_pending(),
+            queued_at(1),
+            armed_snapshot(),
+        ] {
+            let src = FakeSource::new(vec![Ok(snap)], queue_rules());
+            let armer = CountingArmer::new();
+            assert_eq!(reenqueue(&src, &armer).outcome, Outcome::Blocked);
+            assert_eq!(armer.calls.get(), 0);
+        }
+    }
+
+    #[test]
+    fn reenqueue_preserves_prearm_guards() {
+        use crate::pr::snapshot::MergeStateStatus;
+        let mut red = open(green());
+        red.checks[0].state = CheckState::Failure;
+        let mut conflicting = open(green());
+        conflicting.mergeable = Mergeable::Conflicting;
+        let mut drift = open(green());
+        drift.head_sha = "replacement".into();
+        let mut blocked = open(green());
+        blocked.merge_state_status = MergeStateStatus::Blocked;
+        let mut unknown = open(green());
+        unknown.mergeable = Mergeable::Unknown;
+        let mut behind = open(green());
+        behind.merge_state_status = MergeStateStatus::Behind;
+        for (snap, rules, expected) in [
+            (red, queue_rules(), Outcome::ChecksFailed),
+            (conflicting, queue_rules(), Outcome::Conflicted),
+            (drift, queue_rules(), Outcome::Stale),
+            (blocked, queue_rules(), Outcome::Blocked),
+            (unknown, queue_rules(), Outcome::Pending),
+            (behind, strict_rules(), Outcome::Stale),
+            (
+                open(green()),
+                RequiredChecks {
+                    contexts: vec![],
+                    ..queue_rules()
+                },
+                Outcome::WatcherError,
+            ),
+        ] {
+            let src = FakeSource::new(vec![Ok(snap)], rules)
+                .with_ejection(Some(ejection("2026-07-30T14:30:00Z")));
+            let armer = CountingArmer::new();
+            assert_eq!(reenqueue(&src, &armer).outcome, expected);
+            assert_eq!(armer.calls.get(), 0);
+        }
+        let src = FakeSource::new(vec![Ok(open(green()))], queue_rules())
+            .with_ejection_error(ApiError::Transport("unknown prior run".into()));
+        let armer = CountingArmer::new();
+        assert_eq!(reenqueue(&src, &armer).outcome, Outcome::WatcherError);
+        assert_eq!(armer.calls.get(), 0);
+    }
+
+    #[test]
+    fn reenqueue_requires_stable_failed_run_identity() {
+        let mut old = ejection("2026-07-30T14:30:00Z");
+        old.url.clear();
+        let src = FakeSource::new(vec![Ok(open(green()))], queue_rules()).with_ejection(Some(old));
+        let armer = CountingArmer::new();
+        let report = reenqueue(&src, &armer);
+        assert_eq!(report.outcome, Outcome::WatcherError);
+        assert_eq!(armer.calls.get(), 0);
+    }
+
+    #[test]
+    fn reenqueue_preserves_postarm_head_and_queue_guards() {
+        let mut replacement = merged_snapshot();
+        replacement.head_sha = "replacement".into();
+        for (snaps, expected) in [
+            (vec![Ok(open(green())), Ok(replacement)], Outcome::Stale),
+            (
+                vec![Ok(open(green())), Ok(queued_at(1)), Ok(open(green()))],
+                Outcome::Dequeued,
+            ),
+        ] {
+            let src = FakeSource::new(snaps, queue_rules())
+                .with_ejection(Some(ejection("2026-07-30T14:30:00Z")));
+            let armer = CountingArmer::new();
+            assert_eq!(reenqueue(&src, &armer).outcome, expected);
+            assert_eq!(armer.calls.get(), 1);
+        }
     }
 
     // ---- the divergence guard ----
@@ -769,9 +1117,8 @@ mod tests {
 
     #[test]
     fn an_already_ejected_pr_is_reported_and_never_re_armed() {
-        // Re-enqueueing after an ejection is the one action the tool refuses: a
-        // genuinely failing PR would loop forever. Without the prologue probe this PR
-        // (open, green, unqueued) reads as merely unarmed and gets re-enqueued.
+        // Ordinary landing must refuse recovery: a genuinely failing PR could loop
+        // forever if open, green and unqueued were sufficient to authorize rearming.
         let src = FakeSource::new(vec![Ok(open(green()))], queue_rules())
             .with_ejection(Some(ejection("2026-07-30T14:30:00Z")));
         let armer = CountingArmer::new();
