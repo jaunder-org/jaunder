@@ -3138,7 +3138,8 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
             .0
             .replace("${backend}", "sqlite")
             .replace("${browser}", "chromium")
-            .replace("${identity}", "sqlite-chromium-unsplit");
+            .replace("${identity}", "sqlite-chromium-unsplit")
+            .replace("${pkgs.nodejs}/bin/node", "/nix/store/test-node/bin/node");
         let expression = format!("''\n{helper}\n''");
         let evaluated = std::process::Command::new("nix-instantiate")
             .args(["--eval", "--strict", "--json", "--expr", &expression])
@@ -3151,6 +3152,7 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         );
         let generated: String =
             serde_json::from_slice(&evaluated.stdout).expect("evaluated Python script string");
+        assert!(generated.contains("/nix/store/test-node/bin/node"));
         let syntax = std::process::Command::new("python3")
             .args(["-c", "import ast, sys; ast.parse(sys.argv[1])", &generated])
             .output()
@@ -3174,6 +3176,13 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
             .split_once("  # END result capture helper")
             .expect("capture helper end")
             .0;
+        let node_binary = std::process::Command::new("which")
+            .arg("node")
+            .output()
+            .expect("locate the pinned Node runtime");
+        assert!(node_binary.status.success(), "Node runtime is required");
+        let node_binary = String::from_utf8(node_binary.stdout).unwrap();
+        let helper = helper.replace("${pkgs.nodejs}/bin/node", node_binary.trim());
         let script = r#"
 import json
 import os
@@ -3188,16 +3197,19 @@ capture = namespace["capture_result_file"]
 assert_capture_outcome = namespace["assert_capture_outcome"]
 
 class Machine:
-  def __init__(self, root, fail_inspection=False, fail_stage=False, fail_output=False):
+  def __init__(self, root, fail_inspection=False, fail_stage=False, fail_output=False, empty_inspection_failure=False):
     self.root = root
     self.output = os.path.join(root, "retained")
     os.makedirs(self.output, exist_ok=True)
     self.fail_inspection = fail_inspection
     self.fail_stage = fail_stage
     self.fail_output = fail_output
+    self.empty_inspection_failure = empty_inspection_failure
   def execute(self, command):
-    if command.startswith("python3 -c ") and self.fail_inspection:
+    if " -e " in command and self.fail_inspection:
       return (2, "injected inspect failure")
+    if " -e " in command and self.empty_inspection_failure:
+      return (127, "")
     if command.startswith("cp -- ") and self.fail_stage:
       return (1, "injected stage failure")
     result = subprocess.run(command, shell=True, capture_output=True, text=True)
@@ -3258,6 +3270,10 @@ with tempfile.TemporaryDirectory() as root:
   result = capture(Machine(root, fail_inspection=True), "sqlite-firefox-ordinary-1-of-2", "results.json", source, guest, errors)
   assert result["source"]["condition"] == "inspection-error"
   assert "operation source inspection" in errors[0]
+  errors = []
+  result = capture(Machine(root, empty_inspection_failure=True), "sqlite-firefox-ordinary-1-of-2", "results.json", source, guest, errors)
+  assert result["source"]["condition"] == "inspection-error"
+  assert "exited with status 127" in result["source"]["detail"], result
 
   source, guest = paths("output-fail", b"{\"ok\":true}")
   errors = []

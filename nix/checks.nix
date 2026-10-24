@@ -387,22 +387,21 @@ e2ePhaseTimingHelpers = backend: browser: identity: ''
   # BEGIN result capture helper
   def capture_result_file(machine, lane, name, source_path, guest_path, retention_errors, required=False):
     """Observe one producer result and record each guest transfer boundary."""
+    node_binary = "${pkgs.nodejs}/bin/node"
     inspect_program = (
-      "import json, os, sys\n"
-      "p=sys.argv[1]\n"
-      "try:\n"
-      " s=os.stat(p); print(json.dumps({'condition': 'empty' if s.st_size == 0 else 'nonempty'}))\n"
-      "except FileNotFoundError:\n"
-      " print(json.dumps({'condition': 'missing'}))\n"
-      "except OSError as e:\n"
-      " print(json.dumps({'condition': 'inspection-error', 'detail': str(e)}))"
+      "const fs=require('node:fs'); "
+      "const p=process.argv[1]; "
+      "try { const size=fs.statSync(p).size; "
+      "console.log(JSON.stringify({condition:size===0?'empty':'nonempty'})); } "
+      "catch (error) { console.log(JSON.stringify({condition:error.code==='ENOENT'?'missing':'inspection-error',detail:error.message})); }"
     )
     try:
       status, output = machine.execute(
-        "python3 -c " + shlex.quote(inspect_program) + " " + shlex.quote(source_path)
+        node_binary + " -e " + shlex.quote(inspect_program) + " " + shlex.quote(source_path)
       )
       if status != 0:
-        source = {"condition": "inspection-error", "detail": output.strip()}
+        detail = output.strip() or "guest inspector exited with status %d" % status
+        source = {"condition": "inspection-error", "detail": detail}
       else:
         source = json.loads(output)
     except Exception as error:
