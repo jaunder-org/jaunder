@@ -381,10 +381,8 @@ impl BaselineLifecycle {
             .context("unknown deployment for seed bridge")?
             .control_port;
         let path = self.private_path(&format!("{deployment_id}-seed.mjs"))?;
-        fs::write(
-            &path,
-            format!(
-                r#"#!{node}
+        let source = format!(
+            r#"#!{node}
 import net from "node:net";
 const quote = (value) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
 const args = process.argv.slice(2).map(quote).join(" ");
@@ -441,9 +439,8 @@ socket.on("end", () => {{
 }});
 {SEED_SOCKET_WRITE}
 "#
-            ),
-        )?;
-        restrict_executable(&path)?;
+        );
+        write_seed_bridge(Path::new(node), &path, &mut source.as_bytes(), |_| Ok(()))?;
         Ok(path)
     }
 
@@ -1964,6 +1961,107 @@ fn restrict(path: &Path) -> Result<()> {
     Ok(())
 }
 
+// Only the admitted child owns the bridge writer, so concurrent parent
+// spawns cannot retain it across publication of the executable (#1820).
+fn write_seed_bridge(
+    node: &Path,
+    path: &Path,
+    source: &mut impl Read,
+    during_write: impl FnOnce(&mut Child) -> Result<()>,
+) -> Result<()> {
+    let mut child = Command::new(node)
+        .args([
+            "-e",
+            r#"
+const fs = require('node:fs');
+const path = process.argv[1];
+let fd;
+let created = false;
+try {
+  fd = fs.openSync(path, 'wx', 0o600);
+  created = true;
+  fs.writeSync(1, '1');
+  const source = fs.readFileSync(0);
+  fs.writeFileSync(fd, source);
+} catch (error) {
+  console.error(error.message);
+  process.exitCode = created ? 2 : 1;
+} finally {
+  if (fd !== undefined) {
+    try { fs.closeSync(fd); } catch (error) {
+      console.error(error.message);
+      process.exitCode = 2;
+    }
+  }
+}
+"#,
+        ])
+        .arg(path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .context("spawning admitted seed bridge writer")?;
+    let mut created = false;
+    let transfer = (|| -> Result<()> {
+        // The one-byte acknowledgement proves exclusive ownership; there is no
+        // undrained output stream competing with source transfer.
+        let mut acknowledgement = [0];
+        child
+            .stdout
+            .take()
+            .context("seed writer acknowledgement pipe")?
+            .read_exact(&mut acknowledgement)
+            .context("seed writer did not acknowledge exclusive creation")?;
+        created = acknowledgement == *b"1";
+        if !created {
+            bail!("seed writer returned an invalid creation acknowledgement");
+        }
+        during_write(&mut child)?;
+        std::io::copy(
+            source,
+            child.stdin.as_mut().context("seed writer input pipe")?,
+        )
+        .context("transferring seed bridge source")?;
+        Ok(())
+    })();
+    // EOF must reach the writer even when input or the construction hook fails.
+    drop(child.stdin.take());
+    let status = match child.wait() {
+        Ok(status) => Ok(status),
+        Err(error) => {
+            // Preserve reap ownership even if the initial wait fails.
+            if let Err(kill_error) = child.kill() {
+                eprintln!("seed writer termination after wait failure: {kill_error}");
+            }
+            child
+                .wait()
+                .context("reaping seed writer after wait failure")?;
+            Err(error).context("waiting for seed bridge writer")
+        }
+    };
+    // Exit 2 also confirms ownership if creation succeeded but the
+    // acknowledgement itself failed. Conflicts exit 1 and never grant cleanup.
+    if let Ok(status) = &status {
+        created |= status.code() == Some(2);
+    }
+    let result = (|| {
+        transfer?;
+        if !status?.success() {
+            bail!("seed bridge writer failed");
+        }
+        restrict_executable(path)
+    })();
+    if result.is_err() && created {
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => eprintln!("removing failed private seed bridge: {error}"),
+        }
+    }
+    result
+}
+
 /// Restrict the lifecycle's private executable bridge without making ordinary
 /// sensitive files executable.
 fn restrict_executable(path: &Path) -> Result<()> {
@@ -2389,6 +2487,171 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn seed_bridge_direct_launch_survives_sibling_spawn_during_construction() {
+        let root = tempfile::tempdir().unwrap();
+        let node = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|directory| directory.join("node"))
+            .find(|path| path.is_file())
+            .unwrap();
+        let node = fs::canonicalize(node).unwrap();
+        let bridge = root.path().join("bridge.mjs");
+        let source = format!("#!{}\nconsole.log('ready');\n", node.display());
+        let mut sibling = None;
+        let mut exposed = [0];
+        let mut writer_pid = 0;
+        let construction = write_seed_bridge(&node, &bridge, &mut source.as_bytes(), |writer| {
+            writer_pid = writer.id();
+            // This diagnostic retains an actual open parent writer before
+            // publication; it models exposure, not the kernel's fork timing.
+            let mut child = Command::new(&node)
+                .args([
+                    "-e",
+                    r#"
+const fs = require('node:fs');
+const [parent, target] = process.argv.slice(1);
+let writer;
+for (const entry of fs.readdirSync(`/proc/${parent}/fd`)) {
+  const fd = `/proc/${parent}/fd/${entry}`;
+  let link;
+  try { link = fs.readlinkSync(fd); } catch (error) {
+    if (error.code === 'ENOENT') continue;
+    throw error;
+  }
+  if (link !== target) continue;
+  const info = fs.readFileSync(`/proc/${parent}/fdinfo/${entry}`, 'utf8');
+  const flags = parseInt(info.match(/^flags:\s+(\d+)/m)[1], 8);
+  if ((flags & 3) === 0) continue;
+  writer = fs.openSync(fd, 'r+');
+  break;
+}
+process.stdout.write(writer === undefined ? '0' : '1');
+process.stdin.resume();
+process.stdin.on('end', () => { if (writer !== undefined) fs.closeSync(writer); });
+"#,
+                ])
+                .arg(std::process::id().to_string())
+                .arg(&bridge)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .spawn()?;
+            let acknowledgement = child
+                .stdout
+                .take()
+                .context("sibling acknowledgement")?
+                .read_exact(&mut exposed);
+            sibling = Some(child);
+            acknowledgement?;
+            Ok(())
+        });
+        let reaped = !Path::new(&format!("/proc/{writer_pid}")).exists();
+        let launched = construction
+            .as_ref()
+            .ok()
+            .map(|()| Command::new(&bridge).env("PATH", root.path()).output());
+        let mut sibling = sibling.unwrap();
+        drop(sibling.stdin.take());
+        assert!(sibling.wait().unwrap().success());
+        construction.unwrap();
+        assert!(
+            reaped,
+            "construction must reap its writer before publication"
+        );
+        let output = launched
+            .unwrap()
+            .expect("direct executable must not encounter a retained construction writer");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, b"ready\n");
+        assert_eq!(
+            &exposed, b"0",
+            "parent must not expose a writable bridge fd"
+        );
+    }
+
+    fn seed_writer_node() -> PathBuf {
+        fs::canonicalize(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap())
+                .map(|directory| directory.join("node"))
+                .find(|path| path.is_file())
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn seed_bridge_failed_input_closes_stdin_reaps_and_removes_owned_file() {
+        struct FailedInput;
+        impl Read for FailedInput {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("fixture input failure"))
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let bridge = root.path().join("bridge.mjs");
+        let mut pid = 0;
+        let error = write_seed_bridge(&seed_writer_node(), &bridge, &mut FailedInput, |child| {
+            pid = child.id();
+            assert!(bridge.is_file());
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("fixture input failure"));
+        assert!(!bridge.exists());
+        assert_ne!(pid, 0);
+        assert!(
+            !Path::new(&format!("/proc/{pid}")).exists(),
+            "writer must be reaped"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn seed_bridge_failed_child_is_reaped_before_owned_file_cleanup() {
+        let root = tempfile::tempdir().unwrap();
+        let bridge = root.path().join("bridge.mjs");
+        let mut pid = 0;
+        let result =
+            write_seed_bridge(&seed_writer_node(), &bridge, &mut &b"source"[..], |child| {
+                pid = child.id();
+                child.kill().context("killing fixture writer")
+            });
+        assert!(result.is_err());
+        assert!(!bridge.exists());
+        assert_ne!(pid, 0);
+        assert!(
+            !Path::new(&format!("/proc/{pid}")).exists(),
+            "writer must be reaped"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn seed_bridge_exclusive_creation_preserves_existing_file_and_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let original = root.path().join("original");
+        let link = root.path().join("link");
+        fs::write(&original, b"untouched").unwrap();
+        symlink(&original, &link).unwrap();
+        for path in [&original, &link] {
+            let result =
+                write_seed_bridge(&seed_writer_node(), path, &mut &b"replacement"[..], |_| {
+                    panic!("exclusive-create conflict must not enter the writer window");
+                });
+            assert!(result.is_err());
+            assert_eq!(fs::read(&original).unwrap(), b"untouched");
+        }
+        assert!(fs::symlink_metadata(link).unwrap().file_type().is_symlink());
+    }
+
     #[test]
     fn seed_bridge_runs_with_admitted_node_even_when_path_has_no_node() {
         let root = tempfile::tempdir().unwrap();
@@ -2422,6 +2685,14 @@ mod tests {
             },
         );
         let bridge = lifecycle.seed_process("seed-fixture", &node).unwrap();
+        let metadata = fs::symlink_metadata(&bridge).unwrap();
+        assert!(metadata.is_file());
+        assert!(!metadata.file_type().is_symlink());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(metadata.permissions().mode() & 0o777, 0o700);
+        }
         let empty_path = root.path().join("empty-path");
         fs::create_dir(&empty_path).unwrap();
         let output = Command::new(&bridge)
