@@ -822,7 +822,7 @@ mod tests {
 
     use crate::test_support::{commit, git_ok, write};
 
-    fn temp_repo(tag: &str) -> std::path::PathBuf {
+    fn temp_repo(tag: &str) -> crate::test_support::TestRepo {
         crate::test_support::temp_repo("git", tag)
     }
 
@@ -833,7 +833,6 @@ mod tests {
         let head = output(&dir, &["rev-parse", "HEAD"]).unwrap();
         assert_eq!(head.len(), 40, "full sha, trimmed: {head:?}");
         assert!(output(&dir, &["not-a-subcommand"]).is_err());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -843,7 +842,6 @@ mod tests {
         commit(&dir, "b.txt", "2\n");
         let subjects = lines(&dir, &["log", "--format=%s"]).unwrap();
         assert_eq!(subjects, vec!["c".to_string(), "c".to_string()]);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -852,7 +850,6 @@ mod tests {
         commit(&dir, "a.txt", "x\n");
         assert!(run(&dir, &["status", "--porcelain"]).is_ok());
         assert!(run(&dir, &["mv", "nope", "nowhere"]).is_err());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -871,7 +868,6 @@ mod tests {
             std::env::temp_dir().join(format!("jaunder-git-missing-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&missing);
         assert!(grep_files(&missing, "x").is_err());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -884,7 +880,6 @@ mod tests {
             std::fs::canonicalize(&root).unwrap(),
             std::fs::canonicalize(&dir).unwrap()
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -896,7 +891,6 @@ mod tests {
             config_get(&dir, "core.hooksPath").unwrap(),
             Some(".githooks".to_string())
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -905,7 +899,6 @@ mod tests {
         assert!(ensure_hooks_path(&dir).unwrap(), "first call sets it");
         assert!(!ensure_hooks_path(&dir).unwrap(), "second call is a no-op");
         assert_eq!(hooks_path(&dir).unwrap(), Some(HOOKS_PATH.to_string()));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -925,7 +918,6 @@ mod tests {
             remote_url(&dir, "origin").unwrap(),
             Some("git@github.com:o/r.git".to_string())
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1150,7 +1142,6 @@ mod tests {
             "a.rs"
         );
         assert_eq!(output(&dir, &["diff", "--name-only"]).unwrap(), "b.rs");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1166,7 +1157,6 @@ mod tests {
         assert!(snap.paths.contains_key("b.rs"));
         assert!(!snap.paths.keys().any(|path| path.contains(" -> ")));
         assert!(snap.paths["b.rs"].worktree_fingerprint.is_some());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1186,7 +1176,6 @@ mod tests {
         assert!(!step.ok);
         assert!(step.detail.as_deref().unwrap().contains("new untracked"));
         assert_eq!(output(&dir, &["show", ":a.rs"]).unwrap(), "three");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1212,7 +1201,6 @@ mod tests {
         );
         assert_eq!(output(&dir, &["show", ":a.rs"]).unwrap(), "two");
         assert_eq!(std::fs::read_to_string(dir.join("a.rs")).unwrap(), "four\n");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1238,7 +1226,6 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1260,7 +1247,6 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1283,7 +1269,6 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
     fn snapshot(status: &[u8], raw: &[u8]) -> GitStatusSnapshot {
         parse_snapshot(status, raw)
@@ -1492,7 +1477,6 @@ mod tests {
                 .iter()
                 .any(|failure| failure.contains("will not add work"))
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
     #[test]
     fn gitlink_mode_is_broad_without_needing_a_worktree_fingerprint() {
@@ -1537,7 +1521,6 @@ mod tests {
 
         assert!(merge_tree_conflicts(&dir, &main, &candidate).unwrap());
         assert!(!merge_tree_conflicts(&dir, &candidate, &candidate).unwrap());
-        let _ = std::fs::remove_dir_all(&dir);
     }
     #[test]
     fn leased_deletion_refuses_changed_head_and_ordinary_push_recreates_absent_branch() {
@@ -1574,7 +1557,6 @@ mod tests {
             .unwrap(),
             changed
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

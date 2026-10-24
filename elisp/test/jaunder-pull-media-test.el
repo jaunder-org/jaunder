@@ -1151,11 +1151,16 @@
   (let* ((hash (secure-hash 'sha256 (string-as-unibyte "cleanup")))
          (cleanup nil)
          warning
-         primary)
+         primary
+         temporary-path
+         fixture-root)
     (jaunder-pull-media-test--with-root root
-                                        (let ((real-delete (symbol-function 'delete-file)))
+                                        (setq fixture-root root)
+                                        (let ((temporary-file-directory (file-name-as-directory root))
+                                              (real-delete (symbol-function 'delete-file)))
                                           (cl-letf (((symbol-function 'jaunder--pull-media-get)
                                                      (lambda (_url temporary)
+                                                       (setq temporary-path temporary)
                                                        (jaunder-pull-media-test--write-bytes temporary "partial")
                                                        (setq cleanup t)
                                                        (error "primary acquisition failure")))
@@ -1171,7 +1176,11 @@
                                                  (jaunder-pull-media-test--materialization-plan hash "a.bin"))
                                               (error (setq primary (error-message-string err))))
                                             (should (equal primary "primary acquisition failure"))
-                                            (should (string-match-p "could not remove pulled-media temporary" warning)))))))
+                                            (should (string-match-p "could not remove pulled-media temporary" warning))
+                                            (should (file-in-directory-p temporary-path root))
+                                            (should (file-exists-p temporary-path)))))
+    (should-not (file-exists-p temporary-path))
+    (should-not (file-exists-p fixture-root))))
 
 (ert-deftest jaunder-pull-media-finalize-staged-cleans-owned-temp-after-write-or-hash-failure ()
   "Every created finalization temporary is cleaned even when staging it fails."

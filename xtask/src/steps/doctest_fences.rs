@@ -587,8 +587,6 @@ mod tests {
         assert_eq!(roots[1].source, top.join("tools"));
         assert_eq!(roots[1].manifest, top.join("tools/Cargo.toml"));
         assert!(roots.iter().all(|root| root.manifest.is_absolute()));
-
-        let _ = std::fs::remove_dir_all(repo);
     }
 
     #[test]

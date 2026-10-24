@@ -133,7 +133,6 @@ mod tests {
             git::output(&dir, &["diff", "--cached", "--name-only"]).expect("cached paths"),
             "a.rs"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -169,7 +168,6 @@ mod tests {
             "a.rs"
         );
         assert_eq!(git::output(&dir, &["diff", "--name-only"]).unwrap(), "b.rs");
-        let _ = std::fs::remove_dir_all(&dir);
     }
     #[test]
     fn precommit_routes_staged_markdown_before_restaging_safe_formatter_output() {
@@ -201,7 +199,6 @@ mod tests {
             git::output(&dir, &["diff", "--cached", "--name-only"]).expect("cached paths"),
             "guide.md"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -243,7 +240,6 @@ mod tests {
                 .count(),
             1
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -275,6 +271,5 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -287,12 +287,10 @@ pub fn problems(repo: &Path) -> Result<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::*;
     use crate::test_support::{commit, write};
 
-    fn repo(tag: &str) -> PathBuf {
+    fn repo(tag: &str) -> crate::test_support::TestRepo {
         crate::test_support::temp_repo("links", tag)
     }
 

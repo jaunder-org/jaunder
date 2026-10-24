@@ -8,7 +8,7 @@
 //! the fixture at the real repository — corrupting the shared config and committing
 //! fixture files to the branch.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::ExitStatus;
 
 /// A fn wearing the **retired** leptos `#[server]` spelling (#714) — the fixture
@@ -35,15 +35,34 @@ pub fn git_ok(dir: &Path, args: &[&str]) {
     assert!(git(dir, args).success(), "git {args:?} failed");
 }
 
+/// An owning repository path: path access never separates callers from cleanup.
+pub struct TestRepo(tempfile::TempDir);
+
+impl std::ops::Deref for TestRepo {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.path()
+    }
+}
+
+impl AsRef<Path> for TestRepo {
+    fn as_ref(&self) -> &Path {
+        self.0.path()
+    }
+}
+
 /// A fresh git repo under a temp dir, identity configured.
 ///
-/// The directory name is `jaunder-<prefix>-<tag>-<pid>`. `tag` must be unique among
-/// the callers sharing a `prefix`: tests in one binary share a process, so the pid
-/// alone does not separate them and a collision means two tests racing on one repo.
-pub fn temp_repo(prefix: &str, tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("jaunder-{prefix}-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+/// Retain the returned owner through every Git/filesystem use. Randomized names
+/// isolate callers, and ownership starts before Git initialization can unwind.
+pub fn temp_repo(prefix: &str, tag: &str) -> TestRepo {
+    let dir = TestRepo(
+        tempfile::Builder::new()
+            .prefix(&format!("jaunder-{prefix}-{tag}-"))
+            .tempdir()
+            .unwrap(),
+    );
     for args in [
         &["init", "-q", "-b", "main"][..],
         &["config", "user.email", "t@t"],
@@ -66,4 +85,52 @@ pub fn commit(dir: &Path, rel: &str, body: &str) {
     write(dir, rel, body);
     git_ok(dir, &["add", rel]);
     git_ok(dir, &["commit", "-qm", "c"]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn temp_repo_cleans_after_normal_return() {
+        let path = {
+            let owner = temp_repo("ownership", "normal");
+            let path: &Path = owner.as_ref();
+            git_ok(path, &["rev-parse", "--git-dir"]);
+            path.to_path_buf()
+        };
+        assert!(!path.exists(), "fixture survived normal return: {path:?}");
+    }
+
+    #[test]
+    fn temp_repo_cleans_after_error_return() {
+        fn fail(path: &mut Option<PathBuf>) -> Result<(), &'static str> {
+            let owner = temp_repo("ownership", "error");
+            let root: &Path = owner.as_ref();
+            git_ok(root, &["rev-parse", "--git-dir"]);
+            *path = Some(root.to_path_buf());
+            Err("fixture consumer failed")
+        }
+
+        let mut path = None;
+        assert_eq!(fail(&mut path), Err("fixture consumer failed"));
+        let path = path.expect("fixture created before error");
+        assert!(!path.exists(), "fixture survived error return: {path:?}");
+    }
+
+    #[test]
+    fn temp_repo_cleans_after_panic_unwinding() {
+        let mut path = None;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let owner = temp_repo("ownership", "panic");
+            let root: &Path = owner.as_ref();
+            git_ok(root, &["rev-parse", "--git-dir"]);
+            path = Some(root.to_path_buf());
+            panic!("fixture consumer panicked");
+        }));
+        assert!(result.is_err());
+        let path = path.expect("fixture created before panic");
+        assert!(!path.exists(), "fixture survived panic unwinding: {path:?}");
+    }
 }

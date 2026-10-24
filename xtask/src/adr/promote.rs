@@ -268,7 +268,6 @@ mod tests {
         let body = std::fs::read_to_string(tmp.join("docs/adr/0002-d.md")).unwrap();
         assert!(body.contains("](0001-foo.md)"), "body: {body}");
         assert!(!body.contains("](../0001-foo.md)"), "body: {body}");
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -283,7 +282,6 @@ mod tests {
         let body = std::fs::read_to_string(tmp.join("docs/adr/0002-d.md")).unwrap();
         assert!(body.contains("](template.md)"), "body: {body}");
         assert!(body.contains("](../CONTRIBUTING.md)"), "body: {body}");
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -305,7 +303,6 @@ mod tests {
         );
         assert!(body.contains("```text\nADR-DRAFT\n```"), "body: {body}");
         assert!(!body.contains("`ADR-0002`"), "body: {body}");
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -342,7 +339,6 @@ mod tests {
         let staged = git_stdout(&tmp, &["diff", "--cached", "--name-only"]);
         assert!(unstaged.trim().is_empty(), "unstaged diff: {unstaged}");
         assert!(staged.trim().is_empty(), "staged diff: {staged}");
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     // Assert on the `warning:` clause, never on the whole summary: Pass C already
@@ -366,7 +362,6 @@ mod tests {
             summary.contains("warning: unresolved link(s) — docs/adr/0002-d.md: nonexistent.md"),
             "summary: {summary}"
         );
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -379,7 +374,6 @@ mod tests {
         );
         let summary = promote_tracked(&tmp).unwrap();
         assert!(!summary.contains("warning"), "summary: {summary}");
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -409,7 +403,6 @@ mod tests {
         assert_eq!(notes, "See [Bbb](adr/0003-bbb.md).\n");
         let after = crate::doc_links::problems(&tmp).unwrap();
         assert!(after.is_empty(), "promoted links must resolve: {after:?}");
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -433,7 +426,6 @@ mod tests {
             problems.is_empty(),
             "promoted tree must be clean: {problems:?}"
         );
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -448,7 +440,6 @@ mod tests {
         let body = std::fs::read_to_string(tmp.join("docs/adr/0002-d.md")).unwrap();
         assert!(body.contains("- Status: accepted"), "body: {body}");
         assert!(!body.contains("proposed"), "body: {body}");
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -468,7 +459,6 @@ mod tests {
             let body = std::fs::read_to_string(tmp.join("docs/adr/0002-d.md")).unwrap();
             assert!(body.contains(&format!("- Status: {token}")), "body: {body}");
             assert!(!body.contains("accepted"), "{token} body: {body}");
-            let _ = std::fs::remove_dir_all(&tmp);
         }
     }
 
@@ -487,7 +477,6 @@ mod tests {
         promote_tracked(&tmp).unwrap();
         let body = std::fs::read_to_string(tmp.join("docs/adr/0002-d.md")).unwrap();
         assert!(body.contains("  - Status: accepted"), "body: {body}");
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -507,7 +496,6 @@ mod tests {
             body.contains("We proposed X in an earlier cycle."),
             "prose must survive: {body}"
         );
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -527,7 +515,6 @@ mod tests {
             summary.contains("(status: proposed -> accepted)"),
             "summary: {summary}"
         );
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -540,7 +527,6 @@ mod tests {
         );
         let summary = promote_tracked(&tmp).unwrap();
         assert!(!summary.contains("status:"), "summary: {summary}");
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// Trimmed stdout of a git command that must succeed — for asserting index
@@ -563,7 +549,7 @@ mod tests {
 
     /// A committed repo with `docs/adr/0001-foo.md` on `main` — the base state the
     /// promote tests graduate a draft on top of.
-    fn promote_repo(tag: &str) -> std::path::PathBuf {
+    fn promote_repo(tag: &str) -> crate::test_support::TestRepo {
         let tmp = crate::test_support::temp_repo("adr-promote", tag);
         write(
             &tmp,
@@ -637,8 +623,6 @@ mod tests {
             "staged: {staged}"
         );
         assert!(staged.contains("M\tdocs/README.md"), "staged: {staged}");
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -662,8 +646,6 @@ mod tests {
         assert!(tmp.join("docs/adr/0003-bbb.md").exists());
         assert!(!tmp.join("docs/adr/drafts/aaa.md").exists());
         assert!(!tmp.join("docs/adr/drafts/bbb.md").exists());
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -689,8 +671,6 @@ mod tests {
 
         let notes = std::fs::read_to_string(tmp.join("docs/notes.md")).unwrap();
         assert_eq!(notes, "Decided in docs/adr/0002-my-decision.md.\n");
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -717,8 +697,6 @@ mod tests {
             "cross-reference rewritten: {bbb}"
         );
         assert!(!bbb.contains("drafts/aaa"), "no stale draft path: {bbb}");
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -736,7 +714,6 @@ mod tests {
         let unstaged = git_stdout(&tmp, &["diff", "--name-only"]);
         assert!(staged.is_empty(), "staged: {staged}");
         assert!(unstaged.is_empty(), "unstaged: {unstaged}");
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -748,8 +725,6 @@ mod tests {
         // Nothing staged.
         let staged = git_stdout(&tmp, &["diff", "--cached", "--name-only"]);
         assert!(staged.is_empty(), "staged: {staged}");
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -770,7 +745,6 @@ mod tests {
         let unstaged = git_stdout(&tmp, &["diff", "--name-only"]);
         assert!(staged.is_empty(), "staged: {staged}");
         assert!(unstaged.is_empty(), "unstaged: {unstaged}");
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -796,8 +770,6 @@ mod tests {
 
         assert!(tmp.join("docs/adr/0006-later.md").exists());
         assert!(!tmp.join("docs/adr/drafts/later.md").exists());
-
-        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
