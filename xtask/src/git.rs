@@ -822,42 +822,43 @@ mod tests {
 
     use crate::test_support::{commit, git_ok, write};
 
-    fn temp_repo(tag: &str) -> std::path::PathBuf {
+    fn temp_repo(tag: &str) -> tempfile::TempDir {
         crate::test_support::temp_repo("git", tag)
     }
 
     #[test]
     fn output_returns_trimmed_stdout_and_bails_on_error() {
-        let dir = temp_repo("output");
+        let owner = temp_repo("output");
+        let dir = owner.path().to_path_buf();
         commit(&dir, "a.txt", "x\n");
         let head = output(&dir, &["rev-parse", "HEAD"]).unwrap();
         assert_eq!(head.len(), 40, "full sha, trimmed: {head:?}");
         assert!(output(&dir, &["not-a-subcommand"]).is_err());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn lines_drops_blank_lines() {
-        let dir = temp_repo("lines");
+        let owner = temp_repo("lines");
+        let dir = owner.path().to_path_buf();
         commit(&dir, "a.txt", "1\n");
         commit(&dir, "b.txt", "2\n");
         let subjects = lines(&dir, &["log", "--format=%s"]).unwrap();
         assert_eq!(subjects, vec!["c".to_string(), "c".to_string()]);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn run_ok_on_success_err_on_failure() {
-        let dir = temp_repo("run");
+        let owner = temp_repo("run");
+        let dir = owner.path().to_path_buf();
         commit(&dir, "a.txt", "x\n");
         assert!(run(&dir, &["status", "--porcelain"]).is_ok());
         assert!(run(&dir, &["mv", "nope", "nowhere"]).is_err());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn grep_files_match_no_match_and_error() {
-        let dir = temp_repo("grep");
+        let owner = temp_repo("grep");
+        let dir = owner.path().to_path_buf();
         commit(&dir, "hay.txt", "a needle here\n");
         commit(&dir, "other.txt", "nothing\n");
         assert_eq!(
@@ -871,12 +872,12 @@ mod tests {
             std::env::temp_dir().join(format!("jaunder-git-missing-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&missing);
         assert!(grep_files(&missing, "x").is_err());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn toplevel_returns_repo_root() {
-        let dir = temp_repo("toplevel");
+        let owner = temp_repo("toplevel");
+        let dir = owner.path().to_path_buf();
         commit(&dir, "a.txt", "x\n");
         let root = toplevel(&dir).unwrap();
         // Compare canonically — /tmp may be a symlink.
@@ -884,33 +885,33 @@ mod tests {
             std::fs::canonicalize(&root).unwrap(),
             std::fs::canonicalize(&dir).unwrap()
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn config_get_none_when_unset_some_after_set() {
-        let dir = temp_repo("config");
+        let owner = temp_repo("config");
+        let dir = owner.path().to_path_buf();
         assert_eq!(config_get(&dir, "core.hooksPath").unwrap(), None);
         config_set(&dir, "core.hooksPath", ".githooks").unwrap();
         assert_eq!(
             config_get(&dir, "core.hooksPath").unwrap(),
             Some(".githooks".to_string())
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn ensure_hooks_path_sets_then_is_noop() {
-        let dir = temp_repo("ensure-hooks");
+        let owner = temp_repo("ensure-hooks");
+        let dir = owner.path().to_path_buf();
         assert!(ensure_hooks_path(&dir).unwrap(), "first call sets it");
         assert!(!ensure_hooks_path(&dir).unwrap(), "second call is a no-op");
         assert_eq!(hooks_path(&dir).unwrap(), Some(HOOKS_PATH.to_string()));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn current_branch_head_sha_and_remote_read_a_real_repo() {
-        let dir = temp_repo("readers");
+        let owner = temp_repo("readers");
+        let dir = owner.path().to_path_buf();
         commit(&dir, "seed.txt", "x\n");
         assert!(current_branch(&dir).unwrap().is_some());
         let sha = head_sha(&dir).unwrap().expect("a seeded repo has a HEAD");
@@ -925,7 +926,6 @@ mod tests {
             remote_url(&dir, "origin").unwrap(),
             Some("git@github.com:o/r.git".to_string())
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1130,7 +1130,8 @@ mod tests {
 
     #[test]
     fn precommit_apply_restages_only_the_previously_staged_file() {
-        let dir = temp_repo("precommit-restage");
+        let owner = temp_repo("precommit-restage");
+        let dir = owner.path().to_path_buf();
         commit(&dir, "a.rs", "fn a(){}\n");
         commit(&dir, "b.rs", "fn b(){}\n");
 
@@ -1150,12 +1151,12 @@ mod tests {
             "a.rs"
         );
         assert_eq!(output(&dir, &["diff", "--name-only"]).unwrap(), "b.rs");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn status_snapshot_forces_rename_detection_not_copy_detection() {
-        let dir = temp_repo("status-no-copies");
+        let owner = temp_repo("status-no-copies");
+        let dir = owner.path().to_path_buf();
         commit(&dir, "a.rs", "same\n");
         git_ok(&dir, &["config", "status.renames", "copies"]);
         write(&dir, "b.rs", "same\n");
@@ -1166,12 +1167,12 @@ mod tests {
         assert!(snap.paths.contains_key("b.rs"));
         assert!(!snap.paths.keys().any(|path| path.contains(" -> ")));
         assert!(snap.paths["b.rs"].worktree_fingerprint.is_some());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn precommit_apply_stages_safe_paths_even_when_other_failures_exist() {
-        let dir = temp_repo("precommit-partial-failure");
+        let owner = temp_repo("precommit-partial-failure");
+        let dir = owner.path().to_path_buf();
         commit(&dir, "a.rs", "one\n");
         write(&dir, "a.rs", "two\n");
         git_ok(&dir, &["add", "a.rs"]);
@@ -1186,12 +1187,12 @@ mod tests {
         assert!(!step.ok);
         assert!(step.detail.as_deref().unwrap().contains("new untracked"));
         assert_eq!(output(&dir, &["show", ":a.rs"]).unwrap(), "three");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn precommit_apply_refuses_mixed_staged_unstaged_file() {
-        let dir = temp_repo("precommit-mixed");
+        let owner = temp_repo("precommit-mixed");
+        let dir = owner.path().to_path_buf();
         commit(&dir, "a.rs", "one\n");
         write(&dir, "a.rs", "two\n");
         git_ok(&dir, &["add", "a.rs"]);
@@ -1212,12 +1213,12 @@ mod tests {
         );
         assert_eq!(output(&dir, &["show", ":a.rs"]).unwrap(), "two");
         assert_eq!(std::fs::read_to_string(dir.join("a.rs")).unwrap(), "four\n");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn precommit_apply_refuses_unstaged_only_file() {
-        let dir = temp_repo("precommit-unstaged");
+        let owner = temp_repo("precommit-unstaged");
+        let dir = owner.path().to_path_buf();
         commit(&dir, "a.rs", "one\n");
         let before = status_snapshot(&dir).unwrap();
 
@@ -1238,12 +1239,12 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn precommit_apply_refuses_new_untracked_file_without_staging_old_untracked() {
-        let dir = temp_repo("precommit-untracked");
+        let owner = temp_repo("precommit-untracked");
+        let dir = owner.path().to_path_buf();
         commit(&dir, "tracked.rs", "one\n");
         write(&dir, "old.tmp", "old\n");
         let before = status_snapshot(&dir).unwrap();
@@ -1260,12 +1261,12 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn precommit_apply_refuses_new_file_inside_preexisting_untracked_dir() {
-        let dir = temp_repo("precommit-untracked-dir");
+        let owner = temp_repo("precommit-untracked-dir");
+        let dir = owner.path().to_path_buf();
         commit(&dir, "tracked.rs", "one\n");
         write(&dir, "scratch/old.tmp", "old\n");
         let before = status_snapshot(&dir).unwrap();
@@ -1283,7 +1284,6 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
     fn snapshot(status: &[u8], raw: &[u8]) -> GitStatusSnapshot {
         parse_snapshot(status, raw)
@@ -1479,7 +1479,8 @@ mod tests {
 
     #[test]
     fn reconciliation_detects_mutation_of_preexisting_unstaged_regular_file() {
-        let dir = temp_repo("precommit-unstaged-fingerprint");
+        let owner = temp_repo("precommit-unstaged-fingerprint");
+        let dir = owner.path().to_path_buf();
         commit(&dir, "a.rs", "one\n");
         write(&dir, "a.rs", "two\n");
         let before = status_snapshot(&dir).expect("before snapshot");
@@ -1492,7 +1493,6 @@ mod tests {
                 .iter()
                 .any(|failure| failure.contains("will not add work"))
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
     #[test]
     fn gitlink_mode_is_broad_without_needing_a_worktree_fingerprint() {
@@ -1524,7 +1524,8 @@ mod tests {
     }
     #[test]
     fn merge_tree_classifies_exact_conflicts_and_non_conflicting_ancestry() {
-        let dir = temp_repo("promoter-merge-tree");
+        let owner = temp_repo("promoter-merge-tree");
+        let dir = owner.path().to_path_buf();
         commit(&dir, "shared.txt", "base\n");
         git_ok(&dir, &["branch", "candidate"]);
         write(&dir, "shared.txt", "main\n");
@@ -1537,11 +1538,11 @@ mod tests {
 
         assert!(merge_tree_conflicts(&dir, &main, &candidate).unwrap());
         assert!(!merge_tree_conflicts(&dir, &candidate, &candidate).unwrap());
-        let _ = std::fs::remove_dir_all(&dir);
     }
     #[test]
     fn leased_deletion_refuses_changed_head_and_ordinary_push_recreates_absent_branch() {
-        let dir = temp_repo("promoter-lease");
+        let owner = temp_repo("promoter-lease");
+        let dir = owner.path().to_path_buf();
         commit(&dir, "seed.txt", "one\n");
         let remote = dir.join("remote.git");
         git_ok(&dir, &["init", "--bare", "remote.git"]);
@@ -1574,7 +1575,6 @@ mod tests {
             .unwrap(),
             changed
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

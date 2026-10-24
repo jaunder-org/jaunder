@@ -388,7 +388,8 @@ mod tests {
 
     #[test]
     fn e2e_provenance_corrupt_marker_is_distinct_from_missing() {
-        let root = test_support::temp_repo("provenance", "corrupt");
+        let owner = test_support::temp_repo("provenance", "corrupt");
+        let root = owner.path().to_path_buf();
         test_support::commit(&root, ".gitignore", ".xtask/\n");
         let output = tempfile::tempdir().unwrap();
         let marker = output.path().join("producer-input-test.json");
@@ -418,7 +419,8 @@ mod tests {
 
     #[test]
     fn e2e_provenance_unreadable_marker_and_corrupt_report_keep_context() {
-        let root = test_support::temp_repo("provenance", "unreadable");
+        let owner = test_support::temp_repo("provenance", "unreadable");
+        let root = owner.path().to_path_buf();
         test_support::commit(&root, ".gitignore", ".xtask/\n");
         let output = tempfile::tempdir().unwrap();
         std::fs::create_dir(output.path().join("producer-input-test.json")).unwrap();
@@ -446,7 +448,8 @@ mod tests {
 
     #[test]
     fn e2e_provenance_freezes_raw_parents_including_shallow_checkout() {
-        let root = test_support::temp_repo("provenance", "raw");
+        let owner = test_support::temp_repo("provenance", "raw");
+        let root = owner.path().to_path_buf();
         test_support::commit(&root, "a", "one");
         let parent = git_text(&root, &["rev-parse", "HEAD"]).unwrap();
         test_support::commit(&root, "a", "two");
@@ -560,7 +563,8 @@ mod tests {
 
     #[test]
     fn e2e_provenance_failed_marker_clearing_prevents_attestation() {
-        let root = test_support::temp_repo("provenance", "clearing");
+        let owner = test_support::temp_repo("provenance", "clearing");
+        let root = owner.path().to_path_buf();
         test_support::commit(&root, ".gitignore", ".xtask/\n");
         let marker = root.join(".xtask/diagnostics/e2e-test/producer-input-test.json");
         std::fs::create_dir_all(&marker).unwrap();
@@ -576,7 +580,8 @@ mod tests {
 
     #[test]
     fn e2e_provenance_retains_preselection_on_failed_spawn_and_never_claims_cached_runtime() {
-        let root = test_support::temp_repo("provenance", "failed");
+        let owner = test_support::temp_repo("provenance", "failed");
+        let root = owner.path().to_path_buf();
         test_support::commit(&root, ".gitignore", ".xtask/\n");
         let output = tempfile::tempdir().unwrap();
         let head = checkout(&root).unwrap().head;

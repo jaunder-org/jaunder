@@ -71,7 +71,8 @@ mod tests {
 
     #[test]
     fn precommit_reconciles_once_after_an_early_static_failure() {
-        let dir = crate::test_support::temp_repo("precommit", "early-failure-reconcile");
+        let owner = crate::test_support::temp_repo("precommit", "early-failure-reconcile");
+        let dir = owner.path().to_path_buf();
         crate::test_support::commit(&dir, "a.rs", "fn a(){}\n");
         crate::test_support::write(&dir, "a.rs", "fn a() { }\n");
         crate::test_support::git_ok(&dir, &["add", "a.rs"]);
@@ -133,12 +134,12 @@ mod tests {
             git::output(&dir, &["diff", "--cached", "--name-only"]).expect("cached paths"),
             "a.rs"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn precommit_orchestration_restages_safe_fixture() {
-        let dir = crate::test_support::temp_repo("precommit", "orchestration-safe");
+        let owner = crate::test_support::temp_repo("precommit", "orchestration-safe");
+        let dir = owner.path().to_path_buf();
         crate::test_support::commit(&dir, "a.rs", "fn a(){}\n");
         crate::test_support::commit(&dir, "b.rs", "fn b(){}\n");
         crate::test_support::write(&dir, "a.rs", "fn a() { }\n");
@@ -169,11 +170,11 @@ mod tests {
             "a.rs"
         );
         assert_eq!(git::output(&dir, &["diff", "--name-only"]).unwrap(), "b.rs");
-        let _ = std::fs::remove_dir_all(&dir);
     }
     #[test]
     fn precommit_routes_staged_markdown_before_restaging_safe_formatter_output() {
-        let dir = crate::test_support::temp_repo("precommit", "markdown-routing");
+        let owner = crate::test_support::temp_repo("precommit", "markdown-routing");
+        let dir = owner.path().to_path_buf();
         crate::test_support::commit(&dir, "guide.md", "# Guide\n");
         crate::test_support::write(&dir, "guide.md", "# Guide\nChanged\n");
         crate::test_support::git_ok(&dir, &["add", "guide.md"]);
@@ -201,12 +202,12 @@ mod tests {
             git::output(&dir, &["diff", "--cached", "--name-only"]).expect("cached paths"),
             "guide.md"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn narrow_dispatch_failure_still_reconciles_exactly_once() {
-        let dir = crate::test_support::temp_repo("precommit", "markdown-failure");
+        let owner = crate::test_support::temp_repo("precommit", "markdown-failure");
+        let dir = owner.path().to_path_buf();
         crate::test_support::commit(&dir, "guide.md", "# Guide\n");
         crate::test_support::write(&dir, "guide.md", "# Guide\nChanged\n");
         crate::test_support::git_ok(&dir, &["add", "guide.md"]);
@@ -243,12 +244,12 @@ mod tests {
                 .count(),
             1
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn precommit_orchestration_fails_clean_before_tracked_mutation() {
-        let dir = crate::test_support::temp_repo("precommit", "orchestration-unsafe");
+        let owner = crate::test_support::temp_repo("precommit", "orchestration-unsafe");
+        let dir = owner.path().to_path_buf();
         crate::test_support::commit(&dir, "clean.rs", "one\n");
 
         let result = run_precommit_with_host_gate(&dir, |_, result| {
@@ -275,6 +276,5 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

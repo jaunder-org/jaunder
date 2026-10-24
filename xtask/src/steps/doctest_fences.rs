@@ -565,7 +565,8 @@ mod tests {
 
     #[test]
     fn host_roots_are_absolute_when_invoked_beneath_the_repository_root() {
-        let repo = temp_repo("doctest-fences", "outside-root");
+        let owner = temp_repo("doctest-fences", "outside-root");
+        let repo = owner.path().to_path_buf();
         commit(&repo, "xtask/Cargo.toml", "[workspace]\n");
         commit(&repo, "xtask/src/lib.rs", "");
         commit(&repo, "tools/Cargo.toml", "[workspace]\n");
@@ -587,8 +588,6 @@ mod tests {
         assert_eq!(roots[1].source, top.join("tools"));
         assert_eq!(roots[1].manifest, top.join("tools/Cargo.toml"));
         assert!(roots.iter().all(|root| root.manifest.is_absolute()));
-
-        let _ = std::fs::remove_dir_all(repo);
     }
 
     #[test]
