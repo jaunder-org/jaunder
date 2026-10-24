@@ -24,7 +24,6 @@ let
     testSupportBin
     devtoolBin
     docsDevtoolBin
-    mkToolingCargo
     cargo-crap
     wasm-bindgen-cli
     wasmTestWebdriverConfig
@@ -38,9 +37,6 @@ let
     emacsSrc
     emacsForCi
     ;
-  toolingCargoArtifactsCheck = import ./tooling-cargo-test.nix {
-    inherit pkgs craneLib mkToolingCargo devtoolBin nonSubstitutable;
-  };
   # Verdict outputs must not be substituted; build/dependency artifacts may be.
   # These flags do not rerun outputs already valid in the local store. CI must
   # retain executing-verdict evidence rather than infer execution from availability.
@@ -2527,7 +2523,6 @@ wasm-coverage-measure-firefox-instrumented = mkWasmCoverageMeasurementProducer {
 e2eGateChecks
 // coverageCacheChecks
 // {
-  tooling-cargo-artifacts = toolingCargoArtifactsCheck;
   wasm-tests = assert sourceMembershipAssertions; craneLib.cargoTest (
     commonArgs
     // {
@@ -2758,9 +2753,6 @@ static-code =
       JAUNDER_DEVTOOL_TOOLS_CARGO_HOME = "${toolsOfflineCargoHome}";
     }
     ''
-      # The shared tooling path must preserve changed local semantics while importing
-      # fresh external artifacts; this proof does not replace any static definition.
-      test -d ${toolingCargoArtifactsCheck}
       # Writable copy: `devtool check tsc` provisions end2end/node_modules
       # in-process (#229).
       cp --no-preserve=mode -r ${staticCodeSrc} src

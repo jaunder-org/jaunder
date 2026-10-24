@@ -1195,7 +1195,6 @@ in
       testSupportBin
       devtoolBin
       docsDevtoolBin
-      mkToolingCargo
       cargo-crap
       wasm-bindgen-cli
       wasmTestWebdriverConfig

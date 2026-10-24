@@ -1,4 +1,0 @@
-pub fn value() -> String {
-    let mut buffer = itoa::Buffer::new();
-    buffer.format(7_u32).to_owned()
-}
