@@ -313,9 +313,14 @@ mod tests {
     }
     #[test]
     fn reports_git_failures_explicitly() {
-        let temporary = tempfile::tempdir().expect("tempdir");
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let temporary_root = checkout.join(".xtask/tmp");
+        fs::create_dir_all(&temporary_root).expect("temporary root");
+        // Nest permanently under the checkout; a missing child makes Git -C
+        // fail before ancestor discovery regardless of the caller's TMPDIR.
+        let temporary = tempfile::tempdir_in(&temporary_root).expect("tempdir");
         let report = rust(&CollectorContext {
-            repo_root: temporary.path().to_path_buf(),
+            repo_root: temporary.path().join("unavailable-checkout"),
             snapshot: SourceSnapshot::default(),
             semantic_reports: Default::default(),
         });

@@ -118,11 +118,13 @@ fn initdb_args(pgdata: &Path) -> Vec<String> {
 }
 
 /// `-c k=v` pairs for `pg_ctl -o`; durability disabled (the cluster is discarded).
-fn server_settings(host: &str, port: u16, pgdata: &Path) -> Vec<String> {
+fn server_settings(host: &str, port: u16) -> Vec<String> {
     [
         format!("listen_addresses={host}"),
         format!("port={port}"),
-        format!("unix_socket_directories={}", pgdata.display()),
+        // Clients use loopback TCP; avoid Unix socket pathname limits on PGDATA.
+        // pg_ctl interprets -o through a shell, so quote the empty setting.
+        "unix_socket_directories=''".to_string(),
         "max_connections=200".to_string(),
         "fsync=off".to_string(),
         "full_page_writes=off".to_string(),
@@ -293,7 +295,7 @@ fn start_cluster_on_port(port: u16) -> Result<Arc<Cluster>> {
     let cluster = create_cluster_guard()?;
     let startup = (|| {
         run_checked(Command::new("initdb").args(initdb_args(&cluster.pgdata)))?;
-        let settings = server_settings(HOST, port, &cluster.pgdata).join(" ");
+        let settings = server_settings(HOST, port).join(" ");
         run_checked(Command::new("pg_ctl").args([
             "-D",
             &cluster.pgdata.display().to_string(),
@@ -455,10 +457,10 @@ mod tests {
 
     #[test]
     fn server_settings_disable_durability() {
-        let s = server_settings(HOST, 54329, &PathBuf::from("/tmp/pg")).join(" ");
+        let s = server_settings(HOST, 54329).join(" ");
         assert!(s.contains("-c listen_addresses=127.0.0.1"));
         assert!(s.contains("-c port=54329"));
-        assert!(s.contains("-c unix_socket_directories=/tmp/pg"));
+        assert!(s.contains("-c unix_socket_directories=''"));
         assert!(s.contains("-c max_connections=200"));
         assert!(s.contains("-c fsync=off"));
         assert!(s.contains("-c full_page_writes=off"));

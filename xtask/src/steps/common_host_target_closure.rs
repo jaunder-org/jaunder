@@ -251,10 +251,12 @@ fn prepare_metadata_root(root: &Path, directory: &Path, package: &str) -> Result
         .context("writing temporary metadata source")?;
     let package_path = serde_json::to_string(&root.join(package).to_string_lossy())
         .context("encoding package path for temporary manifest")?;
+    // Keep checkout-local temporary packages out of the ancestor product workspace.
     fs::write(
         &manifest,
         format!(
-            "[package]\nname = \"target-closure-root\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\
+            "[workspace]\n\
+             [package]\nname = \"target-closure-root\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\
              [dependencies]\n{package} = {{ path = {package_path} }}\n{patches}"
         ),
     )
@@ -330,6 +332,59 @@ mod tests {
             fs::write(lock, "# temporary Cargo reconciliation\n").unwrap();
             assert_eq!(fs::read(product.path().join("Cargo.lock")).unwrap(), locked);
         }
+    }
+
+    #[test]
+    fn nested_metadata_root_is_independent_of_checkout_workspace() {
+        let checkout = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
+        let artifacts = checkout.join(".xtask/issue-1811");
+        fs::create_dir_all(&artifacts).unwrap();
+        let owned = tempfile::tempdir_in(&artifacts).unwrap();
+        let product = owned.path().join("product");
+        fs::create_dir_all(product.join("host/src")).unwrap();
+        fs::write(
+            product.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"host\"]\nresolver = \"3\"\n",
+        )
+        .unwrap();
+        fs::write(product.join("Cargo.lock"), "version = 4\n").unwrap();
+        fs::write(
+            product.join("host/Cargo.toml"),
+            "[package]\nname = \"host\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::write(product.join("host/src/lib.rs"), "").unwrap();
+        let isolated = tempfile::tempdir_in(owned.path()).unwrap();
+        let manifest = prepare_metadata_root(&product, isolated.path(), "host").unwrap();
+
+        // Cargo must accept the generated package beneath the real checkout workspace,
+        // without resolving the product's full dependency graph for this regression.
+        let output = std::process::Command::new("cargo")
+            .args([
+                "metadata",
+                "--offline",
+                "--format-version=1",
+                "--manifest-path",
+            ])
+            .arg(manifest)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            metadata["workspace_root"],
+            isolated.path().to_str().unwrap()
+        );
+        assert_eq!(
+            fs::read_to_string(product.join("Cargo.lock")).unwrap(),
+            "version = 4\n"
+        );
     }
 
     #[test]
