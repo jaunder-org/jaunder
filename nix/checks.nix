@@ -163,7 +163,7 @@ e2ePanicGate = backend: identity: ''
 '';
 
 # The two e2e time budgets, which must stay ordered:
-# `e2ePlaywrightTimeout` < `e2eGlobalTimeout`.
+# `playwrightTimeout` < `vmGlobalTimeout`.
 #
 # Playwright runs under `machine.execute`, whose driver default is
 # `timeout=900` — passing no `timeout=` silently caps the Playwright step
@@ -183,7 +183,6 @@ e2ePanicGate = backend: identity: ''
 e2ePlaywrightTimeout = 1500;
 e2eLifecycleAllowance = 300;
 e2eDeadlineReserve = 120;
-e2eGlobalTimeout = e2ePlaywrightTimeout + e2eLifecycleAllowance + e2eDeadlineReserve;
 e2eSeedTraceTimeout = 30;
 
 # Performance producers seed larger profiles before measuring. Their browser
@@ -425,6 +424,7 @@ e2eRunAndCapture =
     # that DB (it reads `JAUNDER_DB`). Backend-specific; see each check.
     jaunderDb,
     extraEnv ? "",
+    playwrightTimeout,
   }:
   let
     # Bind only the final test recipe to its clean checkout, not product builds.
@@ -483,7 +483,7 @@ e2eRunAndCapture =
       + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
       + " --config playwright.config.ts"
       + " ${projectArgs}${shardArg}",
-      timeout=${toString e2ePlaywrightTimeout},
+      timeout=${toString playwrightTimeout},
     )
     record_e2e_phase(
       "gate-execution",
@@ -592,7 +592,8 @@ mkE2eCheck =
     vmCores ? null,
     producer ? null,
     extraNodeConfig ? (_: { }),
-    vmGlobalTimeout ? e2eGlobalTimeout,
+    playwrightTimeout ? e2ePlaywrightTimeout,
+    vmGlobalTimeout ? playwrightTimeout + e2eLifecycleAllowance + e2eDeadlineReserve,
   }:
   assert (producer == null) != (lane == null);
   let
@@ -683,13 +684,13 @@ mkE2eCheck =
     name = checkName;
 
     # Caller-selected outer budget for boot, seed, execution, and artifact
-    # recovery. The ordinary gate defaults to 32 minutes; performance producers
+    # recovery. Suite caps retain lifecycle headroom; performance producers
     # extend it for canonical dataset seeding. Each inner execution timeout must
     # expire first so diagnostics remain recoverable.
     globalTimeout =
-      assert e2eSeedTraceTimeout < e2ePlaywrightTimeout;
+      assert e2eSeedTraceTimeout < playwrightTimeout;
       assert e2eSeedTraceTimeout < vmGlobalTimeout;
-      assert producer != null || vmGlobalTimeout >= e2ePlaywrightTimeout + e2eLifecycleAllowance + e2eDeadlineReserve;
+      assert producer != null || vmGlobalTimeout >= playwrightTimeout + e2eLifecycleAllowance + e2eDeadlineReserve;
       vmGlobalTimeout;
 
     nodes.machine =
@@ -810,6 +811,7 @@ mkE2eCheck =
               traceId
               traceParent
               extraEnv
+              playwrightTimeout
               ;
             jaunderDb = backendPolicy.jaunderDb;
           }}
@@ -864,6 +866,7 @@ mkE2eCombo =
     vmMemory ? 2048,
     vmCores ? null,
     vmDiskSize ? null,
+    playwrightTimeout ? e2ePlaywrightTimeout,
   }:
   let
     traceId = pkgs.lib.concatStrings (pkgs.lib.genList (_: traceDigit) 32);
@@ -884,7 +887,7 @@ mkE2eCombo =
     # JAUNDER_E2E_SALT. Changing the hash is its whole job. Spliced here
     # rather than per-family so every combo salts alike.
     extraEnv = extraEnv + pkgs.lib.optionalString (e2eSalt != "") " JAUNDER_E2E_SALT=${e2eSalt}";
-    inherit backend browser traceId traceParent vmMemory vmCores;
+    inherit backend browser traceId traceParent vmMemory vmCores playwrightTimeout;
     lane = {
       inherit
         identity
@@ -920,6 +923,9 @@ e2eGateChecks = pkgs.lib.listToAttrs (
       expectedCensusTopology = "${c.backend}-${c.browser}-split";
       vmMemory = 3072;
       vmCores = 2;
+    } // pkgs.lib.optionalAttrs (c.backend == "postgres" && c.browser == "chromium") {
+      # Add suite headroom only here; shared lanes and census retain their cap.
+      playwrightTimeout = 1800;
     } // pkgs.lib.optionalAttrs (c.browser == "firefox" && c.partition == "ordinary") {
       vmMemory = 4096;
       vmDiskSize = 2048;
