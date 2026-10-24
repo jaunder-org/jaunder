@@ -381,6 +381,81 @@ e2ePhaseTimingHelpers = backend: browser: identity: ''
       }
     )
 
+  e2e_result_captures: list[dict[str, object]] = []
+  retention_errors: list[str] = []
+
+  # BEGIN result capture helper
+  def capture_result_file(machine, lane, name, source_path, guest_path, retention_errors, required=False):
+    """Observe one producer result and record each guest transfer boundary."""
+    node_binary = "${pkgs.nodejs}/bin/node"
+    inspect_program = (
+      "const fs=require('node:fs'); "
+      "const p=process.argv[1]; "
+      "try { const size=fs.statSync(p).size; "
+      "console.log(JSON.stringify({condition:size===0?'empty':'nonempty'})); } "
+      "catch (error) { console.log(JSON.stringify({condition:error.code==='ENOENT'?'missing':'inspection-error',detail:error.message})); }"
+    )
+    try:
+      status, output = machine.execute(
+        node_binary + " -e " + shlex.quote(inspect_program) + " " + shlex.quote(source_path)
+      )
+      if status != 0:
+        detail = output.strip() or "guest inspector exited with status %d" % status
+        source = {"condition": "inspection-error", "detail": detail}
+      else:
+        source = json.loads(output)
+    except Exception as error:
+      source = {"condition": "inspection-error", "detail": str(error)}
+
+    result = {
+      "name": name,
+      "source": source,
+      "source_to_guest": {"outcome": "not-applicable"},
+      "guest_to_output": {"outcome": "not-applicable"},
+    }
+    if source["condition"] == "inspection-error":
+      result["source"]["detail"] = "lane %s file %s operation source inspection: %s" % (lane, name, source.get("detail", "unknown error"))
+      retention_errors.append(result["source"]["detail"])
+      return result
+    if source["condition"] == "missing":
+      if required:
+        retention_errors.append("lane %s file %s operation source inspection: required source is missing" % (lane, name))
+      return result
+
+    try:
+      status, output = machine.execute(
+        "cp -- " + shlex.quote(source_path) + " " + shlex.quote(guest_path)
+      )
+      if status == 0:
+        result["source_to_guest"] = {"outcome": "copied", "file": guest_path}
+        try:
+          machine.copy_from_machine(guest_path, "")
+          result["guest_to_output"] = {"outcome": "copied", "file": guest_path}
+        except Exception as error:
+          result["guest_to_output"] = {
+            "outcome": "copy-error",
+            "detail": "lane %s file %s operation guest-to-output copy: %s" % (lane, name, error),
+          }
+          retention_errors.append(result["guest_to_output"]["detail"])
+      else:
+        detail = "lane %s file %s operation source-to-guest copy: %s" % (lane, name, output.strip())
+        result["source_to_guest"] = {"outcome": "copy-error", "detail": detail}
+        retention_errors.append(detail)
+        result["guest_to_output"] = {"outcome": "not-applicable"}
+    except Exception as error:
+      result["source_to_guest"] = {
+        "outcome": "copy-error",
+        "detail": "lane %s file %s operation source-to-guest copy: %s" % (lane, name, error),
+      }
+      retention_errors.append(result["source_to_guest"]["detail"])
+    return result
+
+  def assert_capture_outcome(pw_status, retention_errors, lane):
+    if pw_status == 0:
+      assert not retention_errors, "e2e capture retention failed: " + "; ".join(retention_errors)
+    assert pw_status == 0, "e2e Playwright failed (exit %d) for %s" % (pw_status, lane)
+  # END result capture helper
+
   def write_e2e_phase_manifest():
     payload = base64.b64encode(
       json.dumps(
@@ -390,6 +465,7 @@ e2ePhaseTimingHelpers = backend: browser: identity: ''
           "browser": "${browser}",
           "lane": "${identity}",
           "phases": e2e_phases,
+          "result_captures": e2e_result_captures,
         },
         separators=(",", ":"),
       ).encode()
@@ -456,7 +532,19 @@ e2eRunAndCapture =
     )
     print(expected_census_out)
     assert expected_census_status == 0, "e2e expected census preflight failed for ${expectedCensusTopology}"
-    machine.succeed("test -s /tmp/e2e/test-results/e2e-expected-census.json && cp /tmp/e2e/test-results/e2e-expected-census.json /tmp/e2e-census-${identity}.json")
+    e2e_result_captures.append(capture_result_file(
+      machine, "${identity}", "e2e-expected-census.json",
+      "/tmp/e2e/test-results/e2e-expected-census.json", "/tmp/e2e-census-${identity}.json",
+      retention_errors, required=True,
+    ))
+    ''}
+    ${pkgs.lib.optionalString (expectedCensusProjectArgs == "") ''
+    e2e_result_captures.append({
+      "name": "e2e-expected-census.json",
+      "source": {"condition": "not-applicable"},
+      "source_to_guest": {"outcome": "not-applicable"},
+      "guest_to_output": {"outcome": "not-applicable"},
+    })
     ''}
     gate_started_at = time.monotonic()
     pw_status, pw_out = machine.execute(
@@ -497,7 +585,7 @@ e2eRunAndCapture =
     print(pw_out)
 
     # Collect failures without aborting the remaining diagnostic lifts.
-    retention_errors = stop_e2e_capture_writers()
+    retention_errors.extend(stop_e2e_capture_writers())
 
     result_lift_started_at = time.monotonic()
 
@@ -527,13 +615,16 @@ e2eRunAndCapture =
         print("producer-input lift unavailable")
     except Exception:
       print("producer-input lift unavailable")
-    machine.execute("test -s /tmp/e2e/test-results/results.json && cp /tmp/e2e/test-results/results.json /tmp/playwright-report-${identity}.json")
-    _grab("/tmp/playwright-report-${identity}.json")
-    machine.execute("test -s /tmp/e2e/test-results/duration-budget-manifest.json && cp /tmp/e2e/test-results/duration-budget-manifest.json /tmp/duration-budget-manifest-${identity}.json")
-    _grab("/tmp/duration-budget-manifest-${identity}.json")
-    # Playwright clears test-results when the actual gate starts, so lift the
-    # census copy preserved outside that directory immediately after preflight.
-    _grab("/tmp/e2e-census-${identity}.json")
+    e2e_result_captures.append(capture_result_file(
+      machine, "${identity}", "results.json",
+      "/tmp/e2e/test-results/results.json", "/tmp/playwright-report-${identity}.json",
+      retention_errors,
+    ))
+    e2e_result_captures.append(capture_result_file(
+      machine, "${identity}", "duration-budget-manifest.json",
+      "/tmp/e2e/test-results/duration-budget-manifest.json",
+      "/tmp/duration-budget-manifest-${identity}.json", retention_errors,
+    ))
     machine.execute("test -s /tmp/e2e/test-results/e2e-lane-manifest.json && cp /tmp/e2e/test-results/e2e-lane-manifest.json /tmp/e2e-lane-manifest-${identity}.json")
     _grab("/tmp/e2e-lane-manifest-${identity}.json")
 
@@ -573,10 +664,9 @@ e2eRunAndCapture =
 
     # A browser failure keeps its original assertion after best-effort capture.
     # Otherwise, missing drain/inventory/tar/copy integrity must not become green.
-    if pw_status == 0:
-      assert not retention_errors, "e2e capture retention failed: " + "; ".join(retention_errors)
-    # Fail the check now — after all artifacts are safely copied out.
-    assert pw_status == 0, "e2e Playwright failed (exit %d) for ${identity}; see playwright-report-${identity}.json + duration-budget-manifest-${identity}.json + playwright-artifacts-${identity}.tar.gz + e2e-phase-${identity}.json + e2e-census-${identity}.json + e2e-lane-manifest-${identity}.json + build.log" % pw_status
+    # Fail only after all diagnostics are lifted. Ancillary capture failures
+    # become blocking only when Playwright itself succeeded.
+    assert_capture_outcome(pw_status, retention_errors, "${identity}")
   '';
 
 mkE2eCheck =
