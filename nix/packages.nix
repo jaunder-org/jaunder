@@ -581,7 +581,6 @@ let
     cargoLock = ../tools/Cargo.lock;
     postPatch = ''
       ln -sf ../Cargo.lock tools/Cargo.lock
-      bash ${./tooling-workspace-patch.sh} Cargo.toml
     '';
     nativeBuildInputs = [ pkgs.pkg-config ];
     buildInputs = [

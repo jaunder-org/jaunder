@@ -1687,14 +1687,11 @@ shell, Theme Package manifest and migration) guard only `static-code`, `devtool`
 and tooling dependencies; they make no runtime assertions for the other four
 boundaries. Tooling preparation uses generated dummy sources and a file-scoped
 lockfile, with repository-root target alignment and nonempty archive admission
-for ordinary, documentation and qualification consumers. The host test
-`cargo test --locked --manifest-path xtask/Cargo.toml --test tooling_workspace_patch`
-checks our workspace-member transformation against raw and generated manifest
-layouts, preserving unrelated tables and arrays. Release artifacts are not
-assumed to seed dev-profile clippy. CI runs the identity drift probe; it builds
-no application/check outputs, although evaluation can require declared source
-preparation. It never purges the store. Stable identity is not proof of compiler
-freshness or local/remote realization reuse.
+for ordinary, documentation and qualification consumers. Release artifacts are
+not assumed to seed dev-profile clippy. CI runs the identity drift probe; it
+builds no application/check outputs, although evaluation can require declared
+source preparation. It never purges the store. Stable identity is not proof of
+compiler freshness or local/remote realization reuse.
 
 Artifact compatibility includes compiler, target, profile, resolved features,
 flags and native inputs; incompatible work must rebuild. Dependency preparations

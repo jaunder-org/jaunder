@@ -4329,14 +4329,12 @@ file-scoped tools lockfile. Compiler/target/profile/features/configuration and
 native dependencies remain artifact inputs; real local source and embedded data
 remain final-consumer inputs. Nested tools Cargo and archive export/import share
 the repository-root target directory, and ordinary, documentation and
-qualification tool builds require a nonempty dependency archive. The host
-`tooling_workspace_patch` test checks the production workspace-member
-transformation against raw and generated TOML layouts while preserving unrelated
-tables and arrays. Imported external artifacts do not justify treating changed
-local code as fresh. Release artifacts remain distinct from dev-profile clippy
-preparation. The delivered correction is release-tooling artifact/source reuse,
-not a production dev/all-targets clippy preparation layer. Linux evidence does
-not establish Darwin execution or cross-platform artifact reuse.
+qualification tool builds require a nonempty dependency archive. Imported
+external artifacts do not justify treating changed local code as fresh. Release
+artifacts remain distinct from dev-profile clippy preparation. The delivered
+correction is release-tooling artifact/source reuse, not a production
+dev/all-targets clippy preparation layer. Linux evidence does not establish
+Darwin execution or cross-platform artifact reuse.
 
 `cargo xtask nix probe-source` protects these boundaries by applying isolated
 tracked markers and evaluating `.drv` identities. It fails closed unless a docs
