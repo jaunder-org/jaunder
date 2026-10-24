@@ -142,31 +142,28 @@ test("published Org source blocks are distinct and readable on narrow screens", 
   tracedContext,
 }, testInfo) => {
   // Rendering is the subject; arrange the Post before its cold permalink entry.
-  const { permalink } = await createPostViaApi(page, {
+  const { post_id, permalink } = await createPostViaApi(page, {
     body: "#+TITLE: Code sample\n\nIntro paragraph.\n\n#+begin_src emacs-lisp\n;; source line\n(use-package consult\n  :after (project)\n  :bind (([remap switch-to-buffer] . consult-buffer)))\n#+end_src\n\nOutro paragraph.",
     format: "org",
     audience: "public",
     publish: true,
   });
   await registeredPage(permalink);
-  const body = page.locator(".j-post-body");
+  // Only the fetched PostCard has this ID; the projector seed can share its text.
+  const post = page.locator(`#j-post-${post_id}`);
+  await expect(post).toBeVisible();
+  const body = post.locator(".j-post-body");
   await expect(body).toContainText("Intro paragraph.");
   await expect(body).toContainText("Outro paragraph.");
   const code = body.locator("pre");
   await expect(code).toContainText("(use-package consult");
   await expect(code.locator('span[class^="j-syn-"]').first()).toBeVisible();
-  const style = await code.evaluate((element) => {
-    const css = getComputedStyle(element);
-    return {
-      background: css.backgroundColor,
-      overflowX: css.overflowX,
-      padding: css.padding,
-    };
-  });
   // A plain <pre> preserves whitespace but is otherwise indistinguishable from prose.
-  expect(style.background).not.toBe("rgba(0, 0, 0, 0)");
-  expect(style.padding).not.toBe("0px");
-  expect(style.overflowX).toBe("auto");
+  await expect(code).toHaveCSS("overflow-x", "auto");
+  await expect(code).toHaveCSS("background-color", /.+/);
+  await expect(code).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(code).toHaveCSS("padding", /.+/);
+  await expect(code).not.toHaveCSS("padding", "0px");
   await page.setViewportSize({ width: 390, height: 844 });
   const geometry = await code.evaluate((element) => ({
     codeWidth: element.getBoundingClientRect().width,
@@ -186,11 +183,8 @@ test("published Org source blocks are distinct and readable on narrow screens", 
   const homeCode = page.locator('article.j-post:has-text("Code sample") pre');
   await expect(homeCode).toContainText("(use-package consult");
   await expect(homeCode.locator('span[class^="j-syn-"]').first()).toBeVisible();
-  expect(
-    await homeCode.evaluate(
-      (element) => getComputedStyle(element).backgroundColor,
-    ),
-  ).not.toBe("rgba(0, 0, 0, 0)");
+  await expect(homeCode).toHaveCSS("background-color", /.+/);
+  await expect(homeCode).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
 
   const anonymous = await tracedContext();
   try {
@@ -203,28 +197,26 @@ test("published Org source blocks are distinct and readable on narrow screens", 
     await expect(
       publicCode.locator('span[class^="j-syn-"]').first(),
     ).toBeVisible();
-    expect(
-      await publicCode.evaluate(
-        (element) => getComputedStyle(element).backgroundColor,
-      ),
-    ).not.toBe("rgba(0, 0, 0, 0)");
+    await expect(publicCode).toHaveCSS("background-color", /.+/);
+    await expect(publicCode).not.toHaveCSS(
+      "background-color",
+      "rgba(0, 0, 0, 0)",
+    );
     await navigateInApp(
       publicPage,
       () => click(publicPage, '.j-nav a[href="/"]'),
       { url: "/", ready: '.j-topbar h1:has-text("Jaunder")' },
     );
-    const localCode = publicPage.locator(
-      'article.j-post:has-text("Code sample") pre',
-    );
+    const localCode = publicPage.locator(`#j-post-${post_id} .j-post-body pre`);
     await expect(localCode).toContainText("(use-package consult");
     await expect(
       localCode.locator('span[class^="j-syn-"]').first(),
     ).toBeVisible();
-    expect(
-      await localCode.evaluate(
-        (element) => getComputedStyle(element).backgroundColor,
-      ),
-    ).not.toBe("rgba(0, 0, 0, 0)");
+    await expect(localCode).toHaveCSS("background-color", /.+/);
+    await expect(localCode).not.toHaveCSS(
+      "background-color",
+      "rgba(0, 0, 0, 0)",
+    );
   } finally {
     await anonymous.close();
   }
