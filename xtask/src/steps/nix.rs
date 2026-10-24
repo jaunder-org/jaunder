@@ -2906,6 +2906,99 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../nix/checks.nix"),
         )
         .expect("nix/checks.nix");
+        // Keep the real combo -> check -> execution path, replacing only NixOS
+        // realization and store inputs so this remains a primitive evaluation.
+        let checks_path =
+            serde_json::to_string(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../nix/checks.nix"))
+                .expect("checks path");
+        let expression = r#"
+          let
+            lib = rec {
+              inherit (builtins) listToAttrs genList concatLists concatStringsSep;
+              concatStrings = concatStringsSep "";
+              concatMap = f: xs: concatLists (map f xs);
+              concatMapStringsSep = sep: f: xs: concatStringsSep sep (map f xs);
+              unique = xs: builtins.foldl' (acc: x: if builtins.elem x acc then acc else acc ++ [ x ]) [] xs;
+              optionalString = condition: value: if condition then value else "";
+              optionalAttrs = condition: value: if condition then value else {};
+              removeSuffix = suffix: value: builtins.substring 0 (builtins.stringLength value - builtins.stringLength suffix) value;
+            };
+            outputs = import (builtins.toPath CHECKS_PATH) {
+              self = {};
+              system = "x86_64-linux";
+              nixpkgs = {};
+              nixosInternals = {};
+              packageInternals = {
+                visualFontConfig = "/primitive/fonts";
+                jaunderBin = "/primitive/jaunder";
+                e2ePackage = "/primitive/e2e";
+              };
+              pkgs = {
+                inherit lib;
+                stdenv.hostPlatform.isLinux = true;
+                testers.nixosTest = args: args // { overrideTestDerivation = _: args; };
+                writeText = _: _: "/primitive/input";
+                nodejs = "/primitive/node";
+                playwright-driver.browsers = "/primitive/browsers";
+              };
+            };
+          in builtins.listToAttrs (map (name: {
+            inherit name;
+            value = { inherit (outputs.checks.${name}) globalTimeout testScript; };
+          }) (builtins.filter (name: builtins.match "e2e-.*" name != null)
+            (builtins.attrNames outputs.checks)))
+        "#
+        .replace("CHECKS_PATH", &checks_path);
+        let output = std::process::Command::new("nix-instantiate")
+            .args(["--eval", "--strict", "--json", "--expr", &expression])
+            .output()
+            .expect("primitive Nix lane evaluation");
+        assert!(
+            output.status.success(),
+            "lane evaluation: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let lanes: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("evaluated lanes");
+        let lanes = lanes.as_object().expect("lane map");
+        assert_eq!(lanes.len(), 8);
+        for (name, lane) in lanes {
+            let (suite, deadline) = if name == "e2e-postgres-chromium-unsplit" {
+                (1800, 2220)
+            } else {
+                (1500, 1920)
+            };
+            assert_eq!(lane["globalTimeout"], deadline, "{name}");
+            let script = lane["testScript"].as_str().expect("VM test script");
+            let execution = script
+                .split_once("pw_status, pw_out = machine.execute(")
+                .expect("Playwright execution")
+                .1
+                .split_once("record_e2e_phase(")
+                .expect("execution phase end")
+                .0;
+            let execution_timeout: u64 = execution
+                .split_once("timeout=")
+                .expect("execution timeout")
+                .1
+                .split_once(',')
+                .expect("timeout argument end")
+                .0
+                .parse()
+                .expect("timeout seconds");
+            assert_eq!(execution_timeout, suite, "{name}");
+            assert!(execution_timeout < lane["globalTimeout"].as_u64().expect("VM deadline"));
+            if name.contains("firefox") {
+                let census = script
+                    .split_once("expected_census_status, expected_census_out = machine.execute(")
+                    .expect("Firefox census")
+                    .1
+                    .split_once("print(expected_census_out)")
+                    .expect("census end")
+                    .0;
+                assert!(census.contains("timeout=1500,"), "{name}");
+            }
+        }
         // Evaluate the actual source-owned budget and guard, not a mirrored formula
         // or a flake/VM derivation (this needs only Nix's primitive evaluator).
         let budgets = checks
@@ -2922,17 +3015,18 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
             .split_once("\n\n    nodes.machine")
             .expect("VM deadline end")
             .0;
-        for (producer, deadline, accepted) in [
-            ("null", 1920, true),
-            ("null", 1919, false),
-            ("null", 1680, false),
-            ("{}", 6000, true),
+        for (producer, suite, deadline, accepted) in [
+            ("null", 1500, 1920, true),
+            ("null", 1500, 1919, false),
+            ("null", 1500, 1680, false),
+            ("null", 1800, 2220, true),
+            ("null", 1800, 2219, false),
+            ("{}", 1500, 6000, true),
         ] {
             let expression = format!(
                 "let e2ePlaywrightTimeout ={budgets}\nproducer = {producer}; \
-                 vmGlobalTimeout = {deadline}; in \
-                 [ e2ePlaywrightTimeout e2eLifecycleAllowance e2eDeadlineReserve \
-                 e2eGlobalTimeout ({}) ]",
+                 playwrightTimeout = {suite}; vmGlobalTimeout = {deadline}; in \
+                 [ e2ePlaywrightTimeout e2eLifecycleAllowance e2eDeadlineReserve ({}) ]",
                 guard.trim().trim_end_matches(';')
             );
             let output = std::process::Command::new("nix-instantiate")
@@ -2942,24 +3036,17 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
             assert_eq!(
                 output.status.success(),
                 accepted,
-                "producer={producer} deadline={deadline}: {}",
+                "producer={producer} suite={suite} deadline={deadline}: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
             if accepted {
                 let values: serde_json::Value =
                     serde_json::from_slice(&output.stdout).expect("budget values");
-                assert_eq!(values, serde_json::json!([1500, 300, 120, 1920, deadline]));
+                assert_eq!(values, serde_json::json!([1500, 300, 120, deadline]));
             } else {
                 assert!(String::from_utf8_lossy(&output.stderr).contains("assertion"));
             }
         }
-        assert!(checks.contains("vmGlobalTimeout ? e2eGlobalTimeout,"));
-        assert_eq!(
-            checks
-                .matches("timeout=${toString e2ePlaywrightTimeout},")
-                .count(),
-            2
-        );
         for obligation in [
             "capture_module.verify_capture_archive(",
             "assert source_hashes and source_hashes.keys() == source_sizes.keys()",
