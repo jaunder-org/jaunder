@@ -2,7 +2,8 @@
 //!
 //! The pure comparison is intentionally independent from Nix and Git. The command
 //! measures each tracked perturbation in a disposable worktree, then compares only
-//! derivation identities; it never builds or realizes an output.
+//! derivation identities. It does not build application/check outputs; evaluation
+//! can require declared source preparation, so identities alone do not prove reuse.
 
 use std::fmt;
 use std::fs;
@@ -28,15 +29,19 @@ enum Boundary {
     Site,
     WasmTests,
     Xtask,
+    Devtool,
+    ToolingDependencies,
 }
 
 impl Boundary {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 7] = [
         Self::StaticDocs,
         Self::StaticCode,
         Self::Site,
         Self::WasmTests,
         Self::Xtask,
+        Self::Devtool,
+        Self::ToolingDependencies,
     ];
 
     const fn name(self) -> &'static str {
@@ -46,6 +51,8 @@ impl Boundary {
             Self::Site => "site",
             Self::WasmTests => "wasm-tests",
             Self::Xtask => "xtask",
+            Self::Devtool => "devtool",
+            Self::ToolingDependencies => "tooling-dependencies",
         }
     }
 }
@@ -66,10 +73,20 @@ pub enum Arm {
     QualificationSchema,
     ThemeCss,
     ApplicationCss,
+    DevtoolSource,
+    ToolsLock,
+    RootManifest,
+    ToolsManifest,
+    DevtoolManifest,
+    SharedManifest,
+    ServerBuildScript,
+    CsrShell,
+    ThemeManifest,
+    Migration,
 }
 
 impl Arm {
-    const ALL: [Self; 14] = [
+    const ALL: [Self; 24] = [
         Self::Docs,
         Self::Server,
         Self::Web,
@@ -84,6 +101,16 @@ impl Arm {
         Self::QualificationSchema,
         Self::ThemeCss,
         Self::ApplicationCss,
+        Self::DevtoolSource,
+        Self::ToolsLock,
+        Self::RootManifest,
+        Self::ToolsManifest,
+        Self::DevtoolManifest,
+        Self::SharedManifest,
+        Self::ServerBuildScript,
+        Self::CsrShell,
+        Self::ThemeManifest,
+        Self::Migration,
     ];
 
     const fn name(self) -> &'static str {
@@ -102,6 +129,16 @@ impl Arm {
             Self::QualificationSchema => "qualification-schema",
             Self::ThemeCss => "theme-css",
             Self::ApplicationCss => "application-css",
+            Self::DevtoolSource => "devtool-source",
+            Self::ToolsLock => "tools-lock",
+            Self::RootManifest => "root-manifest",
+            Self::ToolsManifest => "tools-manifest",
+            Self::DevtoolManifest => "devtool-manifest",
+            Self::SharedManifest => "shared-manifest",
+            Self::ServerBuildScript => "server-build-script",
+            Self::CsrShell => "csr-shell",
+            Self::ThemeManifest => "theme-manifest",
+            Self::Migration => "migration",
         }
     }
 
@@ -121,7 +158,78 @@ impl Arm {
             Self::QualificationSchema => "docs/production-baseline.schema.json",
             Self::ThemeCss => "host/system_theme_sources/studio/style.css",
             Self::ApplicationCss => "server/assets/jaunder.css",
+            Self::DevtoolSource => "tools/devtool/src/__nix_source_probe.rs",
+            Self::ToolsLock => "tools/Cargo.lock",
+            Self::RootManifest => "Cargo.toml",
+            Self::ToolsManifest => "tools/Cargo.toml",
+            Self::DevtoolManifest => "tools/devtool/Cargo.toml",
+            Self::SharedManifest => "common/Cargo.toml",
+            Self::ServerBuildScript => "server/build.rs",
+            Self::CsrShell => "csr/index.html",
+            Self::ThemeManifest => "host/system_theme_sources/studio/theme.json",
+            Self::Migration => "storage/migrations/sqlite/0001_create_site_config.sql",
         }
+    }
+
+    // Additional tooling admission cases check the changed boundary only. They do
+    // not claim a new exhaustive product/wasm/xtask invalidation matrix.
+    fn boundaries(self) -> &'static [Boundary] {
+        match self {
+            Self::RootManifest
+            | Self::ToolsManifest
+            | Self::DevtoolManifest
+            | Self::SharedManifest
+            | Self::ServerBuildScript
+            | Self::CsrShell
+            | Self::ThemeManifest
+            | Self::Migration => &[
+                Boundary::StaticCode,
+                Boundary::Devtool,
+                Boundary::ToolingDependencies,
+            ],
+            _ => &Boundary::ALL,
+        }
+    }
+
+    fn perturb(self, original: &[u8]) -> Result<Vec<u8>> {
+        let replacement = match self {
+            Self::RootManifest => Some((
+                "common = { path = \"common\" }",
+                "common = { path = \"common\", features = [\"test-utils\"] }",
+            )),
+            Self::ToolsManifest => Some(("resolver = \"3\"", "resolver = \"2\"")),
+            Self::DevtoolManifest => Some((
+                "qualification = [\"system-artifacts\", \"host/qualification\"]",
+                "qualification = [\"system-artifacts\", \"host/qualification\", \"common/test-utils\"]",
+            )),
+            Self::SharedManifest => Some(("test-utils = []", "test-utils = [\"test-support\"]")),
+            _ => None,
+        };
+        if let Some((old, new)) = replacement {
+            let text = std::str::from_utf8(original).context("reading manifest perturbation")?;
+            if text.matches(old).count() != 1 {
+                bail!(
+                    "{}: expected exactly one dependency/configuration declaration",
+                    self.name()
+                );
+            }
+            return Ok(text.replacen(old, new, 1).into_bytes());
+        }
+        let mut bytes = original.to_vec();
+        if self == Self::BuildConfig {
+            let text = std::str::from_utf8(original).context("reading Cargo configuration")?;
+            if text.contains("[build]") {
+                bail!("build-config: update the existing probe for the declared build table");
+            }
+            // Exercise compiler configuration, not merely configuration-file bytes.
+            bytes.extend_from_slice(
+                b"\n[build]\nrustflags = [\"--cfg\", \"jaunder_source_probe\"]\n",
+            );
+        } else {
+            // Source/embedded admission needs byte sensitivity, not changed SQL/JSON behavior.
+            bytes.push(b'\n');
+        }
+        Ok(bytes)
     }
 
     const fn expects_change(self, boundary: Boundary) -> bool {
@@ -143,6 +251,41 @@ impl Arm {
                     Boundary::Xtask
                 )
                 | (Self::LaneCatalog, Boundary::StaticCode | Boundary::Xtask)
+                | (
+                    Self::Common
+                        | Self::Macros
+                        | Self::Performance
+                        | Self::SharedHost
+                        | Self::ThemeCss
+                        | Self::ApplicationCss
+                        | Self::BuildConfig
+                        | Self::DevtoolSource
+                        | Self::ToolsLock,
+                    Boundary::Devtool
+                )
+                // Docs and site transitively depend on their devtool executables.
+                | (Self::DevtoolSource, Boundary::StaticDocs | Boundary::StaticCode | Boundary::Site)
+                | (
+                    Self::ToolsLock,
+                    Boundary::StaticDocs
+                        | Boundary::StaticCode
+                        | Boundary::Site
+                        | Boundary::Xtask
+                        | Boundary::ToolingDependencies
+                )
+                | (Self::BuildConfig, Boundary::ToolingDependencies)
+                | (
+                    Self::RootManifest
+                        | Self::ToolsManifest
+                        | Self::DevtoolManifest
+                        | Self::SharedManifest,
+                    Boundary::StaticCode | Boundary::Devtool | Boundary::ToolingDependencies
+                )
+                | (
+                    Self::CsrShell | Self::ThemeManifest | Self::Migration,
+                    Boundary::StaticCode | Boundary::Devtool
+                )
+                | (Self::ServerBuildScript, Boundary::StaticCode)
         )
     }
 }
@@ -154,6 +297,8 @@ pub struct DrvPaths {
     site: String,
     wasm_tests: String,
     xtask: String,
+    devtool: String,
+    tooling_dependencies: String,
 }
 
 impl DrvPaths {
@@ -164,6 +309,8 @@ impl DrvPaths {
             Boundary::Site => &self.site,
             Boundary::WasmTests => &self.wasm_tests,
             Boundary::Xtask => &self.xtask,
+            Boundary::Devtool => &self.devtool,
+            Boundary::ToolingDependencies => &self.tooling_dependencies,
         }
     }
 }
@@ -212,7 +359,7 @@ impl std::error::Error for ProbeError {}
 /// Compare one perturbation against the exact boundary matrix. Check required
 /// fan-out before over-inclusion so a dropped source is reported first.
 pub fn compare_arm(base: &DrvPaths, arm: Arm, changed: &DrvPaths) -> Result<(), ProbeError> {
-    for boundary in Boundary::ALL {
+    for &boundary in arm.boundaries() {
         if arm.expects_change(boundary) && changed.get(boundary) == base.get(boundary) {
             return Err(ProbeError::MissingChange {
                 arm,
@@ -221,7 +368,7 @@ pub fn compare_arm(base: &DrvPaths, arm: Arm, changed: &DrvPaths) -> Result<(), 
             });
         }
     }
-    for boundary in Boundary::ALL {
+    for &boundary in arm.boundaries() {
         if !arm.expects_change(boundary) && changed.get(boundary) != base.get(boundary) {
             return Err(ProbeError::UnexpectedChange {
                 arm,
@@ -259,6 +406,11 @@ fn eval_paths_with(evaluate: impl FnOnce() -> Result<SourceProbeDrvPaths>) -> Re
         site: parse_drv_path(Boundary::Site.name(), &paths.site)?,
         wasm_tests: parse_drv_path(Boundary::WasmTests.name(), &paths.wasm_tests)?,
         xtask: parse_drv_path(Boundary::Xtask.name(), &paths.xtask)?,
+        devtool: parse_drv_path(Boundary::Devtool.name(), &paths.devtool)?,
+        tooling_dependencies: parse_drv_path(
+            Boundary::ToolingDependencies.name(),
+            &paths.tooling_dependencies,
+        )?,
     })
 }
 
@@ -367,9 +519,7 @@ fn run_probe() -> Result<()> {
         } else {
             None
         };
-        // Whitespace preserves JSON/TOML/CSS validity while changing source bytes.
-        let mut bytes = original.clone().unwrap_or_default();
-        bytes.push(b'\n');
+        let bytes = arm.perturb(original.as_deref().unwrap_or_default())?;
         fs::write(&marker, bytes).with_context(|| format!("writing {} marker", arm.name()))?;
         git_run(&tmp, &["add", arm.marker_path()])?;
         let changed = eval_paths(&tmp).with_context(|| {
@@ -401,6 +551,8 @@ mod tests {
             site: site.to_owned(),
             wasm_tests: wasm_tests.to_owned(),
             xtask: "xtask".to_owned(),
+            devtool: "devtool".to_owned(),
+            tooling_dependencies: "tooling-dependencies".to_owned(),
         }
     }
 
@@ -421,6 +573,7 @@ mod tests {
             let mut changed = changed;
             if matches!(arm, Arm::Common | Arm::Macros | Arm::Performance) {
                 changed.xtask = "xtask-2".to_owned();
+                changed.devtool = "devtool-2".to_owned();
             }
             assert_eq!(compare_arm(&base, arm, &changed), Ok(()));
         }
@@ -468,12 +621,256 @@ mod tests {
             ),
         ] {
             changed.xtask = "xtask-2".to_owned();
+            if matches!(
+                arm,
+                Arm::SharedHost | Arm::BuildConfig | Arm::ThemeCss | Arm::ApplicationCss
+            ) {
+                changed.devtool = "devtool-2".to_owned();
+            }
+            if matches!(arm, Arm::BuildConfig) {
+                changed.tooling_dependencies = "tooling-dependencies-2".to_owned();
+            }
             assert_eq!(compare_arm(&base, arm, &changed), Ok(()));
             assert!(matches!(
                 compare_arm(&base, arm, &base),
                 Err(ProbeError::MissingChange { .. })
             ));
         }
+    }
+
+    #[test]
+    fn devtool_source_changes_preserve_compiled_dependency_identity() {
+        let base = paths("docs", "code", "site", "wasm");
+        let mut changed = base.clone();
+        changed.static_code = "code-2".to_owned();
+        changed.devtool = "devtool-2".to_owned();
+        changed.static_docs = "docs-2".to_owned();
+        changed.site = "site-2".to_owned();
+        assert_eq!(compare_arm(&base, Arm::DevtoolSource, &changed), Ok(()));
+        for (boundary, stale) in [
+            (
+                "static-docs",
+                DrvPaths {
+                    static_docs: base.static_docs.clone(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "static-code",
+                DrvPaths {
+                    static_code: base.static_code.clone(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "site",
+                DrvPaths {
+                    site: base.site.clone(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "devtool",
+                DrvPaths {
+                    devtool: base.devtool.clone(),
+                    ..changed.clone()
+                },
+            ),
+        ] {
+            assert!(matches!(
+                compare_arm(&base, Arm::DevtoolSource, &stale),
+                Err(ProbeError::MissingChange { boundary: actual, .. }) if actual == boundary
+            ));
+        }
+        assert!(matches!(
+            compare_arm(&base, Arm::DevtoolSource, &base),
+            Err(ProbeError::MissingChange { .. })
+        ));
+        for (boundary, unrelated) in [
+            (
+                "wasm-tests",
+                DrvPaths {
+                    wasm_tests: "wasm-2".to_owned(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "xtask",
+                DrvPaths {
+                    xtask: "xtask-2".to_owned(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "tooling-dependencies",
+                DrvPaths {
+                    tooling_dependencies: "tooling-dependencies-2".to_owned(),
+                    ..changed.clone()
+                },
+            ),
+        ] {
+            assert!(matches!(
+                compare_arm(&base, Arm::DevtoolSource, &unrelated),
+                Err(ProbeError::UnexpectedChange { boundary: actual, .. }) if actual == boundary
+            ));
+        }
+    }
+
+    #[test]
+    fn tools_lock_changes_invalidate_the_tooling_dependency_graph() {
+        let base = paths("docs", "code", "site", "wasm");
+        let mut changed = paths("docs-2", "code-2", "site-2", "wasm");
+        changed.xtask = "xtask-2".to_owned();
+        changed.devtool = "devtool-2".to_owned();
+        assert!(matches!(
+            compare_arm(&base, Arm::ToolsLock, &changed),
+            Err(ProbeError::MissingChange {
+                boundary: "tooling-dependencies",
+                ..
+            })
+        ));
+        changed.tooling_dependencies = "tooling-dependencies-2".to_owned();
+        assert_eq!(compare_arm(&base, Arm::ToolsLock, &changed), Ok(()));
+        for (boundary, stale) in [
+            (
+                "static-docs",
+                DrvPaths {
+                    static_docs: base.static_docs.clone(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "static-code",
+                DrvPaths {
+                    static_code: base.static_code.clone(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "site",
+                DrvPaths {
+                    site: base.site.clone(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "xtask",
+                DrvPaths {
+                    xtask: base.xtask.clone(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "devtool",
+                DrvPaths {
+                    devtool: base.devtool.clone(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "tooling-dependencies",
+                DrvPaths {
+                    tooling_dependencies: base.tooling_dependencies.clone(),
+                    ..changed.clone()
+                },
+            ),
+        ] {
+            assert!(matches!(
+                compare_arm(&base, Arm::ToolsLock, &stale),
+                Err(ProbeError::MissingChange { boundary: actual, .. }) if actual == boundary
+            ));
+        }
+        assert!(matches!(
+            compare_arm(&base, Arm::ToolsLock, &base),
+            Err(ProbeError::MissingChange { .. })
+        ));
+        changed.wasm_tests = "wasm-2".to_owned();
+        assert!(matches!(
+            compare_arm(&base, Arm::ToolsLock, &changed),
+            Err(ProbeError::UnexpectedChange {
+                boundary: "wasm-tests",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn tooling_manifest_and_embedded_admission_contracts() {
+        let base = paths("docs", "code", "site", "wasm");
+        for arm in [
+            Arm::RootManifest,
+            Arm::ToolsManifest,
+            Arm::DevtoolManifest,
+            Arm::SharedManifest,
+            Arm::ServerBuildScript,
+            Arm::CsrShell,
+            Arm::ThemeManifest,
+            Arm::Migration,
+        ] {
+            let mut changed = base.clone();
+            changed.static_code = "code-2".to_owned();
+            if arm != Arm::ServerBuildScript {
+                changed.devtool = "devtool-2".to_owned();
+            }
+            if matches!(
+                arm,
+                Arm::RootManifest | Arm::ToolsManifest | Arm::DevtoolManifest | Arm::SharedManifest
+            ) {
+                changed.tooling_dependencies = "deps-2".to_owned();
+            }
+            assert_eq!(compare_arm(&base, arm, &changed), Ok(()));
+            assert!(matches!(
+                compare_arm(&base, arm, &base),
+                Err(ProbeError::MissingChange { .. })
+            ));
+            changed.tooling_dependencies = "wrong-deps".to_owned();
+            if !arm.expects_change(Boundary::ToolingDependencies) {
+                assert!(matches!(
+                    compare_arm(&base, arm, &changed),
+                    Err(ProbeError::UnexpectedChange {
+                        boundary: "tooling-dependencies",
+                        ..
+                    })
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn configuration_perturbations_change_real_declarations() {
+        for (arm, original, expected) in [
+            (
+                Arm::RootManifest,
+                include_bytes!("../../Cargo.toml").as_slice(),
+                "features = [\"test-utils\"]",
+            ),
+            (
+                Arm::ToolsManifest,
+                include_bytes!("../../tools/Cargo.toml").as_slice(),
+                "resolver = \"2\"",
+            ),
+            (
+                Arm::DevtoolManifest,
+                include_bytes!("../../tools/devtool/Cargo.toml").as_slice(),
+                "\"common/test-utils\"",
+            ),
+            (
+                Arm::SharedManifest,
+                include_bytes!("../../common/Cargo.toml").as_slice(),
+                "test-utils = [\"test-support\"]",
+            ),
+            (
+                Arm::BuildConfig,
+                include_bytes!("../../.cargo/config.toml").as_slice(),
+                "rustflags = [\"--cfg\", \"jaunder_source_probe\"]",
+            ),
+        ] {
+            let changed = arm.perturb(original).unwrap();
+            assert_ne!(changed, original);
+            assert!(std::str::from_utf8(&changed).unwrap().contains(expected));
+        }
+        assert!(Arm::DevtoolManifest.perturb(b"[package]\n").is_err());
+        assert!(Arm::BuildConfig.perturb(b"[build]\n").is_err());
     }
 
     #[test]

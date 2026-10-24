@@ -37,9 +37,10 @@ let
     emacsSrc
     emacsForCi
     ;
-  # Final coverage/e2e verdicts must execute for the current ref. These
-  # derivation flags are checked from actual Nix metadata by cache-safety probe;
-  # the closure proof remains the independent defense against result leakage.
+  # Verdict outputs must not be substituted; build/dependency artifacts may be.
+  # These flags do not rerun outputs already valid in the local store. CI must
+  # retain executing-verdict evidence rather than infer execution from availability.
+  # Coverage/e2e flags are also checked by the existing cache-safety probe.
   nonSubstitutable =
     derivation:
     if derivation ? overrideAttrs then
@@ -2816,7 +2817,7 @@ static-code =
         staticCodeSourceFilter;
     };
   in
-  pkgs.runCommand "static-code"
+  nonSubstitutable (pkgs.runCommand "static-code"
     {
       nativeBuildInputs = [
         pkgs.stdenv.cc
@@ -2855,7 +2856,7 @@ static-code =
       devtool check --group code --sandbox-cargo
       node end2end/e2eCensusContract.ts
       touch $out
-    '';
+    '');
 # Doctests: the one suite nextest structurally cannot run, so the
 # `coverage` check above never sees them (#763). The producer runs
 # `cargo test --workspace --doc` AND reconciles what ran against the

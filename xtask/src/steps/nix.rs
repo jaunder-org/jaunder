@@ -1823,6 +1823,8 @@ pub(crate) struct SourceProbeDrvPaths {
     pub(crate) site: String,
     pub(crate) wasm_tests: String,
     pub(crate) xtask: String,
+    pub(crate) devtool: String,
+    pub(crate) tooling_dependencies: String,
 }
 
 /// Evaluate the derivation identities guarded by `nix probe-source`.
@@ -1836,6 +1838,11 @@ pub(crate) fn eval_source_probe_drvpaths(flake_dir: &Path) -> Result<SourceProbe
         site: nix_eval_raw(Some(flake_dir), ".#site.drvPath")?,
         wasm_tests: nix_eval_raw(Some(flake_dir), ".#checks.x86_64-linux.wasm-tests.drvPath")?,
         xtask: nix_eval_raw(Some(flake_dir), ".#xtask.drvPath")?,
+        devtool: nix_eval_raw(Some(flake_dir), ".#devtool.drvPath")?,
+        tooling_dependencies: nix_eval_raw(
+            Some(flake_dir),
+            ".#devtool.toolingDependencies.drvPath",
+        )?,
     })
 }
 
