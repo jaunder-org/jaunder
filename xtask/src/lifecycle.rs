@@ -71,8 +71,7 @@ mod tests {
 
     #[test]
     fn precommit_reconciles_once_after_an_early_static_failure() {
-        let owner = crate::test_support::temp_repo("precommit", "early-failure-reconcile");
-        let dir = owner.path().to_path_buf();
+        let dir = crate::test_support::temp_repo("precommit", "early-failure-reconcile");
         crate::test_support::commit(&dir, "a.rs", "fn a(){}\n");
         crate::test_support::write(&dir, "a.rs", "fn a() { }\n");
         crate::test_support::git_ok(&dir, &["add", "a.rs"]);
@@ -138,8 +137,7 @@ mod tests {
 
     #[test]
     fn precommit_orchestration_restages_safe_fixture() {
-        let owner = crate::test_support::temp_repo("precommit", "orchestration-safe");
-        let dir = owner.path().to_path_buf();
+        let dir = crate::test_support::temp_repo("precommit", "orchestration-safe");
         crate::test_support::commit(&dir, "a.rs", "fn a(){}\n");
         crate::test_support::commit(&dir, "b.rs", "fn b(){}\n");
         crate::test_support::write(&dir, "a.rs", "fn a() { }\n");
@@ -173,8 +171,7 @@ mod tests {
     }
     #[test]
     fn precommit_routes_staged_markdown_before_restaging_safe_formatter_output() {
-        let owner = crate::test_support::temp_repo("precommit", "markdown-routing");
-        let dir = owner.path().to_path_buf();
+        let dir = crate::test_support::temp_repo("precommit", "markdown-routing");
         crate::test_support::commit(&dir, "guide.md", "# Guide\n");
         crate::test_support::write(&dir, "guide.md", "# Guide\nChanged\n");
         crate::test_support::git_ok(&dir, &["add", "guide.md"]);
@@ -206,8 +203,7 @@ mod tests {
 
     #[test]
     fn narrow_dispatch_failure_still_reconciles_exactly_once() {
-        let owner = crate::test_support::temp_repo("precommit", "markdown-failure");
-        let dir = owner.path().to_path_buf();
+        let dir = crate::test_support::temp_repo("precommit", "markdown-failure");
         crate::test_support::commit(&dir, "guide.md", "# Guide\n");
         crate::test_support::write(&dir, "guide.md", "# Guide\nChanged\n");
         crate::test_support::git_ok(&dir, &["add", "guide.md"]);
@@ -248,8 +244,7 @@ mod tests {
 
     #[test]
     fn precommit_orchestration_fails_clean_before_tracked_mutation() {
-        let owner = crate::test_support::temp_repo("precommit", "orchestration-unsafe");
-        let dir = owner.path().to_path_buf();
+        let dir = crate::test_support::temp_repo("precommit", "orchestration-unsafe");
         crate::test_support::commit(&dir, "clean.rs", "one\n");
 
         let result = run_precommit_with_host_gate(&dir, |_, result| {

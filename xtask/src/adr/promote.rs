@@ -258,8 +258,7 @@ mod tests {
 
     #[test]
     fn promote_strips_one_level_from_sibling_links() {
-        let owner = promote_repo("strip-sibling");
-        let tmp = owner.path().to_path_buf();
+        let tmp = promote_repo("strip-sibling");
         write(
             &tmp,
             "docs/adr/drafts/d.md",
@@ -273,8 +272,7 @@ mod tests {
 
     #[test]
     fn promote_strips_one_level_from_non_adr_links() {
-        let owner = promote_repo("strip-general");
-        let tmp = owner.path().to_path_buf();
+        let tmp = promote_repo("strip-general");
         write(
             &tmp,
             "docs/adr/drafts/d.md",
@@ -288,8 +286,7 @@ mod tests {
 
     #[test]
     fn promote_rewrites_only_the_heading_token() {
-        let owner = promote_repo("heading-only");
-        let tmp = owner.path().to_path_buf();
+        let tmp = promote_repo("heading-only");
         write(
             &tmp,
             "docs/adr/drafts/d.md",
@@ -310,8 +307,7 @@ mod tests {
 
     #[test]
     fn promote_rejects_malformed_heading_before_mutating_any_draft() {
-        let owner = promote_repo("bad-heading");
-        let tmp = owner.path().to_path_buf();
+        let tmp = promote_repo("bad-heading");
         let valid = "# ADR-DRAFT: Aaa\n";
         let malformed = "# ADR-DRAFT:   \n";
         write(&tmp, "docs/adr/drafts/aaa.md", valid);
@@ -351,8 +347,7 @@ mod tests {
 
     #[test]
     fn promote_warns_on_a_surviving_dead_link() {
-        let owner = promote_repo("warn");
-        let tmp = owner.path().to_path_buf();
+        let tmp = promote_repo("warn");
         write(
             &tmp,
             "docs/adr/drafts/d.md",
@@ -371,8 +366,7 @@ mod tests {
 
     #[test]
     fn promote_is_silent_when_every_link_resolves() {
-        let owner = promote_repo("no-warn");
-        let tmp = owner.path().to_path_buf();
+        let tmp = promote_repo("no-warn");
         write(
             &tmp,
             "docs/adr/drafts/d.md",
@@ -384,8 +378,7 @@ mod tests {
 
     #[test]
     fn tracked_draft_links_and_citations_resolve_before_and_after_promotion() {
-        let owner = promote_repo("tracked-links");
-        let tmp = owner.path().to_path_buf();
+        let tmp = promote_repo("tracked-links");
         write(&tmp, "docs/notes.md", "See [Bbb](adr/drafts/bbb.md).\n");
         write(&tmp, "docs/adr/drafts/aaa.md", "# ADR-DRAFT: Aaa\n");
         write(
@@ -421,8 +414,7 @@ mod tests {
         // Teeth: drop the `accept_proposed_status` call from Pass B and THIS fails — the
         // promoted file is still `proposed`, which the gate rejects — where the
         // unit tests would merely report their own narrower loss.
-        let owner = promote_repo("round-trip");
-        let tmp = owner.path().to_path_buf();
+        let tmp = promote_repo("round-trip");
         write(
             &tmp,
             "docs/adr/drafts/d.md",
@@ -438,8 +430,7 @@ mod tests {
 
     #[test]
     fn promote_sets_accepted_on_a_proposed_draft() {
-        let owner = promote_repo("status-proposed");
-        let tmp = owner.path().to_path_buf();
+        let tmp = promote_repo("status-proposed");
         write(
             &tmp,
             "docs/adr/drafts/d.md",
@@ -461,8 +452,7 @@ mod tests {
             ("rej", "rejected"),
             ("dep", "deprecated"),
         ] {
-            let owner = promote_repo(tag);
-            let tmp = owner.path().to_path_buf();
+            let tmp = promote_repo(tag);
             let draft = format!("# ADR-DRAFT: D\n\n- Status: {token}\n");
             write(&tmp, "docs/adr/drafts/d.md", &draft);
             promote_tracked(&tmp).unwrap();
@@ -478,8 +468,7 @@ mod tests {
         // implementation that matched a column-0 `- Status:` literal passes
         // `promote_sets_accepted_on_a_proposed_draft` and fails here, leaving a
         // promoted ADR that `adr-format` immediately rejects.
-        let owner = promote_repo("status-indented");
-        let tmp = owner.path().to_path_buf();
+        let tmp = promote_repo("status-indented");
         write(
             &tmp,
             "docs/adr/drafts/d.md",
@@ -494,8 +483,7 @@ mod tests {
     fn promote_leaves_the_word_proposed_in_prose() {
         // Token-scoped and line-anchored: a whole-body `replace("proposed", …)`
         // passes every other test in this group and corrupts the prose here.
-        let owner = promote_repo("status-prose");
-        let tmp = owner.path().to_path_buf();
+        let tmp = promote_repo("status-prose");
         write(
             &tmp,
             "docs/adr/drafts/d.md",
@@ -516,8 +504,7 @@ mod tests {
         // always pushes the path pair in (see the standing warning above), so a
         // `summary.contains("0002-d.md")` assertion passes no matter what the
         // status code does.
-        let owner = promote_repo("status-summary");
-        let tmp = owner.path().to_path_buf();
+        let tmp = promote_repo("status-summary");
         write(
             &tmp,
             "docs/adr/drafts/d.md",
@@ -532,8 +519,7 @@ mod tests {
 
     #[test]
     fn promote_summary_is_silent_for_an_already_accepted_draft() {
-        let owner = promote_repo("status-silent");
-        let tmp = owner.path().to_path_buf();
+        let tmp = promote_repo("status-silent");
         write(
             &tmp,
             "docs/adr/drafts/d.md",
@@ -563,9 +549,8 @@ mod tests {
 
     /// A committed repo with `docs/adr/0001-foo.md` on `main` — the base state the
     /// promote tests graduate a draft on top of.
-    fn promote_repo(tag: &str) -> tempfile::TempDir {
-        let owner = crate::test_support::temp_repo("adr-promote", tag);
-        let tmp = owner.path().to_path_buf();
+    fn promote_repo(tag: &str) -> crate::test_support::TestRepo {
+        let tmp = crate::test_support::temp_repo("adr-promote", tag);
         write(
             &tmp,
             "docs/adr/0001-foo.md",
@@ -573,13 +558,12 @@ mod tests {
         );
         git(&tmp, &["add", "."]);
         git(&tmp, &["commit", "-qm", "main: 0001-foo"]);
-        owner
+        tmp
     }
 
     #[test]
     fn promote_numbers_single_draft() {
-        let owner = promote_repo("single");
-        let tmp = owner.path().to_path_buf();
+        let tmp = promote_repo("single");
         // A README with the table so the row-sync path is exercised.
         write(
             &tmp,
@@ -643,8 +627,7 @@ mod tests {
 
     #[test]
     fn promote_assigns_distinct_numbers_to_multiple_drafts() {
-        let owner = promote_repo("multi");
-        let tmp = owner.path().to_path_buf();
+        let tmp = promote_repo("multi");
         write(
             &tmp,
             "docs/adr/drafts/aaa.md",
@@ -667,8 +650,7 @@ mod tests {
 
     #[test]
     fn promote_rewrites_path_form_references() {
-        let owner = promote_repo("path-refs");
-        let tmp = owner.path().to_path_buf();
+        let tmp = promote_repo("path-refs");
         // A tracked file referencing the draft by path — only tracked files are
         // visible to `git grep`.
         write(
@@ -693,8 +675,7 @@ mod tests {
 
     #[test]
     fn promote_resolves_draft_referencing_another_draft() {
-        let owner = promote_repo("draft-ref-draft");
-        let tmp = owner.path().to_path_buf();
+        let tmp = promote_repo("draft-ref-draft");
         write(
             &tmp,
             "docs/adr/drafts/aaa.md",
@@ -720,8 +701,7 @@ mod tests {
 
     #[test]
     fn promote_keeps_the_tracked_drafts_readme() {
-        let owner = promote_repo("draft-readme");
-        let tmp = owner.path().to_path_buf();
+        let tmp = promote_repo("draft-readme");
         write(&tmp, "docs/adr/drafts/README.md", "# ADR drafts\n");
         git(&tmp, &["add", "docs/adr/drafts/README.md"]);
         git(&tmp, &["commit", "-qm", "docs: draft explainer"]);
@@ -738,8 +718,7 @@ mod tests {
 
     #[test]
     fn promote_is_noop_without_drafts() {
-        let owner = promote_repo("noop");
-        let tmp = owner.path().to_path_buf();
+        let tmp = promote_repo("noop");
         std::fs::create_dir_all(tmp.join(DRAFTS_DIR)).unwrap();
         let summary = promote_tracked(&tmp).unwrap();
         assert_eq!(summary, "no ADR drafts to promote");
@@ -750,8 +729,7 @@ mod tests {
 
     #[test]
     fn promote_rerun_after_committing_is_a_clean_noop() {
-        let owner = promote_repo("clean-rerun");
-        let tmp = owner.path().to_path_buf();
+        let tmp = promote_repo("clean-rerun");
         write(
             &tmp,
             "docs/adr/drafts/d.md",
@@ -773,8 +751,7 @@ mod tests {
     fn promote_picks_next_after_committed_adr() {
         // A branch that already committed a higher-numbered ADR: the draft must
         // pick up after it, not collide with the base `0001`.
-        let owner = promote_repo("after-committed");
-        let tmp = owner.path().to_path_buf();
+        let tmp = promote_repo("after-committed");
         write(
             &tmp,
             "docs/adr/0005-x.md",

@@ -290,7 +290,7 @@ mod tests {
     use super::*;
     use crate::test_support::{commit, write};
 
-    fn repo(tag: &str) -> tempfile::TempDir {
+    fn repo(tag: &str) -> crate::test_support::TestRepo {
         crate::test_support::temp_repo("links", tag)
     }
 
@@ -406,8 +406,7 @@ mod tests {
 
     #[test]
     fn tracked_file_target_is_not_dead() {
-        let owner = repo("alive");
-        let d = owner.path().to_path_buf();
+        let d = repo("alive");
         commit(&d, "docs/b.md", "hi\n");
         write(&d, "docs/a.md", "[x](b.md)\n");
         assert!(dead_links_in(&d, "docs/a.md").unwrap().is_empty());
@@ -415,8 +414,7 @@ mod tests {
 
     #[test]
     fn missing_target_is_dead_with_line_and_target() {
-        let owner = repo("dead");
-        let d = owner.path().to_path_buf();
+        let d = repo("dead");
         write(&d, "docs/a.md", "one\n[x](gone.md)\n");
         let found = dead_links_in(&d, "docs/a.md").unwrap();
         assert_eq!(found.len(), 1);
@@ -426,8 +424,7 @@ mod tests {
 
     #[test]
     fn untracked_existing_file_target_is_dead() {
-        let owner = repo("untracked-target");
-        let d = owner.path().to_path_buf();
+        let d = repo("untracked-target");
         commit(&d, "docs/a.md", "[x](b.md)\n");
         write(&d, "docs/b.md", "hi\n");
         let found = dead_links_in(&d, "docs/a.md").unwrap();
@@ -437,8 +434,7 @@ mod tests {
 
     #[test]
     fn gitignored_existing_file_target_is_dead() {
-        let owner = repo("ignored-target");
-        let d = owner.path().to_path_buf();
+        let d = repo("ignored-target");
         commit(&d, ".gitignore", "docs/ignored.md\n");
         commit(&d, "docs/a.md", "[x](ignored.md)\n");
         write(&d, "docs/ignored.md", "hi\n");
@@ -449,8 +445,7 @@ mod tests {
 
     #[test]
     fn directory_target_with_tracked_child_resolves() {
-        let owner = repo("dir");
-        let d = owner.path().to_path_buf();
+        let d = repo("dir");
         commit(&d, "docs/adr/one.md", "hi\n");
         write(&d, "docs/a.md", "[x](adr/)\n");
         assert!(dead_links_in(&d, "docs/a.md").unwrap().is_empty());
@@ -458,8 +453,7 @@ mod tests {
 
     #[test]
     fn directory_target_with_only_untracked_content_is_dead() {
-        let owner = repo("untracked-dir");
-        let d = owner.path().to_path_buf();
+        let d = repo("untracked-dir");
         commit(&d, "docs/a.md", "[x](adr/)\n");
         write(&d, "docs/adr/one.md", "hi\n");
         let found = dead_links_in(&d, "docs/a.md").unwrap();
@@ -469,8 +463,7 @@ mod tests {
 
     #[test]
     fn directory_target_does_not_resolve_to_tracked_file() {
-        let owner = repo("dir-not-file");
-        let d = owner.path().to_path_buf();
+        let d = repo("dir-not-file");
         commit(&d, "docs/adr", "hi\n");
         write(&d, "docs/a.md", "[x](adr/)\n");
         let found = dead_links_in(&d, "docs/a.md").unwrap();
@@ -480,8 +473,7 @@ mod tests {
 
     #[test]
     fn fragment_is_stripped_before_resolving() {
-        let owner = repo("frag");
-        let d = owner.path().to_path_buf();
+        let d = repo("frag");
         commit(&d, "docs/b.md", "hi\n");
         write(&d, "docs/a.md", "[x](b.md#sec)\n");
         assert!(dead_links_in(&d, "docs/a.md").unwrap().is_empty());
@@ -489,8 +481,7 @@ mod tests {
 
     #[test]
     fn urls_and_anchors_are_ignored() {
-        let owner = repo("urls");
-        let d = owner.path().to_path_buf();
+        let d = repo("urls");
         write(
             &d,
             "docs/a.md",
@@ -501,16 +492,14 @@ mod tests {
 
     #[test]
     fn dead_link_inside_a_fenced_block_is_ignored() {
-        let owner = repo("code-fence");
-        let d = owner.path().to_path_buf();
+        let d = repo("code-fence");
         write(&d, "docs/a.md", "```\n[y](gone.md)\n```\n");
         assert!(dead_links_in(&d, "docs/a.md").unwrap().is_empty());
     }
 
     #[test]
     fn dead_link_inside_an_inline_code_span_is_ignored() {
-        let owner = repo("code-span");
-        let d = owner.path().to_path_buf();
+        let d = repo("code-span");
         write(&d, "docs/a.md", "`[x](gone.md)`\n");
         assert!(dead_links_in(&d, "docs/a.md").unwrap().is_empty());
     }
@@ -519,8 +508,7 @@ mod tests {
 
     #[test]
     fn gate_reports_a_dead_link_in_tracked_markdown() {
-        let owner = repo("gate");
-        let d = owner.path().to_path_buf();
+        let d = repo("gate");
         commit(&d, "docs/a.md", "[x](gone.md)\n");
         assert_eq!(
             problems(&d).unwrap(),
@@ -530,8 +518,7 @@ mod tests {
 
     #[test]
     fn gate_checks_tracked_adr_drafts() {
-        let owner = repo("tracked-draft-dead");
-        let d = owner.path().to_path_buf();
+        let d = repo("tracked-draft-dead");
         commit(
             &d,
             "docs/adr/drafts/decision.md",
@@ -545,8 +532,7 @@ mod tests {
 
     #[test]
     fn promotion_safe_links_in_tracked_drafts_pass_the_gate() {
-        let owner = repo("tracked-draft-links");
-        let d = owner.path().to_path_buf();
+        let d = repo("tracked-draft-links");
         commit(&d, "docs/adr/0001-base.md", "# ADR-0001: Base\n");
         commit(
             &d,
@@ -564,32 +550,28 @@ mod tests {
 
     #[test]
     fn arbitrary_document_directories_receive_link_checks() {
-        let owner = repo("ordinary-docs");
-        let d = owner.path().to_path_buf();
+        let d = repo("ordinary-docs");
         commit(&d, "docs/history/old.md", "[x](gone.md)\n");
         assert_eq!(problems(&d).unwrap().len(), 1);
     }
 
     #[test]
     fn gate_skips_the_superpowers_tree() {
-        let owner = repo("excluded-superpowers");
-        let d = owner.path().to_path_buf();
+        let d = repo("excluded-superpowers");
         commit(&d, "docs/superpowers/plan.md", "[x](gone.md)\n");
         assert!(problems(&d).unwrap().is_empty());
     }
 
     #[test]
     fn gate_skips_untracked_files() {
-        let owner = repo("untracked");
-        let d = owner.path().to_path_buf();
+        let d = repo("untracked");
         write(&d, "docs/loose.md", "[x](gone.md)\n"); // never `git add`ed
         assert!(problems(&d).unwrap().is_empty());
     }
 
     #[test]
     fn gate_skips_tracked_but_deleted_files() {
-        let owner = repo("deleted");
-        let d = owner.path().to_path_buf();
+        let d = repo("deleted");
         commit(&d, "docs/a.md", "[x](gone.md)\n");
         std::fs::remove_file(d.join("docs/a.md")).unwrap();
         assert!(problems(&d).unwrap().is_empty());
@@ -597,8 +579,7 @@ mod tests {
 
     #[test]
     fn gate_is_clean_when_every_link_resolves() {
-        let owner = repo("clean");
-        let d = owner.path().to_path_buf();
+        let d = repo("clean");
         commit(&d, "docs/b.md", "hi\n");
         commit(&d, "docs/a.md", "[x](b.md)\n");
         assert!(problems(&d).unwrap().is_empty());

@@ -565,8 +565,7 @@ mod tests {
 
     #[test]
     fn host_roots_are_absolute_when_invoked_beneath_the_repository_root() {
-        let owner = temp_repo("doctest-fences", "outside-root");
-        let repo = owner.path().to_path_buf();
+        let repo = temp_repo("doctest-fences", "outside-root");
         commit(&repo, "xtask/Cargo.toml", "[workspace]\n");
         commit(&repo, "xtask/src/lib.rs", "");
         commit(&repo, "tools/Cargo.toml", "[workspace]\n");

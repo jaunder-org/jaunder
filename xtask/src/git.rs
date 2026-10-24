@@ -822,14 +822,13 @@ mod tests {
 
     use crate::test_support::{commit, git_ok, write};
 
-    fn temp_repo(tag: &str) -> tempfile::TempDir {
+    fn temp_repo(tag: &str) -> crate::test_support::TestRepo {
         crate::test_support::temp_repo("git", tag)
     }
 
     #[test]
     fn output_returns_trimmed_stdout_and_bails_on_error() {
-        let owner = temp_repo("output");
-        let dir = owner.path().to_path_buf();
+        let dir = temp_repo("output");
         commit(&dir, "a.txt", "x\n");
         let head = output(&dir, &["rev-parse", "HEAD"]).unwrap();
         assert_eq!(head.len(), 40, "full sha, trimmed: {head:?}");
@@ -838,8 +837,7 @@ mod tests {
 
     #[test]
     fn lines_drops_blank_lines() {
-        let owner = temp_repo("lines");
-        let dir = owner.path().to_path_buf();
+        let dir = temp_repo("lines");
         commit(&dir, "a.txt", "1\n");
         commit(&dir, "b.txt", "2\n");
         let subjects = lines(&dir, &["log", "--format=%s"]).unwrap();
@@ -848,8 +846,7 @@ mod tests {
 
     #[test]
     fn run_ok_on_success_err_on_failure() {
-        let owner = temp_repo("run");
-        let dir = owner.path().to_path_buf();
+        let dir = temp_repo("run");
         commit(&dir, "a.txt", "x\n");
         assert!(run(&dir, &["status", "--porcelain"]).is_ok());
         assert!(run(&dir, &["mv", "nope", "nowhere"]).is_err());
@@ -857,8 +854,7 @@ mod tests {
 
     #[test]
     fn grep_files_match_no_match_and_error() {
-        let owner = temp_repo("grep");
-        let dir = owner.path().to_path_buf();
+        let dir = temp_repo("grep");
         commit(&dir, "hay.txt", "a needle here\n");
         commit(&dir, "other.txt", "nothing\n");
         assert_eq!(
@@ -876,8 +872,7 @@ mod tests {
 
     #[test]
     fn toplevel_returns_repo_root() {
-        let owner = temp_repo("toplevel");
-        let dir = owner.path().to_path_buf();
+        let dir = temp_repo("toplevel");
         commit(&dir, "a.txt", "x\n");
         let root = toplevel(&dir).unwrap();
         // Compare canonically — /tmp may be a symlink.
@@ -889,8 +884,7 @@ mod tests {
 
     #[test]
     fn config_get_none_when_unset_some_after_set() {
-        let owner = temp_repo("config");
-        let dir = owner.path().to_path_buf();
+        let dir = temp_repo("config");
         assert_eq!(config_get(&dir, "core.hooksPath").unwrap(), None);
         config_set(&dir, "core.hooksPath", ".githooks").unwrap();
         assert_eq!(
@@ -901,8 +895,7 @@ mod tests {
 
     #[test]
     fn ensure_hooks_path_sets_then_is_noop() {
-        let owner = temp_repo("ensure-hooks");
-        let dir = owner.path().to_path_buf();
+        let dir = temp_repo("ensure-hooks");
         assert!(ensure_hooks_path(&dir).unwrap(), "first call sets it");
         assert!(!ensure_hooks_path(&dir).unwrap(), "second call is a no-op");
         assert_eq!(hooks_path(&dir).unwrap(), Some(HOOKS_PATH.to_string()));
@@ -910,8 +903,7 @@ mod tests {
 
     #[test]
     fn current_branch_head_sha_and_remote_read_a_real_repo() {
-        let owner = temp_repo("readers");
-        let dir = owner.path().to_path_buf();
+        let dir = temp_repo("readers");
         commit(&dir, "seed.txt", "x\n");
         assert!(current_branch(&dir).unwrap().is_some());
         let sha = head_sha(&dir).unwrap().expect("a seeded repo has a HEAD");
@@ -1130,8 +1122,7 @@ mod tests {
 
     #[test]
     fn precommit_apply_restages_only_the_previously_staged_file() {
-        let owner = temp_repo("precommit-restage");
-        let dir = owner.path().to_path_buf();
+        let dir = temp_repo("precommit-restage");
         commit(&dir, "a.rs", "fn a(){}\n");
         commit(&dir, "b.rs", "fn b(){}\n");
 
@@ -1155,8 +1146,7 @@ mod tests {
 
     #[test]
     fn status_snapshot_forces_rename_detection_not_copy_detection() {
-        let owner = temp_repo("status-no-copies");
-        let dir = owner.path().to_path_buf();
+        let dir = temp_repo("status-no-copies");
         commit(&dir, "a.rs", "same\n");
         git_ok(&dir, &["config", "status.renames", "copies"]);
         write(&dir, "b.rs", "same\n");
@@ -1171,8 +1161,7 @@ mod tests {
 
     #[test]
     fn precommit_apply_stages_safe_paths_even_when_other_failures_exist() {
-        let owner = temp_repo("precommit-partial-failure");
-        let dir = owner.path().to_path_buf();
+        let dir = temp_repo("precommit-partial-failure");
         commit(&dir, "a.rs", "one\n");
         write(&dir, "a.rs", "two\n");
         git_ok(&dir, &["add", "a.rs"]);
@@ -1191,8 +1180,7 @@ mod tests {
 
     #[test]
     fn precommit_apply_refuses_mixed_staged_unstaged_file() {
-        let owner = temp_repo("precommit-mixed");
-        let dir = owner.path().to_path_buf();
+        let dir = temp_repo("precommit-mixed");
         commit(&dir, "a.rs", "one\n");
         write(&dir, "a.rs", "two\n");
         git_ok(&dir, &["add", "a.rs"]);
@@ -1217,8 +1205,7 @@ mod tests {
 
     #[test]
     fn precommit_apply_refuses_unstaged_only_file() {
-        let owner = temp_repo("precommit-unstaged");
-        let dir = owner.path().to_path_buf();
+        let dir = temp_repo("precommit-unstaged");
         commit(&dir, "a.rs", "one\n");
         let before = status_snapshot(&dir).unwrap();
 
@@ -1243,8 +1230,7 @@ mod tests {
 
     #[test]
     fn precommit_apply_refuses_new_untracked_file_without_staging_old_untracked() {
-        let owner = temp_repo("precommit-untracked");
-        let dir = owner.path().to_path_buf();
+        let dir = temp_repo("precommit-untracked");
         commit(&dir, "tracked.rs", "one\n");
         write(&dir, "old.tmp", "old\n");
         let before = status_snapshot(&dir).unwrap();
@@ -1265,8 +1251,7 @@ mod tests {
 
     #[test]
     fn precommit_apply_refuses_new_file_inside_preexisting_untracked_dir() {
-        let owner = temp_repo("precommit-untracked-dir");
-        let dir = owner.path().to_path_buf();
+        let dir = temp_repo("precommit-untracked-dir");
         commit(&dir, "tracked.rs", "one\n");
         write(&dir, "scratch/old.tmp", "old\n");
         let before = status_snapshot(&dir).unwrap();
@@ -1479,8 +1464,7 @@ mod tests {
 
     #[test]
     fn reconciliation_detects_mutation_of_preexisting_unstaged_regular_file() {
-        let owner = temp_repo("precommit-unstaged-fingerprint");
-        let dir = owner.path().to_path_buf();
+        let dir = temp_repo("precommit-unstaged-fingerprint");
         commit(&dir, "a.rs", "one\n");
         write(&dir, "a.rs", "two\n");
         let before = status_snapshot(&dir).expect("before snapshot");
@@ -1524,8 +1508,7 @@ mod tests {
     }
     #[test]
     fn merge_tree_classifies_exact_conflicts_and_non_conflicting_ancestry() {
-        let owner = temp_repo("promoter-merge-tree");
-        let dir = owner.path().to_path_buf();
+        let dir = temp_repo("promoter-merge-tree");
         commit(&dir, "shared.txt", "base\n");
         git_ok(&dir, &["branch", "candidate"]);
         write(&dir, "shared.txt", "main\n");
@@ -1541,8 +1524,7 @@ mod tests {
     }
     #[test]
     fn leased_deletion_refuses_changed_head_and_ordinary_push_recreates_absent_branch() {
-        let owner = temp_repo("promoter-lease");
-        let dir = owner.path().to_path_buf();
+        let dir = temp_repo("promoter-lease");
         commit(&dir, "seed.txt", "one\n");
         let remote = dir.join("remote.git");
         git_ok(&dir, &["init", "--bare", "remote.git"]);

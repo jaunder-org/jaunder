@@ -35,24 +35,42 @@ pub fn git_ok(dir: &Path, args: &[&str]) {
     assert!(git(dir, args).success(), "git {args:?} failed");
 }
 
+/// An owning repository path: path access never separates callers from cleanup.
+pub struct TestRepo(tempfile::TempDir);
+
+impl std::ops::Deref for TestRepo {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.path()
+    }
+}
+
+impl AsRef<Path> for TestRepo {
+    fn as_ref(&self) -> &Path {
+        self.0.path()
+    }
+}
+
 /// A fresh git repo under a temp dir, identity configured.
 ///
 /// Retain the returned owner through every Git/filesystem use. Randomized names
 /// isolate callers, and ownership starts before Git initialization can unwind.
-pub fn temp_repo(prefix: &str, tag: &str) -> tempfile::TempDir {
-    let owner = tempfile::Builder::new()
-        .prefix(&format!("jaunder-{prefix}-{tag}-"))
-        .tempdir()
-        .unwrap();
-    let dir = owner.path();
+pub fn temp_repo(prefix: &str, tag: &str) -> TestRepo {
+    let dir = TestRepo(
+        tempfile::Builder::new()
+            .prefix(&format!("jaunder-{prefix}-{tag}-"))
+            .tempdir()
+            .unwrap(),
+    );
     for args in [
         &["init", "-q", "-b", "main"][..],
         &["config", "user.email", "t@t"],
         &["config", "user.name", "t"],
     ] {
-        git_ok(dir, args);
+        git_ok(&dir, args);
     }
-    owner
+    dir
 }
 
 /// Write `rel` under `dir`, creating its parent.
