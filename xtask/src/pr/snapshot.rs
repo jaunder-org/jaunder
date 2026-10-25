@@ -189,6 +189,18 @@ fn owned(v: &Value, path: &[&str]) -> Option<String> {
     str_at(v, path).map(str::to_string)
 }
 
+pub(super) fn parse_subject_snapshot(v: &Value, subject: &Subject) -> Result<PrSnapshot, ApiError> {
+    if v.pointer("/data/repository/pullRequest/number")
+        .and_then(Value::as_u64)
+        != Some(subject.number.0)
+    {
+        return Err(ApiError::Malformed(
+            "pull request number does not match requested PR".into(),
+        ));
+    }
+    parse_snapshot(v)
+}
+
 pub fn parse_snapshot(v: &Value) -> Result<PrSnapshot, ApiError> {
     // A null `pullRequest` is how GitHub reports "no such PR" inside a 200 response.
     // Defaulting it to an empty snapshot would read as a healthy PR with no checks,
@@ -200,11 +212,25 @@ pub fn parse_snapshot(v: &Value) -> Result<PrSnapshot, ApiError> {
         .filter(|p| !p.is_null())
         .ok_or_else(|| ApiError::Malformed("no pullRequest node in response".into()))?;
 
-    let state = match str_at(pr, &["state"]).unwrap_or("") {
-        "MERGED" => PrState::Merged,
-        "CLOSED" => PrState::Closed,
-        _ => PrState::Open,
+    if !pr
+        .get("number")
+        .and_then(Value::as_u64)
+        .is_some_and(|number| number > 0)
+    {
+        return Err(ApiError::Malformed(
+            "pull request has no valid number".into(),
+        ));
+    }
+    let state = match str_at(pr, &["state"]) {
+        Some("OPEN") => PrState::Open,
+        Some("MERGED") => PrState::Merged,
+        Some("CLOSED") => PrState::Closed,
+        _ => return Err(ApiError::Malformed("pull request has invalid state".into())),
     };
+    let in_queue = pr
+        .get("isInMergeQueue")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| ApiError::Malformed("pull request has invalid isInMergeQueue".into()))?;
     let mergeable = match str_at(pr, &["mergeable"]).unwrap_or("") {
         "MERGEABLE" => Mergeable::Mergeable,
         "CONFLICTING" => Mergeable::Conflicting,
@@ -248,10 +274,7 @@ pub fn parse_snapshot(v: &Value) -> Result<PrSnapshot, ApiError> {
         // own output is not evidence — it prints the same thing either way.
         auto_merge_armed: str_at(pr, &["autoMergeRequest", "enabledAt"]).is_some(),
         queue: QueueState {
-            in_queue: pr
-                .get("isInMergeQueue")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
+            in_queue,
             position: pr
                 .get("mergeQueueEntry")
                 .and_then(|e| e.get("position"))
@@ -997,7 +1020,7 @@ impl PrSource for GhSource {
         let mut snapshot: Option<PrSnapshot> = None;
         loop {
             let value = graphql_snapshot_page(subject, after.as_deref())?;
-            let mut page = parse_snapshot(&value)?;
+            let mut page = parse_subject_snapshot(&value, subject)?;
             let (has_next_page, end_cursor) = rollup_page_info(&value)?;
             if let Some(existing) = &mut snapshot {
                 if existing.head_sha != page.head_sha {

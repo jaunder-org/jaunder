@@ -1093,6 +1093,35 @@ mod tests {
     }
 
     #[test]
+    fn queue_disappearance_confirmation_retains_landing_head_guard() {
+        let mut replacement_merged = merged_snapshot();
+        replacement_merged.head_sha = "replacement".into();
+        let mut replacement_open = open(green());
+        replacement_open.head_sha = "replacement".into();
+        for (confirmation, expected) in [
+            (merged_snapshot(), Outcome::Merged),
+            (replacement_merged, Outcome::Stale),
+            (replacement_open, Outcome::Stale),
+        ] {
+            let src = FakeSource::new(
+                vec![
+                    Ok(open(green())),
+                    Ok(queued_at(1)),
+                    Ok(open(green())),
+                    Ok(confirmation),
+                ],
+                queue_rules(),
+            );
+            let armer = CountingArmer::new();
+            let report = land(&src, &armer, &clock(), &subject(), cfg(), &mut |_| {});
+            assert_eq!(report.outcome, expected);
+            assert_eq!(report.head_sha, "abc");
+            assert_eq!(*armer.expected_heads.borrow(), ["abc"]);
+            assert_eq!(armer.calls.get(), 1, "confirmation never re-arms");
+        }
+    }
+
+    #[test]
     fn verified_queue_entry_disappearance_is_dequeued() {
         let src = FakeSource::new(
             vec![Ok(open(green())), Ok(queued_at(1)), Ok(open(green()))],
