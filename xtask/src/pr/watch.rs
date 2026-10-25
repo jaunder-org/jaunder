@@ -497,42 +497,64 @@ pub(super) fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
                 Some(r) => r.clone(),
                 None => source.required_checks(subject)?,
             };
-            let snap = source.snapshot(subject)?;
-            // Landing cannot inherit a replacement head's checks or merged state.
-            if let Some(expected) = expected_head
-                && snap.head_sha != expected
-            {
-                return Ok(Polled {
-                    required: req,
-                    classification: SnapshotClassification::Complete {
-                        step: Step::Terminal {
-                            outcome: Outcome::Stale,
-                            detail: Some(super::land::head_drift_detail(expected, &snap.head_sha)),
-                            pointer: None,
-                            subject_failure: None,
+            let poll = || -> Result<Polled, ApiError> {
+                let snap = source.snapshot(subject)?;
+                // Landing cannot inherit a replacement head's checks or merged state.
+                if let Some(expected) = expected_head
+                    && snap.head_sha != expected
+                {
+                    return Ok(Polled {
+                        required: req.clone(),
+                        classification: SnapshotClassification::Complete {
+                            step: Step::Terminal {
+                                outcome: Outcome::Stale,
+                                detail: Some(super::land::head_drift_detail(
+                                    expected,
+                                    &snap.head_sha,
+                                )),
+                                pointer: None,
+                                subject_failure: None,
+                            },
+                            optional_failures: Vec::new(),
                         },
-                        optional_failures: Vec::new(),
-                    },
+                        snapshot: snap,
+                    });
+                }
+                let ejection = if decide::needs_ejection_probe(&snap, &req) {
+                    source.ejection_run(subject)?
+                } else {
+                    None
+                };
+                // Keep the failed verdict intact; only this invocation's acknowledged
+                // run is ineligible to diagnose a new ejection. Fresh failures still end it.
+                let current_ejection = ejection
+                    .as_ref()
+                    .filter(|run| acknowledged_ejection != Some(run.url.as_str()));
+                let classification =
+                    classify_snapshot(source, subject, &snap, &req, current_ejection, &progress)?;
+                Ok(Polled {
+                    required: req.clone(),
                     snapshot: snap,
-                });
-            }
-            let ejection = if decide::needs_ejection_probe(&snap, &req) {
-                source.ejection_run(subject)?
-            } else {
-                None
+                    classification,
+                })
             };
-            // Keep the failed verdict intact; only this invocation's acknowledged
-            // run is ineligible to diagnose a new ejection. Fresh failures still end it.
-            let current_ejection = ejection
-                .as_ref()
-                .filter(|run| acknowledged_ejection != Some(run.url.as_str()));
-            let classification =
-                classify_snapshot(source, subject, &snap, &req, current_ejection, &progress)?;
-            Ok(Polled {
-                required: req,
-                snapshot: snap,
-                classification,
-            })
+            let candidate = poll()?;
+            // Disappearance alone cannot distinguish dequeue from merge. Confirm once
+            // with fresh evidence, retaining the ordinary head and failure guards.
+            if matches!(
+                candidate.classification,
+                SnapshotClassification::Complete {
+                    step: Step::Terminal {
+                        outcome: Outcome::Dequeued,
+                        ..
+                    },
+                    ..
+                }
+            ) {
+                poll()
+            } else {
+                Ok(candidate)
+            }
         })();
 
         let Polled {
@@ -1181,9 +1203,192 @@ mod tests {
     }
 
     #[test]
+    fn queue_disappearance_confirms_merge_with_metadata() {
+        let src = FakeSource::new(
+            vec![Ok(queued_at(2)), Ok(open(green())), Ok(merged_snapshot())],
+            queue_rules(),
+        );
+        let report = watch(&src, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(report.outcome, Outcome::Merged);
+        assert!(report.detail.unwrap().contains("2026-07-30T15:00:00Z"));
+        assert_eq!(report.pointer.as_deref(), Some("deadbeef"));
+    }
+
+    #[test]
+    fn confirmation_classifies_fresh_closed_head_and_queue_evidence() {
+        let mut closed = open(green());
+        closed.state = PrState::Closed;
+        let mut replacement = open(green());
+        replacement.head_sha = "replacement".into();
+        let mut replacement_merged = merged_snapshot();
+        replacement_merged.head_sha = "replacement".into();
+        let mut failed = open(green());
+        failed.checks[0].state = CheckState::Failure;
+        for (fresh, expected) in [
+            (closed, Outcome::ClosedUnmerged),
+            (replacement, Outcome::ReadyToLand),
+            (replacement_merged, Outcome::Merged),
+            (failed, Outcome::ChecksFailed),
+            (open(green()), Outcome::Dequeued),
+        ] {
+            let src = FakeSource::new(
+                vec![Ok(queued_at(2)), Ok(open(green())), Ok(fresh)],
+                queue_rules(),
+            );
+            assert_eq!(
+                watch(&src, &clock(), &subject(), cfg(), &mut |_| {}).outcome,
+                expected
+            );
+        }
+        // A fresh queued or pending snapshot is not a confirmed dequeue.
+        for fresh in [queued_at(1), open_pending()] {
+            let src = FakeSource::new(
+                vec![
+                    Ok(queued_at(2)),
+                    Ok(open(green())),
+                    Ok(fresh),
+                    Ok(merged_snapshot()),
+                ],
+                queue_rules(),
+            );
+            assert_eq!(
+                watch(&src, &clock(), &subject(), cfg(), &mut |_| {}).outcome,
+                Outcome::Merged
+            );
+        }
+    }
+
+    #[test]
+    fn confirmation_preserves_fresh_ejection_evidence() {
+        let src = FakeSource::new(
+            vec![Ok(queued_at(2)), Ok(open(green())), Ok(open(green()))],
+            queue_rules(),
+        )
+        .with_ejection_script(vec![Ok(None), Ok(Some(ejection("2026-07-30T14:30:00Z")))]);
+        assert_eq!(
+            watch(&src, &clock(), &subject(), cfg(), &mut |_| {}).outcome,
+            Outcome::Ejected
+        );
+    }
+
+    #[test]
+    fn confirmation_failure_retries_only_within_existing_poll_budget() {
+        let src = FakeSource::new(
+            vec![
+                Ok(queued_at(2)),
+                Ok(open(green())),
+                Err(ApiError::Transport("confirmation unavailable".into())),
+                Ok(open(green())),
+                Ok(merged_snapshot()),
+            ],
+            queue_rules(),
+        );
+        let report = watch(&src, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(report.outcome, Outcome::Merged);
+        assert_eq!(
+            report
+                .events
+                .iter()
+                .filter(|event| event.kind == EventKind::PollError)
+                .count(),
+            1
+        );
+
+        let mut config = cfg();
+        config.timeout_mins = 1;
+        let src = FakeSource::new(
+            vec![
+                Ok(queued_at(2)),
+                Ok(open(green())),
+                Err(ApiError::Malformed("bad confirmation".into())),
+            ],
+            queue_rules(),
+        );
+        let report = watch(&src, &clock(), &subject(), config, &mut |_| {});
+        assert_eq!(report.outcome, Outcome::TimedOut);
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|event| event.kind == EventKind::PollError)
+        );
+    }
+
+    #[test]
+    fn malformed_raw_confirmation_uses_poll_error_budget() {
+        for field in ["state", "isInMergeQueue", "number"] {
+            for invalid in [
+                None,
+                Some(serde_json::Value::Null),
+                Some(serde_json::json!({})),
+                Some(serde_json::json!("UNKNOWN")),
+                Some(serde_json::json!(999)),
+            ] {
+                let mut raw: serde_json::Value =
+                    serde_json::from_str(include_str!("testdata/pr-open-green.json")).unwrap();
+                raw["data"]["repository"]["pullRequest"]["number"] = serde_json::json!(731);
+                raw["data"]["repository"]["pullRequest"]["baseRefOid"] = serde_json::json!("base");
+                raw["data"]["repository"]["pullRequest"]["commits"]["nodes"][0]["commit"]["oid"] =
+                    serde_json::json!("abc");
+                assert!(super::super::snapshot::parse_subject_snapshot(&raw, &subject()).is_ok());
+                let pr = raw["data"]["repository"]["pullRequest"]
+                    .as_object_mut()
+                    .unwrap();
+                match invalid {
+                    Some(value) => {
+                        pr.insert(field.into(), value);
+                    }
+                    None => {
+                        pr.remove(field);
+                    }
+                }
+                let confirmation = super::super::snapshot::parse_subject_snapshot(&raw, &subject());
+                let error = confirmation.as_ref().unwrap_err().detail();
+                assert!(error.contains(field), "{error}");
+                let src = FakeSource::new(
+                    vec![Ok(queued_at(2)), Ok(open(green())), confirmation.clone()],
+                    queue_rules(),
+                );
+                let report = watch(&src, &clock(), &subject(), cfg(), &mut |_| {});
+                assert_eq!(report.outcome, Outcome::WatcherError, "{field}: {raw}");
+                assert_eq!(
+                    report
+                        .events
+                        .iter()
+                        .filter(|event| event.kind == EventKind::PollError)
+                        .count(),
+                    cfg().max_strikes as usize
+                );
+                let src = FakeSource::new(
+                    vec![Ok(queued_at(2)), Ok(open(green())), confirmation],
+                    queue_rules(),
+                );
+                let mut config = cfg();
+                config.timeout_mins = 1;
+                let report = watch(&src, &clock(), &subject(), config, &mut |_| {});
+                assert_eq!(report.outcome, Outcome::TimedOut);
+                assert!(
+                    report
+                        .events
+                        .iter()
+                        .any(|event| event.kind == EventKind::PollError)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn same_head_dequeue_returns_after_exactly_one_poll_interval() {
         let c = clock();
-        let src = FakeSource::new(vec![Ok(queued_at(2)), Ok(open(green()))], queue_rules());
+        let src = FakeSource::new(
+            vec![
+                Ok(queued_at(2)),
+                Ok(open(green())),
+                Ok(open(green())),
+                Ok(merged_snapshot()),
+            ],
+            queue_rules(),
+        );
         let report = watch(&src, &c, &subject(), cfg(), &mut |_| {});
         assert_eq!(report.outcome, Outcome::Dequeued);
         let detail = report.detail.unwrap();
