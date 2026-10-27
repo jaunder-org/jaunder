@@ -15,7 +15,7 @@ const CONFIG: &str = "end2end/otel-collector.yaml";
 const POLICY: &str = "nix/otel-processors.yaml";
 // Digest of the reviewed JSON value (sorted object keys, compact encoding).
 // Policy changes need new semantic wire proof, not just a matching processor name.
-const POLICY_DIGEST: &str = "70f370a4dbf469027245f6ebc74dd3c664235bd19094d6c919f0b06d7c973f53";
+const POLICY_DIGEST: &str = "5220968775cdb944137f635ca79e98bd8cb1fc4e8ec1a3d8a59b3ab8e2d21bb2";
 
 fn policy_problem(source: &str) -> Option<String> {
     use sha2::{Digest as _, Sha256};

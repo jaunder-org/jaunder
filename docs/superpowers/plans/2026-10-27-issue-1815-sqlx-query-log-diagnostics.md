@@ -15,7 +15,7 @@ No additional bind capture or SQLx trace-retention exception is authorized.
 
 ## Task outline
 
-- [ ] Task 1: Store real normal and slow SQLx diagnostics in the existing stack.
+- [x] Task 1: Store real normal and slow SQLx diagnostics in the existing stack.
   - Policy owner: `nix/otel-processors.yaml` and its reviewed policy digest in
     `xtask/src/steps/e2e_collector_config_check.rs`. Apply exactly the approved
     producer selection, field/carrier admission, and body precedence.
@@ -37,7 +37,7 @@ No additional bind capture or SQLx trace-retention exception is authorized.
     severity, and IDs. Preserve the original slow-query message byte-for-byte.
     Establish this tracer bullet before expanding the regression matrix.
 
-- [ ] Task 2: Lock down the narrow SQLx exception and unchanged privacy
+- [x] Task 2: Lock down the narrow SQLx exception and unchanged privacy
       boundaries.
   - Extend behavior assertions within the existing Collector/stack proof seams;
     use synthetic OTLP records only for edge cases real SQLx cannot naturally
@@ -55,7 +55,7 @@ No additional bind capture or SQLx trace-retention exception is authorized.
     validation, and extended real-stack assertions. All spec acceptance items
     1–4 map to Tasks 1–2; no permanent wiring/source-copy tests.
 
-- [ ] Task 3: Publish the implemented operator contract.
+- [x] Task 3: Publish the implemented operator contract.
   - Update `docs/observability.md` and `docs/DESIGN.md`: SQLx query lookup,
     statement/message distinction, execution fields, and explicitly accepted SQL
     exposure. Non-SQLx bodyless records remain outside this fix.

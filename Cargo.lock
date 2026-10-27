@@ -5776,6 +5776,8 @@ dependencies = [
  "common",
  "host",
  "jiff",
+ "log",
+ "opentelemetry",
  "performance",
  "rstest",
  "rstest_reuse",
@@ -5786,6 +5788,8 @@ dependencies = [
  "storage",
  "tempfile",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

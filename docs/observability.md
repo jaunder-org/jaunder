@@ -158,6 +158,38 @@ OTLP value types. Neither `jaunder.target` nor `jaunder.request.uri` is
 exported. Explicit/contextual/root and sampled/unsampled parent semantics
 remain; roots legitimately have no request link.
 
+### SQLx query-log diagnostics
+
+The Collector policy admits exactly native scope `sqlx::query`, or scope `log`
+with `log.target="sqlx::query"`. A conflicting target on another scope does not
+qualify. Query `scope.name:"sqlx::query"` in VictoriaLogs; facade records use
+`scope.name:"log" log.target:"sqlx::query"`. Native severity, resource identity,
+timestamps and available trace/span IDs remain unchanged.
+
+For an absent or empty-string body, the Collector uses the nonempty emitted
+`db.statement`, otherwise nonempty `summary`. SQLx emits an empty statement when
+its summary already holds the complete short query. Existing bodies are
+preserved, including `slow statement: execution time exceeded alert threshold`;
+inspect SQL attributes rather than expecting a slow record's `_msg` to be SQL.
+SQLx's empty `db.statement` may be omitted from stored attributes; for these
+short queries, inspect `summary` for the complete emitted SQL (also in `_msg`
+for normal message-less records). Retained execution fields are integer
+`rows_affected`/`rows_returned` (including stock unsigned-overflow decimal
+strings), debug-formatted duration strings `elapsed` and emitted
+`slow_threshold`, and floating-point `elapsed_secs`. The policy does not parse
+durations or cast counters. VictoriaLogs' string representation does not prove
+the native carrier type.
+
+**Accepted exposure:** SQL bytes are retained as emitted, without sanitization,
+truncation or reconstruction. SQL literals and identifiers can expose private
+content or secrets in durable logs. The operator explicitly accepts that
+log-only exception. No bind values are separately captured, and none are
+promised when SQLx does not emit them. This does not expand arbitrary-field,
+other-producer, trace-event or span retention. Non-SQLx bodyless records and
+historic logs are not repaired. See the
+[SQLx query-log decision](adr/drafts/sqlx-query-log-diagnostics.md) for the
+retention and body-population contract.
+
 Raw application SDK data, OTLP transport and trusted Collector input are
 accepted processing locations, explicitly amending ADR-0011's pre-Collector
 privacy interpretation. Durable Victoria/file output **and persisted Collector

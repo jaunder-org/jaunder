@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
+default-run = "test-support"
 
 [lints]
 workspace = true
@@ -11,6 +12,15 @@ workspace = true
 [[bin]]
 name = "test-support"
 path = "src/main.rs"
+
+[[bin]]
+name = "sqlx-query-diagnostics"
+path = "src/bin/sqlx-query-diagnostics.rs"
+required-features = ["sqlx-query-diagnostics"]
+
+[features]
+# VM-only producer: ordinary seed-helper builds do not compile this target.
+sqlx-query-diagnostics = ["dep:log", "dep:tracing", "dep:tracing-subscriber", "dep:opentelemetry"]
 
 [dependencies]
 storage = { workspace = true, features = ["seed-posts", "seed-themes"] }
@@ -26,6 +36,10 @@ performance = { path = "../tools/performance" }
 async-trait.workspace = true
 sqlx = { workspace = true }
 sha2.workspace = true
+log = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+opentelemetry = { workspace = true, optional = true }
 
 [dev-dependencies]
 host = { workspace = true, features = ["test-utils"] }

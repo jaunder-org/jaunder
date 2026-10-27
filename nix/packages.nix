@@ -213,6 +213,7 @@ let
       [
         "src/lib.rs"
         "src/main.rs"
+        "src/bin/sqlx-query-diagnostics.rs"
       ]
     else
       [ "src/lib.rs" ];

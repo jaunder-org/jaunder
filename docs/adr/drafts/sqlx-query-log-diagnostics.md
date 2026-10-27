@@ -8,12 +8,12 @@
 
 The [native OTLP process logs decision](../drafts/native-otlp-process-logs.md)
 keeps the stock tracing-to-OpenTelemetry log bridge and qualifies retained
-fields by producer at the shared Collector. The external-producer `keep_keys`
-rule in `nix/otel-processors.yaml` currently strips SQLx query diagnostics. The
-stock bridge maps tracing's `message` field to the native log body; it does not
-invent a body from other attributes. Normal SQLx query events have no message,
-so retaining only producer/location metadata leaves operators without either a
-useful message or the query execution diagnostics.
+fields by producer at the shared Collector. Before this exception, the
+external-producer `keep_keys` rule in `nix/otel-processors.yaml` stripped SQLx
+query diagnostics. The stock bridge maps tracing's `message` field to the native
+log body; it does not invent a body from other attributes. Normal SQLx query
+events have no message, so retaining only producer/location metadata left
+operators without either a useful message or the query execution diagnostics.
 
 SQLx 0.9.0's `sqlx-core/src/logger.rs` (`QueryLogger::finish`) emits at target
 `sqlx::query`: a short SQL `summary`, `db.statement`, row counts, and elapsed
@@ -25,9 +25,8 @@ message `slow statement: execution time exceeded alert threshold`.
 Literal SQL can contain sensitive text even without bound argument values. The
 operator explicitly approved this exposure: "Yes, I want SQL text inclued in the
 logs, accepting the exposure." This records that narrow choice, not a general
-relaxation of telemetry privacy. The exposure choice is approved; implementation
-of the design below remains pending approval. This draft does not claim that
-runtime behavior or durable output has already changed.
+relaxation of telemetry privacy. The shared Collector implements this log-only
+exception while the stock native log bridge remains unchanged.
 
 ## Decision
 
@@ -49,12 +48,12 @@ runtime behavior or durable output has already changed.
    Do not parse duration strings, cast counters, reconstruct statements, or
    invent query identities. Retention does not add fields SQLx did not emit.
 
-2. For a message-less SQLx log, use the available nonempty `db.statement` as the
-   log body; if SQLx emitted an empty statement, use `summary`. Keep the SQL
-   attributes as well. Preserve an explicit body unchanged, including SQLx's
-   slow-query diagnostic message; the slow record's SQL remains in attributes.
-   Do not substitute a generic placeholder, suppress the event, or synthesize
-   SQL from absent data.
+2. For a SQLx log with an absent or empty-string body, use the available
+   nonempty `db.statement` as the log body, otherwise nonempty `summary`. Keep
+   the SQL attributes as well. Preserve an existing nonempty body unchanged,
+   including SQLx's slow-query diagnostic message; the slow record's SQL remains
+   in attributes. Do not substitute a generic placeholder, suppress the event,
+   or synthesize SQL from absent data.
 3. Own both the narrowly qualified retention rule and body population in the
    canonical shared Collector policy, `nix/otel-processors.yaml`, before batch
    and durable log export. Adjust the external-producer keep rule so it does not
@@ -83,8 +82,9 @@ runtime behavior or durable output has already changed.
   for this behavior; no replacement application log bridge, new query
   identifier, additional bind capture, or trace-retention exception is
   justified.
-- Implementation and its evidence remain pending approval. The implementation
-  must demonstrate normal and slow events, SQLx's empty-statement fallback,
-  carrier preservation, exact producer qualification, unchanged other-producer
-  and trace retention, and stored message/attribute behavior. This documentation
-  change supplies no runtime or ingestion proof.
+- Maintained real-stack regression coverage exercises SQLx queries through the
+  production native telemetry, canonical Collector and VictoriaLogs on SQLite
+  and PostgreSQL. It covers normal and slow short/long queries, exact SQL and
+  original slow messages, execution diagnostics, producer/carrier/body edge
+  cases, and unchanged other-producer and trace retention. Configuration
+  validation complements this coverage; it does not replace ingestion proof.
