@@ -2516,6 +2516,24 @@ producer feedback or queue pressure and promises no volume recovery. The
 [operator guide](observability.md#shared-collector-privacy-policy) describes
 actual stored query fields and the confidence limits.
 
+**SQLx query-log diagnostics — implementation pending approval.** The operator
+approved retaining literal SQL despite its sensitive-text exposure (decision:
+`docs/adr/drafts/sqlx-query-log-diagnostics.md`). The selected design keeps the
+stock native log bridge and gives the shared Collector sole ownership of this
+narrow log-retention/body rule. For exactly producer `sqlx::query`, resolved by
+the existing scope/facade convention, retain string `summary`/`db.statement`,
+stock integer/overflow-string `rows_affected`/`rows_returned`, debug-duration
+strings `elapsed`/`slow_threshold` when emitted, and floating-point
+`elapsed_secs`. A message-less log uses its nonempty full statement as body, or
+its summary when SQLx emits an empty statement; an explicit slow-query message
+and the SQL attribute both remain. This is a log-only exposure exception, not
+additional bind capture, fabricated query identity, placeholder/suppression,
+filtering/exporter changes, or expanded trace-event/span retention. Other
+privacy rules remain unchanged. The current external-producer keep rule still
+strips these diagnostics, and the stock bridge does not populate a body from
+non-message fields; this projection records the selected design, not an
+implemented or ingestion-proven change.
+
 #### Stock native logs and local diagnostic formatting
 
 Stock appender 0.32.0 owns native message/severity/field conversion without
