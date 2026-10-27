@@ -484,6 +484,13 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
   forward arbitrary Playwright flags; use file or `file:line` targeting instead
   of title `--grep` examples.
 
+  Mount completion is not data ownership. Before interacting with a permalink
+  Post, wait for the fetched client card `#j-post-${post_id}` from the creation
+  response and scope its controls to that card. Projector-seeded markup can show
+  the same tags before the fetch resolves and be replaced during a pointer
+  gesture, losing the click. Keep destination-content assertions; do not repair
+  this readiness gap with sleeps, larger timeouts or retries.
+
 - **The authoritative gate** — `cargo xtask e2e <backend> chromium` runs one
   unsplit Chromium lane through its hermetic Nix VM. Firefox production uses
   `cargo xtask e2e-lane <backend>-firefox-<ordinary-1-of-2|ordinary-2-of-2|serial-special>`;
