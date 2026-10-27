@@ -799,28 +799,40 @@ let
   # The client-side-render wasm binary — the only client (#180).
   # `csrWasmBundle` runs wasm-bindgen over it; `site`
   # (above) bundles it with the public assets + rendered CSR shell.
-  csrWasm = craneLib.buildPackage (
-    csrArgs
-    // {
-      src = siteSrc;
-      cargoArtifacts = craneLib.buildDepsOnly (
-        csrArgs
-        // {
-          src = siteSrc;
-          CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
-          cargoExtraArgs = "-p csr";
-          doCheck = false;
-        }
-      );
-      CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
-      cargoExtraArgs = "-p csr";
-      doCheck = false;
-      installPhaseCommand = ''
-        mkdir -p $out/lib
-        cp target/wasm32-unknown-unknown/release/csr.wasm $out/lib/
-      '';
-    }
-  );
+  mkCsrWasm =
+    { debug ? false }:
+    let
+      # Leave Crane's existing release defaults untouched; debug dependencies
+      # and the final module must use the same Cargo profile.
+      profileArgs = pkgs.lib.optionalAttrs debug { CARGO_PROFILE = "dev"; };
+      artifactProfile = if debug then "debug" else "release";
+    in
+    craneLib.buildPackage (
+      csrArgs
+      // profileArgs
+      // {
+        src = siteSrc;
+        cargoArtifacts = craneLib.buildDepsOnly (
+          csrArgs
+          // profileArgs
+          // {
+            src = siteSrc;
+            CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
+            cargoExtraArgs = "-p csr";
+            doCheck = false;
+          }
+        );
+        CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
+        cargoExtraArgs = "-p csr";
+        doCheck = false;
+        installPhaseCommand = ''
+          mkdir -p $out/lib
+          cp target/wasm32-unknown-unknown/${artifactProfile}/csr.wasm $out/lib/
+        '';
+      }
+    );
+  csrWasm = mkCsrWasm { };
+  csrDebugWasm = mkCsrWasm { debug = true; };
 
   # Measurement-only direct-init arm label. Empty is committed and preserves
   # the normal e2e derivation hash; set for one #864 measurement arm, then
@@ -833,8 +845,10 @@ let
     {
       devtool,
       fixture ? null,
+      wasm ? csrWasm,
+      name ? "jaunder-csr-wasm-bundle",
     }:
-    pkgs.runCommand "jaunder-csr-wasm-bundle${pkgs.lib.optionalString (fixture != null) "-${fixture}"}"
+    pkgs.runCommand "${name}${pkgs.lib.optionalString (fixture != null) "-${fixture}"}"
       {
         passthru.sourceAdmits = csrSourceAdmits;
         nativeBuildInputs = [
@@ -849,7 +863,7 @@ let
         # the host build (`cargo xtask build-csr`) runs, so host and Nix cannot
         # drift (#236). The resulting root holds the build-only manifest,
         # rendered shell, and served `pkg/` assets.
-        devtool csr-bundle --wasm ${csrWasm}/lib/csr.wasm --out $out${
+        devtool csr-bundle --wasm ${wasm}/lib/csr.wasm --out $out${
           pkgs.lib.optionalString (fixture != null) " --system-artifact-fixture ${fixture}"
         }${
           pkgs.lib.optionalString (wasmExperimentArm != "") " --wasm-experiment-arm ${wasmExperimentArm}"
@@ -859,6 +873,11 @@ let
         }
       '';
   csrWasmBundle = mkCsrWasmBundle { devtool = devtoolBin; };
+  csrDebugBundle = mkCsrWasmBundle {
+    devtool = devtoolBin;
+    wasm = csrDebugWasm;
+    name = "jaunder-csr-debug-wasm-bundle";
+  };
   mkSystemArtifactQualificationPackage =
     fixture:
     if
@@ -1128,6 +1147,7 @@ in
     # bundle, so the shipped file cannot be attributed to crates (#836).
     inherit csrWasm;
     csrBundle = csrWasmBundle;
+    inherit csrDebugBundle;
     devtool = devtoolBin;
     xtask = xtaskBin;
     # The out-of-process e2e seed helper (ADR-0046). Exposed so it is

@@ -36,6 +36,7 @@ pub struct HostArtifactConfig {
     pub include_test_support: bool,
     pub server_label: &'static str,
     pub test_support_label: &'static str,
+    nix_debug_bundle: bool,
 }
 
 impl HostArtifactConfig {
@@ -52,6 +53,7 @@ impl HostArtifactConfig {
             include_test_support: true,
             server_label: "e2e-local-build-server",
             test_support_label: "e2e-local-build-support",
+            nix_debug_bundle: !release_csr,
         }
     }
 
@@ -63,6 +65,7 @@ impl HostArtifactConfig {
             include_test_support: true,
             server_label: "sandbox-build-server",
             test_support_label: "sandbox-build-support",
+            nix_debug_bundle: false,
         }
     }
 
@@ -74,6 +77,7 @@ impl HostArtifactConfig {
             include_test_support: false,
             server_label: "sandbox-build-jaunder",
             test_support_label: "sandbox-build-support",
+            nix_debug_bundle: false,
         }
     }
 }
@@ -84,6 +88,8 @@ pub struct HostArtifacts {
     pub root: PathBuf,
     pub jaunder: PathBuf,
     pub test_support: Option<PathBuf>,
+    // Retained by the caller until every consumer and its teardown have finished.
+    pub(super) _build_lock: Option<HostArtifactBuildLock>,
 }
 
 impl HostArtifacts {
@@ -95,7 +101,20 @@ impl HostArtifacts {
         result: &mut CommandResult,
         config: HostArtifactConfig,
     ) -> Option<Self> {
-        let _build_lock = match host_artifact_build_lock() {
+        // Interactive sandboxes allow operational commands while a managed
+        // server is live; preserve their preparation-only lock scope.
+        let mut artifacts = Self::prepare_interruptible(sh, result, config, || None)?;
+        artifacts._build_lock.take();
+        Some(artifacts)
+    }
+
+    pub(super) fn prepare_interruptible(
+        sh: &Shell,
+        result: &mut CommandResult,
+        config: HostArtifactConfig,
+        mut interrupted: impl FnMut() -> Option<i32>,
+    ) -> Option<Self> {
+        let build_lock = match host_artifact_build_lock_at(&sh.current_dir()) {
             Ok(lock) => lock,
             Err(error) => {
                 result.push(StepResult::fail(config.server_label).detail(format!(
@@ -104,15 +123,42 @@ impl HostArtifacts {
                 return None;
             }
         };
-        if config.include_csr {
-            super::build_csr::run(sh, result, config.csr_profile == HostBuildProfile::Release);
-            if !result.ok {
-                return None;
-            }
+        if let Some(code) = interrupted() {
+            result.exit_override = Some(code);
+            return None;
         }
+        let bundle = if config.nix_debug_bundle {
+            let started = Instant::now();
+            match e2e_debug_bundle(sh) {
+                Ok(root) => {
+                    result.push(
+                        StepResult::ok("e2e-local-csr-bundle")
+                            .detail(format!("verified CSR bundle {}", root.display()))
+                            .with_duration(started.elapsed()),
+                    );
+                    Some(root)
+                }
+                Err(error) => {
+                    result.push(
+                        StepResult::fail("e2e-local-csr-bundle")
+                            .detail(format!("{error:#}"))
+                            .with_duration(started.elapsed()),
+                    );
+                    return None;
+                }
+            }
+        } else {
+            if config.include_csr {
+                super::build_csr::run(sh, result, config.csr_profile == HostBuildProfile::Release);
+                if !result.ok {
+                    return None;
+                }
+            }
+            None
+        };
 
         let root_start = std::time::Instant::now();
-        let root = match git::toplevel(Path::new(".")) {
+        let root = match git::toplevel(&sh.current_dir()) {
             Ok(root) => PathBuf::from(root),
             Err(_) => {
                 result.push(
@@ -129,10 +175,17 @@ impl HostArtifacts {
             binaries.push(("test-support", config.test_support_label));
         }
         for (pkg, label) in binaries {
+            if let Some(code) = interrupted() {
+                result.exit_override = Some(code);
+                return None;
+            }
             let build_start = std::time::Instant::now();
             let mut command = cmd!(sh, "cargo build -p {pkg}");
             if config.server_profile == HostBuildProfile::Release {
                 command = command.arg("--release");
+            }
+            if let Some(root) = &bundle {
+                command = command.env("JAUNDER_CSR_BUNDLE_DIR", root);
             }
             if command.run().is_err() {
                 result.push(
@@ -155,8 +208,26 @@ impl HostArtifacts {
                 .include_test_support
                 .then(|| root.join(format!("target/{profile}/test-support"))),
             root,
+            _build_lock: Some(build_lock),
         })
     }
+}
+
+fn e2e_debug_bundle(sh: &Shell) -> anyhow::Result<PathBuf> {
+    let root = match sh.var_os("JAUNDER_CSR_BUNDLE_DIR") {
+        Some(root) => sh.current_dir().join(root),
+        None => {
+            crate::host_tooling::admit_untracked_inputs(
+                &sh.current_dir(),
+                ".#csrDebugBundle.sourceAdmits",
+            )?;
+            let root = sh.current_dir().join(".xtask/csr-debug-bundle");
+            sh.create_dir(root.parent().expect("bundle root has a parent"))?;
+            crate::nix_build::build_rooted(sh, "csrDebugBundle", &root)?;
+            root
+        }
+    };
+    super::csr_prerequisite::validate(&root)
 }
 
 /// Server inputs owned for the complete lifetime of one host session.
@@ -213,11 +284,6 @@ pub struct HostServerSession {
 }
 
 impl HostServerSession {
-    /// Spawn Jaunder, wait for its runtime file, and verify an HTTP response.
-    pub fn start(config: ServerSessionConfig<'_>) -> Result<Self, HostServerStartError> {
-        Self::start_interruptible(config, || false)
-    }
-
     /// Spawn Jaunder and wait for readiness until the caller requests interruption.
     pub fn start_interruptible<F>(
         config: ServerSessionConfig<'_>,
@@ -337,11 +403,6 @@ impl HostServerSession {
         })
     }
 
-    /// Gracefully stop the process tree, escalating after the bounded drain.
-    pub fn stop(&mut self) -> anyhow::Result<()> {
-        self.process.shutdown(PROCESS_SHUTDOWN_TIMEOUT).map(|_| ())
-    }
-
     /// Request immediate process-tree cleanup when a caller has already escalated.
     pub fn force_stop(&mut self) -> anyhow::Result<()> {
         self.process.shutdown(Duration::ZERO).map(|_| ())
@@ -379,18 +440,44 @@ fn start_process(command: Command, stderr: File) -> anyhow::Result<Process> {
     )
 }
 
-pub(crate) fn host_artifact_build_lock() -> anyhow::Result<File> {
-    let path = Path::new(".xtask/host-artifacts.lock");
+/// Checkout-local artifact ownership, released when the owner finishes rather
+/// than when an unrelated fork finally closes its inherited descriptor.
+#[derive(Debug)]
+pub(crate) struct HostArtifactBuildLock {
+    file: File,
+}
+
+impl Drop for HostArtifactBuildLock {
+    fn drop(&mut self) {
+        if let Err(error) = self.file.unlock() {
+            use std::io::Write;
+
+            // Drop must also work during unwinding. Report the failure without
+            // panicking; closing the file remains the fallback release path.
+            let _ = writeln!(
+                std::io::stderr(),
+                "cannot unlock host artifact build lock: {error}"
+            );
+        }
+    }
+}
+
+pub(crate) fn host_artifact_build_lock() -> anyhow::Result<HostArtifactBuildLock> {
+    host_artifact_build_lock_at(Path::new("."))
+}
+
+fn host_artifact_build_lock_at(root: &Path) -> anyhow::Result<HostArtifactBuildLock> {
+    let path = root.join(".xtask/host-artifacts.lock");
     fs::create_dir_all(path.parent().expect("artifact lock has a parent"))?;
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
-        .open(path)?;
+        .open(&path)?;
     file.lock()
         .with_context(|| format!("locking {}", path.display()))?;
-    Ok(file)
+    Ok(HostArtifactBuildLock { file })
 }
 
 /// Parse Jaunder's runtime-info JSON when it belongs to the expected child.
@@ -412,6 +499,211 @@ fn base_url_from_runtime(json: &str, expected_identity: (u32, Option<u64>)) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn preparation_fixture() -> Option<(tempfile::TempDir, Shell)> {
+        use std::os::unix::fs::PermissionsExt;
+        // xshell cannot mask an inherited variable; isolate the automatic-path
+        // fixtures without mutating the multithreaded test process environment.
+        if std::env::var_os("JAUNDER_CSR_BUNDLE_DIR").is_some() {
+            let current = std::thread::current();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", current.name().unwrap(), "--nocapture"])
+                .env_remove("JAUNDER_CSR_BUNDLE_DIR")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            return None;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        assert!(
+            crate::git::at(temp.path())
+                .args(["init", "--quiet"])
+                .status()
+                .unwrap()
+                .success()
+        );
+        fs::write(temp.path().join(".git/info/exclude"), "*\n").unwrap();
+        for (name, body) in [
+            ("cargo", "#!/bin/sh\ntouch \"$COMPILED\"\nexit 0\n"),
+            ("nix", "#!/bin/sh\nexit 37\n"),
+        ] {
+            let path = temp.path().join(name);
+            fs::write(&path, body).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let shell = Shell::new().unwrap();
+        shell.change_dir(temp.path());
+        shell.set_var(
+            "PATH",
+            format!(
+                "{}:{}",
+                temp.path().display(),
+                std::env::var("PATH").unwrap()
+            ),
+        );
+        shell.set_var("COMPILED", temp.path().join("compiled"));
+        Some((temp, shell))
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn explicit_bundle_is_validated_before_compilation_without_automatic_fallback() {
+        let Some((temp, shell)) = preparation_fixture() else {
+            return;
+        };
+        let stale = temp.path().join(".xtask/csr-debug-bundle");
+        super::super::csr_prerequisite::tests::write_bundle(&stale);
+        for input in ["missing", "corrupt"] {
+            fs::create_dir_all(temp.path().join("corrupt")).unwrap();
+            fs::write(temp.path().join("corrupt/manifest.json"), "corrupt").unwrap();
+            shell.set_var("JAUNDER_CSR_BUNDLE_DIR", input);
+            let mut result = CommandResult::new("e2e-local");
+            assert!(
+                HostArtifacts::prepare_interruptible(
+                    &shell,
+                    &mut result,
+                    HostArtifactConfig::e2e_local(false),
+                    || None
+                )
+                .is_none()
+            );
+            assert!(!result.ok);
+            assert!(!temp.path().join("compiled").exists());
+        }
+        shell.set_var("JAUNDER_CSR_BUNDLE_DIR", ".xtask/csr-debug-bundle/.");
+        let mut result = CommandResult::new("e2e-local");
+        let prepared = HostArtifacts::prepare_interruptible(
+            &shell,
+            &mut result,
+            HostArtifactConfig::e2e_local(false),
+            || None,
+        )
+        .expect("valid explicit input does not invoke the failing Nix producer");
+        assert!(result.ok, "{:?}", result.steps);
+        assert!(temp.path().join("compiled").exists());
+        assert!(!temp.path().join("target/site").exists());
+        drop(prepared);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn failed_debug_realization_never_compiles_an_older_root() {
+        let Some((temp, shell)) = preparation_fixture() else {
+            return;
+        };
+        super::super::csr_prerequisite::tests::write_bundle(
+            &temp.path().join(".xtask/csr-debug-bundle"),
+        );
+        let mut result = CommandResult::new("e2e-local");
+        assert!(
+            HostArtifacts::prepare_interruptible(
+                &shell,
+                &mut result,
+                HostArtifactConfig::e2e_local(false),
+                || None
+            )
+            .is_none()
+        );
+        assert!(!result.ok);
+        assert!(!temp.path().join("compiled").exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn failed_host_compilation_releases_preparation_ownership() {
+        let Some((temp, shell)) = preparation_fixture() else {
+            return;
+        };
+        let bundle = temp.path().join("bundle");
+        super::super::csr_prerequisite::tests::write_bundle(&bundle);
+        shell.set_var("JAUNDER_CSR_BUNDLE_DIR", bundle);
+        fs::write(temp.path().join("cargo"), "#!/bin/sh\nexit 9\n").unwrap();
+        let mut result = CommandResult::new("e2e-local");
+        assert!(
+            HostArtifacts::prepare_interruptible(
+                &shell,
+                &mut result,
+                HostArtifactConfig::e2e_local(false),
+                || None
+            )
+            .is_none()
+        );
+        assert!(!result.ok);
+        let peer = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(temp.path().join(".xtask/host-artifacts.lock"))
+            .unwrap();
+        peer.try_lock()
+            .expect("failed consumer compilation releases the guard");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn prepared_artifacts_exclude_peers_until_drop_and_release_on_unwind() {
+        let Some((temp, shell)) = preparation_fixture() else {
+            return;
+        };
+        let bundle = temp.path().join("bundle");
+        super::super::csr_prerequisite::tests::write_bundle(&bundle);
+        shell.set_var("JAUNDER_CSR_BUNDLE_DIR", &bundle);
+        let mut result = CommandResult::new("e2e-local");
+        let prepared = HostArtifacts::prepare_interruptible(
+            &shell,
+            &mut result,
+            HostArtifactConfig::e2e_local(false),
+            || None,
+        )
+        .unwrap();
+        let peer = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(temp.path().join(".xtask/host-artifacts.lock"))
+            .unwrap();
+        assert!(matches!(
+            peer.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        let unwind = std::panic::catch_unwind(move || {
+            let _prepared = prepared;
+            panic!("controlled consumer unwind");
+        });
+        assert!(unwind.is_err());
+        peer.try_lock().expect("unwind releases prepared ownership");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn pending_interruption_blocks_host_consumers() {
+        let Some((temp, shell)) = preparation_fixture() else {
+            return;
+        };
+        let bundle = temp.path().join("bundle");
+        super::super::csr_prerequisite::tests::write_bundle(&bundle);
+        shell.set_var("JAUNDER_CSR_BUNDLE_DIR", bundle);
+        let mut result = CommandResult::new("e2e-local");
+        let mut boundaries = 0;
+        assert!(
+            HostArtifacts::prepare_interruptible(
+                &shell,
+                &mut result,
+                HostArtifactConfig::e2e_local(false),
+                || {
+                    boundaries += 1;
+                    (boundaries == 2).then_some(143)
+                }
+            )
+            .is_none()
+        );
+        assert_eq!(result.exit_override, Some(143));
+        assert!(!temp.path().join("compiled").exists());
+    }
 
     #[test]
     fn runtime_info_requires_expected_process_identity_ip_and_port() {
@@ -471,25 +763,6 @@ mod tests {
         let mut session = failure.into_session().expect("retain spawned session");
         assert!(!session.is_stopped());
         session.force_stop().expect("clean up sleeping server");
-    }
-
-    #[test]
-    fn e2e_artifact_configuration_preserves_debug_server_builds() {
-        assert_eq!(
-            HostArtifactConfig::e2e_local(false),
-            HostArtifactConfig {
-                csr_profile: HostBuildProfile::Debug,
-                server_profile: HostBuildProfile::Debug,
-                include_csr: true,
-                include_test_support: true,
-                server_label: "e2e-local-build-server",
-                test_support_label: "e2e-local-build-support",
-            }
-        );
-        assert_eq!(
-            HostArtifactConfig::e2e_local(true).csr_profile,
-            HostBuildProfile::Release
-        );
     }
 
     #[test]

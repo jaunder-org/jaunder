@@ -458,18 +458,45 @@ The host and the CI VM load the **same** `end2end/playwright.config.ts`, keeping
 browser-flow definitions shared. A focused host pass does not establish the
 hermetic backend/browser matrix verdict; CI remains authoritative.
 
-- **Fast local loop** — `cargo xtask e2e-local` owns the whole loop: it builds
-  the CSR bundle + server, starts its own `jaunder serve` and OTLP collector on
-  ephemeral ports with a fresh per-run SQLite temp DB, seeds fixtures, and runs
-  the local Chromium lifecycle, tearing both processes down after. The collector
-  captures correlated browser and server spans, then the command retains the
-  complete capture under `.xtask/e2e-local/<run-id>/<browser>/capture/` and
-  prints the exact `otel-traces.jsonl` path. No pre-existing server or collector
-  is needed. Use this while iterating on the web UI; it uses the HTML reporter
-  for interactive debugging. For browser-specific investigation on macOS, select
-  WebKit after provisioning browsers, for example
+- **Fast local loop** — `cargo xtask e2e-local` owns the whole loop: it resolves
+  the CSR bundle and builds the host server, starts its own `jaunder serve` and
+  OTLP collector on ephemeral ports with a fresh per-run SQLite temp DB, seeds
+  fixtures, and runs the local Chromium lifecycle, tearing both processes down
+  after. The collector captures correlated browser and server spans, then the
+  command retains the complete capture under
+  `.xtask/e2e-local/<run-id>/<browser>/capture/` and prints the exact
+  `otel-traces.jsonl` path. No pre-existing server or collector is needed. Use
+  this while iterating on the web UI; it uses the HTML reporter for interactive
+  debugging. For browser-specific investigation on macOS, select WebKit after
+  provisioning browsers, for example
   `cargo xtask e2e-local post-image-fit.spec.ts --browser webkit`; this proves
   Playwright WebKit only, not actual Safari.
+
+  Ordinary runs realize the native `.#csrDebugBundle` through the existing Nix
+  producer and validate the complete immutable bundle before server compilation.
+  Cargo's dev profile retains browser debug assertions; the pinned toolchain and
+  declared Cargo configuration, not ambient host flags, determine its inputs.
+  Nix owns source/tool identity and warm artifact reuse, not test verdicts. A
+  first miss can be slower and retains an additional debug artifact.
+
+  Relevant nonignored untracked producer inputs are refused: use `git add -N` or
+  `git add` to include them in the Git flake snapshot. Tracked dirty and
+  intent-to-add inputs participate; unrelated notes do not. The
+  `.xtask/host-artifacts.lock` protects the checkout-local
+  `.xtask/csr-debug-bundle` GC root and host binaries through browser teardown.
+  Admission, realization or complete-bundle validation failure prevents consumer
+  compilation/startup, with no older-root, release or `target/site` fallback.
+
+  An explicit `JAUNDER_CSR_BUNDLE_DIR` is validated caller-owned input instead
+  of automatic production. Its owner must supply source/profile-matched input
+  and keep it stable and retained through the run; validation proves integrity,
+  not provenance, and our checkout lock cannot protect a foreign artifact.
+  Handled SIGINT/SIGTERM stops owned foreground consumers before
+  server/collector teardown and lock release. Visual-update mode retains its
+  existing release producer and inherited server-build override behavior;
+  standalone `build-csr`, sandbox and `test-local` keep their existing
+  producer/profile selection.
+
 - **Focused browser-flow proof** — `cargo xtask e2e-local <spec-or-file:line>`
   scopes the local loop to one Playwright positional filter when that spec or
   line covers the changed behavior:
@@ -1384,9 +1411,11 @@ without fallback to an older root or `target/site`.
 
 This prerequisite is release-built, so browser debug assertions are omitted and
 a first cache miss can be expensive. Host tests and the actual image worker
-remain debug-built and execute freshly. `check` and `prepush` share this lane;
-`build-csr`, sandbox and default `e2e-local` retain their debug CSR workflows.
-Product-test work remains host-native and invokes no Nix check derivations.
+remain debug-built and execute freshly. `check` and `prepush` share this lane.
+Ordinary `e2e-local` uses the separate Nix debug bundle described under
+[Running e2e tests locally](#running-e2e-tests-locally); standalone `build-csr`
+and sandbox retain their host debug CSR production. Product-test work remains
+host-native and invokes no Nix check derivations.
 
 The same lane builds the locked host `jaunder` executable and supplies its
 absolute path as `JAUNDER_TEST_EXECUTABLE` to storage and seeding tests that

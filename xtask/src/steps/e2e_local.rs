@@ -42,6 +42,8 @@ use crate::result::{CommandResult, StepResult};
 use crate::steps::host_server::{
     HostArtifactConfig, HostArtifacts, HostServerSession, ServerSessionConfig, ServerStartPhase,
 };
+use crate::steps::host_signals::{ServerExit, ServerSignals};
+use crate::steps::process::Process;
 
 const COLLECTOR_PORT_ATTEMPTS: usize = 8;
 
@@ -336,6 +338,7 @@ fn record_panic_gate_result(
 }
 
 struct LifecycleVerification<'a> {
+    sh: &'a Shell,
     browser: &'a str,
     test_support: &'a str,
 }
@@ -515,16 +518,19 @@ fn finish_server_setup_failure(
 }
 
 fn finish_lifecycle(
-    sh: &Shell,
     result: &mut CommandResult,
     server: &mut HostServerSession,
     collector: &mut CollectorGuard,
     retained: &RetainedCapture,
     verification: &LifecycleVerification<'_>,
     playwright_result: Option<(Result<(), String>, Duration)>,
+    signals: &mut ServerSignals,
 ) {
     let server_log_step = step_name(verification.browser, "server-log");
-    let server_stopped = match server.stop() {
+    let mut shutdown_signal = None;
+    let server_stopped = match server.stop_interruptible(async {
+        shutdown_signal = Some(signals.next_signal_code().await);
+    }) {
         Ok(()) => true,
         Err(error) => {
             result.push(
@@ -534,6 +540,9 @@ fn finish_lifecycle(
             server.is_stopped()
         }
     };
+    if result.exit_override.is_none() {
+        result.exit_override = shutdown_signal;
+    }
 
     let capture = stop_and_finalize_collector(
         result,
@@ -545,6 +554,7 @@ fn finish_lifecycle(
 
     let panic_gate_start = Instant::now();
     let panic_gate_result = if let Some(capture) = capture {
+        let sh = verification.sh;
         let test_support = verification.test_support;
         let server_stderr = capture.join("server-stderr.log");
         cmd!(
@@ -616,6 +626,7 @@ fn run_lifecycle(
     lifecycle: &BrowserLifecycle,
     workers: &str,
     path: &OsString,
+    signals: &mut ServerSignals,
 ) {
     let root = &artifacts.root;
     let browser = lifecycle.browser;
@@ -744,52 +755,53 @@ fn run_lifecycle(
             ),
         ],
     };
-    let mut server = match HostServerSession::start(config) {
-        Ok(server) => server,
-        Err(failure) => {
-            let detail = match failure.phase() {
-                ServerStartPhase::Spawn => {
-                    format!("failed to spawn jaunder serve: {}", failure.error())
-                }
-                ServerStartPhase::RuntimeFile => {
-                    format!(
-                        "server runtime file not ready within 15s: {}",
-                        failure.error()
-                    )
-                }
-                ServerStartPhase::Http => failure.error().to_string(),
-                ServerStartPhase::Interrupted => {
-                    unreachable!("noninterruptible e2e-local startup cannot be interrupted")
-                }
-            };
-            result.push(
-                StepResult::fail(&server_step)
-                    .detail(detail)
-                    .with_duration(server_start.elapsed()),
-            );
-            if let Some(mut server) = failure.into_session() {
-                let verification = LifecycleVerification {
-                    browser,
-                    test_support: &test_support,
+    let mut server =
+        match HostServerSession::start_interruptible(config, || interrupted(result, signals)) {
+            Ok(server) => server,
+            Err(failure) => {
+                let detail = match failure.phase() {
+                    ServerStartPhase::Spawn => {
+                        format!("failed to spawn jaunder serve: {}", failure.error())
+                    }
+                    ServerStartPhase::RuntimeFile => {
+                        format!(
+                            "server runtime file not ready within 15s: {}",
+                            failure.error()
+                        )
+                    }
+                    ServerStartPhase::Http => failure.error().to_string(),
+                    ServerStartPhase::Interrupted => "E2E server startup interrupted".to_owned(),
                 };
-                finish_lifecycle(
-                    sh,
-                    result,
-                    &mut server,
-                    &mut collector,
-                    &retained,
-                    &verification,
-                    None,
+                result.push(
+                    StepResult::fail(&server_step)
+                        .detail(detail)
+                        .with_duration(server_start.elapsed()),
                 );
-            } else {
-                finish_server_setup_failure(result, browser, &retained, &mut collector);
+                if let Some(mut server) = failure.into_session() {
+                    let verification = LifecycleVerification {
+                        sh,
+                        browser,
+                        test_support: &test_support,
+                    };
+                    finish_lifecycle(
+                        result,
+                        &mut server,
+                        &mut collector,
+                        &retained,
+                        &verification,
+                        None,
+                        signals,
+                    );
+                } else {
+                    finish_server_setup_failure(result, browser, &retained, &mut collector);
+                }
+                return;
             }
-            return;
-        }
-    };
+        };
     let base_url = playwright_base_url(&server.base_url);
     result.push(StepResult::ok(&server_step).with_duration(server_start.elapsed()));
     let verification = LifecycleVerification {
+        sh,
         browser,
         test_support: &test_support,
     };
@@ -797,16 +809,19 @@ fn run_lifecycle(
     let tools = root.join("tools/Cargo.toml");
     let jaunder = &artifacts.jaunder;
     let seed_start = std::time::Instant::now();
-    if devtool_seed_command(
-        sh,
-        &tools,
-        &db,
-        &test_support,
-        jaunder,
-        &capture,
-        &collector.grpc_exporter_url(),
+    if run_consumer(
+        devtool_seed_command(
+            sh,
+            &tools,
+            &db,
+            &test_support,
+            jaunder,
+            &capture,
+            &collector.grpc_exporter_url(),
+        ),
+        result,
+        signals,
     )
-    .run()
     .is_err()
     {
         result.push(
@@ -815,13 +830,13 @@ fn run_lifecycle(
                 .with_duration(seed_start.elapsed()),
         );
         finish_lifecycle(
-            sh,
             result,
             &mut server,
             &mut collector,
             &retained,
             &verification,
             None,
+            signals,
         );
         return;
     }
@@ -833,27 +848,32 @@ fn run_lifecycle(
     let playwright_start = std::time::Instant::now();
     let mut playwright_result = Ok(());
     for invocation in &lifecycle.invocations {
-        if cmd!(sh, "playwright")
-            .args(&invocation.args)
-            .env("JAUNDER_E2E_BASE_URL", &base_url)
-            .env(
-                "JAUNDER_E2E_PRODUCER_INPUT",
-                root.join(".xtask/diagnostics/e2e-host-local/producer-checkout-host-local.json"),
-            )
-            .env("JAUNDER_DB", &db)
-            .env("JAUNDER_STORAGE_PATH", storage.path())
-            .env("JAUNDER_TEST_EXECUTABLE", jaunder)
-            .env("JAUNDER_CAPTURE_DIR", &capture)
-            .env(
-                "JAUNDER_E2E_OTLP_HTTP_ENDPOINT",
-                collector.browser_http_trace_url(),
-            )
-            .env("JAUNDER_E2E_TRACE_ID", &trace_id)
-            .env("JAUNDER_E2E_WORKERS", workers)
-            .env("PLAYWRIGHT_HTML_OPEN", "never")
-            .env("PATH", path)
-            .run()
-            .is_err()
+        if run_consumer(
+            cmd!(sh, "playwright")
+                .args(&invocation.args)
+                .env("JAUNDER_E2E_BASE_URL", &base_url)
+                .env(
+                    "JAUNDER_E2E_PRODUCER_INPUT",
+                    root.join(
+                        ".xtask/diagnostics/e2e-host-local/producer-checkout-host-local.json",
+                    ),
+                )
+                .env("JAUNDER_DB", &db)
+                .env("JAUNDER_STORAGE_PATH", storage.path())
+                .env("JAUNDER_TEST_EXECUTABLE", jaunder)
+                .env("JAUNDER_CAPTURE_DIR", &capture)
+                .env(
+                    "JAUNDER_E2E_OTLP_HTTP_ENDPOINT",
+                    collector.browser_http_trace_url(),
+                )
+                .env("JAUNDER_E2E_TRACE_ID", &trace_id)
+                .env("JAUNDER_E2E_WORKERS", workers)
+                .env("PLAYWRIGHT_HTML_OPEN", "never")
+                .env("PATH", path),
+            result,
+            signals,
+        )
+        .is_err()
         {
             playwright_result = Err(format!(
                 "{} Playwright invocation reported failures",
@@ -864,13 +884,13 @@ fn run_lifecycle(
     }
 
     finish_lifecycle(
-        sh,
         result,
         &mut server,
         &mut collector,
         &retained,
         &verification,
         Some((playwright_result, playwright_start.elapsed())),
+        signals,
     );
 }
 
@@ -914,17 +934,87 @@ pub fn run(
         return;
     };
     let plan = e2e_local_plan(browser, test_filter, update_visual_snapshots);
-    let Some(artifacts) =
-        HostArtifacts::prepare(sh, result, HostArtifactConfig::e2e_local(plan.release_csr))
-    else {
+    let mut signals = match ServerSignals::install() {
+        Ok(signals) => signals,
+        Err(error) => {
+            result.push(StepResult::fail("e2e-local-signals").detail(format!("{error:#}")));
+            provenance.completed(false);
+            return;
+        }
+    };
+    let Some(artifacts) = HostArtifacts::prepare_interruptible(
+        sh,
+        result,
+        HostArtifactConfig::e2e_local(plan.release_csr),
+        || signals.take_pending(),
+    ) else {
         provenance.completed(false);
         return;
     };
 
     for lifecycle in &plan.lifecycles {
-        run_lifecycle(sh, result, &artifacts, lifecycle, &workers, &path);
+        if interrupted(result, &mut signals) {
+            break;
+        }
+        run_lifecycle(
+            sh,
+            result,
+            &artifacts,
+            lifecycle,
+            &workers,
+            &path,
+            &mut signals,
+        );
+        if interrupted(result, &mut signals) {
+            break;
+        }
     }
-    provenance.completed(result.ok);
+    provenance.completed(result.ok && result.exit_override.is_none());
+}
+
+fn interrupted(result: &mut CommandResult, signals: &mut ServerSignals) -> bool {
+    if result.exit_override.is_none() {
+        result.exit_override = signals.take_pending();
+    }
+    result.exit_override.is_some()
+}
+
+fn run_consumer(
+    command: xshell::Cmd<'_>,
+    result: &mut CommandResult,
+    signals: &mut ServerSignals,
+) -> anyhow::Result<()> {
+    if interrupted(result, signals) {
+        anyhow::bail!("E2E invocation interrupted");
+    }
+    eprintln!("$ {command}");
+    let command: std::process::Command = command.into();
+    let mut owned = processkit::Command::new(command.get_program())
+        .args(command.get_args())
+        .inherit_stdin()
+        .stdout(processkit::StdioMode::Inherit)
+        .stderr(processkit::StdioMode::Inherit);
+    if let Some(cwd) = command.get_current_dir() {
+        owned = owned.current_dir(cwd);
+    }
+    for (key, value) in command.get_envs() {
+        owned = match value {
+            Some(value) => owned.env(key, value),
+            None => owned.env_remove(key),
+        };
+    }
+    let mut process = Process::start(owned)?;
+    match signals.wait_until_stopped(|| process.is_stopped()) {
+        ServerExit::Unexpected(_) => match process.wait()? {
+            processkit::Outcome::Exited(0) => Ok(()),
+            outcome => anyhow::bail!("E2E consumer failed: {outcome:?}"),
+        },
+        ServerExit::Signal(code) => {
+            result.exit_override = Some(code);
+            signals.shutdown_process(&mut process)?;
+            anyhow::bail!("E2E invocation interrupted");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -932,6 +1022,119 @@ mod tests {
     use std::ffi::OsStr;
 
     use super::*;
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn cancellation_stops_owned_consumer_before_artifact_guard_release() {
+        use std::fs::{self, OpenOptions};
+
+        const CHILD: &str = "JAUNDER_E2E_CANCEL_PROBE";
+        let child_directory = std::env::var_os(CHILD);
+        let isolated_child = child_directory
+            .as_deref()
+            .is_some_and(|directory| Path::new(directory) == std::env::current_dir().unwrap())
+            && std::env::args().any(|argument| argument == "--exact");
+        if !isolated_child {
+            for signal in ["INT", "TERM"] {
+                let isolated = tempfile::tempdir().unwrap();
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "steps::e2e_local::tests::cancellation_stops_owned_consumer_before_artifact_guard_release",
+                        "--nocapture",
+                    ])
+                    .current_dir(isolated.path())
+                    .env(CHILD, isolated.path().canonicalize().unwrap())
+                    .env("JAUNDER_E2E_CANCEL_SIGNAL", signal)
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr),
+                );
+            }
+            return;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let shell = Shell::new().unwrap();
+        let mut signals = ServerSignals::install().unwrap();
+        let artifacts = HostArtifacts {
+            root: temp.path().to_path_buf(),
+            jaunder: temp.path().join("unused"),
+            test_support: None,
+            _build_lock: Some(crate::steps::host_server::host_artifact_build_lock().unwrap()),
+        };
+        let peer = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(".xtask/host-artifacts.lock")
+            .unwrap();
+        // A retained startup session is still an owned server and must be
+        // stopped after the cancelled foreground consumer, before unlocking.
+        use std::os::unix::fs::PermissionsExt;
+        let server_path = temp.path().join("server");
+        fs::write(&server_path, "#!/bin/sh\nexec sleep 60\n").unwrap();
+        fs::set_permissions(&server_path, fs::Permissions::from_mode(0o755)).unwrap();
+        let failure = HostServerSession::start_interruptible(
+            ServerSessionConfig {
+                shell: &shell,
+                jaunder: server_path,
+                storage: temp.path().to_path_buf(),
+                runtime_file: temp.path().join("runtime.json"),
+                database_url: "sqlite:unused.db".to_owned(),
+                stderr: File::create(temp.path().join("server.stderr")).unwrap(),
+                extra_env: Vec::new(),
+            },
+            || true,
+        )
+        .err()
+        .expect("retain owned startup session");
+        let mut server = failure.into_session().unwrap();
+        let stopped = temp.path().join("stopped");
+        // Keep the wait and trap in the owned shell: a foreground sleep can
+        // defer TERM handling until after the supervisor's escalation deadline.
+        let script = r#"trap ': > "$STOPPED"; exit 0' TERM
+kill -"$SIGNAL" "$PARENT"
+while :; do :; done"#;
+        let mut result = CommandResult::new("e2e-local");
+        let signal = std::env::var("JAUNDER_E2E_CANCEL_SIGNAL").unwrap();
+        let outcome = run_consumer(
+            cmd!(shell, "sh -c {script}")
+                .env("PARENT", std::process::id().to_string())
+                .env("SIGNAL", &signal)
+                .env("STOPPED", &stopped),
+            &mut result,
+            &mut signals,
+        );
+        assert!(outcome.is_err());
+        assert_eq!(
+            result.exit_override,
+            Some(if signal == "INT" { 130 } else { 143 })
+        );
+        assert!(
+            fs::metadata(stopped).unwrap().is_file(),
+            "consumer teardown completed"
+        );
+        assert!(matches!(
+            peer.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        server.stop_interruptible(signals.next_signal()).unwrap();
+        assert!(
+            server.is_stopped(),
+            "server teardown completes under held ownership"
+        );
+        assert!(matches!(
+            peer.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        drop(server);
+        drop(artifacts);
+        peer.try_lock()
+            .expect("consumer teardown precedes ownership release");
+    }
 
     #[test]
     fn local_collectors_overlap_while_default_metrics_port_is_occupied() {

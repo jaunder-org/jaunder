@@ -65,6 +65,7 @@ mod steps {
     pub mod flaky;
     pub mod flow_docs;
     pub mod host_server;
+    mod host_signals;
     pub mod host_tests;
     pub mod html_sink_check;
     pub mod ident_gate;

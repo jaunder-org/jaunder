@@ -15,7 +15,7 @@ scope only for preservation; no new cache protocol or scheduler.
 
 ## Task outline
 
-- [ ] **1. Deliver the first complete debug-bundle E2E path.**
+- [x] **1. Deliver the first complete debug-bundle E2E path.**
   - Producer owner: parameterize the existing WASM producer with
     `CARGO_PROFILE=dev` for dependency/final builds and the `debug` artifact
     path; expose `csrDebugBundle` using the shared postprocessor/source

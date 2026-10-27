@@ -17,7 +17,6 @@ use anyhow::{Context, bail};
 use processkit::{Outcome, StdioMode};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio::runtime::Builder;
 use xshell::Shell;
 
 use crate::cli::SandboxProfile;
@@ -25,6 +24,7 @@ use crate::result::{CommandResult, StepResult};
 use crate::steps::host_server::{
     HostArtifactConfig, HostArtifacts, HostServerSession, ServerSessionConfig, ServerStartPhase,
 };
+use crate::steps::host_signals::{ServerExit, ServerSignals};
 use crate::steps::process::Process;
 
 const SANDBOX_ROOT: &str = ".xtask/sandboxes";
@@ -93,18 +93,6 @@ enum Mode {
     Command(String),
 }
 
-enum ServerExit {
-    Signal(i32),
-    Unexpected(i32),
-}
-
-impl ServerExit {
-    fn code(&self) -> i32 {
-        match self {
-            Self::Signal(code) | Self::Unexpected(code) => *code,
-        }
-    }
-}
 #[derive(Debug)]
 struct InterruptedChild {
     code: i32,
@@ -114,13 +102,6 @@ struct InterruptedChild {
 enum SupervisedOutcome {
     Completed(Outcome),
     Signal(InterruptedChild),
-}
-
-struct ServerSignals {
-    runtime: tokio::runtime::Runtime,
-    interrupt: tokio::signal::unix::Signal,
-    terminate: tokio::signal::unix::Signal,
-    pending: Option<i32>,
 }
 
 struct NamedServer {
@@ -645,95 +626,6 @@ fn finish_interrupted(result: &mut CommandResult, interrupted: InterruptedChild)
         record(result, "sandbox-shutdown", error);
     }
     result.exit_override = Some(interrupted.code);
-}
-
-impl ServerSignals {
-    fn install() -> anyhow::Result<Self> {
-        let runtime = Builder::new_current_thread()
-            .enable_time()
-            .enable_io()
-            .build()
-            .context("creating sandbox signal runtime")?;
-        let (interrupt, terminate) = runtime.block_on(async {
-            Ok::<_, std::io::Error>((
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?,
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?,
-            ))
-        })?;
-        Ok(Self {
-            runtime,
-            interrupt,
-            terminate,
-            pending: None,
-        })
-    }
-
-    fn take_pending(&mut self) -> Option<i32> {
-        self.pending.take().or_else(|| self.receive_pending())
-    }
-
-    fn has_pending(&mut self) -> bool {
-        if self.pending.is_none() {
-            self.pending = self.receive_pending();
-        }
-        self.pending.is_some()
-    }
-
-    fn receive_pending(&mut self) -> Option<i32> {
-        self.runtime.block_on(async {
-            tokio::time::timeout(Duration::from_millis(1), async {
-                tokio::select! {
-                    _ = self.interrupt.recv() => 130,
-                    _ = self.terminate.recv() => 143,
-                }
-            })
-            .await
-            .ok()
-        })
-    }
-
-    fn wait_for_server(&mut self, session: &mut HostServerSession) -> ServerExit {
-        self.wait_until_stopped(|| session.is_stopped())
-    }
-
-    fn wait_until_stopped(&mut self, mut stopped: impl FnMut() -> bool) -> ServerExit {
-        self.runtime.block_on(async {
-            loop {
-                if stopped() {
-                    return ServerExit::Unexpected(1);
-                }
-                tokio::select! {
-                    _ = tokio::time::sleep(Duration::from_millis(100)) => {},
-                    _ = self.interrupt.recv() => return ServerExit::Signal(130),
-                    _ = self.terminate.recv() => return ServerExit::Signal(143),
-                }
-            }
-        })
-    }
-
-    fn shutdown_session(
-        &mut self,
-        session: &mut HostServerSession,
-        exit: ServerExit,
-    ) -> anyhow::Result<()> {
-        match exit {
-            ServerExit::Signal(_) => session.stop_interruptible(self.next_signal()),
-            ServerExit::Unexpected(_) => Ok(()),
-        }
-    }
-
-    fn shutdown_process(&mut self, process: &mut Process) -> anyhow::Result<()> {
-        process
-            .shutdown_interruptible(Duration::from_secs(10), self.next_signal())
-            .map(|_| ())
-    }
-
-    async fn next_signal(&mut self) {
-        tokio::select! {
-            _ = self.interrupt.recv() => {},
-            _ = self.terminate.recv() => {},
-        }
-    }
 }
 
 fn preflight_named_server(
@@ -1515,6 +1407,7 @@ mod tests {
             root: root.to_path_buf(),
             jaunder,
             test_support: None,
+            _build_lock: None,
         }
     }
     fn fake_artifacts_with_seeder(

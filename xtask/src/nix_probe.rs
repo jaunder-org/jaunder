@@ -31,10 +31,11 @@ enum Boundary {
     Xtask,
     Devtool,
     ToolingDependencies,
+    CsrDebugBundle,
 }
 
 impl Boundary {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::StaticDocs,
         Self::StaticCode,
         Self::Site,
@@ -42,6 +43,7 @@ impl Boundary {
         Self::Xtask,
         Self::Devtool,
         Self::ToolingDependencies,
+        Self::CsrDebugBundle,
     ];
 
     const fn name(self) -> &'static str {
@@ -53,6 +55,7 @@ impl Boundary {
             Self::Xtask => "xtask",
             Self::Devtool => "devtool",
             Self::ToolingDependencies => "tooling-dependencies",
+            Self::CsrDebugBundle => "csr-debug-bundle",
         }
     }
 }
@@ -83,10 +86,16 @@ pub enum Arm {
     CsrShell,
     ThemeManifest,
     Migration,
+    CsrSource,
+    CsrManifest,
+    RootLock,
+    CsrBundleProducer,
+    Toolchain,
+    UnrelatedNote,
 }
 
 impl Arm {
-    const ALL: [Self; 24] = [
+    const ALL: [Self; 30] = [
         Self::Docs,
         Self::Server,
         Self::Web,
@@ -111,6 +120,12 @@ impl Arm {
         Self::CsrShell,
         Self::ThemeManifest,
         Self::Migration,
+        Self::CsrSource,
+        Self::CsrManifest,
+        Self::RootLock,
+        Self::CsrBundleProducer,
+        Self::Toolchain,
+        Self::UnrelatedNote,
     ];
 
     const fn name(self) -> &'static str {
@@ -139,6 +154,12 @@ impl Arm {
             Self::CsrShell => "csr-shell",
             Self::ThemeManifest => "theme-manifest",
             Self::Migration => "migration",
+            Self::CsrSource => "csr-source",
+            Self::CsrManifest => "csr-manifest",
+            Self::RootLock => "root-lock",
+            Self::CsrBundleProducer => "csr-bundle-producer",
+            Self::Toolchain => "toolchain",
+            Self::UnrelatedNote => "unrelated-note",
         }
     }
 
@@ -168,13 +189,25 @@ impl Arm {
             Self::CsrShell => "csr/index.html",
             Self::ThemeManifest => "host/system_theme_sources/studio/theme.json",
             Self::Migration => "storage/migrations/sqlite/0001_create_site_config.sql",
+            Self::CsrSource => "csr/src/lib.rs",
+            Self::CsrManifest => "csr/Cargo.toml",
+            Self::RootLock => "Cargo.lock",
+            Self::CsrBundleProducer => "tools/devtool/src/csr_bundle.rs",
+            Self::Toolchain => "rust-toolchain.toml",
+            Self::UnrelatedNote => "__nix_source_probe_note.txt",
         }
     }
 
-    // Additional tooling admission cases check the changed boundary only. They do
-    // not claim a new exhaustive product/wasm/xtask invalidation matrix.
+    // Added cases guard their relevant boundaries without expanding the existing
+    // product/wasm/xtask invalidation contract.
     fn boundaries(self) -> &'static [Boundary] {
         match self {
+            Self::CsrSource
+            | Self::CsrManifest
+            | Self::RootLock
+            | Self::CsrBundleProducer
+            | Self::Toolchain
+            | Self::UnrelatedNote => &[Boundary::CsrDebugBundle],
             Self::RootManifest
             | Self::ToolsManifest
             | Self::DevtoolManifest
@@ -186,6 +219,7 @@ impl Arm {
                 Boundary::StaticCode,
                 Boundary::Devtool,
                 Boundary::ToolingDependencies,
+                Boundary::CsrDebugBundle,
             ],
             _ => &Boundary::ALL,
         }
@@ -286,6 +320,33 @@ impl Arm {
                     Boundary::StaticCode | Boundary::Devtool
                 )
                 | (Self::ServerBuildScript, Boundary::StaticCode)
+                // The final bundle includes both the WASM target closure and
+                // the existing broad devtool producer closure.
+                | (
+                    Self::Web
+                        | Self::Common
+                        | Self::Macros
+                        | Self::Performance
+                        | Self::SharedHost
+                        | Self::BuildConfig
+                        | Self::ThemeCss
+                        | Self::ApplicationCss
+                        | Self::DevtoolSource
+                        | Self::ToolsLock
+                        | Self::RootManifest
+                        | Self::ToolsManifest
+                        | Self::DevtoolManifest
+                        | Self::SharedManifest
+                        | Self::CsrShell
+                        | Self::ThemeManifest
+                        | Self::Migration
+                        | Self::CsrSource
+                        | Self::CsrManifest
+                        | Self::RootLock
+                        | Self::CsrBundleProducer
+                        | Self::Toolchain,
+                    Boundary::CsrDebugBundle
+                )
         )
     }
 }
@@ -299,6 +360,7 @@ pub struct DrvPaths {
     xtask: String,
     devtool: String,
     tooling_dependencies: String,
+    csr_debug_bundle: String,
 }
 
 impl DrvPaths {
@@ -311,6 +373,7 @@ impl DrvPaths {
             Boundary::Xtask => &self.xtask,
             Boundary::Devtool => &self.devtool,
             Boundary::ToolingDependencies => &self.tooling_dependencies,
+            Boundary::CsrDebugBundle => &self.csr_debug_bundle,
         }
     }
 }
@@ -411,6 +474,7 @@ fn eval_paths_with(evaluate: impl FnOnce() -> Result<SourceProbeDrvPaths>) -> Re
             Boundary::ToolingDependencies.name(),
             &paths.tooling_dependencies,
         )?,
+        csr_debug_bundle: parse_drv_path(Boundary::CsrDebugBundle.name(), &paths.csr_debug_bundle)?,
     })
 }
 
@@ -553,6 +617,7 @@ mod tests {
             xtask: "xtask".to_owned(),
             devtool: "devtool".to_owned(),
             tooling_dependencies: "tooling-dependencies".to_owned(),
+            csr_debug_bundle: "csr-debug-bundle".to_owned(),
         }
     }
 
@@ -563,6 +628,15 @@ mod tests {
             (Arm::Docs, paths("docs-2", "code", "site", "wasm")),
             (Arm::Server, paths("docs", "code-2", "site", "wasm")),
             (Arm::Web, paths("docs", "code-2", "site-2", "wasm")),
+            (Arm::CsrSource, paths("docs", "code", "site", "wasm")),
+            (Arm::CsrManifest, paths("docs", "code", "site", "wasm")),
+            (Arm::RootLock, paths("docs", "code", "site", "wasm")),
+            (
+                Arm::CsrBundleProducer,
+                paths("docs", "code", "site", "wasm"),
+            ),
+            (Arm::Toolchain, paths("docs", "code", "site", "wasm")),
+            (Arm::UnrelatedNote, paths("docs", "code", "site", "wasm")),
             (Arm::Common, paths("docs", "code-2", "site-2", "wasm-2")),
             (Arm::Macros, paths("docs", "code-2", "site-2", "wasm-2")),
             (
@@ -571,6 +645,9 @@ mod tests {
             ),
         ] {
             let mut changed = changed;
+            if !matches!(arm, Arm::Docs | Arm::Server | Arm::UnrelatedNote) {
+                changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
+            }
             if matches!(arm, Arm::Common | Arm::Macros | Arm::Performance) {
                 changed.xtask = "xtask-2".to_owned();
                 changed.devtool = "devtool-2".to_owned();
@@ -626,6 +703,7 @@ mod tests {
                 Arm::SharedHost | Arm::BuildConfig | Arm::ThemeCss | Arm::ApplicationCss
             ) {
                 changed.devtool = "devtool-2".to_owned();
+                changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
             }
             if matches!(arm, Arm::BuildConfig) {
                 changed.tooling_dependencies = "tooling-dependencies-2".to_owned();
@@ -646,6 +724,7 @@ mod tests {
         changed.devtool = "devtool-2".to_owned();
         changed.static_docs = "docs-2".to_owned();
         changed.site = "site-2".to_owned();
+        changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
         assert_eq!(compare_arm(&base, Arm::DevtoolSource, &changed), Ok(()));
         for (boundary, stale) in [
             (
@@ -722,6 +801,7 @@ mod tests {
         let mut changed = paths("docs-2", "code-2", "site-2", "wasm");
         changed.xtask = "xtask-2".to_owned();
         changed.devtool = "devtool-2".to_owned();
+        changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
         assert!(matches!(
             compare_arm(&base, Arm::ToolsLock, &changed),
             Err(ProbeError::MissingChange {
@@ -811,6 +891,7 @@ mod tests {
             changed.static_code = "code-2".to_owned();
             if arm != Arm::ServerBuildScript {
                 changed.devtool = "devtool-2".to_owned();
+                changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
             }
             if matches!(
                 arm,
@@ -903,6 +984,61 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn debug_bundle_rejects_stale_final_identity_after_producer_changes() {
+        let base = paths("docs", "code", "site", "wasm");
+        let mut changed = paths("docs-2", "code-2", "site-2", "wasm");
+        changed.devtool = "devtool-2".to_owned();
+        assert_eq!(
+            compare_arm(&base, Arm::DevtoolSource, &changed),
+            Err(ProbeError::MissingChange {
+                arm: Arm::DevtoolSource,
+                boundary: "csr-debug-bundle",
+                drv: base.csr_debug_bundle.clone(),
+            })
+        );
+        changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
+        assert_eq!(compare_arm(&base, Arm::DevtoolSource, &changed), Ok(()));
+    }
+
+    #[test]
+    fn debug_bundle_rejects_missing_target_and_configuration_invalidation() {
+        let base = paths("docs", "code", "site", "wasm");
+        for arm in [
+            Arm::CsrSource,
+            Arm::CsrManifest,
+            Arm::RootLock,
+            Arm::CsrBundleProducer,
+            Arm::Toolchain,
+        ] {
+            assert_eq!(
+                compare_arm(&base, arm, &base),
+                Err(ProbeError::MissingChange {
+                    arm,
+                    boundary: "csr-debug-bundle",
+                    drv: base.csr_debug_bundle.clone(),
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn debug_bundle_rejects_unrelated_note_invalidation() {
+        let base = paths("docs", "code", "site", "wasm");
+        let mut changed = base.clone();
+        changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
+        assert_eq!(
+            compare_arm(&base, Arm::UnrelatedNote, &changed),
+            Err(ProbeError::UnexpectedChange {
+                arm: Arm::UnrelatedNote,
+                boundary: "csr-debug-bundle",
+                base: base.csr_debug_bundle.clone(),
+                changed: changed.csr_debug_bundle,
+            })
+        );
+        assert_eq!(compare_arm(&base, Arm::UnrelatedNote, &base), Ok(()));
     }
 
     #[test]
