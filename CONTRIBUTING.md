@@ -720,6 +720,11 @@ a certification gate.
 | `cargo xtask validate --no-e2e` | verify-only host/static surface plus Nix static proof, `wasm-budget`, Nix `wasm-tests`, Rust `coverage`/`coverage-gate`, Nix `doctests`/`doctests-gate`, and authoritative `elisp-coverage-producer` plus host consumer                              | never mutates |
 | `cargo xtask validate`          | inherits the authoritative Emacs verdict, then adds the retained two unsplit Chromium and six split Firefox E2E lanes with host reconciliation, plus authoritative SQLite/Chromium server-function coverage verification — the full local gate       | never mutates |
 
+The CI host lane captures filesystem capacity/inodes, memory/swap and allocated
+bytes for checkout-owned Cargo targets before validation. It does not traverse
+the shared `/nix/store`: filesystem capacity comes from `df`, not a whole-store
+`du`. Resource diagnostics do not replace or weaken the validation verdict.
+
 #### Measuring Nix invalidation
 
 Every `cargo xtask` invocation overwrites `.xtask/last-result.json`. Each
