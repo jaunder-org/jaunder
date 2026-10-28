@@ -423,13 +423,16 @@
          (let* ((application (jaunder-keyword-repair-apply report '(0)))
                 (result (car (plist-get application :results))))
            (should (eq (plist-get result :status) (cdr case)))
+           (should (equal (plist-get result :path) path))
            (should (= puts 1))
            (should (equal application jaunder-keyword-repair-last-application))
            (when (eq (car case) 'quit) (should (plist-get application :cancelled)))
            (when (eq (car case) 'loss)
              (should (equal (jaunder-keyword-repair-error-source (cons 'error result))
                             '(file-error "private response loss")))
-             (should-not (string-match-p "private" (format "%S" result))))))))))
+             ;; Temp paths may contain "private"; only source rendering is redacted.
+             (should-not (string-match-p "private response loss"
+                                         (format "%S" (plist-get result :source)))))))))))
 
 (ert-deftest jaunder-keyword-repair-apply-preserves-qualified-remote-dom ()
   (require 'jaunder-keyword-repair)
