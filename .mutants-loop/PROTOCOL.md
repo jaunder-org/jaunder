@@ -33,6 +33,10 @@ when written. That is the problem — anything derived from a fixed point in
 history rots silently, and a stale work list is indistinguishable from a current
 one.
 
+Record the pre-iteration dirty/staged/untracked inventory and diff before any
+iteration edits (including journal writes or formatter-capable commands), so
+ownership and later selective undo can be demonstrated.
+
 So the work list is re-derived every time:
 
 ```bash
@@ -205,9 +209,14 @@ tool failure.
 
 - **Never merge.** A PR at the end of a grind is fine; landing it is the user's
   call.
-- **Never leave the tree broken.** If the gate goes red and you cannot fix it in
-  one try, undo your change (`git checkout -- <files>`), record the skip, and
-  move on. A clean tree matters more than a killed mutant.
+- **Preserve on gate failure.** If one fix attempt does not restore green,
+  retain the failure evidence and undo only edits demonstrably owned by this
+  iteration, using the pre-iteration inventory and diff. Preserve earlier or
+  uncertain edits and formatter mutations; a red gate or deliberate skip does
+  not establish ownership. The direct Lead owns the current inventory and
+  resolution. If safe selective undo cannot be established, report the blocker
+  to that owner and wait for direction rather than discarding work or advancing
+  the loop.
 - **A red gate is not always your fault — check for contention first.** If the
   gate fails a check you never touched (`tools-test`, `xtask-tests`, anything
   outside the file you edited), see whether a local scan is running:
