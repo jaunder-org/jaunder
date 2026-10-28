@@ -99,9 +99,12 @@ rather than a prompt. `PrArmer` is a separate trait from `PrSource` so no
 observer can mutate.
 
 The tool owns only the crank-turning steps: poll to a terminal state, re-arm
-when the arm silently no-ops, confirm the merge. It refuses the judgement calls
-— re-running a red job ("flake or real?"), rebasing, re-enqueueing after an
-ejection — and reports the state so a human decides.
+when the arm silently no-ops, confirm the merge. Routine technical diagnosis
+belongs to the assigned Lead; recovery after an ejection requires explicit
+authorization from the authority assigned by governing owner policy. In
+particular, `--reenqueue` remains a separate, explicit one-shot action, and
+neither observation nor diagnosis authorizes it. `land` remains the distinct
+per-PR human merge approval; recovery authorization does not waive that gate.
 
 ## Consequences
 

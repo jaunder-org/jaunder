@@ -495,9 +495,9 @@ pub enum PrWatchUntil {
 /// `pr` subcommands (#729).
 ///
 /// The split is the point: `watch` cannot merge anything, so running `land` **is**
-/// the merge approval. Every other action in the sequence — re-running a red job,
-/// rebasing, or explicitly requesting one re-enqueue after an ejection — needs a
-/// judgement call and stays with the human.
+/// the per-PR human merge approval. Routine technical diagnosis belongs to the
+/// assigned Lead; recovery after ejection requires explicit authorization from
+/// the authority assigned by owner policy. `land --reenqueue` remains explicit.
 #[derive(Subcommand)]
 pub enum PrCommand {
     /// Observe a PR until the next caller-actionable outcome. Never merges,
@@ -530,9 +530,11 @@ pub enum PrCommand {
     },
     /// Arm auto-merge, verify the arm actually took, then watch it to `merged`.
     ///
-    /// Running this command is the merge approval. It refuses when invoked from the
-    /// PR's own branch with unpushed local commits. An ejected PR is refused unless
-    /// --reenqueue explicitly permits one new enqueue; it never retries that arm.
+    /// Running this command is the per-PR human merge approval. Recovery after an
+    /// ejection requires separate explicit authorization from the authority assigned
+    /// by owner policy; diagnosis alone does not authorize it. It refuses when invoked
+    /// from the PR's own branch with unpushed local commits. An ejected PR is refused
+    /// unless --reenqueue explicitly permits one new enqueue; it never retries that arm.
     #[command(after_help = "EXAMPLES:\n  \
         cargo xtask pr land\n  \
         cargo xtask pr land 731\n  \
