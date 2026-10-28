@@ -168,7 +168,12 @@ pub async fn finalize_passkey_authentication(
         return Err(PasskeyMutationError(sqlx::Error::RowNotFound));
     }
     sessions
-        .create_session(transaction, user_id, session_label)
+        .create_session(
+            transaction,
+            user_id,
+            session_label,
+            crate::SessionKind::Browser,
+        )
         .await
         .map_err(PasskeyMutationError)
 }
@@ -594,9 +599,16 @@ mod tests {
         confirmed(
             env.write_scope()
                 .run(move |transaction| {
-                    Box::pin(
-                        async move { sessions.create_session(transaction, user_id, &label).await },
-                    )
+                    Box::pin(async move {
+                        sessions
+                            .create_session(
+                                transaction,
+                                user_id,
+                                &label,
+                                crate::SessionKind::Unknown,
+                            )
+                            .await
+                    })
                 })
                 .await
                 .unwrap(),
@@ -779,10 +791,9 @@ mod tests {
             outcome,
             common::MutationOutcome::CommitIndeterminate(_)
         ));
-        assert_eq!(
-            env.sessions().list_sessions(user_id).await.unwrap().len(),
-            1
-        );
+        let stored_sessions = env.sessions().list_sessions(user_id).await.unwrap();
+        assert_eq!(stored_sessions.len(), 1);
+        assert_eq!(stored_sessions[0].kind, crate::SessionKind::Browser);
         assert!(
             env.passkeys()
                 .credential_for_user(user_id, &credential_id)

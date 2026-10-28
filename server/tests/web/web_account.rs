@@ -363,7 +363,12 @@ async fn list_sessions_returns_only_authenticated_users_sessions(#[case] backend
         .run(|transaction| {
             Box::pin(async move {
                 sessions
-                    .create_session(transaction, user1_id, &user1_label)
+                    .create_session(
+                        transaction,
+                        user1_id,
+                        &user1_label,
+                        storage::SessionKind::Unknown,
+                    )
                     .await
             })
         })
@@ -378,7 +383,12 @@ async fn list_sessions_returns_only_authenticated_users_sessions(#[case] backend
         .run(|transaction| {
             Box::pin(async move {
                 sessions
-                    .create_session(transaction, user2_id, &user2_label)
+                    .create_session(
+                        transaction,
+                        user2_id,
+                        &user2_label,
+                        storage::SessionKind::Unknown,
+                    )
                     .await
             })
         })

@@ -22,7 +22,7 @@ impl SessionDialect for Sqlite {
     ) -> sqlx::Result<Option<SessionRow>> {
         let connection = <Sqlite as crate::backend::Backend>::write_connection(transaction)?;
         let row = sqlx::query_as::<_, SessionRow>(
-            "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at
+            "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at, s.kind
              FROM sessions s
              JOIN users u ON u.user_id = s.user_id
              WHERE s.token_hash = $1",
@@ -51,7 +51,7 @@ impl SessionDialect for Sqlite {
         .await?;
 
         sqlx::query_as::<_, SessionRow>(
-            "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at
+            "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at, s.kind
              FROM sessions s
              JOIN users u ON u.user_id = s.user_id
              WHERE s.token_hash = $1",

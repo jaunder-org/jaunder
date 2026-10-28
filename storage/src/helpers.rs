@@ -126,6 +126,7 @@ struct SessionRecordParts {
     user_id: UserId,
     username: Username,
     label: SessionLabel,
+    kind: crate::SessionKind,
     created_at: SessionCreatedAt,
     last_used_at: SessionLastUsedAt,
 }
@@ -136,6 +137,7 @@ fn build_session_record(
         user_id,
         username,
         label,
+        kind,
         created_at,
         last_used_at,
     }: SessionRecordParts,
@@ -150,6 +152,7 @@ fn build_session_record(
         user_id,
         username,
         label,
+        kind,
         created_at: created_at.value(),
         last_used_at: last_used_at.value(),
     }
@@ -217,6 +220,7 @@ pub struct SessionRow {
     user_id: UserId,
     username: Username,
     label: StoredSessionLabel,
+    kind: crate::SessionKind,
     created_at: SessionCreatedAt,
     last_used_at: SessionLastUsedAt,
 }
@@ -238,6 +242,7 @@ pub(crate) fn session_record_from_row(row: SessionRow) -> SessionRecord {
         user_id: row.user_id,
         username: row.username,
         label: SessionLabel::from_lossy(row.label.as_str()),
+        kind: row.kind,
         created_at: row.created_at,
         last_used_at: row.last_used_at,
     })
@@ -748,6 +753,7 @@ mod tests {
             user_id: UserId::from(1),
             username: parse_username("alice"),
             label: parse_session_label("label"),
+            kind: crate::SessionKind::Unknown,
             created_at: now.into(),
             last_used_at: later.into(),
         });
@@ -917,6 +923,7 @@ mod tests {
             user_id: UserId::from(1),
             username: parse_username("alice"),
             label: StoredSessionLabel("label".to_owned()),
+            kind: crate::SessionKind::Unknown,
             created_at: now.into(),
             last_used_at: last_used_at.into(),
         };

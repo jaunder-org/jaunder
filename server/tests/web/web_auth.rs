@@ -354,6 +354,7 @@ async fn register_nested_request_maps_open_fields(#[case] backend: Backend) {
         .expect("the register cookie authenticates");
     let record = storage::test_support::confirmed_for(outcome, "session authentication");
     assert_eq!(record.user_id, user.user_id);
+    assert_eq!(record.kind, storage::SessionKind::Browser);
 }
 
 #[apply(backends)]
@@ -900,6 +901,7 @@ async fn login_nested_request_maps_distinct_fields(#[case] backend: Backend) {
         .unwrap();
     let record = storage::test_support::confirmed_for(outcome, "session authentication");
     assert_eq!(record.label, "Issue 417 device");
+    assert_eq!(record.kind, storage::SessionKind::Browser);
 }
 
 #[apply(backends)]

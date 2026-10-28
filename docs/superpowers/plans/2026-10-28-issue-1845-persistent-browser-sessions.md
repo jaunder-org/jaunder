@@ -16,7 +16,7 @@ access/credentials, and any expansion of the accepted legacy carveout.
 
 ## Task outline
 
-- [ ] Task 1: Add durable Session kind and preserve legacy rows.
+- [x] Task 1: Add durable Session kind and preserve legacy rows.
   - Contract: explicit closed kind (`Browser`, `Machine`, `Unknown`) on every
     new creation; migration assigns pre-existing rows `Unknown`, never inferring
     from label, creation route, or request transport. Audit every
@@ -33,6 +33,11 @@ access/credentials, and any expansion of the accepted legacy carveout.
     backends via `#[apply(backends)]` across every audited creation path. Define
     rollback as forward-only unless old binaries tolerate the additive column;
     otherwise restore the pre-migration backup, not an unsupported downgrade.
+  - Foundation uses additive migration 0052 on both backends with checked text
+    kinds. Rollback is forward-only: to return to an older binary, restore a
+    pre-migration backup with that release rather than attempting a downgrade.
+    Existing exact-schema backup admission remains unchanged; absent row kind
+    decodes as Unknown only after the backup passes that admission.
 - [ ] Task 2: Enforce expiry, atomic touch and same-cookie renewal.
   - Contract: one explicit UTC `now`; typed Browser is expired at
     `last_used_at <= now - 2_592_000s`. Define touch eligibility against the

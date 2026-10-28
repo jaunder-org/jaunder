@@ -276,7 +276,11 @@ async fn create_session(
 ) -> common::token::RawToken {
     let outcome = write_scope
         .run(|transaction| {
-            Box::pin(async move { sessions.create_session(transaction, user_id, &label).await })
+            Box::pin(async move {
+                sessions
+                    .create_session(transaction, user_id, &label, storage::SessionKind::Unknown)
+                    .await
+            })
         })
         .await
         .expect("session fixture setup should succeed");

@@ -40,7 +40,12 @@ async fn list_sessions_returns_sessions_for_authenticated_user(#[case] backend: 
         .run(|transaction| {
             Box::pin(async move {
                 sessions
-                    .create_session(transaction, session.user_id, &label)
+                    .create_session(
+                        transaction,
+                        session.user_id,
+                        &label,
+                        storage::SessionKind::Machine,
+                    )
                     .await
             })
         })
@@ -408,7 +413,8 @@ async fn create_app_password_mints_labelled_session(#[case] backend: Backend) {
 
     // The new app password appears as a session with its label.
     let sessions = env.sessions().list_sessions(session.user_id).await.unwrap();
-    assert!(sessions.iter().any(|s| s.label == "MarsEdit"));
+    let machine = sessions.iter().find(|s| s.label == "MarsEdit").unwrap();
+    assert_eq!(machine.kind, storage::SessionKind::Machine);
 }
 
 #[apply(backends)]

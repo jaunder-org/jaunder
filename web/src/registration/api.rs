@@ -215,7 +215,12 @@ pub async fn register(
                 let (user_id, invite_consumed) = user_id_result?;
                 let signup_label = SessionLabel::from_lossy("Sign-up session");
                 sessions
-                    .create_session(transaction, user_id, &signup_label)
+                    .create_session(
+                        transaction,
+                        user_id,
+                        &signup_label,
+                        storage::SessionKind::Browser,
+                    )
                     .instrument(tracing::info_span!(
                         "web.registration.register.create_session"
                     ))

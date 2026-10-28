@@ -26,10 +26,10 @@ impl SessionDialect for Postgres {
                  UPDATE sessions
                  SET last_used_at = $1
                  WHERE token_hash = $2 AND last_used_at < $3
-                 RETURNING token_hash, user_id, label, created_at, last_used_at
+                 RETURNING token_hash, user_id, label, created_at, last_used_at, kind
              )
              SELECT updated.token_hash, updated.user_id, u.username, updated.label,
-                    updated.created_at, updated.last_used_at
+                    updated.created_at, updated.last_used_at, updated.kind
              FROM updated
              JOIN users u ON updated.user_id = u.user_id",
         )
@@ -44,7 +44,7 @@ impl SessionDialect for Postgres {
         }
 
         sqlx::query_as::<_, SessionRow>(
-            "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at
+            "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at, s.kind
              FROM sessions s
              JOIN users u ON u.user_id = s.user_id
              WHERE s.token_hash = $1",

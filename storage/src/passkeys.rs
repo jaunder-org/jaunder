@@ -949,9 +949,16 @@ mod tests {
         let raw_session = crate::test_support::confirmed(
             env.write_scope()
                 .run(move |transaction| {
-                    Box::pin(
-                        async move { sessions.create_session(transaction, user_id, &label).await },
-                    )
+                    Box::pin(async move {
+                        sessions
+                            .create_session(
+                                transaction,
+                                user_id,
+                                &label,
+                                crate::SessionKind::Browser,
+                            )
+                            .await
+                    })
                 })
                 .await
                 .unwrap(),
@@ -1483,7 +1490,12 @@ mod tests {
                 .run(move |transaction| {
                     Box::pin(async move {
                         sessions
-                            .create_session(transaction, user_id, &original_label)
+                            .create_session(
+                                transaction,
+                                user_id,
+                                &original_label,
+                                crate::SessionKind::Unknown,
+                            )
                             .await
                     })
                 })
@@ -1497,7 +1509,12 @@ mod tests {
                 .run(move |transaction| {
                     Box::pin(async move {
                         sessions
-                            .create_session(transaction, user_id, &sibling_label)
+                            .create_session(
+                                transaction,
+                                user_id,
+                                &sibling_label,
+                                crate::SessionKind::Unknown,
+                            )
                             .await
                     })
                 })

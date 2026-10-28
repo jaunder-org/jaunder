@@ -33,6 +33,7 @@ pub(crate) fn auth_parts(user_id: UserId, username: &str) -> Parts {
                 user_id,
                 username: username.clone(),
                 label: "test".parse().expect("valid session label"),
+                kind: storage::SessionKind::Unknown,
                 created_at: UtcInstant::now(),
                 last_used_at: UtcInstant::now(),
             })

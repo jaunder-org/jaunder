@@ -108,7 +108,12 @@ pub async fn login(
                     .await
                     .map_err(InternalError::from)?;
                 let raw_token = sessions
-                    .create_session(transaction, record.user_id, &session_label)
+                    .create_session(
+                        transaction,
+                        record.user_id,
+                        &session_label,
+                        storage::SessionKind::Browser,
+                    )
                     .instrument(tracing::info_span!("web.auth.login.create_session"))
                     .await
                     .map_err(InternalError::storage)?;

@@ -82,7 +82,12 @@ async fn confirm_password_reset_changes_credentials(#[case] backend: Backend) {
         .run(|transaction| {
             Box::pin(async move {
                 sessions
-                    .create_session(transaction, user.user_id, &label)
+                    .create_session(
+                        transaction,
+                        user.user_id,
+                        &label,
+                        storage::SessionKind::Unknown,
+                    )
                     .await
             })
         })

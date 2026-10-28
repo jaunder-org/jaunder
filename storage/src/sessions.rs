@@ -30,6 +30,19 @@ impl CorruptSessionTokenHash {
     }
 }
 
+/// Durable credential purpose; labels and authentication transports never select it.
+#[macros::text_enum(sqlx, error = InvalidSessionKind, message = "session kind must be browser, machine, or unknown")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[strum(serialize_all = "snake_case")]
+pub enum SessionKind {
+    /// A Session established by browser sign-in.
+    Browser,
+    /// An App Password or other deliberately minted machine credential.
+    Machine,
+    /// A legacy credential whose purpose is not known.
+    Unknown,
+}
+
 /// A session record returned by [`SessionStorage`] queries.
 #[derive(Clone, Debug)]
 pub struct SessionRecord {
@@ -42,6 +55,8 @@ pub struct SessionRecord {
     /// Validated label for the device/client (e.g., "Mobile App", "Safari on
     /// macOS", "Sign-up session").
     pub label: SessionLabel,
+    /// Stored credential purpose, independent of display label and transport.
+    pub kind: SessionKind,
     /// When the session was first created.
     pub created_at: UtcInstant,
     /// When the session was last persisted as used to authenticate a request.
@@ -96,6 +111,7 @@ pub trait SessionStorage: Send + Sync {
         transaction: &mut WriteTransaction,
         user_id: UserId,
         label: &SessionLabel,
+        kind: SessionKind,
     ) -> Result<RawToken>;
 
     /// Validates a raw session token and returns the associated record.
@@ -204,6 +220,7 @@ where
     // bridge (the `SessionRow: FromRow` bound above threads the decode).
     String: Type<DB>,
     for<'q> String: Encode<'q, DB>,
+    for<'q> SessionKind: Encode<'q, DB> + Type<DB>,
     for<'q> UtcInstant: Encode<'q, DB> + Type<DB>,
     for<'c> &'c Pool<DB>: Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
@@ -219,20 +236,22 @@ where
         transaction: &mut WriteTransaction,
         user_id: UserId,
         label: &SessionLabel,
+        kind: SessionKind,
     ) -> Result<RawToken> {
         let (raw_token, token_hash) = token::generate_hashed();
         let now = UtcInstant::now();
         let connection = DB::write_connection(transaction)?;
 
         sqlx::query(
-            "INSERT INTO sessions (token_hash, user_id, label, created_at, last_used_at)
-             VALUES ($1, $2, $3, $4, $5)",
+            "INSERT INTO sessions (token_hash, user_id, label, created_at, last_used_at, kind)
+             VALUES ($1, $2, $3, $4, $5, $6)",
         )
         .bind_storage(token_hash)
         .bind_storage(user_id)
         .bind_storage(label)
         .bind_storage(now)
         .bind_storage(now)
+        .bind_storage(kind)
         .execute(&mut *connection)
         .await?;
 
@@ -310,7 +329,7 @@ where
 
     async fn list_sessions(&self, user_id: UserId) -> Result<Vec<SessionRecord>> {
         let rows = sqlx::query_as::<_, SessionRow>(
-            "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at
+            "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at, s.kind
              FROM sessions s JOIN users u ON s.user_id = u.user_id
              WHERE s.user_id = $1",
         )
@@ -336,6 +355,68 @@ mod tests {
     use rstest::*;
     use rstest_reuse::*;
     use std::sync::Arc;
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn session_kinds_survive_authentication_listing_and_revocation(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope().clone())
+            .await
+            .user_id;
+        for kind in [
+            SessionKind::Browser,
+            SessionKind::Machine,
+            SessionKind::Unknown,
+        ] {
+            let sessions = env.sessions();
+            // Identical labels deliberately cannot classify credentials.
+            let label = parse_session_label("Browser");
+            let outcome = env
+                .write_scope()
+                .run(|transaction| {
+                    Box::pin(async move {
+                        sessions
+                            .create_session(transaction, user_id, &label, kind)
+                            .await
+                    })
+                })
+                .await
+                .unwrap();
+            let raw = crate::test_support::confirmed_for(outcome, "kind creation");
+            let sessions = env.sessions();
+            let outcome = env
+                .write_scope()
+                .run(|transaction| {
+                    Box::pin(async move { sessions.authenticate(transaction, &raw).await })
+                })
+                .await
+                .unwrap();
+            let record = crate::test_support::confirmed_for(outcome, "kind authentication");
+            assert_eq!(record.kind, kind);
+            let listed = env.sessions().list_sessions(user_id).await.unwrap();
+            assert_eq!(listed.len(), 1);
+            assert_eq!(listed[0].kind, kind);
+            let sessions = env.sessions();
+            env.write_scope()
+                .run(|transaction| {
+                    Box::pin(async move {
+                        sessions
+                            .revoke_session(transaction, &record.token_hash)
+                            .await
+                    })
+                })
+                .await
+                .unwrap();
+            assert!(
+                env.sessions()
+                    .list_sessions(user_id)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
 
     #[test]
     fn session_touch_cutoff_clamps_at_the_earliest_timestamp() {
@@ -367,7 +448,11 @@ mod tests {
         let outcome = env
             .write_scope()
             .run(|transaction| {
-                Box::pin(async move { sessions.create_session(transaction, user_id, &label).await })
+                Box::pin(async move {
+                    sessions
+                        .create_session(transaction, user_id, &label, SessionKind::Unknown)
+                        .await
+                })
             })
             .await
             .unwrap();
@@ -407,7 +492,11 @@ mod tests {
         let outcome = env
             .write_scope()
             .run(|transaction| {
-                Box::pin(async move { sessions.create_session(transaction, user_id, &label).await })
+                Box::pin(async move {
+                    sessions
+                        .create_session(transaction, user_id, &label, SessionKind::Unknown)
+                        .await
+                })
             })
             .await
             .unwrap();
@@ -453,7 +542,11 @@ mod tests {
         let outcome = env
             .write_scope()
             .run(|transaction| {
-                Box::pin(async move { sessions.create_session(transaction, user_id, &label).await })
+                Box::pin(async move {
+                    sessions
+                        .create_session(transaction, user_id, &label, SessionKind::Unknown)
+                        .await
+                })
             })
             .await
             .unwrap();
@@ -487,7 +580,11 @@ mod tests {
         let outcome = env
             .write_scope()
             .run(|transaction| {
-                Box::pin(async move { sessions.create_session(transaction, user_id, &label).await })
+                Box::pin(async move {
+                    sessions
+                        .create_session(transaction, user_id, &label, SessionKind::Unknown)
+                        .await
+                })
             })
             .await
             .unwrap();
@@ -565,7 +662,12 @@ mod tests {
                 .run(move |transaction| {
                     Box::pin(async move {
                         sessions
-                            .create_session(transaction, user_id, &label_for_create)
+                            .create_session(
+                                transaction,
+                                user_id,
+                                &label_for_create,
+                                SessionKind::Unknown,
+                            )
                             .await
                     })
                 })

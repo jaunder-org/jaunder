@@ -183,7 +183,11 @@ async fn create_session(
     let label = parse_session_label("Existing device");
     let outcome = write_scope
         .run(|transaction| {
-            Box::pin(async move { sessions.create_session(transaction, user_id, &label).await })
+            Box::pin(async move {
+                sessions
+                    .create_session(transaction, user_id, &label, storage::SessionKind::Unknown)
+                    .await
+            })
         })
         .await
         .expect("session fixture setup should succeed");
