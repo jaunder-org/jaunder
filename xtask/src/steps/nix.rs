@@ -1825,6 +1825,7 @@ pub(crate) struct SourceProbeDrvPaths {
     pub(crate) xtask: String,
     pub(crate) devtool: String,
     pub(crate) tooling_dependencies: String,
+    pub(crate) csr_debug_bundle: String,
 }
 
 /// Evaluate the derivation identities guarded by `nix probe-source`.
@@ -1843,6 +1844,7 @@ pub(crate) fn eval_source_probe_drvpaths(flake_dir: &Path) -> Result<SourceProbe
             Some(flake_dir),
             ".#devtool.toolingDependencies.drvPath",
         )?,
+        csr_debug_bundle: nix_eval_raw(Some(flake_dir), ".#csrDebugBundle.drvPath")?,
     })
 }
 

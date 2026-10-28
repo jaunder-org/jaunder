@@ -4008,6 +4008,28 @@ is streamed unchanged to the live terminal and a per-run file; stopping the
 child closes the pipe so the driver can drain that journal-equivalent input
 before invoking the shared zero-panic verifier.
 
+Ordinary host E2E resolves native `.#csrDebugBundle`, a dev-profile WASM variant
+of the existing Nix producer using the shared bundle postprocessor. Existing
+release outputs are unchanged. The selected immutable bundle is validated and
+passed through `JAUNDER_CSR_BUNDLE_DIR` during host server compilation, before
+embedding; it is not copied into `target/site`. Source admission includes
+tracked dirty and intent-to-add inputs and refuses relevant omitted untracked
+producer inputs. Nix owns freshness/reuse; the output manifest owns integrity
+and asset naming, not producer provenance. An explicit bundle remains validated,
+caller-owned input whose source/profile equivalence and stable lifetime are the
+caller's responsibility. Automatic selection has no stale-root or release
+fallback. The pinned debug artifact may cost more on its first miss and retains
+additional store space.
+
+Prepared E2E artifacts own the checkout-local host-artifact lock from bundle
+selection through all browser lifecycle teardown, protecting their GC root and
+host binary generation. Handled foreground SIGINT/SIGTERM uses the existing host
+signal/process machinery to stop consumers, then finalize server/collector
+capture and panic verification before releasing ownership. Sandboxes retain
+their preparation-only host-artifact lock duration so commands can operate
+against an already running named sandbox; their separate workspace/server leases
+remain authoritative for that lifetime.
+
 The same host process-control seam also serves interactive UX sandboxes
 ([host UX sandbox lifecycle](adr/0180-host-ux-sandbox-lifecycle.md)).
 `cargo xtask sandbox [NAME]` builds current host artifacts, starts on an
