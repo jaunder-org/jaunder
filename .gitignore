@@ -44,6 +44,9 @@ mutants.out.old/
 /.superpowers/
 /.pi-herdsman/
 
+# Local agent session transcripts and screenshots are execution artifacts.
+/.agent-shell/
+
 # ADR drafts are tracked Markdown; keep non-Markdown scratch files out while
 # retaining the explainer and numberless drafts in the repository.
 docs/adr/drafts/*

@@ -484,6 +484,13 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
   forward arbitrary Playwright flags; use file or `file:line` targeting instead
   of title `--grep` examples.
 
+  Mount completion is not data ownership. Before interacting with a permalink
+  Post, wait for the fetched client card `#j-post-${post_id}` from the creation
+  response and scope its controls to that card. Projector-seeded markup can show
+  the same tags before the fetch resolves and be replaced during a pointer
+  gesture, losing the click. Keep destination-content assertions; do not repair
+  this readiness gap with sleeps, larger timeouts or retries.
+
 - **The authoritative gate** — `cargo xtask e2e <backend> chromium` runs one
   unsplit Chromium lane through its hermetic Nix VM. Firefox production uses
   `cargo xtask e2e-lane <backend>-firefox-<ordinary-1-of-2|ordinary-2-of-2|serial-special>`;
@@ -719,6 +726,11 @@ a certification gate.
 | `cargo xtask prepush`           | verify-only host/static surface + auxiliary `xtask`/`tools` non-doc tests + `test-local` + `workspace-doctests`, with clean-tree refusal and no hermetic check derivations after launcher realization — the `.githooks/pre-push` hook runs this path | never mutates |
 | `cargo xtask validate --no-e2e` | verify-only host/static surface plus Nix static proof, `wasm-budget`, Nix `wasm-tests`, Rust `coverage`/`coverage-gate`, Nix `doctests`/`doctests-gate`, and authoritative `elisp-coverage-producer` plus host consumer                              | never mutates |
 | `cargo xtask validate`          | inherits the authoritative Emacs verdict, then adds the retained two unsplit Chromium and six split Firefox E2E lanes with host reconciliation, plus authoritative SQLite/Chromium server-function coverage verification — the full local gate       | never mutates |
+
+The CI host lane captures filesystem capacity/inodes, memory/swap and allocated
+bytes for checkout-owned Cargo targets before validation. It does not traverse
+the shared `/nix/store`: filesystem capacity comes from `df`, not a whole-store
+`du`. Resource diagnostics do not replace or weaken the validation verdict.
 
 #### Measuring Nix invalidation
 

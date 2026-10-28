@@ -61,9 +61,7 @@ jobs:
           for path in xtask/target tools/target; do
             probe "native target allocated bytes: $path" du -s -B1 -- "$path"
           done
-          for path in target /nix/store; do
-            probe "owned storage allocated bytes: $path" timeout 30s du -s -x -B1 -- "$path"
-          done
+          probe "owned storage allocated bytes: target" timeout 30s du -s -x -B1 -- target
           probe memory-and-swap free -b
       - name: Upload host resource baseline
         if: always() && steps.host-resource-baseline.outcome != 'skipped'
