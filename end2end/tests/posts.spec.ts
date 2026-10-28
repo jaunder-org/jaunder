@@ -3138,18 +3138,20 @@ test("tag chip on permalink navigates to site tag listing", async ({
   // Create a published post with two tags via the API. `page` is the same object
   // `registeredPage` boots; the seeded session is already on its context, so the
   // API call needs no navigation and the permalink can name the entry.
-  const { permalink } = await createPostViaApi(page, {
+  const { post_id, permalink } = await createPostViaApi(page, {
     body: "# Chip Nav Post\n\ncontent",
     tags: ["rustlang", "nix"],
   });
-  expect(permalink).toBeTruthy();
 
-  // Visit permalink; wait for tag chips to render
+  // Only the fetched client PostCard has this ID; matching visible projector markup
+  // is not enough because it can be replaced before the click completes.
   await registeredPage(permalink);
-  await waitForSelector(page, '.j-tag[href="/tags/rustlang"]');
+  const post = page.locator(`#j-post-${post_id}`);
+  await expect(post).toBeVisible();
 
   // Click the "rustlang" chip — Leptos router handles this client-side
-  await page.locator('.j-tag[href="/tags/rustlang"]').click();
+  await click(page, `#j-post-${post_id} .j-tag[href="/tags/rustlang"]`);
+
   await waitForSelector(page, '.j-topbar:has-text("#rustlang")');
 
   // Post should appear in the listing
