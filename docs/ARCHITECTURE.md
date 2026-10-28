@@ -2516,6 +2516,28 @@ producer feedback or queue pressure and promises no volume recovery. The
 [operator guide](observability.md#shared-collector-privacy-policy) describes
 actual stored query fields and the confidence limits.
 
+**SQLx query-log diagnostics.** The operator approved retaining literal SQL
+despite its sensitive-text exposure (decision:
+`docs/adr/drafts/sqlx-query-log-diagnostics.md`). The stock native log bridge
+remains unchanged; the shared Collector implements this narrow
+log-retention/body rule before batching and durable export. For exactly producer
+`sqlx::query`, resolved by the existing scope/facade convention, it retains
+string `summary`/`db.statement`, stock integer/overflow-string
+`rows_affected`/`rows_returned`, debug-duration strings
+`elapsed`/`slow_threshold` when emitted, and floating-point `elapsed_secs`,
+without parsing durations or casting counters. An absent or empty-string body
+uses the nonempty emitted statement, otherwise nonempty summary; an existing
+nonempty body, including the original slow-query diagnostic, remains unchanged
+with SQL in attributes. SQL bytes are retained as emitted, not sanitized,
+truncated or reconstructed, and may expose private literals, identifiers or
+secrets. This is a log-only exposure exception, not additional bind capture,
+fabricated query identity, placeholder/suppression, filtering/exporter changes,
+or expanded trace-event/span retention. All other privacy and correlation rules
+remain unchanged. Both-backend real-stack regression coverage exercises native
+SQLx normal/slow short/long queries through the canonical Collector into
+VictoriaLogs, alongside producer/carrier/body edge cases and unchanged trace
+retention.
+
 #### Stock native logs and local diagnostic formatting
 
 Stock appender 0.32.0 owns native message/severity/field conversion without

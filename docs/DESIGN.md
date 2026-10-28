@@ -194,9 +194,10 @@ For message verification, open the VictoriaLogs UI using loopback/SSH access or
 the authenticated observability host below. Select an explicit time window
 containing a known safe request and start with query `*` in the default Group
 view. A body-bearing application event should display its actual body, not an
-alternate structured message field. Stock bodyless dependency records (including
-SQLx records) may legitimately display Victoria's missing-message placeholder;
-they are not the response-completion fixture. Narrow the query to:
+alternate structured message field. The SQLx query-log exception uses the
+emitted full statement, or its nonempty summary when the statement is empty or
+absent, for an absent/empty-string body; other bodyless dependency records
+remain outside this fix. Narrow the response-completion query to:
 
 ```text
 scope.name:"tower_http::trace::on_response"
@@ -215,6 +216,24 @@ timestamps. Root events can legitimately have no IDs. Check for duplicate
 records; enabling a parallel stdout/journal forwarding path would violate the
 supported no-mirroring topology. Historical journal-ingested records are not
 repaired by switching ingress.
+
+For SQLx diagnostics, query `scope.name:"sqlx::query"` (facade producers use
+`scope.name:"log" log.target:"sqlx::query"`). Normal message-less records use
+nonempty `db.statement`, then nonempty `summary`, as `_msg`; slow records keep
+`slow statement: execution time exceeded alert threshold` unchanged, with SQL in
+attributes. Inspect integer `rows_affected`/`rows_returned` (including stock
+unsigned-overflow decimal strings), debug-formatted duration strings `elapsed`
+and emitted `slow_threshold`, and floating-point `elapsed_secs` alongside
+severity and available trace/span IDs. Durations are not parsed and counters are
+not cast by the policy; VictoriaLogs' string representation does not establish
+native OTLP carrier types. SQLx's empty `db.statement` may be omitted from
+stored attributes; the complete short query remains available in `summary` and,
+for normal message-less records, `_msg`. SQL text is retained byte-for-byte as
+emitted: it can contain private literals, identifiers, or secrets. The operator
+explicitly accepts this durable **log-only** exposure; there is no sanitization,
+truncation, reconstruction, extra bind capture, trace-retention expansion, or
+broader producer admission. See the
+[SQLx query-log decision](adr/drafts/sqlx-query-log-diagnostics.md).
 
 If records are missing or malformed:
 

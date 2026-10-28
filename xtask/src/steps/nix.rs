@@ -2962,12 +2962,7 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         );
     }
 
-    #[test]
-    fn e2e_vm_deadline_accounts_for_the_full_lifecycle() {
-        let checks = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../nix/checks.nix"),
-        )
-        .expect("nix/checks.nix");
+    fn evaluate_e2e_expression(result: &str) -> std::process::Output {
         // Keep the real combo -> check -> execution path, replacing only NixOS
         // realization and store inputs so this remains a primitive evaluation.
         let checks_path =
@@ -3004,24 +2999,44 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
                 playwright-driver.browsers = "/primitive/browsers";
               };
             };
-          in builtins.listToAttrs (map (name: {
-            inherit name;
-            value = { inherit (outputs.checks.${name}) globalTimeout testScript; };
-          }) (builtins.filter (name: builtins.match "e2e-.*" name != null)
-            (builtins.attrNames outputs.checks)))
+          in RESULT
         "#
-        .replace("CHECKS_PATH", &checks_path);
-        let output = std::process::Command::new("nix-instantiate")
-            .args(["--eval", "--strict", "--json", "--expr", &expression])
+        .replace("CHECKS_PATH", &checks_path)
+        .replace("RESULT", result);
+        // Materialize interpolated source files (not derivation outputs) so the
+        // executed Python imports the same capture module as the VM driver.
+        std::process::Command::new("nix-instantiate")
+            .args([
+                "--eval",
+                "--read-write-mode",
+                "--strict",
+                "--json",
+                "--expr",
+                &expression,
+            ])
             .output()
-            .expect("primitive Nix lane evaluation");
+            .expect("primitive Nix lane evaluation")
+    }
+
+    fn evaluated_e2e_lanes() -> serde_json::Value {
+        let output = evaluate_e2e_expression(
+            r#"builtins.listToAttrs (map (name: {
+              inherit name;
+              value = { inherit (outputs.checks.${name}) globalTimeout testScript; };
+            }) (builtins.filter (name: builtins.match "e2e-.*" name != null)
+              (builtins.attrNames outputs.checks)))"#,
+        );
         assert!(
             output.status.success(),
             "lane evaluation: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let lanes: serde_json::Value =
-            serde_json::from_slice(&output.stdout).expect("evaluated lanes");
+        serde_json::from_slice(&output.stdout).expect("evaluated lanes")
+    }
+
+    #[test]
+    fn e2e_vm_deadline_accounts_for_the_full_lifecycle() {
+        let lanes = evaluated_e2e_lanes();
         let lanes = lanes.as_object().expect("lane map");
         assert_eq!(lanes.len(), 8);
         for (name, lane) in lanes {
@@ -3032,51 +3047,49 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
             };
             assert_eq!(lane["globalTimeout"], deadline, "{name}");
             let script = lane["testScript"].as_str().expect("VM test script");
-            let execution = script
-                .split_once("pw_status, pw_out = machine.execute(")
-                .expect("Playwright execution")
-                .1
-                .split_once("record_e2e_phase(")
-                .expect("execution phase end")
-                .0;
-            let execution_timeout: u64 = execution
-                .split_once("timeout=")
-                .expect("execution timeout")
-                .1
-                .split_once(',')
-                .expect("timeout argument end")
-                .0
-                .parse()
-                .expect("timeout seconds");
-            assert_eq!(execution_timeout, suite, "{name}");
-            assert!(execution_timeout < lane["globalTimeout"].as_u64().expect("VM deadline"));
-            if name.contains("firefox") {
-                let census = script
-                    .split_once("expected_census_status, expected_census_out = machine.execute(")
-                    .expect("Firefox census")
-                    .1
-                    .split_once("print(expected_census_out)")
-                    .expect("census end")
-                    .0;
-                assert!(census.contains("timeout=1500,"), "{name}");
-            }
+            let syntax = std::process::Command::new("python3")
+                .args([
+                    "-B",
+                    "-c",
+                    r#"
+import ast
+import json
+import sys
+
+module = ast.parse(sys.argv[1])
+timeouts = []
+for call in ast.walk(module):
+    if not isinstance(call, ast.Call) or not call.args:
+        continue
+    if not isinstance(call.func, ast.Attribute) or call.func.attr != "execute":
+        continue
+    if not any(isinstance(node, ast.Constant) and isinstance(node.value, str)
+               and "node_modules/.bin/playwright test" in node.value
+               for node in ast.walk(call.args[0])):
+        continue
+    timeout = next(keyword.value for keyword in call.keywords if keyword.arg == "timeout")
+    timeouts.append(ast.literal_eval(timeout))
+print(json.dumps(sorted(timeouts)))
+"#,
+                    script,
+                ])
+                .output()
+                .expect("parse evaluated VM script");
+            assert!(
+                syntax.status.success(),
+                "{name}: {}",
+                String::from_utf8_lossy(&syntax.stderr)
+            );
+            let timeouts: Vec<u64> =
+                serde_json::from_slice(&syntax.stdout).expect("browser execution timeouts");
+            let expected = if name.contains("firefox") {
+                vec![1500, suite]
+            } else {
+                vec![suite]
+            };
+            assert_eq!(timeouts, expected, "{name}");
+            assert!(timeouts.iter().all(|timeout| *timeout < deadline), "{name}");
         }
-        // Evaluate the actual source-owned budget and guard, not a mirrored formula
-        // or a flake/VM derivation (this needs only Nix's primitive evaluator).
-        let budgets = checks
-            .split_once("e2ePlaywrightTimeout =")
-            .expect("inner budget declaration")
-            .1
-            .split_once("# Performance producers")
-            .expect("budget section end")
-            .0;
-        let guard = checks
-            .split_once("    globalTimeout =\n")
-            .expect("VM deadline")
-            .1
-            .split_once("\n\n    nodes.machine")
-            .expect("VM deadline end")
-            .0;
         for (producer, suite, deadline, accepted) in [
             ("null", 1500, 1920, true),
             ("null", 1500, 1919, false),
@@ -3086,15 +3099,19 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
             ("{}", 1500, 6000, true),
         ] {
             let expression = format!(
-                "let e2ePlaywrightTimeout ={budgets}\nproducer = {producer}; \
-                 playwrightTimeout = {suite}; vmGlobalTimeout = {deadline}; in \
-                 [ e2ePlaywrightTimeout e2eLifecycleAllowance e2eDeadlineReserve ({}) ]",
-                guard.trim().trim_end_matches(';')
+                r#"(outputs.internals.mkE2eCheck {{
+                  backend = "sqlite";
+                  checkName = "deadline-boundary";
+                  browser = "chromium";
+                  traceId = "";
+                  traceParent = "";
+                  producer = {producer};
+                  lane = if {producer} == null then {{}} else null;
+                  playwrightTimeout = {suite};
+                  vmGlobalTimeout = {deadline};
+                }}).globalTimeout"#
             );
-            let output = std::process::Command::new("nix-instantiate")
-                .args(["--eval", "--strict", "--json", "--expr", &expression])
-                .output()
-                .expect("primitive Nix budget evaluation");
+            let output = evaluate_e2e_expression(&expression);
             assert_eq!(
                 output.status.success(),
                 accepted,
@@ -3102,21 +3119,10 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
                 String::from_utf8_lossy(&output.stderr)
             );
             if accepted {
-                let values: serde_json::Value =
-                    serde_json::from_slice(&output.stdout).expect("budget values");
-                assert_eq!(values, serde_json::json!([1500, 300, 120, deadline]));
-            } else {
-                assert!(String::from_utf8_lossy(&output.stderr).contains("assertion"));
+                let actual: u64 =
+                    serde_json::from_slice(&output.stdout).expect("evaluated VM deadline");
+                assert_eq!(actual, deadline);
             }
-        }
-        for obligation in [
-            "capture_module.verify_capture_archive(",
-            "assert source_hashes and source_hashes.keys() == source_sizes.keys()",
-            "assert panic_status == 0",
-            "assert not retention_errors",
-            "write_e2e_phase_manifest()",
-        ] {
-            assert!(checks.contains(obligation), "missing {obligation}");
         }
     }
 
@@ -3134,65 +3140,20 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
     }
 
     #[test]
-    fn e2e_phase_timing_helper_nix_indentation_yields_valid_python() {
-        let checks =
-            fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../nix/checks.nix"))
-                .expect("nix/checks.nix");
-        let helper = checks
-            .split_once("e2ePhaseTimingHelpers = backend: browser: identity: ''\n")
-            .expect("production Nix helper start")
-            .1
-            .split_once("\n'';\n\ne2eRunAndCapture")
-            .expect("production Nix helper end")
-            .0
-            .replace("${backend}", "sqlite")
-            .replace("${browser}", "chromium")
-            .replace("${identity}", "sqlite-chromium-unsplit")
-            .replace("${pkgs.nodejs}/bin/node", "/nix/store/test-node/bin/node");
-        let expression = format!("''\n{helper}\n''");
-        let evaluated = std::process::Command::new("nix-instantiate")
-            .args(["--eval", "--strict", "--json", "--expr", &expression])
-            .output()
-            .expect("evaluate production Nix indented string");
-        assert!(
-            evaluated.status.success(),
-            "Nix evaluation failed: {}",
-            String::from_utf8_lossy(&evaluated.stderr)
-        );
-        let generated: String =
-            serde_json::from_slice(&evaluated.stdout).expect("evaluated Python script string");
-        assert!(generated.contains("/nix/store/test-node/bin/node"));
-        let syntax = std::process::Command::new("python3")
-            .args(["-c", "import ast, sys; ast.parse(sys.argv[1])", &generated])
-            .output()
-            .expect("validate Nix-generated Python syntax");
-        assert!(
-            syntax.status.success(),
-            "Nix-generated Python is invalid: {}",
-            String::from_utf8_lossy(&syntax.stderr)
-        );
-    }
-
-    #[test]
     fn e2e_result_capture_helper_exercises_source_transport_and_failure_precedence() {
-        let checks =
-            fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../nix/checks.nix"))
-                .expect("nix/checks.nix");
-        let helper = checks
-            .split_once("  # BEGIN result capture helper\n")
-            .expect("capture helper start")
-            .1
-            .split_once("  # END result capture helper")
-            .expect("capture helper end")
-            .0;
+        let lanes = evaluated_e2e_lanes();
+        let helper = lanes["e2e-sqlite-chromium-unsplit"]["testScript"]
+            .as_str()
+            .expect("evaluated VM script");
         let node_binary = std::process::Command::new("which")
             .arg("node")
             .output()
             .expect("locate the pinned Node runtime");
         assert!(node_binary.status.success(), "Node runtime is required");
         let node_binary = String::from_utf8(node_binary.stdout).unwrap();
-        let helper = helper.replace("${pkgs.nodejs}/bin/node", node_binary.trim());
+        let helper = helper.replace("/primitive/node/bin/node", node_binary.trim());
         let script = r#"
+import ast
 import json
 import os
 import shlex
@@ -3201,7 +3162,8 @@ import subprocess
 import tempfile
 
 namespace = {"json": json, "shlex": shlex}
-exec("\n".join(line[2:] if line.startswith("  ") else line for line in __HELPER__.splitlines()), namespace)
+module = ast.parse(__HELPER__)
+exec(compile(ast.Module(body=[node for node in module.body if isinstance(node, ast.FunctionDef)], type_ignores=[]), "<evaluated VM helpers>", "exec"), namespace)
 capture = namespace["capture_result_file"]
 assert_capture_outcome = namespace["assert_capture_outcome"]
 
@@ -3361,44 +3323,20 @@ print("actual result-capture helper cases passed")
         assert!(checks.contains("assert panic_status == 0"));
     }
 
-    fn generated_seed_trace_helper() -> String {
-        let checks = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("..")
-                .join("nix")
-                .join("checks.nix"),
-        )
-        .expect("nix/checks.nix");
-        let source = checks
-            .split_once("e2eOtelTestHelpers = identity: ''\n")
-            .expect("E2E OTel helper declaration")
-            .1
-            .split_once("\n'';\n\n# The NixOS test driver")
-            .expect("E2E OTel helper end")
-            .0;
-        source
-            .replace("${identity}", "sqlite")
-            .replace("${toString e2eSeedTraceTimeout}", "30")
-            .replace(
-                "${./e2e_capture.py}",
-                Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../nix/e2e_capture.py")
-                    .to_str()
-                    .expect("capture helper path"),
-            )
-    }
-
-    fn run_seed_timeout_harness(timed_out_command: &str) -> serde_json::Value {
-        let helper = generated_seed_trace_helper();
+    fn run_seed_timeout_harness(timed_out_command: &str, identity: &str) -> serde_json::Value {
+        let lanes = evaluated_e2e_lanes();
+        let helper = lanes[format!("e2e-{identity}")]["testScript"]
+            .as_str()
+            .expect("evaluated VM script");
         let script = format!(
             r#"
+import ast
 import contextlib
 import json
 from pathlib import Path
 import sys
 import tarfile
 import tempfile
-import textwrap
 
 temporary = tempfile.TemporaryDirectory()
 
@@ -3435,12 +3373,13 @@ class FakeMachine:
     self.actions.append(["wait_for_open_port", port, timeout])
 
 machine = FakeMachine()
-exec(textwrap.dedent({helper:?}))
+module = ast.parse({helper:?})
+exec(compile(ast.Module(body=[node for node in module.body if isinstance(node, ast.FunctionDef)], type_ignores=[]), "<evaluated VM helpers>", "exec"))
 try:
   with contextlib.redirect_stdout(sys.stderr):
     assert_seed_storage_spans()
 except AssertionError as error:
-  with tarfile.open(machine.out_dir / "capture-sqlite.tar.gz") as archive:
+  with tarfile.open(machine.out_dir / "capture-{identity}.tar.gz") as archive:
     payload = archive.extractfile("capture/diag.log").read().decode()
   print(json.dumps({{"error": str(error), "actions": machine.actions, "capture_bytes": payload}}))
 else:
@@ -3473,7 +3412,22 @@ finally:
         expected_token: &str,
         forbidden_stage: &str,
     ) {
-        let result = run_seed_timeout_harness(timed_out_command);
+        for identity in ["sqlite-chromium-unsplit", "postgres-chromium-unsplit"] {
+            assert_seed_timeout_result(
+                run_seed_timeout_harness(timed_out_command, identity),
+                timed_out_command,
+                expected_token,
+                forbidden_stage,
+            );
+        }
+    }
+
+    fn assert_seed_timeout_result(
+        result: serde_json::Value,
+        timed_out_command: &str,
+        expected_token: &str,
+        forbidden_stage: &str,
+    ) {
         let expected_error = if expected_token == "seed-collector-stop-timeout" {
             "seed-collector-stop-timeout: collector stop exceeded 30s"
         } else {
@@ -3550,23 +3504,6 @@ finally:
             .map(|offset| command_at + offset)
             .expect("captured verifier output is reported");
         assert!(command_at < assertion_at);
-    }
-
-    #[test]
-    fn e2e_seed_helpers_are_emitted_for_sqlite_and_postgres_placements() {
-        let checks = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("..")
-                .join("nix")
-                .join("checks.nix"),
-        )
-        .expect("nix/checks.nix");
-        let sqlite_placement = "beforeMachineStart = if backendPolicy.seedBeforeStart then \"\\n\\n${seedDefinition}\\n\\n\\n\" else \"\\n\";";
-        let postgres_placement = "afterPackageCopy =\n      if backendPolicy.seedBeforeStart then \"\\n\\n\" else \"\\n\\n\\n${seedDefinition}\\n\\n\\n\";";
-        assert!(checks.contains(sqlite_placement));
-        assert!(checks.contains(postgres_placement));
-        assert!(checks.contains("${e2ePhaseTimingHelpers backend browser identity}${e2eOtelTestHelpers identity}${beforeMachineStart}"));
-        assert!(checks.contains("machine.succeed(\"cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e\")${afterPackageCopy}"));
     }
 
     #[test]

@@ -23,6 +23,10 @@ processors:
             "log.module_path", "status", "db.system"]) where
             log.cache["producer"] == "tower_http::trace::on_response"'
           - 'keep_keys(log.attributes, ["log.target", "log.file", "log.line",
+            "log.module_path", "summary", "db.statement", "rows_affected",
+            "rows_returned", "elapsed", "elapsed_secs", "slow_threshold"]) where
+            log.cache["producer"] == "sqlx::query"'
+          - 'keep_keys(log.attributes, ["log.target", "log.file", "log.line",
             "log.module_path", "db.system"]) where not (log.cache["producer"] ==
             "host::error") and not (log.cache["producer"] ==
             "web::registration::api" or log.cache["producer"] ==
@@ -41,6 +45,7 @@ processors:
             "web::password_reset::api" or log.cache["producer"] ==
             "web::email::api") and not (log.cache["producer"] ==
             "tower_http::trace::on_response") and not
+            (log.cache["producer"] == "sqlx::query") and not
             (IsMatch(log.cache["producer"], "^host::") or
             IsMatch(log.cache["producer"], "^storage::") or
             IsMatch(log.cache["producer"], "^web::") or
@@ -98,6 +103,32 @@ processors:
           - 'delete_key(log.attributes, "status") where not
             (IsString(log.attributes["status"]) or
             IsInt(log.attributes["status"]))'
+          - 'delete_key(log.attributes, "summary") where not
+            IsString(log.attributes["summary"])'
+          - 'delete_key(log.attributes, "db.statement") where not
+            IsString(log.attributes["db.statement"])'
+          - 'delete_key(log.attributes, "elapsed") where not
+            IsString(log.attributes["elapsed"])'
+          - 'delete_key(log.attributes, "slow_threshold") where not
+            IsString(log.attributes["slow_threshold"])'
+          - 'delete_key(log.attributes, "elapsed_secs") where not
+            IsDouble(log.attributes["elapsed_secs"])'
+          - 'delete_key(log.attributes, "rows_affected") where not
+            (IsInt(log.attributes["rows_affected"]) or
+            IsString(log.attributes["rows_affected"]))'
+          - 'delete_key(log.attributes, "rows_returned") where not
+            (IsInt(log.attributes["rows_returned"]) or
+            IsString(log.attributes["rows_returned"]))'
+          - 'set(log.body, log.attributes["db.statement"]) where
+            log.cache["producer"] == "sqlx::query" and
+            (log.body == nil or log.body == "") and
+            IsString(log.attributes["db.statement"]) and
+            log.attributes["db.statement"] != ""'
+          - 'set(log.body, log.attributes["summary"]) where
+            log.cache["producer"] == "sqlx::query" and
+            (log.body == nil or log.body == "") and
+            IsString(log.attributes["summary"]) and
+            log.attributes["summary"] != ""'
           - 'set(log.body, "HTML parser diagnostic; text withheld") where
             (log.cache["producer"] == "html5ever::tokenizer" or
             log.cache["producer"] == "html5ever::tree_builder" or
@@ -124,6 +155,18 @@ processors:
             IsMatch(log.attributes["status"], "^-?[0-9]+$")'
         conditions:
           - 'IsString(log.attributes["status"])'
+      - context: "log"
+        statements:
+          - 'delete_key(log.attributes, "rows_affected") where not
+            IsMatch(log.attributes["rows_affected"], "^[0-9]+$")'
+        conditions:
+          - 'IsString(log.attributes["rows_affected"])'
+      - context: "log"
+        statements:
+          - 'delete_key(log.attributes, "rows_returned") where not
+            IsMatch(log.attributes["rows_returned"], "^[0-9]+$")'
+        conditions:
+          - 'IsString(log.attributes["rows_returned"])'
     trace_statements:
       - context: "spanevent"
         statements:

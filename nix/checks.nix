@@ -1791,6 +1791,29 @@ mkWasmCoverageMeasurementProducer =
     pkgs.runCommand "jaunder-stack-module" { } ''
       touch $out
     '';
+  # Real SQLx producer, isolated from the package's cheap-kdf dev-dependencies.
+  sqlxQueryDiagnostics = craneLib.buildPackage (
+    hostArgs
+    // {
+      inherit cargoArtifacts;
+      pname = "sqlx-query-diagnostics";
+      cargoExtraArgs = "-p test-support --bin sqlx-query-diagnostics --features sqlx-query-diagnostics";
+      doCheck = false;
+      installPhaseCommand = ''
+        mkdir -p "$out/bin"
+        cp target/release/sqlx-query-diagnostics "$out/bin/"
+      '';
+      nativeBuildInputs = hostArgs.nativeBuildInputs ++ [ pkgs.patchelf ];
+      postFixup = ''
+        patchelf --add-rpath "${
+          pkgs.lib.makeLibraryPath [
+            pkgs.openssl
+            pkgs.dav1d
+          ]
+        }" "$out/bin/sqlx-query-diagnostics"
+      '';
+    }
+  );
   mkJaunderStackVmCheck =
     {
       checkName,
@@ -1817,7 +1840,8 @@ mkWasmCoverageMeasurementProducer =
             pkgs.iproute2
             pkgs.jq
             pkgs.procps
-          ] ++ lib.optional runtimeCredentials pkgs.util-linux ++ lib.optionals (database == "postgresql") [
+          ] ++ lib.optional captureSignals sqlxQueryDiagnostics
+            ++ lib.optional runtimeCredentials pkgs.util-linux ++ lib.optionals (database == "postgresql") [
             pkgs.iptables
             pkgs.postgresql_16
           ];
@@ -2211,6 +2235,78 @@ mkWasmCoverageMeasurementProducer =
         )
 
         ${pkgs.lib.optionalString captureSignals ''
+          fixture = json.loads(machine.succeed(
+            "runuser -u jaunder -- env JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317"
+            + " OTEL_SERVICE_NAME=sqlx-real-query-fixture sqlx-query-diagnostics "
+            + shlex.quote("${
+              if database == "postgresql" then
+                "postgresql://jaunder@localhost/jaunder?host=/run/postgresql"
+              else
+                "sqlite::memory:"
+            }")
+          ))
+          assert [execution["values"] for execution in fixture["executions"]] == [[1], [1815, 1816], [1], [1815, 1816]], fixture
+          sqlx_command = (
+            "curl " + curl_options + " -fsSG"
+            + " --data-urlencode " + shlex.quote('query=scope.name:"sqlx::query" service.name:"sqlx-real-query-fixture" | limit 10000')
+            + " http://127.0.0.1:9428/logs/select/logsql/query"
+          )
+          originals = [original for original in fixture["originals"]
+            if original["fields"].get("summary") in ["SELECT 1", "SELECT 1815 AS synthetic_sqlx_query_diagnostics …"]]
+          assert len(originals) == 4, fixture
+          stored_sqlx = []
+          for _ in range(120):
+            stored_sqlx = [record for record in log_records(sqlx_command)
+              if record.get("summary") in ["SELECT 1", "SELECT 1815 AS synthetic_sqlx_query_diagnostics …"]]
+            if len(stored_sqlx) >= 4:
+              break
+            machine.sleep(1)
+          assert len(stored_sqlx) == 4, stored_sqlx
+          for original in originals:
+            fields = original["fields"]
+            candidates = [record for record in stored_sqlx
+              if record.get("summary") == fields["summary"]
+              and record.get("severity_text") == original["severity_text"]]
+            assert len(candidates) == 1, (original, candidates)
+            record = candidates[0]
+            expected_body = fields.get("message") or fields["db.statement"] or fields["summary"]
+            assert record["_msg"] == expected_body, (original, record)
+            assert record["severity_number"] == original["severity_number"], record
+            for key in ["summary", "db.statement", "rows_affected", "rows_returned", "elapsed", "elapsed_secs", "slow_threshold"]:
+              if key in fields:
+                # Empty attributes carry no diagnostic data; VictoriaLogs omits them.
+                if fields[key] == "":
+                  continue
+                assert key in record, (key, original, record)
+                if key == "elapsed_secs":
+                  assert float(record[key]) == fields[key], (original, record)
+                else:
+                  assert record[key] == str(fields[key]), (key, original, record)
+              else:
+                assert key not in record, (key, record)
+            assert isinstance(fields["elapsed_secs"], float), original
+            assert isinstance(fields["elapsed"], str) and fields["elapsed"], original
+            assert fields["rows_returned"] == (1 if fields["summary"] == "SELECT 1" else 2), original
+            assert isinstance(fields["rows_affected"], int), original
+            assert fields["rows_affected"] == (${
+              if database == "postgresql" then ''fields["rows_returned"]'' else "0"
+            }), original
+            for key in ["trace_id", "span_id"]:
+              assert record.get(key, "") == (original[key] or ""), (original, record)
+            if original["severity_text"] == "WARN":
+              assert fields["message"] == "slow statement: execution time exceeded alert threshold", original
+              assert fields["slow_threshold"] == "0ns", original
+            if fields["summary"] == "SELECT 1":
+              assert fields["db.statement"] == "", original
+            else:
+              assert fields["db.statement"] == "\n\n" + fixture["executions"][1]["query"] + "\n", original
+          print("real SQLx diagnostic proof: " + json.dumps({"emitted": fixture, "stored": stored_sqlx}, sort_keys=True))
+          import importlib.util
+          edge_spec = importlib.util.spec_from_file_location("sqlx_query_diagnostics", "${./sqlx_query_diagnostics.py}")
+          assert edge_spec is not None and edge_spec.loader is not None
+          edge_proof = importlib.util.module_from_spec(edge_spec)
+          edge_spec.loader.exec_module(edge_proof)
+          edge_proof.assert_policy_edges(machine, curl_options)
           trace_id = "0123456789abcdef0123456789abcdef"
           request_id = "jaunder-stack-telemetry-request"
           authorization = "Bearer jaunder-stack-fake-authorization-credential"
@@ -2545,7 +2641,7 @@ in
 {
 
   internals = {
-    inherit mkPerformanceProducer;
+    inherit mkE2eCheck mkPerformanceProducer;
   };
   packages = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
     e2eSupportPackages
