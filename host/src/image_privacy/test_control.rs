@@ -303,6 +303,28 @@ mod tests {
     }
 
     #[test]
+    fn before_reap_returns_immediately_for_non_paused_modes() {
+        use std::future::Future;
+        use std::pin::pin;
+        use std::task::{Context, Poll, Waker};
+
+        let mut context = Context::from_waker(Waker::noop());
+        for mode in [
+            WorkerTestMode::OversizedResponse,
+            WorkerTestMode::ExpandedOutput,
+            WorkerTestMode::VerificationFailure,
+        ] {
+            let control = WorkerTestControl::new(mode);
+            let mut before_reap = pin!(control.before_reap());
+            assert_eq!(before_reap.as_mut().poll(&mut context), Poll::Ready(()));
+        }
+
+        let control = WorkerTestControl::new(WorkerTestMode::Paused);
+        let mut before_reap = pin!(control.before_reap());
+        assert_eq!(before_reap.as_mut().poll(&mut context), Poll::Pending);
+    }
+
+    #[test]
     fn every_test_mode_installs_one_fixed_marker() {
         for mode in [
             WorkerTestMode::Paused,
