@@ -1206,15 +1206,18 @@ baseline.
   [the actionable-handoff decision](docs/adr/0135-pr-watch-actionable-handoff.md)
   for the stopping policy.
 
-  Default `land` refuses an observed ejection. Use `land <PR> --reenqueue` only
-  after deciding another enqueue is appropriate: it requires an observed prior
-  ejection, current green required checks and merge readiness, and refuses
-  queued or auto-merge-armed PRs. It makes at most one armer call, never
-  ordinary rearming on uncertainty. Observation acknowledges only the old failed
-  run's URL for this invocation, without changing its failed verdict; delayed
-  fresh visibility uses the normal deadline, and a distinct fresh failure
-  terminates. Existing head, check, queue and fail-closed guards remain in
-  force. See
+  Default `land` refuses an observed ejection. Routine technical diagnosis is
+  owned by the assigned Lead; recovery requires explicit authorization from the
+  authority assigned by governing owner policy (the Manager where that policy
+  reserves the decision, otherwise the Lead within approved scope). Diagnosis
+  alone does not authorize recovery. Use `land <PR> --reenqueue` only after that
+  authorization: it requires an observed prior ejection, current green required
+  checks and merge readiness, and refuses queued or auto-merge-armed PRs. It
+  makes at most one armer call, never ordinary rearming on uncertainty. Ordinary
+  `land` does not re-enqueue. Observation acknowledges only the old failed run's
+  URL for this invocation, without changing its failed verdict; delayed fresh
+  visibility uses the normal deadline, and a distinct fresh failure terminates.
+  Existing head, check, queue and fail-closed guards remain in force. See
   [explicit one-shot recovery](docs/adr/drafts/explicit-one-shot-pr-reenqueue.md).
 
   **Post-merge ownership:** after `pr land` reports verified `merged`, choose
