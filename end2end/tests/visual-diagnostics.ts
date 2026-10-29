@@ -531,13 +531,18 @@ async function runCornerProbe(
   failed: boolean,
 ): Promise<void> {
   if (info.project.name !== "chromium-visual" || info.retry !== 0) return;
+  const probeLimitMs = 2_000;
+  const checkpointAllowanceMs = 25;
+  const cleanupAllowanceMs = 100;
+  const finalReportReserveMs = 50;
   const began = nodePerformance.now();
-  const expires = began + 750;
+  const expires = began + probeLimitMs;
   const remaining = () =>
     Math.min(expires - nodePerformance.now(), remainingBudget(info));
   const prefix = `visual-corner-probe-${info.retry}-${++sequence}`;
-  // The checkpoint admission allowance comes from, not on top of, the 750ms.
-  const workReserveMs = 125; // 25ms checkpoint admission + existing 100ms cleanup.
+  // All reserves are inside the probe allowance, not extra time or cancellation.
+  const workReserveMs =
+    checkpointAllowanceMs + cleanupAllowanceMs + finalReportReserveMs;
   let jsonBytesUsed = 0;
   const finalJsonReserveBytes = 2048;
   const phases: Array<Record<string, unknown>> = [];
@@ -580,9 +585,10 @@ async function runCornerProbe(
     original_outcome: failed ? "failed" : "passed",
     began_unix_ms: Date.now(),
     limits: {
-      budget_ms: 750,
-      cleanup_allowance_ms: 100,
-      checkpoint_admission_allowance_ms: 25,
+      budget_ms: probeLimitMs,
+      cleanup_allowance_ms: cleanupAllowanceMs,
+      checkpoint_admission_allowance_ms: checkpointAllowanceMs,
+      final_report_allowance_ms: finalReportReserveMs,
       checkpoint_bytes: 1024,
       original_reserve_ms: 100,
       png_count: 3,
@@ -674,9 +680,12 @@ async function runCornerProbe(
     attachJson("final-json", record, 32768, 0, "", () =>
       compactRecord("post-cleanup"),
     );
-  // Reserve 100ms for the original result in addition to the full 750ms probe.
-  if (info.startedUnixMs === undefined || remainingBudget(info) < 750) {
-    record.reason = "missing-clock-or-less-than-850ms-remaining";
+  // remainingBudget already protects the separate 100ms original-result reserve.
+  if (
+    info.startedUnixMs === undefined ||
+    remainingBudget(info) < probeLimitMs
+  ) {
+    record.reason = "missing-clock-or-less-than-2100ms-remaining";
     await attachRecord();
     return;
   }
@@ -929,7 +938,7 @@ async function runCornerProbe(
         `checkpoint-${phase}`,
         checkpoint,
         1024,
-        100,
+        cleanupAllowanceMs + finalReportReserveMs,
         `-checkpoint-${phase}`,
         () => ({
           ...checkpoint,
@@ -980,10 +989,17 @@ async function runCornerProbe(
   } finally {
     // Each attempt is independent. Admission is best effort, not cancellation;
     // a late RPC may exhaust the allowance, making restoration INVALID.
+    const cleanupTimeout = () => {
+      const budget = remaining() - finalReportReserveMs;
+      if (budget <= 0)
+        throw new Error("cleanup budget unavailable: final report reserve");
+      return Math.min(150, budget);
+    };
     const cleanup = async (label: string, work: () => Promise<unknown>) => {
       let admitted = false;
       try {
-        if (remaining() <= 0) throw new Error("cleanup budget unavailable");
+        if (remaining() <= finalReportReserveMs)
+          throw new Error("cleanup budget unavailable: final report reserve");
         admitted = true;
         await work();
         cleanupStatus[label] = "completed";
@@ -1002,13 +1018,15 @@ async function runCornerProbe(
             else el.setAttribute("style", value);
           },
           originalStyle,
-          { timeout: Math.min(150, remaining()) },
+          { timeout: cleanupTimeout() },
         );
-        if (remaining() <= 0)
-          throw new Error("style verification budget unavailable");
+        if (remaining() <= finalReportReserveMs)
+          throw new Error(
+            "style verification budget unavailable: final report reserve",
+          );
         if (
           (await target!.getAttribute("style", {
-            timeout: Math.min(150, remaining()),
+            timeout: cleanupTimeout(),
           })) !== originalStyle
         )
           throw new Error("inline style did not return");
@@ -1019,8 +1037,10 @@ async function runCornerProbe(
           ({ x, y }) => scrollTo({ left: x, top: y, behavior: "instant" }),
           initialScroll!,
         );
-        if (remaining() <= 0)
-          throw new Error("scroll verification budget unavailable");
+        if (remaining() <= finalReportReserveMs)
+          throw new Error(
+            "scroll verification budget unavailable: final report reserve",
+          );
         const returned = await page.evaluate(() => ({
           x: scrollX,
           y: scrollY,

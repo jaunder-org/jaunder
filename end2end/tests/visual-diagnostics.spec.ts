@@ -1,4 +1,5 @@
 import type { Page, TestInfo } from "@playwright/test";
+import { performance as nodePerformance } from "node:perf_hooks";
 import { expect, nonBrowserTest as test } from "./fixtures";
 import { runVisualAssertion } from "./visual-diagnostics";
 
@@ -174,6 +175,235 @@ const sqliteProducer = async () => ({
   revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 });
 
+async function withCornerClock(
+  work: (setElapsed: (ms: number) => void) => Promise<void>,
+) {
+  const dateNow = Date.now;
+  const epoch = dateNow();
+  const descriptor = Object.getOwnPropertyDescriptor(nodePerformance, "now");
+  let elapsed = 0;
+  Date.now = () => epoch + elapsed;
+  Object.defineProperty(nodePerformance, "now", {
+    configurable: true,
+    value: () => elapsed,
+  });
+  try {
+    await work((ms) => {
+      elapsed = ms;
+    });
+  } finally {
+    Date.now = dateNow;
+    if (descriptor) Object.defineProperty(nodePerformance, "now", descriptor);
+    else Reflect.deleteProperty(nodePerformance, "now");
+  }
+}
+
+for (const timeout of [2099, 2100]) {
+  test(`the two-second probe requires the exact 2100ms admission boundary (${timeout}ms)`, async ({}, info) => {
+    await withCornerClock(async () => {
+      const boundary = cornerBoundary();
+      const visual = cornerInfo(info, boundary.attach, timeout)();
+      await runVisualAssertion(
+        boundary.page,
+        "home-timeline.png",
+        async () => {},
+        () => visual,
+        sqliteProducer,
+      );
+      const final = JSON.parse(boundary.attachments.at(-1)!.body.toString());
+      expect(boundary.captureTimeouts).toHaveLength(timeout === 2100 ? 3 : 0);
+      expect(final).toMatchObject({
+        limits: {
+          budget_ms: 2000,
+          final_report_allowance_ms: 50,
+          original_reserve_ms: 100,
+        },
+      });
+      if (timeout === 2099)
+        expect(final.reason).toBe(
+          "missing-clock-or-less-than-2100ms-remaining",
+        );
+      expect(visual.timeout).toBe(timeout);
+    });
+  });
+}
+
+test("the observed 530/647/751ms progression fits inside the two-second probe without extending test timeout", async ({}, info) => {
+  await withCornerClock(async (setElapsed) => {
+    const boundary = cornerBoundary({
+      onGeometry: () => {
+        if (boundary.offsets.length === 2) setElapsed(647);
+        if (boundary.offsets.length === 3) setElapsed(751);
+      },
+    });
+    const visual = cornerInfo(info, async (name, args) => {
+      if (name.endsWith("-zero-before") && args?.contentType === "image/png")
+        setElapsed(530);
+      await boundary.attach(name, args);
+    })();
+    await runVisualAssertion(
+      boundary.page,
+      "home-timeline.png",
+      async () => {},
+      () => visual,
+      sqliteProducer,
+    );
+    expect(boundary.captureTimeouts).toEqual([150, 150, 150]);
+    const checkpoints = boundary.attachments
+      .filter((a) => a.name.includes("checkpoint-"))
+      .map((a) => JSON.parse(a.body.toString()));
+    expect(checkpoints.map((c) => c.elapsed_ms)).toEqual([530, 647, 751]);
+    expect(checkpoints.map((c) => c.remaining_ms)).toEqual([1470, 1353, 1249]);
+    const final = JSON.parse(boundary.attachments.at(-1)!.body.toString());
+    expect(final).toMatchObject({
+      status: "available",
+      elapsed_ms: 751,
+      limits: {
+        budget_ms: 2000,
+        final_report_allowance_ms: 50,
+        final_json_reserved_bytes: 2048,
+      },
+      cleanup: {
+        "inline-style": "completed",
+        scroll: "completed",
+        stylesheet: "completed",
+      },
+    });
+    expect(visual.timeout).toBe(30000);
+  });
+});
+
+test("checkpoint admission retains cleanup100 plus final50 inside the two-second allowance", async ({}, info) => {
+  await withCornerClock(async (setElapsed) => {
+    const boundary = cornerBoundary();
+    const warnings: string[] = [];
+    const warn = console.warn;
+    console.warn = (...args) => {
+      warnings.push(args.map(String).join(" "));
+    };
+    try {
+      const visual = cornerInfo(info, async (name, args) => {
+        if (name.endsWith("-zero-before") && args?.contentType === "image/png")
+          setElapsed(1850);
+        await boundary.attach(name, args);
+      })();
+      await runVisualAssertion(
+        boundary.page,
+        "home-timeline.png",
+        async () => {},
+        () => visual,
+        sqliteProducer,
+      );
+      expect(boundary.captureTimeouts).toHaveLength(1);
+      expect(
+        boundary.attachments.some((a) => a.name.includes("checkpoint-")),
+      ).toBe(false);
+      expect(warnings.join(" ")).toContain(
+        "stage=checkpoint-zero-before:budget",
+      );
+      expect(warnings.join(" ")).toContain("elapsed_ms=1850 remaining_ms=150");
+      expect(
+        JSON.parse(boundary.attachments.at(-1)!.body.toString()),
+      ).toMatchObject({
+        status: "unavailable",
+        reason: "stopped-after-unavailable-checkpoint",
+        elapsed_ms: 1850,
+        cleanup: {
+          "inline-style": "completed",
+          scroll: "completed",
+          stylesheet: "completed",
+        },
+      });
+    } finally {
+      console.warn = warn;
+    }
+  });
+});
+
+test("cleanup retains the last 50ms for final JSON inside, not beyond, the 2000ms allowance", async ({}, info) => {
+  await withCornerClock(async (setElapsed) => {
+    const boundary = cornerBoundary();
+    const visual = cornerInfo(info, async (name, args) => {
+      if (name.endsWith("-zero-before") && args?.contentType === "image/png")
+        setElapsed(530);
+      await boundary.attach(name, args);
+      if (name.includes("checkpoint-zero-before")) setElapsed(1950);
+    })();
+    await runVisualAssertion(
+      boundary.page,
+      "home-timeline.png",
+      async () => {},
+      () => visual,
+      sqliteProducer,
+    );
+    expect(boundary.captureTimeouts).toHaveLength(1);
+    const final = JSON.parse(boundary.attachments.at(-1)!.body.toString());
+    expect(final).toMatchObject({
+      status: "INVALID",
+      elapsed_ms: 1950,
+      cleanup: {
+        "inline-style": "unavailable",
+        scroll: "unavailable",
+        stylesheet: "unavailable",
+      },
+    });
+    expect(boundary.restoration()).toMatchObject({
+      restored: false,
+      removed: false,
+    });
+    expect(final.cleanup_errors).toHaveLength(3);
+  });
+});
+
+for (const outcome of ["passed", "failed"] as const) {
+  test(`2000ms is the absolute probe envelope with the original ${outcome} outcome preserved`, async ({}, info) => {
+    await withCornerClock(async (setElapsed) => {
+      const boundary = cornerBoundary();
+      const warnings: string[] = [];
+      const warn = console.warn;
+      console.warn = (...args) => {
+        warnings.push(args.map(String).join(" "));
+      };
+      try {
+        const visual = cornerInfo(info, async (name, args) => {
+          if (
+            name.endsWith("-zero-before") &&
+            args?.contentType === "image/png"
+          )
+            setElapsed(530);
+          await boundary.attach(name, args);
+          if (name.includes("checkpoint-zero-before")) setElapsed(2000);
+        })();
+        const run = runVisualAssertion(
+          boundary.page,
+          "home-timeline.png",
+          outcome === "failed" ? rejectAssertion : async () => {},
+          () => visual,
+          sqliteProducer,
+        );
+        if (outcome === "failed") await expect(run).rejects.toBe(original);
+        else await run;
+        expect(
+          boundary.attachments.some((a) =>
+            a.name.includes("checkpoint-zero-before"),
+          ),
+        ).toBe(true);
+        expect(
+          boundary.attachments.some((a) =>
+            /^visual-corner-probe-\d+-\d+$/.test(a.name),
+          ),
+        ).toBe(false);
+        expect(boundary.captureTimeouts).toHaveLength(1);
+        expect(warnings.join(" ")).toContain("stage=final-json:budget");
+        expect(warnings.join(" ")).toContain("elapsed_ms=2000 remaining_ms=0");
+        expect(visual.timeout).toBe(30000);
+      } finally {
+        console.warn = warn;
+      }
+    });
+  });
+}
+
 test("checkpoint rejection is precise and bounded, stops captures, and still attempts post-cleanup metadata", async ({}, info) => {
   const boundary = cornerBoundary();
   const warnings: string[] = [];
@@ -242,7 +472,7 @@ test("a non-positive capture timeout is skipped and warns at the precise capture
     const visual = cornerInfo(info, boundary.attach)();
     drain = () => {
       if (boundary.offsets.length === 1)
-        visual.timeout = Date.now() - visual.startedUnixMs + 220;
+        visual.timeout = Date.now() - visual.startedUnixMs + 275;
     };
     await runVisualAssertion(
       boundary.page,
@@ -280,7 +510,7 @@ for (const exhaustion of ["cleanup-reserve", "exhausted"] as const) {
           visual.timeout =
             Date.now() -
             visual.startedUnixMs +
-            (exhaustion === "cleanup-reserve" ? 220 : 100);
+            (exhaustion === "cleanup-reserve" ? 275 : 100);
       })();
       await runVisualAssertion(
         boundary.page,
@@ -753,13 +983,13 @@ for (const guard of ["filename", "project", "retry"] as const) {
   });
 }
 
-test("less than 850ms remaining admits no probe capture", async ({}, info) => {
+test("less than 2100ms remaining admits no probe capture", async ({}, info) => {
   const boundary = cornerBoundary();
   await runVisualAssertion(
     boundary.page,
     "home-timeline.png",
     async () => {},
-    cornerInfo(info, boundary.attach, 849),
+    cornerInfo(info, boundary.attach, 2099),
     sqliteProducer,
   );
   expect(boundary.captureTimeouts).toEqual([]);
