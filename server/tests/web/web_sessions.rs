@@ -35,9 +35,10 @@ async fn list_sessions_returns_sessions_for_authenticated_user(#[case] backend: 
     // Create a second session with a label.
     let sessions = Arc::clone(&env.sessions());
     let label = parse_session_label("mobile");
-    let outcome = env
-        .write_scope()
-        .run(|transaction| {
+    storage::test_support::run_confirmed(
+        &env.write_scope(),
+        "machine Session fixture",
+        |transaction| {
             Box::pin(async move {
                 sessions
                     .create_session(
@@ -48,10 +49,9 @@ async fn list_sessions_returns_sessions_for_authenticated_user(#[case] backend: 
                     )
                     .await
             })
-        })
-        .await
-        .unwrap();
-    assert!(matches!(outcome, MutationOutcome::Confirmed(_)));
+        },
+    )
+    .await;
 
     let (status, body) = post_form(
         app.clone(),

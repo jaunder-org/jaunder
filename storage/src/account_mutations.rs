@@ -596,23 +596,18 @@ mod tests {
     ) -> common::token::RawToken {
         let label = parse_session_label(label);
         let sessions = env.sessions();
-        confirmed(
-            env.write_scope()
-                .run(move |transaction| {
-                    Box::pin(async move {
-                        sessions
-                            .create_session(
-                                transaction,
-                                user_id,
-                                &label,
-                                crate::SessionKind::Unknown,
-                            )
-                            .await
-                    })
+        crate::test_support::run_confirmed(
+            &env.write_scope(),
+            "account Session fixture",
+            move |transaction| {
+                Box::pin(async move {
+                    sessions
+                        .create_session(transaction, user_id, &label, crate::SessionKind::Unknown)
+                        .await
                 })
-                .await
-                .unwrap(),
+            },
         )
+        .await
     }
 
     #[apply(backends)]

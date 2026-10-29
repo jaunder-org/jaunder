@@ -346,19 +346,14 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
     ] {
         let sessions = factory.sessions();
         let label = common::test_support::parse_session_label("same backup label");
-        confirmed_for(
-            write_scope
-                .run(|transaction| {
-                    Box::pin(async move {
-                        sessions
-                            .create_session(transaction, author, &label, kind)
-                            .await
-                    })
-                })
-                .await
-                .expect("create backup Session"),
-            "backup Session",
-        );
+        storage::test_support::run_confirmed(&write_scope, "backup Session", |transaction| {
+            Box::pin(async move {
+                sessions
+                    .create_session(transaction, author, &label, kind)
+                    .await
+            })
+        })
+        .await;
     }
     let passkey = seed_backup_passkey(args, factory.passkeys(), write_scope.clone(), author).await;
     let public = SeedRawPost::new(author)

@@ -137,6 +137,28 @@ pub async fn set_site_config(
     Ok(())
 }
 
+/// Runs a successful fixture write and returns its confirmed value.
+///
+/// Keep result/outcome assertions on `WriteScope::run` directly instead.
+///
+/// # Panics
+///
+/// Panics with `action` and the error if the write fails, or if commit
+/// acknowledgement is indeterminate.
+pub async fn run_confirmed<T, E: std::fmt::Debug>(
+    write_scope: &WriteScope,
+    action: &str,
+    callback: impl for<'scope> FnOnce(
+        &'scope mut crate::WriteTransaction,
+    ) -> futures_util::future::BoxFuture<'scope, Result<T, E>>,
+) -> T {
+    let outcome = write_scope
+        .run(callback)
+        .await
+        .unwrap_or_else(|error| panic!("{action} failed: {error:?}"));
+    confirmed_for(outcome, action)
+}
+
 /// Extracts a mutation value, requiring that commit acknowledgement is confirmed.
 ///
 /// # Panics
@@ -1695,6 +1717,49 @@ mod tests {
     async fn postgres_accessor_rejects_a_sqlite_pool() {
         let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
         let _ = CloseablePool::Sqlite(pool).postgres();
+    }
+
+    // guard:no-backend — mock scope verifies the fixture helper's returned value
+    #[tokio::test]
+    async fn run_confirmed_returns_fixture_value() {
+        let value = super::run_confirmed(&super::mock_write_scope(), "fixture value", |_| {
+            Box::pin(async { Ok::<_, sqlx::Error>(42) })
+        })
+        .await;
+        assert_eq!(value, 42);
+    }
+
+    // guard:no-backend — mock scope exercises fixture operation-error diagnostics
+    #[tokio::test]
+    #[should_panic(expected = "rejected fixture failed: Operation(\"injected rejection\")")]
+    async fn run_confirmed_rejects_operation_error() {
+        super::run_confirmed(&super::mock_write_scope(), "rejected fixture", |_| {
+            Box::pin(async { Err::<(), _>("injected rejection") })
+        })
+        .await;
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    #[should_panic(expected = "closed fixture failed: Begin(PoolClosed)")]
+    async fn run_confirmed_rejects_begin_error(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.base.pool().close().await;
+        super::run_confirmed(&env.write_scope(), "closed fixture", |_| {
+            Box::pin(async { Ok::<_, sqlx::Error>(()) })
+        })
+        .await;
+    }
+
+    // guard:no-backend — injected acknowledgement loss exercises fixture confirmation
+    #[tokio::test]
+    #[should_panic(expected = "uncertain fixture requires a confirmed commit")]
+    async fn run_confirmed_rejects_indeterminate_commit() {
+        let scope = super::mock_write_scope_with_commit_acknowledgement_loss();
+        super::run_confirmed(&scope, "uncertain fixture", |_| {
+            Box::pin(async { Ok::<_, sqlx::Error>(42) })
+        })
+        .await;
     }
 
     #[test]

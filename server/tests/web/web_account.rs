@@ -358,9 +358,10 @@ async fn list_sessions_returns_only_authenticated_users_sessions(#[case] backend
 
     let sessions = Arc::clone(&env.sessions());
     let user1_label = parse_session_label("carol-session");
-    let outcome = env
-        .write_scope()
-        .run(|transaction| {
+    let token1 = storage::test_support::run_confirmed(
+        &env.write_scope(),
+        "session fixture setup",
+        |transaction| {
             Box::pin(async move {
                 sessions
                     .create_session(
@@ -371,16 +372,16 @@ async fn list_sessions_returns_only_authenticated_users_sessions(#[case] backend
                     )
                     .await
             })
-        })
-        .await
-        .unwrap();
-    let token1 = storage::test_support::confirmed_for(outcome, "session fixture setup");
+        },
+    )
+    .await;
     // Create a session for user2 — should NOT appear in user1's list.
     let sessions = Arc::clone(&env.sessions());
     let user2_label = parse_session_label("dave-session");
-    let outcome = env
-        .write_scope()
-        .run(|transaction| {
+    storage::test_support::run_confirmed(
+        &env.write_scope(),
+        "other user's Session fixture",
+        |transaction| {
             Box::pin(async move {
                 sessions
                     .create_session(
@@ -391,10 +392,9 @@ async fn list_sessions_returns_only_authenticated_users_sessions(#[case] backend
                     )
                     .await
             })
-        })
-        .await
-        .unwrap();
-    assert!(matches!(outcome, MutationOutcome::Confirmed(_)));
+        },
+    )
+    .await;
 
     let cookie = session_cookie(&token1);
     let (status, body) = post_form(

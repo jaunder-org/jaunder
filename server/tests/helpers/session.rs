@@ -5,7 +5,7 @@ use common::token::RawToken;
 use common::username::Username;
 use std::sync::Arc;
 
-use storage::test_support::confirmed_for;
+use storage::test_support::run_confirmed;
 
 /// The `session=<token>` cookie header value for an authenticated request — the
 /// one place the session-cookie shape is written, so call sites pass the
@@ -69,17 +69,14 @@ async fn issue_session(
     user_id: UserId,
 ) -> RawToken {
     let label = parse_session_label("test session");
-    let outcome = write_scope
-        .run(|transaction| {
-            Box::pin(async move {
-                sessions
-                    .create_session(transaction, user_id, &label, storage::SessionKind::Unknown)
-                    .await
-            })
+    run_confirmed(&write_scope, "test session", |transaction| {
+        Box::pin(async move {
+            sessions
+                .create_session(transaction, user_id, &label, storage::SessionKind::Unknown)
+                .await
         })
-        .await
-        .expect("create session");
-    confirmed_for(outcome, "test session")
+    })
+    .await
 }
 
 /// A session on an already-seeded `user_id`. Looks the username up so the

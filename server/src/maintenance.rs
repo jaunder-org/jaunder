@@ -479,30 +479,30 @@ mod tests {
             .await
             .user_id;
         let sessions = env.sessions();
-        confirmed(
-            env.write_scope()
-                .run(|transaction| {
-                    Box::pin(async move {
-                        for kind in [
-                            storage::SessionKind::Browser,
-                            storage::SessionKind::Machine,
-                            storage::SessionKind::Unknown,
-                        ] {
-                            sessions
-                                .create_session(
-                                    transaction,
-                                    user_id,
-                                    &common::test_support::parse_session_label("retention"),
-                                    kind,
-                                )
-                                .await?;
-                        }
-                        Ok::<_, SqlxError>(())
-                    })
+        storage::test_support::run_confirmed(
+            &env.write_scope(),
+            "retention Session fixture",
+            |transaction| {
+                Box::pin(async move {
+                    for kind in [
+                        storage::SessionKind::Browser,
+                        storage::SessionKind::Machine,
+                        storage::SessionKind::Unknown,
+                    ] {
+                        sessions
+                            .create_session(
+                                transaction,
+                                user_id,
+                                &common::test_support::parse_session_label("retention"),
+                                kind,
+                            )
+                            .await?;
+                    }
+                    Ok::<_, SqlxError>(())
                 })
-                .await
-                .unwrap(),
-        );
+            },
+        )
+        .await;
         env.base
             .pool()
             .execute("UPDATE sessions SET last_used_at = '2026-01-01 00:00:00+00'")

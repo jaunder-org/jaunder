@@ -470,18 +470,18 @@ mod tests {
             let sessions = env.sessions();
             // Identical labels deliberately cannot classify credentials.
             let label = parse_session_label("Browser");
-            let outcome = env
-                .write_scope()
-                .run(|transaction| {
+            let raw = crate::test_support::run_confirmed(
+                &env.write_scope(),
+                "kind creation",
+                |transaction| {
                     Box::pin(async move {
                         sessions
                             .create_session(transaction, user_id, &label, kind)
                             .await
                     })
-                })
-                .await
-                .unwrap();
-            let raw = crate::test_support::confirmed_for(outcome, "kind creation");
+                },
+            )
+            .await;
             let sessions = env.sessions();
             let outcome = env
                 .write_scope()
@@ -574,27 +574,22 @@ mod tests {
             .await
             .user_id;
         let sessions = env.sessions();
-        crate::test_support::confirmed_for(
-            env.write_scope()
-                .run(|transaction| {
-                    Box::pin(async move {
-                        for _ in 0..1001 {
-                            sessions
-                                .create_session(
-                                    transaction,
-                                    user_id,
-                                    &parse_session_label("cleanup backlog"),
-                                    SessionKind::Browser,
-                                )
-                                .await?;
-                        }
-                        Ok::<_, sqlx::Error>(())
-                    })
-                })
-                .await
-                .unwrap(),
-            "seed backlog",
-        );
+        crate::test_support::run_confirmed(&env.write_scope(), "seed backlog", |transaction| {
+            Box::pin(async move {
+                for _ in 0..1001 {
+                    sessions
+                        .create_session(
+                            transaction,
+                            user_id,
+                            &parse_session_label("cleanup backlog"),
+                            SessionKind::Browser,
+                        )
+                        .await?;
+                }
+                Ok::<_, sqlx::Error>(())
+            })
+        })
+        .await;
         env.base
             .pool()
             .execute("UPDATE sessions SET last_used_at = '2026-01-01 00:00:00+00'")
@@ -663,19 +658,18 @@ mod tests {
             .user_id;
         let sessions = env.sessions();
         let label = parse_session_label("cutoff");
-        let raw = crate::test_support::confirmed_for(
-            env.write_scope()
-                .run(|transaction| {
-                    Box::pin(async move {
-                        sessions
-                            .create_session(transaction, user_id, &label, SessionKind::Browser)
-                            .await
-                    })
-                })
-                .await
-                .unwrap(),
+        let raw = crate::test_support::run_confirmed(
+            &env.write_scope(),
             "create browser Session",
-        );
+            |transaction| {
+                Box::pin(async move {
+                    sessions
+                        .create_session(transaction, user_id, &label, SessionKind::Browser)
+                        .await
+                })
+            },
+        )
+        .await;
         let last_used = env.sessions().list_sessions(user_id).await.unwrap()[0].last_used_at;
         let now = UtcInstant::from(last_used.value().checked_add(2_592_000.seconds()).unwrap());
         let sessions = env.sessions();
@@ -711,19 +705,18 @@ mod tests {
             .user_id;
         let sessions = env.sessions();
         let label = parse_session_label("activity");
-        let raw = crate::test_support::confirmed_for(
-            env.write_scope()
-                .run(|transaction| {
-                    Box::pin(async move {
-                        sessions
-                            .create_session(transaction, user_id, &label, SessionKind::Browser)
-                            .await
-                    })
-                })
-                .await
-                .unwrap(),
+        let raw = crate::test_support::run_confirmed(
+            &env.write_scope(),
             "create Session",
-        );
+            |transaction| {
+                Box::pin(async move {
+                    sessions
+                        .create_session(transaction, user_id, &label, SessionKind::Browser)
+                        .await
+                })
+            },
+        )
+        .await;
         let original = env.sessions().list_sessions(user_id).await.unwrap()[0].last_used_at;
         for (elapsed, touched) in [(59, false), (60, true), (61, false)] {
             let now = UtcInstant::from(original.value().checked_add(elapsed.seconds()).unwrap());
@@ -764,19 +757,15 @@ mod tests {
             .user_id;
         let sessions = env.sessions();
         let label = parse_session_label("idle policy");
-        let raw = crate::test_support::confirmed_for(
-            env.write_scope()
-                .run(|transaction| {
-                    Box::pin(async move {
-                        sessions
-                            .create_session(transaction, user_id, &label, kind)
-                            .await
-                    })
+        let raw =
+            crate::test_support::run_confirmed(&env.write_scope(), "idle fixture", |transaction| {
+                Box::pin(async move {
+                    sessions
+                        .create_session(transaction, user_id, &label, kind)
+                        .await
                 })
-                .await
-                .unwrap(),
-            "idle fixture",
-        );
+            })
+            .await;
         let used = env.sessions().list_sessions(user_id).await.unwrap()[0].last_used_at;
         (user_id, raw, used)
     }
@@ -1157,18 +1146,18 @@ mod tests {
         // their newtypes via the sqlx bridge (#438).
         let sessions = Arc::clone(&env.sessions());
         let label = parse_session_label("Test Device");
-        let outcome = env
-            .write_scope()
-            .run(|transaction| {
+        let raw_token = crate::test_support::run_confirmed(
+            &env.write_scope(),
+            "session fixture setup",
+            |transaction| {
                 Box::pin(async move {
                     sessions
                         .create_session(transaction, user_id, &label, SessionKind::Unknown)
                         .await
                 })
-            })
-            .await
-            .unwrap();
-        let raw_token = crate::test_support::confirmed_for(outcome, "session fixture setup");
+            },
+        )
+        .await;
         let expected_hash = token::hash(&raw_token).unwrap();
 
         let sessions = Arc::clone(&env.sessions());
@@ -1206,18 +1195,18 @@ mod tests {
             .user_id;
         let sessions = Arc::clone(&env.sessions());
         let label = parse_session_label("Test Device");
-        let outcome = env
-            .write_scope()
-            .run(|transaction| {
+        crate::test_support::run_confirmed(
+            &env.write_scope(),
+            "session fixture setup",
+            |transaction| {
                 Box::pin(async move {
                     sessions
                         .create_session(transaction, user_id, &label, SessionKind::Unknown)
                         .await
                 })
-            })
-            .await
-            .unwrap();
-        assert!(matches!(outcome, common::MutationOutcome::Confirmed(_)));
+            },
+        )
+        .await;
 
         // Overwrite the `token_hash` column with a value `TokenHash::from_str`
         // rejects (a space is not a valid token character).
@@ -1256,18 +1245,18 @@ mod tests {
             .user_id;
         let sessions = Arc::clone(&env.sessions());
         let label = parse_session_label("Test Device");
-        let outcome = env
-            .write_scope()
-            .run(|transaction| {
+        crate::test_support::run_confirmed(
+            &env.write_scope(),
+            "session fixture setup",
+            |transaction| {
                 Box::pin(async move {
                     sessions
                         .create_session(transaction, user_id, &label, SessionKind::Unknown)
                         .await
                 })
-            })
-            .await
-            .unwrap();
-        assert!(matches!(outcome, common::MutationOutcome::Confirmed(_)));
+            },
+        )
+        .await;
         let stored = StoredSessionLabel::new("x".repeat(1_000));
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query("UPDATE sessions SET label = $1")
@@ -1294,18 +1283,18 @@ mod tests {
             .user_id;
         let sessions = Arc::clone(&env.sessions());
         let label = parse_session_label("Test Device");
-        let outcome = env
-            .write_scope()
-            .run(|transaction| {
+        let raw_token = crate::test_support::run_confirmed(
+            &env.write_scope(),
+            "session fixture setup",
+            |transaction| {
                 Box::pin(async move {
                     sessions
                         .create_session(transaction, user_id, &label, SessionKind::Unknown)
                         .await
                 })
-            })
-            .await
-            .unwrap();
-        let raw_token = crate::test_support::confirmed_for(outcome, "session fixture setup");
+            },
+        )
+        .await;
         let token_hash = token::hash(&raw_token).unwrap();
         let created_at = "2026-01-02T03:04:05.123456Z".parse::<UtcInstant>().unwrap();
         let last_used_at = "2026-03-04T05:06:07.654321Z".parse::<UtcInstant>().unwrap();
@@ -1374,9 +1363,10 @@ mod tests {
             let sessions = Arc::clone(&env.sessions());
             let label = parse_session_label(label);
             let label_for_create = label.clone();
-            let outcome = env
-                .write_scope()
-                .run(move |transaction| {
+            let raw_token = crate::test_support::run_confirmed(
+                &env.write_scope(),
+                "session fixture setup",
+                move |transaction| {
                     Box::pin(async move {
                         sessions
                             .create_session(
@@ -1387,10 +1377,9 @@ mod tests {
                             )
                             .await
                     })
-                })
-                .await
-                .unwrap();
-            let raw_token = crate::test_support::confirmed_for(outcome, "session fixture setup");
+                },
+            )
+            .await;
             let token_hash = token::hash(&raw_token).unwrap();
             crate::with_closeable_pool!(env.base.pool(), pool, {
                 sqlx::query("UPDATE sessions SET last_used_at = $1 WHERE token_hash = $2")

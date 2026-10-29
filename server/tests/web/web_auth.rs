@@ -180,19 +180,18 @@ async fn durable_kind_not_transport_selects_expiry_and_cookie_renewal(#[case] ba
     ] {
         let sessions = env.sessions();
         let label = common::test_support::parse_session_label("Browser");
-        let raw = storage::test_support::confirmed_for(
-            env.write_scope()
-                .run(|transaction| {
-                    Box::pin(async move {
-                        sessions
-                            .create_session(transaction, user.user_id, &label, kind)
-                            .await
-                    })
-                })
-                .await
-                .unwrap(),
+        let raw = storage::test_support::run_confirmed(
+            &env.write_scope(),
             "kind fixture",
-        );
+            |transaction| {
+                Box::pin(async move {
+                    sessions
+                        .create_session(transaction, user.user_id, &label, kind)
+                        .await
+                })
+            },
+        )
+        .await;
         let hash = host::token::hash(&raw).unwrap();
         let used = env
             .sessions()

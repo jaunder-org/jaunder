@@ -514,24 +514,23 @@ async fn telemetry_commit_acknowledgement_loss_rejects_without_cookie_or_report(
     let user = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
     let sessions = env.sessions();
     let label = common::test_support::parse_session_label("Browser");
-    let token = storage::test_support::confirmed_for(
-        env.write_scope()
-            .run(|transaction| {
-                Box::pin(async move {
-                    sessions
-                        .create_session(
-                            transaction,
-                            user.user_id,
-                            &label,
-                            storage::SessionKind::Browser,
-                        )
-                        .await
-                })
-            })
-            .await
-            .unwrap(),
+    let token = storage::test_support::run_confirmed(
+        &env.write_scope(),
         "browser telemetry fixture",
-    );
+        |transaction| {
+            Box::pin(async move {
+                sessions
+                    .create_session(
+                        transaction,
+                        user.user_id,
+                        &label,
+                        storage::SessionKind::Browser,
+                    )
+                    .await
+            })
+        },
+    )
+    .await;
     let hash = host::token::hash(&token).unwrap();
     let original = env
         .sessions()
@@ -637,24 +636,23 @@ async fn explicit_authorization_suppresses_telemetry_cookie_renewal(#[case] back
     let user = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
     let sessions = env.sessions();
     let label = common::test_support::parse_session_label("Browser");
-    let token = storage::test_support::confirmed_for(
-        env.write_scope()
-            .run(|transaction| {
-                Box::pin(async move {
-                    sessions
-                        .create_session(
-                            transaction,
-                            user.user_id,
-                            &label,
-                            storage::SessionKind::Browser,
-                        )
-                        .await
-                })
-            })
-            .await
-            .unwrap(),
+    let token = storage::test_support::run_confirmed(
+        &env.write_scope(),
         "typed browser telemetry fixture",
-    );
+        |transaction| {
+            Box::pin(async move {
+                sessions
+                    .create_session(
+                        transaction,
+                        user.user_id,
+                        &label,
+                        storage::SessionKind::Browser,
+                    )
+                    .await
+            })
+        },
+    )
+    .await;
     let hash = host::token::hash(&token).unwrap();
     let original = env
         .sessions()

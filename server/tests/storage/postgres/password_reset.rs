@@ -158,8 +158,10 @@ async fn create_password_reset(
     write_scope: WriteScope,
     user_id: UserId,
 ) -> RawToken {
-    let outcome = write_scope
-        .run(|transaction| {
+    storage::test_support::run_confirmed(
+        &write_scope,
+        "password-reset fixture setup",
+        |transaction| {
             Box::pin(async move {
                 password_resets
                     .create_password_reset(
@@ -169,10 +171,9 @@ async fn create_password_reset(
                     )
                     .await
             })
-        })
-        .await
-        .expect("password-reset fixture setup should succeed");
-    storage::test_support::confirmed_for(outcome, "password-reset fixture setup")
+        },
+    )
+    .await
 }
 
 async fn create_session(
@@ -181,17 +182,14 @@ async fn create_session(
     user_id: UserId,
 ) {
     let label = parse_session_label("Existing device");
-    let outcome = write_scope
-        .run(|transaction| {
-            Box::pin(async move {
-                sessions
-                    .create_session(transaction, user_id, &label, storage::SessionKind::Unknown)
-                    .await
-            })
+    storage::test_support::run_confirmed(&write_scope, "session fixture setup", |transaction| {
+        Box::pin(async move {
+            sessions
+                .create_session(transaction, user_id, &label, storage::SessionKind::Unknown)
+                .await
         })
-        .await
-        .expect("session fixture setup should succeed");
-    storage::test_support::confirmed_for(outcome, "session fixture setup");
+    })
+    .await;
 }
 
 async fn confirm_after_claim_barrier(
