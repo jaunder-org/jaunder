@@ -91,7 +91,7 @@ def archive_capture(backing, destination):
             if path.relative_to(backing).as_posix() == ".virtfs_metadata_root":
                 continue
             files["capture/" + path.relative_to(backing).as_posix()] = path
-    # Exclusive, private output preserves any earlier evidence on failure.
+    # Keep incomplete output private; publish it readably only after assembly closes.
     with os.fdopen(os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output:
         with tarfile.open(fileobj=output, mode="w:gz") as archive:
             for name in sorted(directories):
@@ -105,3 +105,5 @@ def archive_capture(backing, destination):
                 info.size = path.stat().st_size
                 with path.open("rb") as data:
                     archive.addfile(info, data)
+    # chmod ignores umask, so every completed outer artifact is host-readable.
+    os.chmod(destination, 0o644)
