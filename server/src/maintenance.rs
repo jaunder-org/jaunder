@@ -18,7 +18,7 @@ use host::{
 };
 use storage::{
     EmailVerificationStorage, FeedEventStorage, InviteStorage, PasskeyStorage,
-    PasswordResetStorage, WriteScope,
+    PasswordResetStorage, SessionStorage, WriteScope,
 };
 use tokio_cron_scheduler::{Job, JobScheduler};
 
@@ -34,6 +34,7 @@ pub(crate) struct DatabaseMaintenance {
     password_resets: Arc<dyn PasswordResetStorage>,
     feed_events: Arc<dyn FeedEventStorage>,
     passkeys: Option<(Arc<dyn PasskeyStorage>, WriteScope)>,
+    sessions: Option<Arc<dyn SessionStorage>>,
 }
 
 impl DatabaseMaintenance {
@@ -49,6 +50,7 @@ impl DatabaseMaintenance {
             password_resets,
             feed_events,
             passkeys: None,
+            sessions: None,
         }
     }
 
@@ -60,6 +62,13 @@ impl DatabaseMaintenance {
         write_scope: WriteScope,
     ) -> Self {
         self.passkeys = Some((passkeys, write_scope));
+        self
+    }
+
+    /// Adds typed Browser Session retention at the production composition root.
+    #[must_use]
+    pub(crate) fn with_sessions(mut self, sessions: Arc<dyn SessionStorage>) -> Self {
+        self.sessions = Some(sessions);
         self
     }
 
@@ -80,6 +89,15 @@ impl DatabaseMaintenance {
             Domain::FeedEvents,
             self.feed_events.prune_terminal_events(now).await,
         );
+        if let Some(sessions) = &self.sessions {
+            // Database diagnostics can contain tokens or row values. Report only
+            // this bounded domain failure; the next pass retries remaining rows.
+            let result = sessions
+                .prune_expired_browser_sessions(now)
+                .await
+                .map_err(|_| std::io::Error::other("browser Session cleanup failed"));
+            report_cleanup(Domain::BrowserSessions, result);
+        }
         if let Some((passkeys, write_scope)) = &self.passkeys {
             report_cleanup(
                 Domain::PasskeyCeremonies,
@@ -175,6 +193,11 @@ where
             );
         }
         Err(error) => {
+            let _span = tracing::info_span!(
+                "database.maintenance.cleanup",
+                retention.domain = domain.label()
+            )
+            .entered();
             metrics::retention_run(domain, CleanupResult::Failure);
             error::report_swallowed(
                 ErrorKind::Storage,
@@ -198,7 +221,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use storage::{
         FeedEventError, MockEmailVerificationStorage, MockFeedEventStorage, MockInviteStorage,
-        MockPasskeyStorage, MockPasswordResetStorage, PerformCreationError,
+        MockPasskeyStorage, MockPasswordResetStorage, MockSessionStorage, PerformCreationError,
         PostBookkeepingExpectation, PostCreation, PostFormat, perform_post_creation_at,
         test_support::{Backend, SeedUser, backends, confirmed, mock_write_scope},
     };
@@ -447,6 +470,129 @@ mod tests {
         .await;
     }
 
+    #[apply(backends)]
+    #[tokio::test]
+    async fn browser_cleanup_database_failure_isolated_and_retried(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let sessions = env.sessions();
+        confirmed(
+            env.write_scope()
+                .run(|transaction| {
+                    Box::pin(async move {
+                        for kind in [
+                            storage::SessionKind::Browser,
+                            storage::SessionKind::Machine,
+                            storage::SessionKind::Unknown,
+                        ] {
+                            sessions
+                                .create_session(
+                                    transaction,
+                                    user_id,
+                                    &common::test_support::parse_session_label("retention"),
+                                    kind,
+                                )
+                                .await?;
+                        }
+                        Ok::<_, SqlxError>(())
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+        env.base
+            .pool()
+            .execute("UPDATE sessions SET last_used_at = '2026-01-01 00:00:00+00'")
+            .await
+            .unwrap();
+        if matches!(backend, Backend::Postgres) {
+            env.base.pool().execute("CREATE FUNCTION fail_browser_cleanup() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected cleanup failure'; END $$").await.unwrap();
+        }
+        let install = match backend {
+            Backend::Sqlite => {
+                "CREATE TRIGGER fail_browser_cleanup BEFORE DELETE ON sessions BEGIN SELECT RAISE(ABORT, 'injected cleanup failure'); END"
+            }
+            Backend::Postgres => {
+                "CREATE TRIGGER fail_browser_cleanup BEFORE DELETE ON sessions FOR EACH ROW EXECUTE FUNCTION fail_browser_cleanup()"
+            }
+        };
+        env.base.pool().execute(install).await.unwrap();
+        let now = "2026-01-31T00:00:00Z".parse().unwrap();
+        let stores = successful_stores(now);
+        let mut passkeys = MockPasskeyStorage::new();
+        passkeys
+            .expect_prune_ceremonies()
+            .times(2)
+            .returning(|_, _, _| Box::pin(async { Ok(0) }));
+        let service = maintenance(stores.0, stores.1, stores.2, stores.3)
+            .with_sessions(env.sessions())
+            .with_passkeys(Arc::new(passkeys), mock_write_scope());
+        service.run_at(now).await;
+        assert_eq!(
+            env.sessions().list_sessions(user_id).await.unwrap().len(),
+            3
+        );
+        let remove = match backend {
+            Backend::Sqlite => "DROP TRIGGER fail_browser_cleanup",
+            Backend::Postgres => "DROP TRIGGER fail_browser_cleanup ON sessions",
+        };
+        env.base.pool().execute(remove).await.unwrap();
+        service.run_at(now).await;
+        let survivors = env.sessions().list_sessions(user_id).await.unwrap();
+        assert_eq!(survivors.len(), 2);
+        assert!(
+            survivors
+                .iter()
+                .all(|row| row.kind != storage::SessionKind::Browser)
+        );
+    }
+
+    // guard:no-backend — domain mocks prove failure isolation, sanitized reporting and retry.
+    #[tokio::test]
+    async fn browser_cleanup_failure_continues_later_domains_and_retries_next_pass() {
+        let now = "2026-10-28T12:00:00Z".parse().unwrap();
+        let stores = successful_stores(now);
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&attempts);
+        let mut sessions = MockSessionStorage::new();
+        sessions
+            .expect_prune_expired_browser_sessions()
+            .times(2)
+            .returning(move |actual| {
+                assert_eq!(actual, now);
+                if observed.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Err(SqlxError::Protocol(
+                        "secret-token user@example.test".to_owned(),
+                    ))
+                } else {
+                    Ok(1)
+                }
+            });
+        let mut passkeys = MockPasskeyStorage::new();
+        passkeys
+            .expect_prune_ceremonies()
+            .times(2)
+            .returning(|_, _, _| Box::pin(async { Ok(0) }));
+        let service = maintenance(stores.0, stores.1, stores.2, stores.3)
+            .with_sessions(Arc::new(sessions))
+            .with_passkeys(Arc::new(passkeys), mock_write_scope());
+        let (guard, output) = trace_capture();
+        service.run_at(now).await;
+        service.run_at(now).await;
+        drop(guard);
+        let trace = trace_text(&output);
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert!(trace.contains("browser_sessions"), "{trace}");
+        assert!(trace.contains("browser Session cleanup failed"), "{trace}");
+        assert!(
+            !trace.contains("secret-token") && !trace.contains("user@example.test"),
+            "{trace}"
+        );
+    }
+
     fn successful_stores(
         expected_now: UtcInstant,
     ) -> (
@@ -517,7 +663,14 @@ mod tests {
             .times(1)
             .returning(|_| Err(FeedEventError::Db(SqlxError::PoolClosed)));
 
+        let mut sessions = MockSessionStorage::new();
+        sessions
+            .expect_prune_expired_browser_sessions()
+            .withf(move |actual| *actual == now)
+            .times(1)
+            .returning(|_| Ok(1));
         maintenance(invites, email_verifications, password_resets, feed_events)
+            .with_sessions(Arc::new(sessions))
             .run_at(now)
             .await;
     }

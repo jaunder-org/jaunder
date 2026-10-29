@@ -74,7 +74,7 @@ access/credentials, and any expansion of the accepted legacy carveout.
     60-second threshold; throttled request followed by idle expiry; commit
     failure; deterministic concurrent touch/expiry/revoke races; cookie
     attributes, expiry bound, and no token churn; password and Passkey paths.
-- [ ] Task 3: Add bounded typed-browser cleanup and qualify retention policy.
+- [x] Task 3: Add bounded typed-browser cleanup and qualify retention policy.
   - Contract: extend the daily transient-data pass with repeated fixed-size
     statements of at most 500 rows, draining the eligible backlog in one pass
     and releasing locks between batches. Select only typed Browser rows
@@ -95,6 +95,11 @@ access/credentials, and any expansion of the accepted legacy carveout.
     `devtool run -- cargo xtask e2e-local <auth spec>`; then applicable
     `prepush` and CI/validation ladder per CONTRIBUTING, escalating for the
     backend/browser integration boundary.
+  - Focused persistence-specific Chromium/SQLite proof now observes a real UI
+    login's persistent cookie, preserved attributes, authenticated use by a
+    separate cold page in the same browser context, and logout removal. This is
+    not universal restart proof. Broad prepush, hermetic coverage, CI and the
+    backend/browser matrix remain Lead-owned; Task 4 is not fully certified.
 
 ## Risk checks
 

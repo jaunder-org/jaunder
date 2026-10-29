@@ -8,13 +8,14 @@ use sqlx::{Database, Encode, Error, Executor, Pool, Result, Type};
 use crate::WriteTransaction;
 #[cfg(test)]
 use crate::helpers::StoredSessionLabel;
-use crate::sql::QueryStorageExt;
+use crate::sql::{QueryStorageExt, RowCount};
 use common::ids::UserId;
+use common::pagination::RowLimit;
 use common::session_label::SessionLabel;
 use common::time::UtcInstant;
 use common::token::{RawToken, TokenHash};
 use common::username::Username;
-use host::token;
+use host::{metrics, retention::Domain, token};
 /// Test-only invalid `sessions.token_hash` column value.
 ///
 /// Fixtures use this role to bypass `TokenHash` validation deliberately without
@@ -192,6 +193,11 @@ pub trait SessionStorage: Send + Sync {
         current_token_hash: &TokenHash,
     ) -> sqlx::Result<()>;
 
+    /// Drains expired typed Browser Sessions using one UTC instant and separate
+    /// statements of at most 500 rows. Completed batches survive later failure;
+    /// Unknown and Machine credentials are never eligible.
+    async fn prune_expired_browser_sessions(&self, now: UtcInstant) -> Result<u64>;
+
     /// Returns a list of all active sessions for a user.
     async fn list_sessions(&self, user_id: UserId) -> Result<Vec<SessionRecord>>;
 }
@@ -266,6 +272,8 @@ impl<DB: Database> SessionStore<DB> {
 impl<DB> SessionStorage for SessionStore<DB>
 where
     DB: SessionDialect,
+    for<'q> RowCount: sqlx::Decode<'q, DB> + Type<DB>,
+    usize: sqlx::ColumnIndex<DB::Row>,
     SessionRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: Encode<'q, DB> + Type<DB>,
     for<'q> &'q str: Encode<'q, DB> + Type<DB>,
@@ -378,6 +386,38 @@ where
         Ok(())
     }
 
+    async fn prune_expired_browser_sessions(&self, now: UtcInstant) -> Result<u64> {
+        const BATCH_SIZE: RowLimit = RowLimit::at_most(500);
+        let cutoff = session_idle_cutoff(now);
+        let mut pruned = 0;
+        loop {
+            // Pool execution ends each statement's transaction before the next
+            // batch, releasing locks even when a later batch fails. Recheck
+            // eligibility on the DELETE itself so PostgreSQL cannot delete a
+            // row renewed while this statement waited for its row lock.
+            let batch = sqlx::query_scalar::<_, RowCount>(
+                "DELETE FROM sessions WHERE kind = 'browser' AND last_used_at <= $1
+                 AND token_hash IN (
+                     SELECT token_hash FROM sessions
+                     WHERE kind = 'browser' AND last_used_at <= $1
+                     ORDER BY token_hash LIMIT $2
+                 ) RETURNING CAST(1 AS BIGINT)",
+            )
+            .bind_storage(cutoff)
+            .bind_storage(BATCH_SIZE)
+            .fetch_all(&self.pool)
+            .await?
+            .len() as u64;
+            if batch != 0 {
+                metrics::retention_pruned(Domain::BrowserSessions, batch);
+            }
+            pruned += batch;
+            if batch == 0 {
+                return Ok(pruned);
+            }
+        }
+    }
+
     async fn list_sessions(&self, user_id: UserId) -> Result<Vec<SessionRecord>> {
         let rows = sqlx::query_as::<_, SessionRow>(
             "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at, s.kind
@@ -472,6 +512,138 @@ mod tests {
                     .is_empty()
             );
         }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn browser_cleanup_preserves_other_kinds_and_obeys_exact_cutoff(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        for kind in [
+            SessionKind::Browser,
+            SessionKind::Machine,
+            SessionKind::Unknown,
+        ] {
+            let (user_id, _, used) = idle_fixture(&env, kind).await;
+            let before = UtcInstant::from(used.value().checked_add(2_591_999.seconds()).unwrap());
+            let cutoff = UtcInstant::from(used.value().checked_add(2_592_000.seconds()).unwrap());
+            assert_eq!(
+                env.sessions()
+                    .prune_expired_browser_sessions(before)
+                    .await
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                env.sessions()
+                    .prune_expired_browser_sessions(cutoff)
+                    .await
+                    .unwrap(),
+                u64::from(kind == SessionKind::Browser)
+            );
+            assert_eq!(
+                env.sessions().list_sessions(user_id).await.unwrap().len(),
+                usize::from(kind != SessionKind::Browser)
+            );
+            assert_eq!(
+                env.sessions()
+                    .prune_expired_browser_sessions(cutoff)
+                    .await
+                    .unwrap(),
+                0
+            );
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn browser_cleanup_commits_500_row_batches_and_retries_partial_progress(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let sessions = env.sessions();
+        crate::test_support::confirmed_for(
+            env.write_scope()
+                .run(|transaction| {
+                    Box::pin(async move {
+                        for _ in 0..1001 {
+                            sessions
+                                .create_session(
+                                    transaction,
+                                    user_id,
+                                    &parse_session_label("cleanup backlog"),
+                                    SessionKind::Browser,
+                                )
+                                .await?;
+                        }
+                        Ok::<_, sqlx::Error>(())
+                    })
+                })
+                .await
+                .unwrap(),
+            "seed backlog",
+        );
+        env.base
+            .pool()
+            .execute("UPDATE sessions SET last_used_at = '2026-01-01 00:00:00+00'")
+            .await
+            .unwrap();
+        // Fail after exactly one full batch. A statement exceeding 500 rows
+        // would roll back its entire first batch, making the remaining count wrong.
+        if matches!(backend, Backend::Postgres) {
+            env.base.pool().execute("CREATE FUNCTION fail_browser_cleanup() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF (SELECT COUNT(*) FROM sessions) <= 501 THEN RAISE EXCEPTION 'injected cleanup failure'; END IF; RETURN OLD; END $$").await.unwrap();
+        }
+        let install = match backend {
+            Backend::Sqlite => {
+                "CREATE TRIGGER fail_browser_cleanup BEFORE DELETE ON sessions WHEN (SELECT COUNT(*) FROM sessions) <= 501 BEGIN SELECT RAISE(ABORT, 'injected cleanup failure'); END"
+            }
+            Backend::Postgres => {
+                "CREATE TRIGGER fail_browser_cleanup BEFORE DELETE ON sessions FOR EACH ROW EXECUTE FUNCTION fail_browser_cleanup()"
+            }
+        };
+        env.base.pool().execute(install).await.unwrap();
+        let now = "2026-01-31T00:00:00Z".parse().unwrap();
+        assert!(
+            env.sessions()
+                .prune_expired_browser_sessions(now)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            env.sessions().list_sessions(user_id).await.unwrap().len(),
+            501
+        );
+        let remove = match backend {
+            Backend::Sqlite => "DROP TRIGGER fail_browser_cleanup",
+            Backend::Postgres => "DROP TRIGGER fail_browser_cleanup ON sessions",
+        };
+        env.base.pool().execute(remove).await.unwrap();
+        assert_eq!(
+            env.sessions()
+                .prune_expired_browser_sessions(now)
+                .await
+                .unwrap(),
+            501
+        );
+        assert!(
+            env.sessions()
+                .list_sessions(user_id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            env.sessions()
+                .prune_expired_browser_sessions(now)
+                .await
+                .unwrap(),
+            0
+        );
     }
 
     #[apply(backends)]

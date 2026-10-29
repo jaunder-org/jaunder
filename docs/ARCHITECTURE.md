@@ -1484,12 +1484,18 @@ nonzero high-water mark; bounded PII-free telemetry records the anomaly.
   ([ADR-0014](adr/0014-atompub-authentication.md)).
 
 The
-[bounded transient-data retention decision](adr/0167-bounded-transient-data-retention.md)
-keeps Machine and Unknown Sessions and App Passwords outside transient cleanup.
-Browser Session expiry is authoritative independently of physical deletion;
-Session rows currently remain until explicit revocation. Other expiring
-credentials remain retained for 24 hours after expiry, while a consumed
-credential is cleanup-eligible immediately.
+[Browser Session lifecycle decision](adr/drafts/persistent-browser-session-lifecycle.md)
+qualifies the Session exclusion in
+[bounded transient-data retention](adr/0167-bounded-transient-data-retention.md).
+Machine and Unknown Sessions and App Passwords remain outside cleanup. Expired
+typed Browser Sessions are drained in the existing startup/daily transient pass,
+with one explicit UTC cutoff and at most 500 rows per statement, releasing locks
+between batches without a global transaction. A separately reported, PII- and
+secret-free Session-domain failure leaves completed batches intact; other
+domains continue and the next pass retries. Semantic expiry remains
+authoritative independently of deletion. Other expiring credentials remain
+retained for 24 hours after expiry, while a consumed credential is
+cleanup-eligible immediately.
 
 - A token for user X reaches only `/atompub/X/*`. The enforcer is
   `server::atompub::require_user_match` (`server/src/atompub/guards.rs:13`),
