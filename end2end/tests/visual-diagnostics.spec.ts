@@ -2,6 +2,346 @@ import type { Page, TestInfo } from "@playwright/test";
 import { expect, nonBrowserTest as test } from "./fixtures";
 import { runVisualAssertion } from "./visual-diagnostics";
 
+test("the timeline probe explicitly skips an unknown producer lane after the assertion", async ({}, info) => {
+  const records: string[] = [];
+  let asserted = false;
+  await runVisualAssertion(
+    fakePage(async () => ({})),
+    "home-timeline.png",
+    async () => {
+      asserted = true;
+    },
+    () => ({
+      ...sink(info, async (name, options) => {
+        expect(asserted).toBe(true);
+        if (name.startsWith("visual-corner-probe-"))
+          records.push(options!.body!.toString());
+      })(),
+      project: { ...info.project, name: "chromium-visual" },
+    }),
+    async () => ({ available: false }),
+  );
+  expect(records).toHaveLength(1);
+  expect(JSON.parse(records[0])).toMatchObject({
+    status: "skipped",
+    reason: "unknown-or-ineligible-producer-lane",
+  });
+});
+
+function cornerBoundary(
+  options: {
+    restoreThrows?: boolean;
+    oversized?: boolean;
+    captureThrows?: boolean;
+    drift?: boolean;
+    lostStyle?: boolean;
+    scrollThrows?: boolean;
+    stylesheetThrows?: boolean;
+  } = {},
+) {
+  let dy = 0;
+  let restored = false;
+  let removed = false;
+  let scrollRestores = 0;
+  const offsets: number[] = [];
+  const captureTimeouts: number[] = [];
+  const cssTexts: string[] = [];
+  const attachments: Array<{ name: string; body: Buffer }> = [];
+  const state = (index: number) => {
+    const y = index === 0 ? 900 : 100.25 + dy;
+    return {
+      rect: {
+        x: 20,
+        y,
+        left: 20,
+        top: y,
+        right: 92,
+        bottom: y + 32,
+        width: 72,
+        height: 32,
+      },
+      scroll: { x: 0, y: options.drift && offsets.length === 3 ? 1 : 0 },
+      viewport: { width: 1280, height: 720, dpr: 1 },
+      transform: "none",
+      radius: { top_right: "6px", bottom_right: "6px" },
+      font_status: "loaded",
+      main_document: true,
+    };
+  };
+  const locator = (index: number) => ({
+    getAttribute: async () =>
+      restored && options.lostStyle ? "wrong-style" : "color: red;",
+    evaluate: async (_: unknown, value: unknown) => {
+      if (typeof value === "number") {
+        dy = value;
+        offsets.push(value);
+        return;
+      }
+      if (typeof value === "string" || value === null) {
+        restored = true;
+        if (options.restoreThrows) throw new Error("inline restore failed");
+        return;
+      }
+      return state(index);
+    },
+    screenshot: async (args: { timeout: number; style: string }) => {
+      captureTimeouts.push(args.timeout);
+      cssTexts.push(args.style);
+      if (options.captureThrows) throw new Error("capture failed");
+      const png = Buffer.alloc(options.oversized ? 262145 : 25);
+      Buffer.from("89504e470d0a1a0a", "hex").copy(png);
+      png.writeUInt32BE(72, 16);
+      png.writeUInt32BE(32, 20);
+      png[24] = dy === 0 ? 0 : 1;
+      return png;
+    },
+  });
+  const page = {
+    ...fakePage(async () => {
+      scrollRestores++;
+      if (options.scrollThrows && scrollRestores === 4)
+        throw new Error("scroll restore failed");
+      return { x: 0, y: 0 };
+    }),
+    addStyleTag: async ({ content }: { content: string }) => {
+      cssTexts.push(content);
+      return {
+        evaluate: async () => {
+          removed = true;
+          if (options.stylesheetThrows)
+            throw new Error("stylesheet removal failed");
+        },
+      };
+    },
+    locator: (selector: string) => {
+      expect(selector).toBe(
+        "#j-trusted-post-actions button.j-post-action-trigger",
+      );
+      return { count: async () => 2, nth: locator };
+    },
+  } as unknown as Page;
+  const attach: TestInfo["attach"] = async (name, args) => {
+    attachments.push({ name, body: Buffer.from(args!.body!) });
+  };
+  return {
+    page,
+    attach,
+    offsets,
+    captureTimeouts,
+    cssTexts,
+    attachments,
+    restoration: () => ({ restored, removed, scrollRestores }),
+  };
+}
+
+function cornerInfo(
+  info: TestInfo,
+  attach: TestInfo["attach"],
+  timeout = 30000,
+) {
+  return () => ({
+    ...sink(info, attach, timeout)(),
+    project: { ...info.project, name: "chromium-visual" },
+  });
+}
+const sqliteProducer = async () => ({
+  schema_version: 1,
+  lane: "sqlite-chromium-unsplit",
+});
+
+test("the corner probe captures bounded reversible phases and restores the selected second control", async ({}, info) => {
+  const boundary = cornerBoundary();
+  await runVisualAssertion(
+    boundary.page,
+    "home-timeline.png",
+    async () => {},
+    cornerInfo(info, boundary.attach),
+    sqliteProducer,
+  );
+  expect(boundary.offsets).toEqual([0, -0.25, 0]);
+  expect(boundary.captureTimeouts).toHaveLength(3);
+  expect(boundary.captureTimeouts.every((t) => t > 0 && t <= 150)).toBe(true);
+  expect(new Set(boundary.cssTexts).size).toBe(1);
+  const images = boundary.attachments.filter(
+    (a) =>
+      a.name.endsWith("zero-before") ||
+      a.name.endsWith("integer-snap") ||
+      a.name.endsWith("zero-after"),
+  );
+  expect(images).toHaveLength(3);
+  expect(new Set(images.map((a) => a.name)).size).toBe(3);
+  expect(images.every((a) => a.body.length <= 262144)).toBe(true);
+  const record = JSON.parse(boundary.attachments.at(-1)!.body.toString());
+  expect(record).toMatchObject({ status: "available", selected_index: 1 });
+  expect(record.phases.map((p: { png: unknown }) => p.png)).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ width: 72, height: 32 }),
+    ]),
+  );
+  expect(boundary.restoration()).toMatchObject({
+    restored: true,
+    removed: true,
+  });
+});
+
+test("restoration failures invalidate ancillary evidence but do not block other cleanup or replace the matcher error", async ({}, info) => {
+  const boundary = cornerBoundary({ restoreThrows: true });
+  await expect(
+    runVisualAssertion(
+      boundary.page,
+      "home-timeline.png",
+      rejectAssertion,
+      cornerInfo(info, boundary.attach),
+      sqliteProducer,
+    ),
+  ).rejects.toBe(original);
+  expect(boundary.restoration()).toEqual({
+    restored: true,
+    removed: true,
+    scrollRestores: 5,
+  });
+  const record = JSON.parse(boundary.attachments.at(-1)!.body.toString());
+  expect(record.status).toBe("INVALID");
+  expect(record.cleanup_errors[0]).toContain("inline-style");
+});
+
+test("original failure attachment paths are frozen before ancillary PNGs", async ({}, info) => {
+  const boundary = cornerBoundary();
+  const provider = () => ({
+    ...cornerInfo(info, boundary.attach)(),
+    outputDir: "/original-test-output",
+    attachments: ["actual", "expected", "diff"].map((name) => ({
+      name,
+      path: `/original-test-output/${name}.png`,
+      contentType: "image/png",
+    })),
+  });
+  await expect(
+    runVisualAssertion(
+      boundary.page,
+      "home-timeline.png",
+      rejectAssertion,
+      provider,
+      sqliteProducer,
+    ),
+  ).rejects.toBe(original);
+  const saved = boundary.attachments.findIndex((a) =>
+    a.name.endsWith("original-evidence"),
+  );
+  const capture = boundary.attachments.findIndex((a) =>
+    a.name.endsWith("zero-before"),
+  );
+  expect(saved).toBeGreaterThanOrEqual(0);
+  expect(saved).toBeLessThan(capture);
+  const record = JSON.parse(boundary.attachments[saved].body.toString());
+  expect(
+    record.original_evidence.attachments.map((a: { path: string }) => a.path),
+  ).toEqual([
+    "/original-test-output/actual.png",
+    "/original-test-output/expected.png",
+    "/original-test-output/diff.png",
+  ]);
+  expect(record.original_evidence.context_path).toBe(
+    "/original-test-output/error-context.md",
+  );
+  expect(record.original_evidence.trace_path).toBe(
+    "/original-test-output/trace.zip",
+  );
+});
+
+test("a successful restoration RPC with mismatched inline style invalidates the probe", async ({}, info) => {
+  const boundary = cornerBoundary({ lostStyle: true });
+  await runVisualAssertion(
+    boundary.page,
+    "home-timeline.png",
+    async () => {},
+    cornerInfo(info, boundary.attach),
+    sqliteProducer,
+  );
+  expect(JSON.parse(boundary.attachments.at(-1)!.body.toString()).status).toBe(
+    "INVALID",
+  );
+});
+
+for (const fault of ["oversized", "captureThrows", "drift"] as const) {
+  test(`a ${fault} probe never manufactures a passing assertion failure`, async ({}, info) => {
+    const boundary = cornerBoundary({ [fault]: true });
+    await runVisualAssertion(
+      boundary.page,
+      "home-timeline.png",
+      async () => {},
+      cornerInfo(info, boundary.attach),
+      sqliteProducer,
+    );
+    const record = JSON.parse(boundary.attachments.at(-1)!.body.toString());
+    expect(record.status).toBe(fault === "drift" ? "INVALID" : "unavailable");
+    expect(boundary.restoration()).toMatchObject({
+      restored: true,
+      removed: true,
+    });
+  });
+}
+
+for (const fault of ["scrollThrows", "stylesheetThrows"] as const) {
+  test(`a ${fault} cleanup failure is nonthrowing and INVALID`, async ({}, info) => {
+    const boundary = cornerBoundary({ [fault]: true });
+    await runVisualAssertion(
+      boundary.page,
+      "home-timeline.png",
+      async () => {},
+      cornerInfo(info, boundary.attach),
+      sqliteProducer,
+    );
+    expect(boundary.restoration()).toMatchObject({
+      restored: true,
+      removed: true,
+    });
+    const record = JSON.parse(boundary.attachments.at(-1)!.body.toString());
+    expect(record.status).toBe("INVALID");
+    expect(record.cleanup_errors).toHaveLength(1);
+  });
+}
+
+for (const guard of ["filename", "project", "retry"] as const) {
+  test(`the ${guard} guard excludes additional probe captures`, async ({}, info) => {
+    const boundary = cornerBoundary();
+    const provider = () => ({
+      ...cornerInfo(info, boundary.attach)(),
+      ...(guard === "project" ? { project: info.project } : {}),
+      retry: guard === "retry" ? 1 : 0,
+    });
+    await runVisualAssertion(
+      boundary.page,
+      guard === "filename" ? "other.png" : "home-timeline.png",
+      async () => {},
+      provider,
+      async () => {
+        throw new Error("producer must not be read");
+      },
+    );
+    expect(boundary.captureTimeouts).toEqual([]);
+    expect(
+      boundary.attachments.some((a) =>
+        a.name.startsWith("visual-corner-probe-"),
+      ),
+    ).toBe(false);
+  });
+}
+
+test("less than 850ms remaining admits no probe capture", async ({}, info) => {
+  const boundary = cornerBoundary();
+  await runVisualAssertion(
+    boundary.page,
+    "home-timeline.png",
+    async () => {},
+    cornerInfo(info, boundary.attach, 849),
+    sqliteProducer,
+  );
+  expect(boundary.captureTimeouts).toEqual([]);
+  const record = JSON.parse(boundary.attachments.at(-1)!.body.toString());
+  expect(record.status).toBe("skipped");
+});
+
 const original = new Error("original screenshot matcher rejection");
 const rejectAssertion = async () => {
   throw original;
