@@ -231,3 +231,36 @@ limits. The three zero/snap/zero transforms and locator screenshot API stay
 unchanged; none/zero/none or page-screenshot experiments are not approved here.
 Historical final-attachment cause remains unknown; a partial raster match is not
 cause proof.
+
+## Approved two-second allowance supplement
+
+Human decision `1791-probe-two-seconds`, request
+`cf9fbbee-9415-4b52-bdc2-c458de2db326`: “Approve allowance change and one run”.
+This supersedes only the corner probe's 750ms time allowance above with 2000ms,
+adding at most 1250ms of best-effort observation allowance, not a hard timing or
+RPC-cancellation guarantee. No whole-test timeout extension or scaling change.
+
+Admission requires at least 2100ms remaining test time: 2000ms probe allowance
+plus the unchanged 100ms original-result reserve. All probe work remains capped
+by remaining test time minus that reserve. Keep 50ms final-report time allowance
+**inside** the 2000ms: capture work retains checkpoint25 + cleanup100 + final50;
+checkpoint admission retains cleanup100 + final50; cleanup admission retains
+final50. Final reporting uses remaining allotted time. Unavailable/INVALID
+ancillary status never replaces original PASS or its identical matcher error.
+
+Retain the same positive screenshot cap of 150ms, three zero/snap/zero locator
+captures, exact guard, independent cleanup, identity100/timeline500, original
+strict assertion/mask/baseline/thresholds and product/fixtures. The 32KiB
+aggregate JSON, 1KiB checkpoints and 2KiB final **byte** reserve remain
+unchanged and are distinct from the new 50ms final **time** reserve. No extra
+capture, API, framework, retry, timer race, automatic workflow repeat, merge or
+cleanup.
+
+Use the existing helper seam and controlled clock to test 2100ms admission, the
+observed 530/647/751ms progression, the absolute 2000ms envelope (not 2000ms
+plus reserves), reserved final-report admission and original-result protection.
+Run the complete helper regression and pinned type/format/diff checks. Actual
+renderer timing remains unproven until the ONE future approved existing full
+workflow, after independent review and Lead head/tree acceptance; the previous
+two workflows are consumed. Preserve their evidence and distinct producer source
+identities. This changes allowance only, not the diagnostic hypothesis or scope.
