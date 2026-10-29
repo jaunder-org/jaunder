@@ -380,10 +380,11 @@ async function runTimelineObservation(
   }
 }
 
-function reportUnavailable(): void {
+function reportUnavailable(detail?: string): void {
   try {
     console.warn(
-      "visual diagnostics unavailable (collection, attachment or deadline)",
+      detail ??
+        "visual diagnostics unavailable (collection, attachment or deadline)",
     );
   } catch {
     // A broken ancillary reporter must not alter either screenshot outcome.
@@ -535,8 +536,45 @@ async function runCornerProbe(
   const remaining = () =>
     Math.min(expires - nodePerformance.now(), remainingBudget(info));
   const prefix = `visual-corner-probe-${info.retry}-${++sequence}`;
+  // The checkpoint admission allowance comes from, not on top of, the 750ms.
+  const workReserveMs = 125; // 25ms checkpoint admission + existing 100ms cleanup.
+  let jsonBytesUsed = 0;
+  const finalJsonReserveBytes = 2048;
+  const phases: Array<Record<string, unknown>> = [];
+  const cleanupErrors: string[] = [];
+  const cleanupStatus: Record<string, string> = {
+    "inline-style": "not-needed",
+    scroll: "not-needed",
+    stylesheet: "not-needed",
+  };
+  const errorMessage = (error: unknown) =>
+    (error instanceof Error ? error.message : String(error))
+      .split(/\r?\n/, 1)[0]
+      .replace(/https?:\/\/\S+/gi, "[url]")
+      .replace(
+        /\b(?:token|password|secret|authorization)\s*[:=]\s*\S+/gi,
+        "credential=[redacted]",
+      )
+      .slice(0, 256);
+  const warn = (stage: string, attachment: string, error: unknown) => {
+    try {
+      // Plain warning text, not another unaccounted probe-JSON attachment.
+      const type = (error instanceof Error ? error.name : typeof error)
+        .replace(/[\r\n]/g, " ")
+        .slice(0, 256);
+      reportUnavailable(
+        `visual corner probe unavailable stage=${stage.slice(0, 256)} attachment=${attachment.slice(0, 256)} error_type=${type} elapsed_ms=${Math.round(nodePerformance.now() - began)} remaining_ms=${Math.round(remaining())} message=${errorMessage(error)}`,
+      );
+    } catch {
+      reportUnavailable();
+    }
+  };
   const record: Record<string, unknown> = {
     schema_version: 1,
+    probe: prefix,
+    phases,
+    cleanup_errors: cleanupErrors,
+    cleanup: cleanupStatus,
     status: "skipped",
     reason: "not-admitted",
     original_outcome: failed ? "failed" : "passed",
@@ -544,10 +582,13 @@ async function runCornerProbe(
     limits: {
       budget_ms: 750,
       cleanup_allowance_ms: 100,
+      checkpoint_admission_allowance_ms: 25,
+      checkpoint_bytes: 1024,
       original_reserve_ms: 100,
       png_count: 3,
       png_bytes: 262144,
       json_bytes: 32768,
+      final_json_reserved_bytes: finalJsonReserveBytes,
       string_characters: 256,
       controls: 2,
     },
@@ -556,44 +597,107 @@ async function runCornerProbe(
     css_scope:
       "Main-document target only; screenshot style also pierces frames/shadows, unlike main-frame style tag.",
   };
-  const attachRecord = async (suffix = "") => {
-    const body = Buffer.from(
-      JSON.stringify(record, (_, value) =>
-        typeof value === "string" ? value.slice(0, 256) : value,
-      ),
-    );
-    if (body.length > 32768) throw new Error("probe JSON size cap");
-    if (remaining() <= 0)
-      throw new Error("probe metadata attachment unavailable: budget");
-    await info.attach(`${prefix}${suffix}`, {
-      body,
-      contentType: "application/json",
-    });
+  // Optional repeated details may be omitted, never JSON text truncated. Short
+  // reasons leave this independently useful cleanup summary within its 2KiB reserve.
+  const compactRecord = (kind: string) => ({
+    schema_version: 1,
+    record_kind: kind,
+    probe: prefix,
+    metadata_status: "compact-omissions",
+    original_outcome: record.original_outcome,
+    status: record.status,
+    reason: String(record.reason).slice(0, 48),
+    cleanup: cleanupStatus,
+    cleanup_errors: cleanupErrors.map((message) => message.slice(0, 48)),
+    phases_completed: phases.length,
+    pngs_attached: phases.filter(
+      (phase) => phase.attachment_status === "attached",
+    ).length,
+    checkpoints_attached: phases.filter(
+      (phase) => phase.checkpoint_status === "attached",
+    ).length,
+    elapsed_ms: Math.round(nodePerformance.now() - began),
+    remaining_ms: Math.round(remaining()),
+    json_bytes_attempted_before_final: jsonBytesUsed,
+    omissions: [
+      "original_evidence-details",
+      "phase-details",
+      "browser-css-geometry",
+      "long-reasons",
+    ],
+  });
+  // Charge attempted bodies too: a rejecting sink may already have retained one.
+  // This local accounting covers original-evidence, checkpoints AND final JSON.
+  const attachJson = async (
+    purpose: string,
+    value: unknown,
+    cap: number,
+    reserveMs: number,
+    suffix = "",
+    compact?: () => unknown,
+  ) => {
+    const attachment = `${prefix}${suffix}`;
+    let stage = `${purpose}:serialization`;
+    try {
+      const serialize = (item: unknown) =>
+        Buffer.from(
+          JSON.stringify(item, (_, field) =>
+            typeof field === "string" ? field.slice(0, 256) : field,
+          ),
+        );
+      const available = Math.min(
+        cap,
+        32768 -
+          jsonBytesUsed -
+          (purpose === "final-json" ? 0 : finalJsonReserveBytes),
+      );
+      let body = serialize(value);
+      if (body.length > available && compact) body = serialize(compact());
+      stage = `${purpose}:size`;
+      if (body.length > available)
+        throw new Error(
+          "probe JSON size cap (body, aggregate or final reserve)",
+        );
+      stage = `${purpose}:budget`;
+      if (remaining() <= reserveMs)
+        throw new Error("probe JSON admission unavailable: reserved allowance");
+      stage = `${purpose}:attachment`;
+      jsonBytesUsed += body.length;
+      await info.attach(attachment, { body, contentType: "application/json" });
+      return true;
+    } catch (error) {
+      warn(stage, attachment, error);
+      return false;
+    }
   };
+  const attachRecord = () =>
+    attachJson("final-json", record, 32768, 0, "", () =>
+      compactRecord("post-cleanup"),
+    );
   // Reserve 100ms for the original result in addition to the full 750ms probe.
   if (info.startedUnixMs === undefined || remainingBudget(info) < 750) {
     record.reason = "missing-clock-or-less-than-850ms-remaining";
-    if (remaining() > 0) await attachRecord();
-    else reportUnavailable();
+    await attachRecord();
     return;
   }
-  // Leave 100ms of this probe's allowance for independent cleanup and metadata.
+  // Preserve checkpoint admission AND independent cleanup within the same budget.
   const admit = () => {
-    if (remaining() <= 100)
-      throw new Error("probe work unavailable: cleanup allowance");
+    if (remaining() <= workReserveMs)
+      throw new Error(
+        "probe work unavailable: checkpoint and cleanup allowance",
+      );
   };
   let style: Awaited<ReturnType<Page["addStyleTag"]>> | undefined;
   let target: ReturnType<Page["locator"]> | undefined;
   let originalStyle: string | null = null;
   let savedStyle = false;
   let initialScroll: { x: number; y: number } | undefined;
-  const phases: Array<Record<string, unknown>> = [];
-  record.phases = phases;
-  const cleanupErrors: string[] = [];
-  record.cleanup_errors = cleanupErrors;
   try {
     admit();
-    const input = (await producer()) as { lane?: string } | null;
+    const input = (await producer()) as {
+      lane?: string;
+      revision?: string;
+    } | null;
     if (input?.lane !== "sqlite-chromium-unsplit") {
       record.reason = "unknown-or-ineligible-producer-lane";
       return;
@@ -617,7 +721,20 @@ async function runCornerProbe(
     if (failed) {
       record.reason = "original-evidence-saved-before-probe";
       admit();
-      await attachRecord("-original-evidence");
+      if (
+        !(await attachJson(
+          "original-evidence",
+          record,
+          32768 - finalJsonReserveBytes - 3 * 1024,
+          workReserveMs,
+          "-original-evidence",
+          () => compactRecord("original-evidence"),
+        ))
+      ) {
+        record.status = "unavailable";
+        record.reason = "original-evidence-attachment-unavailable";
+        return;
+      }
     }
     admit();
     const cssBytes = await readFile(join(__dirname, "visual.css"));
@@ -645,7 +762,7 @@ async function runCornerProbe(
       admit();
       const state = await geometry(
         controls.nth(index),
-        Math.min(150, remaining() - 100),
+        Math.min(150, remaining() - workReserveMs),
       );
       if (
         state.main_document &&
@@ -672,7 +789,7 @@ async function runCornerProbe(
     target = controls.nth(selected.index);
     admit();
     originalStyle = await target.getAttribute("style", {
-      timeout: Math.min(150, remaining() - 100),
+      timeout: Math.min(150, remaining() - workReserveMs),
     });
     savedStyle = true;
     record.original_style = originalStyle;
@@ -692,7 +809,18 @@ async function runCornerProbe(
         status: "unavailable",
         began_unix_ms: Date.now(),
       };
+      if (remaining() <= workReserveMs) {
+        record.reason =
+          "stopped-before-capture-to-retain-checkpoint-and-cleanup-allowance";
+        warn(
+          "phase-admission:budget",
+          `${prefix}-${phase}`,
+          new Error(String(record.reason)),
+        );
+        break;
+      }
       phases.push(result);
+      let phaseStage = `${phase}:apply`;
       try {
         admit();
         await target.evaluate(
@@ -700,18 +828,19 @@ async function runCornerProbe(
             (el as HTMLElement).style.transform = `translateY(${offset}px)`;
           },
           dy,
-          { timeout: Math.min(150, remaining() - 100) },
+          { timeout: Math.min(150, remaining() - workReserveMs) },
         );
+        phaseStage = `${phase}:geometry-before`;
         admit();
         result.before = await geometry(
           target,
-          Math.min(150, remaining() - 100),
+          Math.min(150, remaining() - workReserveMs),
         );
-        const timeout = Math.min(150, remaining() - 100);
-        if (timeout <= 0) {
-          result.reason = "non-positive-capture-timeout";
-          continue;
-        }
+        phaseStage = `${phase}:capture-budget`;
+        const timeout = Math.min(150, remaining() - workReserveMs);
+        if (timeout <= 0)
+          throw new Error("non-positive-capture-timeout: capture skipped");
+        phaseStage = `${phase}:capture`;
         const png = await target.screenshot({
           type: "png",
           scale: "css",
@@ -720,8 +849,13 @@ async function runCornerProbe(
           style: css,
           timeout,
         });
+        phaseStage = `${phase}:geometry-after`;
         admit();
-        result.after = await geometry(target, Math.min(150, remaining() - 100));
+        result.after = await geometry(
+          target,
+          Math.min(150, remaining() - workReserveMs),
+        );
+        phaseStage = `${phase}:png-size-or-format`;
         if (png.length > 262144) throw new Error("probe PNG size cap");
         if (
           png.length < 24 ||
@@ -734,15 +868,92 @@ async function runCornerProbe(
           bytes: png.length,
           sha256: createHash("sha256").update(png).digest("hex"),
         };
+        phaseStage = `${phase}:png-attachment-budget`;
         admit();
         const attachment = `${prefix}-${phase}`;
+        phaseStage = `${phase}:png-attachment`;
         await info.attach(attachment, { body: png, contentType: "image/png" });
         result.attachment = attachment;
+        result.attachment_status = "attached";
         result.status = "available";
       } catch (error) {
-        result.reason = String(error).slice(0, 256);
+        result.reason = errorMessage(error);
+        warn(phaseStage, `${prefix}-${phase}`, error);
       } finally {
         result.ended_unix_ms = Date.now();
+      }
+      // Persist this phase before another capture can erase its structured story.
+      // Rect/scroll brackets describe observations, not raster-time geometry.
+      const bracket = (value: unknown) => {
+        if (!value) return undefined;
+        const state = value as Awaited<ReturnType<typeof geometry>>;
+        return [
+          state.rect.x,
+          state.rect.y,
+          state.rect.width,
+          state.rect.height,
+          state.scroll.x,
+          state.scroll.y,
+        ];
+      };
+      const checkpoint = {
+        schema_version: 1,
+        probe: prefix,
+        test_id_sha256: createHash("sha256").update(info.testId).digest("hex"),
+        retry: info.retry,
+        source:
+          typeof input.revision === "string"
+            ? input.revision.slice(0, 64)
+            : "unavailable",
+        phase,
+        dy,
+        selected_index: selected.index,
+        completed_unix_ms: result.ended_unix_ms,
+        elapsed_ms: Math.round(nodePerformance.now() - began),
+        remaining_ms: Math.round(remaining()),
+        outcome: result.status,
+        attachment_status: result.attachment_status ?? "unavailable",
+        reason:
+          typeof result.reason === "string"
+            ? result.reason.slice(0, 96)
+            : undefined,
+        png: result.png
+          ? { ...(result.png as object), name: result.attachment }
+          : undefined,
+        before_rect_scroll: bracket(result.before),
+        after_rect_scroll: bracket(result.after),
+        css_sha256: record.css_sha256,
+        caveat: "brackets-not-raster;cleanup-unobserved",
+      };
+      const attached = await attachJson(
+        `checkpoint-${phase}`,
+        checkpoint,
+        1024,
+        100,
+        `-checkpoint-${phase}`,
+        () => ({
+          ...checkpoint,
+          source: undefined,
+          source_sha256: createHash("sha256")
+            .update(checkpoint.source)
+            .digest("hex"),
+          before_rect_scroll: undefined,
+          after_rect_scroll: undefined,
+          css_sha256: undefined,
+          reason: undefined,
+          metadata_status: "compact-omissions",
+          omissions: [
+            "geometry-brackets",
+            "css_sha256",
+            "reason",
+            "source-text",
+          ],
+        }),
+      );
+      result.checkpoint_status = attached ? "attached" : "unavailable";
+      if (!attached) {
+        record.reason = "stopped-after-unavailable-checkpoint";
+        break;
       }
     }
     if (phases.length === 3 && phases.every((p) => p.status === "available")) {
@@ -765,16 +976,22 @@ async function runCornerProbe(
     }
   } catch (error) {
     record.status = "unavailable";
-    record.reason = String(error).slice(0, 256);
+    record.reason = errorMessage(error);
   } finally {
     // Each attempt is independent. Admission is best effort, not cancellation;
     // a late RPC may exhaust the allowance, making restoration INVALID.
     const cleanup = async (label: string, work: () => Promise<unknown>) => {
+      let admitted = false;
       try {
         if (remaining() <= 0) throw new Error("cleanup budget unavailable");
+        admitted = true;
         await work();
+        cleanupStatus[label] = "completed";
       } catch (error) {
-        cleanupErrors.push(`${label}: ${String(error)}`.slice(0, 256));
+        cleanupStatus[label] = admitted
+          ? "failed-or-unverified"
+          : "unavailable";
+        cleanupErrors.push(`${label}: ${errorMessage(error)}`.slice(0, 256));
       }
     };
     if (target && savedStyle)
@@ -820,11 +1037,8 @@ async function runCornerProbe(
       record.reason = "cleanup-failed";
     }
     record.elapsed_ms = nodePerformance.now() - began;
-    try {
-      await attachRecord();
-    } catch {
-      reportUnavailable();
-    }
+    record.json_bytes_attempted_before_final = jsonBytesUsed;
+    await attachRecord();
   }
 }
 
