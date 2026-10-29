@@ -192,3 +192,42 @@ references: `end2end/node_modules/playwright-core/types/types.d.ts`
 topology: `.github/workflows/ci.yml` (matrix/reconciliation/gate);
 `CONTRIBUTING.md` Visual snapshot workflow. No API supports observing the
 original internal assertion buffers.
+
+## Approved checkpoint-resilience supplement
+
+Human decision `1791-probe-checkpoints`, request
+`99b5339f-ae3c-466b-a92d-021a2678407c`: “Approve correction and one CI run”. The
+Manager's exact grant:
+
+> Authorized narrow correction: save compact structured checkpoint after each
+> completed image/phase before next capture, retain final post-cleanup report,
+> disclose precise ancillary attachment errors; test partial progress surviving
+> later metadata failure while original matcher outcome/error unchanged. Keep
+> original assertion/baseline/mask/strict thresholds and existing diagnostic
+> time limits; no product change or framework. Normal local
+> validation/review/hooks/commit/push to diagnostic draftPR1852 plus ONE
+> additional full existing CI workflow, no automatic repeats or merge. Earlier
+> resource hold released due1754 prerequisite STOP; coordinate if renewed timing
+> window later admitted. Bind reviewed final head/tree and actual producer
+> source to results.
+
+Checkpoints record retained PNG identity/hash/dimensions, script-phase identity,
+minimal geometry context, completion time and elapsed/remaining allowance. They
+are progress evidence, not raster-time geometry or cleanup success. Keep at most
+three compact checkpoints (at most 1KiB each); aggregate emitted probe JSON,
+including original-evidence/checkpoint/final bodies, stays at most 32KiB.
+Checkpoint work and cleanup/final-report admission remain inside the existing
+750ms allowance, with the separate 100ms original-result reserve unchanged. Stop
+further captures when admission cannot retain cleanup/checkpoint allowance.
+Warnings distinguish budget, serialization/size and attachment rejection using
+bounded stage/name/type/message and elapsed/remaining facts; a broken sink is
+not claimed reliable. Retain the final independent-cleanup report attempt.
+
+Use the existing helper/sink/producer testing seam to prove an accepted first
+PNG/checkpoint survives later final-metadata rejection or budget exhaustion,
+without changing original PASS or the identical matcher-error object. Cover
+precise checkpoint errors, admission, aggregate JSON and positive capture
+limits. The three zero/snap/zero transforms and locator screenshot API stay
+unchanged; none/zero/none or page-screenshot experiments are not approved here.
+Historical final-attachment cause remains unknown; a partial raster match is not
+cause proof.
