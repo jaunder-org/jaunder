@@ -217,7 +217,11 @@ where
             .await
         {
             Ok(common::MutationOutcome::Confirmed(authentication)) => {
-                if let Some(renewal) = parts.extensions.get::<web::auth::SessionCookieRenewal>() {
+                // Cookie-only intake ignores explicit credentials, but must not
+                // renew ambient browser state when Authorization is present.
+                if !parts.headers.contains_key(header::AUTHORIZATION)
+                    && let Some(renewal) = parts.extensions.get::<web::auth::SessionCookieRenewal>()
+                {
                     renewal.committed_activity(&authentication, token);
                 }
                 Ok(Self {

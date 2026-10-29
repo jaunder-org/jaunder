@@ -71,17 +71,24 @@ pub struct SessionRecord {
 /// Production uses UTC wall time; controlled clocks are test-only inputs.
 #[derive(Clone, Default)]
 pub struct SessionClock {
+    source: SessionClockSource,
+}
+
+#[derive(Clone, Default)]
+enum SessionClockSource {
+    #[default]
+    Wall,
     #[cfg(any(test, feature = "test-utils"))]
-    read: Option<std::sync::Arc<dyn Fn() -> UtcInstant + Send + Sync>>,
+    Controlled(std::sync::Arc<dyn Fn() -> UtcInstant + Send + Sync>),
 }
 
 impl SessionClock {
     pub(crate) fn now(&self) -> UtcInstant {
-        #[cfg(any(test, feature = "test-utils"))]
-        if let Some(read) = &self.read {
-            return read();
+        match &self.source {
+            SessionClockSource::Wall => UtcInstant::now(),
+            #[cfg(any(test, feature = "test-utils"))]
+            SessionClockSource::Controlled(read) => read(),
         }
-        UtcInstant::now()
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -94,7 +101,7 @@ impl SessionClock {
     #[must_use]
     pub fn for_test(read: impl Fn() -> UtcInstant + Send + Sync + 'static) -> Self {
         Self {
-            read: Some(std::sync::Arc::new(read)),
+            source: SessionClockSource::Controlled(std::sync::Arc::new(read)),
         }
     }
 }
