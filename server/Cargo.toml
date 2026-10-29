@@ -79,6 +79,8 @@ csr_bundle = { path = "../tools/csr_bundle" }
 host = { path = "../host" }
 
 [dev-dependencies]
+# ZIP is the checked-in fixture container only; restore inputs remain directories or tar/gzip.
+zip = { version = "9.0.4", default-features = false, features = ["deflate"] }
 # Independent pixel observations use the existing pinned decoder, never upload editing.
 image = { version = "0.25.10", default-features = false, features = ["png", "webp"] }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
