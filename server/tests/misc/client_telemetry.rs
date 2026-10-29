@@ -504,6 +504,131 @@ async fn valid_cookie_returns_204_and_reports_one_client_swallow(#[case] backend
 
 #[apply(backends)]
 #[tokio::test]
+async fn telemetry_commit_acknowledgement_loss_rejects_without_cookie_or_report(
+    #[case] backend: Backend,
+) {
+    use common::time::UtcInstant;
+    use jiff::ToSpan;
+
+    let env = backend.setup().await;
+    let user = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
+    let sessions = env.sessions();
+    let label = common::test_support::parse_session_label("Browser");
+    let token = storage::test_support::confirmed_for(
+        env.write_scope()
+            .run(|transaction| {
+                Box::pin(async move {
+                    sessions
+                        .create_session(
+                            transaction,
+                            user.user_id,
+                            &label,
+                            storage::SessionKind::Browser,
+                        )
+                        .await
+                })
+            })
+            .await
+            .unwrap(),
+        "browser telemetry fixture",
+    );
+    let hash = host::token::hash(&token).unwrap();
+    let original = env
+        .sessions()
+        .list_sessions(user.user_id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|row| row.token_hash == hash)
+        .unwrap()
+        .last_used_at;
+    let now = UtcInstant::from(original.value().checked_add(60.seconds()).unwrap());
+    let renewal = web::auth::SessionCookieRenewal::default();
+    let limiter = limiter();
+    let observation = observe(
+        app(
+            env.sessions(),
+            storage::test_support::write_scope_with_commit_acknowledgement_loss(&env.write_scope()),
+            limiter.clone(),
+        )
+        .layer(axum::Extension(renewal.clone()))
+        .layer(axum::Extension(storage::SessionClock::fixed(now))),
+        request(
+            event_json(),
+            Some("application/json"),
+            Some(&format!("session={token}")),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(
+        observation.response.status(),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    assert!(!observation.events.contains(INTAKE_WARNING));
+    assert_eq!(
+        observation
+            .metric_points("jaunder.errors")
+            .filter(|point| {
+                point.attributes.get("telemetry.origin").map(String::as_str) == Some("client")
+            })
+            .count(),
+        0,
+        "rejected intake must not report a client error (commit uncertainty is a server error)"
+    );
+    assert!(
+        renewal.header(false).is_none(),
+        "unacknowledged activity must not renew"
+    );
+    assert!(
+        !observation
+            .response
+            .headers()
+            .contains_key(header::SET_COOKIE)
+    );
+    let stored = env
+        .sessions()
+        .list_sessions(user.user_id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|row| row.token_hash == hash)
+        .unwrap();
+    assert_eq!(
+        stored.last_used_at, now,
+        "the injected lost acknowledgement follows a real commit"
+    );
+
+    // Rejection must not consume the browser user's intake allowance.
+    let app = app(env.sessions(), env.write_scope(), limiter)
+        .layer(axum::Extension(storage::SessionClock::fixed(now)));
+    for _ in 0..5 {
+        let response = app
+            .clone()
+            .oneshot(request(
+                event_json(),
+                Some("application/json"),
+                Some(&format!("session={token}")),
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+    let response = app
+        .oneshot(request(
+            event_json(),
+            Some("application/json"),
+            Some(&format!("session={token}")),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn explicit_authorization_suppresses_telemetry_cookie_renewal(#[case] backend: Backend) {
     use common::time::UtcInstant;
     use jiff::ToSpan;

@@ -909,22 +909,25 @@ mod tests {
 
     async fn contender_is_waiting_for_session_lock(
         env: &crate::test_support::TestEnv,
-        backend: Backend,
         observed: &tokio::sync::Notify,
     ) -> bool {
-        if matches!(backend, Backend::Sqlite) {
-            return tokio::time::timeout(std::time::Duration::from_secs(5), observed.notified())
+        let pool = match env.base.pool() {
+            crate::test_support::CloseablePool::Sqlite(_) => {
+                return tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    observed.notified(),
+                )
                 .await
                 .is_ok();
-        }
+            }
+            crate::test_support::CloseablePool::Postgres(pool) => pool,
+        };
         // Observe the database wait rather than task scheduling: expiry must not
         // reject a snapshot while an earlier eligible touch is uncommitted.
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
-                let waiting = crate::with_closeable_pool!(env.base.pool(), pool, {
-                    sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE 'SELECT s.token_hash%')")
-                        .fetch_one(pool).await.unwrap()
-                });
+                let waiting = sqlx::query_scalar::<_, crate::sql::Exists>("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE 'SELECT s.token_hash%')")
+                    .fetch_one(pool).await.unwrap().into_bool();
                 if waiting { return; }
                 tokio::task::yield_now().await;
             }
@@ -973,7 +976,7 @@ mod tests {
                 })
                 .await
         });
-        let waited_for_lock = contender_is_waiting_for_session_lock(&env, backend, &observed).await;
+        let waited_for_lock = contender_is_waiting_for_session_lock(&env, &observed).await;
         release_tx.send(()).unwrap();
         retry.notify_one();
         assert!(
@@ -1039,7 +1042,7 @@ mod tests {
                 })
                 .await
         });
-        let waited_for_lock = contender_is_waiting_for_session_lock(&env, backend, &observed).await;
+        let waited_for_lock = contender_is_waiting_for_session_lock(&env, &observed).await;
         let premature_reads = reads.load(Ordering::SeqCst);
         *current.lock().unwrap() = cutoff;
         release_tx.send(()).unwrap();
@@ -1104,7 +1107,7 @@ mod tests {
                 })
                 .await
         });
-        let waited_for_lock = contender_is_waiting_for_session_lock(&env, backend, &observed).await;
+        let waited_for_lock = contender_is_waiting_for_session_lock(&env, &observed).await;
         release_tx.send(()).unwrap();
         crate::test_support::confirmed_for(revoke.await.unwrap().unwrap(), "revoke");
         retry.notify_one();

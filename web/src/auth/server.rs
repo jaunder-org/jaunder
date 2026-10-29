@@ -450,6 +450,44 @@ mod tests {
     use crate::test_support::auth_parts;
     use storage::MockUserStorage;
 
+    // guard:no-backend — mock store exercises authentication error projection
+    #[tokio::test]
+    async fn browser_cookie_preparation_rejects_failed_session_authentication() {
+        for error in [
+            storage::SessionAuthError::InvalidToken,
+            storage::SessionAuthError::SessionNotFound,
+            storage::SessionAuthError::Internal(sqlx::Error::PoolClosed),
+        ] {
+            let internal = matches!(error, storage::SessionAuthError::Internal(_));
+            let mut sessions = storage::MockSessionStorage::new();
+            sessions
+                .expect_authenticate()
+                .once()
+                .return_once(move |_, _, _| Err(error));
+            let result = storage::test_support::mock_write_scope()
+                .run(|transaction| {
+                    Box::pin(async move {
+                        prepare_browser_session_cookie(
+                            &sessions,
+                            transaction,
+                            parse_raw_token("rejected-session"),
+                        )
+                        .await
+                    })
+                })
+                .await;
+            let Err(storage::WriteScopeError::Operation(error)) = result else {
+                panic!("failed authentication must not prepare a browser cookie");
+            };
+            let projected = crate::error::project(error.kind(), error.public_message());
+            if internal {
+                assert!(matches!(projected, crate::error::WebError::Storage { .. }));
+            } else {
+                assert!(matches!(projected, crate::error::WebError::Unauthorized));
+            }
+        }
+    }
+
     // guard:no-backend — mock store
     #[tokio::test]
     async fn require_operator_rejects_when_user_absent() {

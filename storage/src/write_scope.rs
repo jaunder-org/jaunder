@@ -196,6 +196,11 @@ impl WriteScope {
     ///
     /// Returns [`WriteScopeError::Begin`] if transaction acquisition fails, or
     /// [`WriteScopeError::Operation`] if the callback rejects the mutation.
+    ///
+    /// # Panics
+    ///
+    /// In unit tests only, a configured `SQLite` contention observer asserts that
+    /// its initial BEGIN actually encounters `SQLITE_BUSY`.
     pub async fn run<T, E>(
         &self,
         callback: impl for<'scope> FnOnce(
@@ -225,14 +230,13 @@ impl WriteScope {
                     .execute(&mut *connection)
                     .await
                     .map_err(WriteScopeError::Begin)?;
-                match connection.begin_with("BEGIN IMMEDIATE").await {
-                    Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("5") => {}
-                    _ => {
-                        return Err(WriteScopeError::Begin(sqlx::Error::Protocol(
-                            "contender must observe SQLITE_BUSY at BEGIN IMMEDIATE".into(),
-                        )));
-                    }
-                }
+                assert!(
+                    matches!(
+                        connection.begin_with("BEGIN IMMEDIATE").await,
+                        Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("5")
+                    ),
+                    "contender must observe SQLITE_BUSY at BEGIN IMMEDIATE"
+                );
                 sqlx::query("PRAGMA busy_timeout = 5000")
                     .execute(&mut *connection)
                     .await
