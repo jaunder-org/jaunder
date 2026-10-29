@@ -1058,12 +1058,186 @@ fn read_e2e_phase_records(
 
 /// What one diagnostics-copy pass did.
 struct DiagnosticsCopy {
+    /// Whether this pass invoked authoritative-input cleanup (even if it failed).
+    cleanup_ran: bool,
     /// How many artifacts were lifted.
     copied: usize,
+    /// Names whose source bytes were copied, so recovery observations do not infer
+    /// success from a destination that may have survived a failed cleanup.
+    copied_files: Vec<String>,
     /// One message per artifact that could NOT be lifted, naming the file and the OS
     /// error. Reported rather than counted: which file went missing is the whole
     /// diagnostic value, and a bare count would say only that something did.
     failures: Vec<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CaptureFileState {
+    File { bytes: u64 },
+    Absent,
+    NonFile,
+    Error { kind: String },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CaptureCopyOutcome {
+    Copied,
+    NotAttempted,
+    Failed,
+    Unknown,
+}
+
+#[derive(Debug)]
+struct CaptureRecoveryAttempt {
+    route: String,
+    source: String,
+    source_state: CaptureFileState,
+    copy: CaptureCopyOutcome,
+    cleanup_ran: bool,
+    copy_failures: Vec<String>,
+    destination_after: CaptureFileState,
+}
+
+impl CaptureRecoveryAttempt {
+    fn not_copied(
+        route: &str,
+        source: String,
+        source_state: CaptureFileState,
+        destination: &Path,
+        capture_name: &str,
+    ) -> Self {
+        Self {
+            route: route.to_owned(),
+            source,
+            source_state,
+            copy: CaptureCopyOutcome::NotAttempted,
+            cleanup_ran: false,
+            copy_failures: vec![],
+            destination_after: capture_file_state(&destination.join(capture_name)),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct CaptureRecoverySummary {
+    attempts: Vec<CaptureRecoveryAttempt>,
+    final_destination: Option<CaptureFileState>,
+}
+
+fn capture_file_state_from_metadata(metadata: io::Result<(bool, u64)>) -> CaptureFileState {
+    match metadata {
+        Ok((true, bytes)) => CaptureFileState::File { bytes },
+        Ok((false, _)) => CaptureFileState::NonFile,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => CaptureFileState::Absent,
+        Err(error) => CaptureFileState::Error {
+            kind: format!("{:?}", error.kind()),
+        },
+    }
+}
+
+fn capture_file_state(path: &Path) -> CaptureFileState {
+    capture_file_state_from_metadata(
+        fs::metadata(path).map(|metadata| (metadata.is_file(), metadata.len())),
+    )
+}
+
+fn capture_copy_outcome(
+    source: &CaptureFileState,
+    copied_files: &[String],
+    failures: &[String],
+    capture_name: &str,
+) -> CaptureCopyOutcome {
+    if copied_files.iter().any(|name| name == capture_name) {
+        return CaptureCopyOutcome::Copied;
+    }
+    if failures
+        .iter()
+        .any(|failure| failure.contains(capture_name))
+    {
+        return CaptureCopyOutcome::Failed;
+    }
+    match source {
+        CaptureFileState::Absent => CaptureCopyOutcome::NotAttempted,
+        CaptureFileState::File { .. }
+        | CaptureFileState::NonFile
+        | CaptureFileState::Error { .. } => CaptureCopyOutcome::Unknown,
+    }
+}
+
+fn observe_capture_recovery_copy(
+    route: &str,
+    source_dir: &Path,
+    destination_dir: &Path,
+    capture_name: &str,
+    copy: impl FnOnce(&Path, &Path) -> DiagnosticsCopy,
+) -> (DiagnosticsCopy, CaptureRecoveryAttempt) {
+    let source_path = source_dir.join(capture_name);
+    let source_state = capture_file_state(&source_path);
+    let result = copy(source_dir, destination_dir);
+    let destination_state = capture_file_state(&destination_dir.join(capture_name));
+    let copy_outcome = capture_copy_outcome(
+        &source_state,
+        &result.copied_files,
+        &result.failures,
+        capture_name,
+    );
+    let copy_failures = result
+        .failures
+        .iter()
+        .filter(|failure| {
+            failure.contains(capture_name)
+                || failure.starts_with("reading ")
+                || failure.starts_with("creating ")
+        })
+        .cloned()
+        .collect();
+    let cleanup_ran = result.cleanup_ran;
+    (
+        result,
+        CaptureRecoveryAttempt {
+            route: route.to_owned(),
+            source: source_dir.display().to_string(),
+            source_state,
+            copy: copy_outcome,
+            cleanup_ran,
+            copy_failures,
+            destination_after: destination_state,
+        },
+    )
+}
+
+fn append_capture_recovery_detail(step: &mut StepResult, summary: &CaptureRecoverySummary) {
+    if summary.attempts.is_empty() && summary.final_destination.is_none() {
+        return;
+    }
+    let attempts = summary
+        .attempts
+        .iter()
+        .map(|attempt| {
+            format!(
+                "route={:?} source={:?} source_state={:?} copy={:?} cleanup_ran={} copy_failures={:?} destination_after={:?}",
+                attempt.route,
+                attempt.source,
+                attempt.source_state,
+                attempt.copy,
+                attempt.cleanup_ran,
+                attempt.copy_failures,
+                attempt.destination_after
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let observation = format!(
+        "capture-recovery=[{attempts}] final_destination={:?}",
+        summary.final_destination
+    );
+    match &mut step.detail {
+        Some(detail) => {
+            detail.push_str("; ");
+            detail.push_str(&observation);
+        }
+        None => step.detail = Some(observation),
+    }
 }
 
 /// Copy matching diagnostic artifacts and collect every best-effort failure.
@@ -1158,7 +1332,11 @@ fn clear_authoritative_e2e_inputs(
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return,
         Err(error) => {
-            failures.push(format!("reading {}: {error}", dest_dir.display()));
+            failures.push(format!(
+                "reading {}: {:?}",
+                dest_dir.display(),
+                error.kind()
+            ));
             return;
         }
     };
@@ -1167,8 +1345,9 @@ fn clear_authoritative_e2e_inputs(
             Ok(entry) => entry,
             Err(error) => {
                 failures.push(format!(
-                    "reading entry under {}: {error}",
-                    dest_dir.display()
+                    "reading entry under {}: {:?}",
+                    dest_dir.display(),
+                    error.kind()
                 ));
                 continue;
             }
@@ -1200,28 +1379,44 @@ fn copy_e2e_diagnostics_with_ops(
     mut set_permissions: impl FnMut(&Path, fs::Permissions) -> io::Result<()>,
 ) -> DiagnosticsCopy {
     let mut copied = 0;
+    let mut copied_files = Vec::new();
     let mut failures = Vec::new();
     clear_authoritative_e2e_inputs(dest_dir, &mut remove, &mut failures);
     let entries = match fs::read_dir(src_dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return DiagnosticsCopy { copied, failures };
+            return DiagnosticsCopy {
+                cleanup_ran: true,
+                copied,
+                copied_files,
+                failures,
+            };
         }
         Err(error) => {
-            failures.push(format!("reading {}: {error}", src_dir.display()));
-            return DiagnosticsCopy { copied, failures };
+            failures.push(format!("reading {}: {:?}", src_dir.display(), error.kind()));
+            return DiagnosticsCopy {
+                cleanup_ran: true,
+                copied,
+                copied_files,
+                failures,
+            };
         }
     };
     if let Err(error) = fs::create_dir_all(dest_dir) {
-        failures.push(format!("creating {}: {error}", dest_dir.display()));
+        failures.push(format!(
+            "creating {}: {:?}",
+            dest_dir.display(),
+            error.kind()
+        ));
     }
     for entry in entries {
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {
                 failures.push(format!(
-                    "reading entry under {}: {error}",
-                    src_dir.display()
+                    "reading entry under {}: {:?}",
+                    src_dir.display(),
+                    error.kind()
                 ));
                 continue;
             }
@@ -1267,6 +1462,7 @@ fn copy_e2e_diagnostics_with_ops(
                     );
                 }
                 copied += 1;
+                copied_files.push(name.to_owned());
             }
             Err(error) => record_e2e_artifact_failure(
                 name,
@@ -1281,7 +1477,12 @@ fn copy_e2e_diagnostics_with_ops(
             ),
         }
     }
-    DiagnosticsCopy { copied, failures }
+    DiagnosticsCopy {
+        cleanup_ran: true,
+        copied,
+        copied_files,
+        failures,
+    }
 }
 
 /// Best-effort diagnostics lift with one aggregate warning per attempt.
@@ -1694,7 +1895,8 @@ fn build_installable(step_name: &str, check: &str, installable: &str) -> StepRes
         }
     };
     let outcome = process.wait();
-    let step = finish_build_with(
+    let mut capture_recovery = CaptureRecoverySummary::default();
+    let mut step = finish_build_with(
         BuildCompletion {
             step_name,
             installable,
@@ -1704,11 +1906,12 @@ fn build_installable(step_name: &str, check: &str, installable: &str) -> StepRes
             outcome,
         },
         || write_failure_excerpt(&log_path),
-        || rescue_diagnostics(check),
+        || rescue_diagnostics(check, &mut capture_recovery),
         || before.finish(installable),
         &mut io::stderr(),
     )
     .with_duration(start.elapsed());
+    append_capture_recovery_detail(&mut step, &capture_recovery);
     if let Some(request) = &mut provenance {
         request.completed(step.ok);
     }
@@ -1877,33 +2080,128 @@ fn recover_candidate_diagnostics(identity: &str) -> Vec<String> {
     failures
 }
 
-fn rescue_diagnostics(check: &str) -> bool {
+fn rescue_diagnostics(check: &str, capture_recovery: &mut CaptureRecoverySummary) -> bool {
     let destination = Path::new(".xtask/diagnostics").join(check);
-    let mut failed = fs::create_dir_all(&destination).is_err();
+    rescue_diagnostics_with(
+        check,
+        &destination,
+        Path::new("/tmp"),
+        || eval_out_path(check),
+        capture_recovery,
+    )
+}
+
+/// Keep the production recovery sequence testable without invoking Nix or
+/// inspecting unrelated retained builds in the host's /tmp.
+fn rescue_diagnostics_with(
+    check: &str,
+    destination: &Path,
+    tmp_root: &Path,
+    eval: impl FnOnce() -> Result<String>,
+    capture_recovery: &mut CaptureRecoverySummary,
+) -> bool {
+    let mut failed = fs::create_dir_all(destination).is_err();
+    let capture_name = format!(
+        "capture-{}.tar.gz",
+        check.strip_prefix("e2e-").unwrap_or(check)
+    );
     if check.starts_with("e2e") {
-        match eval_out_path(check) {
+        match eval() {
             Ok(out_path) => {
-                let outcome = copy_e2e_diagnostics_between(Path::new(&out_path), &destination);
+                let (outcome, attempt) = observe_capture_recovery_copy(
+                    "outPath",
+                    Path::new(&out_path),
+                    destination,
+                    &capture_name,
+                    copy_e2e_diagnostics_between,
+                );
                 failed |= !outcome.failures.is_empty();
+                capture_recovery.attempts.push(attempt);
             }
-            Err(_) => failed = true,
+            Err(_) => {
+                capture_recovery
+                    .attempts
+                    .push(CaptureRecoveryAttempt::not_copied(
+                        "outPath",
+                        format!("Nix outPath for {check}"),
+                        CaptureFileState::Error {
+                            kind: "outPath-evaluation".to_owned(),
+                        },
+                        destination,
+                        &capture_name,
+                    ));
+                failed = true;
+            }
         }
+        failed |= rescue_emitted_diagnostics_observed(
+            check,
+            destination,
+            &capture_name,
+            tmp_root,
+            Some(capture_recovery),
+        );
+        capture_recovery.final_destination =
+            Some(capture_file_state(&destination.join(capture_name)));
+    } else {
+        failed |= rescue_emitted_diagnostics(check, destination);
     }
-    failed | rescue_emitted_diagnostics(check, &destination)
+    failed
 }
 
 fn rescue_emitted_diagnostics(check: &str, destination: &Path) -> bool {
+    let capture_name = format!(
+        "capture-{}.tar.gz",
+        check.strip_prefix("e2e-").unwrap_or(check)
+    );
+    rescue_emitted_diagnostics_observed(check, destination, &capture_name, Path::new("/tmp"), None)
+}
+
+fn rescue_emitted_diagnostics_observed(
+    check: &str,
+    destination: &Path,
+    capture_name: &str,
+    tmp_root: &Path,
+    capture_recovery: Option<&mut CaptureRecoverySummary>,
+) -> bool {
     let mut failed = fs::create_dir_all(destination).is_err();
     let prefix = format!("nix-build-jaunder-{check}");
-    let entries = match fs::read_dir("/tmp") {
+    let mut capture_recovery = capture_recovery;
+    let entries = match fs::read_dir(tmp_root) {
         Ok(entries) => entries,
-        Err(_) => return true,
+        Err(error) => {
+            if let Some(summary) = capture_recovery.as_deref_mut() {
+                summary.attempts.push(CaptureRecoveryAttempt::not_copied(
+                    "emit-out-discovery",
+                    tmp_root.display().to_string(),
+                    CaptureFileState::Error {
+                        kind: format!("{:?}", error.kind()),
+                    },
+                    destination,
+                    capture_name,
+                ));
+            }
+            return true;
+        }
     };
+    let mut found_candidate = false;
+    let mut discovery_error = false;
     for entry in entries {
         let entry = match entry {
             Ok(entry) => entry,
-            Err(_) => {
+            Err(error) => {
                 failed = true;
+                discovery_error = true;
+                if let Some(summary) = capture_recovery.as_deref_mut() {
+                    summary.attempts.push(CaptureRecoveryAttempt::not_copied(
+                        "emit-out-discovery",
+                        format!("{} directory entry", tmp_root.display()),
+                        CaptureFileState::Error {
+                            kind: format!("{:?}", error.kind()),
+                        },
+                        destination,
+                        capture_name,
+                    ));
+                }
                 continue;
             }
         };
@@ -1913,12 +2211,70 @@ fn rescue_emitted_diagnostics(check: &str, destination: &Path) -> bool {
         if !name.starts_with(&prefix) {
             continue;
         }
-        let src = entry.path().join("emit-out/diagnostics");
-        if src.is_dir() {
-            failed |= !copy_e2e_diagnostics_between(&src, destination)
-                .failures
-                .is_empty();
+        found_candidate = true;
+        let source = entry.path().join("emit-out/diagnostics");
+        match fs::metadata(&source) {
+            Ok(metadata) if metadata.is_dir() => {
+                let (outcome, attempt) = observe_capture_recovery_copy(
+                    "emit-out/diagnostics",
+                    &source,
+                    destination,
+                    capture_name,
+                    copy_e2e_diagnostics_between,
+                );
+                failed |= !outcome.failures.is_empty();
+                if let Some(summary) = capture_recovery.as_deref_mut() {
+                    summary.attempts.push(attempt);
+                }
+            }
+            Ok(_) => {
+                if let Some(summary) = capture_recovery.as_deref_mut() {
+                    summary.attempts.push(CaptureRecoveryAttempt::not_copied(
+                        "emit-out/diagnostics",
+                        source.display().to_string(),
+                        CaptureFileState::NonFile,
+                        destination,
+                        capture_name,
+                    ));
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                if let Some(summary) = capture_recovery.as_deref_mut() {
+                    summary.attempts.push(CaptureRecoveryAttempt::not_copied(
+                        "emit-out/diagnostics",
+                        source.display().to_string(),
+                        CaptureFileState::Absent,
+                        destination,
+                        capture_name,
+                    ));
+                }
+            }
+            Err(error) => {
+                if let Some(summary) = capture_recovery.as_deref_mut() {
+                    summary.attempts.push(CaptureRecoveryAttempt::not_copied(
+                        "emit-out/diagnostics",
+                        source.display().to_string(),
+                        CaptureFileState::Error {
+                            kind: format!("{:?}", error.kind()),
+                        },
+                        destination,
+                        capture_name,
+                    ));
+                }
+            }
         }
+    }
+    if !found_candidate
+        && !discovery_error
+        && let Some(summary) = capture_recovery
+    {
+        summary.attempts.push(CaptureRecoveryAttempt::not_copied(
+            "emit-out/discovery",
+            format!("{}/{prefix}*/emit-out/diagnostics", tmp_root.display()),
+            CaptureFileState::Absent,
+            destination,
+            capture_name,
+        ));
     }
     failed
 }
@@ -2306,6 +2662,8 @@ mod tests {
 
     #[test]
     fn failed_e2e_out_path_lookup_aggregates_with_build_diagnostics() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut summary = super::CaptureRecoverySummary::default();
         let status = std::process::Command::new("false").status().unwrap();
         let mut stderr = Vec::new();
         let result = failed_build_after_diagnostics_with(
@@ -2318,9 +2676,13 @@ mod tests {
             },
             || Ok(".xtask/diagnostics/e2e/failure-excerpt.log".to_owned()),
             || {
-                let failed_eval: anyhow::Result<String> =
-                    Err(anyhow::anyhow!("injected sensitive nix eval failure"));
-                failed_eval.is_err()
+                super::rescue_diagnostics_with(
+                    "e2e-sqlite-chromium-unsplit",
+                    &temp.path().join("destination"),
+                    temp.path(),
+                    || Err(anyhow::anyhow!("injected sensitive nix eval failure")),
+                    &mut summary,
+                )
             },
             &mut stderr,
         );
@@ -2329,6 +2691,21 @@ mod tests {
         assert_eq!(warning.matches("xtask.nix.build_diagnostics").count(), 1);
         assert_eq!(warning.lines().count(), 1);
         assert!(!warning.contains("sensitive"));
+        let mut result = result;
+        let original = result.detail.clone().unwrap();
+        assert_eq!(
+            original,
+            "nix build .#checks.x86_64-linux.e2e exited with exit status: 1; scoped excerpt (read first): .xtask/diagnostics/e2e/failure-excerpt.log; full build log: .xtask/diagnostics/e2e/build.log"
+        );
+        super::append_capture_recovery_detail(&mut result, &summary);
+        assert!(!result.ok);
+        let detail = result.detail.unwrap();
+        assert!(detail.starts_with(&original));
+        assert!(detail.contains("outPath-evaluation"));
+        assert!(detail.contains("cleanup_ran=false"));
+        assert!(detail.contains("copy=NotAttempted"));
+        assert!(detail.contains("final_destination=Some(Absent)"));
+        assert!(!detail.contains("sensitive"));
     }
 
     use super::{failure_detail, failure_excerpt, write_failure_excerpt};
@@ -3765,6 +4142,238 @@ finally:
         ));
         assert!(warning.contains("PermissionDenied"));
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    fn capture_recovery_failed_step(rescue: impl FnOnce() -> bool) -> StepResult {
+        let step = finish_build_with(
+            super::BuildCompletion {
+                step_name: "nix-e2e",
+                installable: ".#checks.x86_64-linux.e2e-sqlite-chromium-unsplit",
+                log_path: "build.log",
+                diagnostic_failed: false,
+                capture: super::BuildCaptureOutcome::default(),
+                outcome: Ok(Outcome::Exited(1)),
+            },
+            || Ok("failure-excerpt.log".to_owned()),
+            rescue,
+            || panic!("failed builds must not report success"),
+            &mut Vec::new(),
+        );
+        assert!(!step.ok);
+        assert_eq!(
+            step.detail.as_deref(),
+            Some(
+                "nix build .#checks.x86_64-linux.e2e-sqlite-chromium-unsplit exited with exit status: 1; scoped excerpt (read first): failure-excerpt.log; full build log: build.log"
+            )
+        );
+        step
+    }
+
+    #[test]
+    fn capture_recovery_present_out_path_is_final_when_no_emitted_source_exists() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let destination = temp.path().join("destination");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(
+            source.join("capture-sqlite-chromium-unsplit.tar.gz"),
+            b"trace archive",
+        )
+        .unwrap();
+        let mut summary = super::CaptureRecoverySummary::default();
+        let mut step = capture_recovery_failed_step(|| {
+            super::rescue_diagnostics_with(
+                "e2e-sqlite-chromium-unsplit",
+                &destination,
+                temp.path(),
+                || Ok(source.display().to_string()),
+                &mut summary,
+            )
+        });
+        assert_eq!(
+            summary.final_destination,
+            Some(super::CaptureFileState::File { bytes: 13 })
+        );
+        super::append_capture_recovery_detail(&mut step, &summary);
+        assert!(!step.ok);
+        let detail = step.detail.unwrap();
+        assert!(detail.contains("copy=Copied cleanup_ran=true"));
+        assert!(detail.contains("copy=NotAttempted cleanup_ran=false"));
+        assert!(detail.contains("final_destination=Some(File { bytes: 13 })"));
+    }
+
+    #[test]
+    fn capture_recovery_read_and_discovery_errors_reach_failed_detail() {
+        for discovery_error in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let source = temp.path().join("not-a-directory");
+            fs::write(&source, b"not a directory").unwrap();
+            let destination = temp.path().join("destination");
+            let tmp_root = if discovery_error {
+                &source
+            } else {
+                temp.path()
+            };
+            let mut summary = super::CaptureRecoverySummary::default();
+            let mut step = capture_recovery_failed_step(|| {
+                super::rescue_diagnostics_with(
+                    "e2e-sqlite-chromium-unsplit",
+                    &destination,
+                    tmp_root,
+                    || Ok(source.display().to_string()),
+                    &mut summary,
+                )
+            });
+            let original = step.detail.clone().unwrap();
+            super::append_capture_recovery_detail(&mut step, &summary);
+            assert!(!step.ok);
+            let detail = step.detail.unwrap();
+            assert!(detail.starts_with(&original));
+            assert!(detail.contains("source_state=Error"));
+            assert!(detail.contains("NotADirectory"));
+            assert!(detail.contains("reading "));
+            assert!(detail.contains("cleanup_ran=true"));
+            assert!(detail.contains("final_destination=Some(Absent)"));
+            if discovery_error {
+                assert!(detail.contains("emit-out-discovery"));
+                assert!(detail.contains("cleanup_ran=false"));
+            }
+        }
+    }
+
+    #[test]
+    fn capture_recovery_metadata_distinguishes_missing_from_error() {
+        let absent =
+            super::capture_file_state_from_metadata(Err(io::Error::from(io::ErrorKind::NotFound)));
+        assert_eq!(absent, super::CaptureFileState::Absent);
+
+        let unreadable = super::capture_file_state_from_metadata(Err(io::Error::from(
+            io::ErrorKind::PermissionDenied,
+        )));
+        assert_eq!(
+            unreadable,
+            super::CaptureFileState::Error {
+                kind: "PermissionDenied".to_owned(),
+            }
+        );
+
+        let present = super::capture_file_state_from_metadata(Ok((true, 17)));
+        assert_eq!(present, super::CaptureFileState::File { bytes: 17 });
+    }
+
+    #[test]
+    fn capture_recovery_attempts_record_each_source_and_final_destination() {
+        let temp = tempfile::tempdir().unwrap();
+        let out_path = temp.path().join("nix-out");
+        let tmp_root = temp.path().join("tmp");
+        let emitted = tmp_root
+            .join("nix-build-jaunder-e2e-sqlite-chromium-unsplit-1")
+            .join("emit-out/diagnostics");
+        let emitted_second = tmp_root
+            .join("nix-build-jaunder-e2e-sqlite-chromium-unsplit-2")
+            .join("emit-out/diagnostics");
+        let destination = temp.path().join("diagnostics");
+        std::fs::create_dir_all(&out_path).unwrap();
+        std::fs::create_dir_all(&emitted).unwrap();
+        std::fs::create_dir_all(&emitted_second).unwrap();
+        let capture = "capture-sqlite-chromium-unsplit.tar.gz";
+        std::fs::write(out_path.join(capture), b"trace archive").unwrap();
+
+        let mut summary = super::CaptureRecoverySummary::default();
+        let mut step = capture_recovery_failed_step(|| {
+            super::rescue_diagnostics_with(
+                "e2e-sqlite-chromium-unsplit",
+                &destination,
+                &tmp_root,
+                || Ok(out_path.display().to_string()),
+                &mut summary,
+            )
+        });
+        let first = &summary.attempts[0];
+        assert_eq!(
+            first.source_state,
+            super::CaptureFileState::File { bytes: 13 }
+        );
+        assert_eq!(first.copy, super::CaptureCopyOutcome::Copied);
+        assert_eq!(
+            first.destination_after,
+            super::CaptureFileState::File { bytes: 13 }
+        );
+
+        // Each emit-out source is reconciled separately; the later empty source
+        // clears the previous authoritative archive, so only the final state proves
+        // whether the destination still contains it.
+        assert_eq!(summary.attempts.len(), 3);
+        assert!(summary.attempts.iter().all(|attempt| attempt.cleanup_ran));
+        for source in [&emitted, &emitted_second] {
+            assert!(
+                summary
+                    .attempts
+                    .iter()
+                    .any(|attempt| attempt.source == source.display().to_string())
+            );
+        }
+        let second = summary
+            .attempts
+            .iter()
+            .find(|attempt| attempt.route == "emit-out/diagnostics")
+            .unwrap();
+        assert_eq!(second.source_state, super::CaptureFileState::Absent);
+        assert_eq!(second.copy, super::CaptureCopyOutcome::NotAttempted);
+        assert_eq!(second.destination_after, super::CaptureFileState::Absent);
+
+        assert_eq!(
+            summary.final_destination,
+            Some(super::CaptureFileState::Absent)
+        );
+        let original = step.detail.clone().unwrap();
+        super::append_capture_recovery_detail(&mut step, &summary);
+        assert!(!step.ok);
+        let detail = step.detail.unwrap();
+        assert!(detail.starts_with(&original));
+        assert!(detail.contains("outPath"));
+        assert!(detail.contains("emit-out/diagnostics"));
+        assert!(detail.contains("final_destination=Some(Absent)"));
+    }
+
+    #[test]
+    fn capture_recovery_copy_errors_are_not_reported_as_success() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let destination = temp.path().join("destination");
+        std::fs::create_dir_all(&source).unwrap();
+        let capture = "capture-sqlite-chromium-unsplit.tar.gz";
+        std::fs::write(source.join(capture), b"trace archive").unwrap();
+        let mut summary = super::CaptureRecoverySummary::default();
+        let mut step = capture_recovery_failed_step(|| {
+            let (outcome, attempt) = super::observe_capture_recovery_copy(
+                "outPath",
+                &source,
+                &destination,
+                capture,
+                |src, dest| {
+                    super::copy_e2e_diagnostics_with_ops(
+                        src,
+                        dest,
+                        |path| fs::remove_file(path),
+                        |_, _| Err(io::Error::from(io::ErrorKind::PermissionDenied)),
+                        |_, _| Ok(()),
+                    )
+                },
+            );
+            assert_eq!(attempt.copy, super::CaptureCopyOutcome::Failed);
+            assert!(attempt.cleanup_ran);
+            assert_eq!(attempt.destination_after, super::CaptureFileState::Absent);
+            summary.attempts.push(attempt);
+            !outcome.failures.is_empty()
+        });
+        let original = step.detail.clone().unwrap();
+        super::append_capture_recovery_detail(&mut step, &summary);
+        assert!(!step.ok);
+        let detail = step.detail.unwrap();
+        assert!(detail.starts_with(&original));
+        assert!(detail.contains("copy=Failed"));
+        assert!(detail.contains("PermissionDenied"));
     }
 
     #[test]

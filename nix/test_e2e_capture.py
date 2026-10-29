@@ -51,7 +51,9 @@ class CaptureTransportTest(unittest.TestCase):
         actual_hashes, actual_sizes = self.archive()
         self.assertEqual(actual_hashes, self.hashes)
         self.assertEqual(actual_sizes, self.sizes)
-        self.assertEqual(self.output.stat().st_mode & 0o777, 0o600)
+        # The host must read the published archive even when a failed Nix output
+        # is recovered outside the builder identity; members remain private.
+        self.assertEqual(self.output.stat().st_mode & 0o777, 0o644)
         with tarfile.open(self.output) as archive:
             members = archive.getmembers()
             self.assertFalse(any(".virtfs_metadata" in m.name for m in members))
