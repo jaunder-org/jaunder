@@ -216,8 +216,9 @@ fn extract_zip_fixture(source: &Path, destination: &Path) -> Result<(), BackupCo
         fs::create_dir(destination)?;
     }
     let input = fs::File::open(source)?;
-    let mut archive = zip::ZipArchive::new(input)
-        .map_err(|error| io::Error::other(format!("invalid fixture ZIP: {error}")))?;
+    let mut archive = zip::ZipArchive::new(input).map_err(|error| {
+        io::Error::other(format!("invalid fixture ZIP {}: {error}", source.display()))
+    })?;
     let mut seen = BTreeSet::new();
     for index in 0..archive.len() {
         let mut file = archive

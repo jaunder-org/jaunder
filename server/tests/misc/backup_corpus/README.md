@@ -86,21 +86,24 @@ fixture or changes the format version.
 
 ## Schema-52 format-3 evidence
 
-`format-3-schema-52/` extends the hand-authored schema-51 examples with three
+`format-3-schema-52.zip` extends the hand-authored schema-51 examples with three
 Session rows whose identical labels deliberately carry distinct `browser`,
 `machine`, and `unknown` kinds. Migration 0052 adds that closed text field, not
 a new table or backup format. Its separate provenance manifest pins schema 52.
 The schema-51 fixture and digest remain unchanged; its index entry is now
 historical-schema admission evidence and must be rejected before mutation.
 
-The current-writer oracle explicitly requires schema 52 and the unchanged
-independent table/path inventory, plus exact Session wire members, owner, shared
-label and all three stored kinds. The public reader matrix restores the new
-immutable fixture through directory and archive inputs on both backends and
-checks those kinds via Session storage. Formats 1 and 2 retain their historical
-row-decode coverage. The separate Session codec test retains absent-kind to
-Unknown decoding; exact-schema admission still precedes row loading. No fixture
-is upgraded in place.
+The directory fixture was converted to the ZIP container
+`format-3-schema-52.zip` without changing its normalized payload digest or any
+of its 51 file paths/bytes. Together with the six earlier ZIP fixtures, this
+leaves seven indexed fixtures. The current-writer oracle explicitly requires
+schema 52 and the unchanged independent table/path inventory, plus exact Session
+wire members, owner, shared label and all three stored kinds. The public reader
+matrix restores the new immutable fixture through directory and archive inputs
+on both backends and checks those kinds via Session storage. Formats 1 and 2
+retain their historical row-decode coverage. The separate Session codec test
+retains absent-kind to Unknown decoding; exact-schema admission still precedes
+row loading. No fixture is upgraded in place.
 
 ## Retirement
 
