@@ -51,10 +51,26 @@ async fn retire_session_cookie(
 ) -> axum::response::Response {
     let retirement = web::auth::SessionCookieRetirement::default();
     request.extensions_mut().insert(retirement.clone());
+    let renewal = web::auth::SessionCookieRenewal::default();
+    request.extensions_mut().insert(renewal.clone());
     let mut response = next.run(request).await;
 
     if retirement.requested() {
         let Ok(value) = host::auth::clear_session_cookie_header(secure).parse() else {
+            unreachable!("generated session cookie header must be valid");
+        };
+        response
+            .headers_mut()
+            .append(axum::http::header::SET_COOKIE, value);
+    } else if !response
+        .headers()
+        .get_all(axum::http::header::SET_COOKIE)
+        .iter()
+        .any(|value| value.as_bytes().starts_with(b"session="))
+        && let Some(cookie) = renewal.header(secure)
+    {
+        // Handler-owned establishment and clearing win over ambient renewal.
+        let Ok(value) = cookie.parse() else {
             unreachable!("generated session cookie header must be valid");
         };
         response

@@ -27,14 +27,18 @@ pub(crate) fn auth_parts(user_id: UserId, username: &str) -> Parts {
     // `require_auth` only ever calls `authenticate`, which must resolve to the
     // fixed user so `auth::User` extraction succeeds.
     mock.expect_authenticate()
-        .returning(move |_transaction, _raw_token| {
-            Ok(SessionRecord {
-                token_hash: common::token::TokenHash::from_digest("hash"),
-                user_id,
-                username: username.clone(),
-                label: "test".parse().expect("valid session label"),
-                created_at: UtcInstant::now(),
-                last_used_at: UtcInstant::now(),
+        .returning(move |_transaction, _raw_token, _now| {
+            Ok(storage::SessionAuthentication {
+                record: SessionRecord {
+                    token_hash: common::token::TokenHash::from_digest("hash"),
+                    user_id,
+                    username: username.clone(),
+                    label: "test".parse().expect("valid session label"),
+                    kind: storage::SessionKind::Unknown,
+                    created_at: UtcInstant::now(),
+                    last_used_at: UtcInstant::now(),
+                },
+                touched: false,
             })
         });
     let sessions: Arc<dyn SessionStorage> = Arc::new(mock);

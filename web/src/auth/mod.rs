@@ -52,9 +52,12 @@ pub use session::{
 // whole `auth` module in `lib.rs`: its API stubs and wasm UI also compile in the
 // client build.
 #[cfg(feature = "server")]
-pub use server::{
-    CookieSettings, Rejection, SessionCookieRetirement, User, is_operator_soft, require_auth,
-    require_operator,
+pub(crate) use server::{
+    BrowserSessionCookie, optional_auth, prepare_browser_session_cookie, require_cookie_auth,
+    set_session_cookie,
 };
 #[cfg(feature = "server")]
-pub(crate) use server::{optional_auth, require_cookie_auth, set_session_cookie};
+pub use server::{
+    CookieSettings, Rejection, SessionCookieRenewal, SessionCookieRetirement, User,
+    is_operator_soft, require_auth, require_operator,
+};

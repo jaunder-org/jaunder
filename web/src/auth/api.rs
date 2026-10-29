@@ -30,7 +30,7 @@ fn login_write_scope_error(error: WriteScopeError<InternalError>) -> InternalErr
 
 #[cfg(feature = "server")]
 fn finalize_login(
-    outcome: MutationOutcome<(common::token::RawToken, super::SessionUser)>,
+    outcome: MutationOutcome<(super::server::BrowserSessionCookie, super::SessionUser)>,
 ) -> MutationOutcome<super::SessionUser> {
     match outcome {
         MutationOutcome::Confirmed((raw_token, session)) => {
@@ -38,8 +38,7 @@ fn finalize_login(
             server::set_session_cookie(&raw_token);
             MutationOutcome::Confirmed(session)
         }
-        MutationOutcome::CommitIndeterminate((raw_token, session)) => {
-            server::set_session_cookie(&raw_token);
+        MutationOutcome::CommitIndeterminate((_, session)) => {
             MutationOutcome::CommitIndeterminate(session)
         }
     }
@@ -108,12 +107,23 @@ pub async fn login(
                     .await
                     .map_err(InternalError::from)?;
                 let raw_token = sessions
-                    .create_session(transaction, record.user_id, &session_label)
+                    .create_session(
+                        transaction,
+                        record.user_id,
+                        &session_label,
+                        storage::SessionKind::Browser,
+                    )
                     .instrument(tracing::info_span!("web.auth.login.create_session"))
                     .await
                     .map_err(InternalError::storage)?;
-                Ok((
+                let cookie = server::prepare_browser_session_cookie(
+                    sessions.as_ref(),
+                    transaction,
                     raw_token,
+                )
+                .await?;
+                Ok((
+                    cookie,
                     super::SessionUser {
                         username: record.username,
                         is_operator: record.is_operator.is_operator(),
@@ -203,10 +213,15 @@ mod tests {
     }
 
     #[test]
-    fn finalize_login_preserves_indeterminate_session_and_sets_cookie() {
+    fn finalize_login_preserves_indeterminate_session_without_setting_cookie() {
         Owner::new().with(|| {
+            let response = leptos_axum::ResponseOptions::default();
+            leptos::prelude::provide_context(response.clone());
             let outcome = finalize_login(MutationOutcome::CommitIndeterminate((
-                parse_raw_token("token"),
+                crate::auth::BrowserSessionCookie {
+                    token: parse_raw_token("token"),
+                    last_used_at: common::time::UtcInstant::now(),
+                },
                 SessionUser {
                     username: parse_username("alice"),
                     is_operator: false,
@@ -218,6 +233,15 @@ mod tests {
                 MutationOutcome::CommitIndeterminate(session)
                     if session.username == parse_username("alice") && !session.is_operator
             ));
+            assert!(
+                response
+                    .0
+                    .read()
+                    .unwrap()
+                    .headers
+                    .get(axum::http::header::SET_COOKIE)
+                    .is_none()
+            );
         });
     }
 }

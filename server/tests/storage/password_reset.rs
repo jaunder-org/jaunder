@@ -77,18 +77,23 @@ async fn confirm_password_reset_changes_credentials(#[case] backend: Backend) {
 
     let sessions = Arc::clone(&env.sessions());
     let label = common::test_support::parse_session_label("Existing device");
-    let outcome = env
-        .write_scope()
-        .run(|transaction| {
+    storage::test_support::run_confirmed(
+        &env.write_scope(),
+        "session fixture setup",
+        |transaction| {
             Box::pin(async move {
                 sessions
-                    .create_session(transaction, user.user_id, &label)
+                    .create_session(
+                        transaction,
+                        user.user_id,
+                        &label,
+                        storage::SessionKind::Unknown,
+                    )
                     .await
             })
-        })
-        .await
-        .expect("session fixture setup should succeed");
-    storage::test_support::confirmed_for(outcome, "session fixture setup");
+        },
+    )
+    .await;
     assert_eq!(
         env.sessions()
             .list_sessions(user.user_id)
@@ -273,17 +278,18 @@ async fn create_password_reset(
     user_id: UserId,
     expires_at: UtcInstant,
 ) -> RawToken {
-    let outcome = write_scope
-        .run(|transaction| {
+    storage::test_support::run_confirmed(
+        &write_scope,
+        "password-reset fixture setup",
+        |transaction| {
             Box::pin(async move {
                 password_resets
                     .create_password_reset(transaction, user_id, expires_at)
                     .await
             })
-        })
-        .await
-        .expect("password-reset fixture setup should succeed");
-    storage::test_support::confirmed_for(outcome, "password-reset fixture setup")
+        },
+    )
+    .await
 }
 
 async fn use_password_reset(

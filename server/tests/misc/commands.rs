@@ -895,6 +895,7 @@ async fn app_password_create_records_the_default_label(#[case] backend: Backend)
         .unwrap();
     assert_eq!(sessions.len(), 1, "one app password was minted");
     assert_eq!(sessions[0].label, "app-password");
+    assert_eq!(sessions[0].kind, storage::SessionKind::Machine);
 }
 
 #[apply(backends)]
@@ -1938,6 +1939,75 @@ async fn cmd_restore_empty_target_rejects_invalid_backup(#[case] backend: Backen
         .expect_err("restore fails");
 
     assert!(err.to_string().contains("missing manifest"));
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_session_kind_compatibility_is_closed(#[case] backend: Backend) {
+    let source = InitializedCommandEnv::new(backend).await;
+    let username: Username = "kindbackup".parse().unwrap();
+    execute_user_create(
+        &source.args,
+        &username,
+        Some("password123".parse().unwrap()),
+        None,
+        false,
+    )
+    .await
+    .unwrap();
+    execute_app_password_create(&source.args, &username, &parse_session_label("Browser"))
+        .await
+        .unwrap();
+    let backup_path = source.base.path().join("backup");
+    cmd_backup(
+        &source.args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .unwrap();
+    let path = backup_path.join("db/sessions.ndjson");
+    let mut row: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(row["kind"], "machine");
+    row["kind"] = serde_json::json!("invalid");
+    std::fs::write(&path, format!("{row}\n")).unwrap();
+    let target = InitializedCommandEnv::new(backend).await;
+    let error = cmd_restore(&target.args, &backup_path)
+        .await
+        .expect_err("unknown kind is not grandfathered");
+    assert!(error.to_string().contains("invalid session kind"));
+    let factory =
+        open_existing_database(&target.args.db, &storage::StorageRuntimeConfig::default())
+            .await
+            .unwrap();
+    assert!(
+        factory
+            .users()
+            .get_user_by_username(&username)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    row.as_object_mut().unwrap().remove("kind");
+    std::fs::write(&path, format!("{row}\n")).unwrap();
+    cmd_restore(&target.args, &backup_path)
+        .await
+        .expect("absent historical kind restores");
+    let user = factory
+        .users()
+        .get_user_by_username(&username)
+        .await
+        .unwrap()
+        .unwrap();
+    let sessions = factory
+        .sessions()
+        .list_sessions(user.user_id)
+        .await
+        .unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].kind, storage::SessionKind::Unknown);
+    assert_eq!(sessions[0].label, "Browser");
 }
 
 // M6.6.1: backup/restore round-trips database records and media.

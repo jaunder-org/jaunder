@@ -137,6 +137,28 @@ pub async fn set_site_config(
     Ok(())
 }
 
+/// Runs a successful fixture write and returns its confirmed value.
+///
+/// Keep result/outcome assertions on `WriteScope::run` directly instead.
+///
+/// # Panics
+///
+/// Panics with `action` and the error if the write fails, or if commit
+/// acknowledgement is indeterminate.
+pub async fn run_confirmed<T, E: std::fmt::Debug>(
+    write_scope: &WriteScope,
+    action: &str,
+    callback: impl for<'scope> FnOnce(
+        &'scope mut crate::WriteTransaction,
+    ) -> futures_util::future::BoxFuture<'scope, Result<T, E>>,
+) -> T {
+    let outcome = write_scope
+        .run(callback)
+        .await
+        .unwrap_or_else(|error| panic!("{action} failed: {error:?}"));
+    confirmed_for(outcome, action)
+}
+
 /// Extracts a mutation value, requiring that commit acknowledgement is confirmed.
 ///
 /// # Panics
@@ -1488,8 +1510,13 @@ mod tests {
     use common::backup::BackupConfig;
     use common::media::{MaxFileSize, UserQuota};
     use common::registration::RegistrationPolicy;
+    use futures_util::FutureExt;
     use rstest::*;
     use rstest_reuse::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     #[derive(Copy, Clone)]
     enum FixtureOverride {
@@ -1695,6 +1722,76 @@ mod tests {
     async fn postgres_accessor_rejects_a_sqlite_pool() {
         let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
         let _ = CloseablePool::Sqlite(pool).postgres();
+    }
+
+    fn counted_fixture_callback(
+        calls: Arc<AtomicUsize>,
+    ) -> impl for<'scope> FnOnce(
+        &'scope mut crate::WriteTransaction,
+    )
+        -> futures_util::future::BoxFuture<'scope, Result<i32, sqlx::Error>> {
+        move |_| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(42) })
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn run_confirmed_returns_fixture_value(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let value = super::run_confirmed(
+            &env.write_scope(),
+            "fixture value",
+            counted_fixture_callback(Arc::clone(&calls)),
+        )
+        .await;
+        assert_eq!(value, 42);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    // guard:no-backend — mock scope exercises fixture operation-error diagnostics
+    #[tokio::test]
+    #[should_panic(expected = "rejected fixture failed: Operation(\"injected rejection\")")]
+    async fn run_confirmed_rejects_operation_error() {
+        super::run_confirmed(&super::mock_write_scope(), "rejected fixture", |_| {
+            Box::pin(async { Err::<(), _>("injected rejection") })
+        })
+        .await;
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn run_confirmed_rejects_begin_error(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        env.base.pool().close().await;
+        let scope = env.write_scope();
+        let result = std::panic::AssertUnwindSafe(super::run_confirmed(
+            &scope,
+            "closed fixture",
+            counted_fixture_callback(Arc::clone(&calls)),
+        ))
+        .catch_unwind()
+        .await;
+        let panic = result.expect_err("a closed pool must reject the fixture write");
+        assert_eq!(
+            *panic.downcast::<String>().unwrap(),
+            "closed fixture failed: Begin(PoolClosed)"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    // guard:no-backend — injected acknowledgement loss exercises fixture confirmation
+    #[tokio::test]
+    #[should_panic(expected = "uncertain fixture requires a confirmed commit")]
+    async fn run_confirmed_rejects_indeterminate_commit() {
+        let scope = super::mock_write_scope_with_commit_acknowledgement_loss();
+        super::run_confirmed(&scope, "uncertain fixture", |_| {
+            Box::pin(async { Ok::<_, sqlx::Error>(42) })
+        })
+        .await;
     }
 
     #[test]

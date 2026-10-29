@@ -286,7 +286,7 @@ async fn content_license_commit_acknowledgement_loss_reaches_the_wire(#[case] ba
     )
     .await;
     let write_scope = write_scope_with_commit_acknowledgement_loss(&env.write_scope());
-    let app = make_app!(&env, &env.base; override_write_scope = write_scope);
+    let app = make_app!(&env, &env.base; override_write_scope = write_scope, auth_write_scope = env.write_scope());
 
     let (status, body) = post_form(
         app,
@@ -358,33 +358,43 @@ async fn list_sessions_returns_only_authenticated_users_sessions(#[case] backend
 
     let sessions = Arc::clone(&env.sessions());
     let user1_label = parse_session_label("carol-session");
-    let outcome = env
-        .write_scope()
-        .run(|transaction| {
+    let token1 = storage::test_support::run_confirmed(
+        &env.write_scope(),
+        "session fixture setup",
+        |transaction| {
             Box::pin(async move {
                 sessions
-                    .create_session(transaction, user1_id, &user1_label)
+                    .create_session(
+                        transaction,
+                        user1_id,
+                        &user1_label,
+                        storage::SessionKind::Unknown,
+                    )
                     .await
             })
-        })
-        .await
-        .unwrap();
-    let token1 = storage::test_support::confirmed_for(outcome, "session fixture setup");
+        },
+    )
+    .await;
     // Create a session for user2 — should NOT appear in user1's list.
     let sessions = Arc::clone(&env.sessions());
     let user2_label = parse_session_label("dave-session");
-    let outcome = env
-        .write_scope()
-        .run(|transaction| {
+    storage::test_support::run_confirmed(
+        &env.write_scope(),
+        "other user's Session fixture",
+        |transaction| {
             Box::pin(async move {
                 sessions
-                    .create_session(transaction, user2_id, &user2_label)
+                    .create_session(
+                        transaction,
+                        user2_id,
+                        &user2_label,
+                        storage::SessionKind::Unknown,
+                    )
                     .await
             })
-        })
-        .await
-        .unwrap();
-    assert!(matches!(outcome, MutationOutcome::Confirmed(_)));
+        },
+    )
+    .await;
 
     let cookie = session_cookie(&token1);
     let (status, body) = post_form(
@@ -437,8 +447,13 @@ async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backen
         .run(move |transaction| {
             Box::pin(async move {
                 sessions
-                    .authenticate(transaction, &token_b_for_authentication)
+                    .authenticate(
+                        transaction,
+                        &token_b_for_authentication,
+                        storage::SessionClock::default(),
+                    )
                     .await
+                    .map(|auth| auth.record)
             })
         })
         .await
@@ -474,7 +489,12 @@ async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backen
     let result = env
         .write_scope()
         .run(|transaction| {
-            Box::pin(async move { sessions.authenticate(transaction, &token_b).await })
+            Box::pin(async move {
+                sessions
+                    .authenticate(transaction, &token_b, storage::SessionClock::default())
+                    .await
+                    .map(|auth| auth.record)
+            })
         })
         .await;
     assert!(result.is_err(), "revoked session should not authenticate");
@@ -982,7 +1002,12 @@ async fn revoke_session_other_user_hash_returns_error(#[case] backend: Backend) 
     let outcome = env
         .write_scope()
         .run(|transaction| {
-            Box::pin(async move { sessions.authenticate(transaction, &token).await })
+            Box::pin(async move {
+                sessions
+                    .authenticate(transaction, &token, storage::SessionClock::default())
+                    .await
+                    .map(|auth| auth.record)
+            })
         })
         .await
         .unwrap();

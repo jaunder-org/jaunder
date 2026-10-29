@@ -458,7 +458,7 @@ async fn service_document_authentication_storage_error_keeps_500_without_basic_c
     sessions
         .expect_authenticate()
         .times(1)
-        .return_once(|_, _| Err(storage::SessionAuthError::Internal(sqlx::Error::PoolClosed)));
+        .return_once(|_, _, _| Err(storage::SessionAuthError::Internal(sqlx::Error::PoolClosed)));
     let app = make_app!(&env, base; override_sessions = Arc::new(sessions));
 
     let response = app

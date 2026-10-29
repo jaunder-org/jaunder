@@ -512,8 +512,11 @@ pub async fn finish_authentication(
                     .get_user(user_id)
                     .await?
                     .ok_or_else(|| InternalError::validation("authentication failed"))?;
+                let cookie =
+                    auth::prepare_browser_session_cookie(sessions.as_ref(), transaction, token)
+                        .await?;
                 Ok((
-                    token,
+                    cookie,
                     auth::SessionUser {
                         username: user.username,
                         is_operator: user.is_operator.is_operator(),
@@ -530,8 +533,7 @@ pub async fn finish_authentication(
             auth::set_session_cookie(&token);
             Ok(MutationOutcome::Confirmed(user))
         }
-        MutationOutcome::CommitIndeterminate((token, user)) => {
-            auth::set_session_cookie(&token);
+        MutationOutcome::CommitIndeterminate((_, user)) => {
             Ok(MutationOutcome::CommitIndeterminate(user))
         }
     }
