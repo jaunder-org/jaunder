@@ -57,6 +57,11 @@ impl<E: std::error::Error + 'static> std::error::Error for WriteScopeError<E> {
 #[derive(Clone)]
 pub struct WriteScope {
     backend: ScopeBackend,
+    #[cfg(test)]
+    sqlite_begin_contention: Option<(
+        std::sync::Arc<tokio::sync::Notify>,
+        std::sync::Arc<tokio::sync::Notify>,
+    )>,
     #[cfg(any(test, feature = "test-utils"))]
     lose_commit_acknowledgement_after_commit: bool,
 }
@@ -130,6 +135,8 @@ impl WriteScope {
     pub(crate) fn sqlite(pool: SqlitePool) -> Self {
         Self {
             backend: ScopeBackend::Sqlite(pool),
+            #[cfg(test)]
+            sqlite_begin_contention: None,
             #[cfg(any(test, feature = "test-utils"))]
             lose_commit_acknowledgement_after_commit: false,
         }
@@ -138,6 +145,8 @@ impl WriteScope {
     pub(crate) fn postgres(pool: PgPool) -> Self {
         Self {
             backend: ScopeBackend::Postgres(pool),
+            #[cfg(test)]
+            sqlite_begin_contention: None,
             #[cfg(any(test, feature = "test-utils"))]
             lose_commit_acknowledgement_after_commit: false,
         }
@@ -148,6 +157,8 @@ impl WriteScope {
     pub(crate) fn with_commit_acknowledgement_loss_after_commit_for_test(&self) -> Self {
         Self {
             backend: self.backend.clone(),
+            #[cfg(test)]
+            sqlite_begin_contention: None,
             lose_commit_acknowledgement_after_commit: true,
         }
     }
@@ -156,9 +167,23 @@ impl WriteScope {
     pub(crate) fn mock() -> Self {
         Self {
             backend: ScopeBackend::Mock,
+            #[cfg(test)]
+            sqlite_begin_contention: None,
             #[cfg(any(test, feature = "test-utils"))]
             lose_commit_acknowledgement_after_commit: false,
         }
+    }
+
+    /// Pauses this same operation after a real `SQLite` BEGIN reports `SQLITE_BUSY`.
+    /// Only tests replace the opaque busy-handler wait with an explicit retry.
+    #[cfg(test)]
+    pub(crate) fn observing_sqlite_begin_contention(
+        mut self,
+        observed: std::sync::Arc<tokio::sync::Notify>,
+        retry: std::sync::Arc<tokio::sync::Notify>,
+    ) -> Self {
+        self.sqlite_begin_contention = Some((observed, retry));
+        self
     }
 
     /// Executes one coherent mutation and makes its commit boundary explicit.
@@ -190,6 +215,32 @@ impl WriteScope {
         );
         let span_for_future = span.clone();
         async move {
+            #[cfg(test)]
+            if let (ScopeBackend::Sqlite(pool), Some((observed, retry))) =
+                (&self.backend, &self.sqlite_begin_contention)
+            {
+                use sqlx::Connection;
+                let mut connection = pool.acquire().await.map_err(WriteScopeError::Begin)?;
+                sqlx::query("PRAGMA busy_timeout = 0")
+                    .execute(&mut *connection)
+                    .await
+                    .map_err(WriteScopeError::Begin)?;
+                match connection.begin_with("BEGIN IMMEDIATE").await {
+                    Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("5") => {}
+                    _ => {
+                        return Err(WriteScopeError::Begin(sqlx::Error::Protocol(
+                            "contender must observe SQLITE_BUSY at BEGIN IMMEDIATE".into(),
+                        )));
+                    }
+                }
+                sqlx::query("PRAGMA busy_timeout = 5000")
+                    .execute(&mut *connection)
+                    .await
+                    .map_err(WriteScopeError::Begin)?;
+                drop(connection);
+                observed.notify_one();
+                retry.notified().await;
+            }
             let transaction = match &self.backend {
                 ScopeBackend::Sqlite(pool) => HeldTransaction::Sqlite(
                     pool.begin_with("BEGIN IMMEDIATE")

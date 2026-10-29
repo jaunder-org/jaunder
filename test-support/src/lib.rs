@@ -2023,7 +2023,12 @@ mod seed_session_tests {
         let outcome = write_scope
             .run(move |transaction| {
                 let sessions = Arc::clone(&sessions);
-                Box::pin(async move { sessions.authenticate(transaction, &token).await })
+                Box::pin(async move {
+                    sessions
+                        .authenticate(transaction, &token, storage::SessionClock::default())
+                        .await
+                        .map(|auth| auth.record)
+                })
             })
             .await
             .map_err(|error| anyhow::anyhow!("fixture session authentication failed: {error}"))?;

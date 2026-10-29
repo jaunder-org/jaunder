@@ -200,15 +200,33 @@ where
             .get::<WriteScope>()
             .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
+        let clock = parts
+            .extensions
+            .get::<storage::SessionClock>()
+            .cloned()
+            .unwrap_or_default();
+        let authentication_token = token.clone();
         match write_scope
             .run(move |transaction| {
-                Box::pin(async move { sessions.authenticate(transaction, &token).await })
+                Box::pin(async move {
+                    sessions
+                        .authenticate(transaction, &authentication_token, clock)
+                        .await
+                })
             })
             .await
         {
-            Ok(outcome) => Ok(Self {
-                user_id: outcome.value().user_id,
-            }),
+            Ok(common::MutationOutcome::Confirmed(authentication)) => {
+                if let Some(renewal) = parts.extensions.get::<web::auth::SessionCookieRenewal>() {
+                    renewal.committed_activity(&authentication, token);
+                }
+                Ok(Self {
+                    user_id: authentication.record.user_id,
+                })
+            }
+            Ok(common::MutationOutcome::CommitIndeterminate(_)) => {
+                Err(StatusCode::INTERNAL_SERVER_ERROR)
+            }
             Err(WriteScopeError::Operation(
                 SessionAuthError::InvalidToken | SessionAuthError::SessionNotFound,
             )) => Err(StatusCode::UNAUTHORIZED),

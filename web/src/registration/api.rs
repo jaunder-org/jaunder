@@ -15,10 +15,10 @@ use common::{MutationOutcome, registration::RegistrationPolicy, username::Userna
 #[cfg(feature = "server")]
 use {
     crate::auth,
+    crate::auth::BrowserSessionCookie,
     crate::error::{InternalError, InternalResult, from_write_scope_error},
     common::ids::UserId,
     common::session_label::SessionLabel,
-    common::token::RawToken,
     host::invite::InviteCode,
     host::metrics::{self, InviteEvent, RegistrationResult, RegistrationSource},
     host::password,
@@ -35,13 +35,13 @@ use {
 #[cfg(feature = "server")]
 fn classify_registration_scope_result(
     scope_result: Result<
-        MutationOutcome<(RawToken, Option<UserId>)>,
+        MutationOutcome<(BrowserSessionCookie, Option<UserId>)>,
         WriteScopeError<InternalError>,
     >,
     span: &tracing::Span,
     metric_policy: metrics::RegistrationPolicy,
     is_invite_registration: bool,
-) -> InternalResult<MutationOutcome<RawToken>> {
+) -> InternalResult<MutationOutcome<BrowserSessionCookie>> {
     match scope_result {
         Ok(MutationOutcome::Confirmed((token, invite_consumed))) => {
             metrics::registration(
@@ -78,17 +78,14 @@ fn classify_registration_scope_result(
 }
 
 #[cfg(feature = "server")]
-fn finalize_registration(outcome: MutationOutcome<RawToken>) -> MutationOutcome<()> {
+fn finalize_registration(outcome: MutationOutcome<BrowserSessionCookie>) -> MutationOutcome<()> {
     match outcome {
         MutationOutcome::Confirmed(raw_token) => {
             auth::set_session_cookie(&raw_token);
             leptos_axum::redirect("/app");
             MutationOutcome::Confirmed(())
         }
-        MutationOutcome::CommitIndeterminate(raw_token) => {
-            auth::set_session_cookie(&raw_token);
-            MutationOutcome::CommitIndeterminate(())
-        }
+        MutationOutcome::CommitIndeterminate(_) => MutationOutcome::CommitIndeterminate(()),
     }
 }
 
@@ -214,7 +211,7 @@ pub async fn register(
                     };
                 let (user_id, invite_consumed) = user_id_result?;
                 let signup_label = SessionLabel::from_lossy("Sign-up session");
-                sessions
+                let token = sessions
                     .create_session(
                         transaction,
                         user_id,
@@ -225,8 +222,11 @@ pub async fn register(
                         "web.registration.register.create_session"
                     ))
                     .await
-                    .map(|token| (token, invite_consumed))
-                    .map_err(InternalError::storage)
+                    .map_err(InternalError::storage)?;
+                let cookie =
+                    auth::prepare_browser_session_cookie(sessions.as_ref(), transaction, token)
+                        .await?;
+                Ok((cookie, invite_consumed))
             })
         })
         .await;
@@ -248,7 +248,10 @@ mod tests {
 
     #[test]
     fn scope_result_preserves_indeterminate_token_without_confirmed_metrics() {
-        let token = parse_raw_token("token");
+        let token = crate::auth::BrowserSessionCookie {
+            token: parse_raw_token("token"),
+            last_used_at: common::time::UtcInstant::now(),
+        };
         let outcome = classify_registration_scope_result(
             Ok(MutationOutcome::CommitIndeterminate((token.clone(), None))),
             &Span::none(),
@@ -260,18 +263,32 @@ mod tests {
         assert!(matches!(
             outcome,
             MutationOutcome::CommitIndeterminate(returned)
-                if returned.as_ref() == token.as_ref()
+                if returned.token.as_ref() == token.token.as_ref()
         ));
     }
 
     #[test]
-    fn finalize_registration_preserves_indeterminate_envelope_and_sets_cookie() {
+    fn finalize_registration_preserves_indeterminate_envelope_without_setting_cookie() {
         Owner::new().with(|| {
+            let response = leptos_axum::ResponseOptions::default();
+            leptos::prelude::provide_context(response.clone());
             let outcome = finalize_registration(MutationOutcome::CommitIndeterminate(
-                parse_raw_token("token"),
+                crate::auth::BrowserSessionCookie {
+                    token: parse_raw_token("token"),
+                    last_used_at: common::time::UtcInstant::now(),
+                },
             ));
 
             assert!(matches!(outcome, MutationOutcome::CommitIndeterminate(())));
+            assert!(
+                response
+                    .0
+                    .read()
+                    .unwrap()
+                    .headers
+                    .get(axum::http::header::SET_COOKIE)
+                    .is_none()
+            );
         });
     }
 }

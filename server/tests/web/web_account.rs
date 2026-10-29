@@ -286,7 +286,7 @@ async fn content_license_commit_acknowledgement_loss_reaches_the_wire(#[case] ba
     )
     .await;
     let write_scope = write_scope_with_commit_acknowledgement_loss(&env.write_scope());
-    let app = make_app!(&env, &env.base; override_write_scope = write_scope);
+    let app = make_app!(&env, &env.base; override_write_scope = write_scope, auth_write_scope = env.write_scope());
 
     let (status, body) = post_form(
         app,
@@ -447,8 +447,13 @@ async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backen
         .run(move |transaction| {
             Box::pin(async move {
                 sessions
-                    .authenticate(transaction, &token_b_for_authentication)
+                    .authenticate(
+                        transaction,
+                        &token_b_for_authentication,
+                        storage::SessionClock::default(),
+                    )
                     .await
+                    .map(|auth| auth.record)
             })
         })
         .await
@@ -484,7 +489,12 @@ async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backen
     let result = env
         .write_scope()
         .run(|transaction| {
-            Box::pin(async move { sessions.authenticate(transaction, &token_b).await })
+            Box::pin(async move {
+                sessions
+                    .authenticate(transaction, &token_b, storage::SessionClock::default())
+                    .await
+                    .map(|auth| auth.record)
+            })
         })
         .await;
     assert!(result.is_err(), "revoked session should not authenticate");
@@ -992,7 +1002,12 @@ async fn revoke_session_other_user_hash_returns_error(#[case] backend: Backend) 
     let outcome = env
         .write_scope()
         .run(|transaction| {
-            Box::pin(async move { sessions.authenticate(transaction, &token).await })
+            Box::pin(async move {
+                sessions
+                    .authenticate(transaction, &token, storage::SessionClock::default())
+                    .await
+                    .map(|auth| auth.record)
+            })
         })
         .await
         .unwrap();

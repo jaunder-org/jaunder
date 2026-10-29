@@ -185,6 +185,26 @@ pub fn session_cookie_header(token: &RawToken, secure: bool) -> String {
     SessionCookie::Set { token, secure }.to_string()
 }
 
+/// Builds a persistent cookie bounded by an authoritative server cutoff.
+/// Both the absolute expiry and remaining lifetime round down, so serialization
+/// cannot grant an extra fractional second of validity.
+#[must_use]
+pub fn persistent_session_cookie_header(
+    token: &RawToken,
+    secure: bool,
+    cutoff: common::time::UtcInstant,
+    now: common::time::UtcInstant,
+) -> String {
+    let expiry = cutoff.value().as_second();
+    let remaining =
+        (expiry - now.value().as_second() - i64::from(now.value().subsec_nanosecond() != 0)).max(0);
+    let date = cutoff.value().strftime("%a, %d %b %Y %H:%M:%S GMT");
+    format!(
+        "{}; Expires={date}; Max-Age={remaining}",
+        session_cookie_header(token, secure)
+    )
+}
+
 /// Builds the `Set-Cookie` header value that clears the session cookie
 /// (`Max-Age=0`). `secure` mirrors [`session_cookie_header`].
 #[must_use]
@@ -321,6 +341,22 @@ mod tests {
         assert_eq!(credential.token, "abcABC012-_");
         assert_eq!(credential.transport, CredentialTransport::Bearer);
         assert!(session_cookie_present);
+    }
+
+    #[test]
+    fn persistent_cookie_expiry_and_max_age_do_not_outlive_the_cutoff() {
+        let token = parse_raw_token("same-token");
+        let cutoff = "2026-11-27T12:00:00.987654Z".parse().unwrap();
+        let now = "2026-11-27T11:59:58.500Z".parse().unwrap();
+        let cookie = persistent_session_cookie_header(&token, true, cutoff, now);
+        assert_eq!(
+            cookie,
+            "session=same-token; HttpOnly; SameSite=Lax; Path=/; Secure; Expires=Fri, 27 Nov 2026 12:00:00 GMT; Max-Age=1"
+        );
+        let late = "2026-11-27T12:00:01Z".parse().unwrap();
+        assert!(
+            persistent_session_cookie_header(&token, false, cutoff, late).ends_with("Max-Age=0")
+        );
     }
 
     #[test]

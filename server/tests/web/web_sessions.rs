@@ -278,7 +278,12 @@ async fn revoke_session_removes_session_for_authenticated_user(#[case] backend: 
     let outcome = env
         .write_scope()
         .run(|transaction| {
-            Box::pin(async move { sessions.authenticate(transaction, &raw_token2).await })
+            Box::pin(async move {
+                sessions
+                    .authenticate(transaction, &raw_token2, storage::SessionClock::default())
+                    .await
+                    .map(|auth| auth.record)
+            })
         })
         .await
         .unwrap();
@@ -309,7 +314,12 @@ async fn revoke_session_removes_session_for_authenticated_user(#[case] backend: 
     let outcome = env
         .write_scope()
         .run(|transaction| {
-            Box::pin(async move { sessions.authenticate(transaction, &token).await })
+            Box::pin(async move {
+                sessions
+                    .authenticate(transaction, &token, storage::SessionClock::default())
+                    .await
+                    .map(|auth| auth.record)
+            })
         })
         .await
         .unwrap();
@@ -342,7 +352,12 @@ async fn revoke_session_rejects_session_belonging_to_another_user(#[case] backen
     let outcome = env
         .write_scope()
         .run(|transaction| {
-            Box::pin(async move { sessions.authenticate(transaction, &token).await })
+            Box::pin(async move {
+                sessions
+                    .authenticate(transaction, &token, storage::SessionClock::default())
+                    .await
+                    .map(|auth| auth.record)
+            })
         })
         .await
         .unwrap();

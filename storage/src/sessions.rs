@@ -66,6 +66,46 @@ pub struct SessionRecord {
     pub last_used_at: UtcInstant,
 }
 
+/// Clock sampled only after acquiring the Session operation's database lock.
+/// Production uses UTC wall time; controlled clocks are test-only inputs.
+#[derive(Clone, Default)]
+pub struct SessionClock {
+    #[cfg(any(test, feature = "test-utils"))]
+    read: Option<std::sync::Arc<dyn Fn() -> UtcInstant + Send + Sync>>,
+}
+
+impl SessionClock {
+    pub(crate) fn now(&self) -> UtcInstant {
+        #[cfg(any(test, feature = "test-utils"))]
+        if let Some(read) = &self.read {
+            return read();
+        }
+        UtcInstant::now()
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    #[must_use]
+    pub fn fixed(now: UtcInstant) -> Self {
+        Self::for_test(move || now)
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    #[must_use]
+    pub fn for_test(read: impl Fn() -> UtcInstant + Send + Sync + 'static) -> Self {
+        Self {
+            read: Some(std::sync::Arc::new(read)),
+        }
+    }
+}
+
+/// Authentication data pending the enclosing transaction's commit acknowledgement.
+#[derive(Clone, Debug)]
+pub struct SessionAuthentication {
+    pub record: SessionRecord,
+    /// True only if this transaction actually persisted activity.
+    pub touched: bool,
+}
+
 /// Errors that can occur when authenticating a session token.
 #[derive(Debug, thiserror::Error)]
 pub enum SessionAuthError {
@@ -116,13 +156,17 @@ pub trait SessionStorage: Send + Sync {
 
     /// Validates a raw session token and returns the associated record.
     ///
-    /// On success, refreshes `last_used_at` only when the stored value is older
-    /// than the 60 second freshness window.
+    /// Browser Sessions expire after 30 days of inactivity. On success, refreshes
+    /// `last_used_at` only at the 60-second threshold. Samples one explicit UTC
+    /// `now` from `clock` after acquiring the database lock, so waiting cannot
+    /// revive a Session that expires during the wait. Eligibility and activity
+    /// remain serialized with revocation until the enclosing scope commits.
     async fn authenticate(
         &self,
         transaction: &mut WriteTransaction,
         raw_token: &RawToken,
-    ) -> Result<SessionRecord, SessionAuthError>;
+        clock: SessionClock,
+    ) -> Result<SessionAuthentication, SessionAuthError>;
 
     /// Revokes a specific session by its token hash.
     async fn revoke_session(
@@ -159,9 +203,19 @@ pub trait SessionStorage: Send + Sync {
 use crate::backend::Backend;
 use crate::helpers::{self, SessionRow};
 
+/// Inactivity lifetime of a typed Browser Session, in elapsed seconds.
+pub const BROWSER_SESSION_IDLE_SECONDS: i64 = 2_592_000;
 const SESSION_TOUCH_FRESHNESS_SECONDS: i64 = 60;
 
-fn session_touch_cutoff(now: UtcInstant) -> UtcInstant {
+pub(crate) fn session_idle_cutoff(now: UtcInstant) -> UtcInstant {
+    UtcInstant::from(
+        now.value()
+            .saturating_sub(BROWSER_SESSION_IDLE_SECONDS.seconds())
+            .map_or(jiff::Timestamp::MIN, std::convert::identity),
+    )
+}
+
+pub(crate) fn session_touch_cutoff(now: UtcInstant) -> UtcInstant {
     // At Timestamp::MIN there is no earlier session timestamp to refresh, so
     // clamping preserves the freshness-window predicate.
     UtcInstant::from(
@@ -171,9 +225,9 @@ fn session_touch_cutoff(now: UtcInstant) -> UtcInstant {
     )
 }
 
-/// Per-backend divergences of [`SessionStorage`]. The only operation that differs
-/// between `SQLite` and Postgres is the atomic touch-and-load used by
-/// `authenticate` (`SQLite`: explicit tx; Postgres: data-modifying CTE).
+/// Per-backend serialization of Session eligibility and conditional activity.
+/// `SQLite` relies on its enclosing immediate write scope; `PostgreSQL` locks the
+/// Session row until the enclosing scope finishes.
 #[async_trait]
 pub trait SessionDialect: Backend
 where
@@ -186,15 +240,14 @@ where
     for<'c> &'c Pool<Self>: Executor<'c, Database = Self>,
     SessionRow: for<'r> sqlx::FromRow<'r, Self::Row>,
 {
-    /// Return the joined session row (with username), touching `last_used_at`
-    /// only when the stored value is older than `stale_before`. `None` if no
-    /// such session exists.
+    /// Returns the eligible joined row and whether this operation persisted
+    /// activity. Touches at/before `stale_before`; Browser rows at/before the
+    /// expiry cutoff are ineligible. Locks remain held until enclosing commit.
     async fn touch_and_load(
         transaction: &mut WriteTransaction,
         token_hash: &TokenHash,
-        now: UtcInstant,
-        stale_before: UtcInstant,
-    ) -> Result<Option<SessionRow>>;
+        clock: &SessionClock,
+    ) -> Result<Option<(SessionRow, bool)>>;
 }
 
 /// Generic `SessionStorage` backed by any [`SessionDialect`] database.
@@ -260,25 +313,23 @@ where
 
     #[tracing::instrument(
         name = "storage.session.authenticate",
-        skip(self, transaction, raw_token),
+        skip(self, transaction, raw_token, clock),
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn authenticate(
         &self,
         transaction: &mut WriteTransaction,
         raw_token: &RawToken,
-    ) -> Result<SessionRecord, SessionAuthError> {
+        clock: SessionClock,
+    ) -> Result<SessionAuthentication, SessionAuthError> {
         let token_hash = token::hash(raw_token).map_err(|_| SessionAuthError::InvalidToken)?;
 
-        let now = UtcInstant::now();
-        let stale_before = session_touch_cutoff(now);
-
-        let row = DB::touch_and_load(transaction, &token_hash, now, stale_before)
+        let (row, touched) = DB::touch_and_load(transaction, &token_hash, &clock)
             .await?
             .ok_or(SessionAuthError::SessionNotFound)?;
 
         let record = helpers::session_record_from_row(row);
-        Ok(record)
+        Ok(SessionAuthentication { record, touched })
     }
 
     #[tracing::instrument(
@@ -388,7 +439,12 @@ mod tests {
             let outcome = env
                 .write_scope()
                 .run(|transaction| {
-                    Box::pin(async move { sessions.authenticate(transaction, &raw).await })
+                    Box::pin(async move {
+                        sessions
+                            .authenticate(transaction, &raw, SessionClock::default())
+                            .await
+                            .map(|auth| auth.record)
+                    })
                 })
                 .await
                 .unwrap();
@@ -416,6 +472,480 @@ mod tests {
                     .is_empty()
             );
         }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn browser_session_is_expired_at_the_idle_cutoff(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope().clone())
+            .await
+            .user_id;
+        let sessions = env.sessions();
+        let label = parse_session_label("cutoff");
+        let raw = crate::test_support::confirmed_for(
+            env.write_scope()
+                .run(|transaction| {
+                    Box::pin(async move {
+                        sessions
+                            .create_session(transaction, user_id, &label, SessionKind::Browser)
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+            "create browser Session",
+        );
+        let last_used = env.sessions().list_sessions(user_id).await.unwrap()[0].last_used_at;
+        let now = UtcInstant::from(last_used.value().checked_add(2_592_000.seconds()).unwrap());
+        let sessions = env.sessions();
+        let result = env
+            .write_scope()
+            .run(|transaction| {
+                Box::pin(async move {
+                    sessions
+                        .authenticate(transaction, &raw, SessionClock::fixed(now))
+                        .await
+                })
+            })
+            .await;
+        assert!(matches!(
+            result,
+            Err(crate::WriteScopeError::Operation(
+                SessionAuthError::SessionNotFound
+            ))
+        ));
+        assert_eq!(
+            env.sessions().list_sessions(user_id).await.unwrap()[0].last_used_at,
+            last_used
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn browser_session_activity_is_persisted_only_at_the_threshold(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope().clone())
+            .await
+            .user_id;
+        let sessions = env.sessions();
+        let label = parse_session_label("activity");
+        let raw = crate::test_support::confirmed_for(
+            env.write_scope()
+                .run(|transaction| {
+                    Box::pin(async move {
+                        sessions
+                            .create_session(transaction, user_id, &label, SessionKind::Browser)
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+            "create Session",
+        );
+        let original = env.sessions().list_sessions(user_id).await.unwrap()[0].last_used_at;
+        for (elapsed, touched) in [(59, false), (60, true), (61, false)] {
+            let now = UtcInstant::from(original.value().checked_add(elapsed.seconds()).unwrap());
+            let sessions = env.sessions();
+            let token = raw.clone();
+            let authentication = crate::test_support::confirmed_for(
+                env.write_scope()
+                    .run(|transaction| {
+                        Box::pin(async move {
+                            sessions
+                                .authenticate(transaction, &token, SessionClock::fixed(now))
+                                .await
+                        })
+                    })
+                    .await
+                    .unwrap(),
+                "authenticate Session",
+            );
+            assert_eq!(authentication.touched, touched);
+            assert_eq!(
+                authentication.record.last_used_at,
+                if elapsed < 60 {
+                    original
+                } else {
+                    UtcInstant::from(original.value().checked_add(60.seconds()).unwrap())
+                }
+            );
+        }
+    }
+
+    async fn idle_fixture(
+        env: &crate::test_support::TestEnv,
+        kind: SessionKind,
+    ) -> (UserId, RawToken, UtcInstant) {
+        let user_id = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let sessions = env.sessions();
+        let label = parse_session_label("idle policy");
+        let raw = crate::test_support::confirmed_for(
+            env.write_scope()
+                .run(|transaction| {
+                    Box::pin(async move {
+                        sessions
+                            .create_session(transaction, user_id, &label, kind)
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+            "idle fixture",
+        );
+        let used = env.sessions().list_sessions(user_id).await.unwrap()[0].last_used_at;
+        (user_id, raw, used)
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn session_idle_policy_uses_durable_kind_at_before_equal_and_after_cutoff(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        for kind in [
+            SessionKind::Browser,
+            SessionKind::Machine,
+            SessionKind::Unknown,
+        ] {
+            for elapsed in [2_591_999, 2_592_000, 2_592_001] {
+                let (user_id, raw, used) = idle_fixture(&env, kind).await;
+                let now = UtcInstant::from(used.value().checked_add(elapsed.seconds()).unwrap());
+                let sessions = env.sessions();
+                let result = env
+                    .write_scope()
+                    .run(|transaction| {
+                        Box::pin(async move {
+                            sessions
+                                .authenticate(transaction, &raw, SessionClock::fixed(now))
+                                .await
+                        })
+                    })
+                    .await;
+                let expired = kind == SessionKind::Browser && elapsed >= 2_592_000;
+                if expired {
+                    assert!(matches!(
+                        result,
+                        Err(crate::WriteScopeError::Operation(
+                            SessionAuthError::SessionNotFound
+                        ))
+                    ));
+                } else {
+                    let authenticated =
+                        crate::test_support::confirmed_for(result.unwrap(), "idle authentication");
+                    assert!(authenticated.touched);
+                    assert_eq!(authenticated.record.last_used_at, now);
+                }
+                assert_eq!(
+                    env.sessions().list_sessions(user_id).await.unwrap()[0].last_used_at,
+                    if expired { used } else { now }
+                );
+            }
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn throttled_browser_use_does_not_extend_inactivity_or_revive_revoked_session(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let (user_id, raw, used) = idle_fixture(&env, SessionKind::Browser).await;
+        for elapsed in [59, 2_592_000, 2_592_001] {
+            let sessions = env.sessions();
+            let token = raw.clone();
+            let now = UtcInstant::from(used.value().checked_add(elapsed.seconds()).unwrap());
+            let result = env
+                .write_scope()
+                .run(|transaction| {
+                    Box::pin(async move {
+                        sessions
+                            .authenticate(transaction, &token, SessionClock::fixed(now))
+                            .await
+                    })
+                })
+                .await;
+            if elapsed == 59 {
+                assert!(
+                    !crate::test_support::confirmed_for(result.unwrap(), "throttled use").touched
+                );
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(crate::WriteScopeError::Operation(
+                        SessionAuthError::SessionNotFound
+                    ))
+                ));
+            }
+        }
+        assert_eq!(
+            env.sessions().list_sessions(user_id).await.unwrap()[0].last_used_at,
+            used
+        );
+        let sessions = env.sessions();
+        let hash = token::hash(&raw).unwrap();
+        env.write_scope()
+            .run(|transaction| {
+                Box::pin(async move { sessions.revoke_session(transaction, &hash).await })
+            })
+            .await
+            .unwrap();
+        let sessions = env.sessions();
+        assert!(matches!(
+            env.write_scope()
+                .run(|transaction| Box::pin(async move {
+                    sessions
+                        .authenticate(transaction, &raw, SessionClock::fixed(used))
+                        .await
+                }))
+                .await,
+            Err(crate::WriteScopeError::Operation(
+                SessionAuthError::SessionNotFound
+            ))
+        ));
+    }
+
+    fn contending_scope(
+        env: &crate::test_support::TestEnv,
+    ) -> (
+        crate::WriteScope,
+        Arc<tokio::sync::Notify>,
+        Arc<tokio::sync::Notify>,
+    ) {
+        let observed = Arc::new(tokio::sync::Notify::new());
+        let retry = Arc::new(tokio::sync::Notify::new());
+        (
+            env.write_scope()
+                .clone()
+                .observing_sqlite_begin_contention(observed.clone(), retry.clone()),
+            observed,
+            retry,
+        )
+    }
+
+    async fn contender_is_waiting_for_session_lock(
+        env: &crate::test_support::TestEnv,
+        backend: Backend,
+        observed: &tokio::sync::Notify,
+    ) -> bool {
+        if matches!(backend, Backend::Sqlite) {
+            return tokio::time::timeout(std::time::Duration::from_secs(5), observed.notified())
+                .await
+                .is_ok();
+        }
+        // Observe the database wait rather than task scheduling: expiry must not
+        // reject a snapshot while an earlier eligible touch is uncommitted.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let waiting = crate::with_closeable_pool!(env.base.pool(), pool, {
+                    sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE 'SELECT s.token_hash%')")
+                        .fetch_one(pool).await.unwrap()
+                });
+                if waiting { return; }
+                tokio::task::yield_now().await;
+            }
+        }).await.is_ok()
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn serialized_touch_before_old_cutoff_governs_the_waiting_authentication(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let (_, raw, used) = idle_fixture(&env, SessionKind::Browser).await;
+        let first_now = UtcInstant::from(used.value().checked_add(2_591_999.seconds()).unwrap());
+        let later_now = UtcInstant::from(used.value().checked_add(2_592_000.seconds()).unwrap());
+        let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let sessions = env.sessions();
+        let scope = env.write_scope();
+        let first_token = raw.clone();
+        let first = tokio::spawn(async move {
+            scope
+                .run(|transaction| {
+                    Box::pin(async move {
+                        let authentication = sessions
+                            .authenticate(transaction, &first_token, SessionClock::fixed(first_now))
+                            .await?;
+                        locked_tx.send(()).unwrap();
+                        release_rx.await.unwrap();
+                        Ok::<_, SessionAuthError>(authentication)
+                    })
+                })
+                .await
+        });
+        locked_rx.await.unwrap();
+        let sessions = env.sessions();
+        let (scope, observed, retry) = contending_scope(&env);
+        let second = tokio::spawn(async move {
+            scope
+                .run(|transaction| {
+                    Box::pin(async move {
+                        sessions
+                            .authenticate(transaction, &raw, SessionClock::fixed(later_now))
+                            .await
+                    })
+                })
+                .await
+        });
+        let waited_for_lock = contender_is_waiting_for_session_lock(&env, backend, &observed).await;
+        release_tx.send(()).unwrap();
+        retry.notify_one();
+        assert!(
+            crate::test_support::confirmed_for(first.await.unwrap().unwrap(), "first touch")
+                .touched
+        );
+        let later = crate::test_support::confirmed_for(
+            second.await.unwrap().unwrap(),
+            "waiting authentication",
+        );
+        assert!(!later.touched);
+        assert_eq!(later.record.last_used_at, first_now);
+        assert!(waited_for_lock, "expiry must wait for the Session lock");
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn session_wait_crossing_idle_cutoff_samples_clock_only_after_lock(
+        #[case] backend: Backend,
+    ) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let env = backend.setup().await;
+        let (user_id, raw, used) = idle_fixture(&env, SessionKind::Browser).await;
+        let before = UtcInstant::from(used.value().checked_add(2_591_999.seconds()).unwrap());
+        let cutoff = UtcInstant::from(used.value().checked_add(2_592_000.seconds()).unwrap());
+        let current = Arc::new(std::sync::Mutex::new(before));
+        let reads = Arc::new(AtomicUsize::new(0));
+        let clock = SessionClock::for_test({
+            let current = current.clone();
+            let reads = reads.clone();
+            move || {
+                reads.fetch_add(1, Ordering::SeqCst);
+                *current.lock().unwrap()
+            }
+        });
+        let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let sessions = env.sessions();
+        let scope = env.write_scope();
+        let first_token = raw.clone();
+        let blocker = tokio::spawn(async move {
+            scope
+                .run(|transaction| {
+                    Box::pin(async move {
+                        let auth = sessions
+                            .authenticate(transaction, &first_token, SessionClock::fixed(used))
+                            .await?;
+                        assert!(!auth.touched);
+                        locked_tx.send(()).unwrap();
+                        release_rx.await.unwrap();
+                        Ok::<_, SessionAuthError>(auth)
+                    })
+                })
+                .await
+        });
+        locked_rx.await.unwrap();
+        let sessions = env.sessions();
+        let (scope, observed, retry) = contending_scope(&env);
+        let contender = tokio::spawn(async move {
+            scope
+                .run(|transaction| {
+                    Box::pin(async move { sessions.authenticate(transaction, &raw, clock).await })
+                })
+                .await
+        });
+        let waited_for_lock = contender_is_waiting_for_session_lock(&env, backend, &observed).await;
+        let premature_reads = reads.load(Ordering::SeqCst);
+        *current.lock().unwrap() = cutoff;
+        release_tx.send(()).unwrap();
+        crate::test_support::confirmed_for(blocker.await.unwrap().unwrap(), "blocking auth");
+        retry.notify_one();
+        assert!(matches!(
+            contender.await.unwrap(),
+            Err(crate::WriteScopeError::Operation(
+                SessionAuthError::SessionNotFound
+            ))
+        ));
+        assert!(waited_for_lock);
+        assert_eq!(
+            premature_reads, 0,
+            "request-start time must not become eligibility time"
+        );
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            1,
+            "one explicit time governs expiry and touch"
+        );
+        assert_eq!(
+            env.sessions().list_sessions(user_id).await.unwrap()[0].last_used_at,
+            used
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn serialized_revoke_prevents_waiting_stale_cookie_revival(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let (user_id, raw, used) = idle_fixture(&env, SessionKind::Browser).await;
+        let now = UtcInstant::from(used.value().checked_add(60.seconds()).unwrap());
+        let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let sessions = env.sessions();
+        let scope = env.write_scope();
+        let hash = token::hash(&raw).unwrap();
+        let revoke = tokio::spawn(async move {
+            scope
+                .run(|transaction| {
+                    Box::pin(async move {
+                        sessions.revoke_session(transaction, &hash).await?;
+                        locked_tx.send(()).unwrap();
+                        release_rx.await.unwrap();
+                        Ok::<_, sqlx::Error>(())
+                    })
+                })
+                .await
+        });
+        locked_rx.await.unwrap();
+        let sessions = env.sessions();
+        let (scope, observed, retry) = contending_scope(&env);
+        let authentication = tokio::spawn(async move {
+            scope
+                .run(|transaction| {
+                    Box::pin(async move {
+                        sessions
+                            .authenticate(transaction, &raw, SessionClock::fixed(now))
+                            .await
+                    })
+                })
+                .await
+        });
+        let waited_for_lock = contender_is_waiting_for_session_lock(&env, backend, &observed).await;
+        release_tx.send(()).unwrap();
+        crate::test_support::confirmed_for(revoke.await.unwrap().unwrap(), "revoke");
+        retry.notify_one();
+        assert!(matches!(
+            authentication.await.unwrap(),
+            Err(crate::WriteScopeError::Operation(
+                SessionAuthError::SessionNotFound
+            ))
+        ));
+        assert!(
+            waited_for_lock,
+            "authentication must wait for the earlier revoke"
+        );
+        assert!(
+            env.sessions()
+                .list_sessions(user_id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -463,7 +993,12 @@ mod tests {
         let outcome = env
             .write_scope()
             .run(|transaction| {
-                Box::pin(async move { sessions.authenticate(transaction, &raw_token).await })
+                Box::pin(async move {
+                    sessions
+                        .authenticate(transaction, &raw_token, SessionClock::default())
+                        .await
+                        .map(|auth| auth.record)
+                })
             })
             .await
             .unwrap();
@@ -635,7 +1170,7 @@ mod tests {
                 ),
                 now,
             ),
-            ("exact", stale_before, stale_before),
+            ("exact", stale_before, now),
             (
                 "fresh",
                 UtcInstant::from(
@@ -694,8 +1229,7 @@ mod tests {
                                 <sqlx::Sqlite as SessionDialect>::touch_and_load(
                                     transaction,
                                     &token_hash_for_touch,
-                                    now,
-                                    stale_before,
+                                    &SessionClock::fixed(now),
                                 )
                                 .await
                             }
@@ -703,8 +1237,7 @@ mod tests {
                                 <sqlx::Postgres as SessionDialect>::touch_and_load(
                                     transaction,
                                     &token_hash_for_touch,
-                                    now,
-                                    stale_before,
+                                    &SessionClock::fixed(now),
                                 )
                                 .await
                             }
@@ -714,7 +1247,7 @@ mod tests {
                 .await
                 .unwrap();
             let row = match outcome {
-                common::MutationOutcome::Confirmed(Some(row)) => row,
+                common::MutationOutcome::Confirmed(Some((row, _))) => row,
                 common::MutationOutcome::Confirmed(None) => panic!("session should exist"),
                 common::MutationOutcome::CommitIndeterminate(_) => {
                     panic!("session touch requires a confirmed commit")

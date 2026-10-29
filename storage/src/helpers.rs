@@ -226,6 +226,11 @@ pub struct SessionRow {
 }
 impl SessionRow {
     #[must_use]
+    pub(crate) fn kind(&self) -> crate::SessionKind {
+        self.kind
+    }
+
+    #[must_use]
     pub(crate) fn last_used_at(&self) -> UtcInstant {
         self.last_used_at.value()
     }

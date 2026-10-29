@@ -13,7 +13,7 @@ use host::{
 };
 use leptos::{context, prelude};
 use std::sync::{
-    Arc,
+    Arc, OnceLock,
     atomic::{AtomicBool, Ordering},
 };
 use storage::{SessionStorage, UserStorage, WriteScope, WriteScopeError};
@@ -22,6 +22,78 @@ use storage::{SessionStorage, UserStorage, WriteScope, WriteScopeError};
 // `web::auth::CookieSettings` path (the `server` crate provides it into leptos
 // context) keeps resolving.
 pub use host::auth::CookieSettings;
+
+/// Cookie material bound to a persisted Browser Session timestamp.
+#[derive(Clone, Debug)]
+pub(crate) struct BrowserSessionCookie {
+    pub(crate) token: RawToken,
+    pub(crate) last_used_at: common::time::UtcInstant,
+}
+
+impl BrowserSessionCookie {
+    fn header(&self, secure: bool) -> String {
+        use jiff::ToSpan;
+        let cutoff = self
+            .last_used_at
+            .value()
+            .saturating_add(storage::BROWSER_SESSION_IDLE_SECONDS.seconds())
+            .unwrap_or(jiff::Timestamp::MAX);
+        auth::persistent_session_cookie_header(
+            &self.token,
+            secure,
+            cutoff.into(),
+            common::time::UtcInstant::now(),
+        )
+    }
+}
+
+/// Shared request result consumed only after the enclosing auth scope commits.
+#[derive(Clone, Default)]
+pub struct SessionCookieRenewal(Arc<OnceLock<BrowserSessionCookie>>);
+
+impl SessionCookieRenewal {
+    /// Records only acknowledged activity; the caller must first observe
+    /// `MutationOutcome::Confirmed` from the enclosing authentication scope.
+    pub fn committed_activity(
+        &self,
+        authentication: &storage::SessionAuthentication,
+        token: RawToken,
+    ) {
+        if authentication.touched && authentication.record.kind == storage::SessionKind::Browser {
+            self.0.get_or_init(|| BrowserSessionCookie {
+                token,
+                last_used_at: authentication.record.last_used_at,
+            });
+        }
+    }
+
+    #[must_use]
+    pub fn header(&self, secure: bool) -> Option<String> {
+        self.0.get().map(|cookie| cookie.header(secure))
+    }
+}
+
+/// Reads the timestamp inserted in this transaction, including database precision,
+/// rather than assigning browser lifetime from a separate wall-clock sample.
+pub(crate) async fn prepare_browser_session_cookie(
+    sessions: &dyn SessionStorage,
+    transaction: &mut storage::WriteTransaction,
+    token: RawToken,
+) -> InternalResult<BrowserSessionCookie> {
+    let authenticated = sessions
+        .authenticate(transaction, &token, storage::SessionClock::default())
+        .await
+        .map_err(|error| {
+            auth_rejection_error(Rejection::Session {
+                transport: CredentialTransport::Cookie,
+                error,
+            })
+        })?;
+    Ok(BrowserSessionCookie {
+        token,
+        last_used_at: authenticated.record.last_used_at,
+    })
+}
 
 /// Request-scoped signal that successful explicit authentication should retire
 /// an ambient browser session cookie from the response.
@@ -111,16 +183,29 @@ where
             .get::<WriteScope>()
             .ok_or(Rejection::MissingWriteScope)?;
         let token = credential.token.clone();
+        let clock = parts
+            .extensions
+            .get::<storage::SessionClock>()
+            .cloned()
+            .unwrap_or_default();
 
-        let record = match write_scope
+        let authentication = match write_scope
             .run(move |transaction| {
                 let sessions = sessions.clone();
                 let token = token.clone();
-                Box::pin(async move { sessions.authenticate(transaction, &token).await })
+                Box::pin(async move { sessions.authenticate(transaction, &token, clock).await })
             })
             .await
         {
-            Ok(outcome) => outcome.value().clone(),
+            Ok(common::MutationOutcome::Confirmed(authentication)) => authentication,
+            Ok(common::MutationOutcome::CommitIndeterminate(_)) => {
+                return Err(Rejection::Session {
+                    transport,
+                    error: storage::SessionAuthError::Internal(sqlx::Error::Protocol(
+                        "Session authentication commit was not acknowledged".into(),
+                    )),
+                });
+            }
             Err(WriteScopeError::Operation(error)) => {
                 metrics::session_validation(storage::session_outcome(&error));
                 return Err(Rejection::Session { transport, error });
@@ -133,7 +218,16 @@ where
             }
         };
         metrics::session_validation(metrics::SessionOutcome::Ok);
-        verify_basic_username(&record.username, credential.expected_username.as_ref())?;
+        verify_basic_username(
+            &authentication.record.username,
+            credential.expected_username.as_ref(),
+        )?;
+        if transport == CredentialTransport::Cookie
+            && let Some(renewal) = parts.extensions.get::<SessionCookieRenewal>()
+        {
+            renewal.committed_activity(&authentication, credential.token.clone());
+        }
+        let record = authentication.record;
         if session_cookie_present
             && transport != CredentialTransport::Cookie
             && let Some(retirement) = retire_cookie
@@ -320,13 +414,13 @@ fn verify_basic_username(
 // Cookie helpers (leptos/axum adapters over host's pure header builders)
 // ---------------------------------------------------------------------------
 
-pub fn set_session_cookie(raw_token: &RawToken) {
+pub(crate) fn set_session_cookie(cookie: &BrowserSessionCookie) {
     use leptos_axum::ResponseOptions;
 
     let secure = context::use_context::<CookieSettings>().is_none_or(|settings| settings.secure);
 
     if let Some(opts) = context::use_context::<ResponseOptions>() {
-        let cookie = auth::session_cookie_header(raw_token, secure);
+        let cookie = cookie.header(secure);
         if let Ok(val) = axum::http::HeaderValue::from_str(&cookie) {
             opts.insert_header(axum::http::header::SET_COOKIE, val);
         }
@@ -411,7 +505,10 @@ mod tests {
     fn set_session_cookie_without_response_options_context_is_noop() {
         Owner::new().with(|| {
             provide_context(CookieSettings { secure: true });
-            set_session_cookie(&parse_raw_token("token"));
+            set_session_cookie(&BrowserSessionCookie {
+                token: parse_raw_token("token"),
+                last_used_at: common::time::UtcInstant::now(),
+            });
         });
     }
 

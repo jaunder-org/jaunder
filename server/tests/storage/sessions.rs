@@ -305,7 +305,12 @@ async fn authenticate_result(
 ) -> Result<MutationOutcome<storage::SessionRecord>, WriteScopeError<SessionAuthError>> {
     write_scope
         .run(|transaction| {
-            Box::pin(async move { sessions.authenticate(transaction, &raw_token).await })
+            Box::pin(async move {
+                sessions
+                    .authenticate(transaction, &raw_token, storage::SessionClock::default())
+                    .await
+                    .map(|auth| auth.record)
+            })
         })
         .await
 }

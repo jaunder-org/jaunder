@@ -37,6 +37,298 @@ macro_rules! secure_app {
     };
 }
 
+#[apply(backends)]
+#[tokio::test]
+async fn browser_cookie_renews_same_token_only_after_committed_activity(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let app = secure_app!(&env);
+    let (status, cookie, _) = post_server_fn_with_secure_flag(
+        app.clone(),
+        &register_input("rolling", "password123", None),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let cookie = cookie.unwrap();
+    assert!(cookie.contains("Expires="));
+    assert!(cookie.contains("Max-Age="));
+    let token = token_from_set_cookie(&cookie);
+    let user = env
+        .users()
+        .get_user_by_username(&"rolling".parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let original = env.sessions().list_sessions(user.user_id).await.unwrap()[0].last_used_at;
+    let request_cookie = format!("session={token}");
+    for (elapsed, renew) in [(59, false), (60, true), (61, false)] {
+        let now = UtcInstant::from(original.value().checked_add(elapsed.seconds()).unwrap());
+        let response = post_server_fn_response(
+            app.clone()
+                .layer(axum::Extension(storage::SessionClock::fixed(now))),
+            &web::auth::GetSession {},
+            Some(&request_cookie),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let header = response.headers().get(header::SET_COOKIE);
+        assert_eq!(header.is_some(), renew);
+        if let Some(header) = header {
+            let value = header.to_str().unwrap();
+            assert_eq!(token_from_set_cookie(value).as_ref(), token.as_ref());
+            assert!(value.contains("HttpOnly; SameSite=Lax; Path=/; Secure"));
+            let cutoff = original.value().checked_add(2_592_060.seconds()).unwrap();
+            assert!(value.contains(&format!(
+                "Expires={}",
+                cutoff.strftime("%a, %d %b %Y %H:%M:%S GMT")
+            )));
+        }
+    }
+}
+
+#[apply(backends_matrix)]
+#[case::commit_rejected(false)]
+#[case::acknowledgement_lost(true)]
+#[tokio::test]
+async fn browser_cookie_is_not_emitted_without_commit_acknowledgement(
+    backend: Backend,
+    #[case] lose_ack: bool,
+) {
+    let env = backend.setup().await;
+    let app = secure_app!(&env);
+    let (_, cookie, _) = post_server_fn_with_secure_flag(
+        app,
+        &register_input("commitgate", "password123", None),
+        None,
+        true,
+    )
+    .await;
+    let cookie = cookie.unwrap();
+    let token = token_from_set_cookie(&cookie);
+    let user = env
+        .users()
+        .get_user_by_username(&"commitgate".parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let original = env.sessions().list_sessions(user.user_id).await.unwrap()[0].last_used_at;
+    if !lose_ack {
+        // A deferred FK violation lets the real authentication statement succeed
+        // but makes its enclosing COMMIT fail on both databases.
+        let trigger = match backend {
+            Backend::Sqlite => {
+                "CREATE TRIGGER fail_session_commit AFTER UPDATE ON sessions BEGIN INSERT INTO session_commit_child VALUES (1); END;"
+            }
+            Backend::Postgres => {
+                "CREATE FUNCTION fail_session_commit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO session_commit_child VALUES (1); RETURN NEW; END $$; CREATE TRIGGER fail_session_commit AFTER UPDATE ON sessions FOR EACH ROW EXECUTE FUNCTION fail_session_commit();"
+            }
+        };
+        storage::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::raw_sql("CREATE TABLE session_commit_parent (id BIGINT PRIMARY KEY); CREATE TABLE session_commit_child (id BIGINT REFERENCES session_commit_parent(id) DEFERRABLE INITIALLY DEFERRED);").execute(pool).await.unwrap();
+            sqlx::raw_sql(trigger).execute(pool).await.unwrap();
+        });
+    }
+    if !lose_ack {
+        let fresh_now = UtcInstant::from(original.value().checked_add(59.seconds()).unwrap());
+        let fresh = post_server_fn_response(
+            make_app!(&env, &env.base)
+                .layer(axum::Extension(storage::SessionClock::fixed(fresh_now))),
+            &web::auth::GetSession {},
+            Some(&format!("session={token}")),
+        )
+        .await;
+        assert_eq!(
+            fresh.status(),
+            StatusCode::OK,
+            "throttled authentication must not fire the update trigger"
+        );
+        assert!(fresh.headers().get(header::SET_COOKIE).is_none());
+    }
+    let scope = if lose_ack {
+        storage::test_support::write_scope_with_commit_acknowledgement_loss(&env.write_scope())
+    } else {
+        env.write_scope()
+    };
+    let now = UtcInstant::from(original.value().checked_add(60.seconds()).unwrap());
+    let app = make_app!(&env, &env.base; override_write_scope = scope)
+        .layer(axum::Extension(storage::SessionClock::fixed(now)));
+    let response = post_server_fn_response(
+        app,
+        &web::auth::GetSession {},
+        Some(&format!("session={token}")),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(response.headers().get(header::SET_COOKIE).is_none());
+    let stored = env.sessions().list_sessions(user.user_id).await.unwrap()[0].last_used_at;
+    assert_eq!(stored, if lose_ack { now } else { original });
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn durable_kind_not_transport_selects_expiry_and_cookie_renewal(#[case] backend: Backend) {
+    use base64::Engine;
+    use tower::ServiceExt;
+    let env = backend.setup().await;
+    let app = secure_app!(&env);
+    let user = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
+    for kind in [
+        storage::SessionKind::Browser,
+        storage::SessionKind::Machine,
+        storage::SessionKind::Unknown,
+    ] {
+        let sessions = env.sessions();
+        let label = common::test_support::parse_session_label("Browser");
+        let raw = storage::test_support::confirmed_for(
+            env.write_scope()
+                .run(|transaction| {
+                    Box::pin(async move {
+                        sessions
+                            .create_session(transaction, user.user_id, &label, kind)
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+            "kind fixture",
+        );
+        let hash = host::token::hash(&raw).unwrap();
+        let used = env
+            .sessions()
+            .list_sessions(user.user_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|record| record.token_hash == hash)
+            .unwrap()
+            .last_used_at;
+        for (elapsed, transport) in [(60_i64, "cookie"), (120, "bearer"), (180, "basic")] {
+            let now = UtcInstant::from(used.value().checked_add(elapsed.seconds()).unwrap());
+            let mut request = axum::http::Request::builder()
+                .method("POST")
+                .uri(<web::auth::GetSession as ServerFn>::PATH)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+            request = if transport == "cookie" {
+                request.header(header::COOKIE, format!("session={raw}"))
+            } else {
+                let authorization = if transport == "bearer" {
+                    format!("Bearer {raw}")
+                } else {
+                    format!(
+                        "Basic {}",
+                        base64::engine::general_purpose::STANDARD
+                            .encode(format!("{}:{raw}", user.username))
+                    )
+                };
+                request
+                    .header(header::COOKIE, user.cookie())
+                    .header(header::AUTHORIZATION, authorization)
+            };
+            let response = app
+                .clone()
+                .layer(axum::Extension(storage::SessionClock::fixed(now)))
+                .oneshot(request.body(axum::body::Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let headers: Vec<_> = response
+                .headers()
+                .get_all(header::SET_COOKIE)
+                .iter()
+                .map(|value| value.to_str().unwrap())
+                .collect();
+            match transport {
+                "cookie" if kind == storage::SessionKind::Browser => {
+                    assert_eq!(headers.len(), 1);
+                    assert_eq!(token_from_set_cookie(headers[0]).as_ref(), raw.as_ref());
+                    assert!(headers[0].contains("Expires="));
+                }
+                "cookie" => assert!(headers.is_empty()),
+                _ => {
+                    assert_eq!(headers.len(), 1);
+                    assert!(headers[0].ends_with("Max-Age=0"));
+                    assert!(!headers[0].contains("Expires="));
+                }
+            }
+            let stored = env
+                .sessions()
+                .list_sessions(user.user_id)
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|record| record.token_hash == hash)
+                .unwrap();
+            assert_eq!(stored.kind, kind);
+            assert_eq!(stored.last_used_at, now);
+        }
+        let now = UtcInstant::from(used.value().checked_add(2_592_180.seconds()).unwrap());
+        let response = post_server_fn_response(
+            app.clone()
+                .layer(axum::Extension(storage::SessionClock::fixed(now))),
+            &web::auth::GetSession {},
+            Some(&format!("session={raw}")),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().get(header::SET_COOKIE).is_none());
+        let body = body_string(response).await;
+        if kind == storage::SessionKind::Browser {
+            assert_eq!(body, "null");
+        } else {
+            assert!(body.contains(user.username.as_ref()));
+        }
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn throttled_cookie_activity_followed_by_inactivity_expires_without_renewal(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let (_, cookie, _) = post_server_fn_with_secure_flag(
+        app.clone(),
+        &register_input("throttled", "password123", None),
+        None,
+        false,
+    )
+    .await;
+    let cookie = cookie.unwrap();
+    assert!(!cookie.contains("; Secure"));
+    let token = token_from_set_cookie(&cookie);
+    let user = env
+        .users()
+        .get_user_by_username(&"throttled".parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let used = env.sessions().list_sessions(user.user_id).await.unwrap()[0].last_used_at;
+    for elapsed in [59, 2_592_000, 2_592_001] {
+        let now = UtcInstant::from(used.value().checked_add(elapsed.seconds()).unwrap());
+        let response = post_server_fn_response(
+            app.clone()
+                .layer(axum::Extension(storage::SessionClock::fixed(now))),
+            &web::auth::GetSession {},
+            Some(&format!("session={token}")),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().get(header::SET_COOKIE).is_none());
+        let body = body_string(response).await;
+        if elapsed == 59 {
+            assert!(body.contains("throttled"));
+        } else {
+            assert_eq!(body, "null");
+        }
+    }
+    assert_eq!(
+        env.sessions().list_sessions(user.user_id).await.unwrap()[0].last_used_at,
+        used
+    );
+}
+
 #[derive(serde::Serialize)]
 struct LoginDecodeFixture<'a> {
     username: &'a str,
@@ -348,7 +640,12 @@ async fn register_nested_request_maps_open_fields(#[case] backend: Backend) {
     let outcome = env
         .write_scope()
         .run(|transaction| {
-            Box::pin(async move { sessions.authenticate(transaction, &cookie_token).await })
+            Box::pin(async move {
+                sessions
+                    .authenticate(transaction, &cookie_token, storage::SessionClock::default())
+                    .await
+                    .map(|auth| auth.record)
+            })
         })
         .await
         .expect("the register cookie authenticates");
@@ -895,7 +1192,12 @@ async fn login_nested_request_maps_distinct_fields(#[case] backend: Backend) {
     let outcome = env
         .write_scope()
         .run(|transaction| {
-            Box::pin(async move { sessions.authenticate(transaction, &raw_token).await })
+            Box::pin(async move {
+                sessions
+                    .authenticate(transaction, &raw_token, storage::SessionClock::default())
+                    .await
+                    .map(|auth| auth.record)
+            })
         })
         .await
         .unwrap();
@@ -932,7 +1234,12 @@ async fn login_nested_request_without_label_uses_user_agent(#[case] backend: Bac
     let outcome = env
         .write_scope()
         .run(|transaction| {
-            Box::pin(async move { sessions.authenticate(transaction, &raw_token).await })
+            Box::pin(async move {
+                sessions
+                    .authenticate(transaction, &raw_token, storage::SessionClock::default())
+                    .await
+                    .map(|auth| auth.record)
+            })
         })
         .await
         .unwrap();
@@ -1038,7 +1345,12 @@ async fn login_bounds_long_user_agent_at_session_label_cap(#[case] backend: Back
     let outcome = env
         .write_scope()
         .run(|transaction| {
-            Box::pin(async move { sessions.authenticate(transaction, &raw_token).await })
+            Box::pin(async move {
+                sessions
+                    .authenticate(transaction, &raw_token, storage::SessionClock::default())
+                    .await
+                    .map(|auth| auth.record)
+            })
         })
         .await
         .unwrap();
@@ -1078,7 +1390,12 @@ async fn login_truncates_user_agent_past_session_label_cap(#[case] backend: Back
     let outcome = env
         .write_scope()
         .run(|transaction| {
-            Box::pin(async move { sessions.authenticate(transaction, &raw_token).await })
+            Box::pin(async move {
+                sessions
+                    .authenticate(transaction, &raw_token, storage::SessionClock::default())
+                    .await
+                    .map(|auth| auth.record)
+            })
         })
         .await
         .unwrap();

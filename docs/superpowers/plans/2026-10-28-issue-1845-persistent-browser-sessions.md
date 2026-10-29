@@ -38,7 +38,7 @@ access/credentials, and any expansion of the accepted legacy carveout.
     pre-migration backup with that release rather than attempting a downgrade.
     Existing exact-schema backup admission remains unchanged; absent row kind
     decodes as Unknown only after the backup passes that admission.
-- [ ] Task 2: Enforce expiry, atomic touch and same-cookie renewal.
+- [x] Task 2: Enforce expiry, atomic touch and same-cookie renewal.
   - Contract: one explicit UTC `now`; typed Browser is expired at
     `last_used_at <= now - 2_592_000s`. Define touch eligibility against the
     persisted timestamp and existing 60-second policy. Storage authentication
@@ -48,14 +48,28 @@ access/credentials, and any expansion of the accepted legacy carveout.
     caller-owned write transaction, success/cookie emission waits for
     acknowledged enclosing commit; commit error or ambiguous outcome emits no
     renewal. Expiry, touch and revoke have a single storage linearization order:
-    once expired/revoked, stale-cookie auth cannot revive; a touch committed
-    before expiry governs, otherwise auth fails. Only cookie auth whose
-    enclosing transaction committed a touch renews the same token. Compute
+    once expired/revoked, stale-cookie auth cannot revive. Eligibility uses one
+    fresh UTC `now` sampled after acquiring the required database lock; an
+    eligible serialized touch governs only after acknowledged commit. Only
+    cookie auth whose enclosing transaction committed a touch renews the same
+    token. Compute
     `floor_unix_seconds(committed last_used_at + 2_592_000 seconds)`; emit
     `Expires` at that absolute instant and `Max-Age` as nonnegative remaining
     duration, neither extending server validity. No renewal in throttle.
     Explicit Authorization precedence remains ADR-0132; Bearer/Basic never renew
     ambient cookies. Preserve logout/retirement cookie clearing.
+  - Linearization interpretation confirmed by Lead and Manager clarification:
+    expiry uses each operation's explicit UTC `now` sampled **after** required
+    lock acquisition, not stale request-start time or a commit-wall-clock lease.
+    Production uses a system Session clock; test-only controlled clocks exercise
+    exact boundaries and a lock wait crossing the idle cutoff. A touch holding
+    its lock before another operation governs that operation after acknowledged
+    commit; a revoke serialized first prevents stale-cookie revival. SQLite uses
+    the existing `BEGIN IMMEDIATE` scope; PostgreSQL holds a Session row lock
+    even for a throttled read. No tombstone, transaction hook or lease framework
+    is needed. Cookie remaining age is calculated at emission; extreme
+    scheduling delay cannot produce a positive lifetime at/past the committed
+    cutoff.
   - Verification: controlled UTC clock at before/equal/after idle cutoff and
     60-second threshold; throttled request followed by idle expiry; commit
     failure; deterministic concurrent touch/expiry/revoke races; cookie
