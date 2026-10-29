@@ -76,7 +76,12 @@ pub async fn create_app_password(label: SessionLabel) -> WebResult<MutationOutco
         .run(|transaction| {
             Box::pin(async move {
                 let token = sessions
-                    .create_session(transaction, auth.user_id, &label)
+                    .create_session(
+                        transaction,
+                        auth.user_id,
+                        &label,
+                        storage::SessionKind::Machine,
+                    )
                     .await
                     .map_err(InternalError::storage)?;
                 Ok(AppPassword { token, label })

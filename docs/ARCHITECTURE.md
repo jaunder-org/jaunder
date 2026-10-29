@@ -1464,26 +1464,38 @@ nonzero high-water mark; bounded PII-free telemetry records the anomaly.
   body ([ADR-0011](adr/0011-unified-observability.md)). The directional
   guarantee and the rejected stronger type-state design are recorded by
   [hash bearer-equivalent tokens before persistence](adr/0133-hash-bearer-tokens-before-persistence.md).
-- An **app password** is just a labelled session: minting calls
-  `SessionStorage::create_session(user_id, &label)`
-  (`storage/src/sessions.rs:70`) — no separate table, no `kind` column, so
-  tokens are interchangeable across transports (accepted for the self-hosted
-  single-user trust model). Sessions never expire; the `sessions` row is
-  `(token_hash, user_id, label, created_at, last_used_at)`. `last_used_at` is
-  operator-facing metadata and is bounded-stale: authentication refreshes it
-  only when the stored value is more than 60 seconds old, so fresh authenticated
-  requests need not become database writers (`storage/src/sessions.rs:164`).
-  `label` is a mandatory validated newtype,
-  `common::session_label::SessionLabel` — browser logins auto-generate a
-  User-Agent/host label, app passwords carry a user-supplied name. Revocation is
-  deleting the session in the Sessions UI
+- An **App Password** is a labelled Session with durable `Machine` kind;
+  password login, registration and Passkey sign-in create `Browser` Sessions.
+  Existing rows carry `Unknown` kind, never inferred from labels or transport.
+  The additive kind column preserves token interchangeability across transports
+  ([ADR-0014](adr/0014-atompub-authentication.md)); it selects lifecycle policy,
+  not authorization. Machine and Unknown Sessions remain non-expiring. Browser
+  Sessions expire when `last_used_at <= now - 2_592_000 seconds`. Authentication
+  samples one fresh UTC operation time after acquiring the required lock (never
+  at request entry), and serializes eligibility, conditional activity writes and
+  revocation within the caller's write scope: SQLite holds `BEGIN IMMEDIATE`;
+  PostgreSQL locks the Session row, including throttled reads. At least 60
+  seconds must have elapsed before activity is persisted. A throttled request
+  neither writes activity nor renews its cookie. Authentication succeeds only
+  after the enclosing commit is acknowledged. `label` is a mandatory validated
+  newtype, `common::session_label::SessionLabel` — browser logins auto-generate
+  a User-Agent/host label, app passwords carry a user-supplied name. Revocation
+  is deleting the session in the Sessions UI
   ([ADR-0014](adr/0014-atompub-authentication.md)).
 
 The
-[bounded transient-data retention decision](adr/0167-bounded-transient-data-retention.md)
-separates permanent sessions and App Passwords from credentials with expiry: an
-expired credential remains retained for 24 hours after expiry, while a consumed
-credential is cleanup-eligible immediately.
+[Browser Session lifecycle decision](adr/drafts/persistent-browser-session-lifecycle.md)
+qualifies the Session exclusion in
+[bounded transient-data retention](adr/0167-bounded-transient-data-retention.md).
+Machine and Unknown Sessions and App Passwords remain outside cleanup. Expired
+typed Browser Sessions are drained in the existing startup/daily transient pass,
+with one explicit UTC cutoff and at most 500 rows per statement, releasing locks
+between batches without a global transaction. A separately reported, PII- and
+secret-free Session-domain failure leaves completed batches intact; other
+domains continue and the next pass retries. Semantic expiry remains
+authoritative independently of deletion. Other expiring credentials remain
+retained for 24 hours after expiry, while a consumed credential is
+cleanup-eligible immediately.
 
 - A token for user X reaches only `/atompub/X/*`. The enforcer is
   `server::atompub::require_user_match` (`server/src/atompub/guards.rs:13`),
@@ -1502,8 +1514,7 @@ credential is cleanup-eligible immediately.
 
 Cookie management is layered:
 `web::auth::server::{set_session_cookie, clear_session_cookie}` are Leptos
-adapters over the pure header builders
-`host::auth::{session_cookie_header, clear_session_cookie_header}`, which emit
+adapters over `host::auth`'s pure cookie header builders, which preserve
 `session=<token>; HttpOnly; SameSite=Lax; Path=/` (plus `; Secure` when the
 deployment's `CookieSettings` say HTTPS); clearing sets `Max-Age=0`. `HttpOnly`
 keeps page JavaScript away from the credential — the protection ADR-0107 exists
@@ -1511,6 +1522,19 @@ to stop the response body from undoing — and `SameSite=Lax` is the XSRF
 mitigation ADR-0007 lists among its decision drivers
 ([ADR-0007](adr/0007-auth-mechanisms.md),
 [ADR-0107](adr/0107-web-session-establishment-is-cookie-only.md)).
+
+New Browser Sessions receive persistent cookies only after acknowledged creation
+commit. Successful cookie-authenticated use renews the same token only when its
+activity write commits with acknowledgement. `Expires` is the integer
+Unix-second floor of committed `last_used_at + 2_592_000 seconds`; `Max-Age`
+rounds the remaining duration down again at emission and is never positive
+at/past that cutoff. An unacknowledged commit emits no cookie. Legacy Unknown
+cookies retain their session-cookie behavior; Machine credentials and explicit
+Authorization never renew ambient state. Handler-owned establishment or clearing
+takes precedence over a request's ambient renewal, preserving logout and
+retirement. The operation-time cutoff is not a commit-wall-clock lease: time
+sampled after lock acquisition determines eligibility, while acknowledgement
+determines whether its result may authenticate or emit a cookie.
 
 Explicit-auth cookie retirement uses a request-scoped `SessionCookieRetirement`
 marker set by `auth::User` only after Bearer/Basic token and username checks

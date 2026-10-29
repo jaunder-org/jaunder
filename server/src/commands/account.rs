@@ -167,7 +167,12 @@ pub async fn app_password_create(
         .run(move |transaction| {
             Box::pin(async move {
                 sessions
-                    .create_session(transaction, user.user_id, &label)
+                    .create_session(
+                        transaction,
+                        user.user_id,
+                        &label,
+                        storage::SessionKind::Machine,
+                    )
                     .await
             })
         })

@@ -1267,7 +1267,11 @@ async fn session_record(
     let outcome = write_scope
         .run(move |transaction| {
             let sessions = Arc::clone(&sessions);
-            Box::pin(async move { sessions.create_session(transaction, user_id, &label).await })
+            Box::pin(async move {
+                sessions
+                    .create_session(transaction, user_id, &label, storage::SessionKind::Unknown)
+                    .await
+            })
         })
         .await
         .map_err(|error| anyhow::anyhow!("fixture session creation failed: {error}"))?;
@@ -2019,7 +2023,12 @@ mod seed_session_tests {
         let outcome = write_scope
             .run(move |transaction| {
                 let sessions = Arc::clone(&sessions);
-                Box::pin(async move { sessions.authenticate(transaction, &token).await })
+                Box::pin(async move {
+                    sessions
+                        .authenticate(transaction, &token, storage::SessionClock::default())
+                        .await
+                        .map(|auth| auth.record)
+                })
             })
             .await
             .map_err(|error| anyhow::anyhow!("fixture session authentication failed: {error}"))?;

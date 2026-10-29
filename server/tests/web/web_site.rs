@@ -310,7 +310,7 @@ async fn malformed_site_tagline_wire_rejection_preserves_the_aggregate_snapshot(
 async fn aggregate_identity_commit_acknowledgement_loss_reaches_the_wire(#[case] backend: Backend) {
     let env = backend.setup().await;
     let write_scope = write_scope_with_commit_acknowledgement_loss(&env.write_scope());
-    let app = make_app!(&env, &env.base; override_write_scope = write_scope);
+    let app = make_app!(&env, &env.base; override_write_scope = write_scope, auth_write_scope = env.write_scope());
     let cookie = create_operator_and_session(
         std::sync::Arc::clone(&env.users()),
         std::sync::Arc::clone(&env.sessions()),

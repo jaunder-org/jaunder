@@ -80,6 +80,8 @@ pub async fn install_app_system_inventory(
 /// Router composition at a test root. The input expression supplies focused
 /// storage minting methods; the expanded router crosses only exact dependencies.
 macro_rules! make_app {
+    (@auth_scope $default:expr) => { $default };
+    (@auth_scope $default:expr, $scope:expr) => { $scope };
     (@preparer $preparer:expr) => { $preparer };
     (@preparer) => {
         host::image_privacy::UploadPreparer::new(std::path::PathBuf::from(env!("CARGO_BIN_EXE_jaunder")))
@@ -190,7 +192,7 @@ macro_rules! make_app {
             $(preparer = $preparer,)?
         )
     };
-    ($env:expr, $storage:expr; override_write_scope = $write_scope:expr) => {
+    ($env:expr, $storage:expr; override_write_scope = $write_scope:expr $(, auth_write_scope = $auth_write_scope:expr)?) => {
         make_app!(@build $storage, ($env).write_scope(), storage::InstanceId::new(), storage::test_support::noop_mailer(), false, std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
             site_config = ($env).site_config(), passkeys = ($env).passkeys(), users = ($env).users(), sessions = ($env).sessions(),
             invites = ($env).invites(), email_verifications = ($env).email_verifications(),
@@ -199,6 +201,7 @@ macro_rules! make_app {
             audiences = ($env).audiences(), media = ($env).media(), user_config = ($env).user_config(),
             themes = ($env).themes(), feed_cache = ($env).feed_cache(),
             feed_events = ($env).feed_events(), publisher = ($env).publisher(),
+            $(auth_write_scope = $auth_write_scope,)?
         )
     };
     ($env:expr, $storage:expr; override_sessions = $sessions:expr) => {
@@ -265,6 +268,7 @@ macro_rules! make_app {
         feed_cache = $feed_cache:expr,
         feed_events = $feed_events:expr,
         publisher = $publisher:expr,
+        $(auth_write_scope = $auth_write_scope:expr,)?
         $(preparer = $preparer:expr,)?
     ) => {{
         let themes: std::sync::Arc<dyn storage::ThemeStorage> = $themes;
@@ -284,6 +288,9 @@ macro_rules! make_app {
                 $password_resets;
             let posts: std::sync::Arc<dyn storage::PostStorage> = $posts;
             let write_scope = $write_scope;
+            // Mutation fault injection can leave the independent authentication
+            // transaction confirmed, so the test reaches its intended boundary.
+            let auth_write_scope = make_app!(@auth_scope write_scope.clone() $(, $auth_write_scope)?);
             let subscriptions: std::sync::Arc<dyn storage::SubscriptionStorage> =
                 $subscriptions;
             let audiences: std::sync::Arc<dyn storage::AudienceStorage> = $audiences;
@@ -426,7 +433,7 @@ macro_rules! make_app {
             .layer(axum::Extension(publisher_service))
             .layer(axum::Extension(feed_events))
             .layer(axum::Extension(sessions))
-            .layer(axum::Extension(write_scope));
+            .layer(axum::Extension(auth_write_scope));
             jaunder::create_router(app, &instance_id, $secure_cookies, false)
         })
     }};

@@ -274,13 +274,14 @@ async fn create_session(
     user_id: common::ids::UserId,
     label: common::session_label::SessionLabel,
 ) -> common::token::RawToken {
-    let outcome = write_scope
-        .run(|transaction| {
-            Box::pin(async move { sessions.create_session(transaction, user_id, &label).await })
+    storage::test_support::run_confirmed(&write_scope, "session fixture setup", |transaction| {
+        Box::pin(async move {
+            sessions
+                .create_session(transaction, user_id, &label, storage::SessionKind::Unknown)
+                .await
         })
-        .await
-        .expect("session fixture setup should succeed");
-    storage::test_support::confirmed_for(outcome, "session fixture setup")
+    })
+    .await
 }
 
 async fn authenticate(
@@ -301,7 +302,12 @@ async fn authenticate_result(
 ) -> Result<MutationOutcome<storage::SessionRecord>, WriteScopeError<SessionAuthError>> {
     write_scope
         .run(|transaction| {
-            Box::pin(async move { sessions.authenticate(transaction, &raw_token).await })
+            Box::pin(async move {
+                sessions
+                    .authenticate(transaction, &raw_token, storage::SessionClock::default())
+                    .await
+                    .map(|auth| auth.record)
+            })
         })
         .await
 }

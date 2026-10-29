@@ -946,16 +946,18 @@ mod tests {
         let user_id = seed_user(&env).await;
         let sessions = env.sessions();
         let label = parse_session_label("Passkey test");
-        let raw_session = crate::test_support::confirmed(
-            env.write_scope()
-                .run(move |transaction| {
-                    Box::pin(
-                        async move { sessions.create_session(transaction, user_id, &label).await },
-                    )
+        let raw_session = crate::test_support::run_confirmed(
+            &env.write_scope(),
+            "Passkey Browser Session fixture",
+            move |transaction| {
+                Box::pin(async move {
+                    sessions
+                        .create_session(transaction, user_id, &label, crate::SessionKind::Browser)
+                        .await
                 })
-                .await
-                .unwrap(),
-        );
+            },
+        )
+        .await;
         let user_handle = env.passkeys().user_handle(user_id).await.unwrap().unwrap();
         let base_url = "https://passkeys.example.test/".parse().unwrap();
         let (_, state) = RelyingParty::from_base_url(&base_url)
@@ -1478,32 +1480,42 @@ mod tests {
         let credential = insert_credential(&env, user_id, "Laptop").await;
         let sessions = env.sessions();
         let original_label = parse_session_label("Existing browser");
-        crate::test_support::confirmed(
-            env.write_scope()
-                .run(move |transaction| {
-                    Box::pin(async move {
-                        sessions
-                            .create_session(transaction, user_id, &original_label)
-                            .await
-                    })
+        crate::test_support::run_confirmed(
+            &env.write_scope(),
+            "original Session fixture",
+            move |transaction| {
+                Box::pin(async move {
+                    sessions
+                        .create_session(
+                            transaction,
+                            user_id,
+                            &original_label,
+                            crate::SessionKind::Unknown,
+                        )
+                        .await
                 })
-                .await
-                .unwrap(),
-        );
+            },
+        )
+        .await;
         let sessions = env.sessions();
         let sibling_label = parse_session_label("Sibling browser");
-        crate::test_support::confirmed(
-            env.write_scope()
-                .run(move |transaction| {
-                    Box::pin(async move {
-                        sessions
-                            .create_session(transaction, user_id, &sibling_label)
-                            .await
-                    })
+        crate::test_support::run_confirmed(
+            &env.write_scope(),
+            "sibling Session fixture",
+            move |transaction| {
+                Box::pin(async move {
+                    sessions
+                        .create_session(
+                            transaction,
+                            user_id,
+                            &sibling_label,
+                            crate::SessionKind::Unknown,
+                        )
+                        .await
                 })
-                .await
-                .unwrap(),
-        );
+            },
+        )
+        .await;
 
         let passkeys = env.passkeys();
         let sessions = env.sessions();

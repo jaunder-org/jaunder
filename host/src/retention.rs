@@ -7,6 +7,7 @@ pub enum Domain {
     EmailVerifications,
     PasswordResets,
     PasskeyCeremonies,
+    BrowserSessions,
     FeedEvents,
 }
 
@@ -20,6 +21,7 @@ impl Domain {
             Self::PasswordResets => "password_resets",
             Self::PasskeyCeremonies => "passkey_ceremonies",
             Self::FeedEvents => "feed_events",
+            Self::BrowserSessions => "browser_sessions",
         }
     }
 }
@@ -49,6 +51,7 @@ mod tests {
     #[test]
     fn labels_are_the_documented_bounded_vocabulary() {
         assert_eq!(Domain::Invites.label(), "invites");
+        assert_eq!(Domain::BrowserSessions.label(), "browser_sessions");
         assert_eq!(Domain::EmailVerifications.label(), "email_verifications");
         assert_eq!(Domain::PasswordResets.label(), "password_resets");
         assert_eq!(Domain::FeedEvents.label(), "feed_events");

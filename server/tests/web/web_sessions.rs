@@ -35,18 +35,23 @@ async fn list_sessions_returns_sessions_for_authenticated_user(#[case] backend: 
     // Create a second session with a label.
     let sessions = Arc::clone(&env.sessions());
     let label = parse_session_label("mobile");
-    let outcome = env
-        .write_scope()
-        .run(|transaction| {
+    storage::test_support::run_confirmed(
+        &env.write_scope(),
+        "machine Session fixture",
+        |transaction| {
             Box::pin(async move {
                 sessions
-                    .create_session(transaction, session.user_id, &label)
+                    .create_session(
+                        transaction,
+                        session.user_id,
+                        &label,
+                        storage::SessionKind::Machine,
+                    )
                     .await
             })
-        })
-        .await
-        .unwrap();
-    assert!(matches!(outcome, MutationOutcome::Confirmed(_)));
+        },
+    )
+    .await;
 
     let (status, body) = post_form(
         app.clone(),
@@ -273,7 +278,12 @@ async fn revoke_session_removes_session_for_authenticated_user(#[case] backend: 
     let outcome = env
         .write_scope()
         .run(|transaction| {
-            Box::pin(async move { sessions.authenticate(transaction, &raw_token2).await })
+            Box::pin(async move {
+                sessions
+                    .authenticate(transaction, &raw_token2, storage::SessionClock::default())
+                    .await
+                    .map(|auth| auth.record)
+            })
         })
         .await
         .unwrap();
@@ -304,7 +314,12 @@ async fn revoke_session_removes_session_for_authenticated_user(#[case] backend: 
     let outcome = env
         .write_scope()
         .run(|transaction| {
-            Box::pin(async move { sessions.authenticate(transaction, &token).await })
+            Box::pin(async move {
+                sessions
+                    .authenticate(transaction, &token, storage::SessionClock::default())
+                    .await
+                    .map(|auth| auth.record)
+            })
         })
         .await
         .unwrap();
@@ -337,7 +352,12 @@ async fn revoke_session_rejects_session_belonging_to_another_user(#[case] backen
     let outcome = env
         .write_scope()
         .run(|transaction| {
-            Box::pin(async move { sessions.authenticate(transaction, &token).await })
+            Box::pin(async move {
+                sessions
+                    .authenticate(transaction, &token, storage::SessionClock::default())
+                    .await
+                    .map(|auth| auth.record)
+            })
         })
         .await
         .unwrap();
@@ -408,7 +428,8 @@ async fn create_app_password_mints_labelled_session(#[case] backend: Backend) {
 
     // The new app password appears as a session with its label.
     let sessions = env.sessions().list_sessions(session.user_id).await.unwrap();
-    assert!(sessions.iter().any(|s| s.label == "MarsEdit"));
+    let machine = sessions.iter().find(|s| s.label == "MarsEdit").unwrap();
+    assert_eq!(machine.kind, storage::SessionKind::Machine);
 }
 
 #[apply(backends)]

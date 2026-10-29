@@ -226,11 +226,26 @@ pub(crate) fn read_table_rows(
         }
 
         let value: Value = serde_json::from_str(&line)?;
-        let Value::Object(row) = value else {
+        let Value::Object(mut row) = value else {
             return Err(BackupError::InvalidBackup(format!(
                 "table {table} contains a non-object row"
             )));
         };
+        if table == "sessions" {
+            // Historical rows carry no purpose evidence. Default only absence;
+            // invalid supplied kinds must not become grandfathered credentials.
+            let kind = row
+                .entry("kind")
+                .or_insert_with(|| Value::String("unknown".to_owned()));
+            let valid = kind
+                .as_str()
+                .is_some_and(|value| value.parse::<crate::SessionKind>().is_ok());
+            if !valid {
+                return Err(BackupError::InvalidBackup(
+                    "invalid session kind".to_owned(),
+                ));
+            }
+        }
         rows.push(row);
     }
     Ok(rows)
@@ -254,6 +269,32 @@ mod tests {
 
     fn quote_test_identifier(identifier: &str) -> String {
         format!("\"{identifier}\"")
+    }
+
+    #[test]
+    fn session_backup_rows_preserve_closed_kinds_and_default_only_absent_kind() {
+        let temp = TempDir::new().unwrap();
+        let db = temp.path().join("db");
+        fs::create_dir(&db).unwrap();
+        let path = db.join("sessions.ndjson");
+        fs::write(
+            &path,
+            "{\"kind\":\"browser\"}\n{\"kind\":\"machine\"}\n{\"kind\":\"unknown\"}\n{}\n",
+        )
+        .unwrap();
+        let rows = read_table_rows(temp.path(), "sessions").unwrap();
+        let kinds: Vec<_> = rows
+            .iter()
+            .map(|row| row["kind"].as_str().unwrap())
+            .collect();
+        assert_eq!(kinds, ["browser", "machine", "unknown", "unknown"]);
+        for invalid in ["\"Browser\"", "\"other\"", "null", "1"] {
+            fs::write(&path, format!("{{\"kind\":{invalid}}}\n")).unwrap();
+            assert!(matches!(
+                read_table_rows(temp.path(), "sessions"),
+                Err(BackupError::InvalidBackup(_))
+            ));
+        }
     }
 
     #[test]

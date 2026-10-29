@@ -271,6 +271,7 @@ approve_storage_binds!(
     RestoreText,
     RowLimit,
     SessionLabel,
+    crate::SessionKind,
     TargetKind,
     TokenHash,
     FeedCacheGeneratedAt,

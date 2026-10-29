@@ -30,6 +30,34 @@ mod tests {
     static SQLITE_MIGRATOR: Migrator = sqlx::migrate!("./migrations/sqlite");
     static POSTGRES_MIGRATOR: Migrator = sqlx::migrate!("./migrations/postgres");
 
+    #[apply(backends)]
+    #[tokio::test]
+    async fn session_kind_upgrade_preserves_legacy_rows_as_unknown(#[case] backend: Backend) {
+        let database = MigrationDatabase::new(backend).await;
+        database.migrate_to(51).await.unwrap();
+        crate::with_closeable_pool!(&database.pool, pool, {
+            sqlx::query("INSERT INTO users (username, password_hash, created_at) VALUES ('legacyuser', 'hash', CURRENT_TIMESTAMP)")
+                .execute(pool).await.unwrap();
+            sqlx::query("INSERT INTO sessions (token_hash, user_id, label, created_at, last_used_at) VALUES ('legacyhash', (SELECT user_id FROM users WHERE username = 'legacyuser'), 'Browser', '2020-01-01T00:00:00Z', '2020-01-02T00:00:00Z')")
+                .execute(pool).await.unwrap();
+        });
+        database.migrate_current().await.unwrap();
+        crate::with_closeable_pool!(&database.pool, pool, {
+            let (kind, label, created, used): (crate::SessionKind, String, common::time::UtcInstant, common::time::UtcInstant) = sqlx::query_as("SELECT kind, label, created_at, last_used_at FROM sessions WHERE token_hash = 'legacyhash'")
+                .fetch_one(pool).await.unwrap();
+            assert_eq!(kind, crate::SessionKind::Unknown);
+            assert_eq!(label, "Browser");
+            assert_eq!(created, "2020-01-01T00:00:00Z".parse().unwrap());
+            assert_eq!(used, "2020-01-02T00:00:00Z".parse().unwrap());
+            assert!(
+                sqlx::query("UPDATE sessions SET kind = 'invalid'")
+                    .execute(pool)
+                    .await
+                    .is_err()
+            );
+        });
+    }
+
     fn migrator_through(source: &Migrator, version: i64) -> Migrator {
         Migrator {
             migrations: Cow::Owned(

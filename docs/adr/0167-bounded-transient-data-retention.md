@@ -4,6 +4,11 @@
 - Date: 2026-08-31
 - Issue: [#393](https://github.com/jaunder-org/jaunder/issues/393)
 
+On 2026-10-28, #1845 qualified the Session exclusion with typed Browser idle
+expiry and cleanup; see the
+[Browser Session lifecycle decision](drafts/persistent-browser-session-lifecycle.md)
+and [current architecture](../ARCHITECTURE.md#authentication).
+
 ## Context
 
 Jaunder has durable product records and short-lived operational records with

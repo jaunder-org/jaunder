@@ -799,7 +799,8 @@ fn prepare_background_worker_setup_from_dependencies(
         Arc::clone(&dependencies.feed_events),
         Arc::clone(&dependencies.passkeys),
         dependencies.write_scope.clone(),
-    );
+    )
+    .with_sessions(Arc::clone(&dependencies.sessions));
     let websub_capture = capture.map(|paths| paths.websub.clone());
     let feed_interval = feed_worker_interval(websub_capture.is_some());
     let feed_worker = feed_worker(

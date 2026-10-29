@@ -497,7 +497,7 @@ async fn commit_indeterminate_ceremony_claim_is_neutral_and_durably_consumed(
         MutationOutcome::Confirmed(start) | MutationOutcome::CommitIndeterminate(start) => start,
     };
     let acknowledgement_lost = write_scope_with_commit_acknowledgement_loss(&env.write_scope());
-    let indeterminate_app = make_app!(&env, &env.base; override_write_scope = acknowledgement_lost);
+    let indeterminate_app = make_app!(&env, &env.base; override_write_scope = acknowledgement_lost, auth_write_scope = env.write_scope());
 
     for (path, body, cookie, neutral_message) in [
         (

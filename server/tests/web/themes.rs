@@ -1198,7 +1198,7 @@ async fn copy_commit_acknowledgement_loss_reconciles_one_destination_without_rep
     .await;
     let lost =
         storage::test_support::write_scope_with_commit_acknowledgement_loss(&env.write_scope());
-    let app = make_app!(&env, &env.base; override_write_scope = lost);
+    let app = make_app!(&env, &env.base; override_write_scope = lost, auth_write_scope = env.write_scope());
     let (status, body) = post_server_fn(
         app,
         &web::themes::CopyTheme {

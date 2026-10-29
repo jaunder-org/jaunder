@@ -72,14 +72,32 @@ initialized, never-served instance: release-role installation belongs to startup
 admission. The old `format-3/` bytes and digest remain unchanged and its index
 entry is historical-schema evidence, not current-schema materialization.
 
-The current-writer oracle extends its independent format-3 table inventory for
-schema 51 and requires that exact schema version and complete path set. Its
-populated writer seed installs canonical A, B-app and B-theme inventories; the
-raw-wire checks require current application/theme identities, binary manifest
-cells, live/retained references and six exact immutable content members. The
-public backup interoperability tests and canonical styling qualification
-separately prove populated restoration/readability. Neither proof relabels a
-historical fixture or changes the format version.
+The schema-51 evidence extends the independent format-3 table inventory and
+retains its exact schema version and complete path set. Its populated writer
+seed installs canonical A, B-app and B-theme inventories; the raw-wire checks
+require current application/theme identities, binary manifest cells,
+live/retained references and six exact immutable content members. The public
+backup interoperability tests and canonical styling qualification separately
+prove populated restoration/readability. Neither proof relabels a historical
+fixture or changes the format version.
+
+## Schema-52 format-3 evidence
+
+`format-3-schema-52/` extends the hand-authored schema-51 examples with three
+Session rows whose identical labels deliberately carry distinct `browser`,
+`machine`, and `unknown` kinds. Migration 0052 adds that closed text field, not
+a new table or backup format. Its separate provenance manifest pins schema 52.
+The schema-51 fixture and digest remain unchanged; its index entry is now
+historical-schema admission evidence and must be rejected before mutation.
+
+The current-writer oracle explicitly requires schema 52 and the unchanged
+independent table/path inventory, plus exact Session wire members, owner, shared
+label and all three stored kinds. The public reader matrix restores the new
+immutable fixture through directory and archive inputs on both backends and
+checks those kinds via Session storage. Formats 1 and 2 retain their historical
+row-decode coverage. The separate Session codec test retains absent-kind to
+Unknown decoding; exact-schema admission still precedes row loading. No fixture
+is upgraded in place.
 
 ## Retirement
 

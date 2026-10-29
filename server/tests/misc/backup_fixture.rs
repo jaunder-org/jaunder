@@ -339,6 +339,22 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
     let publisher_generation =
         configure_backup_publisher(factory.publisher(), write_scope.clone()).await;
     let (author, password) = create_backup_author(factory.users(), write_scope.clone()).await;
+    for kind in [
+        storage::SessionKind::Browser,
+        storage::SessionKind::Machine,
+        storage::SessionKind::Unknown,
+    ] {
+        let sessions = factory.sessions();
+        let label = common::test_support::parse_session_label("same backup label");
+        storage::test_support::run_confirmed(&write_scope, "backup Session", |transaction| {
+            Box::pin(async move {
+                sessions
+                    .create_session(transaction, author, &label, kind)
+                    .await
+            })
+        })
+        .await;
+    }
     let passkey = seed_backup_passkey(args, factory.passkeys(), write_scope.clone(), author).await;
     let public = SeedRawPost::new(author)
         .published_at(fixture_published_at())
@@ -787,6 +803,25 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
     let factory = open_existing_database(&args.db, &StorageRuntimeConfig::default())
         .await
         .expect("open restored database");
+    let sessions = factory
+        .sessions()
+        .list_sessions(ids.author)
+        .await
+        .expect("list restored Sessions");
+    let kinds: std::collections::BTreeSet<_> = sessions
+        .iter()
+        .map(|session| session.kind.to_string())
+        .collect();
+    assert_eq!(sessions.len(), 3);
+    assert_eq!(
+        kinds,
+        [
+            "browser".to_owned(),
+            "machine".to_owned(),
+            "unknown".to_owned()
+        ]
+        .into()
+    );
     assert_restored_backup_author(factory.users()).await;
     assert_restored_publisher(factory.publisher(), ids).await;
     assert_restored_public_post_and_passkey(factory.posts(), factory.passkeys(), ids).await;

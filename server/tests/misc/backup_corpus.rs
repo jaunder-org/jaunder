@@ -1280,6 +1280,30 @@ mod reader_tests {
         ));
     }
 
+    async fn assert_reader_session_inventory(factory: &storage::StorageFactory, user_id: UserId) {
+        let sessions = compatibility_result(
+            factory.sessions().list_sessions(user_id).await,
+            "read schema-52 fixture Sessions",
+        );
+        assert_eq!(sessions.len(), 3);
+        assert_eq!(
+            sessions
+                .iter()
+                .map(|session| session.kind.to_string())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "browser".to_owned(),
+                "machine".to_owned(),
+                "unknown".to_owned()
+            ])
+        );
+        assert!(
+            sessions
+                .iter()
+                .all(|session| session.label.as_ref() == "same corpus label")
+        );
+    }
+
     async fn assert_reader_inventory(
         args: &StorageArgs,
         format_version: u32,
@@ -1298,6 +1322,9 @@ mod reader_tests {
             "fixture user exists",
         );
         assert_reader_passkey_inventory(&factory, user_id, format_version).await;
+        if format_version == 3 {
+            assert_reader_session_inventory(&factory, user_id).await;
+        }
         let post = compatibility_option(
             compatibility_result(
                 factory
@@ -1659,6 +1686,12 @@ mod writer_tests {
         tables
     }
 
+    // Migration 0052 adds only sessions.kind; format 3 and the independent
+    // schema-51 table inventory are unchanged.
+    fn schema_52_v3_tables() -> Vec<&'static str> {
+        schema_51_v3_tables()
+    }
+
     struct WriterRole {
         name: &'static str,
         seeded_source: &'static str,
@@ -1694,6 +1727,10 @@ mod writer_tests {
             seeded_source: "PasskeyStorage inserts and uses a durable credential with counter and backup state",
         },
         WriterRole {
+            name: "Session kinds",
+            seeded_source: "three author Sessions share a label but store browser, machine and unknown kinds",
+        },
+        WriterRole {
             name: "Historical Post Permalink Alias",
             seeded_source: "post_permalink_aliases preserves a prior User-qualified identity",
         },
@@ -1723,7 +1760,7 @@ mod writer_tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn current_writer_satisfies_independent_schema_51_v3_raw_wire_oracle(
+    async fn current_writer_satisfies_independent_schema_52_v3_raw_wire_oracle(
         #[case] backend: Backend,
     ) {
         for output in CorpusIoMode::ALL {
@@ -1756,7 +1793,7 @@ mod writer_tests {
             };
 
             assert_writer_version_is_uniquely_supported(&extracted);
-            assert_v3_raw_wire_oracle(&extracted, output, &ids);
+            assert_schema_52_v3_raw_wire_oracle(&extracted, output, &ids);
         }
     }
 
@@ -1794,7 +1831,11 @@ mod writer_tests {
             format_compatibility_diagnostic("format-3 is the sole current writer oracle")
         );
     }
-    fn assert_v3_raw_wire_oracle(export: &Path, output: CorpusIoMode, ids: &BackupFixtureIds) {
+    fn assert_schema_52_v3_raw_wire_oracle(
+        export: &Path,
+        output: CorpusIoMode,
+        ids: &BackupFixtureIds,
+    ) {
         assert_inventory_is_complete();
         let manifest = read_manifest(export);
         let members = compatibility_option(manifest.as_object(), "manifest must be an object");
@@ -1826,9 +1867,9 @@ mod writer_tests {
         );
         assert_eq!(
             manifest["schema_version"],
-            Value::from(51),
+            Value::from(52),
             "{}",
-            format_compatibility_diagnostic("current writer must match the schema-51 oracle")
+            format_compatibility_diagnostic("current writer must match the schema-52 oracle")
         );
         assert!(
             manifest["schema_checksum"].is_string(),
@@ -1858,7 +1899,7 @@ mod writer_tests {
         );
         assert_eq!(
             tables,
-            &schema_51_v3_tables()
+            &schema_52_v3_tables()
                 .iter()
                 .map(|table| Value::from(*table))
                 .collect::<Vec<_>>(),
@@ -1867,7 +1908,7 @@ mod writer_tests {
         );
 
         let paths = regular_file_bytes(export);
-        let expected_paths = schema_51_writer_paths(ids);
+        let expected_paths = schema_52_writer_paths(ids);
         assert_eq!(
             paths.keys().cloned().collect::<BTreeSet<_>>(),
             expected_paths,
@@ -1897,10 +1938,10 @@ mod writer_tests {
         assert_writer_roles(&rows, ids);
     }
 
-    fn schema_51_writer_paths(ids: &BackupFixtureIds) -> BTreeSet<String> {
+    fn schema_52_writer_paths(ids: &BackupFixtureIds) -> BTreeSet<String> {
         std::iter::once("manifest.json".to_owned())
             .chain(
-                schema_51_v3_tables()
+                schema_52_v3_tables()
                     .iter()
                     .map(|table| format!("db/{table}.ndjson")),
             )
@@ -2042,7 +2083,7 @@ mod writer_tests {
     }
 
     fn parse_ndjson_tables(files: &BTreeMap<String, Vec<u8>>) -> BTreeMap<String, Vec<Value>> {
-        schema_51_v3_tables()
+        schema_52_v3_tables()
             .iter()
             .map(|table| {
                 let path = format!("db/{table}.ndjson");
@@ -2249,6 +2290,41 @@ mod writer_tests {
         let audience = ids.audience.to_string();
         let subscription = ids.subscription.to_string();
 
+        let sessions = table_rows(rows, "sessions");
+        assert_eq!(
+            sessions.len(),
+            3,
+            "schema-52 writer must preserve every seeded Session"
+        );
+        assert_eq!(
+            sessions
+                .iter()
+                .map(|row| row["kind"].as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([Some("browser"), Some("machine"), Some("unknown")]),
+            "schema-52 writer must emit the stored closed Session kinds, not infer them from labels"
+        );
+        for session in sessions {
+            assert_eq!(
+                session
+                    .as_object()
+                    .expect("Session object")
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from([
+                    "token_hash",
+                    "user_id",
+                    "label",
+                    "created_at",
+                    "last_used_at",
+                    "kind"
+                ]),
+                "schema-52 Session wire members must be exact"
+            );
+            assert!(row_id_is(session, "user_id", &author));
+            assert_eq!(session["label"], Value::from("same backup label"));
+        }
         assert_writer_user_roles(rows, &author, &viewer);
         assert_writer_passkey_roles(rows, ids, &author);
         assert_writer_media_and_config_roles(rows, &author);
@@ -2263,6 +2339,7 @@ mod writer_tests {
                 .collect::<BTreeSet<_>>(),
             BTreeSet::from([
                 "Historical Post Permalink Alias",
+                "Session kinds",
                 "boolean",
                 "integer",
                 "media bytes",
