@@ -106,7 +106,9 @@ impl BackupCorpus {
     }
 
     pub(crate) fn verify(&self, entry: &CorpusEntry) -> Result<(), BackupCorpusError> {
-        let actual = normalized_digest(&self.root.join(&entry.fixture))?;
+        let temporary = tempfile::tempdir()?;
+        extract_zip_fixture(&self.root.join(&entry.fixture), temporary.path())?;
+        let actual = normalized_digest(temporary.path())?;
         if actual != entry.digest {
             return Err(BackupCorpusError::DigestMismatch {
                 fixture: entry.fixture.clone(),
@@ -139,7 +141,7 @@ impl BackupCorpus {
                 destination.display()
             )));
         }
-        copy_regular_tree(&self.root.join(&entry.fixture), destination)?;
+        extract_zip_fixture(&self.root.join(&entry.fixture), destination)?;
         let manifest_path = destination.join("manifest.json");
         let manifest = fs::read(&manifest_path)?;
         let schema_version = schema_version_value_span(&manifest)?;
@@ -200,6 +202,78 @@ impl BackupCorpus {
         }
         Ok(())
     }
+}
+
+fn extract_zip_fixture(source: &Path, destination: &Path) -> Result<(), BackupCorpusError> {
+    if destination.exists() {
+        if !destination.is_dir() || fs::read_dir(destination)?.next().is_some() {
+            return Err(BackupCorpusError::InvalidIndex(format!(
+                "fixture extraction destination is not empty: {}",
+                destination.display()
+            )));
+        }
+    } else {
+        fs::create_dir(destination)?;
+    }
+    let input = fs::File::open(source)?;
+    let mut archive = zip::ZipArchive::new(input).map_err(|error| {
+        io::Error::other(format!("invalid fixture ZIP {}: {error}", source.display()))
+    })?;
+    let mut seen = BTreeSet::new();
+    for index in 0..archive.len() {
+        let mut file = archive
+            .by_index(index)
+            .map_err(|error| io::Error::other(format!("invalid fixture ZIP member: {error}")))?;
+        let name = file
+            .name()
+            .map_err(|error| io::Error::other(format!("invalid fixture ZIP path: {error}")))?
+            .into_owned();
+        if name.contains('\\') {
+            return Err(BackupCorpusError::UnsafeFixture(format!(
+                "ZIP member path uses a platform separator: {name}"
+            )));
+        }
+        let path = Path::new(&name);
+        let relative = normalized_archive_relative_path(path)?
+            .ok_or_else(|| BackupCorpusError::UnsafeFixture("empty ZIP member path".to_owned()))?;
+        if !seen.insert(relative.clone()) {
+            return Err(BackupCorpusError::UnsafeFixture(format!(
+                "duplicate ZIP member: {}",
+                relative.display()
+            )));
+        }
+        let output = destination.join(&relative);
+        let is_dir = file.is_dir();
+        #[cfg(unix)]
+        if let Some(mode) = file.unix_mode() {
+            match (mode & 0o170_000, is_dir) {
+                (0, _) | (0o100_000, false) | (0o040_000, true) => {}
+                (0o120_000, _) => {
+                    return Err(BackupCorpusError::UnsafeFixture(format!(
+                        "symlink ZIP member: {}",
+                        relative.display()
+                    )));
+                }
+                _ => {
+                    return Err(BackupCorpusError::UnsafeFixture(format!(
+                        "special ZIP member: {}",
+                        relative.display()
+                    )));
+                }
+            }
+        }
+        if is_dir {
+            fs::create_dir_all(output)?;
+            continue;
+        }
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        fs::write(output, bytes)?;
+    }
+    Ok(())
 }
 
 fn normalized_archive_relative_path(path: &Path) -> Result<Option<PathBuf>, BackupCorpusError> {
@@ -460,47 +534,13 @@ fn relative_path(path: &Path) -> Result<String, BackupCorpusError> {
     Ok(parts.join("/"))
 }
 
-fn copy_regular_tree(source: &Path, destination: &Path) -> Result<(), BackupCorpusError> {
-    let metadata = fs::symlink_metadata(source)?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(BackupCorpusError::UnsafeFixture(format!(
-            "{} is not a directory",
-            source.display()
-        )));
-    }
-    fs::create_dir(destination)?;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let source_child = entry.path();
-        let destination_child = destination.join(name);
-        let file_type = fs::symlink_metadata(&source_child)?.file_type();
-        if file_type.is_symlink() {
-            return Err(BackupCorpusError::UnsafeFixture(format!(
-                "symlink entry: {}",
-                source_child.display()
-            )));
-        }
-        if file_type.is_dir() {
-            copy_regular_tree(&source_child, &destination_child)?;
-        } else if file_type.is_file() {
-            fs::copy(source_child, destination_child)?;
-        } else {
-            return Err(BackupCorpusError::UnsafeFixture(format!(
-                "special entry: {}",
-                source_child.display()
-            )));
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, io::Write as _};
 
     use super::*;
     use tempfile::TempDir;
+    use zip::write::SimpleFileOptions;
 
     fn fixture_root() -> TempDir {
         let temp = TempDir::new().expect("create fixture root");
@@ -511,12 +551,66 @@ mod tests {
             b"value",
         )
         .expect("write fixture value");
+        let archive =
+            fs::File::create(temp.path().join("fixture.zip")).expect("create fixture ZIP");
+        let mut archive = zip::ZipWriter::new(archive);
+        archive
+            .start_file("nested/value", SimpleFileOptions::default())
+            .expect("write fixture ZIP member");
+        archive
+            .write_all(b"value")
+            .expect("write fixture ZIP payload");
+        archive.finish().expect("finish fixture ZIP");
         fs::write(
             temp.path().join(INDEX_FILE),
-            r#"{"fixtures":[{"fixture":"fixture","format_version":1,"support":"supported","digest":"0000000000000000000000000000000000000000000000000000000000000000"}]}"#,
+            r#"{"fixtures":[{"fixture":"fixture.zip","format_version":1,"support":"supported","digest":"0000000000000000000000000000000000000000000000000000000000000000"}]}"#,
         )
         .expect("write index");
         temp
+    }
+
+    #[test]
+    fn zip_fixture_extraction_rejects_traversal_members() {
+        let temp = TempDir::new().expect("create ZIP fixture root");
+        let archive_path = temp.path().join("unsafe.zip");
+        let file = fs::File::create(&archive_path).expect("create unsafe ZIP");
+        let mut archive = zip::ZipWriter::new(file);
+        archive
+            .start_file("../outside", SimpleFileOptions::default())
+            .expect("write traversal member");
+        archive.write_all(b"unsafe").expect("write traversal bytes");
+        archive.finish().expect("finish unsafe ZIP");
+
+        assert!(matches!(
+            extract_zip_fixture(&archive_path, &temp.path().join("out")),
+            Err(BackupCorpusError::UnsafeFixture(message)) if message.contains("normalized relative")
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn zip_fixture_rejects_directory_classified_special_member() {
+        let temp = TempDir::new().expect("create ZIP fixture root");
+        let archive_path = temp.path().join("unsafe-directory.zip");
+        let file = fs::File::create(&archive_path).expect("create unsafe ZIP");
+        let mut archive = zip::ZipWriter::new(file);
+        archive
+            .add_directory("special/", SimpleFileOptions::default())
+            .expect("write directory-classified member");
+        archive.finish().expect("finish unsafe ZIP");
+        let mut bytes = fs::read(&archive_path).expect("read unsafe ZIP");
+        let central = bytes
+            .windows(4)
+            .position(|signature| signature == b"PK\x01\x02")
+            .expect("find ZIP central directory member");
+        bytes[central + 5] = 3; // Unix host, so external attributes carry the file type.
+        bytes[central + 38..central + 42].copy_from_slice(&(0o010_644_u32 << 16).to_le_bytes()); // FIFO, despite trailing '/'.
+        fs::write(&archive_path, bytes).expect("write special directory-classified member");
+
+        assert!(matches!(
+            extract_zip_fixture(&archive_path, &temp.path().join("out")),
+            Err(BackupCorpusError::UnsafeFixture(message)) if message.contains("special ZIP member")
+        ));
     }
 
     #[test]
@@ -627,8 +721,13 @@ mod tests {
             corpus.entries().first(),
             "fixture index must contain an entry",
         );
+        let temp = TempDir::new().expect("materialize fixture for assertions");
+        compatibility_result(
+            extract_zip_fixture(&corpus.root.join(&entry.fixture), temp.path()),
+            "extract fixture ZIP",
+        );
         let bytes = compatibility_result(
-            fs::read(corpus.root.join(&entry.fixture).join("manifest.json")),
+            fs::read(temp.path().join("manifest.json")),
             "read fixture manifest",
         );
         let manifest: Value =
@@ -643,14 +742,7 @@ mod tests {
             )
             .contains(&Value::from("instance_identity"))
         );
-        assert!(
-            corpus
-                .root
-                .join(&entry.fixture)
-                .join("media")
-                .join("avatar.txt")
-                .is_file()
-        );
+        assert!(temp.path().join("media").join("avatar.txt").is_file());
     }
 
     #[test]
@@ -660,7 +752,12 @@ mod tests {
             corpus.entries().first(),
             "fixture index must contain an entry",
         );
-        let root = corpus.root.join(&entry.fixture);
+        let temp = TempDir::new().expect("materialize fixture for assertions");
+        compatibility_result(
+            extract_zip_fixture(&corpus.root.join(&entry.fixture), temp.path()),
+            "extract fixture ZIP",
+        );
+        let root = temp.path();
         let bytes = compatibility_result(
             fs::read(root.join("manifest.json")),
             "read fixture manifest",
@@ -677,24 +774,24 @@ mod tests {
                 "users"
             ])
         );
-        let user = ndjson_row(&root, "users");
+        let user = ndjson_row(root, "users");
         assert_eq!(user["user_id"], 41);
         assert_eq!(user["display_name"], Value::Null);
         assert_eq!(user["email_verified"], false);
         assert_eq!(user["is_operator"], true);
 
-        let media = ndjson_row(&root, "media");
+        let media = ndjson_row(root, "media");
         assert_eq!(media["user_id"], user["user_id"]);
         assert_eq!(media["size_bytes"], 13);
         assert_eq!(media["source_url"], Value::Null);
 
-        let post = ndjson_row(&root, "posts");
+        let post = ndjson_row(root, "posts");
         assert_eq!(post["user_id"], user["user_id"]);
         assert_eq!(
             post["rendered_html"],
             serde_json::json!({"kind": "structured", "items": [1, true]})
         );
-        let revision = ndjson_row(&root, "post_revisions");
+        let revision = ndjson_row(root, "post_revisions");
         assert_eq!(revision["post_id"], post["post_id"]);
         assert_eq!(revision["user_id"], user["user_id"]);
         assert_eq!(revision["rendered_html"], 1.25);
@@ -708,14 +805,22 @@ mod tests {
             .iter()
             .find(|entry| entry.materializable)
             .expect("current-schema fixture");
-        let source_before = tree_bytes(&corpus.root.join(&entry.fixture));
+        let source_zip = corpus.root.join(&entry.fixture);
+        let source_zip_before = fs::read(&source_zip).expect("read indexed fixture ZIP");
+        let source = TempDir::new().expect("extract source fixture");
+        extract_zip_fixture(&source_zip, source.path()).expect("extract source fixture");
+        let source_before = tree_bytes(source.path());
         let temp = TempDir::new().expect("create materialization root");
         let destination = temp.path().join("fixture");
         let target_schema_version = 7;
         corpus
             .materialize(entry, &destination, target_schema_version)
             .expect("materialize fixture");
-        assert_eq!(tree_bytes(&corpus.root.join(&entry.fixture)), source_before);
+        assert_eq!(
+            fs::read(&source_zip).expect("read indexed fixture ZIP after materialization"),
+            source_zip_before,
+            "materialization must leave the indexed ZIP bytes unchanged"
+        );
 
         let source_manifest = &source_before["manifest.json"];
         let materialized_manifest =
@@ -1418,7 +1523,12 @@ mod reader_tests {
                 materialized
             } else {
                 compatibility_result(corpus.verify(entry), "verify historical schema fixture");
-                corpus.root.join(&entry.fixture)
+                let source = target.base.path().join("historical-fixture");
+                compatibility_result(
+                    super::extract_zip_fixture(&corpus.root.join(&entry.fixture), &source),
+                    "extract verified historical fixture",
+                );
+                source
             };
             let restore_path = match input {
                 CorpusIoMode::Directory => fixture,

@@ -1,47 +1,47 @@
 {
   "fixtures": [
     {
-      "fixture": "format-1",
+      "fixture": "format-1.zip",
       "format_version": 1,
       "support": "supported",
       "materializable": false,
       "digest": "b55707c7537a81f523d096116dc36b98556a0c3a96be38a8f02e0c2d76de197b"
     },
     {
-      "fixture": "format-1-current",
+      "fixture": "format-1-current.zip",
       "format_version": 1,
       "support": "supported",
       "digest": "28dc68dba43bf120d932b38dca20753d9413a84b1cb74d690b85db5bfefcc03d"
     },
     {
-      "fixture": "format-2",
+      "fixture": "format-2.zip",
       "format_version": 2,
       "support": "supported",
       "materializable": false,
       "digest": "ded577312114f3a72a39a4dda05932facf167ae1ea52458eac5759d16dd2907e"
     },
     {
-      "fixture": "format-2-current",
+      "fixture": "format-2-current.zip",
       "format_version": 2,
       "support": "supported",
       "digest": "33d1bc82fac64732141aacecf6dd2971c95db7de7d012b97721d2a08cdac3912"
     },
     {
-      "fixture": "format-3",
+      "fixture": "format-3.zip",
       "format_version": 3,
       "support": "supported",
       "materializable": false,
       "digest": "eaf125a7bfa4a773c6a7ade027b355f6aac4e19d8c9562ff8e84cae7276caeb6"
     },
     {
-      "fixture": "format-3-schema-51",
+      "fixture": "format-3-schema-51.zip",
       "format_version": 3,
       "support": "supported",
       "materializable": false,
       "digest": "92698e8203f1aea280fd22d10415569574f79838720f106b2006c4ccfa88eec9"
     },
     {
-      "fixture": "format-3-schema-52",
+      "fixture": "format-3-schema-52.zip",
       "format_version": 3,
       "support": "supported",
       "digest": "c9433574d39304d2e08dc9452ba9989bba824e7ac1dea0f2ef74b464bb7967c1"
