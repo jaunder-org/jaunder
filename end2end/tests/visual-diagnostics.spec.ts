@@ -60,6 +60,7 @@ function cornerBoundary(
   let transform = options.originalTransform ?? "none";
   let observation = 0;
   const appliedStyles: Array<string | null> = [];
+  const transformWrites: string[] = [];
   let restored = false;
   let removed = false;
   let scrollRestores = 0;
@@ -115,15 +116,15 @@ function cornerBoundary(
     getAttribute: async () =>
       restored && options.lostStyle ? "wrong-style" : inlineStyle,
     evaluate: async (_: unknown, value: unknown) => {
-      if (value && typeof value === "object" && "phase" in value) {
-        const { phase, originalStyle: saved } = value as {
-          phase: string;
+      if (value && typeof value === "object" && "originalStyle" in value) {
+        const { originalStyle: saved } = value as {
           originalStyle: string | null;
         };
         // Execute the browser-facing mutation callback against a primitive style model.
         const element = {
           style: {
             set transform(value: string) {
+              transformWrites.push(value);
               transform =
                 value === "translateY(0px)"
                   ? "matrix(1, 0, 0, 1, 0, 0)"
@@ -143,7 +144,6 @@ function cornerBoundary(
           },
         };
         (_ as (el: unknown, arg: unknown) => void)(element, {
-          phase,
           originalStyle: saved,
         });
         offsets.push(0);
@@ -211,6 +211,7 @@ function cornerBoundary(
     attach,
     offsets,
     appliedStyles,
+    transformWrites,
     currentStyle: () => inlineStyle,
     captureTimeouts,
     cssTexts,
@@ -297,7 +298,10 @@ test("the observed 530/647/751ms progression fits inside the two-second probe wi
       },
     });
     const visual = cornerInfo(info, async (name, args) => {
-      if (name.endsWith("-original-none") && args?.contentType === "image/png")
+      if (
+        name.endsWith("-control-none-before") &&
+        args?.contentType === "image/png"
+      )
         setElapsed(530);
       await boundary.attach(name, args);
     })();
@@ -344,7 +348,7 @@ test("checkpoint admission retains cleanup100 plus final50 inside the two-second
     try {
       const visual = cornerInfo(info, async (name, args) => {
         if (
-          name.endsWith("-original-none") &&
+          name.endsWith("-control-none-before") &&
           args?.contentType === "image/png"
         )
           setElapsed(1850);
@@ -362,7 +366,7 @@ test("checkpoint admission retains cleanup100 plus final50 inside the two-second
         boundary.attachments.some((a) => a.name.includes("checkpoint-")),
       ).toBe(false);
       expect(warnings.join(" ")).toContain(
-        "stage=checkpoint-original-none:budget",
+        "stage=checkpoint-control-none-before:budget",
       );
       expect(warnings.join(" ")).toContain("elapsed_ms=1850 remaining_ms=150");
       expect(
@@ -387,10 +391,13 @@ test("cleanup retains the last 50ms for final JSON inside, not beyond, the 2000m
   await withCornerClock(async (setElapsed) => {
     const boundary = cornerBoundary();
     const visual = cornerInfo(info, async (name, args) => {
-      if (name.endsWith("-original-none") && args?.contentType === "image/png")
+      if (
+        name.endsWith("-control-none-before") &&
+        args?.contentType === "image/png"
+      )
         setElapsed(530);
       await boundary.attach(name, args);
-      if (name.includes("checkpoint-original-none")) setElapsed(1950);
+      if (name.includes("checkpoint-control-none-before")) setElapsed(1950);
     })();
     await runVisualAssertion(
       boundary.page,
@@ -430,12 +437,12 @@ for (const outcome of ["passed", "failed"] as const) {
       try {
         const visual = cornerInfo(info, async (name, args) => {
           if (
-            name.endsWith("-original-none") &&
+            name.endsWith("-control-none-before") &&
             args?.contentType === "image/png"
           )
             setElapsed(530);
           await boundary.attach(name, args);
-          if (name.includes("checkpoint-original-none")) setElapsed(2000);
+          if (name.includes("checkpoint-control-none-before")) setElapsed(2000);
         })();
         const run = runVisualAssertion(
           boundary.page,
@@ -448,7 +455,7 @@ for (const outcome of ["passed", "failed"] as const) {
         else await run;
         expect(
           boundary.attachments.some((a) =>
-            a.name.includes("checkpoint-original-none"),
+            a.name.includes("checkpoint-control-none-before"),
           ),
         ).toBe(true);
         expect(
@@ -478,7 +485,7 @@ test("checkpoint rejection is precise and bounded, stops captures, and still att
     const attempts: string[] = [];
     const attach: TestInfo["attach"] = async (name, args) => {
       attempts.push(name);
-      if (name.includes("checkpoint-original-none"))
+      if (name.includes("checkpoint-control-none-before"))
         throw new TypeError(
           "checkpoint sink rejected token=private-sentinel " +
             "x".repeat(400) +
@@ -495,10 +502,10 @@ test("checkpoint rejection is precise and bounded, stops captures, and still att
     );
     expect(boundary.captureTimeouts).toHaveLength(1);
     const detail = warnings.find((text) =>
-      text.includes("stage=checkpoint-original-none:attachment"),
+      text.includes("stage=checkpoint-control-none-before:attachment"),
     )!;
     expect(detail).toContain("error_type=TypeError");
-    expect(detail).toContain("checkpoint-original-none");
+    expect(detail).toContain("checkpoint-control-none-before");
     expect(detail.split("message=")[1].length).toBeLessThanOrEqual(256);
     expect(detail).not.toContain("private-sentinel");
     expect(detail).not.toContain("stack sentinel");
@@ -545,9 +552,11 @@ test("a non-positive capture timeout is skipped and warns at the precise capture
       sqliteProducer,
     );
     expect(boundary.captureTimeouts).toEqual([]);
-    expect(warnings.join(" ")).toContain("stage=original-none:capture-budget");
+    expect(warnings.join(" ")).toContain(
+      "stage=control-none-before:capture-budget",
+    );
     expect(warnings.join(" ")).not.toContain(
-      "stage=original-none:geometry-before",
+      "stage=control-none-before:geometry-before",
     );
     expect(boundary.restoration()).toMatchObject({
       restored: true,
@@ -569,7 +578,7 @@ for (const exhaustion of ["cleanup-reserve", "exhausted"] as const) {
     try {
       const visual = cornerInfo(info, async (name, args) => {
         await boundary.attach(name, args);
-        if (name.includes("checkpoint-original-none"))
+        if (name.includes("checkpoint-control-none-before"))
           visual.timeout =
             Date.now() -
             visual.startedUnixMs +
@@ -584,7 +593,7 @@ for (const exhaustion of ["cleanup-reserve", "exhausted"] as const) {
       );
       expect(
         boundary.attachments.some((a) =>
-          a.name.includes("checkpoint-original-none"),
+          a.name.includes("checkpoint-control-none-before"),
         ),
       ).toBe(true);
       expect(boundary.captureTimeouts).toHaveLength(1);
@@ -664,14 +673,14 @@ test("oversized checkpoint metadata becomes valid compact omission JSON without 
   expect(checkpoints).toHaveLength(3);
   const first = JSON.parse(checkpoints[0].body.toString());
   expect(first).toMatchObject({
-    phase: "original-none",
+    phase: "control-none-before",
     outcome: "available",
     attachment_status: "attached",
     metadata_status: "compact-omissions",
     omissions: expect.arrayContaining(["geometry-brackets", "css_sha256"]),
   });
   expect(first.png.sha256).toMatch(/^[a-f0-9]{64}$/);
-  expect(first.png.name).toContain("original-none");
+  expect(first.png.name).toContain("control-none-before");
   expect(first.source_sha256).toMatch(/^[a-f0-9]{64}$/);
   expect(checkpoints.every((a) => a.body.length <= 1024)).toBe(true);
   expect(
@@ -830,9 +839,9 @@ for (const outcome of ["passed", "failed"] as const) {
         if (/^visual-corner-probe-\d+-\d+$/.test(name))
           throw new Error("final sink unavailable");
         const phase = [
-          "original-none",
-          "identity-zero",
-          "restored-none",
+          "control-none-before",
+          "control-none-middle",
+          "control-none-after",
         ].findIndex((p) => name.endsWith(`checkpoint-${p}`));
         if (phase >= 0) {
           expect(boundary.captureTimeouts).toHaveLength(phase + 1);
@@ -850,15 +859,15 @@ for (const outcome of ["passed", "failed"] as const) {
       if (outcome === "failed") await expect(run).rejects.toBe(original);
       else await run;
       const checkpoint = boundary.attachments.find((a) =>
-        a.name.includes("checkpoint-original-none"),
+        a.name.includes("checkpoint-control-none-before"),
       );
       expect(checkpoint).toBeDefined();
       expect(JSON.parse(checkpoint!.body.toString())).toMatchObject({
-        phase: "original-none",
+        phase: "control-none-before",
         outcome: "available",
         attachment_status: "attached",
         source: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        factor: "transform-presence",
+        factor: "no-transform-control",
         before_rect_scroll: [
           20,
           100.25,
@@ -884,7 +893,7 @@ for (const outcome of ["passed", "failed"] as const) {
   });
 }
 
-test("the corner probe varies only transform presence at invariant geometry and restores the selected second control", async ({}, info) => {
+test("the corner probe repeats NONE at invariant geometry and restores the selected second control", async ({}, info) => {
   const boundary = cornerBoundary();
   await runVisualAssertion(
     boundary.page,
@@ -898,7 +907,11 @@ test("the corner probe varies only transform presence at invariant geometry and 
     JSON.parse(boundary.attachments.at(-1)!.body.toString()).phases.map(
       (p: { phase: string }) => p.phase,
     ),
-  ).toEqual(["original-none", "identity-zero", "restored-none"]);
+  ).toEqual([
+    "control-none-before",
+    "control-none-middle",
+    "control-none-after",
+  ]);
   expect(boundary.captureTimeouts).toHaveLength(3);
   expect(boundary.captureTimeouts.every((t) => t > 0 && t <= 150)).toBe(true);
   expect(new Set(boundary.cssTexts).size).toBe(1);
@@ -909,7 +922,11 @@ test("the corner probe varies only transform presence at invariant geometry and 
   expect(new Set(images.map((a) => a.name)).size).toBe(3);
   expect(images.every((a) => a.body.length <= 262144)).toBe(true);
   const record = JSON.parse(boundary.attachments.at(-1)!.body.toString());
-  expect(record).toMatchObject({ status: "available", selected_index: 1 });
+  expect(record).toMatchObject({
+    status: "available",
+    selected_index: 1,
+    factor: "no-transform-control",
+  });
   expect(record.phases.map((p: { png: unknown }) => p.png)).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ width: 72, height: 33 }),
@@ -923,7 +940,7 @@ test("the corner probe varies only transform presence at invariant geometry and 
 
 for (const originalStyle of [null, "color: red;"]) {
   for (const failed of [false, true]) {
-    test(`NONE arms preserve exact ${originalStyle === null ? "absent" : "string"} inline style and original ${failed ? "error" : "PASS"}`, async ({}, info) => {
+    test(`all NONE control arms preserve exact ${originalStyle === null ? "absent" : "string"} inline style without transform insertion and original ${failed ? "error" : "PASS"}`, async ({}, info) => {
       const boundary = cornerBoundary({ originalStyle });
       let asserted = false;
       const run = runVisualAssertion(
@@ -944,10 +961,11 @@ for (const originalStyle of [null, "color: red;"]) {
       else await run;
       expect(boundary.appliedStyles).toEqual([
         originalStyle,
-        `${originalStyle ?? ""}transform: translateY(0px);`,
+        originalStyle,
         originalStyle,
       ]);
       expect(boundary.currentStyle()).toBe(originalStyle);
+      expect(boundary.transformWrites).toEqual([]);
       expect(boundary.offsets).toEqual([0, 0, 0]);
       const record = JSON.parse(boundary.attachments.at(-1)!.body.toString());
       expect(record.original_style).toBe(originalStyle);
@@ -959,14 +977,7 @@ for (const originalStyle of [null, "color: red;"]) {
             after: { transform: string };
           }) => [p.before.transform, p.after.transform],
         ),
-      ).toEqual([
-        "none",
-        "none",
-        "matrix(1, 0, 0, 1, 0, 0)",
-        "matrix(1, 0, 0, 1, 0, 0)",
-        "none",
-        "none",
-      ]);
+      ).toEqual(["none", "none", "none", "none", "none", "none"]);
       expect(record.status).toBe("available");
       expect(record.cleanup).toEqual({
         "inline-style": "completed",
@@ -1053,6 +1064,25 @@ for (const observation of [0, 1, 2, 3, 4, 5]) {
   });
 }
 
+test("even an identity matrix in the middle NONE control invalidates evidence", async ({}, info) => {
+  const boundary = cornerBoundary({
+    phaseTransform: (transform, observation) =>
+      observation === 2 || observation === 3
+        ? "matrix(1, 0, 0, 1, 0, 0)"
+        : transform,
+  });
+  await runVisualAssertion(
+    boundary.page,
+    "home-timeline.png",
+    async () => {},
+    cornerInfo(info, boundary.attach),
+    sqliteProducer,
+  );
+  expect(JSON.parse(boundary.attachments.at(-1)!.body.toString()).status).toBe(
+    "INVALID",
+  );
+});
+
 for (const dimension of ["width", "height"] as const) {
   test(`PNG ${dimension} must match the recorded enclosing clips`, async ({}, info) => {
     const boundary = cornerBoundary({ badDimensions: dimension });
@@ -1134,7 +1164,7 @@ test("original failure attachment paths are frozen before ancillary PNGs", async
     a.name.endsWith("original-evidence"),
   );
   const capture = boundary.attachments.findIndex((a) =>
-    a.name.endsWith("original-none"),
+    a.name.endsWith("control-none-before"),
   );
   expect(saved).toBeGreaterThanOrEqual(0);
   expect(saved).toBeLessThan(capture);

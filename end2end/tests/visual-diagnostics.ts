@@ -522,7 +522,7 @@ export async function runVisualAssertion(
 
 /** #1791 only. Admission limits work, not RPC lifetime; normal teardown owns RPCs.
  * Main-document style injection and screenshot style (which pierces frames/shadows)
- * are intentionally coupled. Explicit zero transforms also change the paint path.
+ * remain confounds even when no transform is inserted by this control.
  */
 async function runCornerProbe(
   page: Page,
@@ -599,7 +599,7 @@ async function runCornerProbe(
       controls: 2,
     },
     caveat:
-      "Transform-presence experiment; locator actionability, scroll and clipping plus duplicated CSS are confounds. Rect brackets are not raster-time telemetry or original comparison buffers.",
+      "No-transform control; locator actionability, scroll and clipping plus duplicated CSS are confounds. Rect brackets are not raster-time telemetry or original comparison buffers.",
     css_scope:
       "Main-document target only; screenshot style also pierces frames/shadows, unlike main-frame style tag.",
   };
@@ -804,11 +804,11 @@ async function runCornerProbe(
     record.original_style = originalStyle;
     record.status = "unavailable";
     record.reason = "incomplete-phases";
-    record.factor = "transform-presence-at-zero-displacement";
+    record.factor = "no-transform-control";
     for (const phase of [
-      "original-none",
-      "identity-zero",
-      "restored-none",
+      "control-none-before",
+      "control-none-middle",
+      "control-none-after",
     ] as const) {
       const result: Record<string, unknown> = {
         phase,
@@ -830,13 +830,11 @@ async function runCornerProbe(
       try {
         admit();
         await target.evaluate(
-          (el, { phase, originalStyle }) => {
-            if (phase === "identity-zero")
-              (el as HTMLElement).style.transform = "translateY(0px)";
-            else if (originalStyle === null) el.removeAttribute("style");
+          (el, { originalStyle }) => {
+            if (originalStyle === null) el.removeAttribute("style");
             else el.setAttribute("style", originalStyle);
           },
-          { phase, originalStyle },
+          { originalStyle },
           { timeout: Math.min(150, remaining() - workReserveMs) },
         );
         phaseStage = `${phase}:geometry-before`;
@@ -920,7 +918,7 @@ async function runCornerProbe(
             ? input.revision.slice(0, 64)
             : "unavailable",
         phase,
-        factor: "transform-presence",
+        factor: "no-transform-control",
         selected_index: selected.index,
         completed_unix_ms: result.ended_unix_ms,
         elapsed_ms: Math.round(nodePerformance.now() - began),
@@ -986,19 +984,7 @@ async function runCornerProbe(
       const control = invariant(observations[0]);
       // All six brackets, not just returned endpoints; no raster-time claim.
       const stable = observations.every((s) => invariant(s) === control);
-      const identity = (transform: string) => {
-        const match = /^matrix\(([^)]+)\)$/.exec(transform);
-        const values = match?.[1].split(",").map(Number);
-        return (
-          values?.length === 6 &&
-          values.every((value, index) => value === [1, 0, 0, 1, 0, 0][index])
-        );
-      };
-      const transforms = observations.every((s, index) =>
-        index === 2 || index === 3
-          ? identity(s.transform)
-          : s.transform === "none",
-      );
+      const transforms = observations.every((s) => s.transform === "none");
       const dimensions = phases.every((p) => {
         const png = p.png as { width: number; height: number };
         return [p.before, p.after].every((value) => {
