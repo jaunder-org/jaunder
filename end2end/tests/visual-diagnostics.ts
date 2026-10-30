@@ -599,7 +599,7 @@ async function runCornerProbe(
       controls: 2,
     },
     caveat:
-      "Coupled geometry/paint experiment; locator actionability, scroll and clipping plus duplicated CSS are confounds. Rect brackets are not raster-time telemetry or original comparison buffers.",
+      "Transform-presence experiment; locator actionability, scroll and clipping plus duplicated CSS are confounds. Rect brackets are not raster-time telemetry or original comparison buffers.",
     css_scope:
       "Main-document target only; screenshot style also pierces frames/shadows, unlike main-frame style tag.",
   };
@@ -804,17 +804,14 @@ async function runCornerProbe(
     record.original_style = originalStyle;
     record.status = "unavailable";
     record.reason = "incomplete-phases";
-    for (const [phase, dy] of [
-      ["zero-before", 0],
-      [
-        "integer-snap",
-        Math.round(selected.state.rect.y) - selected.state.rect.y,
-      ],
-      ["zero-after", 0],
+    record.factor = "transform-presence-at-zero-displacement";
+    for (const phase of [
+      "original-none",
+      "identity-zero",
+      "restored-none",
     ] as const) {
       const result: Record<string, unknown> = {
         phase,
-        dy,
         status: "unavailable",
         began_unix_ms: Date.now(),
       };
@@ -833,10 +830,13 @@ async function runCornerProbe(
       try {
         admit();
         await target.evaluate(
-          (el, offset) => {
-            (el as HTMLElement).style.transform = `translateY(${offset}px)`;
+          (el, { phase, originalStyle }) => {
+            if (phase === "identity-zero")
+              (el as HTMLElement).style.transform = "translateY(0px)";
+            else if (originalStyle === null) el.removeAttribute("style");
+            else el.setAttribute("style", originalStyle);
           },
-          dy,
+          { phase, originalStyle },
           { timeout: Math.min(150, remaining() - workReserveMs) },
         );
         phaseStage = `${phase}:geometry-before`;
@@ -903,6 +903,11 @@ async function runCornerProbe(
           state.rect.height,
           state.scroll.x,
           state.scroll.y,
+          state.viewport.width,
+          state.viewport.height,
+          state.viewport.dpr,
+          state.clip,
+          state.transform,
         ];
       };
       const checkpoint = {
@@ -915,7 +920,7 @@ async function runCornerProbe(
             ? input.revision.slice(0, 64)
             : "unavailable",
         phase,
-        dy,
+        factor: "transform-presence",
         selected_index: selected.index,
         completed_unix_ms: result.ended_unix_ms,
         elapsed_ms: Math.round(nodePerformance.now() - began),
@@ -966,22 +971,46 @@ async function runCornerProbe(
       }
     }
     if (phases.length === 3 && phases.every((p) => p.status === "available")) {
-      const control = phases[0].before;
-      const returned = phases[2].after;
-      const stable = (a: unknown, b: unknown) => {
-        const pick = (v: unknown) => {
-          const s = v as Awaited<ReturnType<typeof geometry>>;
-          return { rect: s.rect, scroll: s.scroll };
-        };
-        return JSON.stringify(pick(a)) === JSON.stringify(pick(b));
+      type State = Awaited<ReturnType<typeof geometry>>;
+      const observations = phases.flatMap((p) => [
+        p.before,
+        p.after,
+      ]) as State[];
+      const invariant = (s: State) =>
+        JSON.stringify({
+          rect: s.rect,
+          scroll: s.scroll,
+          viewport: s.viewport,
+          clip: s.clip,
+        });
+      const control = invariant(observations[0]);
+      // All six brackets, not just returned endpoints; no raster-time claim.
+      const stable = observations.every((s) => invariant(s) === control);
+      const identity = (transform: string) => {
+        const match = /^matrix\(([^)]+)\)$/.exec(transform);
+        const values = match?.[1].split(",").map(Number);
+        return (
+          values?.length === 6 &&
+          values.every((value, index) => value === [1, 0, 0, 1, 0, 0][index])
+        );
       };
-      const brackets = phases.every((p) => stable(p.before, p.after));
-      record.status =
-        brackets && stable(control, returned) ? "available" : "INVALID";
-      record.reason =
-        brackets && stable(control, returned)
-          ? "geometry-and-scroll-returned-raw-PNG-review-required"
-          : "geometry-or-scroll-did-not-return";
+      const transforms = observations.every((s, index) =>
+        index === 2 || index === 3
+          ? identity(s.transform)
+          : s.transform === "none",
+      );
+      const dimensions = phases.every((p) => {
+        const png = p.png as { width: number; height: number };
+        return [p.before, p.after].every((value) => {
+          const { clip } = value as State;
+          return png.width === clip.width && png.height === clip.height;
+        });
+      });
+      const valid = stable && transforms && dimensions;
+      record.status = valid ? "available" : "INVALID";
+      record.reason = valid
+        ? "all-six-invariant-raw-PNG-review-required"
+        : "geometry-transform-or-PNG-clip-inconsistent";
     }
   } catch (error) {
     record.status = "unavailable";
@@ -1063,7 +1092,7 @@ async function runCornerProbe(
 }
 
 async function geometry(target: ReturnType<Page["locator"]>, timeout: number) {
-  return target.evaluate(
+  const state = await target.evaluate(
     (el) => {
       const computed = getComputedStyle(el);
       const rect = el.getBoundingClientRect();
@@ -1100,6 +1129,13 @@ async function geometry(target: ReturnType<Page["locator"]>, timeout: number) {
     undefined,
     { timeout },
   );
+  // Pinned Playwright enclosingIntRect, from the recorded document rect only.
+  const { rect, scroll } = state;
+  const x = Math.floor(rect.x + scroll.x + 0.001);
+  const y = Math.floor(rect.y + scroll.y + 0.001);
+  const right = Math.ceil(rect.x + scroll.x + rect.width - 0.001);
+  const bottom = Math.ceil(rect.y + scroll.y + rect.height - 0.001);
+  return { ...state, clip: { x, y, width: right - x, height: bottom - y } };
 }
 
 let sequence = 0;

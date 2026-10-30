@@ -40,9 +40,26 @@ function cornerBoundary(
     stylesheetThrows?: boolean;
     onGeometry?: () => void;
     wideGeometry?: boolean;
+    originalStyle?: string | null;
+    badDimensions?: "width" | "height";
+    originalTransform?: string;
+    phaseTransform?: (transform: string, observation: number) => string;
+    changeState?: (
+      state: {
+        rect: Record<string, number>;
+        scroll: { x: number; y: number };
+        viewport: { width: number; height: number; dpr: number };
+      },
+      observation: number,
+    ) => void;
   } = {},
 ) {
-  let dy = 0;
+  let inlineStyle =
+    options.originalStyle === undefined ? "color: red;" : options.originalStyle;
+  const originalStyle = inlineStyle;
+  let transform = options.originalTransform ?? "none";
+  let observation = 0;
+  const appliedStyles: Array<string | null> = [];
   let restored = false;
   let removed = false;
   let scrollRestores = 0;
@@ -59,10 +76,8 @@ function cornerBoundary(
     const width = options.wideGeometry ? 72.12345678901235 : 72;
     const height = options.wideGeometry ? 32.123456789012345 : 32;
     const y =
-      index === 0
-        ? 900
-        : (options.wideGeometry ? 100.12345678901234 : 100.25) + dy;
-    return {
+      index === 0 ? 900 : options.wideGeometry ? 100.12345678901234 : 100.25;
+    const result = {
       rect: {
         x,
         y,
@@ -82,24 +97,64 @@ function cornerBoundary(
             : 0,
       },
       viewport: { width: 1280, height: 720, dpr: 1 },
-      transform: "none",
+      transform,
       radius: { top_right: "6px", bottom_right: "6px" },
       font_status: "loaded",
       main_document: true,
     };
+    if (index === 1 && offsets.length > 0) {
+      result.transform =
+        options.phaseTransform?.(result.transform, observation) ??
+        result.transform;
+      options.changeState?.(result, observation);
+      observation++;
+    }
+    return result;
   };
   const locator = (index: number) => ({
     getAttribute: async () =>
-      restored && options.lostStyle ? "wrong-style" : "color: red;",
+      restored && options.lostStyle ? "wrong-style" : inlineStyle,
     evaluate: async (_: unknown, value: unknown) => {
-      if (typeof value === "number") {
-        dy = value;
-        offsets.push(value);
+      if (value && typeof value === "object" && "phase" in value) {
+        const { phase, originalStyle: saved } = value as {
+          phase: string;
+          originalStyle: string | null;
+        };
+        // Execute the browser-facing mutation callback against a primitive style model.
+        const element = {
+          style: {
+            set transform(value: string) {
+              transform =
+                value === "translateY(0px)"
+                  ? "matrix(1, 0, 0, 1, 0, 0)"
+                  : value;
+              inlineStyle = `${originalStyle ?? ""}transform: ${value};`;
+            },
+          },
+          removeAttribute: (name: string) => {
+            expect(name).toBe("style");
+            inlineStyle = null;
+            transform = "none";
+          },
+          setAttribute: (name: string, text: string) => {
+            expect(name).toBe("style");
+            inlineStyle = text;
+            transform = "none";
+          },
+        };
+        (_ as (el: unknown, arg: unknown) => void)(element, {
+          phase,
+          originalStyle: saved,
+        });
+        offsets.push(0);
+        appliedStyles.push(inlineStyle);
         return;
       }
       if (typeof value === "string" || value === null) {
         restored = true;
         if (options.restoreThrows) throw new Error("inline restore failed");
+        inlineStyle = value;
+        transform = "none";
         return;
       }
       options.onGeometry?.();
@@ -111,9 +166,12 @@ function cornerBoundary(
       if (options.captureThrows) throw new Error("capture failed");
       const png = Buffer.alloc(options.oversized ? 262145 : 25);
       Buffer.from("89504e470d0a1a0a", "hex").copy(png);
-      png.writeUInt32BE(72, 16);
-      png.writeUInt32BE(32, 20);
-      png[24] = dy === 0 ? 0 : 1;
+      png.writeUInt32BE(
+        options.badDimensions === "width" ? 71 : options.wideGeometry ? 73 : 72,
+        16,
+      );
+      png.writeUInt32BE(options.badDimensions === "height" ? 32 : 33, 20);
+      png[24] = transform === "none" ? 0 : 1;
       return png;
     },
   });
@@ -152,6 +210,8 @@ function cornerBoundary(
     page,
     attach,
     offsets,
+    appliedStyles,
+    currentStyle: () => inlineStyle,
     captureTimeouts,
     cssTexts,
     attachments,
@@ -237,7 +297,7 @@ test("the observed 530/647/751ms progression fits inside the two-second probe wi
       },
     });
     const visual = cornerInfo(info, async (name, args) => {
-      if (name.endsWith("-zero-before") && args?.contentType === "image/png")
+      if (name.endsWith("-original-none") && args?.contentType === "image/png")
         setElapsed(530);
       await boundary.attach(name, args);
     })();
@@ -283,7 +343,10 @@ test("checkpoint admission retains cleanup100 plus final50 inside the two-second
     };
     try {
       const visual = cornerInfo(info, async (name, args) => {
-        if (name.endsWith("-zero-before") && args?.contentType === "image/png")
+        if (
+          name.endsWith("-original-none") &&
+          args?.contentType === "image/png"
+        )
           setElapsed(1850);
         await boundary.attach(name, args);
       })();
@@ -299,7 +362,7 @@ test("checkpoint admission retains cleanup100 plus final50 inside the two-second
         boundary.attachments.some((a) => a.name.includes("checkpoint-")),
       ).toBe(false);
       expect(warnings.join(" ")).toContain(
-        "stage=checkpoint-zero-before:budget",
+        "stage=checkpoint-original-none:budget",
       );
       expect(warnings.join(" ")).toContain("elapsed_ms=1850 remaining_ms=150");
       expect(
@@ -324,10 +387,10 @@ test("cleanup retains the last 50ms for final JSON inside, not beyond, the 2000m
   await withCornerClock(async (setElapsed) => {
     const boundary = cornerBoundary();
     const visual = cornerInfo(info, async (name, args) => {
-      if (name.endsWith("-zero-before") && args?.contentType === "image/png")
+      if (name.endsWith("-original-none") && args?.contentType === "image/png")
         setElapsed(530);
       await boundary.attach(name, args);
-      if (name.includes("checkpoint-zero-before")) setElapsed(1950);
+      if (name.includes("checkpoint-original-none")) setElapsed(1950);
     })();
     await runVisualAssertion(
       boundary.page,
@@ -367,12 +430,12 @@ for (const outcome of ["passed", "failed"] as const) {
       try {
         const visual = cornerInfo(info, async (name, args) => {
           if (
-            name.endsWith("-zero-before") &&
+            name.endsWith("-original-none") &&
             args?.contentType === "image/png"
           )
             setElapsed(530);
           await boundary.attach(name, args);
-          if (name.includes("checkpoint-zero-before")) setElapsed(2000);
+          if (name.includes("checkpoint-original-none")) setElapsed(2000);
         })();
         const run = runVisualAssertion(
           boundary.page,
@@ -385,7 +448,7 @@ for (const outcome of ["passed", "failed"] as const) {
         else await run;
         expect(
           boundary.attachments.some((a) =>
-            a.name.includes("checkpoint-zero-before"),
+            a.name.includes("checkpoint-original-none"),
           ),
         ).toBe(true);
         expect(
@@ -415,7 +478,7 @@ test("checkpoint rejection is precise and bounded, stops captures, and still att
     const attempts: string[] = [];
     const attach: TestInfo["attach"] = async (name, args) => {
       attempts.push(name);
-      if (name.includes("checkpoint-zero-before"))
+      if (name.includes("checkpoint-original-none"))
         throw new TypeError(
           "checkpoint sink rejected token=private-sentinel " +
             "x".repeat(400) +
@@ -432,10 +495,10 @@ test("checkpoint rejection is precise and bounded, stops captures, and still att
     );
     expect(boundary.captureTimeouts).toHaveLength(1);
     const detail = warnings.find((text) =>
-      text.includes("stage=checkpoint-zero-before:attachment"),
+      text.includes("stage=checkpoint-original-none:attachment"),
     )!;
     expect(detail).toContain("error_type=TypeError");
-    expect(detail).toContain("checkpoint-zero-before");
+    expect(detail).toContain("checkpoint-original-none");
     expect(detail.split("message=")[1].length).toBeLessThanOrEqual(256);
     expect(detail).not.toContain("private-sentinel");
     expect(detail).not.toContain("stack sentinel");
@@ -482,9 +545,9 @@ test("a non-positive capture timeout is skipped and warns at the precise capture
       sqliteProducer,
     );
     expect(boundary.captureTimeouts).toEqual([]);
-    expect(warnings.join(" ")).toContain("stage=zero-before:capture-budget");
+    expect(warnings.join(" ")).toContain("stage=original-none:capture-budget");
     expect(warnings.join(" ")).not.toContain(
-      "stage=zero-before:geometry-before",
+      "stage=original-none:geometry-before",
     );
     expect(boundary.restoration()).toMatchObject({
       restored: true,
@@ -506,7 +569,7 @@ for (const exhaustion of ["cleanup-reserve", "exhausted"] as const) {
     try {
       const visual = cornerInfo(info, async (name, args) => {
         await boundary.attach(name, args);
-        if (name.includes("checkpoint-zero-before"))
+        if (name.includes("checkpoint-original-none"))
           visual.timeout =
             Date.now() -
             visual.startedUnixMs +
@@ -521,7 +584,7 @@ for (const exhaustion of ["cleanup-reserve", "exhausted"] as const) {
       );
       expect(
         boundary.attachments.some((a) =>
-          a.name.includes("checkpoint-zero-before"),
+          a.name.includes("checkpoint-original-none"),
         ),
       ).toBe(true);
       expect(boundary.captureTimeouts).toHaveLength(1);
@@ -601,14 +664,14 @@ test("oversized checkpoint metadata becomes valid compact omission JSON without 
   expect(checkpoints).toHaveLength(3);
   const first = JSON.parse(checkpoints[0].body.toString());
   expect(first).toMatchObject({
-    phase: "zero-before",
+    phase: "original-none",
     outcome: "available",
     attachment_status: "attached",
     metadata_status: "compact-omissions",
     omissions: expect.arrayContaining(["geometry-brackets", "css_sha256"]),
   });
   expect(first.png.sha256).toMatch(/^[a-f0-9]{64}$/);
-  expect(first.png.name).toContain("zero-before");
+  expect(first.png.name).toContain("original-none");
   expect(first.source_sha256).toMatch(/^[a-f0-9]{64}$/);
   expect(checkpoints.every((a) => a.body.length <= 1024)).toBe(true);
   expect(
@@ -766,9 +829,11 @@ for (const outcome of ["passed", "failed"] as const) {
       const attach: TestInfo["attach"] = async (name, args) => {
         if (/^visual-corner-probe-\d+-\d+$/.test(name))
           throw new Error("final sink unavailable");
-        const phase = ["zero-before", "integer-snap", "zero-after"].findIndex(
-          (p) => name.endsWith(`checkpoint-${p}`),
-        );
+        const phase = [
+          "original-none",
+          "identity-zero",
+          "restored-none",
+        ].findIndex((p) => name.endsWith(`checkpoint-${p}`));
         if (phase >= 0) {
           expect(boundary.captureTimeouts).toHaveLength(phase + 1);
           expect(boundary.attachments.at(-1)?.contentType).toBe("image/png");
@@ -785,17 +850,29 @@ for (const outcome of ["passed", "failed"] as const) {
       if (outcome === "failed") await expect(run).rejects.toBe(original);
       else await run;
       const checkpoint = boundary.attachments.find((a) =>
-        a.name.includes("checkpoint-zero-before"),
+        a.name.includes("checkpoint-original-none"),
       );
       expect(checkpoint).toBeDefined();
       expect(JSON.parse(checkpoint!.body.toString())).toMatchObject({
-        phase: "zero-before",
+        phase: "original-none",
         outcome: "available",
         attachment_status: "attached",
         source: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        dy: 0,
-        before_rect_scroll: [20, 100.25, 72, 32, 0, 0],
-        png: { width: 72, height: 32 },
+        factor: "transform-presence",
+        before_rect_scroll: [
+          20,
+          100.25,
+          72,
+          32,
+          0,
+          0,
+          1280,
+          720,
+          1,
+          { x: 20, y: 100, width: 72, height: 33 },
+          "none",
+        ],
+        png: { width: 72, height: 33 },
         caveat: "brackets-not-raster;cleanup-unobserved",
       });
       expect(checkpoint!.body.length).toBeLessThanOrEqual(1024);
@@ -807,7 +884,7 @@ for (const outcome of ["passed", "failed"] as const) {
   });
 }
 
-test("the corner probe captures bounded reversible phases and restores the selected second control", async ({}, info) => {
+test("the corner probe varies only transform presence at invariant geometry and restores the selected second control", async ({}, info) => {
   const boundary = cornerBoundary();
   await runVisualAssertion(
     boundary.page,
@@ -816,7 +893,12 @@ test("the corner probe captures bounded reversible phases and restores the selec
     cornerInfo(info, boundary.attach),
     sqliteProducer,
   );
-  expect(boundary.offsets).toEqual([0, -0.25, 0]);
+  expect(boundary.offsets).toEqual([0, 0, 0]);
+  expect(
+    JSON.parse(boundary.attachments.at(-1)!.body.toString()).phases.map(
+      (p: { phase: string }) => p.phase,
+    ),
+  ).toEqual(["original-none", "identity-zero", "restored-none"]);
   expect(boundary.captureTimeouts).toHaveLength(3);
   expect(boundary.captureTimeouts.every((t) => t > 0 && t <= 150)).toBe(true);
   expect(new Set(boundary.cssTexts).size).toBe(1);
@@ -830,12 +912,180 @@ test("the corner probe captures bounded reversible phases and restores the selec
   expect(record).toMatchObject({ status: "available", selected_index: 1 });
   expect(record.phases.map((p: { png: unknown }) => p.png)).toEqual(
     expect.arrayContaining([
-      expect.objectContaining({ width: 72, height: 32 }),
+      expect.objectContaining({ width: 72, height: 33 }),
     ]),
   );
   expect(boundary.restoration()).toMatchObject({
     restored: true,
     removed: true,
+  });
+});
+
+for (const originalStyle of [null, "color: red;"]) {
+  for (const failed of [false, true]) {
+    test(`NONE arms preserve exact ${originalStyle === null ? "absent" : "string"} inline style and original ${failed ? "error" : "PASS"}`, async ({}, info) => {
+      const boundary = cornerBoundary({ originalStyle });
+      let asserted = false;
+      const run = runVisualAssertion(
+        boundary.page,
+        "home-timeline.png",
+        async () => {
+          asserted = true;
+          expect(boundary.appliedStyles).toEqual([]);
+          if (failed) throw original;
+        },
+        cornerInfo(info, async (name, args) => {
+          expect(asserted).toBe(true);
+          await boundary.attach(name, args);
+        }),
+        sqliteProducer,
+      );
+      if (failed) await expect(run).rejects.toBe(original);
+      else await run;
+      expect(boundary.appliedStyles).toEqual([
+        originalStyle,
+        `${originalStyle ?? ""}transform: translateY(0px);`,
+        originalStyle,
+      ]);
+      expect(boundary.currentStyle()).toBe(originalStyle);
+      expect(boundary.offsets).toEqual([0, 0, 0]);
+      const record = JSON.parse(boundary.attachments.at(-1)!.body.toString());
+      expect(record.original_style).toBe(originalStyle);
+      expect(record.controls[0].state.transform).toBe("none");
+      expect(
+        record.phases.flatMap(
+          (p: {
+            before: { transform: string };
+            after: { transform: string };
+          }) => [p.before.transform, p.after.transform],
+        ),
+      ).toEqual([
+        "none",
+        "none",
+        "matrix(1, 0, 0, 1, 0, 0)",
+        "matrix(1, 0, 0, 1, 0, 0)",
+        "none",
+        "none",
+      ]);
+      expect(record.status).toBe("available");
+      expect(record.cleanup).toEqual({
+        "inline-style": "completed",
+        scroll: "completed",
+        stylesheet: "completed",
+      });
+    });
+  }
+}
+
+for (const section of ["rect", "scroll", "viewport"] as const) {
+  const fields =
+    section === "rect"
+      ? ["x", "y", "width", "height", "top", "right", "bottom", "left"]
+      : section === "scroll"
+        ? ["x", "y"]
+        : ["width", "height", "dpr"];
+  for (const field of fields) {
+    test(`midphase ${section}.${field} drift invalidates even when endpoints return`, async ({}, info) => {
+      const boundary = cornerBoundary({
+        changeState: (state, observation) => {
+          if (observation === 2)
+            (state[section] as Record<string, number>)[field] += 0.0001;
+        },
+      });
+      await runVisualAssertion(
+        boundary.page,
+        "home-timeline.png",
+        async () => {},
+        cornerInfo(info, boundary.attach),
+        sqliteProducer,
+      );
+      const record = JSON.parse(boundary.attachments.at(-1)!.body.toString());
+      expect(record.status).toBe("INVALID");
+      expect(record.phases[0].before.rect).toEqual(record.phases[2].after.rect);
+      expect(record.cleanup_errors).toEqual([]);
+    });
+  }
+}
+
+for (const observation of [0, 1, 2, 3, 4, 5]) {
+  test(`geometry observation ${observation + 1} cannot drift across a derived enclosing clip boundary`, async ({}, info) => {
+    const boundary = cornerBoundary({
+      changeState: (state, index) => {
+        if (index === observation) state.rect.x = 20.9995;
+      },
+    });
+    await runVisualAssertion(
+      boundary.page,
+      "home-timeline.png",
+      async () => {},
+      cornerInfo(info, boundary.attach),
+      sqliteProducer,
+    );
+    const record = JSON.parse(boundary.attachments.at(-1)!.body.toString());
+    expect(record.status).toBe("INVALID");
+    const states = record.phases.flatMap(
+      (p: { before: unknown; after: unknown }) => [p.before, p.after],
+    );
+    expect(states[observation].clip).toEqual({
+      x: 21,
+      y: 100,
+      width: 72,
+      height: 33,
+    });
+  });
+  test(`unexpected computed transform in observation ${observation + 1} is INVALID`, async ({}, info) => {
+    const boundary = cornerBoundary({
+      phaseTransform: (transform, index) =>
+        index === observation ? "matrix(1, 0, 0, 1, 0, 1)" : transform,
+    });
+    await expect(
+      runVisualAssertion(
+        boundary.page,
+        "home-timeline.png",
+        rejectAssertion,
+        cornerInfo(info, boundary.attach),
+        sqliteProducer,
+      ),
+    ).rejects.toBe(original);
+    expect(
+      JSON.parse(boundary.attachments.at(-1)!.body.toString()).status,
+    ).toBe("INVALID");
+  });
+}
+
+for (const dimension of ["width", "height"] as const) {
+  test(`PNG ${dimension} must match the recorded enclosing clips`, async ({}, info) => {
+    const boundary = cornerBoundary({ badDimensions: dimension });
+    await runVisualAssertion(
+      boundary.page,
+      "home-timeline.png",
+      async () => {},
+      cornerInfo(info, boundary.attach),
+      sqliteProducer,
+    );
+    expect(
+      JSON.parse(boundary.attachments.at(-1)!.body.toString()).status,
+    ).toBe("INVALID");
+  });
+}
+
+test("an original computed transform other than none skips unsupported intervention", async ({}, info) => {
+  const boundary = cornerBoundary({
+    originalTransform: "matrix(1, 0, 0, 1, 0, 0)",
+  });
+  await runVisualAssertion(
+    boundary.page,
+    "home-timeline.png",
+    async () => {},
+    cornerInfo(info, boundary.attach),
+    sqliteProducer,
+  );
+  expect(boundary.offsets).toEqual([]);
+  expect(
+    JSON.parse(boundary.attachments.at(-1)!.body.toString()),
+  ).toMatchObject({
+    status: "skipped",
+    reason: "unsupported-existing-transform",
   });
 });
 
@@ -884,7 +1134,7 @@ test("original failure attachment paths are frozen before ancillary PNGs", async
     a.name.endsWith("original-evidence"),
   );
   const capture = boundary.attachments.findIndex((a) =>
-    a.name.endsWith("zero-before"),
+    a.name.endsWith("original-none"),
   );
   expect(saved).toBeGreaterThanOrEqual(0);
   expect(saved).toBeLessThan(capture);
