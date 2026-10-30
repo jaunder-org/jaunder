@@ -304,3 +304,45 @@ pattern support reversible transform-associated paint within this probe, not
 historical cause proof. Three failed-pattern arms show identity unnecessary
 within this probe; three expected arms are inconclusive. No product fix,
 tolerance change, issue closure, merge or cleanup is authorized.
+
+## Approved no-transform negative-control supplement
+
+Human decision `1791-no-transform-control`, request
+`5a285e83-0764-49b3-8107-89cc77671ab3`: “Approve control and one run”. This
+**supersedes only the phase and computed-transform contract** above with
+`control-none-before`, `control-none-middle`, `control-none-after`, factor
+`no-transform-control`. Before each capture restore the exact saved original
+inline style: remove the attribute when null, otherwise set its original string.
+No phase writes `style.transform` or inserts even an identity transform. Retain
+the original computed-none guard and require computed `none` in all six
+before/after observations.
+
+Preserve all-six rect/scroll/viewport/DPR/global derived-clip equality with
+pinned floor/ceil epsilon 0.001 and PNG dimensions matching both phase clips;
+any drift makes interpretation INVALID. Keep original strict assertion first,
+unchanged PASS/identical error, baseline/mask/thresholds/test timeout, same
+locator API/actionability/scroll/crop, CSS text and active lifetime, bounded
+two-control viewport selection, independent cleanup and truthful final status.
+Checkpoints remain progress, not cleanup success. All
+2000ms-total/final50-inside, positive150ms-capture, three-image,
+aggregate32KiB/checkpoint1KiB/final2KiB-byte limits and existing time/byte
+reserves remain unchanged. No new framework, logging, capture API, timer race,
+product or fixture change.
+
+Use the approved existing helper seam to verify exact null/string restoration on
+PASS/error, no transform property writes in any phase, all-six computed NONE and
+meaningful unexpected-transform rejection. Retain geometry/viewport/DPR/clip,
+PNG dimension, cleanup, checkpoint omission and two-second admission
+regressions. Run the full helper suite including existing page-backed cases and
+pinned TypeScript/Prettier/diff checks. New control renderer feasibility remains
+for ONE future existing full PR1852 workflow after independent review and Lead
+exact head/tree acceptance, not an extra host intermittency campaign or
+automatic repeat. Preserve all prior evidence and branch ancestry.
+
+All-control expected weakens capture repetition alone as sufficient here, not
+proof of transform causation across different runs. Expected-to-failed with no
+inserted transform shows identity unnecessary within this probe; all failed also
+shows identity unnecessary but leaves initial context unknown. Unavailable or
+invalid data are inconclusive. Original PASS buffers are not promised; brackets
+are not raster-time telemetry. #1791 remains unresolved: no fix, tolerance
+waiver, issue closure, merge or cleanup.
