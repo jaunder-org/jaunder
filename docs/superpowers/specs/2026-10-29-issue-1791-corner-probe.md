@@ -379,9 +379,9 @@ Use the existing helper seam for ample-budget300ms, remaining-work below300ms,
 non-positive skip, exact attempted-parameter retention including rejection, and
 unchanged reserve/2s-envelope/outcome/cleanup/capacity tests. Run the full
 helper regression and pinned TypeScript/Prettier/native-diff checks. The prior
-middle 104.512ms error was a nested remaining timeout, with original public
-argument unlogged; final report remained retained with ~600ms envelope left. Do
-not infer total-budget exhaustion or renderer cause. A 300ms cap does not
-guarantee completion. ONE future existing PR1852 workflow requires independent
-review and Lead exact-head acceptance first; no automatic repeats, fix, issue
-closure, merge or cleanup.
+middle 104.512ms error is compatible with a nested remaining timeout after
+locator lookup, with original public argument unlogged; final report remained
+retained with ~600ms envelope left. Do not infer total-budget exhaustion or
+renderer cause. A 300ms cap does not guarantee completion. ONE future existing
+PR1852 workflow requires independent review and Lead exact-head acceptance
+first; no automatic repeats, fix, issue closure, merge or cleanup.

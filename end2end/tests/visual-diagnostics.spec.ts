@@ -312,7 +312,7 @@ test("the observed 530/647/751ms progression fits inside the two-second probe wi
       () => visual,
       sqliteProducer,
     );
-    expect(boundary.captureTimeouts).toEqual([150, 150, 150]);
+    expect(boundary.captureTimeouts).toEqual([300, 300, 300]);
     const checkpoints = boundary.attachments
       .filter((a) => a.name.includes("checkpoint-"))
       .map((a) => JSON.parse(a.body.toString()));
@@ -530,6 +530,66 @@ test("checkpoint rejection is precise and bounded, stops captures, and still att
   }
 });
 
+for (const [elapsed, expectedTimeout] of [
+  [0, 300],
+  [1526, 299],
+  [1724.5, 100.5],
+  [1824, 1],
+] as const) {
+  for (const rejected of [false, true]) {
+    test(`attempted capture timeout metadata equals public argument ${expectedTimeout}ms at ${elapsed}ms with rejection ${rejected}`, async ({}, info) => {
+      await withCornerClock(async (setElapsed) => {
+        const boundary = cornerBoundary({
+          captureThrows: rejected,
+          onGeometry: () => {
+            if (boundary.offsets.length > 0) setElapsed(elapsed);
+          },
+        });
+        const run = runVisualAssertion(
+          boundary.page,
+          "home-timeline.png",
+          rejected ? rejectAssertion : async () => {},
+          cornerInfo(info, boundary.attach),
+          sqliteProducer,
+        );
+        if (rejected) await expect(run).rejects.toBe(original);
+        else await run;
+        expect(boundary.captureTimeouts).toEqual([
+          expectedTimeout,
+          expectedTimeout,
+          expectedTimeout,
+        ]);
+        const final = JSON.parse(boundary.attachments.at(-1)!.body.toString());
+        expect(
+          final.phases.map(
+            (phase: { captureTimeoutMs: number }) => phase.captureTimeoutMs,
+          ),
+        ).toEqual(boundary.captureTimeouts);
+        const checkpoints = boundary.attachments.filter((a) =>
+          a.name.includes("checkpoint-"),
+        );
+        expect(
+          checkpoints.map(
+            (a) => JSON.parse(a.body.toString()).captureTimeoutMs,
+          ),
+        ).toEqual(boundary.captureTimeouts);
+        expect(checkpoints.every((a) => a.body.length <= 1024)).toBe(true);
+        expect(final.cleanup).toEqual({
+          "inline-style": "completed",
+          scroll: "completed",
+          stylesheet: "completed",
+        });
+        if (rejected)
+          expect(
+            final.phases.every(
+              (phase: { reason: string }) => phase.reason === "capture failed",
+            ),
+          ).toBe(true);
+      });
+    });
+  }
+}
+
 test("a non-positive capture timeout is skipped and warns at the precise capture-admission stage", async ({}, info) => {
   let drain = () => {};
   const boundary = cornerBoundary({ onGeometry: () => drain() });
@@ -552,6 +612,14 @@ test("a non-positive capture timeout is skipped and warns at the precise capture
       sqliteProducer,
     );
     expect(boundary.captureTimeouts).toEqual([]);
+    const final = JSON.parse(boundary.attachments.at(-1)!.body.toString());
+    expect(final.phases[0]).not.toHaveProperty("captureTimeoutMs");
+    const checkpoint = boundary.attachments.find((a) =>
+      a.name.includes("checkpoint-"),
+    );
+    expect(JSON.parse(checkpoint!.body.toString())).not.toHaveProperty(
+      "captureTimeoutMs",
+    );
     expect(warnings.join(" ")).toContain(
       "stage=control-none-before:capture-budget",
     );
@@ -597,7 +665,7 @@ for (const exhaustion of ["cleanup-reserve", "exhausted"] as const) {
         ),
       ).toBe(true);
       expect(boundary.captureTimeouts).toHaveLength(1);
-      expect(boundary.captureTimeouts.every((t) => t > 0 && t <= 150)).toBe(
+      expect(boundary.captureTimeouts.every((t) => t > 0 && t <= 300)).toBe(
         true,
       );
       expect(warnings.join(" ")).toContain("phase-admission:budget");
@@ -674,6 +742,7 @@ test("oversized checkpoint metadata becomes valid compact omission JSON without 
   const first = JSON.parse(checkpoints[0].body.toString());
   expect(first).toMatchObject({
     phase: "control-none-before",
+    captureTimeoutMs: boundary.captureTimeouts[0],
     outcome: "available",
     attachment_status: "attached",
     metadata_status: "compact-omissions",
@@ -913,7 +982,7 @@ test("the corner probe repeats NONE at invariant geometry and restores the selec
     "control-none-after",
   ]);
   expect(boundary.captureTimeouts).toHaveLength(3);
-  expect(boundary.captureTimeouts.every((t) => t > 0 && t <= 150)).toBe(true);
+  expect(boundary.captureTimeouts.every((t) => t > 0 && t <= 300)).toBe(true);
   expect(new Set(boundary.cssTexts).size).toBe(1);
   const images = boundary.attachments.filter(
     (a) => a.contentType === "image/png",

@@ -844,10 +844,11 @@ async function runCornerProbe(
           Math.min(150, remaining() - workReserveMs),
         );
         phaseStage = `${phase}:capture-budget`;
-        const timeout = Math.min(150, remaining() - workReserveMs);
+        const timeout = Math.min(300, remaining() - workReserveMs);
         if (timeout <= 0)
           throw new Error("non-positive-capture-timeout: capture skipped");
         phaseStage = `${phase}:capture`;
+        result.captureTimeoutMs = timeout;
         const png = await target.screenshot({
           type: "png",
           scale: "css",
@@ -919,6 +920,7 @@ async function runCornerProbe(
             : "unavailable",
         phase,
         factor: "no-transform-control",
+        captureTimeoutMs: result.captureTimeoutMs,
         selected_index: selected.index,
         completed_unix_ms: result.ended_unix_ms,
         elapsed_ms: Math.round(nodePerformance.now() - began),
