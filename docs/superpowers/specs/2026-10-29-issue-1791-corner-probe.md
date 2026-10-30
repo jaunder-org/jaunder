@@ -264,3 +264,43 @@ renderer timing remains unproven until the ONE future approved existing full
 workflow, after independent review and Lead head/tree acceptance; the previous
 two workflows are consumed. Preserve their evidence and distinct producer source
 identities. This changes allowance only, not the diagnostic hypothesis or scope.
+
+## Approved transform-presence supplement
+
+Human decision `1791-transform-presence`, request
+`9c1c0ae3-e131-4542-abdf-2c18333fbd3a`: “Approve transform test and one run”.
+This **supersedes the phase contract only**: retain the existing guard, original
+strict assertion first and identical PASS/error, locator screenshot API, CSS,
+mask, scroll, crop, two-control viewport selection, independent cleanup and all
+2000ms/150ms/three-image/byte limits above.
+
+Use exactly `original-none`, `identity-zero`, `restored-none`. Both NONE arms
+restore the exact saved original inline style (remove the style attribute when
+null, otherwise set its original string); only the identity arm assigns
+`el.style.transform = 'translateY(0px)'`. Require original computed transform
+`none`, then verify computed `none → identity matrix → none`. There is no
+intentional Y movement and no compositor-feature claim.
+
+Replace endpoint-only validity with equality across all six before/after
+observations: rect x/y/width/height/top/right/bottom/left, scroll x/y, viewport
+width/height, DPR and enclosing clips derived from the recorded rect plus scroll
+using pinned Playwright floor/ceil semantics with epsilon 0.001. Any difference,
+unexpected computed transform or PNG dimensions inconsistent with recorded clips
+makes interpretation INVALID. Brackets are not raster-time telemetry;
+checkpoints remain progress evidence, not cleanup success. Preserve truthful
+independent final cleanup reporting and valid compact JSON within existing caps.
+
+Use the existing helper seam for faithful computed-transform mocks, exact
+null/string style restoration, all-six invariance (including midphase drift that
+returns at endpoints), viewport/DPR/clip drift, PNG dimensions and unchanged
+original outcomes/cleanup/admission bounds. Run the complete helper regression
+and pinned TypeScript/Prettier/diff checks. Real-renderer feasibility remains
+unvalidated until ONE future existing full CI workflow after independent review
+and Lead head/tree acceptance; no automatic repeat or scope/base expansion.
+
+Raw registered PNG comparison is future CI analysis only, not a promise of an
+original PASS buffer. Expected NONE arms surrounding the historical failed
+pattern support reversible transform-associated paint within this probe, not
+historical cause proof. Three failed-pattern arms show identity unnecessary
+within this probe; three expected arms are inconclusive. No product fix,
+tolerance change, issue closure, merge or cleanup is authorized.
