@@ -346,3 +346,42 @@ shows identity unnecessary but leaves initial context unknown. Unavailable or
 invalid data are inconclusive. Original PASS buffers are not promised; brackets
 are not raster-time telemetry. #1791 remains unresolved: no fix, tolerance
 waiver, issue closure, merge or cleanup.
+
+## Approved 300ms per-capture cap supplement
+
+Human decision `1791-capture-300ms`, request
+`90d83829-bbca-4c50-9d4b-8e89833bc760`: “Approve300ms cap and one run”. This
+supersedes **only the corner probe's per-screenshot cap**, 150ms → 300ms, within
+the unchanged 2000ms total envelope. Compute the actual positive public locator
+screenshot timeout as `min(300, remaining capture work)` after retaining the
+existing 175ms work reserve and original100ms result reserve. Non-positive
+values skip capture, never `timeout: 0`. Other API caps are unchanged.
+
+Retain the actual attempted public timeout as one small numeric phase field
+`captureTimeoutMs`, assigned immediately before the screenshot call from the
+same positive value forwarded unchanged. Include that phase fact in its existing
+checkpoint; preserve it on capture failure. No attempted value exists when
+capture was skipped before invocation. This records the original public option,
+not Playwright's nested remaining deadline or proof of RPC cancellation. Keep
+all existing JSON/compact-fallback byte bounds and precise error protection; no
+new event, helper, logging transport or diagnostic framework.
+
+Everything else remains unchanged: NONE/NONE/NONE/exact-attribute control,
+all-six computed NONE/geometry/scroll/viewport/DPR/global-clip/PNG-dimension
+validity, strict original assertion first and identical outcome/error,
+baseline/mask/thresholds/test timeout, locator API/CSS
+lifetime/scroll/crop/guards, independent cleanup,
+checkpoint150/cleanup50/final50-inside reserves, three 256KiB PNGs,
+aggregate32KiB/checkpoint1KiB/final2KiB byte reserve, identity100/timeline500.
+No retry, race, sleep, product/fixture/base change or tolerance waiver.
+
+Use the existing helper seam for ample-budget300ms, remaining-work below300ms,
+non-positive skip, exact attempted-parameter retention including rejection, and
+unchanged reserve/2s-envelope/outcome/cleanup/capacity tests. Run the full
+helper regression and pinned TypeScript/Prettier/native-diff checks. The prior
+middle 104.512ms error was a nested remaining timeout, with original public
+argument unlogged; final report remained retained with ~600ms envelope left. Do
+not infer total-budget exhaustion or renderer cause. A 300ms cap does not
+guarantee completion. ONE future existing PR1852 workflow requires independent
+review and Lead exact-head acceptance first; no automatic repeats, fix, issue
+closure, merge or cleanup.
