@@ -1,7 +1,7 @@
 import { join } from "node:path";
 
 import { expect, type Locator, type Page } from "@playwright/test";
-import { runVisualAssertion } from "./visual-diagnostics";
+import { recordVisualIdentity, runVisualAssertion } from "./visual-diagnostics";
 
 const stylePath = join(__dirname, "visual.css");
 
@@ -17,6 +17,7 @@ export async function expectVisual(
   options: VisualOptions = {},
 ): Promise<void> {
   await page.evaluate(() => document.fonts.ready);
+  if (name === "home-timeline.png") await recordVisualIdentity(page);
   await runVisualAssertion(page, name, () =>
     expect(page).toHaveScreenshot(name, {
       animations: "disabled",
