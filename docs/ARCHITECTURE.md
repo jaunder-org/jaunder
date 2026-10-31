@@ -4276,11 +4276,11 @@ CI distributes the same non-e2e surface through four independent
 `cargo xtask ci-validate <lane>` runners selected from one ordered surface
 catalog. `host` owns the verify-only host/static gate and auxiliary host tests;
 `hermetic` owns Nix static checks and the wasm budget; `test-checks` owns wasm
-tests, doctests, and Elisp coverage, then runs the source-closure probe under
-`always()` on the same Nix-populated runner; and `coverage` owns Rust coverage
-plus its gate. Producer/consumer pairs never cross jobs. Test-check and probe
-results remain separate inside their combined job, and either fails it. A
-result-only `Validate (no e2e)` job requires all four lanes, preserving the
+tests, doctests, and Elisp coverage; and `coverage` owns Rust coverage plus its
+gate. Producer/consumer pairs never cross jobs. Source-invalidation probes
+remain manually callable diagnostics, not automatic CI steps
+([on-demand source probes](adr/drafts/on-demand-source-invalidation-probes.md)).
+A result-only `Validate (no e2e)` job requires all four lanes, preserving the
 stable branch-protection context. Local `validate --no-e2e` selects the same
 catalog serially
 ([split non-e2e validation lanes](adr/0192-split-ci-non-e2e-validation-lanes.md);
@@ -4411,10 +4411,10 @@ neither wasm path; a web marker changes `static-code` and site but not wasm
 tests; and `common`/`macros` markers change every dependent final-consumer
 boundary. Tooling and shared implementation changes preserve compiled tooling
 dependency identity while invalidating their real consumer; tools
-lock/configuration changes invalidate the dependency graph. CI runs this drift
-probe. It does not build application/check outputs, though evaluation can
-require declared source preparation. Identity stability alone is not
-local/remote cache or compiler freshness evidence.
+lock/configuration changes invalidate the dependency graph. This drift probe
+runs only on request. It does not build application/check outputs, though
+evaluation can require declared source preparation. Identity stability alone is
+not local/remote cache or compiler freshness evidence.
 
 The full `cargo xtask validate` is still the aggregate ship gate: its `--no-e2e`
 prefix builds both static groups and the Nix-backed test checks, then adds all

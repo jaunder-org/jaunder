@@ -580,10 +580,6 @@ mod tests {
 
     #[derive(Debug, Deserialize)]
     struct CiWorkflowStep {
-        #[serde(default, rename = "if")]
-        condition: Option<String>,
-        #[serde(default, rename = "continue-on-error")]
-        continue_on_error: Option<bool>,
         #[serde(default)]
         run: Option<String>,
     }
@@ -610,17 +606,6 @@ mod tests {
                 "nix develop .#ci --accept-flake-config -c cargo xtask ci-validate {lane}"
             )],
             "CI job must own exactly its declared ci-validate command"
-        );
-    }
-
-    fn assert_command(job: &CiWorkflowJob, command: &str) {
-        assert!(
-            job.steps
-                .iter()
-                .filter_map(|step| step.run.as_deref())
-                .map(normalized_command)
-                .any(|run| run.contains(command)),
-            "CI job must run `{command}`"
         );
     }
 
@@ -1045,23 +1030,20 @@ mod tests {
             assert_ci_validate_command(workflow.job(job_id), lane);
         }
 
-        let test_checks = workflow.job("validate-test-checks");
-        assert_command(test_checks, "cargo xtask nix probe-source");
-        let source_probe = test_checks
-            .steps
-            .iter()
-            .find(|step| {
-                step.run
-                    .as_deref()
-                    .is_some_and(|run| run.contains("cargo xtask nix probe-source"))
-            })
-            .expect("test-checks lane owns the source probe");
-        assert_eq!(source_probe.condition.as_deref(), Some("always()"));
-        assert_ne!(source_probe.continue_on_error, Some(true));
-        assert!(
-            normalized_command(source_probe.run.as_deref().expect("probe command"))
-                .starts_with("rm -f .xtask/last-result.json nix develop")
-        );
+        for (job_id, job) in &workflow.jobs {
+            for run in job.steps.iter().filter_map(|step| step.run.as_deref()) {
+                let command = normalized_command(run);
+                for probe in [
+                    "cargo xtask nix probe-source",
+                    "cargo xtask coverage probe-source",
+                ] {
+                    assert!(
+                        !command.contains(probe),
+                        "CI job `{job_id}` must not automatically run `{probe}`"
+                    );
+                }
+            }
+        }
         assert!(!workflow.jobs.contains_key("validate-source-probe"));
 
         let aggregate = workflow.job("validate-no-e2e");
