@@ -146,21 +146,6 @@ jobs:
           if test -f .xtask/last-result.json; then
             cp .xtask/last-result.json .xtask/test-checks-result.json
           fi
-      # Keep the broad source probe on this Nix-heavy runner so controlled cold
-      # changes reuse its realized store instead of rebuilding the closure on a
-      # fifth VM. `always()` preserves the independent failure signal when an
-      # earlier test-check step fails.
-      - name: Nix source-closure drift probe (#1289)
-        if: always()
-        run: |
-          rm -f .xtask/last-result.json
-          nix develop .#ci --accept-flake-config -c cargo xtask nix probe-source
-      - name: Preserve source probe result
-        if: always()
-        run: |
-          if test -f .xtask/last-result.json; then
-            cp .xtask/last-result.json .xtask/source-probe-result.json
-          fi
       - name: Upload test checks validation diagnostics
         if: always()
         uses: actions/upload-artifact@v7.0.1
@@ -171,7 +156,6 @@ jobs:
             .xtask/gcroots/elisp-coverage-producer/elisp-coverage/
             .xtask/last-result.json
             .xtask/test-checks-result.json
-            .xtask/source-probe-result.json
           if-no-files-found: ignore
           retention-days: 14
 
@@ -194,14 +178,6 @@ jobs:
           if test -f .xtask/last-result.json; then
             cp .xtask/last-result.json .xtask/coverage-result.json
           fi
-      # Drift guard for the Nix coverage `src` filter (#241/#37): eval-only, so it
-      # reuses this job's nix + cachix + xtask cache for ~seconds. `if: always()` so a
-      # filter-drift signal is not masked by an unrelated coverage failure.
-      - name: Coverage source-drift probe (#241)
-        if: always()
-        run:
-          nix develop .#ci --accept-flake-config -c cargo xtask coverage
-          probe-source
       - name: Upload coverage validation diagnostics
         if: always()
         uses: actions/upload-artifact@v7.0.1

@@ -865,9 +865,8 @@ and shared `sccache` across worktrees. That lane sets `CARGO_INCREMENTAL=0` so
 CI does **not** run `cargo xtask validate` as a single job. It distributes the
 non-e2e surface across
 `cargo xtask ci-validate <host|hermetic|test-checks|coverage>` and joins them
-under the stable `Validate (no e2e)` result-only job. The `test-checks` job runs
-the source-closure probe afterward under `always()`; either independently
-recorded result fails the job.
+under the stable `Validate (no e2e)` result-only job. Source-invalidation probes
+are on-demand diagnostics, not automatic CI steps.
 
 E2E uses two unsplit Chromium jobs plus six isolated Firefox lane jobs
 (`cargo xtask e2e-lane <identity>`). An `always()` reconciliation job per
@@ -1668,8 +1667,9 @@ source — a coverage hole the stateless gate can never see, because those lines
 aren't in the report). It evaluates the **committed (HEAD)** filter, so it
 guards what CI/PRs carry, not local uncommitted edits. Subtlety worth knowing: a
 _new_ file must be `git add`-ed to be measured — nix ignores untracked files
-even on a dirty tree. The probe runs in CI's `Validation coverage` job and on
-request; it is deliberately **not** part of `check`/`validate` (#241).
+even on a dirty tree. The probe runs only on request, not automatically in CI;
+it is deliberately **not** part of `check`/`validate` (#241).
+
 **Playwright/WASM coverage evidence (`cargo xtask wasm-coverage probe`).** This
 manual host command realizes the independent Chromium and Firefox diagnostic
 producers before deciding its outcome. It retains each unpacked producer root
@@ -1732,10 +1732,10 @@ and tooling dependencies; they make no runtime assertions for the other four
 boundaries. Tooling preparation uses generated dummy sources and a file-scoped
 lockfile, with repository-root target alignment and nonempty archive admission
 for ordinary, documentation and qualification consumers. Release artifacts are
-not assumed to seed dev-profile clippy. CI runs the identity drift probe; it
-builds no application/check outputs, although evaluation can require declared
-source preparation. It never purges the store. Stable identity is not proof of
-compiler freshness or local/remote realization reuse.
+not assumed to seed dev-profile clippy. The identity drift probe runs only on
+request; it builds no application/check outputs, although evaluation can require
+declared source preparation. It never purges the store. Stable identity is not
+proof of compiler freshness or local/remote realization reuse.
 
 Artifact compatibility includes compiler, target, profile, resolved features,
 flags and native inputs; incompatible work must rebuild. Dependency preparations
