@@ -1,18 +1,11 @@
 use clap::Parser;
-use xtask::{Cli, run};
+use xtask::Cli;
 
 fn main() {
     let cli = Cli::parse();
-    eprintln!("xtask-start: checkout-prepare");
     let json = cli.json;
     let command = cli.command_name();
-    let result = xtask::prepare_checkout().and_then(|()| {
-        eprintln!("xtask-start: hook-setup");
-        // Hook installation is safe only after the selected inputs are admitted.
-        xtask::ensure_hooks_installed();
-        eprintln!("xtask-start: dispatch");
-        run(cli)
-    });
+    let result = xtask::invocation_trace::execute(cli);
     match result {
         Ok(result) => {
             result.report(json);
