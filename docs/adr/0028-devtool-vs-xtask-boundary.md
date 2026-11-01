@@ -119,12 +119,21 @@ the runner is handled by running it live via `cargo run -p devtool`.
 ## Addendum (#1858): standalone `traced-run` and launcher capture
 
 The `run` responsibility has moved to the standalone `traced-run` executable,
-which is built from the shared runner implementation and placed on both
-interactive and CI devShell PATHs. It remains a host-side utility; it does not
-change the in-sandbox purpose or consumers of `devtool`, nor the host-only
-boundary of `xtask`. The existing `devtool run` subcommand remains a temporary
-compatibility forwarding route while the Manager coordinates external command
-routing; it does not carry an independent implementation.
+built from the shared runner implementation and placed on both interactive and
+CI devShell PATHs. Its Nix output has a narrow runner-only source filter: source
+changes admitted only for devtool do not invalidate the runner derivation.
+Workspace manifests and `tools/Cargo.lock` remain inputs, so dependency or
+workspace-resolution changes may invalidate it. The shell still includes both
+outputs, and changes to devtool can therefore change shell realization even when
+the runner derivation is unchanged. `devtool` remains independently packaged for
+its in-sandbox consumers. Its temporary `devtool run` forwarding route shares
+the library implementation; it is not a second installed runner.
+`packages.traced-run` alone installs `bin/traced-run`; `packages.devtool`
+installs only `bin/devtool`. Both default and CI shells include each output
+once, making the independent runner the single authoritative PATH provider. This
+packaging boundary was designated by the Manager for #1858. The runner remains
+host-side and changes neither devtool's in-sandbox purpose nor xtask's host-only
+boundary.
 
 `traced-run` retains captured single-program execution and adds opt-in
 Perfetto-compatible Chrome Trace Event JSON process spans. `scripts/cargo-xtask`

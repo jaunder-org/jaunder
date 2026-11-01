@@ -127,8 +127,12 @@ state.
 
 - Move only `devtool run` responsibility and its behavioral tests. Keep
   unrelated `devtool` responsibilities and their devshell/Nix consumers.
-- Package `traced-run` on the development-shell PATH. Keep host-only `xtask`
-  orchestration and analysis; do not rewrite `cargo xtask` or migrate to `just`.
+- Package `traced-run` as a standalone Nix output on the development-shell PATH,
+  with a source filter that admits runner sources and Cargo workspace/lock
+  inputs but excludes devtool-only source. This does not make the whole shell
+  immune: devtool remains a shell input, and manifests/lock/path dependencies
+  can affect the runner derivation. Keep host-only `xtask` orchestration and
+  analysis; do not rewrite `cargo xtask` or migrate to `just`.
 - Preserve single-program/no-shell behavior, optional timeout, stdout/stderr
   paths and byte/line summaries, result fields (`command`, `exit_code`, `ok`,
   `signal`, `duration_ms`, optional `timed_out`, `stdout`, `stderr`),

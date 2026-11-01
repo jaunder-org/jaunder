@@ -4702,16 +4702,23 @@ route is a temporary forwarding compatibility entry point pending
 Manager-coordinated external routing migration.
 
 - **`traced-run [--name LABEL] [--timeout SECONDS] -- <cmd>`** is the standalone
-  no-shell runner on the host/devShell path. Normal mode parks stdout/stderr
-  under `.xtask/run/`, returns the established JSON result and exits with the
-  child's code. With `--name`, it records participating process spans as a
-  Perfetto-compatible Chrome Trace Event JSON artifact. Complete process spans
-  remain on their actual tracks; recognized Chrome flow pairs link participating
-  parents to children without inventing cross-process call-stack nesting. The
-  instrumented `cargo-xtask` launcher uses `--launcher` to preserve inherited
-  stdout/stderr without wrapper JSON or output capture files. Its private
-  argv-only `--inner xtask` reentry is cooperative, not authentication; no
-  launcher environment guard or runner basename coupling is needed. Recursive
+  no-shell runner on the host/devShell path. `packages.traced-run` is an
+  independent Nix derivation with a narrow runner source closure, not a binary
+  bundled in `packages.devtool`. Both default and CI shells include each output
+  once; only the standalone output installs `bin/traced-run`. Devtool-only
+  implementation edits do not invalidate that runner derivation. Shared tools
+  lockfile, workspace manifests, configuration and toolchain remain inputs;
+  changes to those may invalidate it, and the whole devShell still depends on
+  devtool. This is not whole-shell invalidation immunity. Normal mode parks
+  stdout/stderr under `.xtask/run/`, returns the established JSON result and
+  exits with the child's code. With `--name`, it records participating process
+  spans as a Perfetto-compatible Chrome Trace Event JSON artifact. Complete
+  process spans remain on their actual tracks; recognized Chrome flow pairs link
+  participating parents to children without inventing cross-process call-stack
+  nesting. The instrumented `cargo-xtask` launcher uses `--launcher` to preserve
+  inherited stdout/stderr without wrapper JSON or output capture files. Its
+  private argv-only `--inner xtask` reentry is cooperative, not authentication;
+  no launcher environment guard or runner basename coupling is needed. Recursive
   trace context propagates independently, preserving one root for nested
   launches without stale-skipping later independent invocations. See
   [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md).
