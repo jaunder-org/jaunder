@@ -284,6 +284,43 @@ fn ordinary_child_is_not_fabricated_as_a_trace_span() {
 }
 
 #[test]
+fn forcibly_killed_root_does_not_publish_a_complete_trace() {
+    let fixture = tempfile::tempdir().unwrap();
+    let mut root = Command::new(executable())
+        .current_dir(fixture.path())
+        .args(["--name", "abrupt-root", "--", "sleep", "1"])
+        .spawn()
+        .unwrap();
+    let run_dir = fixture.path().join(".xtask/run");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while !run_dir.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(
+        run_dir.exists(),
+        "root run directory should be allocated before spawn"
+    );
+    root.kill().unwrap();
+    assert!(!root.wait().unwrap().success());
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    let entries: Vec<_> = std::fs::read_dir(&run_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .collect();
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.path().extension().is_some_and(|ext| ext == "d"))
+    );
+    assert!(!entries.iter().any(|entry| {
+        entry
+            .path()
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().ends_with(".trace.json"))
+    }));
+}
+
+#[test]
 fn help_and_malformed_cli_are_distinct() {
     let help = Command::new(executable()).arg("--help").output().unwrap();
     assert!(help.status.success());
