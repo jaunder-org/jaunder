@@ -530,6 +530,7 @@ let
           "tools/csr_bundle"
           "tools/devtool"
           "tools/doctests"
+          "tools/traced-run"
         ];
         requiredToolPath = builtins.any (
           root: relative == root || pkgs.lib.hasPrefix "${root}/" relative
@@ -629,7 +630,7 @@ let
     }:
     let
       cargoExtraArgs =
-        "${toolsArgs.cargoExtraArgs} -p devtool"
+        "${toolsArgs.cargoExtraArgs} -p devtool -p traced-run"
         + pkgs.lib.optionalString qualification " --features qualification";
       tooling =
         if qualification then
@@ -644,6 +645,7 @@ let
       installPhase = ''
         mkdir -p $out/bin
         cp target/release/devtool $out/bin/devtool
+        cp target/release/traced-run $out/bin/traced-run
       '';
       # `installPhase` copies a host-linked executable directly, bypassing
       # Crane's normal cargo binary install path. Give the full producer an

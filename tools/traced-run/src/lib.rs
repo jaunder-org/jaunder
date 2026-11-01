@@ -1,5 +1,5 @@
-//! `devtool run` — run exactly one program with no shell, capturing stdout and
-//! stderr to files under `.xtask/run/` and returning a structured JSON result.
+//! Shared command runner for `traced-run` and the temporary `devtool run`
+//! compatibility route. It executes one program without a shell and parks output under `.xtask/run/`.
 //! The runner exits with the child's exit code, so callers get an honest
 //! pass/fail signal without shell scaffolding (`; echo $?`, `2>&1 | tail`) — the
 //! latter silently overwrites the exit status with the last pipe stage's.
@@ -10,11 +10,22 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use processkit::{Command, Outcome, RunningProcess};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::runtime::{Builder, Runtime};
 
 const RUN_DIR: &str = ".xtask/run";
 const RUN_HISTORY_LIMIT: usize = 50;
+const TRACE_GUARD: &str = "JAUNDER_CARGO_XTASK_INNER";
+const TRACE_ENV: &str = "JAUNDER_TRACED_RUN_CONTEXT";
+static NEXT_RUN: AtomicU64 = AtomicU64::new(1);
+
+fn monotonic_ns() -> u64 {
+    let time = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+    (time.tv_sec as u64)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(time.tv_nsec as u64)
+}
 
 #[derive(Serialize)]
 pub struct Stream {
@@ -52,7 +63,11 @@ fn alloc_id() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    format!("{millis}-{}", std::process::id())
+    format!(
+        "{millis}-{}-{}",
+        std::process::id(),
+        NEXT_RUN.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 /// Keep only the newest history files. Enumeration/stat/removal failures are
@@ -73,12 +88,19 @@ fn prune_with(
             return;
         }
     };
-    let population = entries.map(|entry| {
-        entry.map(|entry| {
+    let population = entries.filter_map(|entry| match entry {
+        Ok(entry) => {
             let path = entry.path();
+            if !matches!(
+                path.extension().and_then(|extension| extension.to_str()),
+                Some("out" | "err")
+            ) {
+                return None;
+            }
             let modified = entry.metadata().and_then(|metadata| metadata.modified());
-            (path, modified)
-        })
+            Some(Ok((path, modified)))
+        }
+        Err(error) => Some(Err(error)),
     });
     prune_entries_with(population, &mut remove, stderr);
 }
@@ -101,7 +123,15 @@ fn prune_entries_with(
             }
         };
         match modified {
-            Ok(modified) => files.push((modified, path)),
+            Ok(modified)
+                if matches!(
+                    path.extension().and_then(|extension| extension.to_str()),
+                    Some("out" | "err")
+                ) =>
+            {
+                files.push((modified, path))
+            }
+            Ok(_) => continue,
             Err(_) => failed = true,
         }
     }
@@ -262,6 +292,7 @@ fn exec_capture(
     timeout: Option<u64>,
     out_path: &Path,
     err_path: &Path,
+    trace_context: Option<&str>,
 ) -> Result<Capture, RunError> {
     let command = Command::new(&argv[0])
         .args(&argv[1..])
@@ -269,6 +300,11 @@ fn exec_capture(
         .stdout_file(out_path)
         .stderr_file(err_path)
         .timeout_opt(timeout.map(Duration::from_secs));
+    let command = if let Some(context) = trace_context {
+        command.env(TRACE_ENV, context)
+    } else {
+        command
+    };
 
     let start = Instant::now();
     let outcome = Process::start(command, argv)?.wait(argv)?;
@@ -327,6 +363,15 @@ pub fn execute(
     cwd: &Path,
     timeout: Option<u64>,
 ) -> Result<(RunResult, i32), RunError> {
+    execute_with_trace(argv, cwd, timeout, None)
+}
+
+fn execute_with_trace(
+    argv: &[String],
+    cwd: &Path,
+    timeout: Option<u64>,
+    trace_context: Option<&str>,
+) -> Result<(RunResult, i32), RunError> {
     validate_argv(argv)?;
     let dir = run_dir(cwd);
     fs::create_dir_all(&dir).map_err(|e| RunError {
@@ -337,7 +382,7 @@ pub fn execute(
     let out_path = dir.join(format!("{id}.out"));
     let err_path = dir.join(format!("{id}.err"));
 
-    let cap = exec_capture(argv, cwd, timeout, &out_path, &err_path)?;
+    let cap = exec_capture(argv, cwd, timeout, &out_path, &err_path, trace_context)?;
     prune(&dir);
 
     let process_code = if cap.timed_out {
@@ -360,6 +405,323 @@ pub fn execute(
         stderr: stream_of(&err_path),
     };
     Ok((result, process_code))
+}
+
+/// Compatibility entry point retained until the externally-owned route is migrated.
+pub fn run_compat(argv: &[String], cwd: &Path, timeout: Option<u64>) -> ! {
+    run(argv, Some(cwd.to_owned()), timeout)
+}
+
+/// Parse the standalone runner's deliberately small option surface.
+#[derive(Clone, Serialize, Deserialize)]
+struct TraceContext {
+    run_id: String,
+    trace_dir: String,
+    origin_ns: u64,
+    parent_span_id: String,
+}
+
+struct TraceSpan {
+    name: String,
+    span_id: String,
+    context: TraceContext,
+    root: bool,
+    started_ns: u64,
+}
+
+static NEXT_SPAN: AtomicU64 = AtomicU64::new(1);
+
+fn prune_traces(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        eprintln!("traced-run: warning: trace pruning unavailable");
+        return;
+    };
+    let mut completed = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".trace.json"))
+            && let Ok(modified) = entry.metadata().and_then(|metadata| metadata.modified())
+        {
+            completed.push((modified, path));
+        }
+    }
+    completed.sort_by_key(|entry| std::cmp::Reverse(entry.0));
+    for (_, trace) in completed.into_iter().skip(RUN_HISTORY_LIMIT) {
+        let stem = trace
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .trim_end_matches(".trace.json");
+        if fs::remove_file(&trace).is_err() {
+            eprintln!("traced-run: warning: completed trace pruning failed");
+            continue;
+        }
+        let records = dir.join(format!("{stem}.trace.d"));
+        if records.exists() && fs::remove_dir_all(records).is_err() {
+            eprintln!("traced-run: warning: completed trace record pruning failed");
+        }
+    }
+}
+
+impl TraceSpan {
+    fn start(name: &str, cwd: &Path) -> Result<Self, RunError> {
+        if name.is_empty()
+            || name.len() > 80
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+        {
+            return Err(RunError {
+                message:
+                    "trace name must be 1-80 ASCII letters, digits, dot, underscore, or hyphen"
+                        .into(),
+                kind: "usage",
+            });
+        }
+        let inherited = std::env::var(TRACE_ENV)
+            .ok()
+            .and_then(|value| serde_json::from_str::<TraceContext>(&value).ok());
+        let root = inherited.is_none();
+        let context = if let Some(context) = inherited {
+            context
+        } else {
+            let run_id = alloc_id();
+            let trace_dir = run_dir(cwd).join(format!("{run_id}.trace.d"));
+            if fs::create_dir_all(&trace_dir).is_err() {
+                eprintln!("traced-run: warning: trace directory could not be created");
+            }
+            TraceContext {
+                run_id,
+                trace_dir: trace_dir.display().to_string(),
+                origin_ns: monotonic_ns(),
+                parent_span_id: String::new(),
+            }
+        };
+        let span_id = format!(
+            "{}-{}",
+            std::process::id(),
+            NEXT_SPAN.fetch_add(1, Ordering::Relaxed)
+        );
+        let started_ns = if root {
+            context.origin_ns
+        } else {
+            monotonic_ns()
+        };
+        Ok(Self {
+            name: name.to_owned(),
+            span_id,
+            context,
+            root,
+            started_ns,
+        })
+    }
+
+    fn child_context(&self) -> TraceContext {
+        let mut context = self.context.clone();
+        context.parent_span_id = self.span_id.clone();
+        context
+    }
+
+    fn finish(self) {
+        let dir = PathBuf::from(&self.context.trace_dir);
+        let end_ns = monotonic_ns();
+        let event = serde_json::json!({
+            "name": self.name, "cat":"process", "ph":"X", "pid":std::process::id(), "tid":std::process::id(),
+            "ts":self.started_ns.saturating_sub(self.context.origin_ns) / 1000, "dur":end_ns.saturating_sub(self.started_ns) / 1000, "args":{"run_id":self.context.run_id,"span_id":self.span_id,
+            "parent_span_id":if self.root { serde_json::Value::Null } else { self.context.parent_span_id.clone().into() }}
+        });
+        let file = dir.join(format!("span-{}.jsonl", self.span_id));
+        let temporary = file.with_extension("tmp");
+        if fs::write(&temporary, format!("{}\n", event)).is_err()
+            || fs::rename(&temporary, &file).is_err()
+        {
+            eprintln!("traced-run: warning: trace record could not be published");
+            let _ = fs::write(dir.join("incomplete"), b"a span record was not published\n");
+            return;
+        }
+        if self.root {
+            self.publish_root(&dir);
+        }
+    }
+
+    fn publish_root(&self, dir: &Path) {
+        let mut events = Vec::new();
+        if dir.join("incomplete").exists() {
+            eprintln!("traced-run: warning: incomplete span records; merged trace withheld");
+            return;
+        }
+        let Ok(entries) = fs::read_dir(dir) else {
+            eprintln!("traced-run: warning: trace records unavailable");
+            return;
+        };
+        let mut complete = true;
+        for entry in entries {
+            let Ok(entry) = entry else {
+                complete = false;
+                continue;
+            };
+            if entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "jsonl")
+            {
+                let Ok(bytes) = fs::read(entry.path()) else {
+                    complete = false;
+                    continue;
+                };
+                for line in bytes
+                    .split(|byte| *byte == b'\n')
+                    .filter(|line| !line.is_empty())
+                {
+                    match serde_json::from_slice::<serde_json::Value>(line) {
+                        Ok(event) => events.push(event),
+                        Err(_) => complete = false,
+                    }
+                }
+            }
+        }
+        if !complete {
+            eprintln!(
+                "traced-run: warning: span records could not be fully read; merged trace withheld"
+            );
+            return;
+        }
+        let destination = dir.with_extension("json");
+        let temporary = destination.with_extension("tmp");
+        let document = serde_json::json!({"traceEvents":events,"displayTimeUnit":"ms"});
+        if fs::write(&temporary, document.to_string()).is_err()
+            || fs::rename(&temporary, &destination).is_err()
+        {
+            eprintln!("traced-run: warning: final trace could not be published");
+        } else {
+            prune_traces(dir.parent().unwrap_or(dir));
+        }
+    }
+}
+
+pub fn traced_cli(args: Vec<String>) -> ! {
+    let mut args = args.into_iter();
+    let mut name = None;
+    let mut timeout = None;
+    let mut launcher = false;
+    let mut command = Vec::new();
+    let mut separator = false;
+    let mut usage_error = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--help" | "-h" => {
+                println!(
+                    "Usage: traced-run [--name LABEL] [--timeout SECONDS] [--launcher] -- PROGRAM [ARG ...]"
+                );
+                std::process::exit(0);
+            }
+            "--" => {
+                command.extend(args);
+                separator = true;
+                break;
+            }
+            "--name" => match args.next() {
+                Some(value) => name = Some(value),
+                None => usage_error = Some("--name requires a label"),
+            },
+            "--timeout" => match args.next().and_then(|value| value.parse::<u64>().ok()) {
+                Some(value) => timeout = Some(value),
+                None => usage_error = Some("--timeout requires a whole number of seconds"),
+            },
+            "--launcher" => launcher = true,
+            _ => {
+                usage_error = Some("expected options followed by `-- PROGRAM [ARG ...]`");
+                break;
+            }
+        }
+    }
+    if !separator || command.is_empty() {
+        usage_error.get_or_insert("a program is required after `--`");
+    }
+    if launcher && name.is_none() {
+        usage_error.get_or_insert("--launcher requires --name");
+    }
+    if let Some(error) = usage_error {
+        if launcher {
+            eprintln!("traced-run: {error}");
+        } else {
+            println!("{}", serde_json::json!({"error":error,"kind":"usage"}));
+        }
+        std::process::exit(64);
+    }
+    if let Some(label) = name {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        match TraceSpan::start(&label, &cwd) {
+            Ok(span) => {
+                let child_context = span.child_context();
+                let serialized = serde_json::to_string(&child_context).unwrap_or_default();
+                let (code, summary) = if launcher {
+                    (execute_launcher(&command, &cwd, timeout, &serialized), None)
+                } else {
+                    match execute_with_trace(&command, &cwd, timeout, Some(&serialized)) {
+                        Ok((result, code)) => (code, Some(result)),
+                        Err(error) => {
+                            eprintln!(
+                                "{}",
+                                serde_json::json!({"error":error.message,"kind":error.kind})
+                            );
+                            (64, None)
+                        }
+                    }
+                };
+                span.finish();
+                if let Some(summary) = summary {
+                    println!("{}", serde_json::to_string_pretty(&summary).unwrap());
+                }
+                std::process::exit(code);
+            }
+            Err(error) => {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({"error":error.message,"kind":error.kind})
+                );
+                std::process::exit(64);
+            }
+        }
+    }
+    run(&command, None, timeout)
+}
+
+fn execute_launcher(argv: &[String], cwd: &Path, timeout: Option<u64>, trace_context: &str) -> i32 {
+    if let Err(error) = validate_argv(argv) {
+        eprintln!("traced-run: {}", error.message);
+        return 64;
+    }
+    let command = Command::new(&argv[0])
+        .args(&argv[1..])
+        .current_dir(cwd)
+        .env(TRACE_ENV, trace_context)
+        .stdout(processkit::StdioMode::Inherit)
+        .stderr(processkit::StdioMode::Inherit)
+        .timeout_opt(timeout.map(Duration::from_secs));
+    let is_cargo_xtask = Path::new(&argv[0])
+        .file_name()
+        .is_some_and(|name| name == "cargo-xtask");
+    let command = if is_cargo_xtask {
+        command.env(TRACE_GUARD, "1")
+    } else {
+        command
+    };
+    match Process::start(command, argv).and_then(|process| process.wait(argv)) {
+        Ok(outcome) if outcome.timed_out() => 124,
+        Ok(outcome) => match (outcome.code(), outcome.signal()) {
+            (Some(code), _) => code,
+            (None, Some(sig)) => 128 + sig,
+            _ => 1,
+        },
+        Err(error) => {
+            eprintln!("traced-run: {}", error.message);
+            64
+        }
+    }
 }
 
 /// CLI entry: run the command, print the JSON result, and exit with the child's
@@ -472,7 +834,7 @@ mod tests {
         let argv = vec![
             executable.to_string_lossy().into_owned(),
             "--exact".into(),
-            "run::tests::exit_via_sigterm".into(),
+            "tests::exit_via_sigterm".into(),
             "--ignored".into(),
         ];
         let (r, code) = execute(&argv, cwd, None).unwrap();

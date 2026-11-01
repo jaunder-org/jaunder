@@ -115,3 +115,25 @@ added: `devtoolBin` is a build input to the coverage check, so stamping it with
 the repo revision would bust the coverage cache on every commit;
 `devtool --version` reports the crate version, and staleness while developing
 the runner is handled by running it live via `cargo run -p devtool`.
+
+## Addendum (#1858): standalone `traced-run` and launcher capture
+
+The `run` responsibility has moved to the standalone `traced-run` executable,
+which is built from the shared runner implementation and placed on both
+interactive and CI devShell PATHs. It remains a host-side utility; it does not
+change the in-sandbox purpose or consumers of `devtool`, nor the host-only
+boundary of `xtask`. The existing `devtool run` subcommand remains a temporary
+compatibility forwarding route while the Manager coordinates external command
+routing; it does not carry an independent implementation.
+
+`traced-run` retains captured single-program execution and adds opt-in
+Perfetto-compatible Chrome Trace Event JSON process spans. `scripts/cargo-xtask`
+uses launcher mode before checkout discovery or Nix, preserving inherited
+stdout/stderr for direct invocation. An explicitly captured outer invocation
+continues to own parked output. Trace capture is diagnostic and distinct from
+attribution; it does not redefine `xtask.command` or alter ADR-0096's lifecycle
+boundary. Span names and fields remain bounded under ADR-0011 and ADR-0147.
+
+External/global command-routing instructions are not switched by this change;
+the old route remains until exact migration readiness is confirmed by the
+Manager.

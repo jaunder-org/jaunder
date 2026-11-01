@@ -1,11 +1,22 @@
 #!/usr/bin/env bash
 # Cargo supplies the subcommand token; all remaining arguments belong to xtask.
 set -euo pipefail
-if [[ "${1-}" != xtask ]]; then
-  printf '%s\n' 'cargo-xtask: invoke through cargo xtask' >&2
-  exit 2
+if [[ "${JAUNDER_CARGO_XTASK_INNER-}" == 1 ]]; then
+  if [[ "${1-}" != --inner ]]; then
+    printf '%s\n' 'cargo-xtask: invalid guarded entry' >&2
+    exit 2
+  fi
+  shift
+else
+  if [[ "${1-}" != xtask ]]; then
+    printf '%s\n' 'cargo-xtask: invoke through cargo xtask' >&2
+    exit 2
+  fi
+  shift
+  script=$(readlink -f -- "$0")
+  exec traced-run --launcher --name cargo-xtask -- "$script" --inner "$@"
 fi
-shift
+unset JAUNDER_CARGO_XTASK_INNER
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_NAMESPACE
 root=$(git rev-parse --show-toplevel)
 # Keep checkout names out of installable syntax (#, ? and % are delimiters).

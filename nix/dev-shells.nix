@@ -43,10 +43,10 @@ let
       # distro git would load that OpenSSL into its older host glibc
       # process, which fails before Nix can fetch git inputs (#815).
       pkgs.git
-      # `devtool run -- <cmd>` for humans/agents, and the `shellHook`'s
-      # `devtool provision-node-modules` (#229) — so it must be on PATH in the
-      # CI shell too, not just the interactive one. Already built for the
-      # coverage and static-checks derivations, so this adds no new build.
+      # `traced-run -- <cmd>` for humans/agents, plus devtool subcommands for
+      # in-sandbox consumers and `provision-node-modules` (#229) in shellHook.
+      # Keep both executables on PATH in CI and interactive shells; they share
+      # this already-built tools package.
       devtoolBin
       emacsForCi
       pkgs.jq

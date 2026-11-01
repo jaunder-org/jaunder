@@ -781,10 +781,10 @@ Create `.xtask/measurements`, run this exact command once as an unrecorded
 warm-up, then run it once more:
 
 ```bash
-devtool run -- cargo xtask --json validate --no-e2e --allow-dirty
+traced-run -- cargo xtask --json validate --no-e2e --allow-dirty
 ```
 
-`devtool run` prints a wrapper summary on the terminal. From that summary, copy
+`traced-run` prints a wrapper summary on the terminal. From that summary, copy
 the captured child stdout at `stdout.path` — or equivalently copy
 `.xtask/last-result.json` — to the explicitly named sidecar
 `.xtask/measurements/post-warm-baseline.json`. Do **not** copy the wrapper
@@ -1746,7 +1746,7 @@ availability. Cache legitimate build inputs aggressively, but execute tests
 afresh; cached test verdicts are not execution evidence.
 
 For optional historical reproduction of the controlled measurements, run one
-unrecorded `devtool run -- cargo xtask --json validate --no-e2e --allow-dirty`
+unrecorded `traced-run -- cargo xtask --json validate --no-e2e --allow-dirty`
 warm-up, then run it again and copy the captured child stdout at the wrapper
 summary's `stdout.path` (or `.xtask/last-result.json`) to
 `.xtask/measurements/post-warm-baseline.json`; do not save the wrapper summary.

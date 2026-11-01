@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["coverage", "csr_bundle", "devtool", "diagnostic-coverage-runtime", "doctests", "performance"]
+members = ["coverage", "csr_bundle", "devtool", "diagnostic-coverage-runtime", "doctests", "performance", "traced-run"]
 
 [workspace.package]
 license = "GPL-3.0-or-later"

@@ -4695,19 +4695,22 @@ placed by a single litmus test — _where must this code execute?_
 
 The "devtool = in-sandbox, xtask = host" split is a litmus test about where code
 _must_ execute, not a ban on running devtool from a shell. ADR-0028's own
-Supplement (#158) extends `devtool run` to the host as the gate-execution
-surface for humans and agents, and exposes `devtoolBin` in the devShell; the
-host verify ladder's use of `devtool check <name>` is ADR-0052's Decision. Both
-host-side subcommands are therefore chartered, not drift.
+Supplement (#158) originally extended `devtool run` to the host; #1858 moves
+that responsibility to standalone `traced-run`, while the host verify ladder's
+use of `devtool check <name>` remains ADR-0052's Decision. The old `devtool run`
+route is a temporary forwarding compatibility entry point pending
+Manager-coordinated external routing migration.
 
-- **`devtool run -- <cmd>`** is a no-shell single-command runner used both
-  in-sandbox and on the host as the gate-execution surface for humans and
-  agents. It `exec`s exactly one program (refusing shell re-entry like `bash -c`
-  or `nix develop`), parks stdout/stderr under `.xtask/run/`
-  (`tools/devtool/src/run.rs`), returns a JSON summary (`exit_code`, `ok`,
-  `signal`, `duration_ms`, per-stream `{path, bytes, lines}`), and exits with
-  the child's code. `devtoolBin` is exposed in the default devShell for this
-  reason ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)).
+- **`traced-run [--name LABEL] [--timeout SECONDS] -- <cmd>`** is the standalone
+  no-shell runner on the host/devShell path. Normal mode parks stdout/stderr
+  under `.xtask/run/`, returns the established JSON result and exits with the
+  child's code. With `--name`, it records participating process spans as a
+  Perfetto-compatible Chrome Trace Event JSON artifact. The instrumented
+  `cargo-xtask` launcher uses `--launcher` to preserve inherited stdout/stderr
+  without wrapper JSON or output capture files. See
+  [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md).
+- **`devtool run`** remains temporarily available as a forwarding compatibility
+  interface to the same runner implementation; it is not a second runner.
 - **`devtool check <name> | --group <docs|code> | --all [--fix] [--sandbox-cargo]`**
   is the single command-definition surface for the migrated static checks
   (`fmt`, `leptosfmt`, `prettier-markdown`, `prettier-end2end`, `prettier-css`,

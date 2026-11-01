@@ -663,7 +663,7 @@ pub enum WasmCoverageCommand {
 pub enum CacheSafetyCommand {
     /// Reconcile `nix/cache-policy.json` with the Nix-derived output inventory,
     /// then inspect admitted support closures without building final verdicts.
-    #[command(after_help = "EXAMPLES:\n  devtool run -- cargo xtask cache-safety probe")]
+    #[command(after_help = "EXAMPLES:\n  traced-run -- cargo xtask cache-safety probe")]
     Probe,
 }
 
@@ -677,7 +677,7 @@ pub enum NixCommand {
     ProbeSource,
     /// Run the opt-in isolated SQLite/PostgreSQL production VM lifecycle smoke
     /// against the current checkout as a `path:` flake. It publishes no evidence.
-    #[command(after_help = "EXAMPLES:\n  devtool run -- cargo xtask nix production-baseline-smoke")]
+    #[command(after_help = "EXAMPLES:\n  traced-run -- cargo xtask nix production-baseline-smoke")]
     ProductionBaselineSmoke,
 }
 
