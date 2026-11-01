@@ -4705,9 +4705,11 @@ Manager-coordinated external routing migration.
   no-shell runner on the host/devShell path. Normal mode parks stdout/stderr
   under `.xtask/run/`, returns the established JSON result and exits with the
   child's code. With `--name`, it records participating process spans as a
-  Perfetto-compatible Chrome Trace Event JSON artifact. The instrumented
-  `cargo-xtask` launcher uses `--launcher` to preserve inherited stdout/stderr
-  without wrapper JSON or output capture files. See
+  Perfetto-compatible Chrome Trace Event JSON artifact. Complete process spans
+  remain on their actual tracks; recognized Chrome flow pairs link participating
+  parents to children without inventing cross-process call-stack nesting. The
+  instrumented `cargo-xtask` launcher uses `--launcher` to preserve inherited
+  stdout/stderr without wrapper JSON or output capture files. See
   [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md).
 - **`devtool run`** remains temporarily available as a forwarding compatibility
   interface to the same runner implementation; it is not a second runner.

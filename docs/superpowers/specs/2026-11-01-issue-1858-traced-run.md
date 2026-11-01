@@ -78,6 +78,23 @@ only; no argv-derived names, paths, or unbounded attributes. Keep determinant
 fields on the narrowest owning span and honor ADR-0011 privacy/cardinality
 limits and ADR-0147.
 
+### Perfetto relationship-encoding clarification (2026-11-02)
+
+Complete `ph:"X"` spans remain on their actual process/thread tracks. Each
+participating parent/child relation additionally emits a separate Chrome Trace
+Event flow pair: `ph:"s"` on the parent track and `ph:"f"` on the child track,
+paired by one unique unsigned 64-bit ID serialized as hexadecimal text. The
+finish event uses `bp:"e"` to bind to the child's enclosing complete span. This
+creates an inspectable causal link, not cross-process slice nesting or a fake
+call stack. Concurrent siblings retain distinct flow IDs, actual process
+timelines, and overlapping intervals.
+
+The representation was verified in Perfetto UI v59.1-79997ada9: importing a real
+nested-parent/child/grandchild trace plus overlapping sibling invocations
+produced three rows in `flow`, each joining the intended source/destination
+slices; import errors and trace errors were both zero. `parent_span_id` remains
+useful correlation metadata but is not itself the viewer relationship.
+
 The root runner owns trace merging, final trace publication, and (in normal
 captured mode) output-result JSON and capture files. In direct launcher mode
 there are no output capture files or summary JSON; the root trace owner may be
@@ -133,6 +150,7 @@ captured mode parks output until observed separately); externally captured
 launcher output remains parked by the outer runner and is not promised
 interactive; child status/signal/timeout behavior; spawn and early checkout/Nix
 failure behavior; refusal/malformed CLI; nested runner and grandchild parentage;
+recognized flow endpoint consistency, unique IDs and complete lifecycle;
 arbitrary children are not misrepresented as instrumented; direct launcher root
 versus externally wrapped launcher has exactly one root and one final trace;
 concurrent invocation isolation; shared-clock alignment; normal and failure

@@ -422,11 +422,14 @@ struct TraceContext {
     trace_dir: String,
     origin_ns: u64,
     parent_span_id: String,
+    parent_pid: u32,
+    parent_started_ns: u64,
 }
 
 struct TraceSpan {
     name: String,
     span_id: String,
+    flow_id: u64,
     context: TraceContext,
     root: bool,
     started_ns: u64,
@@ -501,13 +504,13 @@ impl TraceSpan {
                 trace_dir: trace_dir.display().to_string(),
                 origin_ns: monotonic_ns(),
                 parent_span_id: String::new(),
+                parent_pid: 0,
+                parent_started_ns: 0,
             }
         };
-        let span_id = format!(
-            "{}-{}",
-            std::process::id(),
-            NEXT_SPAN.fetch_add(1, Ordering::Relaxed)
-        );
+        let span_sequence = NEXT_SPAN.fetch_add(1, Ordering::Relaxed);
+        let span_id = format!("{}-{span_sequence}", std::process::id());
+        let flow_id = (u64::from(std::process::id()) << 32) | (span_sequence & u64::from(u32::MAX));
         let started_ns = if root {
             context.origin_ns
         } else {
@@ -526,6 +529,7 @@ impl TraceSpan {
         Ok(Self {
             name: name.to_owned(),
             span_id,
+            flow_id,
             context,
             root,
             started_ns,
@@ -535,20 +539,49 @@ impl TraceSpan {
     fn child_context(&self) -> TraceContext {
         let mut context = self.context.clone();
         context.parent_span_id = self.span_id.clone();
+        context.parent_pid = std::process::id();
+        context.parent_started_ns = self.started_ns;
         context
     }
 
     fn finish(self) {
         let dir = PathBuf::from(&self.context.trace_dir);
         let end_ns = monotonic_ns();
-        let event = serde_json::json!({
+        let span_ts = self.started_ns.saturating_sub(self.context.origin_ns) / 1000;
+        let span_dur = end_ns.saturating_sub(self.started_ns) / 1000;
+        let span_event = serde_json::json!({
             "name": self.name, "cat":"process", "ph":"X", "pid":std::process::id(), "tid":std::process::id(),
-            "ts":self.started_ns.saturating_sub(self.context.origin_ns) / 1000, "dur":end_ns.saturating_sub(self.started_ns) / 1000, "args":{"run_id":self.context.run_id,"span_id":self.span_id,
+            "ts":span_ts, "dur":span_dur, "args":{"run_id":self.context.run_id,"span_id":self.span_id,
             "parent_span_id":if self.root { serde_json::Value::Null } else { self.context.parent_span_id.clone().into() }}
         });
+        let mut events = vec![span_event];
+        if !self.root {
+            let flow_id = format!("{:016x}", self.flow_id);
+            let flow_start_ts = self
+                .context
+                .parent_started_ns
+                .saturating_sub(self.context.origin_ns)
+                / 1000;
+            let flow_end_ts = span_ts.saturating_add(span_dur);
+            events.push(serde_json::json!({
+                "name":"traced-run parent-child", "cat":"process", "ph":"s",
+                "pid":self.context.parent_pid, "tid":self.context.parent_pid,
+                "ts":flow_start_ts, "id":flow_id
+            }));
+            events.push(serde_json::json!({
+                "name":"traced-run parent-child", "cat":"process", "ph":"f",
+                "pid":std::process::id(), "tid":std::process::id(),
+                "ts":flow_end_ts, "id":flow_id, "bp":"e"
+            }));
+        }
         let file = dir.join(format!("span-{}.jsonl", self.span_id));
         let temporary = file.with_extension("tmp");
-        if fs::write(&temporary, format!("{}\n", event)).is_err()
+        let records = events
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        if fs::write(&temporary, format!("{records}\n")).is_err()
             || fs::rename(&temporary, &file).is_err()
         {
             eprintln!("traced-run: warning: trace record could not be published");

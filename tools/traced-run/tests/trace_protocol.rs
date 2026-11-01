@@ -13,6 +13,55 @@ fn root_command() -> Command {
     command
 }
 
+fn assert_flow_pair(
+    flows: &[&serde_json::Value],
+    parent: &serde_json::Value,
+    child: &serde_json::Value,
+) {
+    let finish = flows
+        .iter()
+        .find(|event| event["ph"] == "f" && event["pid"] == child["pid"])
+        .unwrap();
+    let start = flows
+        .iter()
+        .find(|event| event["ph"] == "s" && event["id"] == finish["id"])
+        .unwrap();
+    assert_eq!(start["id"], finish["id"]);
+    assert_eq!(finish["bp"], "e");
+    assert_eq!(start["pid"], parent["pid"]);
+    assert_eq!(finish["pid"], child["pid"]);
+    assert_eq!(start["ts"], parent["ts"]);
+    assert!(finish["ts"].as_u64().unwrap() >= child["ts"].as_u64().unwrap());
+    assert!(
+        finish["ts"].as_u64().unwrap()
+            <= child["ts"].as_u64().unwrap() + child["dur"].as_u64().unwrap()
+    );
+}
+
+fn assert_complete_unique_flows(flows: &[&serde_json::Value], expected_edges: usize) {
+    let mut by_id = std::collections::BTreeMap::<&str, Vec<&serde_json::Value>>::new();
+    for event in flows {
+        by_id
+            .entry(event["id"].as_str().expect("flow event has an id"))
+            .or_default()
+            .push(event);
+    }
+    assert_eq!(by_id.len(), expected_edges, "each relation has a unique id");
+    for (id, endpoints) in by_id {
+        assert!(!id.is_empty());
+        assert!(u64::from_str_radix(id, 16).is_ok(), "flow id is hex");
+        assert_eq!(endpoints.len(), 2, "flow {id} has both endpoints");
+        assert_eq!(
+            endpoints.iter().filter(|event| event["ph"] == "s").count(),
+            1
+        );
+        assert_eq!(
+            endpoints.iter().filter(|event| event["ph"] == "f").count(),
+            1
+        );
+    }
+}
+
 fn final_trace(root: &std::path::Path) -> serde_json::Value {
     let trace = std::fs::read_dir(root.join(".xtask/run"))
         .unwrap()
@@ -40,6 +89,10 @@ fn nested_runners_share_one_root_and_record_parentage() {
             "--name",
             "inner",
             "--",
+            executable(),
+            "--name",
+            "grandchild",
+            "--",
             "true",
         ])
         .output()
@@ -60,19 +113,30 @@ fn nested_runners_share_one_root_and_record_parentage() {
     let document: serde_json::Value =
         serde_json::from_slice(&std::fs::read(traces[0].path()).unwrap()).unwrap();
     let events = document["traceEvents"].as_array().unwrap();
-    assert_eq!(events.len(), 2);
-    let outer = events
+    let spans: Vec<_> = events.iter().filter(|event| event["ph"] == "X").collect();
+    let flows: Vec<_> = events
         .iter()
-        .find(|event| event["name"] == "outer")
-        .unwrap();
-    let inner = events
+        .filter(|event| event["ph"] == "s" || event["ph"] == "f")
+        .collect();
+    assert_eq!(spans.len(), 3);
+    assert_eq!(flows.len(), 4);
+    assert_complete_unique_flows(&flows, 2);
+    let outer = spans.iter().find(|event| event["name"] == "outer").unwrap();
+    let inner = spans.iter().find(|event| event["name"] == "inner").unwrap();
+    let grandchild = spans
         .iter()
-        .find(|event| event["name"] == "inner")
+        .find(|event| event["name"] == "grandchild")
         .unwrap();
     assert_eq!(outer["args"]["parent_span_id"], serde_json::Value::Null);
     assert_eq!(outer["ts"], 0);
     assert_eq!(inner["args"]["parent_span_id"], outer["args"]["span_id"]);
     assert_eq!(inner["args"]["run_id"], outer["args"]["run_id"]);
+    assert_flow_pair(&flows, outer, inner);
+    assert_eq!(
+        grandchild["args"]["parent_span_id"],
+        inner["args"]["span_id"]
+    );
+    assert_flow_pair(&flows, inner, grandchild);
     let child_start = inner["ts"].as_u64().unwrap();
     let child_end = child_start + inner["dur"].as_u64().unwrap();
     assert!(child_start >= outer["ts"].as_u64().unwrap());
@@ -84,14 +148,73 @@ fn nested_runners_share_one_root_and_record_parentage() {
         .collect();
     assert_eq!(
         records.len(),
-        2,
-        "both participants published complete records"
+        3,
+        "all participants published complete records"
     );
     assert!(
         records
             .iter()
             .all(|name| name.to_string_lossy().ends_with(".jsonl"))
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn concurrent_sibling_runners_keep_distinct_tracks_and_complete_parent_flows() {
+    let fixture = tempfile::tempdir().unwrap();
+    let script = fixture.path().join("siblings.py");
+    std::fs::write(
+        &script,
+        r#"import subprocess, sys
+runner = sys.argv[1]
+children = [
+    subprocess.Popen([runner, '--name', name, '--', 'sleep', '0.4'])
+    for name in ('sibling-one', 'sibling-two')
+]
+raise SystemExit(max(child.wait() for child in children))
+"#,
+    )
+    .unwrap();
+    let output = root_command()
+        .current_dir(fixture.path())
+        .args(["--name", "parent", "--", "python3"])
+        .arg(&script)
+        .arg(executable())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let events = final_trace(fixture.path())["traceEvents"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let spans: Vec<_> = events.iter().filter(|event| event["ph"] == "X").collect();
+    let flows: Vec<_> = events
+        .iter()
+        .filter(|event| event["ph"] == "s" || event["ph"] == "f")
+        .collect();
+    assert_eq!(spans.len(), 3);
+    assert_eq!(flows.len(), 4);
+    assert_complete_unique_flows(&flows, 2);
+    let parent = spans
+        .iter()
+        .find(|event| event["name"] == "parent")
+        .unwrap();
+    let siblings: Vec<_> = spans
+        .iter()
+        .filter(|event| event["name"] == "sibling-one" || event["name"] == "sibling-two")
+        .collect();
+    assert_eq!(siblings.len(), 2);
+    assert_ne!(siblings[0]["pid"], siblings[1]["pid"]);
+    for sibling in &siblings {
+        assert_eq!(sibling["args"]["parent_span_id"], parent["args"]["span_id"]);
+        assert_flow_pair(&flows, parent, sibling);
+    }
+    let first_start = siblings[0]["ts"].as_u64().unwrap();
+    let first_end = first_start + siblings[0]["dur"].as_u64().unwrap();
+    let second_start = siblings[1]["ts"].as_u64().unwrap();
+    let second_end = second_start + siblings[1]["dur"].as_u64().unwrap();
+    assert!(first_start.max(second_start) < first_end.min(second_end));
 }
 
 #[test]
@@ -121,7 +244,9 @@ fn externally_captured_launcher_output_belongs_to_the_outer_runner() {
         .as_array()
         .unwrap()
         .clone();
-    assert_eq!(events.len(), 2);
+    assert_eq!(events.iter().filter(|event| event["ph"] == "X").count(), 2);
+    assert_eq!(events.iter().filter(|event| event["ph"] == "s").count(), 1);
+    assert_eq!(events.iter().filter(|event| event["ph"] == "f").count(), 1);
     assert!(events.iter().any(|event| event["name"] == "capture-owner"));
     assert!(events.iter().any(|event| event["name"] == "cargo-xtask"));
 }

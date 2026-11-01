@@ -130,9 +130,14 @@ routing; it does not carry an independent implementation.
 Perfetto-compatible Chrome Trace Event JSON process spans. `scripts/cargo-xtask`
 uses launcher mode before checkout discovery or Nix, preserving inherited
 stdout/stderr for direct invocation. An explicitly captured outer invocation
-continues to own parked output. Trace capture is diagnostic and distinct from
-attribution; it does not redefine `xtask.command` or alter ADR-0096's lifecycle
-boundary. Span names and fields remain bounded under ADR-0011 and ADR-0147.
+continues to own parked output. Each participant retains its complete `X` span
+on its real process track and emits a separate cross-process parent/child flow
+pair (`s` on the parent track, `f` on the child track) with a unique hexadecimal
+64-bit `id`; `bp:"e"` binds the finish endpoint to the child span. These are
+inspectable causal links, not fabricated cross-process slice nesting. Trace
+capture is diagnostic and distinct from attribution; it does not redefine
+`xtask.command` or alter ADR-0096's lifecycle boundary. Span names and fields
+remain bounded under ADR-0011 and ADR-0147.
 
 External/global command-routing instructions are not switched by this change;
 the old route remains until exact migration readiness is confirmed by the
