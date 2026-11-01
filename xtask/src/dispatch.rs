@@ -402,10 +402,12 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         }
         Command::TestLocal { nextest_args } => {
             let sh = Shell::new()?;
-            let start = Instant::now();
             let mut result = CommandResult::new("test-local");
             steps::test_local::run(&sh, &mut result, &nextest_args);
-            lifecycle::finalize(&mut result, start);
+            result.finished_at_unix = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
             Ok(result)
         }
         Command::BuildCsr { release } => {

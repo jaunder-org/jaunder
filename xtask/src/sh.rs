@@ -18,15 +18,24 @@ pub fn step_with_env(
     args: &[&str],
     env: &[(String, String)],
 ) -> StepResult {
-    let start = Instant::now();
+    let traced = crate::invocation_trace::active()
+        && matches!(name, "test-local-image-worker" | "test-local");
+    let phase = traced.then(|| {
+        crate::invocation_trace::phase(if name == "test-local" {
+            "test-local"
+        } else {
+            "test-local-image-worker"
+        })
+    });
+    let start = (!traced).then(Instant::now);
     let mut cmd = sh.cmd(program).args(args).quiet().ignore_status();
     for (key, value) in env {
         cmd = cmd.env(key, value);
     }
-    match cmd.output() {
+    let result = match cmd.output() {
         Ok(output) => {
             if output.status.success() {
-                StepResult::ok(name).with_duration(start.elapsed())
+                StepResult::ok(name)
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let stdout = String::from_utf8_lossy(&output.stdout);
@@ -38,13 +47,16 @@ pub fn step_with_env(
                         format!("exited with status {}", output.status.code().unwrap_or(-1))
                     }
                 };
-                StepResult::fail(name)
-                    .detail(detail)
-                    .with_duration(start.elapsed())
+                StepResult::fail(name).detail(detail)
             }
         }
-        Err(err) => StepResult::fail(name)
-            .detail(err.to_string())
-            .with_duration(start.elapsed()),
+        Err(err) => StepResult::fail(name).detail(err.to_string()),
+    };
+    if let Some(phase) = phase {
+        phase.finish(result.ok);
+    }
+    match start {
+        Some(start) => result.with_duration(start.elapsed()),
+        None => result,
     }
 }

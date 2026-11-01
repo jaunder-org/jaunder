@@ -11,26 +11,43 @@ pub fn run(sh: &Shell, result: &mut CommandResult, nextest_args: &[String]) {
         nextest_args,
         sh.var_os("JAUNDER_CSR_BUNDLE_DIR"),
         |sh, result| {
-            let started = std::time::Instant::now();
+            let traced = crate::invocation_trace::active();
+            let phase = traced.then(|| crate::invocation_trace::phase("test-local-csr-bundle"));
+            let started = (!traced).then(std::time::Instant::now);
             let resolve = || -> anyhow::Result<()> {
-                crate::host_tooling::admit_untracked_inputs(
+                let admission =
+                    traced.then(|| crate::invocation_trace::phase("xtask.csr-admission"));
+                let admitted = crate::host_tooling::admit_untracked_inputs(
                     &sh.current_dir(),
                     ".#csrBundle.sourceAdmits",
-                )?;
+                );
+                if let Some(admission) = admission {
+                    admission.finish(admitted.is_ok());
+                }
+                admitted?;
                 let root = sh.current_dir().join(".xtask/csr-bundle");
                 sh.create_dir(root.parent().unwrap())?;
-                crate::nix_build::build_rooted(sh, "csrBundle", &root)?;
+                let build = traced.then(|| crate::invocation_trace::phase("xtask.csr-build"));
+                let built = crate::nix_build::build_rooted(sh, "csrBundle", &root);
+                if let Some(build) = build {
+                    build.finish(built.is_ok());
+                }
+                built?;
                 Ok(())
             };
-            result.push(
-                (match resolve() {
-                    Ok(()) => StepResult::ok("test-local-csr-bundle"),
-                    Err(error) => {
-                        StepResult::fail("test-local-csr-bundle").detail(format!("{error:#}"))
-                    }
-                })
-                .with_duration(started.elapsed()),
-            );
+            let mut step = match resolve() {
+                Ok(()) => StepResult::ok("test-local-csr-bundle"),
+                Err(error) => {
+                    StepResult::fail("test-local-csr-bundle").detail(format!("{error:#}"))
+                }
+            };
+            if let Some(phase) = phase {
+                phase.finish(step.ok);
+            }
+            if let Some(started) = started {
+                step = step.with_duration(started.elapsed());
+            }
+            result.push(step);
         },
     );
 }
@@ -43,7 +60,13 @@ fn run_with_producer(
     explicit_root: Option<std::ffi::OsString>,
     produce: impl FnOnce(&Shell, &mut CommandResult),
 ) {
-    let _build_lock = match super::host_server::host_artifact_build_lock() {
+    let wait = crate::invocation_trace::active()
+        .then(|| crate::invocation_trace::phase("xtask.artifact-lock-wait"));
+    let lock = super::host_server::host_artifact_build_lock();
+    if let Some(wait) = wait {
+        wait.finish(lock.is_ok());
+    }
+    let _build_lock = match lock {
         Ok(lock) => lock,
         Err(error) => {
             result.push(
@@ -68,7 +91,13 @@ fn run_with_producer(
             sh.current_dir().join(".xtask/csr-bundle")
         }
     };
-    let root = match super::csr_prerequisite::validate(&input) {
+    let validation = crate::invocation_trace::active()
+        .then(|| crate::invocation_trace::phase("test-local-csr-prerequisite"));
+    let validated = super::csr_prerequisite::validate(&input);
+    if let Some(validation) = validation {
+        validation.finish(validated.is_ok());
+    }
+    let root = match validated {
         Ok(root) => root,
         Err(error) => {
             result
