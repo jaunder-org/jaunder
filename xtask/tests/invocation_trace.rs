@@ -19,6 +19,15 @@ fn checkout(root: &Path, admitted: bool) {
 fn invoke(root: &Path) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_xtask"))
         .current_dir(root)
+        // Temp roots may live inside the real checkout in CI. Keep discovery
+        // fixture-local, including when the test is launched by a Git hook.
+        .env("GIT_CEILING_DIRECTORIES", root.parent().unwrap())
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_OBJECT_DIRECTORY")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_NAMESPACE")
         .env(
             "JAUNDER_CSR_BUNDLE_DIR",
             root.join("private-missing-bundle"),
