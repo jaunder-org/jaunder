@@ -14,6 +14,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::runtime::{Builder, Runtime};
 
+#[cfg(unix)]
+mod terminal;
+
 const RUN_DIR: &str = ".xtask/run";
 const RUN_HISTORY_LIMIT: usize = 50;
 const TRACE_GUARD: &str = "JAUNDER_CARGO_XTASK_INNER";
@@ -628,6 +631,10 @@ impl TraceSpan {
 }
 
 pub fn traced_cli(args: Vec<String>) -> ! {
+    #[cfg(unix)]
+    if args.first().is_some_and(|arg| arg == terminal::REENTRY) {
+        terminal::exec(&args[1..]);
+    }
     let mut args = args.into_iter();
     let mut name = None;
     let mut timeout = None;
@@ -722,8 +729,41 @@ fn execute_launcher(argv: &[String], cwd: &Path, timeout: Option<u64>, trace_con
         eprintln!("traced-run: {}", error.message);
         return 64;
     }
-    let command = Command::new(&argv[0])
-        .args(&argv[1..])
+    #[cfg(unix)]
+    let group = match processkit::ProcessGroup::new() {
+        Ok(group) => group,
+        Err(error) => {
+            eprintln!("traced-run: {error}");
+            return 64;
+        }
+    };
+    #[cfg(unix)]
+    let foreground = terminal::Foreground::acquire(&group);
+    #[cfg(unix)]
+    let helper_argv = if let Some(foreground) = &foreground {
+        let executable = match std::env::current_exe() {
+            Ok(executable) => executable,
+            Err(error) => {
+                eprintln!("traced-run: {error}");
+                return 64;
+            }
+        };
+        let mut helper = vec![
+            executable.into_os_string(),
+            terminal::REENTRY.into(),
+            foreground.group().into(),
+        ];
+        helper.extend(argv.iter().map(std::ffi::OsString::from));
+        helper
+    } else {
+        argv.iter().map(std::ffi::OsString::from).collect()
+    };
+    #[cfg(unix)]
+    let launch_argv = &helper_argv;
+    #[cfg(not(unix))]
+    let launch_argv = argv;
+    let command = Command::new(&launch_argv[0])
+        .args(&launch_argv[1..])
         .current_dir(cwd)
         .env(TRACE_ENV, trace_context)
         .inherit_stdin()
@@ -738,6 +778,9 @@ fn execute_launcher(argv: &[String], cwd: &Path, timeout: Option<u64>, trace_con
     } else {
         command
     };
+    #[cfg(unix)]
+    let result = wait_launcher(command, argv, group);
+    #[cfg(not(unix))]
     let result = wait_launcher(command, argv);
     match result {
         Ok(outcome) if outcome.timed_out() => 124,
@@ -757,7 +800,11 @@ fn execute_launcher(argv: &[String], cwd: &Path, timeout: Option<u64>, trace_con
 /// The explicit group owns the entire child tree, including children remaining
 /// after the direct child exits. A second signal skips the two-second grace.
 #[cfg(unix)]
-fn wait_launcher(command: Command, argv: &[String]) -> Result<Outcome, RunError> {
+fn wait_launcher(
+    command: Command,
+    argv: &[String],
+    group: processkit::ProcessGroup,
+) -> Result<Outcome, RunError> {
     use signal_hook::consts::{SIGINT, SIGTERM};
     let failure = |error: String| RunError {
         message: format!("supervising {argv:?}: {error}"),
@@ -771,7 +818,6 @@ fn wait_launcher(command: Command, argv: &[String]) -> Result<Outcome, RunError>
         .enable_all()
         .build()
         .map_err(|error| failure(error.to_string()))?;
-    let group = processkit::ProcessGroup::new().map_err(|error| failure(error.to_string()))?;
     let running = runtime
         .block_on(group.start(&command))
         .map_err(|error| failure(error.to_string()))?;
