@@ -49,25 +49,26 @@ collector, daemon, or arbitrary-process injection.
 Only explicit `traced-run` invocations and the instrumented
 `scripts/cargo-xtask` launcher participate. Environment inheritance alone does
 not make arbitrary children traceable: unmodified programs are opaque time
-inside their nearest participating parent span. The launcher uses a dedicated
-private re-entry guard, separate from trace correlation context. On first entry
-it invokes the already-built PATH
-`traced-run --launcher --name cargo-xtask -- <absolute-script-path> --inner <original-args>`
-before checkout discovery or Nix. The inner launcher phase sees the guard,
-consumes/removes it, performs checkout discovery, then execs Nix; it does not
-invoke the runner again. The runner rejects shell commands as before; the
-supervised executable is the approved launcher script itself (with its shebang),
-not arbitrary `sh -c`/`bash -c`.
+inside their nearest participating parent span. The launcher uses a private
+argv-only inner entry, separate from trace correlation context. On first entry
+it validates Cargo's leading `xtask` token and invokes the already-built PATH
+`traced-run --launcher --name cargo-xtask -- <absolute-script-path> --inner xtask <original-args>`
+before checkout discovery or Nix. The inner launcher phase consumes `--inner`
+and validates/removes the Cargo token, performs checkout discovery, then execs
+Nix; it does not invoke the runner again. The runner rejects shell commands as
+before; the supervised executable is the approved launcher script itself (with
+its shebang), not arbitrary `sh -c`/`bash -c`.
 
-The guard means only “this launcher process is already inside its
-runner-supervised inner phase”; it does not authorize skipping the wrapper on a
-later independent launcher invocation. Set it only for the supervised child, and
-clear it before execing Nix so unrelated descendants cannot inherit stale
-launcher state. Trace context separately determines whether the runner joins an
-existing trace root or creates one. Thus direct launcher execution creates a new
-root before discovery/Nix, while an externally captured
-`traced-run cargo xtask …` remains the root and parks all output; the inner
-launcher joins its trace, adds no JSON and creates no output capture files.
+The private argv entry means only “this launcher process is already inside its
+runner-supervised inner phase”; it is cooperative reentry, not authentication.
+There is no launcher environment guard and no runner special case for a
+`cargo-xtask` executable basename. Later independent launcher invocations carry
+no stale reentry state. `JAUNDER_TRACED_RUN_CONTEXT` remains independently
+propagated and determines whether the runner joins an existing trace root or
+creates one. Thus direct launcher execution creates a new root before
+discovery/Nix, while an externally captured `traced-run cargo xtask …` remains
+the root and parks all output; the inner launcher joins its trace, adds no JSON
+and creates no output capture files.
 
 Use a single monotonic clock domain for all spans in the process tree: root
 exports a monotonic origin (nanoseconds) and descendants timestamp against the
@@ -77,6 +78,16 @@ wall-clock timestamps. Span records identify parent/child and bounded names
 only; no argv-derived names, paths, or unbounded attributes. Keep determinant
 fields on the narrowest owning span and honor ADR-0011 privacy/cardinality
 limits and ADR-0147.
+
+### Launcher simplification approval (2026-11-02)
+
+The Manager explicitly designated the argv-only inner entry as a bounded
+continuing correction after the accepted flow review: remove
+`JAUNDER_CARGO_XTASK_INNER` and generic runner basename coupling, retain
+independent recursive trace context, and preserve pre-discovery/Nix supervision
+and existing execution behavior. This supersedes the earlier two-part guard
+mechanism, not the public CLI or single-root contract; no antiforgery machinery
+is intended. It is not merge, external-routing cutover, or packaging authority.
 
 ### Perfetto relationship-encoding clarification (2026-11-02)
 

@@ -4709,7 +4709,11 @@ Manager-coordinated external routing migration.
   remain on their actual tracks; recognized Chrome flow pairs link participating
   parents to children without inventing cross-process call-stack nesting. The
   instrumented `cargo-xtask` launcher uses `--launcher` to preserve inherited
-  stdout/stderr without wrapper JSON or output capture files. See
+  stdout/stderr without wrapper JSON or output capture files. Its private
+  argv-only `--inner xtask` reentry is cooperative, not authentication; no
+  launcher environment guard or runner basename coupling is needed. Recursive
+  trace context propagates independently, preserving one root for nested
+  launches without stale-skipping later independent invocations. See
   [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md).
 - **`devtool run`** remains temporarily available as a forwarding compatibility
   interface to the same runner implementation; it is not a second runner.

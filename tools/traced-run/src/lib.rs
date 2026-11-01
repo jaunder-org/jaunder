@@ -19,7 +19,6 @@ mod terminal;
 
 const RUN_DIR: &str = ".xtask/run";
 const RUN_HISTORY_LIMIT: usize = 50;
-const TRACE_GUARD: &str = "JAUNDER_CARGO_XTASK_INNER";
 const TRACE_ENV: &str = "JAUNDER_TRACED_RUN_CONTEXT";
 static NEXT_RUN: AtomicU64 = AtomicU64::new(1);
 
@@ -803,14 +802,6 @@ fn execute_launcher(argv: &[String], cwd: &Path, timeout: Option<u64>, trace_con
         .stdout(processkit::StdioMode::Inherit)
         .stderr(processkit::StdioMode::Inherit)
         .timeout_opt(timeout.map(Duration::from_secs));
-    let is_cargo_xtask = Path::new(&argv[0])
-        .file_name()
-        .is_some_and(|name| name == "cargo-xtask");
-    let command = if is_cargo_xtask {
-        command.env(TRACE_GUARD, "1")
-    } else {
-        command
-    };
     #[cfg(unix)]
     let result = wait_launcher(command, argv, group);
     #[cfg(not(unix))]

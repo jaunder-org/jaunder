@@ -142,3 +142,16 @@ remain bounded under ADR-0011 and ADR-0147.
 External/global command-routing instructions are not switched by this change;
 the old route remains until exact migration readiness is confirmed by the
 Manager.
+
+## Clarification (#1858, 2026-11-02): cooperative launcher reentry
+
+The Manager explicitly designated an argv-only inner entry as a bounded
+continuing correction after the accepted flow review. The launcher's private
+`--inner xtask` entry consumed reentry and Cargo tokens before discovery,
+leaving original xtask arguments untouched. This was cooperative reentry, not an
+authentication boundary. The correction removed the launcher environment guard
+and generic runner basename special case; recursive `JAUNDER_TRACED_RUN_CONTEXT`
+remained independently propagated. Nested launchers joined the same root, while
+later independent invocations had no stale guard to skip supervision. No public
+execution contract, packaging boundary, merge approval, or external-routing
+authority changed. Current state: see [ARCHITECTURE.md](../ARCHITECTURE.md).
