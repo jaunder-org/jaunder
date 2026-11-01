@@ -5,6 +5,14 @@ fn executable() -> &'static str {
     env!("CARGO_BIN_EXE_traced-run")
 }
 
+fn root_command() -> Command {
+    let mut command = Command::new(executable());
+    // The hook's cargo-xtask launcher may already carry a trace context.
+    // Only nested invocations inside a fixture should inherit its root.
+    command.env_remove("JAUNDER_TRACED_RUN_CONTEXT");
+    command
+}
+
 fn final_trace(root: &std::path::Path) -> serde_json::Value {
     let trace = std::fs::read_dir(root.join(".xtask/run"))
         .unwrap()
@@ -22,7 +30,7 @@ fn final_trace(root: &std::path::Path) -> serde_json::Value {
 #[test]
 fn nested_runners_share_one_root_and_record_parentage() {
     let fixture = tempfile::tempdir().unwrap();
-    let output = Command::new(executable())
+    let output = root_command()
         .current_dir(fixture.path())
         .args([
             "--name",
@@ -69,12 +77,27 @@ fn nested_runners_share_one_root_and_record_parentage() {
     let child_end = child_start + inner["dur"].as_u64().unwrap();
     assert!(child_start >= outer["ts"].as_u64().unwrap());
     assert!(child_end <= outer["dur"].as_u64().unwrap());
+    let records = traces[0].path().with_extension("d");
+    let records: Vec<_> = std::fs::read_dir(records)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(
+        records.len(),
+        2,
+        "both participants published complete records"
+    );
+    assert!(
+        records
+            .iter()
+            .all(|name| name.to_string_lossy().ends_with(".jsonl"))
+    );
 }
 
 #[test]
 fn externally_captured_launcher_output_belongs_to_the_outer_runner() {
     let fixture = tempfile::tempdir().unwrap();
-    let output = Command::new(executable())
+    let output = root_command()
         .current_dir(fixture.path())
         .args([
             "--name",
@@ -106,7 +129,7 @@ fn externally_captured_launcher_output_belongs_to_the_outer_runner() {
 #[test]
 fn launcher_streams_without_wrapper_json_or_capture_files() {
     let fixture = tempfile::tempdir().unwrap();
-    let output = Command::new(executable())
+    let output = root_command()
         .current_dir(fixture.path())
         .args([
             "--launcher",
@@ -152,7 +175,7 @@ fn launcher_output_is_observable_before_the_child_finishes() {
     std::fs::write(&script, "#!/usr/bin/env python3\nimport pathlib, sys, time\nprint('early', flush=True)\ntime.sleep(1)\npathlib.Path(sys.argv[1]).touch()\n").unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let mut child = Command::new(executable())
+    let mut child = root_command()
         .current_dir(fixture.path())
         .args([
             "--launcher",
@@ -177,6 +200,123 @@ fn launcher_output_is_observable_before_the_child_finishes() {
     assert!(child.wait().unwrap().success());
 }
 
+#[cfg(unix)]
+#[test]
+fn killed_named_descendant_withholds_root_trace() {
+    let fixture = tempfile::tempdir().unwrap();
+    let output = root_command()
+        .current_dir(fixture.path())
+        .args([
+            "--name",
+            "outer",
+            "--timeout",
+            "1",
+            "--",
+            executable(),
+            "--name",
+            "inner",
+            "--",
+            "sleep",
+            "10",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(124));
+    let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(summary["timed_out"], true);
+    assert_unfinished_participant(fixture.path(), &output.stderr);
+    let run_dir = fixture.path().join(".xtask/run");
+    assert!(
+        !std::fs::read_dir(run_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| {
+                entry
+                    .path()
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().ends_with(".trace.json"))
+            })
+    );
+}
+
+fn assert_unfinished_participant(root: &std::path::Path, stderr: &[u8]) {
+    assert!(
+        String::from_utf8_lossy(stderr).contains("unfinished participants; merged trace withheld")
+    );
+    let artifacts: Vec<_> = std::fs::read_dir(root.join(".xtask/run"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert!(
+        !artifacts
+            .iter()
+            .any(|path| path.to_string_lossy().ends_with(".trace.json"))
+    );
+    let records = artifacts
+        .iter()
+        .find(|path| path.extension().is_some_and(|ext| ext == "d"))
+        .unwrap();
+    let records: Vec<_> = std::fs::read_dir(records)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(
+        records
+            .iter()
+            .filter(|name| name.to_string_lossy().starts_with("active-"))
+            .count(),
+        1,
+        "killed participant remains registered"
+    );
+    assert_eq!(
+        records
+            .iter()
+            .filter(|name| name.to_string_lossy().ends_with(".jsonl"))
+            .count(),
+        1,
+        "finished outer record is preserved"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn killed_named_descendant_with_outer_failure_preserves_partial_records() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = tempfile::tempdir().unwrap();
+    let script = fixture.path().join("kill-participant.py");
+    std::fs::write(
+        &script,
+        r"#!/usr/bin/env python3
+import pathlib, subprocess, sys, time
+child = subprocess.Popen([sys.argv[1], '--name', 'killed-inner', '--', 'sleep', '1'])
+deadline = time.monotonic() + 5
+while len(list(pathlib.Path('.xtask/run').glob('*.trace.d/active-*'))) < 2:
+    if time.monotonic() >= deadline:
+        child.kill()
+        child.wait()
+        sys.exit(99)
+    time.sleep(0.005)
+child.kill()
+child.wait()
+sys.exit(17)
+",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let output = root_command()
+        .current_dir(fixture.path())
+        .args(["--name", "failed-outer", "--"])
+        .arg(script)
+        .arg(executable())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(17));
+    let summary: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(summary["exit_code"], 17);
+    assert_eq!(summary["ok"], false);
+    assert_unfinished_participant(fixture.path(), &output.stderr);
+}
+
 #[test]
 fn launcher_timeout_and_spawn_failure_still_publish_final_traces() {
     let fixture = tempfile::tempdir().unwrap();
@@ -191,7 +331,7 @@ fn launcher_timeout_and_spawn_failure_still_publish_final_traces() {
     ] {
         let mut invocation = vec!["--launcher", "--name", name];
         invocation.extend(args);
-        let output = Command::new(executable())
+        let output = root_command()
             .current_dir(fixture.path())
             .args(invocation)
             .output()
@@ -219,7 +359,7 @@ fn concurrent_roots_publish_isolated_traces() {
         .map(|index| {
             let root = root.clone();
             std::thread::spawn(move || {
-                Command::new(executable())
+                root_command()
                     .current_dir(root)
                     .args([
                         "--name",
@@ -269,7 +409,7 @@ fn concurrent_roots_publish_isolated_traces() {
 #[test]
 fn ordinary_child_is_not_fabricated_as_a_trace_span() {
     let fixture = tempfile::tempdir().unwrap();
-    let output = Command::new(executable())
+    let output = root_command()
         .current_dir(fixture.path())
         .args(["--name", "opaque-parent", "--", "true"])
         .output()
@@ -286,7 +426,7 @@ fn ordinary_child_is_not_fabricated_as_a_trace_span() {
 #[test]
 fn forcibly_killed_root_does_not_publish_a_complete_trace() {
     let fixture = tempfile::tempdir().unwrap();
-    let mut root = Command::new(executable())
+    let mut root = root_command()
         .current_dir(fixture.path())
         .args(["--name", "abrupt-root", "--", "sleep", "1"])
         .spawn()
@@ -322,10 +462,10 @@ fn forcibly_killed_root_does_not_publish_a_complete_trace() {
 
 #[test]
 fn help_and_malformed_cli_are_distinct() {
-    let help = Command::new(executable()).arg("--help").output().unwrap();
+    let help = root_command().arg("--help").output().unwrap();
     assert!(help.status.success());
     assert!(String::from_utf8_lossy(&help.stdout).contains("Usage: traced-run"));
-    let malformed = Command::new(executable())
+    let malformed = root_command()
         .args(["--launcher", "--", "true"])
         .output()
         .unwrap();

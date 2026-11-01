@@ -510,6 +510,16 @@ impl TraceSpan {
         } else {
             monotonic_ns()
         };
+        let active = PathBuf::from(&context.trace_dir).join(format!("active-{span_id}"));
+        if fs::write(&active, b"unfinished\n").is_err() {
+            eprintln!(
+                "traced-run: warning: participant registration unavailable; trace will be incomplete"
+            );
+            let _ = fs::write(
+                PathBuf::from(&context.trace_dir).join("incomplete"),
+                b"participant registration failed\n",
+            );
+        }
         Ok(Self {
             name: name.to_owned(),
             span_id,
@@ -542,6 +552,13 @@ impl TraceSpan {
             let _ = fs::write(dir.join("incomplete"), b"a span record was not published\n");
             return;
         }
+        let active = dir.join(format!("active-{}", self.span_id));
+        if fs::remove_file(active).is_err() {
+            let _ = fs::write(
+                dir.join("incomplete"),
+                b"participant registration could not be cleared\n",
+            );
+        }
         if self.root {
             self.publish_root(&dir);
         }
@@ -549,8 +566,16 @@ impl TraceSpan {
 
     fn publish_root(&self, dir: &Path) {
         let mut events = Vec::new();
-        if dir.join("incomplete").exists() {
-            eprintln!("traced-run: warning: incomplete span records; merged trace withheld");
+        if dir.join("incomplete").exists()
+            || fs::read_dir(dir).is_ok_and(|entries| {
+                entries
+                    .flatten()
+                    .any(|entry| entry.file_name().to_string_lossy().starts_with("active-"))
+            })
+        {
+            eprintln!(
+                "traced-run: warning: incomplete span records or unfinished participants; merged trace withheld"
+            );
             return;
         }
         let Ok(entries) = fs::read_dir(dir) else {
@@ -664,7 +689,7 @@ pub fn traced_cli(args: Vec<String>) -> ! {
                     match execute_with_trace(&command, &cwd, timeout, Some(&serialized)) {
                         Ok((result, code)) => (code, Some(result)),
                         Err(error) => {
-                            eprintln!(
+                            println!(
                                 "{}",
                                 serde_json::json!({"error":error.message,"kind":error.kind})
                             );
@@ -679,10 +704,12 @@ pub fn traced_cli(args: Vec<String>) -> ! {
                 std::process::exit(code);
             }
             Err(error) => {
-                eprintln!(
-                    "{}",
-                    serde_json::json!({"error":error.message,"kind":error.kind})
-                );
+                let diagnostic = serde_json::json!({"error":error.message,"kind":error.kind});
+                if launcher {
+                    eprintln!("{diagnostic}");
+                } else {
+                    println!("{diagnostic}");
+                }
                 std::process::exit(64);
             }
         }
@@ -699,6 +726,7 @@ fn execute_launcher(argv: &[String], cwd: &Path, timeout: Option<u64>, trace_con
         .args(&argv[1..])
         .current_dir(cwd)
         .env(TRACE_ENV, trace_context)
+        .inherit_stdin()
         .stdout(processkit::StdioMode::Inherit)
         .stderr(processkit::StdioMode::Inherit)
         .timeout_opt(timeout.map(Duration::from_secs));
@@ -710,7 +738,8 @@ fn execute_launcher(argv: &[String], cwd: &Path, timeout: Option<u64>, trace_con
     } else {
         command
     };
-    match Process::start(command, argv).and_then(|process| process.wait(argv)) {
+    let result = wait_launcher(command, argv);
+    match result {
         Ok(outcome) if outcome.timed_out() => 124,
         Ok(outcome) => match (outcome.code(), outcome.signal()) {
             (Some(code), _) => code,
@@ -722,6 +751,68 @@ fn execute_launcher(argv: &[String], cwd: &Path, timeout: Option<u64>, trace_con
             64
         }
     }
+}
+
+/// Supervise launcher interruption without doing process work in a signal handler.
+/// The explicit group owns the entire child tree, including children remaining
+/// after the direct child exits. A second signal skips the two-second grace.
+#[cfg(unix)]
+fn wait_launcher(command: Command, argv: &[String]) -> Result<Outcome, RunError> {
+    use signal_hook::consts::{SIGINT, SIGTERM};
+    let failure = |error: String| RunError {
+        message: format!("supervising {argv:?}: {error}"),
+        kind: "spawn",
+    };
+    // Register before spawning so an early interruption cannot bypass teardown.
+    let mut signals = signal_hook::iterator::Signals::new([SIGINT, SIGTERM])
+        .map_err(|error| failure(error.to_string()))?;
+    let runtime = Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .map_err(|error| failure(error.to_string()))?;
+    let group = processkit::ProcessGroup::new().map_err(|error| failure(error.to_string()))?;
+    let running = runtime
+        .block_on(group.start(&command))
+        .map_err(|error| failure(error.to_string()))?;
+    let wait = runtime.spawn(running.wait());
+    let mut deadline = None;
+    while !wait.is_finished() {
+        for signal in signals.pending() {
+            if deadline.is_some() {
+                group
+                    .kill_all()
+                    .map_err(|error| failure(error.to_string()))?;
+            } else {
+                group
+                    .signal(processkit::Signal::Other(signal))
+                    .map_err(|error| failure(error.to_string()))?;
+                deadline = Some(Instant::now() + Duration::from_secs(2));
+            }
+        }
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            group
+                .kill_all()
+                .map_err(|error| failure(error.to_string()))?;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let outcome = runtime
+        .block_on(wait)
+        .map_err(|error| failure(error.to_string()))?
+        .map_err(|error| failure(error.to_string()));
+    // Kill remaining descendants before releasing the runtime, even when the
+    // direct child handled the forwarded signal and exited successfully.
+    if let Err(error) = group.kill_all() {
+        eprintln!("traced-run: warning: child-tree cleanup failed: {error}");
+    }
+    drop(group);
+    outcome
+}
+
+#[cfg(not(unix))]
+fn wait_launcher(command: Command, argv: &[String]) -> Result<Outcome, RunError> {
+    Process::start(command, argv)?.wait(argv)
 }
 
 /// CLI entry: run the command, print the JSON result, and exit with the child's
