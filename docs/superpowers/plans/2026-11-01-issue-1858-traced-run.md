@@ -16,24 +16,25 @@ interface, whole-command rewrite, `just` migration, or #1857 merge.
 
 ## Tasks
 
-- [ ] **1. Implement approved placement and compatibility contract.** After
+- [x] **1. Implement approved placement and compatibility contract.** After
       approval, amend ADR-0028 to reconcile standalone host/devshell placement
       and pre-Nix launcher availability with its sandbox/host boundary. Extract
       the direct single-program runner and tests; package it in the devshell,
       retaining unrelated `devtool` operations. Preserve shell refusal,
       output/result/error schema, timeout/signal/exit semantics, history bound
       and honest status.
-- [ ] **2. Implement process spans and root finalization.** Add opt-in
+- [x] **2. Implement process spans and root finalization.** Add opt-in
       `--name LABEL`, normal JSON-result mode, and `--launcher` inherited-stream
       mode as specified. Implement opaque run/parent IDs, explicit participating
       runner/launcher descendants only, per-writer event files, shared monotonic
       origin, atomic root merge/publication, concurrent run isolation and
       documented abrupt-termination limitations. Never instrument or claim
       arbitrary inherited children.
-- [ ] **3. Integrate launcher and perform coordinated interface migration.**
-      Before checkout discovery/Nix, `scripts/cargo-xtask` uses a dedicated
-      private re-entry guard (distinct from trace context): on first entry it
-      execs the already-built PATH runner as
+- [x] **3. Integrate launcher and perform coordinated interface migration
+      (in-repository integration; external cutover pending Manager
+      confirmation).** Before checkout discovery/Nix, `scripts/cargo-xtask` uses
+      a dedicated private re-entry guard (distinct from trace context): on first
+      entry it execs the already-built PATH runner as
       `traced-run --launcher --name cargo-xtask -- <absolute-script-path> --inner <original-args>`.
       The supervised executable is the approved shebang script, not arbitrary
       shell `-c`; inner phase consumes/clears the guard, discovers checkout, and
@@ -51,7 +52,7 @@ interface, whole-command rewrite, `just` migration, or #1857 merge.
       Manager-confirmed exact migration readiness; prefer atomic coordinated
       cutover, with only a bounded shared-implementation forwarding route if
       required.
-- [ ] **4. Prove contracts and inspect one workflow.** Cover capture/result
+- [x] **4. Prove contracts and inspect one workflow.** Cover capture/result
       compatibility; require output-before-child-completion only for direct
       launcher mode (externally captured output is parked by the outer runner);
       nonzero/signal/timeout/spawn and early launcher errors, malformed/refused
@@ -63,11 +64,37 @@ interface, whole-command rewrite, `just` migration, or #1857 merge.
       workflow and inspect its trace in Perfetto; record useful spans and
       unattributed time without claiming speedup. Follow the approved validation
       ladder.
-- [ ] **5. Conformance and artifact retirement.** Inspect implementation against
-      approved spec and proofs; project enduring decisions into current
-      docs/ADRs, retire temporary spec/outline under repository artifact
-      lifecycle after conformance, and record remaining work. Keep #1857
-      unmerged and use it only as selectively applicable experimental evidence.
+- [ ] **5. Conformance and artifact retirement (implementation/proof conformance
+      accepted; retirement pending exact Manager-confirmed external routing
+      cutover so temporary forwarding can be safely removed).** Inspect
+      implementation against approved spec and proofs; project enduring
+      decisions into current docs/ADRs, retire temporary spec/outline under
+      repository artifact lifecycle after conformance, and record remaining
+      work. Keep #1857 unmerged and use it only as selectively applicable
+      experimental evidence.
+
+## Conformance state (2026-11-02)
+
+Tasks 1, 2, and 4 are implemented/proven. Correction commits are
+`74b1c0b2df707ae21e62436d741bcdb314b0996e` (tree
+`7edc9821f7efb66a96d53ced966ab21ec00ecae4`) and
+`594e0d20d15d6c7697335206b3e179ff7c327d8b` (tree
+`9be669cf19a690dcc2f054a183c4dbdb4e6f9bb9`). The final package build, packaged
+filtered workflow, and exact-trace Perfetto import/inspection passed; see
+ignored `.xtask/issue-1858-corrected-proof.md`. The workflow retained no exact
+nextest census, internal work is opaque by design, and this is not a performance
+claim. Native macOS remains untested. Terminal review reported no findings.
+
+In-repository integration is complete, but external command-routing migration
+and deployment/activation are still Manager-owned and pending. Keep the bounded
+`devtool run` forwarding entry point operational. Because the approved spec
+makes that forwarding route removable only after exact external migration
+readiness, final artifact retirement is not yet appropriate; do not report the
+spec/outline lifecycle complete. ADR-0028, `docs/ARCHITECTURE.md`, and
+`docs/observability.md` already contain the enduring contract and rationale. No
+further enduring-doc gap was found. See ignored
+`.xtask/issue-1858-conformance-handoff.md` for the full evidence inventory,
+limitation details, lifecycle rationale, and next owner/action.
 
 ## Review boundary and current checkout evidence
 
