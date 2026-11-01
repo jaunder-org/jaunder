@@ -9,10 +9,21 @@ use crate::{
 /// already, so fresh clones and new worktrees wire up on first run. Best-effort — a
 /// failure here must never block the actual command.
 pub fn ensure_hooks_installed() {
-    match git::ensure_hooks_path(Path::new(".")) {
-        Ok(true) => eprintln!("xtask: set core.hooksPath = {}", git::HOOKS_PATH),
-        Ok(false) => {}
-        Err(e) => eprintln!("xtask: warning: could not set core.hooksPath: {e:#}"),
+    let phase =
+        crate::invocation_trace::active().then(|| crate::invocation_trace::phase("xtask.hooks"));
+    let ok = match git::ensure_hooks_path(Path::new(".")) {
+        Ok(true) => {
+            eprintln!("xtask: set core.hooksPath = {}", git::HOOKS_PATH);
+            true
+        }
+        Ok(false) => true,
+        Err(e) => {
+            eprintln!("xtask: warning: could not set core.hooksPath: {e:#}");
+            false
+        }
+    };
+    if let Some(phase) = phase {
+        phase.finish(ok);
     }
 }
 
