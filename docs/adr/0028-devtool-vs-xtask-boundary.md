@@ -140,11 +140,18 @@ Perfetto-compatible Chrome Trace Event JSON process spans. `scripts/cargo-xtask`
 uses launcher mode before checkout discovery or Nix, preserving inherited
 stdout/stderr for direct invocation. An explicitly captured outer invocation
 continues to own parked output. Each participant retains its complete `X` span
-on its real process track and emits a separate cross-process parent/child flow
-pair (`s` on the parent track, `f` on the child track) with a unique hexadecimal
-64-bit `id`; `bp:"e"` binds the finish endpoint to the child span. These are
-inspectable causal links, not fabricated cross-process slice nesting. Trace
-capture is diagnostic and distinct from attribution; it does not redefine
+on its real process track. Each relation projects a thread-scoped instant named
+`recorded child entry` into the containing parent's track at the child's
+recorded participation start. A separate flow pair (`s` immediately after that
+instant, `f` on the child track at the same timestamp, with `bp:"e"`) uses a
+unique hexadecimal 64-bit `id`. Perfetto binds the source to the instant and the
+target to the child span's beginning. This instant is explicitly a projection of
+the child's monotonic observation, not a measured parent action or OS spawn
+time. Perfetto renders arrows from source-slice end to target-slice start;
+merely moving `s` inside the full parent span still draws from the parent's end.
+The instant avoids that misleading anchor without changing any process duration.
+These are recorded-entry links, not fabricated cross-process slice nesting.
+Trace capture is diagnostic and distinct from attribution; it does not redefine
 `xtask.command` or alter ADR-0096's lifecycle boundary. Span names and fields
 remain bounded under ADR-0011 and ADR-0147.
 

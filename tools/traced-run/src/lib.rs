@@ -556,21 +556,27 @@ impl TraceSpan {
         let mut events = vec![span_event];
         if !self.root {
             let flow_id = format!("{:016x}", self.flow_id);
-            let flow_start_ts = self
-                .context
-                .parent_started_ns
-                .saturating_sub(self.context.origin_ns)
-                / 1000;
-            let flow_end_ts = span_ts.saturating_add(span_dur);
+            // Perfetto draws flows from the source slice's END, not the `s`
+            // event timestamp. Bind to a thread instant inside the parent so
+            // both visible anchors express recorded child participation entry.
+            // This projects the child's observation; it is not an OS spawn time
+            // or a separately measured parent action. Keep the instant before
+            // `s` at the same timestamp so the importer binds to that instant.
+            events.push(serde_json::json!({
+                "name":"recorded child entry", "cat":"process", "ph":"i", "s":"t",
+                "pid":self.context.parent_pid, "tid":self.context.parent_pid,
+                "ts":span_ts, "args":{"run_id":self.context.run_id,
+                "parent_span_id":self.context.parent_span_id, "child_span_id":self.span_id}
+            }));
             events.push(serde_json::json!({
                 "name":"traced-run parent-child", "cat":"process", "ph":"s",
                 "pid":self.context.parent_pid, "tid":self.context.parent_pid,
-                "ts":flow_start_ts, "id":flow_id
+                "ts":span_ts, "id":flow_id
             }));
             events.push(serde_json::json!({
                 "name":"traced-run parent-child", "cat":"process", "ph":"f",
                 "pid":std::process::id(), "tid":std::process::id(),
-                "ts":flow_end_ts, "id":flow_id, "bp":"e"
+                "ts":span_ts, "id":flow_id, "bp":"e"
             }));
         }
         let file = dir.join(format!("span-{}.jsonl", self.span_id));

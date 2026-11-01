@@ -93,18 +93,29 @@ is intended. It is not merge, external-routing cutover, or packaging authority.
 
 Complete `ph:"X"` spans remain on their actual process/thread tracks. Each
 participating parent/child relation additionally emits a separate Chrome Trace
-Event flow pair: `ph:"s"` on the parent track and `ph:"f"` on the child track,
-paired by one unique unsigned 64-bit ID serialized as hexadecimal text. The
-finish event uses `bp:"e"` to bind to the child's enclosing complete span. This
-creates an inspectable causal link, not cross-process slice nesting or a fake
-call stack. Concurrent siblings retain distinct flow IDs, actual process
-timelines, and overlapping intervals.
+Event flow pair, paired by one unique unsigned 64-bit ID serialized as
+hexadecimal text. Both endpoints are at the child's recorded participation
+start, not its OS spawn time. On the parent track, a thread-scoped instant
+`recorded child entry` precedes `ph:"s"` at that timestamp; `ph:"f"` on the
+child track uses `bp:"e"` to bind to the complete child span at its beginning.
+The instant carries run, parent-span and child-span correlation IDs and is a
+projection of the child's shared-monotonic-clock observation, not an
+independently observed parent action. Perfetto renders the source slice's end,
+not the `s` timestamp, so binding directly to the full parent duration is
+misleading even with corrected event timestamps. The instant supplies the
+correct visible time anchor without adding an invented duration. This creates an
+inspectable recorded-entry link, not cross-process slice nesting or a fake call
+stack. Concurrent siblings retain distinct flow IDs, actual process timelines,
+and overlapping intervals.
 
 The representation was verified in Perfetto UI v59.1-79997ada9: importing a real
 nested-parent/child/grandchild trace plus overlapping sibling invocations
-produced three rows in `flow`, each joining the intended source/destination
-slices; import errors and trace errors were both zero. `parent_span_id` remains
-useful correlation metadata but is not itself the viewer relationship.
+produced three rows in `flow`. The entry-anchor correction was separately
+verified with real runner output: each source instant is contained by the
+intended parent slice and links to the intended child slice at the exact same
+timestamp; selected arrows no longer span either process duration. Import errors
+and trace errors were both zero. `parent_span_id` remains useful correlation
+metadata but is not itself the viewer relationship.
 
 The root runner owns trace merging, final trace publication, and (in normal
 captured mode) output-result JSON and capture files. In direct launcher mode

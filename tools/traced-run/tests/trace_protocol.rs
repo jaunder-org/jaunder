@@ -14,15 +14,15 @@ fn root_command() -> Command {
 }
 
 fn assert_flow_pair(
-    flows: &[&serde_json::Value],
+    events: &[serde_json::Value],
     parent: &serde_json::Value,
     child: &serde_json::Value,
 ) {
-    let finish = flows
+    let finish = events
         .iter()
         .find(|event| event["ph"] == "f" && event["pid"] == child["pid"])
         .unwrap();
-    let start = flows
+    let start = events
         .iter()
         .find(|event| event["ph"] == "s" && event["id"] == finish["id"])
         .unwrap();
@@ -30,12 +30,30 @@ fn assert_flow_pair(
     assert_eq!(finish["bp"], "e");
     assert_eq!(start["pid"], parent["pid"]);
     assert_eq!(finish["pid"], child["pid"]);
-    assert_eq!(start["ts"], parent["ts"]);
-    assert!(finish["ts"].as_u64().unwrap() >= child["ts"].as_u64().unwrap());
-    assert!(
-        finish["ts"].as_u64().unwrap()
-            <= child["ts"].as_u64().unwrap() + child["dur"].as_u64().unwrap()
+    assert_eq!(start["ts"], child["ts"]);
+    assert_eq!(finish["ts"], child["ts"]);
+    let marker_index = events
+        .iter()
+        .position(|event| {
+            event["ph"] == "i" && event["args"]["child_span_id"] == child["args"]["span_id"]
+        })
+        .expect("entry flow binds to a parent-track instant, not the parent duration");
+    let marker = &events[marker_index];
+    assert_eq!(marker["name"], "recorded child entry");
+    assert_eq!(marker["s"], "t");
+    assert_eq!(marker["pid"], parent["pid"]);
+    assert_eq!(marker["tid"], parent["tid"]);
+    assert_eq!(marker["ts"], child["ts"]);
+    assert_eq!(marker["args"]["parent_span_id"], parent["args"]["span_id"]);
+    assert_eq!(marker["args"]["run_id"], child["args"]["run_id"]);
+    assert_eq!(
+        &events[marker_index + 1],
+        start,
+        "instant precedes its flow start for Perfetto binding"
     );
+    let entry = child["ts"].as_u64().unwrap();
+    let parent_start = parent["ts"].as_u64().unwrap();
+    assert!(entry >= parent_start && entry <= parent_start + parent["dur"].as_u64().unwrap());
 }
 
 fn assert_complete_unique_flows(flows: &[&serde_json::Value], expected_edges: usize) {
@@ -131,12 +149,12 @@ fn nested_runners_share_one_root_and_record_parentage() {
     assert_eq!(outer["ts"], 0);
     assert_eq!(inner["args"]["parent_span_id"], outer["args"]["span_id"]);
     assert_eq!(inner["args"]["run_id"], outer["args"]["run_id"]);
-    assert_flow_pair(&flows, outer, inner);
+    assert_flow_pair(events, outer, inner);
     assert_eq!(
         grandchild["args"]["parent_span_id"],
         inner["args"]["span_id"]
     );
-    assert_flow_pair(&flows, inner, grandchild);
+    assert_flow_pair(events, inner, grandchild);
     let child_start = inner["ts"].as_u64().unwrap();
     let child_end = child_start + inner["dur"].as_u64().unwrap();
     assert!(child_start >= outer["ts"].as_u64().unwrap());
@@ -208,7 +226,7 @@ raise SystemExit(max(child.wait() for child in children))
     assert_ne!(siblings[0]["pid"], siblings[1]["pid"]);
     for sibling in &siblings {
         assert_eq!(sibling["args"]["parent_span_id"], parent["args"]["span_id"]);
-        assert_flow_pair(&flows, parent, sibling);
+        assert_flow_pair(&events, parent, sibling);
     }
     let first_start = siblings[0]["ts"].as_u64().unwrap();
     let first_end = first_start + siblings[0]["dur"].as_u64().unwrap();

@@ -79,7 +79,15 @@ The recognized real-process Perfetto flow correction was committed as
 `dedbbf8ada02b00863f42fee9dfe788f9ff7e793`; argv-only cooperative launcher
 reentry followed in `12484e2bf6bd8b82c89441256e1e09afdb6f1c0b`. Human feedback
 accepted the demonstrated viewer presentation, not merge/cutover or pending
-independent code review. Existing visual format and earlier proofs are retained.
+independent code review. Subsequent screenshot diagnosis found that the broad
+parent-start/child-end anchors misleadingly crossed process durations. The
+bounded entry-anchor correction preserves those earlier traces/screenshots and
+real process tracks, but binds flows from a parent-track `recorded child entry`
+instant to the child's actual recorded slice beginning. Both anchors project the
+child's participation timestamp, not an invented OS spawn time. Real runner
+output, imported SQL containment/links and selected arrows are verified under
+ignored `.xtask/issue-1858-entry-flow/`; no broader redesign or cutover is
+implied.
 
 The packaging correction separates `packages.traced-run` from
 `packages.devtool`: narrow runner sources plus shared Cargo resolution inputs,
