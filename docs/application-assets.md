@@ -85,7 +85,7 @@ stable origin.
 From a clean checkout in the repository devShell:
 
 ```sh
-devtool run -- cargo xtask production-baseline qualify-styling
+traced-run -- cargo xtask production-baseline qualify-styling
 ```
 
 This opt-in host command is not a production operation or an automatic CI job.

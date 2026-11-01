@@ -420,8 +420,8 @@ For contributors changing Jaunder's theme implementation, the focused platform
 checks are:
 
 ```sh
-devtool run -- cargo xtask test-local -- -p host theme_package
-devtool run -- cargo xtask e2e-local theme-management.spec.ts
+traced-run -- cargo xtask test-local -- -p host theme_package
+traced-run -- cargo xtask e2e-local theme-management.spec.ts
 ```
 
 These commands test Jaunder itself. Studio import and preview remain the

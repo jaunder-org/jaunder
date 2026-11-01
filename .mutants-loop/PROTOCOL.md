@@ -40,7 +40,7 @@ ownership and later selective undo can be demonstrated.
 So the work list is re-derived every time:
 
 ```bash
-devtool run -- .mutants-loop/next-work.sh          # <package> <file> <surviving>
+traced-run -- .mutants-loop/next-work.sh          # <package> <file> <surviving>
 ```
 
 It reads the newest **scheduled** run's artifacts — not the newest run, because
@@ -51,7 +51,7 @@ Then **confirm against the working tree before touching anything**, because the
 scan is by definition older than your checkout:
 
 ```bash
-devtool run -- .mutants-loop/verify.sh <package> <file>
+traced-run -- .mutants-loop/verify.sh <package> <file>
 ```
 
 A completed, applicable verification of a file fixed since the scan returns

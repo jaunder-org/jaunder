@@ -22,7 +22,6 @@ mod doctests;
 mod performance;
 mod pg;
 mod provision;
-mod run;
 mod seed_e2e;
 mod wasm_coverage;
 
@@ -50,8 +49,7 @@ enum Command {
     /// Ephemeral PostgreSQL subcommands.
     #[command(subcommand)]
     Pg(PgCmd),
-    /// Run one program (no shell), capturing output to .xtask/run/ and returning
-    /// a structured JSON result; exits with the child's exit code.
+    /// Compatibility forwarding entry point for the traced-run implementation.
     Run(RunArgs),
     /// Run the migrated static checks (#188/#276): one by name, or `--all`.
     Check(CheckArgs),
@@ -414,7 +412,12 @@ fn main() -> Result<()> {
         }
         Command::Doctests(DoctestsCmd::Emit { out }) => doctests::emit::run(&out),
         Command::Pg(PgCmd::Run { cmd }) => pg::run_command(&cmd),
-        Command::Run(args) => run::run(&args.cmd, args.cwd, args.timeout),
+        Command::Run(args) => {
+            let cwd = args
+                .cwd
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+            traced_run::run_compat(&args.cmd, &cwd, args.timeout)
+        }
         Command::Check(args) => check::run(
             args.name.as_deref(),
             args.group,

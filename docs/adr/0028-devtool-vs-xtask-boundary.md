@@ -115,3 +115,59 @@ added: `devtoolBin` is a build input to the coverage check, so stamping it with
 the repo revision would bust the coverage cache on every commit;
 `devtool --version` reports the crate version, and staleness while developing
 the runner is handled by running it live via `cargo run -p devtool`.
+
+## Addendum (#1858): standalone `traced-run` and launcher capture
+
+The `run` responsibility has moved to the standalone `traced-run` executable,
+built from the shared runner implementation and placed on both interactive and
+CI devShell PATHs. Its Nix output has a narrow runner-only source filter: source
+changes admitted only for devtool do not invalidate the runner derivation.
+Workspace manifests and `tools/Cargo.lock` remain inputs, so dependency or
+workspace-resolution changes may invalidate it. The shell still includes both
+outputs, and changes to devtool can therefore change shell realization even when
+the runner derivation is unchanged. `devtool` remains independently packaged for
+its in-sandbox consumers. Its temporary `devtool run` forwarding route shares
+the library implementation; it is not a second installed runner.
+`packages.traced-run` alone installs `bin/traced-run`; `packages.devtool`
+installs only `bin/devtool`. Both default and CI shells include each output
+once, making the independent runner the single authoritative PATH provider. This
+packaging boundary was designated by the Manager for #1858. The runner remains
+host-side and changes neither devtool's in-sandbox purpose nor xtask's host-only
+boundary.
+
+`traced-run` retains captured single-program execution and adds opt-in
+Perfetto-compatible Chrome Trace Event JSON process spans. `scripts/cargo-xtask`
+uses launcher mode before checkout discovery or Nix, preserving inherited
+stdout/stderr for direct invocation. An explicitly captured outer invocation
+continues to own parked output. Each participant retains its complete `X` span
+on its real process track. Each relation projects a thread-scoped instant named
+`recorded child entry` into the containing parent's track at the child's
+recorded participation start. A separate flow pair (`s` immediately after that
+instant, `f` on the child track at the same timestamp, with `bp:"e"`) uses a
+unique hexadecimal 64-bit `id`. Perfetto binds the source to the instant and the
+target to the child span's beginning. This instant is explicitly a projection of
+the child's monotonic observation, not a measured parent action or OS spawn
+time. Perfetto renders arrows from source-slice end to target-slice start;
+merely moving `s` inside the full parent span still draws from the parent's end.
+The instant avoids that misleading anchor without changing any process duration.
+These are recorded-entry links, not fabricated cross-process slice nesting.
+Trace capture is diagnostic and distinct from attribution; it does not redefine
+`xtask.command` or alter ADR-0096's lifecycle boundary. Span names and fields
+remain bounded under ADR-0011 and ADR-0147.
+
+External/global command-routing instructions are not switched by this change;
+the old route remains until exact migration readiness is confirmed by the
+Manager.
+
+## Clarification (#1858, 2026-11-02): cooperative launcher reentry
+
+The Manager explicitly designated an argv-only inner entry as a bounded
+continuing correction after the accepted flow review. The launcher's private
+`--inner xtask` entry consumed reentry and Cargo tokens before discovery,
+leaving original xtask arguments untouched. This was cooperative reentry, not an
+authentication boundary. The correction removed the launcher environment guard
+and generic runner basename special case; recursive `JAUNDER_TRACED_RUN_CONTEXT`
+remained independently propagated. Nested launchers joined the same root, while
+later independent invocations had no stale guard to skip supervision. No public
+execution contract, packaging boundary, merge approval, or external-routing
+authority changed. Current state: see [ARCHITECTURE.md](../ARCHITECTURE.md).

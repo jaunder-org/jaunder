@@ -10,6 +10,7 @@ let
     toolchain
     cargo-crap
     devtoolBin
+    tracedRunBin
     emacsForCi
     leptosfmt
     wasm-bindgen-cli
@@ -43,11 +44,10 @@ let
       # distro git would load that OpenSSL into its older host glibc
       # process, which fails before Nix can fetch git inputs (#815).
       pkgs.git
-      # `devtool run -- <cmd>` for humans/agents, and the `shellHook`'s
-      # `devtool provision-node-modules` (#229) — so it must be on PATH in the
-      # CI shell too, not just the interactive one. Already built for the
-      # coverage and static-checks derivations, so this adds no new build.
+      # Standalone runner is the sole PATH provider; devtool retains unrelated
+      # in-sandbox commands and its temporary `run` forwarding interface.
       devtoolBin
+      tracedRunBin
       emacsForCi
       pkgs.jq
       # Independent metadata reads in upload privacy tests, never a runtime editor.

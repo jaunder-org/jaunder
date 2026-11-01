@@ -530,6 +530,7 @@ let
           "tools/csr_bundle"
           "tools/devtool"
           "tools/doctests"
+          "tools/traced-run"
         ];
         requiredToolPath = builtins.any (
           root: relative == root || pkgs.lib.hasPrefix "${root}/" relative
@@ -592,6 +593,50 @@ let
   };
   toolsVendorArgs = {
     overrideVendorGitCheckout = vendorPinnedFork "tools";
+  };
+  tracedRunPlaceholderMembers =
+    workspaceMembers
+    ++ map (member: "tools/${member}") (
+      builtins.filter (member: member != "traced-run")
+        (builtins.fromTOML (builtins.readFile ../tools/Cargo.toml)).workspace.members
+    );
+  tracedRunSourceFilter =
+    path: type:
+    let
+      relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
+    in
+    # Traversal must admit ancestors as well as member roots. Directories add
+    # no unrelated source bytes; manifests resolve the workspace, while excluded
+    # targets are supplied by the same placeholder convention as product builds.
+    type == "directory"
+    || cargoWorkspaceInput path
+    || relative == "tools/Cargo.toml"
+    || relative == "tools/Cargo.lock"
+    || builtins.any (member: relative == "${member}/Cargo.toml") tracedRunPlaceholderMembers
+    || (pkgs.lib.hasPrefix "tools/traced-run/" relative && craneLib.filterCargoSources path type);
+  tracedRunSrc = withWorkspacePlaceholders "jaunder-traced-run-cargo-source" (pkgs.lib.cleanSourceWith
+    {
+      src = craneLib.path ../.;
+      filter = tracedRunSourceFilter;
+    }
+  ) tracedRunPlaceholderMembers;
+  tracedRunBaseArgs = toolsBaseArgs // {
+    src = tracedRunSrc;
+    pname = "jaunder-traced-run";
+    cargoExtraArgs = "--manifest-path tools/Cargo.toml -p traced-run";
+  };
+  tracedRunCargoVendorDir = craneLib.vendorCargoDeps (tracedRunBaseArgs // toolsVendorArgs);
+  tracedRunTooling = mkToolingCargo (
+    tracedRunBaseArgs // { cargoVendorDir = tracedRunCargoVendorDir; }
+  );
+  tracedRunBin = tracedRunTooling.buildPackage {
+    pname = "traced-run";
+    doCheck = false;
+    installPhase = ''
+      mkdir -p $out/bin
+      cp target/release/traced-run $out/bin/traced-run
+    '';
+    doNotPostBuildInstallCargoBinaries = true;
   };
   toolsCargoVendorDir = craneLib.vendorCargoDeps (toolsBaseArgs // toolsVendorArgs);
   toolsArgs = toolsBaseArgs // {
@@ -1149,6 +1194,7 @@ in
     inherit csrWasm;
     csrBundle = csrWasmBundle;
     inherit csrDebugBundle;
+    traced-run = tracedRunBin;
     devtool = devtoolBin;
     xtask = xtaskBin;
     # The out-of-process e2e seed helper (ADR-0046). Exposed so it is
@@ -1214,6 +1260,7 @@ in
       diagnosticBaselineCsrWasmBundle
       testSupportBin
       devtoolBin
+      tracedRunBin
       docsDevtoolBin
       cargo-crap
       wasm-bindgen-cli

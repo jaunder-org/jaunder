@@ -301,14 +301,14 @@ production fallback or a browser log-export feature.
 Validate the same merged Collector configuration the local launcher uses:
 
 ```bash
-devtool run -- otelcol-contrib validate --config end2end/otel-collector.yaml --config nix/otel-processors.yaml
+traced-run -- otelcol-contrib validate --config end2end/otel-collector.yaml --config nix/otel-processors.yaml
 ```
 
 For a changed browser flow, use the supported focused SQLite loop, for example
-`devtool run -- cargo xtask e2e-local auth.spec.ts`. This builds and validates
+`traced-run -- cargo xtask e2e-local auth.spec.ts`. This builds and validates
 current CSR assets and exercises a real server/Collector/browser lifecycle; it
 is not PostgreSQL parity, complete CSR lint, authoritative source coverage or a
-full matrix. Use `devtool run -- cargo xtask e2e postgres chromium` for that
+full matrix. Use `traced-run -- cargo xtask e2e postgres chromium` for that
 backend's full hermetic Chromium lane. Firefox uses the retained `e2e-lane`
 producers plus `e2e-reconcile`, not a serial-special result alone. The complete
 commands and final validation ladder remain in
@@ -398,6 +398,25 @@ bounded `server.metrics.media_filesystem_bytes` diagnostic and clears the
 snapshot field, publishing no datapoint rather than zero or a partial value.
 
 ## End-to-End Tracing Layers
+
+### Host command-run traces (#1858)
+
+`traced-run --name LABEL -- PROGRAM [ARG ...]` can emit a separate
+Perfetto-compatible Chrome Trace Event JSON artifact at
+`.xtask/run/<opaque-run-id>.trace.json`. Only explicitly named `traced-run`
+invocations and the guarded `scripts/cargo-xtask` launcher contribute spans;
+inherited context does not attribute arbitrary child processes. Their time is
+opaque within the nearest participating parent span. The artifact is process
+timing, not OpenTelemetry request attribution, and does not change
+`xtask.command`.
+
+Direct `cargo xtask` launcher execution uses inherited stdout/stderr without
+wrapper JSON or output capture files. If a normal captured `traced-run` wraps
+the launcher, that outer runner owns parked output and the result summary;
+interactive streaming is not promised on that path. Trace finalization is
+best-effort: a hard kill before root finalization can leave per-writer records
+without a complete merged trace, and descendants that outlive the root are not
+collected. This trace is diagnostic evidence, not a performance claim.
 
 ### What is a span and what is an attribute (#794)
 
