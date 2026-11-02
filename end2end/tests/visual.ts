@@ -7,6 +7,7 @@ const stylePath = join(__dirname, "visual.css");
 
 type VisualOptions = {
   mask?: Locator[];
+  stylePath?: string;
 };
 
 /** Compare the current desktop viewport under the deterministic screenshot-only
@@ -23,7 +24,7 @@ export async function expectVisual(
       caret: "hide",
       mask: options.mask,
       maxDiffPixels: 0,
-      stylePath,
+      stylePath: options.stylePath ? [stylePath, options.stylePath] : stylePath,
       threshold: 0,
     }),
   );
@@ -43,7 +44,7 @@ export async function expectVisualRegion(
       caret: "hide",
       mask: options.mask,
       maxDiffPixels: 0,
-      stylePath,
+      stylePath: options.stylePath ? [stylePath, options.stylePath] : stylePath,
       threshold: 0,
     }),
   );
