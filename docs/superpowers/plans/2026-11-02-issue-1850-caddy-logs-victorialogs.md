@@ -20,19 +20,28 @@ ADR-0196.
 
 ## Task outline
 
-- [ ] Task 1: Prove `jaunder` namespace upload and source-to-store fidelity
-      before production wiring
+- [x] Task 1: Add the focused `jaunder` namespace upload/source-to-store VM
+      regression proof before production wiring (first implementation slice)
   - Contract: route Caddy stdout/stderr to `LogNamespace=jaunder`; use pinned
     systemd 261.2 `systemd-journal-upload` with `--namespace=jaunder`, native
     VictoriaLogs endpoint `/insert/journald/upload` (stack prefix `/logs`), and
     saved cursor state. Treat scope as the namespace, including
     namespace-internal bookkeeping, not as a unit-only filter.
-  - Verification: in a bounded VM, verify namespace contents and
-    `journalctl --namespace=jaunder -u caddy.service` diagnostics; compare full
-    source journal access record/message and metadata with stored records;
-    establish pinned endpoint acceptance; exercise uploader state/cursor across
-    restart and interruption; verify uploader credentials and hardening. Do not
-    proceed to production wiring on failure.
+  - Verification: the focused `checks.x86_64-linux.jaunder-caddy-journal-upload`
+    VM must verify both vhosts, namespace diagnostics/default exclusion, exact
+    Caddy source-message/store equality and journal metadata, native redaction
+    of Cookie, Set-Cookie, Authorization, and Proxy-Authorization, endpoint
+    acceptance, saved-state restart, and receiver-interruption recovery. Count
+    previously stored markers before and after restart/recovery; prove an upload
+    failure before restoring VictoriaLogs; bound the reload-message comparison
+    to a pre-action journal cursor. This VM observed one previously uploaded
+    restart marker replay after a failed receiver request; it records counts and
+    proves recovery without claiming exactly-once delivery. The production
+    no-duplicates acceptance remains unresolved. The proof uses the loopback
+    receiver without uploader TLS/client credentials, which this route does not
+    configure. Existing `checks.x86_64-linux.jaunder-stack-sqlite-bcrypt`
+    separately exercised Caddy credential reload/rotation. Production wiring
+    remains Task 2 and is not included in this slice.
 - [ ] Task 2: Wire the production native uploader and both managed Caddy vhosts
   - Contract: use `services.journald.upload` for URL, service, saved-state
     arrangement, restart and hardening; override its `ExecStart` only to add

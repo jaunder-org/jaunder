@@ -2760,6 +2760,285 @@ e2eGateChecks
   e2e = self.packages.${system}.e2e-checks;
 
   jaunder-stack-module = jaunderStackModuleCheck;
+  jaunder-caddy-journal-upload = pkgs.testers.nixosTest {
+    name = "jaunder-caddy-journal-upload";
+    globalTimeout = 600;
+    nodes.machine = { lib, pkgs, ... }: {
+      imports = [ self.nixosModules.jaunder-stack ];
+      virtualisation.memorySize = 2048;
+      boot.loader.grub.devices = [ "nodev" ];
+      environment.systemPackages = [ pkgs.curl pkgs.jq ];
+      services.jaunder.stack = {
+        enable = true;
+        hostName = "jaunder.stack.test";
+        observability = {
+          hostName = "observe.stack.test";
+          basicAuth = {
+            username = "operator";
+            passwordHash = "$2a$14$3XbcVHEiOPQs7JeFsE4L6.viyrrG.5pCGkdC5yzH5WK4pGCIm4u4S";
+          };
+        };
+      };
+      services.caddy.virtualHosts."jaunder.stack.test".extraConfig = lib.mkAfter ''
+        tls internal
+        header Set-Cookie "issue1850-set-cookie-secret"
+        log { output stdout format json }
+      '';
+      services.caddy.virtualHosts."observe.stack.test".extraConfig = lib.mkAfter ''
+        tls internal
+        header Set-Cookie "issue1850-set-cookie-secret"
+        log { output stdout format json }
+      '';
+      systemd.services.caddy.serviceConfig.LogNamespace = "jaunder";
+      services.journald.upload = {
+        enable = true;
+        settings.Upload.URL = "http://127.0.0.1:9428/logs/insert/journald";
+      };
+      systemd.services.systemd-journal-upload.serviceConfig.ExecStart = lib.mkForce [
+        ""
+        "${pkgs.systemd}/lib/systemd/systemd-journal-upload --namespace=jaunder --save-state"
+      ];
+      system.stateVersion = "26.05";
+    };
+    testScript = ''
+      import json
+
+      machine.start()
+      for unit in ["caddy", "victorialogs", "systemd-journal-upload"]:
+        machine.wait_for_unit(unit, timeout=90)
+      machine.wait_for_open_port(443)
+      machine.wait_for_open_port(9428)
+
+      app_marker = "issue1850-app-native-record"
+      obs_marker = "issue1850-observability-native-record"
+      machine.succeed(
+        "curl -ksSf --resolve jaunder.stack.test:443:127.0.0.1 "
+        + "https://jaunder.stack.test/?proof=" + app_marker
+        + " -H 'Cookie: issue1850-cookie-secret'"
+        + " -H 'Authorization: issue1850-auth-secret'"
+        + " -H 'Proxy-Authorization: issue1850-proxy-auth-secret' > /dev/null"
+      )
+      machine.succeed(
+        "curl -ksSf --resolve observe.stack.test:443:127.0.0.1 "
+        + "-u operator:stack-password https://observe.stack.test/metrics/?proof=" + obs_marker
+        + " -H 'Cookie: issue1850-cookie-secret'"
+        + " -H 'Proxy-Authorization: issue1850-proxy-auth-secret' > /dev/null"
+      )
+      machine.succeed(
+        "printf 'issue1850-namespace-bookkeeping\\n' | systemd-cat --namespace=jaunder --identifier=issue1850-proof"
+      )
+      machine.succeed(
+        "printf 'issue1850-default-namespace-exclusion\\n' | systemd-cat --identifier=issue1850-default-proof"
+      )
+
+      def source_records():
+        output = machine.succeed("journalctl --namespace=jaunder -u caddy.service --no-pager -o json")
+        return [json.loads(line) for line in output.splitlines() if line]
+
+      def namespace_records():
+        output = machine.succeed("journalctl --namespace=jaunder --no-pager -o json")
+        return [json.loads(line) for line in output.splitlines() if line]
+
+      def stored_records():
+        output = machine.succeed(
+          "curl -fsSG --data-urlencode 'query=_msg:*issue1850*' "
+          + "http://127.0.0.1:9428/logs/select/logsql/query"
+        )
+        return [json.loads(line) for line in output.splitlines() if line]
+
+      def stored_caddy_records():
+        output = machine.succeed(
+          "curl -fsSG --data-urlencode 'query=_SYSTEMD_UNIT:\"caddy.service\"' "
+          + "http://127.0.0.1:9428/logs/select/logsql/query"
+        )
+        return [json.loads(line) for line in output.splitlines() if line]
+
+      for marker in [app_marker, obs_marker]:
+        machine.wait_until_succeeds(
+          "journalctl --namespace=jaunder -u caddy.service --no-pager -o cat | grep -F " + marker,
+          timeout=30,
+        )
+      machine.wait_until_succeeds(
+        "test -s /var/lib/systemd/journal-upload/state",
+        timeout=30,
+      )
+      for marker in [app_marker, obs_marker, "issue1850-namespace-bookkeeping"]:
+        machine.wait_until_succeeds(
+          "curl -fsSG --data-urlencode 'query=_msg:*issue1850*' "
+          + "http://127.0.0.1:9428/logs/select/logsql/query | grep -F " + marker,
+          timeout=60,
+        )
+
+      source = source_records()
+      namespace_source = namespace_records()
+      stored = stored_records()
+      for marker in [app_marker, obs_marker]:
+        matching_source = [record for record in source if marker in record.get("MESSAGE", "")]
+        matching_store = [record for record in stored if marker in record.get("_msg", "")]
+        assert len(matching_source) == 1, (marker, matching_source)
+        assert len(matching_store) == 1, (marker, matching_source, stored)
+        record = matching_source[0]
+        assert matching_store[0]["_msg"] == record["MESSAGE"], (record, matching_store[0])
+        assert record.get("_SYSTEMD_UNIT") == "caddy.service", record
+        native_record = json.loads(record["MESSAGE"])
+        assert native_record["msg"] == "handled request", native_record
+        assert marker in native_record["request"]["uri"], native_record
+        for header in ["Cookie", "Authorization", "Proxy-Authorization"]:
+          assert native_record["request"]["headers"][header] == ["REDACTED"], native_record
+        assert native_record["resp_headers"]["Set-Cookie"] == ["REDACTED"], native_record
+        assert native_record["status"] == 200, native_record
+        for key in ["PRIORITY", "SYSLOG_IDENTIFIER", "_BOOT_ID", "_HOSTNAME", "_MACHINE_ID", "_NAMESPACE", "_SYSTEMD_UNIT", "_TRANSPORT"]:
+          assert matching_store[0].get(key) == record.get(key), (key, record, matching_store[0])
+        for secret in [
+          "issue1850-cookie-secret", "issue1850-auth-secret",
+          "issue1850-proxy-auth-secret", "issue1850-set-cookie-secret",
+        ]:
+          assert secret not in record["MESSAGE"], record
+          assert secret not in matching_store[0]["_msg"], matching_store[0]
+        print("issue1850-native-record=" + json.dumps({"source": record, "stored": matching_store[0]}, sort_keys=True))
+
+      bookkeeping_source = [record for record in namespace_source if "issue1850-namespace-bookkeeping" in record.get("MESSAGE", "")]
+      bookkeeping_store = [record for record in stored if "issue1850-namespace-bookkeeping" in record.get("_msg", "")]
+      assert len(bookkeeping_source) == 1 and len(bookkeeping_store) == 1, (bookkeeping_source, bookkeeping_store)
+      marker_set = [app_marker, obs_marker, "issue1850-namespace-bookkeeping"]
+      initial_marker_counts = {
+        marker: sum(marker in record.get("_msg", "") for record in stored)
+        for marker in marker_set
+      }
+      assert all(count == 1 for count in initial_marker_counts.values()), initial_marker_counts
+      assert bookkeeping_store[0]["_msg"] == bookkeeping_source[0]["MESSAGE"], bookkeeping_store
+      assert not any("issue1850-default-namespace-exclusion" in record.get("_msg", "") for record in stored), stored
+      for marker in [app_marker, obs_marker]:
+        assert not machine.succeed("journalctl -u caddy.service --no-pager -o cat | grep -F " + marker + " || true").strip(), marker
+
+      import shlex
+      cursor_output = machine.succeed(
+        "journalctl --namespace=jaunder -u caddy.service -n 1 --show-cursor --no-pager -o json"
+      )
+      cursor_line = next(line for line in cursor_output.splitlines() if line.startswith("-- cursor: "))
+      reload_cursor = cursor_line.removeprefix("-- cursor: ")
+      machine.succeed(
+        "cp /etc/caddy/caddy_config /tmp/reloaded-caddy; "
+        + "printf '\\nhttps://shared.stack.test {\\n tls internal\\n respond shared\\n}\\n' >> /tmp/reloaded-caddy; "
+        + "mv /tmp/reloaded-caddy /etc/caddy/caddy_config; systemctl reload caddy"
+      )
+      reload_source_output = machine.succeed(
+        "journalctl --namespace=jaunder -u caddy.service --after-cursor="
+        + shlex.quote(reload_cursor) + " --no-pager -o json"
+      )
+      reload_source = [
+        record for record in (json.loads(line) for line in reload_source_output.splitlines())
+        if "using config from file" in record.get("MESSAGE", "")
+      ]
+      assert reload_source, reload_source_output
+      machine.wait_until_succeeds(
+        "curl -fsSG --data-urlencode 'query=_SYSTEMD_UNIT:\"caddy.service\"' "
+        + "http://127.0.0.1:9428/logs/select/logsql/query | grep -F 'using config from file'",
+        timeout=60,
+      )
+      reload_store = [record for record in stored_caddy_records() if "using config from file" in record.get("_msg", "")]
+      for source_record in reload_source:
+        matching = [
+          record for record in reload_store
+          if record.get("_msg") == source_record.get("MESSAGE")
+          and record.get("_PID") == source_record.get("_PID")
+          and record.get("_STREAM_ID") == source_record.get("_STREAM_ID")
+        ]
+        assert len(matching) == 1, (source_record, matching)
+
+      unit_properties = machine.succeed(
+        "systemctl show systemd-journal-upload -p Restart -p RestartSec -p StateDirectory "
+        + "-p SupplementaryGroups -p PrivateDevices -p ProtectHome -p ProtectKernelLogs "
+        + "-p MemoryDenyWriteExecute -p LockPersonality -p RestrictNamespaces"
+      ).splitlines()
+      for property in [
+        "Restart=always", "StateDirectory=systemd/journal-upload",
+        "SupplementaryGroups=systemd-journal", "PrivateDevices=yes",
+        "ProtectHome=yes", "ProtectKernelLogs=yes", "MemoryDenyWriteExecute=yes",
+        "LockPersonality=yes", "RestrictNamespaces=yes",
+      ]:
+        assert property in unit_properties, (property, unit_properties)
+      state_mode = int(machine.succeed("stat -c '%a' /var/lib/systemd/journal-upload/state").strip(), 8)
+      assert state_mode & 0o077 == 0, oct(state_mode)
+
+      restart_marker = "issue1850-uploader-restart-resume"
+      cursor_before_restart = machine.succeed("cat /var/lib/systemd/journal-upload/state").strip()
+      machine.succeed("systemctl show systemd-journal-upload -p ExecStart --value | grep -F -- '--namespace=jaunder' | grep -F -- '--save-state'")
+      machine.succeed("systemctl stop systemd-journal-upload")
+      machine.succeed("printf '%s\\n' " + restart_marker + " | systemd-cat --namespace=jaunder --identifier=issue1850-restart-proof")
+      machine.succeed("systemctl start systemd-journal-upload")
+      machine.wait_for_unit("systemd-journal-upload", timeout=30)
+      machine.wait_until_succeeds(
+        "curl -fsSG --data-urlencode 'query=_msg:*issue1850*' "
+        + "http://127.0.0.1:9428/logs/select/logsql/query | grep -F " + restart_marker,
+        timeout=60,
+      )
+      restarted_records = [record for record in stored_records() if restart_marker in record.get("_msg", "")]
+      assert len(restarted_records) == 1, restarted_records
+      cursor_after_restart = machine.succeed("cat /var/lib/systemd/journal-upload/state").strip()
+      assert cursor_after_restart != cursor_before_restart, (cursor_before_restart, cursor_after_restart)
+      after_restart_counts = {
+        marker: sum(marker in record.get("_msg", "") for record in stored_records())
+        for marker in marker_set
+      }
+      assert after_restart_counts == initial_marker_counts, (initial_marker_counts, after_restart_counts)
+
+      outage_marker = "issue1850-receiver-interruption-resume"
+      pre_outage_records = stored_records()
+      replay_baseline = marker_set + [restart_marker]
+      pre_outage_counts = {
+        marker: sum(marker in record.get("_msg", "") for record in pre_outage_records)
+        for marker in replay_baseline
+      }
+      assert pre_outage_counts == initial_marker_counts | {restart_marker: 1}, pre_outage_counts
+      previous_upload_errors = machine.succeed(
+        "journalctl -u systemd-journal-upload --no-pager -o cat | grep -F "
+        + shlex.quote("Upload to http://127.0.0.1:9428/logs/insert/journald/upload failed")
+        + " || true"
+      ).strip()
+      assert not previous_upload_errors, previous_upload_errors
+      cursor_before_outage = machine.succeed("cat /var/lib/systemd/journal-upload/state").strip()
+
+      machine.succeed("systemctl stop victorialogs")
+      machine.succeed("printf '%s\\n' " + outage_marker + " | systemd-cat --namespace=jaunder --identifier=issue1850-outage-proof")
+      machine.wait_until_succeeds(
+        "journalctl -u systemd-journal-upload --no-pager -o cat | grep -F "
+        + shlex.quote("Upload to http://127.0.0.1:9428/logs/insert/journald/upload failed"),
+        timeout=60,
+      )
+      cursor_during_outage = machine.succeed("cat /var/lib/systemd/journal-upload/state").strip()
+      assert cursor_during_outage == cursor_before_outage, (cursor_before_outage, cursor_during_outage)
+      machine.succeed("systemctl start victorialogs")
+      machine.wait_for_unit("victorialogs", timeout=60)
+      machine.wait_for_unit("systemd-journal-upload", timeout=30)
+      machine.wait_until_succeeds(
+        "curl -fsSG --data-urlencode 'query=_msg:*issue1850*' "
+        + "http://127.0.0.1:9428/logs/select/logsql/query | grep -F " + outage_marker,
+        timeout=60,
+      )
+      recovered_records = stored_records()
+      cursor_after_recovery = machine.succeed("cat /var/lib/systemd/journal-upload/state").strip()
+      assert cursor_after_recovery != cursor_before_outage, (cursor_before_outage, cursor_after_recovery)
+      recovered_counts = {
+        marker: sum(marker in record.get("_msg", "") for record in recovered_records)
+        for marker in replay_baseline + [outage_marker]
+      }
+      assert all(
+        recovered_counts[marker] >= pre_outage_counts[marker]
+        for marker in replay_baseline
+      ), (pre_outage_counts, recovered_counts)
+      assert recovered_counts[outage_marker] >= 1, recovered_counts
+      print("issue1850-cursor-recovery-counts=" + json.dumps({
+        "before_receiver_outage": pre_outage_counts,
+        "after_recovery": recovered_counts,
+        "replayed_existing_records": {
+          marker: recovered_counts[marker] - pre_outage_counts[marker]
+          for marker in replay_baseline
+          if recovered_counts[marker] > pre_outage_counts[marker]
+        },
+      }, sort_keys=True))
+    '';
+  };
   jaunder-stack-sqlite-bcrypt = mkJaunderStackVmCheck {
     checkName = "jaunder-stack-sqlite-bcrypt";
     runtimeCredentials = true;
