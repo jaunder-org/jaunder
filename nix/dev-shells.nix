@@ -44,8 +44,8 @@ let
       # distro git would load that OpenSSL into its older host glibc
       # process, which fails before Nix can fetch git inputs (#815).
       pkgs.git
-      # Standalone runner is the sole PATH provider; devtool retains unrelated
-      # in-sandbox commands and its temporary `run` forwarding interface.
+      # Standalone runner is the sole PATH provider; devtool provides
+      # independent in-sandbox commands.
       devtoolBin
       tracedRunBin
       emacsForCi

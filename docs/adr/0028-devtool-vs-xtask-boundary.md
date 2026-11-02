@@ -119,15 +119,14 @@ the runner is handled by running it live via `cargo run -p devtool`.
 ## Addendum (#1858): standalone `traced-run` and launcher capture
 
 The `run` responsibility has moved to the standalone `traced-run` executable,
-built from the shared runner implementation and placed on both interactive and
-CI devShell PATHs. Its Nix output has a narrow runner-only source filter: source
-changes admitted only for devtool do not invalidate the runner derivation.
-Workspace manifests and `tools/Cargo.lock` remain inputs, so dependency or
+built from `tools/traced-run` and placed on both interactive and CI devShell
+PATHs. Its Nix output has a narrow runner-only source filter: source changes
+admitted only for devtool do not invalidate the runner derivation. Workspace
+manifests and `tools/Cargo.lock` remain inputs, so dependency or
 workspace-resolution changes may invalidate it. The shell still includes both
 outputs, and changes to devtool can therefore change shell realization even when
 the runner derivation is unchanged. `devtool` remains independently packaged for
-its in-sandbox consumers. Its temporary `devtool run` forwarding route shares
-the library implementation; it is not a second installed runner.
+its in-sandbox consumers, with no runner dependency or `run` subcommand.
 `packages.traced-run` alone installs `bin/traced-run`; `packages.devtool`
 installs only `bin/devtool`. Both default and CI shells include each output
 once, making the independent runner the single authoritative PATH provider. This
@@ -155,9 +154,10 @@ Trace capture is diagnostic and distinct from attribution; it does not redefine
 `xtask.command` or alter ADR-0096's lifecycle boundary. Span names and fields
 remain bounded under ADR-0011 and ADR-0147.
 
-External/global command-routing instructions are not switched by this change;
-the old route remains until exact migration readiness is confirmed by the
-Manager.
+The Manager relayed explicit human confirmation that the coordinated external
+routing cutover was complete and authorized removal of the temporary
+`devtool run` forwarder. `traced-run` is the sole command-capture interface;
+unrelated devtool commands and the standalone runner contracts are retained.
 
 ## Clarification (#1858, 2026-11-02): cooperative launcher reentry
 

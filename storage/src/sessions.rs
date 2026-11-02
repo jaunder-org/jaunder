@@ -919,6 +919,9 @@ mod tests {
                     .fetch_one(pool).await.unwrap().into_bool();
                 if waiting { return; }
                 tokio::task::yield_now().await;
+                // A gated PostgreSQL contender may start only after the
+                // observer has completed an iteration without a lock wait.
+                observed.notify_one();
             }
         }).await.is_ok()
     }
@@ -954,7 +957,13 @@ mod tests {
         locked_rx.await.unwrap();
         let sessions = env.sessions();
         let (scope, observed, retry) = contending_scope(&env);
+        let polling = observed.clone();
         let second = tokio::spawn(async move {
+            // PostgreSQL must observe an empty poll before authentication can
+            // contend, so the observer proves the transition into a lock wait.
+            if matches!(backend, Backend::Postgres) {
+                polling.notified().await;
+            }
             scope
                 .run(|transaction| {
                     Box::pin(async move {
@@ -966,6 +975,9 @@ mod tests {
                 .await
         });
         let waited_for_lock = contender_is_waiting_for_session_lock(&env, &observed).await;
+        // Unblock the contender even if the observer times out, allowing the
+        // behavioral assertion below to report the failure without a hung task.
+        observed.notify_one();
         release_tx.send(()).unwrap();
         retry.notify_one();
         assert!(
