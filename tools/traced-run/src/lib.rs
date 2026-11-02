@@ -1,5 +1,5 @@
-//! Shared command runner for `traced-run` and the temporary `devtool run`
-//! compatibility route. It executes one program without a shell and parks output under `.xtask/run/`.
+//! Standalone command runner for `traced-run`.
+//! It executes one program without a shell and parks output under `.xtask/run/`.
 //! The runner exits with the child's exit code, so callers get an honest
 //! pass/fail signal without shell scaffolding (`; echo $?`, `2>&1 | tail`) — the
 //! latter silently overwrites the exit status with the last pipe stage's.
@@ -330,7 +330,7 @@ const REFUSED_SHELLS: &[&str] = &["bash", "sh", "zsh", "fish", "dash", "ash", "e
 
 /// Refuse argv that re-opens a shell or the `nix develop` wrapper — the whole
 /// point of the runner is that there is no shell, so allowlisting
-/// `devtool run *` stays narrower than `bash *`. Everything else runs.
+/// `traced-run *` stays narrower than `bash *`. Everything else runs.
 /// `env VAR=x cmd` is deliberately allowed (a per-command env idiom, not a
 /// shell); `xargs` is allowed (neutered here by the `/dev/null` stdin).
 pub fn validate_argv(argv: &[String]) -> Result<(), RunError> {
@@ -407,11 +407,6 @@ fn execute_with_trace(
         stderr: stream_of(&err_path),
     };
     Ok((result, process_code))
-}
-
-/// Compatibility entry point retained until the externally-owned route is migrated.
-pub fn run_compat(argv: &[String], cwd: &Path, timeout: Option<u64>) -> ! {
-    run(argv, Some(cwd.to_owned()), timeout)
 }
 
 /// Parse the standalone runner's deliberately small option surface.

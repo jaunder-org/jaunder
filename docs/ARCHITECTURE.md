@@ -4697,9 +4697,9 @@ The "devtool = in-sandbox, xtask = host" split is a litmus test about where code
 _must_ execute, not a ban on running devtool from a shell. ADR-0028's own
 Supplement (#158) originally extended `devtool run` to the host; #1858 moves
 that responsibility to standalone `traced-run`, while the host verify ladder's
-use of `devtool check <name>` remains ADR-0052's Decision. The old `devtool run`
-route is a temporary forwarding compatibility entry point pending
-Manager-coordinated external routing migration.
+use of `devtool check <name>` remains ADR-0052's Decision. Following the
+confirmed coordinated routing cutover, `traced-run` is the sole command-capture
+interface; devtool has no `run` subcommand or runner dependency.
 
 - **`traced-run [--name LABEL] [--timeout SECONDS] -- <cmd>`** is the standalone
   no-shell runner on the host/devShell path. `packages.traced-run` is an
@@ -4727,8 +4727,6 @@ Manager-coordinated external routing migration.
   context propagates independently, preserving one root for nested launches
   without stale-skipping later independent invocations. See
   [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md).
-- **`devtool run`** remains temporarily available as a forwarding compatibility
-  interface to the same runner implementation; it is not a second runner.
 - **`devtool check <name> | --group <docs|code> | --all [--fix] [--sandbox-cargo]`**
   is the single command-definition surface for the migrated static checks
   (`fmt`, `leptosfmt`, `prettier-markdown`, `prettier-end2end`, `prettier-css`,

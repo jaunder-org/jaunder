@@ -530,7 +530,6 @@ let
           "tools/csr_bundle"
           "tools/devtool"
           "tools/doctests"
-          "tools/traced-run"
         ];
         requiredToolPath = builtins.any (
           root: relative == root || pkgs.lib.hasPrefix "${root}/" relative
@@ -558,7 +557,8 @@ let
       "$out/host/src" \
       "$out/storage/src" \
       "$out/tools/diagnostic-coverage-runtime/src" \
-      "$out/tools/performance/src"
+      "$out/tools/performance/src" \
+      "$out/tools/traced-run/src"
     printf '%s\n' '[package]' 'name = "common"' 'version = "0.1.0"' 'edition = "2024"' > "$out/common/Cargo.toml"
     # Cargo still resolves optional path-dependency manifests with
     # --no-default-features. Keep only a manifest/source placeholder here: the
@@ -567,11 +567,13 @@ let
     printf '%s\n' '[package]' 'name = "storage"' 'version = "0.1.0"' 'edition = "2024"' > "$out/storage/Cargo.toml"
     printf '%s\n' '[package]' 'name = "diagnostic-coverage-runtime"' 'version = "0.1.0"' 'edition = "2024"' > "$out/tools/diagnostic-coverage-runtime/Cargo.toml"
     printf '%s\n' '[package]' 'name = "performance"' 'version = "0.1.0"' 'edition = "2024"' > "$out/tools/performance/Cargo.toml"
+    printf '%s\n' '[package]' 'name = "traced-run"' 'version = "0.1.0"' 'edition = "2024"' > "$out/tools/traced-run/Cargo.toml"
     printf '%s\n' '# docs-only optional dependency placeholder' > "$out/common/src/lib.rs"
     printf '%s\n' '# docs-only optional dependency placeholder' > "$out/host/src/lib.rs"
     printf '%s\n' '# docs-only optional dependency placeholder' > "$out/storage/src/lib.rs"
     printf '%s\n' '# docs-only workspace placeholder' > "$out/tools/diagnostic-coverage-runtime/src/lib.rs"
     printf '%s\n' '# docs-only workspace placeholder' > "$out/tools/performance/src/lib.rs"
+    printf '%s\n' '# docs-only workspace placeholder' > "$out/tools/traced-run/src/lib.rs"
   '';
   toolsBaseArgs = {
     src = toolsSrc;

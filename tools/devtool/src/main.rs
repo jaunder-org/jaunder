@@ -49,8 +49,6 @@ enum Command {
     /// Ephemeral PostgreSQL subcommands.
     #[command(subcommand)]
     Pg(PgCmd),
-    /// Compatibility forwarding entry point for the traced-run implementation.
-    Run(RunArgs),
     /// Run the migrated static checks (#188/#276): one by name, or `--all`.
     Check(CheckArgs),
     /// Post-process a built `csr.wasm` into a verified CSR bundle root
@@ -154,19 +152,6 @@ struct ProvisionNodeModulesArgs {
     /// Repo or worktree root; provisions <root>/end2end/node_modules.
     #[arg(long, default_value = ".")]
     root: PathBuf,
-}
-
-#[derive(clap::Args)]
-struct RunArgs {
-    /// Working directory for the command (defaults to the current directory).
-    #[arg(long)]
-    cwd: Option<PathBuf>,
-    /// Kill the command after this many seconds (default: no limit).
-    #[arg(long)]
-    timeout: Option<u64>,
-    /// The program and its arguments, after `--`.
-    #[arg(trailing_var_arg = true, required = true)]
-    cmd: Vec<String>,
 }
 
 #[derive(Subcommand)]
@@ -412,12 +397,6 @@ fn main() -> Result<()> {
         }
         Command::Doctests(DoctestsCmd::Emit { out }) => doctests::emit::run(&out),
         Command::Pg(PgCmd::Run { cmd }) => pg::run_command(&cmd),
-        Command::Run(args) => {
-            let cwd = args
-                .cwd
-                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-            traced_run::run_compat(&args.cmd, &cwd, args.timeout)
-        }
         Command::Check(args) => check::run(
             args.name.as_deref(),
             args.group,
