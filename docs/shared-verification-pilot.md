@@ -1,8 +1,10 @@
 # Shared verification pilot: Markdown formatting
 
 **Status:** #1862 established the leaf contract and bounded harness conclusions;
-approved #1863 now routes production narrow precommit and clean prepush through
-that leaf on `x86_64-linux`, as specified below. CI routing remains unchanged.
+approved #1863 routes production narrow precommit and clean prepush through that
+leaf on `x86_64-linux`, as specified below. Local actual-consumer proof is
+complete for the reviewed implementation. Hosted CI and the final intended-tree
+leaf verdict remain pending; CI routing itself is unchanged.
 
 ## Contract
 
@@ -91,6 +93,32 @@ platforms retain prior host behavior. The guarantee assumes a cooperative single
 writer, not immunity to concurrent external mutation. CI retains its existing
 hermetic leaf and aggregate; no workflow duplication or broader platform
 equivalence is claimed.
+
+### #1863 local production-consumer proof
+
+A temporary tracked Markdown input exercised the actual narrow precommit path:
+host Prettier Fix changed the input, the existing safe reconciliation staged
+that fix once, the complete Markdown/config raw-worktree-to-index guard passed,
+and the ordinary Git-backed `static-docs` leaf passed. A normal commit hook and
+clean prepush then requested that same derivation for the same proof content;
+the local-store output was reused. This establishes local reuse for that exact
+proof input, not substituter use or builder execution a second time.
+
+Actual precommit and clean prepush both refused a clean CRLF-converted tracked
+Prettier config before requesting Nix. A temporary real builder fault also
+propagated through actual precommit, prepush, and `ci-validate hermetic`:
+precommit retained one reconciliation and no retry; prepush stopped before later
+phases; hermetic reported the failed docs leaf while its independent static-code
+check still passed. The exact current required-aggregate predicate was
+negatively exercised against a failed lane. These are local proof controls, not
+hosted CI results.
+
+The proof input and fault were temporary and are absent from the intended tree.
+The successful derivation included that temporary Markdown file, so it is not a
+final intended-PR tree verdict. The earlier #1862 harness derivation/results are
+historical foundation only; source/docs changed afterward, so its identity is
+not the current final-tree identity. Obtain normal final-tree leaf verification
+and hosted required CI on the eventual delivered ref before claiming delivery.
 
 ## Ownership and update trigger
 
