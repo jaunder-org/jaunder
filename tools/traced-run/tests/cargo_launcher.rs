@@ -25,7 +25,72 @@ impl Fixture {
         let store = dir.path().join("store");
         fs::create_dir_all(store.join("bin")).unwrap();
         let xtask = store.join("bin/xtask");
-        fs::write(&xtask, "#!/usr/bin/env python3\nimport json, os, subprocess, sys\ncontext=json.loads(os.environ['JAUNDER_TRACED_RUN_CONTEXT'])\nassert context['parent_name'] == 'xtask-execute'\nassert isinstance(context['parent_flow_id'], int)\nassert os.getcwd() == os.environ['JAUNDER_TEST_ROOT']\nargs=sys.argv[1:]\nif args == ['nested']:\n    flow_id = '%016x' % context['parent_flow_id']\n    ts = 42.0\n    events = [\n        {'name':'xtask.command','cat':'xtask_trace','ph':'B','pid':os.getpid(),'tid':os.getpid(),'ts':ts,'args':{'subcommand':'test-local','package':'storage','test_selector':'site_config_primitives_round_trip'}},\n        {'name':'recorded child entry','cat':'xtask_trace','ph':'i','s':'t','pid':context['parent_pid'],'tid':context['parent_pid'],'ts':ts,'args':{'parent_span_id':context['parent_span_id'],'child_name':'xtask.command'}},\n        {'name':'xtask-execute-to-command','cat':'xtask_trace','ph':'s','pid':context['parent_pid'],'tid':context['parent_pid'],'ts':ts,'id':flow_id,'args':{'parent_span_id':context['parent_span_id']}},\n        {'name':'xtask-execute-to-command','cat':'xtask_trace','ph':'f','pid':os.getpid(),'tid':os.getpid(),'ts':ts,'id':flow_id,'bp':'e'},\n        {'name':'xtask.command','cat':'xtask_trace','ph':'E','pid':os.getpid(),'tid':os.getpid(),'ts':ts + 1}\n    ]\n    with open(os.path.join(context['trace_dir'], 'fragment-workload.jsonl'), 'w') as output:\n        output.write(''.join(json.dumps(event) + '\\n' for event in events))\n    sys.exit(subprocess.call(['cargo-xtask', 'xtask', 'leaf']))\nprint(json.dumps(args), flush=True)\nsys.stdout.write(sys.stdin.read())\nsys.stderr.write('child stderr\\n')\nsys.exit(73)\n").unwrap();
+        fs::write(
+            &xtask,
+            r#"#!/usr/bin/env python3
+import json
+import os
+import subprocess
+import sys
+
+context = json.loads(os.environ['JAUNDER_TRACED_RUN_CONTEXT'])
+assert context['parent_name'] == 'xtask-execute'
+assert isinstance(context['parent_flow_id'], int)
+assert os.getcwd() == os.environ['JAUNDER_TEST_ROOT']
+
+args = sys.argv[1:]
+if args == ['nested']:
+    flow_id = '%016x' % context['parent_flow_id']
+    timestamp = 42.0
+    workload_args = {
+        'subcommand': 'test-local',
+        'package': 'storage',
+        'test_selector': 'site_config_primitives_round_trip',
+    }
+    events = [
+        {
+            'name': 'xtask.command', 'cat': 'xtask_trace', 'ph': 'B',
+            'pid': os.getpid(), 'tid': os.getpid(), 'ts': timestamp,
+            'args': workload_args,
+        },
+        {
+            'name': 'recorded child entry', 'cat': 'xtask_trace',
+            'ph': 'i', 's': 't', 'pid': context['parent_pid'],
+            'tid': context['parent_pid'], 'ts': timestamp,
+            'args': {
+                'parent_span_id': context['parent_span_id'],
+                'child_name': 'xtask.command',
+            },
+        },
+        {
+            'name': 'xtask-execute-to-command', 'cat': 'xtask_trace',
+            'ph': 's', 'pid': context['parent_pid'],
+            'tid': context['parent_pid'], 'ts': timestamp,
+            'id': flow_id,
+            'args': {'parent_span_id': context['parent_span_id']},
+        },
+        {
+            'name': 'xtask-execute-to-command', 'cat': 'xtask_trace',
+            'ph': 'f', 'pid': os.getpid(), 'tid': os.getpid(),
+            'ts': timestamp, 'id': flow_id, 'bp': 'e',
+        },
+        {
+            'name': 'xtask.command', 'cat': 'xtask_trace', 'ph': 'E',
+            'pid': os.getpid(), 'tid': os.getpid(), 'ts': timestamp + 1,
+        },
+    ]
+    fragment = os.path.join(context['trace_dir'], 'fragment-workload.jsonl')
+    with open(fragment, 'w') as output:
+        output.write(''.join(json.dumps(event) + '\n' for event in events))
+    sys.exit(subprocess.call(['cargo-xtask', 'xtask', 'leaf']))
+
+print(json.dumps(args), flush=True)
+sys.stdout.write(sys.stdin.read())
+sys.stderr.write('child stderr\n')
+sys.exit(73)
+"#,
+        )
+        .unwrap();
         fs::set_permissions(&xtask, fs::Permissions::from_mode(0o755)).unwrap();
         let nix_script = format!(
             "#!/usr/bin/env python3\nimport os, sys\nassert sys.argv[1:] == ['build', '.#xtask', '--no-link', '--print-out-paths']\nassert os.environ.get('JAUNDER_TRACED_RUN_CONTEXT')\nassert os.getcwd() == os.environ['JAUNDER_TEST_ROOT']\nprint({:?})\n",
