@@ -590,12 +590,16 @@ fn finish_lifecycle(
     }
 }
 
-fn devtool_seed_args(tools: &Path) -> [String; 6] {
+fn devtool_seed_args(tools: &Path) -> [String; 10] {
     [
         "run".to_owned(),
         "--locked".to_owned(),
         "--manifest-path".to_owned(),
         tools.display().to_string(),
+        "-p".to_owned(),
+        "devtool".to_owned(),
+        "--bin".to_owned(),
+        "devtool".to_owned(),
         "--".to_owned(),
         "seed-e2e".to_owned(),
     ]
@@ -1158,14 +1162,18 @@ while :; do :; done"#;
     }
 
     #[test]
-    fn seed_launch_locks_the_tools_workspace() {
+    fn seed_launch_locks_the_tools_workspace_and_selects_devtool() {
         assert_eq!(
-            devtool_seed_args(Path::new("/repo/tools/Cargo.toml")),
+            devtool_seed_args(Path::new("/repo/tools/Cargo.toml")).as_slice(),
             [
                 "run",
                 "--locked",
                 "--manifest-path",
                 "/repo/tools/Cargo.toml",
+                "-p",
+                "devtool",
+                "--bin",
+                "devtool",
                 "--",
                 "seed-e2e",
             ]
