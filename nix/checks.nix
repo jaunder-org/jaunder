@@ -1648,6 +1648,7 @@ mkWasmCoverageMeasurementProducer =
     assert stackEvaluationFails (pkgs.lib.recursiveUpdate runtimeAuthStackOptions { observability.basicAuth.passwordHash = validStackBasicAuth.passwordHash; });
     assert runtimeAuthStack.config.systemd.services.caddy.serviceConfig.LoadCredential == [ "jaunder-observability:/run/secrets/observability-users" ];
     assert runtimeAuthStack.config.systemd.services.caddy.serviceConfig.RefreshOnReload == "credentials";
+    assert runtimeAuthStack.config.systemd.services.caddy.serviceConfig.LogNamespace == "jaunder";
     assert !(runtimeAuthStack.config.systemd.services.caddy.serviceConfig ? ExecStartPre);
     assert runtimeAuthStack.config.systemd.services.caddy.serviceConfig.ExecReload == [ "" "${pkgs.lib.getExe pkgs.caddy} reload --config /etc/caddy/caddy_config --adapter caddyfile --force" ];
     assert literalPercentAuthStack.config.services.jaunder.stack.observability.basicAuth.credentialsFile == "/run/secrets/users%n";
@@ -1745,6 +1746,16 @@ mkWasmCoverageMeasurementProducer =
     assert sqliteStack.config.services.opentelemetry-collector.settings.exporters."otlphttp/victorialogs".logs_endpoint == "http://127.0.0.1:9428/logs/insert/opentelemetry/v1/logs";
     assert builtins.hasAttr "jaunder.example.test" bcryptStack.config.services.caddy.virtualHosts;
     assert builtins.hasAttr "observe.example.test" bcryptStack.config.services.caddy.virtualHosts;
+    assert sqliteStack.config.systemd.services.caddy.serviceConfig.LogNamespace == "jaunder";
+    assert sqliteStack.config.services.journald.upload.enable;
+    assert sqliteStack.config.services.journald.upload.settings.Upload.URL == "http://127.0.0.1:9428/logs/insert/journald";
+    assert sqliteStack.config.systemd.services.systemd-journal-upload.serviceConfig.ExecStart == [ "" "${pkgs.systemd}/lib/systemd/systemd-journal-upload --namespace=jaunder --save-state" ];
+    assert bcryptStack.config.services.journald.upload.settings.Upload.URL == "http://127.0.0.1:9428/logs/insert/journald";
+    assert bcryptStack.config.systemd.services.caddy.serviceConfig.LogNamespace == "jaunder";
+    assert bcryptStack.config.services.caddy.virtualHosts."jaunder.example.test".logFormat == null;
+    assert bcryptStack.config.services.caddy.virtualHosts."observe.example.test".logFormat == null;
+    assert builtins.length (pkgs.lib.splitString "log { output stdout format json }" bcryptStack.config.services.caddy.virtualHosts."jaunder.example.test".extraConfig) == 2;
+    assert builtins.length (pkgs.lib.splitString "log { output stdout format json }" bcryptStack.config.services.caddy.virtualHosts."observe.example.test".extraConfig) == 2;
     assert pkgs.lib.hasInfix "reverse_proxy 127.0.0.1:3000" bcryptStack.config.services.caddy.virtualHosts."jaunder.example.test".extraConfig;
     assert pkgs.lib.hasInfix "header_up -Forwarded" bcryptStack.config.services.caddy.virtualHosts."jaunder.example.test".extraConfig;
     assert pkgs.lib.hasInfix "operator $2b$12$abcdefghijklmnopqrstuuV4qg5bR1uRgYBzO8pu0h1rlaL8fQ2gQ" bcryptStack.config.services.caddy.virtualHosts."observe.example.test".extraConfig;
@@ -1884,9 +1895,11 @@ mkWasmCoverageMeasurementProducer =
           # only this test replaces it with Caddy's deterministic local CA.
           services.caddy.virtualHosts."jaunder.stack.test".extraConfig = lib.mkAfter ''
             tls internal
+            header Set-Cookie "issue1850-file-set-cookie-secret"
           '';
           services.caddy.virtualHosts."observe.stack.test".extraConfig = lib.mkAfter ''
             tls internal
+            header Set-Cookie "issue1850-file-set-cookie-secret"
           '';
           # Local disablement cannot suppress native stack signals.
           systemd.services.jaunder.environment.RUST_LOG = "off";
@@ -2119,6 +2132,57 @@ mkWasmCoverageMeasurementProducer =
         assert_local_uis()
         assert_ingress()
         ${pkgs.lib.optionalString runtimeCredentials ''
+        file_app_marker = "issue1850-file-credentials-app"
+        file_obs_marker = "issue1850-file-credentials-observability"
+        machine.succeed(
+          "curl " + curl_options + " -ksSf --resolve jaunder.stack.test:443:127.0.0.1 "
+          + "https://jaunder.stack.test/?proof=" + file_app_marker
+          + " -H 'Cookie: issue1850-file-cookie-secret'"
+          + " -H 'Authorization: issue1850-file-auth-secret'"
+          + " -H 'Proxy-Authorization: issue1850-file-proxy-secret' > /dev/null"
+        )
+        machine.succeed(
+          "curl " + curl_options + " -ksSf --resolve observe.stack.test:443:127.0.0.1"
+          + auth_option + " https://observe.stack.test/metrics/?proof=" + file_obs_marker
+          + " -H 'Cookie: issue1850-file-cookie-secret'"
+          + " -H 'Proxy-Authorization: issue1850-file-proxy-secret' > /dev/null"
+        )
+        for marker in [file_app_marker, file_obs_marker]:
+          machine.wait_until_succeeds(
+            "journalctl --namespace=jaunder -u caddy.service --no-pager -o cat | grep -F " + marker,
+            timeout=30,
+          )
+          machine.wait_until_succeeds(
+            "curl -fsSG --data-urlencode 'query=_msg:*issue1850-file*' "
+            + "http://127.0.0.1:9428/logs/select/logsql/query | grep -F " + marker,
+            timeout=60,
+          )
+        file_source = [json.loads(line) for line in machine.succeed(
+          "journalctl --namespace=jaunder -u caddy.service --no-pager -o json"
+        ).splitlines()]
+        file_store = log_records(
+          "curl -fsSG --data-urlencode 'query=_msg:*issue1850-file*' "
+          + "http://127.0.0.1:9428/logs/select/logsql/query"
+        )
+        for marker in [file_app_marker, file_obs_marker]:
+          sources = [record for record in file_source if marker in record.get("MESSAGE", "")]
+          stored = [record for record in file_store if marker in record.get("_msg", "")]
+          assert len(sources) == 1 and len(stored) == 1, (marker, sources, stored)
+          source_record = sources[0]
+          stored_record = stored[0]
+          assert source_record["_NAMESPACE"] == "jaunder", source_record
+          assert source_record["_SYSTEMD_UNIT"] == "caddy.service", source_record
+          assert stored_record["_msg"] == source_record["MESSAGE"], (source_record, stored_record)
+          caddy_record = json.loads(source_record["MESSAGE"])
+          assert marker in caddy_record["request"]["uri"], caddy_record
+          for header in ["Cookie", "Authorization", "Proxy-Authorization"]:
+            assert caddy_record["request"]["headers"][header] == ["REDACTED"], caddy_record
+          assert caddy_record["resp_headers"]["Set-Cookie"] == ["REDACTED"], caddy_record
+          for secret in [
+            "issue1850-file-cookie-secret", "issue1850-file-auth-secret",
+            "issue1850-file-proxy-secret", "issue1850-file-set-cookie-secret",
+          ]:
+            assert secret not in stored_record["_msg"], stored_record
         previous_pid = machine.succeed("systemctl show --value -p MainPID caddy").strip()
         # An unrelated shared-Caddy site is applied by the ordinary reload, without restarting.
         machine.succeed("cp /etc/caddy/caddy_config /tmp/reloaded-caddy; printf '\\nhttps://shared.stack.test {\\n tls internal\\n respond shared\\n}\\n' >> /tmp/reloaded-caddy; mv /tmp/reloaded-caddy /etc/caddy/caddy_config")
@@ -2126,10 +2190,8 @@ mkWasmCoverageMeasurementProducer =
         machine.wait_until_succeeds("curl " + curl_options + " -ksSf --resolve shared.stack.test:443:127.0.0.1 https://shared.stack.test/ | grep -Fx shared", timeout=30)
         assert previous_pid == machine.succeed("systemctl show --value -p MainPID caddy").strip()
         assert_native_copy()
-        reload_records = [json.loads(line) for line in machine.succeed("journalctl -u caddy --no-pager -o json").splitlines()]
-        caddy_uid = machine.succeed("id -u caddy").strip()
-        caddy_gid = machine.succeed("id -g caddy").strip()
-        assert any(record.get("_PID") != previous_pid and record.get("_UID") == caddy_uid and record.get("_GID") == caddy_gid and "using config from file" in record.get("MESSAGE", "") for record in reload_records)
+        # The focused native-journal VM proves Caddy reload-message routing; this
+        # credential fixture owns request-visible reload/rotation behavior.
         assert_ingress()
         machine.succeed("curl " + curl_options + " -ksSf --resolve jaunder.stack.test:443:127.0.0.1 https://jaunder.stack.test/ > /dev/null")
         ''}
@@ -2203,6 +2265,33 @@ mkWasmCoverageMeasurementProducer =
             for path in ["/metrics/", "/metrics/api/v1/query?query=up", "/logs/", "/logs/select/logsql/query?query=uri:*", "/traces/", "/traces/select/jaeger/api/services", "/unmatched"]:
               assert caddy_status(path, old_option) == "401", path
             assert_ingress()
+            machine.succeed("systemctl show caddy -p LogNamespace --value | grep -Fx jaunder")
+            rotation_marker = "issue1850-credential-rotation-" + operation
+            machine.succeed(
+              "curl " + curl_options + " -ksSf --resolve observe.stack.test:443:127.0.0.1"
+              + auth_option + " https://observe.stack.test/metrics/?proof=" + rotation_marker
+              + " > /dev/null"
+            )
+            machine.wait_until_succeeds(
+              "journalctl --namespace=jaunder -u caddy.service --no-pager -o cat | grep -F " + rotation_marker,
+              timeout=30,
+            )
+            machine.wait_until_succeeds(
+              "curl -fsSG --data-urlencode 'query=_msg:*issue1850-credential-rotation*' "
+              + "http://127.0.0.1:9428/logs/select/logsql/query | grep -F " + rotation_marker,
+              timeout=60,
+            )
+            rotation_source = [json.loads(line) for line in machine.succeed(
+              "journalctl --namespace=jaunder -u caddy.service --no-pager -o json"
+            ).splitlines()]
+            rotation_store = log_records(
+              "curl -fsSG --data-urlencode 'query=_msg:*issue1850-credential-rotation*' "
+              + "http://127.0.0.1:9428/logs/select/logsql/query"
+            )
+            source_matches = [record for record in rotation_source if rotation_marker in record.get("MESSAGE", "")]
+            store_matches = [record for record in rotation_store if rotation_marker in record.get("_msg", "")]
+            assert len(source_matches) == 1 and len(store_matches) == 1, (source_matches, store_matches)
+            assert store_matches[0]["_msg"] == source_matches[0]["MESSAGE"], (source_matches[0], store_matches[0])
         machine.succeed("rm /run/systemd/system/caddy.service.d/zz-test-restart.conf; systemctl daemon-reload")
         ''}
 
@@ -2782,22 +2871,11 @@ e2eGateChecks
       services.caddy.virtualHosts."jaunder.stack.test".extraConfig = lib.mkAfter ''
         tls internal
         header Set-Cookie "issue1850-set-cookie-secret"
-        log { output stdout format json }
       '';
       services.caddy.virtualHosts."observe.stack.test".extraConfig = lib.mkAfter ''
         tls internal
         header Set-Cookie "issue1850-set-cookie-secret"
-        log { output stdout format json }
       '';
-      systemd.services.caddy.serviceConfig.LogNamespace = "jaunder";
-      services.journald.upload = {
-        enable = true;
-        settings.Upload.URL = "http://127.0.0.1:9428/logs/insert/journald";
-      };
-      systemd.services.systemd-journal-upload.serviceConfig.ExecStart = lib.mkForce [
-        ""
-        "${pkgs.systemd}/lib/systemd/systemd-journal-upload --namespace=jaunder --save-state"
-      ];
       system.stateVersion = "26.05";
     };
     testScript = ''

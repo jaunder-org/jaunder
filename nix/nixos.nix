@@ -170,6 +170,7 @@ let
       managedFileAuth = fileAuth && dnsHostName cfg.observability.hostName;
       hashAlgorithm = if fileAuth then cfg.observability.basicAuth.credentialsFileAlgorithm else if bcryptHash then "bcrypt" else "argon2id";
       observabilityIngress = lib.optionalString (dnsHostName cfg.observability.hostName) ''
+        log { output stdout format json }
         # The stores remain credential-free on loopback; this is their only remote access path.
         basic_auth ${hashAlgorithm} {
           ${if fileAuth then "import {$CREDENTIALS_DIRECTORY}/jaunder-observability" else "${cfg.observability.basicAuth.username} ${cfg.observability.basicAuth.passwordHash}"}
@@ -282,27 +283,43 @@ let
           }
         ];
 
-        systemd.services.caddy = lib.mkIf managedFileAuth {
-          serviceConfig = {
-            # The public filename is literal, not a systemd specifier expression.
-            LoadCredential = [ "jaunder-observability:${lib.replaceStrings [ "%" ] [ "%%" ] cfg.observability.basicAuth.credentialsFile}" ];
-            RefreshOnReload = "credentials";
-          };
+        systemd.services.caddy.serviceConfig = {
+          LogNamespace = "jaunder";
+        } // lib.optionalAttrs managedFileAuth {
+          # The public filename is literal, not a systemd specifier expression.
+          LoadCredential = [ "jaunder-observability:${lib.replaceStrings [ "%" ] [ "%%" ] cfg.observability.basicAuth.credentialsFile}" ];
+          RefreshOnReload = "credentials";
         };
+
+        services.journald.upload = {
+          enable = true;
+          settings.Upload.URL = "http://127.0.0.1:9428/logs/insert/journald";
+        };
+        systemd.services.systemd-journal-upload.serviceConfig.ExecStart = lib.mkForce [
+          ""
+          "${pkgs.systemd}/lib/systemd/systemd-journal-upload --namespace=jaunder --save-state"
+        ];
 
         networking.firewall.allowedTCPPorts = [ 80 443 ];
         services.caddy = lib.mkIf (dnsHostName cfg.hostName) {
           enable = true;
           virtualHosts = {
-            ${applicationHostName}.extraConfig = ''
-              reverse_proxy 127.0.0.1:3000 {
-                # Caddy owns the X-Forwarded-For chain. Do not let callers
-                # supply a competing Forwarded chain to Jaunder.
-                header_up -Forwarded
-              }
-            '';
+            ${applicationHostName} = {
+              logFormat = null;
+              extraConfig = ''
+                log { output stdout format json }
+                reverse_proxy 127.0.0.1:3000 {
+                  # Caddy owns the X-Forwarded-For chain. Do not let callers
+                  # supply a competing Forwarded chain to Jaunder.
+                  header_up -Forwarded
+                }
+              '';
+            };
           } // lib.optionalAttrs (dnsHostName cfg.observability.hostName) {
-            ${observabilityHostName}.extraConfig = observabilityIngress;
+            ${observabilityHostName} = {
+              logFormat = null;
+              extraConfig = observabilityIngress;
+            };
           };
         };
 

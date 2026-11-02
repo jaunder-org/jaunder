@@ -190,6 +190,22 @@ stdout logging and its local filters remain available. The shared endpoint
 precedence is `JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT`, then
 `OTEL_EXPORTER_OTLP_ENDPOINT`.
 
+Caddy logs use a separate native route: the managed Caddy service is assigned to
+journal namespace `jaunder`, and each enabled managed vhost emits one JSON
+access logger to stdout. The supported `systemd-journal-upload` service sends
+that namespace directly to VictoriaLogs; its configured base URL is
+`http://127.0.0.1:9428/logs/insert/journald`, and the uploader appends
+`/upload`. This source includes possible namespace-internal entries, not only
+`caddy.service`; it does not upload the default host journal. Find Caddy's local
+service/access records with `journalctl --namespace=jaunder -u caddy.service`.
+Ordinary `journalctl -u caddy.service` without a namespace sees the default
+namespace, not these records. Caddy's native redaction of Cookie, Set-Cookie,
+Authorization, and Proxy-Authorization remains enabled, and records are not
+parsed or projected before storage. A failed upload can replay previously stored
+records during recovery; steady-state ingestion uses one logger per vhost, but
+exactly-once or universal lossless delivery is not promised. See the
+[Caddy journald upload decision](adr/drafts/caddy-native-journald-upload.md).
+
 For message verification, open the VictoriaLogs UI using loopback/SSH access or
 the authenticated observability host below. Select an explicit time window
 containing a known safe request and start with query `*` in the default Group

@@ -28,21 +28,19 @@ ADR-0196.
     saved cursor state. Treat scope as the namespace, including
     namespace-internal bookkeeping, not as a unit-only filter.
   - Verification: the focused `checks.x86_64-linux.jaunder-caddy-journal-upload`
-    VM must verify both vhosts, namespace diagnostics/default exclusion, exact
+    VM verifies both vhosts, namespace diagnostics/default exclusion, exact
     Caddy source-message/store equality and journal metadata, native redaction
     of Cookie, Set-Cookie, Authorization, and Proxy-Authorization, endpoint
-    acceptance, saved-state restart, and receiver-interruption recovery. Count
-    previously stored markers before and after restart/recovery; prove an upload
-    failure before restoring VictoriaLogs; bound the reload-message comparison
-    to a pre-action journal cursor. This VM observed one previously uploaded
-    restart marker replay after a failed receiver request; it records counts and
-    proves recovery without claiming exactly-once delivery. The production
-    no-duplicates acceptance remains unresolved. The proof uses the loopback
-    receiver without uploader TLS/client credentials, which this route does not
-    configure. Existing `checks.x86_64-linux.jaunder-stack-sqlite-bcrypt`
-    separately exercised Caddy credential reload/rotation. Production wiring
-    remains Task 2 and is not included in this slice.
-- [ ] Task 2: Wire the production native uploader and both managed Caddy vhosts
+    acceptance, saved-state restart, and receiver-interruption recovery. It
+    counts stored markers before/after restart and recovery, observes a failed
+    upload before restoring VictoriaLogs, and bounds reload-message comparison
+    to a pre-action cursor. One previously uploaded restart marker replayed
+    after a failed receiver request; counts document this allowed recovery
+    replay. This path does not promise exactly-once or universal lossless
+    delivery. The loopback receiver has no uploader TLS/client credentials
+    configured. The existing `checks.x86_64-linux.jaunder-stack-sqlite-bcrypt`
+    exercises Caddy credential reload/rotation.
+- [x] Task 2: Wire the production native uploader and both managed Caddy vhosts
   - Contract: use `services.journald.upload` for URL, service, saved-state
     arrangement, restart and hardening; override its `ExecStart` only to add
     `--namespace=jaunder` while preserving `--save-state`. Upload only the
@@ -50,24 +48,31 @@ ADR-0196.
     application/optional observability vhost. No Collector Caddy
     receiver/pipeline; Jaunder OTLP and `transform/jaunder_privacy` remain
     unchanged.
-  - Verification: Nix evaluation checks the composed service invocation,
-    namespace, endpoint, state, restart/hardening and both vhost outputs;
-    confirm no default-file or duplicate access logger. Preserve native
-    VictoriaLogs retention, loopback endpoints, metrics/traces and existing
-    Jaunder routing.
-- [ ] Task 3: Prove production behavior and unchanged boundaries
+  - Verification: `jaunder-stack-module` asserts the production service,
+    uploader URL base `http://127.0.0.1:9428/logs/insert/journald` (the pinned
+    uploader appends `/upload`), namespace flags, vhost logger count and
+    disabled file logger, including Caddy's runtime-credential configuration.
+    The production-wired VM verifies the running unit arguments, persistent
+    cursor, restart/hardening, native endpoint/store, and file-credential
+    source-to-store ingestion through both vhosts initially and through the
+    observability vhost after credential reload/restart. Native VictoriaLogs
+    retention, loopback endpoints, Collector pipelines, and existing Jaunder
+    routing remain unchanged.
+- [x] Task 3: Prove production behavior and unchanged boundaries
   - Contract: full native access records and service/error messages, with
     Caddy's default sensitive-header redaction; no body/extra credential
     capture. The initial uploaded source is Caddy plus namespace-internal
     bookkeeping, not the whole host or a claimed exact unit filter.
-  - Verification: compare production source journal records/messages to
-    VictoriaLogs; test access through each enabled vhost, representative
-    service/error activity, namespace-aware diagnostics, native redaction, no
-    duplicates, cursor/restart behavior and exclusion of default/whole-host
-    journal sources. Confirm Jaunder OTLP still follows existing privacy policy,
-    metrics/traces and listeners are unchanged, and native retention remains
-    unchanged.
-- [ ] Task 4: Reconcile current architecture and decision records
+  - Verification: the production-wired VM compares complete access records and a
+    reload service message with source journal records; exercises both vhosts,
+    namespace-aware diagnostics, four native header redactions, default-journal
+    exclusion, cursor restart and receiver interruption. No duplicate is seen in
+    steady state; interruption recovery may replay and its counts are reported.
+    The retained human clarification accepts this possible replay; exactly-once
+    and universal losslessness are not claimed. The credential-reload VM
+    exercises the operator credential path and existing Jaunder OTLP/privacy
+    signals. Evaluation retains loopback listeners and native retention.
+- [x] Task 4: Reconcile current architecture and decision records
   - Contract: add a separate numberless ADR draft for the approved Caddy
     namespace/upload exception and update `docs/ARCHITECTURE.md` current-state
     projection. Preserve historical ADR-0196 under ADR-0127; keep
@@ -83,9 +88,13 @@ ADR-0196.
 - Human approval is the exact retained reply “I think that’s a reasonable
   direction. proceed.” for `3ea422e6-2db3-4b8b-89e0-994148751fca` /
   `1850-native-journal-route`; it approves the native route and namespace-aware
-  diagnostics, with Caddy plus namespace-internal bookkeeping initially. Do not
-  add a redundant approval gate. Escalate only material new behavior,
-  permissions, source expansion or unsupported adapter need.
+  diagnostics, with Caddy plus namespace-internal bookkeeping initially. The
+  human clarification “Accept possible recovery replay” for
+  `afa90716-9923-413f-aa2d-fdf293fde4d6` / `1850-recovery-replay` permits replay
+  during recovery while requiring no duplicate logger/records in steady state;
+  it adds no exactly-once or universal losslessness promise. Do not add a
+  redundant approval gate. Escalate only material new behavior, permissions,
+  source expansion or unsupported adapter need.
 - Namespace selection is not a strict per-unit filter. Keep uploaded scope at
   the dedicated namespace and verify boundary/bookkeeping; do not claim
   whole-host or exact `caddy.service`-only filtering.

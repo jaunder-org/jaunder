@@ -1,8 +1,7 @@
-# Caddy Access and Service Logs in VictoriaLogs — DRAFT
+# Caddy Access and Service Logs in VictoriaLogs
 
-> **DRAFT for focused soundness review.** The approved route and scope below are
-> authorized for matching implementation after review; this draft is not runtime
-> certification.
+> **Approved scope for implementation.** The route and scope below are
+> authorized; this spec is not runtime certification.
 
 ## Outcome
 
@@ -23,9 +22,11 @@ targeting the pinned VictoriaLogs native journald upload endpoint
 Collector. The pinned systemd 261.2 uploader accepts `--namespace`, `--url`, and
 `--save-state`; NixOS `services.journald.upload` supplies the service,
 state/restart/hardening, while its `ExecStart` must be overridden to add
-`--namespace=jaunder` and preserve `--save-state`. The pinned VictoriaLogs
-1.52.0 tagged receiver registers `/insert/journald/upload`; with the stack's
-`/logs` prefix the configured endpoint is `/logs/insert/journald/upload`.
+`--namespace=jaunder` and preserve `--save-state`. Set the NixOS uploader URL
+base to `http://127.0.0.1:9428/logs/insert/journald`; systemd-journal-upload
+appends `/upload`. The pinned VictoriaLogs 1.52.0 receiver registers
+`/insert/journald/upload`, so the actual request reaches
+`/logs/insert/journald/upload` through the store's `/logs` prefix.
 
 The namespace changes where local Caddy diagnostics are found: use
 namespace-aware `journalctl` (for example,
@@ -33,9 +34,11 @@ namespace-aware `journalctl` (for example,
 default-namespace `journalctl -u caddy.service` shows these records. The
 approved source scope is Caddy plus namespace-internal bookkeeping, not
 whole-host journal upload; namespace selection does not claim a strict unit-only
-filter. Caddy's stdout/stderr journal records, namespace boundary/bookkeeping,
-uploader state/cursor and restart behavior, and diagnostics must be proven in
-the first bounded source-to-store runtime slice before production wiring.
+filter. The first bounded source-to-store VM proof established the supported
+upload route and cursor behavior before production wiring. A receiver
+interruption can replay previously uploaded records; this route does not provide
+exactly-once delivery or a universal losslessness guarantee. The VM result is
+evidence for its tested path, not a universal delivery guarantee.
 
 Explicitly configure exactly one native JSON access-log stream to stdout for
 each managed Caddy virtual host: the application host and the optional
@@ -80,6 +83,13 @@ sensitive-header protections—not body capture, additional credential capture,
 disabling protections, whole-host upload, or changing Jaunder privacy. Caddy
 v2.11.4 format/redaction evidence is `result:caddy-shape#1`.
 
+The human clarification retained for Manager request
+`afa90716-9923-413f-aa2d-fdf293fde4d6` / `1850-recovery-replay` is **“Accept
+possible recovery replay.”** It permits replay after receiver interruption while
+retaining one stdout access logger per enabled vhost and no duplicate records in
+steady-state operation. It does not promise exactly-once delivery or universal
+losslessness; no deduplication layer is authorized.
+
 ### Existing Jaunder route and architecture records
 
 Jaunder application OTLP logs continue through the existing Collector and
@@ -91,8 +101,9 @@ Reconcile current-state architecture against the existing native-OTLP
 process-logs proposal and ADR-0196, following ADR-0127: do not rewrite
 historical ADR-0196. Implementation work may add a separate numberless ADR draft
 for the Caddy exception and update the current `docs/ARCHITECTURE.md`
-projection, preserving ADR-0196's remaining commitments. This spec/outline
-revision changes no ADR, architecture, checker, or implementation file.
+projection, preserving ADR-0196's remaining commitments. This implementation
+updates the current architecture projection and adds a separate numberless ADR
+draft; historical ADR-0196 is unchanged.
 
 ## Acceptance
 
@@ -102,17 +113,21 @@ stdout/stderr and namespace-internal bookkeeping reside in `jaunder`;
 namespace-aware diagnostics find Caddy records; source framing/content reaches
 VictoriaLogs with the full native record/message and journal fields; native
 credential protections remain; uploader credentials are protected; saved
-cursor/state survives restart and resumes correctly; service restart/hardening
-are effective; and no default/whole-host journal is uploaded. Test endpoint
-acceptance against the pinned native upload endpoint. This is the first
-implementation slice and must pass before production wiring.
+cursor/state survives restart; interrupted uploads resume and may replay
+records; service restart/hardening are effective; and no default/whole-host
+journal is uploaded. Test endpoint acceptance against the pinned native upload
+endpoint. This is the first implementation slice and must pass before production
+wiring. No exactly-once or universal losslessness guarantee is made.
 
 Then verify both enabled managed vhosts emit exactly one JSON access stream to
-stdout, with no default file logger or duplicate. Through production wiring,
-compare captured source journal access records and service/error messages with
-stored VictoriaLogs records, verify namespace scope/bookkeeping and absence of
-unrelated default-journal sources, exact native redaction, no duplicates, and
-namespace-aware diagnostics. Verify existing loopback listeners, native
+stdout, with no default file logger and no duplicate records during steady-state
+operation. Through production wiring, compare captured source journal access
+records and service/error messages with stored VictoriaLogs records, verify
+namespace scope/bookkeeping and absence of unrelated default-journal sources,
+exact native redaction, and namespace-aware diagnostics. Exercise receiver
+interruption: recovery may replay previously uploaded records, so record replay
+counts and verify recovery of the test records without claiming exactly-once
+delivery or universal losslessness. Verify existing loopback listeners, native
 retention settings, metrics/traces, and Jaunder OTLP logs/privacy behavior are
 unchanged. Nix evaluation alone is not ingestion proof.
 
@@ -125,9 +140,9 @@ uploader service/state/restart/hardening but no namespace option, hence the
 stated `ExecStart` override. Pinned VictoriaLogs 1.52.0 source establishes
 `/insert/journald/upload`; the stack prefix yields
 `/logs/insert/journald/upload`. These are qualified source/interface facts, not
-runtime proof. No new build or VM is part of this draft revision; framing,
-endpoint acceptance, record fidelity, namespace contents, cursor/restart and
-credential behavior remain implementation-time proofs.
+runtime proof. The first-slice VM proof is tracked in the implementation
+outline; production-wired ingestion, architecture projection, and end-to-end
+boundary verification remain implementation work.
 
 ## Boundaries
 

@@ -3014,9 +3014,23 @@ most 63 ASCII letters, digits, or hyphens, each beginning and ending with a
 letter or digit. Production-mode Jaunder and the OpenTelemetry Collector remain
 on loopback; Jaunder exports native OTLP metrics, logs and traces, and the
 collector routes them into persistent single-node VictoriaMetrics, VictoriaLogs,
-and VictoriaTraces stores. Log ingress is OTLP-only, without Jaunder journal
-collection or JSON parsing
+and VictoriaTraces stores. Jaunder application log ingress to the Collector
+remains OTLP-only, without Jaunder journal collection or JSON parsing
 ([native OTLP process logs proposal](adr/drafts/native-otlp-process-logs.md)).
+Caddy is a separate source: its service stdout/stderr and exactly one native
+JSON stdout access logger per enabled managed vhost go to
+`LogNamespace=jaunder`, with the NixOS per-vhost file logger disabled. The
+supported `systemd-journal-upload` service sends that namespace directly to
+VictoriaLogs' native journald upload receiver over loopback, preserving its
+saved state, restart policy and upstream hardening. It does not pass through the
+Collector. The source is the namespace, including possible namespace-internal
+entries, not a strict Caddy-unit filter; local Caddy diagnostics use
+`journalctl --namespace=jaunder -u caddy.service`. Caddy's native redaction for
+Cookie, Set-Cookie, Authorization and Proxy-Authorization remains enabled.
+Receiver-interruption recovery may replay already-uploaded records; steady-state
+logging has no duplicate logger, but exactly-once delivery and universal
+losslessness are not promised
+([Caddy native journald upload](adr/drafts/caddy-native-journald-upload.md)).
 Each store and its built-in web UI remains loopback-only. The stack sets
 `trustedProxies = [ "127.0.0.1/32" ]` for its immediate Caddy Transport Peer;
 its application route removes caller-supplied `Forwarded` while Caddy owns the
