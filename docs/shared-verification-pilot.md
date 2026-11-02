@@ -116,11 +116,13 @@ hosted CI results.
 The proof input and fault were temporary and are absent from the intended tree.
 The successful fixture derivation included that temporary Markdown file, so it
 is not by itself a final-tree verdict. A separate clean prepush and hosted CI
-were exercised on the reviewed delivery candidate; those results apply only to
-the exact head tested. The earlier #1862 harness derivation/results remain
-historical foundation only; source/docs changed afterward, so their identity is
-not the production consumer's current leaf identity. Do not infer final-head or
-cross-platform results from an earlier source identity.
+were exercised on the previously pushed delivery head; those results apply only
+to that exact head, not to later documentation/source revisions. Each changed
+head needs its own clean prepush and hosted checks before acceptance. The
+earlier #1862 harness derivation/results remain historical foundation only;
+source/docs changed afterward, so their identity is not the production
+consumer's current leaf identity. Do not infer final-head or cross-platform
+results from an earlier source identity.
 
 ## Ownership and update trigger
 
