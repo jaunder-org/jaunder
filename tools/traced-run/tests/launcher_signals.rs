@@ -111,7 +111,17 @@ fn signal_case(signal: i32, mode: &str, expected: i32) {
         .find(|path| path.to_string_lossy().ends_with(".trace.json"))
         .expect("handled interruption must finalize the root trace");
     let trace: serde_json::Value = serde_json::from_slice(&std::fs::read(trace).unwrap()).unwrap();
-    assert_eq!(trace["traceEvents"][0]["name"], "signal-test");
+    let roots: Vec<_> = trace["traceEvents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| {
+            event["ph"] == "X"
+                && event["name"] == "signal-test"
+                && event["args"]["parent_span_id"].is_null()
+        })
+        .collect();
+    assert_eq!(roots.len(), 1, "exactly one signal-test root is finalized");
     assert!(!artifacts.iter().any(|path| matches!(
         path.extension().and_then(|s| s.to_str()),
         Some("out" | "err")

@@ -132,6 +132,16 @@ fn nested_runners_share_one_root_and_record_parentage() {
         serde_json::from_slice(&std::fs::read(traces[0].path()).unwrap()).unwrap();
     let events = document["traceEvents"].as_array().unwrap();
     let spans: Vec<_> = events.iter().filter(|event| event["ph"] == "X").collect();
+    assert!(
+        events
+            .iter()
+            .any(|event| event["name"] == "process_name" && event["args"]["name"] == "traced-run")
+    );
+    assert!(
+        spans
+            .iter()
+            .all(|event| event["args"]["runner"] == "traced-run")
+    );
     let flows: Vec<_> = events
         .iter()
         .filter(|event| event["ph"] == "s" || event["ph"] == "f")
@@ -540,7 +550,12 @@ fn concurrent_roots_publish_isolated_traces() {
         .map(|trace| {
             let document: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(trace.path()).unwrap()).unwrap();
-            document["traceEvents"][0]["args"]["run_id"]
+            document["traceEvents"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|event| event["ph"] == "X")
+                .unwrap()["args"]["run_id"]
                 .as_str()
                 .unwrap()
                 .to_owned()
@@ -562,8 +577,9 @@ fn ordinary_child_is_not_fabricated_as_a_trace_span() {
         .as_array()
         .unwrap()
         .clone();
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0]["name"], "opaque-parent");
+    assert_eq!(events.iter().filter(|event| event["ph"] == "X").count(), 1);
+    assert!(events.iter().any(|event| event["name"] == "opaque-parent"));
+    assert!(events.iter().any(|event| event["name"] == "process_name"));
 }
 
 #[test]

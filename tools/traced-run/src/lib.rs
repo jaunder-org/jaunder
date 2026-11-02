@@ -418,6 +418,10 @@ struct TraceContext {
     parent_span_id: String,
     parent_pid: u32,
     parent_started_ns: u64,
+    #[serde(default)]
+    parent_flow_id: Option<u64>,
+    #[serde(default)]
+    parent_name: Option<String>,
 }
 
 struct TraceSpan {
@@ -430,6 +434,448 @@ struct TraceSpan {
 }
 
 static NEXT_SPAN: AtomicU64 = AtomicU64::new(1);
+static NEXT_FLOW: AtomicU64 = AtomicU64::new(1);
+
+// Mirror only the admitted fields of the command selected by its causal flow.
+// The selector is syntax/length bounded, not guaranteed secret-free.
+fn workload_metadata(
+    command: &serde_json::Value,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let args = command.get("args")?.as_object()?;
+    if args.get("subcommand")?.as_str()? != "test-local" {
+        return None;
+    }
+    let package = args.get("package")?.as_str()?;
+    if !matches!(package, "storage" | "jaunder" | "common" | "web") {
+        return None;
+    }
+    let mut metadata = serde_json::Map::new();
+    metadata.insert("subcommand".into(), "test-local".into());
+    metadata.insert("package".into(), package.into());
+    if let Some(selector) = args
+        .get("test_selector")
+        .and_then(serde_json::Value::as_str)
+        && !selector.is_empty()
+        && selector.len() <= 96
+        && selector
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_:.-".contains(&byte))
+    {
+        metadata.insert("test_selector".into(), selector.into());
+    }
+    // Only terminal status fields are mirrored, never arbitrary event fields.
+    for key in ["outcome", "exit_code", "exit_override"] {
+        if let Some(value) = args.get(key).and_then(serde_json::Value::as_str)
+            && match key {
+                "outcome" => matches!(value, "success" | "failure" | "skipped"),
+                "exit_code" => value.parse::<i32>().is_ok(),
+                _ => valid_exit_override(value),
+            }
+        {
+            metadata.insert(key.into(), value.into());
+        }
+    }
+    Some(metadata)
+}
+
+fn valid_exit_override(value: &str) -> bool {
+    value == "None"
+        || value
+            .strip_prefix("Some(")
+            .and_then(|code| code.strip_suffix(')'))
+            .is_some_and(|code| code.parse::<i32>().is_ok())
+}
+
+// Resolve outcomes before logical track folding: an entered B/E interval on
+// the original (pid, tid) is the identity, not a globally searched phase name.
+// Only completed intervals consume instants; unmatched/error events stay visible.
+fn present_phase_outcomes(events: &mut Vec<serde_json::Value>) {
+    let mut order: Vec<_> = (0..events.len())
+        .filter(|index| events[*index]["cat"] == "xtask_trace")
+        .collect();
+    order.sort_by(|a, b| {
+        events[*a]["ts"]
+            .as_f64()
+            .unwrap_or_default()
+            .total_cmp(&events[*b]["ts"].as_f64().unwrap_or_default())
+    });
+    let mut stacks: std::collections::BTreeMap<(u64, u64), Vec<usize>> =
+        std::collections::BTreeMap::new();
+    let mut completed = vec![false; events.len()];
+    let mut attachments = Vec::new();
+    for index in order {
+        let event = &events[index];
+        let (Some(pid), Some(tid)) = (event["pid"].as_u64(), event["tid"].as_u64()) else {
+            continue;
+        };
+        let stack = stacks.entry((pid, tid)).or_default();
+        match event["ph"].as_str() {
+            Some("B") => stack.push(index),
+            Some("E") => {
+                if let Some(begin) = stack.pop()
+                    && events[begin]["name"] == event["name"]
+                {
+                    completed[begin] = true;
+                }
+            }
+            Some("i") => {
+                let Some(&begin) = stack.last() else { continue };
+                let command = event["name"] == "xtask.command.outcome"
+                    && events[begin]["name"] == "xtask.command";
+                let phase = event["name"] == "xtask.phase.outcome"
+                    && event["args"]["phase"] == events[begin]["name"];
+                if !(command || phase)
+                    || !matches!(
+                        event["args"]["outcome"].as_str(),
+                        Some("success" | "failure" | "skipped")
+                    )
+                {
+                    continue;
+                }
+                let mut fields = serde_json::Map::new();
+                fields.insert("outcome".into(), event["args"]["outcome"].clone());
+                if command {
+                    if let Some(code) = event["args"]["exit_code"].as_str()
+                        && code.parse::<i32>().is_ok()
+                    {
+                        fields.insert("exit_code".into(), code.into());
+                    }
+                    if let Some(value) = event["args"]["exit_override"].as_str()
+                        && valid_exit_override(value)
+                    {
+                        fields.insert("exit_override".into(), value.into());
+                    }
+                }
+                attachments.push((index, begin, fields));
+            }
+            _ => {}
+        }
+    }
+    let mut consumed = vec![false; events.len()];
+    for (instant, begin, fields) in attachments {
+        if completed[begin] {
+            if !events[begin]["args"].is_object() {
+                events[begin]["args"] = serde_json::json!({});
+            }
+            events[begin]["args"]
+                .as_object_mut()
+                .unwrap()
+                .extend(fields);
+            consumed[instant] = true;
+        }
+    }
+    let mut index = 0;
+    events.retain(|_| {
+        let keep = !consumed[index];
+        index += 1;
+        keep
+    });
+}
+
+struct MatchedCommand {
+    root_id: String,
+    root_pid: u64,
+    execute_id: String,
+    command_pid: u64,
+    command_tid: u64,
+    command_start: f64,
+    command_end: f64,
+    metadata: serde_json::Map<String, serde_json::Value>,
+}
+
+fn command_for_execute(
+    events: &[serde_json::Value],
+    root_id: &str,
+    execute: &serde_json::Value,
+) -> Option<MatchedCommand> {
+    let execute_id = execute["args"]["span_id"].as_str()?;
+    let root = events
+        .iter()
+        .find(|event| event["name"] == "cargo-xtask" && event["args"]["span_id"] == root_id)?;
+    let root_pid = root["pid"].as_u64()?;
+    let flow = events.iter().enumerate().find(|(index, event)| {
+        event["name"] == "xtask-execute-to-command"
+            && event["ph"] == "s"
+            && event["args"]["parent_span_id"] == execute_id
+            && index
+                .checked_sub(1)
+                .and_then(|prior| events.get(prior))
+                .is_some_and(|marker| {
+                    marker["name"] == "recorded child entry"
+                        && marker["args"]["parent_span_id"] == execute_id
+                        && marker["args"]["child_name"] == "xtask.command"
+                })
+    })?;
+    let flow_id = flow.1["id"].as_str()?.to_owned();
+    let finish = events
+        .iter()
+        .find(|event| event["ph"] == "f" && event["id"] == flow_id)?;
+    let command_pid = finish["pid"].as_u64()?;
+    let command_tid = finish["tid"].as_u64()?;
+    let command_start = finish["ts"].as_f64()?;
+    let begin_index = events.iter().position(|event| {
+        event["name"] == "xtask.command"
+            && event["ph"] == "B"
+            && event["pid"].as_u64() == Some(command_pid)
+            && event["tid"].as_u64() == Some(command_tid)
+            && event["ts"].as_f64() == Some(command_start)
+    })?;
+    let begin = &events[begin_index];
+    let mut depth = 0_u32;
+    let command_end = events.iter().skip(begin_index).find_map(|event| {
+        if event["name"] != "xtask.command"
+            || event["pid"].as_u64() != Some(command_pid)
+            || event["tid"].as_u64() != Some(command_tid)
+        {
+            return None;
+        }
+        match event["ph"].as_str()? {
+            "B" => depth += 1,
+            "E" => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return event["ts"].as_f64();
+                }
+            }
+            _ => {}
+        }
+        None
+    })?;
+    Some(MatchedCommand {
+        root_id: root_id.to_owned(),
+        root_pid,
+        execute_id: execute_id.to_owned(),
+        command_pid,
+        command_tid,
+        command_start,
+        command_end,
+        metadata: workload_metadata(begin)?,
+    })
+}
+
+fn present_xtask_workflow(events: &mut Vec<serde_json::Value>) {
+    present_phase_outcomes(events);
+    // Parent span IDs and the execute-to-command flow select the exact workflow;
+    // timestamps are used only to bound that command's own same-thread phases.
+    let roots: Vec<_> = events
+        .iter()
+        .filter(|event| event["name"] == "cargo-xtask")
+        .filter_map(|event| {
+            Some((
+                event["args"]["span_id"].as_str()?.to_owned(),
+                event["pid"].as_u64()?,
+            ))
+        })
+        .collect();
+    let mut matched = Vec::new();
+    for (root_id, _) in &roots {
+        let executes: Vec<_> = events
+            .iter()
+            .filter(|event| {
+                event["name"] == "xtask-execute"
+                    && event["args"]["parent_span_id"].as_str() == Some(root_id.as_str())
+            })
+            .cloned()
+            .collect();
+        for execute in executes {
+            if let Some(command) = command_for_execute(events, root_id, &execute) {
+                matched.push(command);
+            }
+        }
+    }
+    if matched.is_empty() {
+        return;
+    }
+
+    let mut folded_spans = Vec::new();
+    let mut folded_flows: Vec<(String, u64)> = Vec::new();
+    let mut folded_processes = Vec::new();
+    for workflow in &matched {
+        let spans: Vec<_> = events
+            .iter()
+            .filter(|event| {
+                event["args"]["parent_span_id"] == workflow.root_id
+                    && (event["name"] == "xtask-acquire"
+                        || (event["name"] == "xtask-execute"
+                            && event["args"]["span_id"] == workflow.execute_id))
+            })
+            .filter_map(|event| event["args"]["span_id"].as_str().map(str::to_owned))
+            .collect();
+        folded_spans.extend(spans.iter().cloned().map(|span| (span, workflow.root_pid)));
+        for (index, event) in events.iter().enumerate() {
+            let folded_child = event["name"] == "recorded child entry"
+                && event["args"]["parent_span_id"] == workflow.root_id
+                && spans
+                    .iter()
+                    .any(|id| event["args"]["child_span_id"].as_str() == Some(id.as_str()));
+            let command_entry = event["name"] == "recorded child entry"
+                && event["args"]["parent_span_id"] == workflow.execute_id
+                && event["args"]["child_name"] == "xtask.command";
+            if (folded_child || command_entry)
+                && let Some(id) = events
+                    .get(index + 1)
+                    .filter(|next| next["ph"] == "s")
+                    .and_then(|next| next["id"].as_str())
+            {
+                folded_flows.push((id.to_owned(), workflow.root_pid));
+            }
+        }
+        for span in spans {
+            if let Some(event) = events
+                .iter()
+                .find(|event| event["ph"] == "X" && event["args"]["span_id"] == span)
+                && let Some(pid) = event["pid"].as_u64()
+            {
+                folded_processes.push(pid);
+            }
+        }
+        folded_processes.push(workflow.command_pid);
+    }
+    let folded_tracks: Vec<_> = events
+        .iter()
+        .filter(|event| event["ph"] == "X")
+        .filter_map(|event| {
+            let (_, root_pid) = folded_spans
+                .iter()
+                .find(|(id, _)| event["args"]["span_id"].as_str() == Some(id.as_str()))?;
+            Some((event["pid"].as_u64()?, event["tid"].as_u64()?, *root_pid))
+        })
+        .collect();
+    for event in events.iter_mut() {
+        let direct_root = if event["ph"] == "X" {
+            folded_spans
+                .iter()
+                .find(|(id, _)| event["args"]["span_id"].as_str() == Some(id.as_str()))
+                .map(|(_, pid)| *pid)
+        } else {
+            None
+        };
+        let command_root = matched
+            .iter()
+            .find(|workflow| {
+                event["cat"] == "xtask_trace"
+                    && event["pid"].as_u64() == Some(workflow.command_pid)
+                    && event["tid"].as_u64() == Some(workflow.command_tid)
+                    && event["ts"].as_f64().is_some_and(|ts| {
+                        ts >= workflow.command_start && ts <= workflow.command_end
+                    })
+            })
+            .map(|workflow| workflow.root_pid);
+        let flow_root = event["id"].as_str().and_then(|id| {
+            folded_flows
+                .iter()
+                .find(|(flow, _)| flow == id)
+                .map(|(_, pid)| *pid)
+        });
+        let endpoint_root = matches!(event["ph"].as_str(), Some("s" | "t" | "f"))
+            .then(|| {
+                folded_tracks
+                    .iter()
+                    .find(|(pid, tid, _)| {
+                        event["pid"].as_u64() == Some(*pid) && event["tid"].as_u64() == Some(*tid)
+                    })
+                    .map(|(_, _, root)| *root)
+            })
+            .flatten();
+        if let Some(root_pid) = direct_root.or(command_root).or(endpoint_root).or(flow_root) {
+            event["pid"] = root_pid.into();
+            event["tid"] = root_pid.into();
+        }
+    }
+    // Grouping consumes the original causal edges above. Presentation needs no
+    // arrows wholly within a folded logical lane, regardless of their names.
+    // Keep complete cross-lane chains, including their intermediate endpoints.
+    let redundant_flows: Vec<_> = events
+        .iter()
+        .filter(|event| event["ph"] == "s")
+        .filter_map(|start| {
+            let id = start["id"].as_str()?;
+            let root = start["pid"].as_u64()?;
+            if start["tid"].as_u64() != Some(root)
+                || !matched.iter().any(|workflow| workflow.root_pid == root)
+            {
+                return None;
+            }
+            let endpoints: Vec<_> = events
+                .iter()
+                .filter(|event| {
+                    event["id"].as_str() == Some(id)
+                        && matches!(event["ph"].as_str(), Some("s" | "t" | "f"))
+                })
+                .collect();
+            (endpoints.iter().any(|event| event["ph"] == "f")
+                && endpoints.iter().all(|event| {
+                    event["pid"].as_u64() == Some(root) && event["tid"].as_u64() == Some(root)
+                }))
+            .then(|| id.to_owned())
+        })
+        .collect();
+    events.retain(|event| {
+        let command_wrapper = matched.iter().any(|workflow| {
+            event["name"] == "xtask.command"
+                && event["pid"].as_u64() == Some(workflow.root_pid)
+                && ((event["ph"] == "B" && event["ts"].as_f64() == Some(workflow.command_start))
+                    || (event["ph"] == "E" && event["ts"].as_f64() == Some(workflow.command_end)))
+        });
+        let marker = event["name"] == "recorded child entry"
+            && (matched.iter().any(|workflow| {
+                event["args"]["parent_span_id"] == workflow.execute_id
+                    && event["args"]["child_name"] == "xtask.command"
+            }) || folded_spans
+                .iter()
+                .any(|(id, _)| event["args"]["child_span_id"].as_str() == Some(id.as_str())));
+        !command_wrapper
+            && !marker
+            && !(matches!(event["ph"].as_str(), Some("s" | "t" | "f"))
+                && event["id"]
+                    .as_str()
+                    .is_some_and(|id| redundant_flows.iter().any(|flow| flow == id)))
+    });
+    for workflow in &matched {
+        let execute = events.iter_mut().find(|event| {
+            event["name"] == "xtask-execute" && event["args"]["span_id"] == workflow.execute_id
+        });
+        if let Some(args) = execute.and_then(|event| event["args"].as_object_mut()) {
+            args.extend(workflow.metadata.clone());
+        }
+        if let Some(root) = events.iter_mut().find(|event| {
+            event["name"] == "cargo-xtask" && event["args"]["span_id"] == workflow.root_id
+        }) && let Some(args) = root["args"].as_object_mut()
+        {
+            args.extend(workflow.metadata.clone());
+        }
+    }
+    let unused_processes: Vec<_> = folded_processes
+        .into_iter()
+        .filter(|pid| {
+            !events
+                .iter()
+                .any(|event| event["pid"].as_u64() == Some(*pid) && event["ph"] != "M")
+        })
+        .collect();
+    events.retain(|event| {
+        !(event["ph"] == "M"
+            && unused_processes.contains(&event["pid"].as_u64().unwrap_or_default()))
+    });
+    let matched_roots: Vec<_> = matched.iter().map(|workflow| workflow.root_pid).collect();
+    for root_pid in matched_roots {
+        for event in events
+            .iter_mut()
+            .filter(|event| event["ph"] == "M" && event["pid"].as_u64() == Some(root_pid))
+        {
+            if event["name"] == "process_name" {
+                event["args"]["name"] = "cargo-xtask workflow (logical)".into();
+            } else if event["name"] == "thread_name" {
+                event["args"]["name"] = "workflow lane (logical)".into();
+            }
+        }
+    }
+}
+
+fn alloc_flow_id() -> u64 {
+    (u64::from(std::process::id()) << 32)
+        | (NEXT_FLOW.fetch_add(1, Ordering::Relaxed) & u64::from(u32::MAX))
+}
 
 fn prune_traces(dir: &Path) {
     let Ok(entries) = fs::read_dir(dir) else {
@@ -500,11 +946,13 @@ impl TraceSpan {
                 parent_span_id: String::new(),
                 parent_pid: 0,
                 parent_started_ns: 0,
+                parent_flow_id: None,
+                parent_name: None,
             }
         };
         let span_sequence = NEXT_SPAN.fetch_add(1, Ordering::Relaxed);
         let span_id = format!("{}-{span_sequence}", std::process::id());
-        let flow_id = (u64::from(std::process::id()) << 32) | (span_sequence & u64::from(u32::MAX));
+        let flow_id = alloc_flow_id();
         let started_ns = if root {
             context.origin_ns
         } else {
@@ -535,6 +983,8 @@ impl TraceSpan {
         context.parent_span_id = self.span_id.clone();
         context.parent_pid = std::process::id();
         context.parent_started_ns = self.started_ns;
+        context.parent_flow_id = Some(alloc_flow_id());
+        context.parent_name = Some(self.name.clone());
         context
     }
 
@@ -543,12 +993,17 @@ impl TraceSpan {
         let end_ns = monotonic_ns();
         let span_ts = self.started_ns.saturating_sub(self.context.origin_ns) / 1000;
         let span_dur = end_ns.saturating_sub(self.started_ns) / 1000;
+        let pid = std::process::id();
+        let mut events = vec![
+            serde_json::json!({"name":"process_name","ph":"M","pid":pid,"args":{"name":"traced-run"}}),
+            serde_json::json!({"name":"thread_name","ph":"M","pid":pid,"tid":pid,"args":{"name":"traced-run"}}),
+        ];
         let span_event = serde_json::json!({
-            "name": self.name, "cat":"process", "ph":"X", "pid":std::process::id(), "tid":std::process::id(),
-            "ts":span_ts, "dur":span_dur, "args":{"run_id":self.context.run_id,"span_id":self.span_id,
+            "name": self.name, "cat":"process", "ph":"X", "pid":pid, "tid":pid,
+            "ts":span_ts, "dur":span_dur, "args":{"runner":"traced-run","run_id":self.context.run_id,"span_id":self.span_id,
             "parent_span_id":if self.root { serde_json::Value::Null } else { self.context.parent_span_id.clone().into() }}
         });
-        let mut events = vec![span_event];
+        events.push(span_event);
         if !self.root {
             let flow_id = format!("{:016x}", self.flow_id);
             // Perfetto draws flows from the source slice's END, not the `s`
@@ -650,6 +1105,7 @@ impl TraceSpan {
             );
             return;
         }
+        present_xtask_workflow(&mut events);
         let destination = dir.with_extension("json");
         let temporary = destination.with_extension("tmp");
         let document = serde_json::json!({"traceEvents":events,"displayTimeUnit":"ms"});
@@ -916,6 +1372,231 @@ mod tests {
             .prefix("devtool-run-test.")
             .tempdir()
             .unwrap()
+    }
+
+    #[test]
+    fn phase_outcomes_use_active_completed_slice_on_the_original_thread() {
+        for outcome in ["success", "failure", "skipped"] {
+            let mut events = vec![
+                serde_json::json!({"name":"phase","cat":"xtask_trace","ph":"B","pid":1,"tid":1,"ts":0,"args":{}}),
+                serde_json::json!({"name":"phase","cat":"xtask_trace","ph":"B","pid":2,"tid":1,"ts":0,"args":{}}),
+                serde_json::json!({"name":"xtask.phase.outcome","cat":"xtask_trace","ph":"i","pid":1,"tid":1,"ts":1,"args":{"phase":"phase","outcome":outcome,"diagnostic":"not admitted"}}),
+                serde_json::json!({"name":"xtask.phase.outcome","cat":"xtask_trace","ph":"i","pid":2,"tid":1,"ts":1,"args":{"phase":"other","outcome":"failure"}}),
+                serde_json::json!({"name":"error","cat":"xtask_trace","ph":"i","pid":1,"tid":1,"ts":2,"args":{"error":"meaningful"}}),
+                serde_json::json!({"name":"phase","cat":"xtask_trace","ph":"E","pid":1,"tid":1,"ts":3}),
+                serde_json::json!({"name":"phase","cat":"xtask_trace","ph":"E","pid":2,"tid":1,"ts":3}),
+                serde_json::json!({"name":"xtask.phase.outcome","cat":"xtask_trace","ph":"i","pid":1,"tid":1,"ts":4,"args":{"phase":"phase","outcome":"failure"}}),
+            ];
+            let original = events.clone();
+            present_xtask_workflow(&mut events);
+            assert_eq!(events.len(), original.len() - 1);
+            assert_eq!(events[0]["args"], serde_json::json!({"outcome":outcome}));
+            assert_eq!(
+                events[1], original[1],
+                "another process is not the same phase"
+            );
+            for index in [3, 4, 5, 6, 7] {
+                assert!(
+                    events.contains(&original[index]),
+                    "unmatched/error events and measured ends survive"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn phase_outcomes_preserve_incomplete_and_nested_thread_identity() {
+        let mut events = vec![
+            serde_json::json!({"name":"phase","cat":"xtask_trace","ph":"B","pid":1,"tid":1,"ts":0}),
+            serde_json::json!({"name":"phase","cat":"xtask_trace","ph":"B","pid":1,"tid":2,"ts":0}),
+            serde_json::json!({"name":"phase","cat":"xtask_trace","ph":"B","pid":1,"tid":1,"ts":1}),
+            serde_json::json!({"name":"xtask.phase.outcome","cat":"xtask_trace","ph":"i","pid":1,"tid":1,"ts":2,"args":{"phase":"phase","outcome":"failure"}}),
+            serde_json::json!({"name":"phase","cat":"xtask_trace","ph":"E","pid":1,"tid":1,"ts":3}),
+            serde_json::json!({"name":"xtask.phase.outcome","cat":"xtask_trace","ph":"i","pid":1,"tid":1,"ts":4,"args":{"phase":"phase","outcome":"success"}}),
+            serde_json::json!({"name":"xtask.phase.outcome","cat":"xtask_trace","ph":"i","pid":1,"tid":2,"ts":4,"args":{"phase":"phase","outcome":"failure"}}),
+            serde_json::json!({"name":"phase","cat":"xtask_trace","ph":"E","pid":1,"tid":1,"ts":5}),
+        ];
+        let incomplete = events[6].clone();
+        present_xtask_workflow(&mut events);
+        assert_eq!(events[0]["args"]["outcome"], "success");
+        assert_eq!(events[2]["args"]["outcome"], "failure");
+        assert!(events[1]["args"].is_null(), "other thread is incomplete");
+        assert!(events.contains(&incomplete));
+    }
+
+    #[test]
+    fn workflow_uses_causal_command_match_and_leaves_unrelated_capture_separate() {
+        let mut events = vec![
+            serde_json::json!({"name":"process_name","ph":"M","pid":10,"args":{"name":"traced-run"}}),
+            serde_json::json!({"name":"thread_name","ph":"M","pid":10,"tid":10,"args":{"name":"traced-run"}}),
+            serde_json::json!({"name":"process_name","ph":"M","pid":11,"args":{"name":"acquire-runner"}}),
+            serde_json::json!({"name":"process_name","ph":"M","pid":12,"args":{"name":"execute-runner"}}),
+            serde_json::json!({"name":"process_name","ph":"M","pid":14,"args":{"name":"unmatched-execute"}}),
+            serde_json::json!({"name":"process_name","ph":"M","pid":20,"args":{"name":"unmatched-command"}}),
+            serde_json::json!({"name":"process_name","ph":"M","pid":30,"args":{"name":"matched-command"}}),
+            serde_json::json!({"name":"cargo-xtask","ph":"X","pid":10,"tid":10,"ts":0,"dur":100,"args":{"span_id":"root","parent_span_id":null}}),
+            serde_json::json!({"name":"xtask-acquire","ph":"X","pid":11,"tid":11,"ts":10,"dur":20,"args":{"span_id":"acquire","parent_span_id":"root"}}),
+            serde_json::json!({"name":"xtask-execute","ph":"X","pid":12,"tid":12,"ts":30,"dur":60,"args":{"span_id":"execute","parent_span_id":"root"}}),
+            serde_json::json!({"name":"xtask-execute","ph":"X","pid":14,"tid":14,"ts":30,"dur":60,"args":{"span_id":"execute-unmatched","parent_span_id":"root"}}),
+            // Deliberately enumerate the unrelated command first. It has no flow from this execute.
+            serde_json::json!({"name":"xtask.command","cat":"xtask_trace","ph":"B","pid":20,"tid":20,"ts":31,"args":{"subcommand":"test-local","package":"jaunder","test_selector":"unmatched"}}),
+            serde_json::json!({"name":"xtask.command","cat":"xtask_trace","ph":"E","pid":20,"tid":20,"ts":90}),
+            serde_json::json!({"name":"xtask.command","cat":"xtask_trace","ph":"B","pid":30,"tid":30,"ts":51,"args":{"subcommand":"test-local","package":"storage","test_selector":"selected"}}),
+            serde_json::json!({"name":"xtask.command","cat":"xtask_trace","ph":"E","pid":30,"tid":30,"ts":79}),
+            serde_json::json!({"name":"xtask.checkout","cat":"xtask_trace","ph":"B","pid":30,"tid":30,"ts":52,"args":{}}),
+            serde_json::json!({"name":"xtask.checkout","cat":"xtask_trace","ph":"E","pid":30,"tid":30,"ts":55}),
+            serde_json::json!({"name":"xtask.command.outcome","cat":"xtask_trace","ph":"i","pid":30,"tid":30,"ts":78,"args":{"exit_code":"17","outcome":"failure"}}),
+            serde_json::json!({"name":"parallel-work","cat":"xtask_trace","ph":"B","pid":30,"tid":99,"ts":53}),
+            serde_json::json!({"name":"recorded child entry","ph":"i","pid":10,"tid":10,"ts":10,"args":{"parent_span_id":"root","child_span_id":"acquire"}}),
+            serde_json::json!({"name":"root-acquire","ph":"s","pid":10,"tid":10,"ts":10,"id":"ra"}),
+            serde_json::json!({"name":"root-acquire","ph":"f","pid":11,"tid":11,"ts":10,"id":"ra"}),
+            serde_json::json!({"name":"recorded child entry","ph":"i","pid":10,"tid":10,"ts":30,"args":{"parent_span_id":"root","child_span_id":"execute"}}),
+            serde_json::json!({"name":"root-execute","ph":"s","pid":10,"tid":10,"ts":30,"id":"re"}),
+            serde_json::json!({"name":"root-execute","ph":"f","pid":12,"tid":12,"ts":30,"id":"re"}),
+            serde_json::json!({"name":"recorded child entry","ph":"i","pid":12,"tid":12,"ts":51,"args":{"parent_span_id":"execute","child_name":"xtask.command"}}),
+            serde_json::json!({"name":"xtask-execute-to-command","ph":"s","pid":12,"tid":12,"ts":51,"id":"ec","args":{"parent_span_id":"execute"}}),
+            serde_json::json!({"name":"xtask-execute-to-command","ph":"f","pid":30,"tid":30,"ts":51,"id":"ec"}),
+        ];
+        // Additional causal edges are not necessarily the named entry flows.
+        // Once folded, these endpoints share the hierarchy; concurrent work does not.
+        events.extend([
+            serde_json::json!({"name":"runner-link","cat":"process","ph":"s","pid":11,"tid":11,"ts":20,"id":"runner-same"}),
+            serde_json::json!({"name":"runner-link","cat":"process","ph":"f","pid":12,"tid":12,"ts":30,"id":"runner-same"}),
+            serde_json::json!({"name":"phase-link","cat":"xtask_trace","ph":"s","pid":30,"tid":30,"ts":52,"id":"same"}),
+            serde_json::json!({"name":"phase-link","cat":"xtask_trace","ph":"t","pid":30,"tid":30,"ts":53,"id":"same"}),
+            serde_json::json!({"name":"phase-link","cat":"xtask_trace","ph":"f","pid":30,"tid":30,"ts":55,"id":"same"}),
+            serde_json::json!({"name":"concurrent-link","cat":"xtask_trace","ph":"s","pid":30,"tid":30,"ts":53,"id":"cross"}),
+            serde_json::json!({"name":"concurrent-link","cat":"xtask_trace","ph":"f","pid":30,"tid":99,"ts":54,"id":"cross"}),
+        ]);
+        let mut success = events.clone();
+        let terminal = success
+            .iter_mut()
+            .find(|event| event["name"] == "xtask.command.outcome")
+            .unwrap();
+        terminal["args"]["outcome"] = "success".into();
+        terminal["args"]["exit_code"] = "0".into();
+        present_xtask_workflow(&mut success);
+        for name in ["cargo-xtask", "xtask-execute"] {
+            let selected = success.iter().find(|event| event["name"] == name).unwrap();
+            assert_eq!(selected["args"]["outcome"], "success");
+            assert_eq!(selected["args"]["exit_code"], "0");
+        }
+        present_xtask_workflow(&mut events);
+        let flows: Vec<_> = events
+            .iter()
+            .filter(|event| matches!(event["ph"].as_str(), Some("s" | "t" | "f")))
+            .collect();
+        assert_eq!(flows.len(), 2, "only the cross-lane flow remains");
+        assert!(flows.iter().all(|event| event["id"] == "cross"));
+        assert_eq!(
+            (flows[0]["pid"].as_u64(), flows[0]["tid"].as_u64()),
+            (Some(10), Some(10))
+        );
+        assert_eq!(
+            (flows[1]["pid"].as_u64(), flows[1]["tid"].as_u64()),
+            (Some(30), Some(99))
+        );
+
+        let slices: Vec<_> = events.iter().filter(|event| event["ph"] == "X").collect();
+        assert_eq!(slices.len(), 4);
+        for (name, ts, dur) in [
+            ("cargo-xtask", 0, 100),
+            ("xtask-acquire", 10, 20),
+            ("xtask-execute", 30, 60),
+        ] {
+            let slice = slices
+                .iter()
+                .find(|event| {
+                    event["name"] == name && event["args"]["span_id"] != "execute-unmatched"
+                })
+                .unwrap();
+            assert_eq!(slice["ts"], ts);
+            assert_eq!(slice["dur"], dur);
+        }
+        assert!(
+            slices
+                .iter()
+                .filter(|event| event["args"]["span_id"] != "execute-unmatched")
+                .all(|event| event["pid"] == 10 && event["tid"] == 10)
+        );
+        assert!(
+            slices
+                .iter()
+                .any(|event| event["args"]["span_id"] == "execute-unmatched" && event["pid"] == 14)
+        );
+        assert_eq!(
+            slices
+                .iter()
+                .filter(|event| event["args"]["span_id"] != "execute-unmatched")
+                .map(|event| event["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["cargo-xtask", "xtask-acquire", "xtask-execute"]
+        );
+        let root = events
+            .iter()
+            .find(|event| event["name"] == "cargo-xtask")
+            .unwrap();
+        assert_eq!(root["args"]["test_selector"], "selected");
+        let execute = events
+            .iter()
+            .find(|event| event["name"] == "xtask-execute")
+            .unwrap();
+        assert_eq!(execute["args"]["package"], "storage");
+        assert!(
+            !events
+                .iter()
+                .any(|event| event["name"] == "xtask.command" && event["pid"] == 10),
+            "matched command wrapper is omitted"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event["name"] == "xtask.command" && event["pid"] == 20),
+            "unmatched command remains"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event["name"] == "xtask.checkout" && event["pid"] == 10),
+            "measured phase is folded, not removed"
+        );
+        for selected in [root, execute] {
+            assert_eq!(selected["args"]["outcome"], "failure");
+            assert_eq!(selected["args"]["exit_code"], "17");
+        }
+        assert!(
+            !events
+                .iter()
+                .any(|event| event["name"] == "xtask.command.outcome")
+        );
+        let concurrent = events
+            .iter()
+            .find(|event| event["name"] == "parallel-work")
+            .unwrap();
+        assert_eq!(
+            (concurrent["pid"].as_u64(), concurrent["tid"].as_u64()),
+            (Some(30), Some(99))
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event["id"].as_str(), Some("ra" | "re" | "ec")))
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| event["name"] == "recorded child entry")
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event["name"] == "process_name" && event["pid"] == 20)
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event["name"] == "process_name" && event["pid"] == 14)
+        );
     }
 
     #[test]

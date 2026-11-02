@@ -22,27 +22,21 @@ impl Fixture {
             bin.join("cargo-xtask"),
         )
         .unwrap();
+        let store = dir.path().join("store");
+        fs::create_dir_all(store.join("bin")).unwrap();
+        let xtask = store.join("bin/xtask");
+        fs::write(&xtask, "#!/usr/bin/env python3\nimport json, os, subprocess, sys\ncontext=json.loads(os.environ['JAUNDER_TRACED_RUN_CONTEXT'])\nassert context['parent_name'] == 'xtask-execute'\nassert isinstance(context['parent_flow_id'], int)\nassert os.getcwd() == os.environ['JAUNDER_TEST_ROOT']\nargs=sys.argv[1:]\nif args == ['nested']:\n    flow_id = '%016x' % context['parent_flow_id']\n    ts = 42.0\n    events = [\n        {'name':'xtask.command','cat':'xtask_trace','ph':'B','pid':os.getpid(),'tid':os.getpid(),'ts':ts,'args':{'subcommand':'test-local','package':'storage','test_selector':'site_config_primitives_round_trip'}},\n        {'name':'recorded child entry','cat':'xtask_trace','ph':'i','s':'t','pid':context['parent_pid'],'tid':context['parent_pid'],'ts':ts,'args':{'parent_span_id':context['parent_span_id'],'child_name':'xtask.command'}},\n        {'name':'xtask-execute-to-command','cat':'xtask_trace','ph':'s','pid':context['parent_pid'],'tid':context['parent_pid'],'ts':ts,'id':flow_id,'args':{'parent_span_id':context['parent_span_id']}},\n        {'name':'xtask-execute-to-command','cat':'xtask_trace','ph':'f','pid':os.getpid(),'tid':os.getpid(),'ts':ts,'id':flow_id,'bp':'e'},\n        {'name':'xtask.command','cat':'xtask_trace','ph':'E','pid':os.getpid(),'tid':os.getpid(),'ts':ts + 1}\n    ]\n    with open(os.path.join(context['trace_dir'], 'fragment-workload.jsonl'), 'w') as output:\n        output.write(''.join(json.dumps(event) + '\\n' for event in events))\n    sys.exit(subprocess.call(['cargo-xtask', 'xtask', 'leaf']))\nprint(json.dumps(args), flush=True)\nsys.stdout.write(sys.stdin.read())\nsys.stderr.write('child stderr\\n')\nsys.exit(73)\n").unwrap();
+        fs::set_permissions(&xtask, fs::Permissions::from_mode(0o755)).unwrap();
+        let nix_script = format!(
+            "#!/usr/bin/env python3\nimport os, sys\nassert sys.argv[1:] == ['build', '.#xtask', '--no-link', '--print-out-paths']\nassert os.environ.get('JAUNDER_TRACED_RUN_CONTEXT')\nassert os.getcwd() == os.environ['JAUNDER_TEST_ROOT']\nprint({:?})\n",
+            store.display().to_string()
+        );
         for (name, script) in [
             (
                 "git",
                 "#!/usr/bin/env bash\nprintf '%s\\n' \"$JAUNDER_TEST_ROOT\"\n",
             ),
-            (
-                "nix",
-                r#"#!/usr/bin/env python3
-import json, os, subprocess, sys
-assert sys.argv[1:4] == ['run', '.#xtask', '--']
-assert os.environ.get('JAUNDER_TRACED_RUN_CONTEXT')
-assert 'JAUNDER_CARGO_XTASK_INNER' not in os.environ
-args = sys.argv[4:]
-if args == ['nested']:
-    sys.exit(subprocess.call(['cargo-xtask', 'xtask', 'leaf']))
-print(json.dumps(args), flush=True)
-sys.stdout.write(sys.stdin.read())
-sys.stderr.write('child stderr\n')
-sys.exit(73)
-"#,
-            ),
+            ("nix", nix_script.as_str()),
         ] {
             let file = bin.join(name);
             fs::write(&file, script).unwrap();
@@ -116,8 +110,13 @@ fn direct_launcher_preserves_arguments_stdin_streams_status_and_later_roots() {
             .iter()
             .filter(|event| event["ph"] == "X")
             .collect();
-        assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0]["name"], "cargo-xtask");
+        assert_eq!(spans.len(), 3);
+        for name in ["cargo-xtask", "xtask-acquire", "xtask-execute"] {
+            assert!(
+                spans.iter().any(|event| event["name"] == name),
+                "missing {name}"
+            );
+        }
     }
 }
 
@@ -143,18 +142,89 @@ fn wrapped_nested_launcher_keeps_one_root_and_each_launcher_span() {
         .iter()
         .filter(|event| event["ph"] == "X")
         .collect();
-    assert_eq!(spans.len(), 3);
+    assert_eq!(spans.len(), 7);
+    let workload_execute = spans
+        .iter()
+        .find(|event| event["name"] == "xtask-execute" && event["args"]["package"] == "storage")
+        .unwrap();
+    let workload_root = spans
+        .iter()
+        .find(|event| {
+            event["name"] == "cargo-xtask"
+                && event["args"]["test_selector"] == "site_config_primitives_round_trip"
+        })
+        .unwrap();
+    for span in [workload_execute, workload_root] {
+        assert_eq!(span["args"]["subcommand"], "test-local");
+        assert_eq!(span["args"]["package"], "storage");
+        assert_eq!(
+            span["args"]["test_selector"],
+            "site_config_primitives_round_trip"
+        );
+    }
+    assert_eq!(
+        workload_execute["args"]["parent_span_id"],
+        workload_root["args"]["span_id"]
+    );
+    let events = traces[0]["traceEvents"].as_array().unwrap();
+    assert_eq!(workload_execute["pid"], workload_root["pid"]);
+    assert_eq!(workload_execute["tid"], workload_root["tid"]);
+    assert!(
+        !events.iter().any(|event| {
+            event["name"] == "xtask.command" || event["name"] == "xtask-execute-to-command"
+        }),
+        "folded wrappers and arrows are presentation-only omissions"
+    );
+    assert!(
+        events.iter().any(|event| event["ph"] == "s"),
+        "unfolded nested-launch flows remain"
+    );
     let outer = spans.iter().find(|event| event["name"] == "outer").unwrap();
     let child = spans
         .iter()
         .find(|event| event["args"]["parent_span_id"] == outer["args"]["span_id"])
         .unwrap();
     assert_eq!(child["name"], "cargo-xtask");
-    assert!(
-        spans
-            .iter()
-            .any(|event| event["args"]["parent_span_id"] == child["args"]["span_id"])
-    );
+    for name in ["xtask-acquire", "xtask-execute"] {
+        assert!(spans.iter().any(|event| {
+            event["name"] == name && event["args"]["parent_span_id"] == child["args"]["span_id"]
+        }));
+    }
+}
+
+#[test]
+fn runner_merges_monotonic_fragments_from_nested_instrumentation() {
+    let fixture = Fixture::new();
+    let program = fixture.dir.path().join("write-fragment.py");
+    fs::write(
+        &program,
+        r#"#!/usr/bin/env python3
+import json, os
+context = json.loads(os.environ['JAUNDER_TRACED_RUN_CONTEXT'])
+event = {'name':'inner.phase','cat':'xtask_trace','ph':'X','pid':os.getpid(),'tid':os.getpid(),'ts':42.0,'dur':7.0}
+with open(os.path.join(context['trace_dir'], 'fragment-fixture.jsonl'), 'w') as output:
+    output.write(json.dumps(event) + '\n')
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+    let output = fixture
+        .command(env!("CARGO_BIN_EXE_traced-run"))
+        .args(["--name", "outer", "--"])
+        .arg(program)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let traces = fixture.traces();
+    assert_eq!(traces.len(), 1);
+    let events = traces[0]["traceEvents"].as_array().unwrap();
+    assert!(events.iter().any(|event| event["name"] == "outer"));
+    let fragment = events
+        .iter()
+        .find(|event| event["name"] == "inner.phase")
+        .unwrap();
+    assert_eq!(fragment["ts"], 42.0);
+    assert_eq!(fragment["ph"], "X");
 }
 
 #[test]
@@ -176,13 +246,27 @@ fn discovery_and_nix_failures_are_already_supervised() {
         assert_eq!(output.stderr, b"early failure\n");
         let traces = fixture.traces();
         assert_eq!(traces.len(), 1);
-        assert!(
-            traces[0]["traceEvents"]
-                .as_array()
-                .unwrap()
+        let spans: Vec<_> = traces[0]["traceEvents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["ph"] == "X")
+            .collect();
+        let launcher = spans
+            .iter()
+            .find(|event| event["name"] == "cargo-xtask")
+            .unwrap();
+        if program == "nix" {
+            let acquisition = spans
                 .iter()
-                .any(|event| event["ph"] == "X" && event["name"] == "cargo-xtask")
-        );
+                .find(|event| event["name"] == "xtask-acquire")
+                .unwrap();
+            assert_eq!(
+                acquisition["args"]["parent_span_id"],
+                launcher["args"]["span_id"]
+            );
+            assert!(!spans.iter().any(|event| event["name"] == "xtask-execute"));
+        }
     }
 }
 

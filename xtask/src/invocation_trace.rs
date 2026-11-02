@@ -1,39 +1,164 @@
 //! Bounded synchronous `test-local` host capture, scoped to one dispatcher.
 //!
 //! Only the closed `xtask_trace` target enters the adapter; arguments, environment,
-//! paths, result details and subprocess output are never fields. Threaded B/E
-//! events measure entered same-thread wall intervals, not child internals or CPU.
-//! The in-memory writer permits preparation spans before checkout resolution.
-//! Guard join precedes validation, timing projection, fallible persistence and all
-//! existing result reporting. Capture failure is ancillary to the command verdict.
+//! paths, result details and subprocess output are never fields. B/E events use the
+//! host monotonic clock shared with traced-run, measure entered same-thread wall
+//! intervals, and are emitted as a runner fragment when a runner context exists.
+//! The in-memory buffer permits preparation spans before checkout resolution.
+//! Capture failure is ancillary to the command verdict.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io::{self, Write},
+    io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 use tracing_subscriber::{filter::filter_fn, prelude::*};
 
 #[derive(Clone, Default)]
-struct Buffer(Arc<Mutex<Vec<u8>>>);
-impl Write for Buffer {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0
-            .lock()
-            .map_err(|_| io::Error::other("trace buffer poisoned"))?
-            .extend_from_slice(bytes);
-        Ok(bytes.len())
+struct Buffer {
+    events: Arc<Mutex<Vec<serde_json::Value>>>,
+    tracks: Arc<Mutex<BTreeSet<(u32, u64)>>>,
+}
+impl Buffer {
+    fn push(&self, event: serde_json::Value) {
+        if let Ok(mut events) = self.events.lock() {
+            events.push(event);
+        }
     }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
+    fn track(&self, pid: u32, tid: u64) {
+        let Ok(mut tracks) = self.tracks.lock() else {
+            return;
+        };
+        if !tracks.insert((pid, tid)) {
+            return;
+        }
+        drop(tracks);
+        self.push(
+            serde_json::json!({"name":"process_name","ph":"M","pid":pid,"args":{"name":"xtask"}}),
+        );
+        self.push(serde_json::json!({"name":"thread_name","ph":"M","pid":pid,"tid":tid,"args":{"name":"xtask"}}));
+    }
+    fn bytes(&self) -> Result<Vec<u8>, &'static str> {
+        serde_json::to_vec(&*self.events.lock().map_err(|_| "buffer-poisoned")?)
+            .map_err(|_| "malformed-json")
+    }
+}
+
+fn monotonic_ns() -> u64 {
+    let time = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+    (time.tv_sec as u64)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(time.tv_nsec as u64)
+}
+// Trace only the parsed test-local identity, never the raw argv. Selector syntax
+// is bounded for display but is not guaranteed secret-free; callers should use
+// ordinary test identifiers rather than putting sensitive text in selectors.
+fn safe_test_local_args(args: &[String]) -> serde_json::Map<String, serde_json::Value> {
+    let mut fields = serde_json::Map::new();
+    fields.insert("subcommand".into(), "test-local".into());
+    let package = match args {
+        [flag, package, selector] if flag == "-p" || flag == "--package" => {
+            Some((package.as_str(), Some(selector.as_str())))
+        }
+        [flag, package] if flag == "-p" || flag == "--package" => Some((package.as_str(), None)),
+        _ => None,
+    };
+    if let Some((package, selector)) = package
+        && matches!(package, "storage" | "jaunder" | "common" | "web")
+    {
+        fields.insert("package".into(), package.into());
+        if let Some(selector) = selector.filter(|value| {
+            !value.is_empty()
+                && value.len() <= 96
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"_:.-".contains(&byte))
+        }) {
+            fields.insert("test_selector".into(), selector.into());
+        }
+    }
+    fields
+}
+
+fn thread_id() -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::thread::current().id().hash(&mut hasher);
+    hasher.finish()
+}
+
+struct NativeTraceLayer {
+    buffer: Buffer,
+    origin_ns: u64,
+    command_args: serde_json::Map<String, serde_json::Value>,
+}
+impl<S> tracing_subscriber::Layer<S> for NativeTraceLayer
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    fn on_enter(&self, id: &tracing::span::Id, ctx: tracing_subscriber::layer::Context<'_, S>) {
+        if let Some(span) = ctx.span(id) {
+            let pid = std::process::id();
+            let tid = thread_id();
+            self.buffer.track(pid, tid);
+            let name = span.metadata().name();
+            let args = if name == "xtask.command" {
+                self.command_args.clone()
+            } else {
+                serde_json::Map::new()
+            };
+            self.buffer.push(serde_json::json!({"name":name,"cat":"xtask_trace","ph":"B","pid":pid,"tid":tid,"ts":monotonic_ns().saturating_sub(self.origin_ns) as f64 / 1000.0,"args":args}));
+        }
+    }
+    fn on_exit(&self, id: &tracing::span::Id, ctx: tracing_subscriber::layer::Context<'_, S>) {
+        if let Some(span) = ctx.span(id) {
+            self.buffer.push(serde_json::json!({"name":span.metadata().name(),"cat":"xtask_trace","ph":"E","pid":std::process::id(),"tid":thread_id(),"ts":monotonic_ns().saturating_sub(self.origin_ns) as f64 / 1000.0}));
+        }
+    }
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let name = event.metadata().name();
+        if !matches!(name, "xtask.phase.outcome" | "xtask.command.outcome") {
+            return;
+        }
+        let mut args = EventFields::default();
+        event.record(&mut args);
+        self.buffer.push(serde_json::json!({"name":name,"cat":"xtask_trace","ph":"i","s":"t","pid":std::process::id(),"tid":thread_id(),"ts":monotonic_ns().saturating_sub(self.origin_ns) as f64 / 1000.0,"args":args.0}));
+    }
+}
+#[derive(Default)]
+struct EventFields(serde_json::Map<String, serde_json::Value>);
+impl tracing::field::Visit for EventFields {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        let value = format!("{value:?}");
+        let value = value
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            .unwrap_or(&value);
+        self.0.insert(field.name().into(), value.into());
+    }
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.0.insert(field.name().into(), value.into());
+    }
+    fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+        self.0.insert(field.name().into(), value.to_string().into());
+    }
+    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+        self.0.insert(field.name().into(), value.to_string().into());
+    }
+    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+        self.0.insert(field.name().into(), value.into());
     }
 }
 
 pub(crate) struct Capture {
     buffer: Buffer,
     dispatch: tracing::Dispatch,
-    guard: tracing_chrome::FlushGuard,
+    origin_ns: u64,
 }
 impl Default for Capture {
     fn default() -> Self {
@@ -42,36 +167,46 @@ impl Default for Capture {
 }
 impl Capture {
     pub fn new() -> Self {
+        Self::with_command_args(serde_json::Map::new())
+    }
+    fn with_command_args(command_args: serde_json::Map<String, serde_json::Value>) -> Self {
         let buffer = Buffer::default();
-        let (layer, guard) = tracing_chrome::ChromeLayerBuilder::new()
-            .writer(buffer.clone())
-            .trace_style(tracing_chrome::TraceStyle::Threaded)
-            .include_args(true)
-            .include_locations(false)
-            .build();
+        let origin_ns = monotonic_ns();
+        let layer = NativeTraceLayer {
+            buffer: buffer.clone(),
+            origin_ns,
+            command_args,
+        };
         let subscriber = tracing_subscriber::registry()
             .with(layer.with_filter(filter_fn(|metadata| metadata.target() == "xtask_trace")));
         Self {
             buffer,
             dispatch: tracing::Dispatch::new(subscriber),
-            guard,
+            origin_ns,
         }
     }
     pub fn with_default<T>(&self, f: impl FnOnce() -> T) -> T {
         tracing::dispatcher::with_default(&self.dispatch, f)
     }
     pub fn finish(self) -> Result<Trace, &'static str> {
-        // Join the adapter writer before inspecting bytes or process::exit.
-        drop(self.guard);
-        let bytes = self.buffer.0.lock().map_err(|_| "buffer-poisoned")?.clone();
+        let bytes = self.buffer.bytes()?;
         let durations = intervals(&bytes)?;
-        Ok(Trace { bytes, durations })
+        Ok(Trace {
+            bytes,
+            durations,
+            origin_ns: self.origin_ns,
+        })
     }
 }
 
 /// Finalize capture and project timing before any result reporting or explicit exit.
 pub fn execute(cli: crate::Cli) -> anyhow::Result<crate::CommandResult> {
-    let capture = matches!(cli.command, crate::Command::TestLocal { .. }).then(Capture::new);
+    let command_args = match &cli.command {
+        crate::Command::TestLocal { nextest_args } => safe_test_local_args(nextest_args),
+        _ => serde_json::Map::new(),
+    };
+    let capture = matches!(&cli.command, crate::Command::TestLocal { .. })
+        .then(|| Capture::with_command_args(command_args));
     let mut root = None;
     let invoke = || {
         let outer = capture.as_ref().map(|_| phase("xtask.command"));
@@ -120,7 +255,14 @@ pub fn execute(cli: crate::Cli) -> anyhow::Result<crate::CommandResult> {
             trace.persist(root.as_deref().ok_or("checkout-unavailable")?)
         });
         match finalized {
-            Ok(path) => eprintln!("xtask-trace: status=complete path={}", path.display()),
+            Ok((path, contributed)) => {
+                let status = if contributed {
+                    "contributed"
+                } else {
+                    "complete"
+                };
+                eprintln!("xtask-trace: status={status} path={}", path.display());
+            }
             Err(reason) => eprintln!("xtask-trace: status=unavailable reason={reason}"),
         }
     }
@@ -150,6 +292,9 @@ pub(crate) fn phase(name: &'static str) -> Phase {
         "test-local-csr-bundle",
         "xtask.csr-admission",
         "xtask.csr-build",
+        "xtask.csr-manifest-check",
+        "xtask.csr-inventory-check",
+        "xtask.csr-shell-check",
         "test-local-csr-prerequisite",
         "test-local-image-worker",
         "test-local"
@@ -173,6 +318,7 @@ pub(crate) fn command_outcome(ok: bool, exit_code: i32, exit_override: Option<i3
 pub(crate) struct Trace {
     pub bytes: Vec<u8>,
     pub durations: BTreeMap<String, u128>,
+    origin_ns: u64,
 }
 impl Trace {
     fn duration(&self, name: &str) -> u128 {
@@ -198,7 +344,17 @@ impl Trace {
             }
         }
     }
-    pub fn persist(&self, root: &Path) -> Result<PathBuf, &'static str> {
+    pub fn persist(&self, root: &Path) -> Result<(PathBuf, bool), &'static str> {
+        match self.persist_runner_fragment_from_env() {
+            Ok(Some(path)) => return Ok((path, true)),
+            Ok(None) => {}
+            Err(reason) => {
+                eprintln!("xtask-trace: warning=runner-fragment-unavailable reason={reason}")
+            }
+        }
+        self.persist_standalone(root).map(|path| (path, false))
+    }
+    fn persist_standalone(&self, root: &Path) -> Result<PathBuf, &'static str> {
         let parent = root.join(".xtask/traces");
         std::fs::create_dir_all(&parent).map_err(|_| "directory-create")?;
         // tempfile's random leaf prevents overwrite even for simultaneous runs.
@@ -210,6 +366,71 @@ impl Trace {
         let path = directory.join("trace.json");
         persist_file(&directory, &path, &self.bytes)?;
         Ok(path)
+    }
+    fn persist_runner_fragment_from_env(&self) -> Result<Option<PathBuf>, &'static str> {
+        let Ok(context) = std::env::var("JAUNDER_TRACED_RUN_CONTEXT") else {
+            return Ok(None);
+        };
+        let context: serde_json::Value =
+            serde_json::from_str(&context).map_err(|_| "runner-context")?;
+        self.persist_runner_fragment(&context).map(Some)
+    }
+    fn persist_runner_fragment(
+        &self,
+        context: &serde_json::Value,
+    ) -> Result<PathBuf, &'static str> {
+        let Some(directory) = context["trace_dir"].as_str() else {
+            return Err("runner-context");
+        };
+        let Some(origin) = context["origin_ns"].as_u64() else {
+            return Err("runner-context");
+        };
+        let offset_us = self.origin_ns.saturating_sub(origin) as f64 / 1000.0;
+        let mut events: Vec<serde_json::Value> =
+            serde_json::from_slice(&self.bytes).map_err(|_| "malformed-json")?;
+        let root_ts = events
+            .iter()
+            .find(|event| event["name"] == "xtask.command" && event["ph"] == "B")
+            .and_then(|event| event["ts"].as_f64())
+            .ok_or("missing-command-root")?;
+        for event in &mut events {
+            if event["ph"] == "M" {
+                continue;
+            }
+            let Some(ts) = event["ts"].as_f64() else {
+                return Err("invalid-timestamp");
+            };
+            event["ts"] = (ts + offset_us).into();
+        }
+        if context["parent_name"] == "xtask-execute" {
+            let flow_id = context["parent_flow_id"].as_u64().ok_or("runner-context")?;
+            let parent_pid = context["parent_pid"].as_u64().ok_or("runner-context")?;
+            let timestamp = root_ts + offset_us;
+            let flow_id = format!("{flow_id:016x}");
+            events.push(serde_json::json!({
+                "name":"recorded child entry", "cat":"xtask_trace", "ph":"i", "s":"t",
+                "pid":parent_pid, "tid":parent_pid, "ts":timestamp,
+                "args":{"run_id":context["run_id"], "parent_span_id":context["parent_span_id"], "child_name":"xtask.command"}
+            }));
+            events.push(serde_json::json!({
+                "name":"xtask-execute-to-command", "cat":"xtask_trace", "ph":"s",
+                "pid":parent_pid, "tid":parent_pid, "ts":timestamp, "id":flow_id,
+                "args":{"parent_span_id":context["parent_span_id"]}
+            }));
+            events.push(serde_json::json!({
+                "name":"xtask-execute-to-command", "cat":"xtask_trace", "ph":"f",
+                "pid":std::process::id(), "tid":thread_id(), "ts":timestamp, "id":flow_id,
+                "bp":"e"
+            }));
+        }
+        let path = Path::new(directory).join(format!("fragment-{}.jsonl", std::process::id()));
+        let body = events
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(path, format!("{body}\n")).map_err(|_| "fragment-write")?;
+        Ok(Path::new(directory).with_extension("json"))
     }
 }
 fn persist_file(directory: &Path, path: &Path, bytes: &[u8]) -> Result<(), &'static str> {
@@ -305,6 +526,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn command_metadata_is_allowlisted_and_selector_is_bounded() {
+        let fields = safe_test_local_args(&[
+            "-p".into(),
+            "storage".into(),
+            "site_config_primitives_round_trip".into(),
+        ]);
+        assert_eq!(fields["subcommand"], "test-local");
+        assert_eq!(fields["package"], "storage");
+        assert_eq!(fields["test_selector"], "site_config_primitives_round_trip");
+        assert!(
+            safe_test_local_args(&["-p".into(), "unknown".into(), "token-secret".into()])
+                .get("package")
+                .is_none()
+        );
+        assert!(
+            safe_test_local_args(&["-p".into(), "storage".into(), "secret/value".into()])
+                .get("test_selector")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn separate_threads_have_independent_nested_tracks_and_no_payload_leaks() {
         let capture = Capture::new();
         capture.with_default(|| {
@@ -370,7 +613,11 @@ mod tests {
         let durations = intervals(&bytes).unwrap();
         assert_eq!(durations["xtask.dispatch"], 1);
         assert_eq!(durations["xtask.command"], 3);
-        let trace = Trace { bytes, durations };
+        let trace = Trace {
+            bytes,
+            durations,
+            origin_ns: monotonic_ns(),
+        };
         let mut result = crate::CommandResult::new("test-local");
         result.push(crate::StepResult::ok("test-local"));
         trace.project(&mut result);
@@ -399,7 +646,125 @@ mod tests {
     }
 
     #[test]
+    fn runner_fragment_uses_the_runner_monotonic_epoch() {
+        let directory = tempfile::tempdir().unwrap();
+        let root_origin = monotonic_ns().saturating_sub(2_000_000);
+        let capture = Capture::new();
+        capture.with_default(|| {
+            let outer = phase("xtask.command");
+            let dispatch = phase("xtask.dispatch");
+            dispatch.finish(true);
+            command_outcome(true, 0, None);
+            outer.finish(true);
+        });
+        let trace = capture.finish().unwrap();
+        trace
+            .persist_runner_fragment(&serde_json::json!({
+                "trace_dir": directory.path(), "origin_ns": root_origin
+            }))
+            .unwrap();
+        let fragment = std::fs::read_dir(directory.path())
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let events: Vec<serde_json::Value> = std::fs::read_to_string(fragment)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert!(
+            events
+                .iter()
+                .any(|event| event["name"] == "thread_name" && event["args"]["name"] == "xtask")
+        );
+        let event = events.iter().find(|event| event["ts"].is_number()).unwrap();
+        let runner_ts = event["ts"].as_f64().unwrap();
+        assert!(
+            runner_ts >= 2_000.0,
+            "timestamp must include measured root offset: {runner_ts}"
+        );
+        assert!(
+            runner_ts < 10_000_000.0,
+            "timestamp unexpectedly far from runner origin: {runner_ts}"
+        );
+    }
+
+    #[test]
+    fn runner_context_links_execute_to_nested_command_root_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let origin = monotonic_ns().saturating_sub(2_000_000);
+        let capture = Capture::new();
+        capture.with_default(|| {
+            let command = phase("xtask.command");
+            let dispatch = phase("xtask.dispatch");
+            dispatch.finish(true);
+            command_outcome(true, 0, None);
+            command.finish(true);
+        });
+        let trace = capture.finish().unwrap();
+        trace
+            .persist_runner_fragment(&serde_json::json!({
+                "trace_dir": directory.path(), "origin_ns": origin,
+                "parent_name":"xtask-execute", "parent_span_id":"execute-id",
+                "parent_pid":1234, "parent_flow_id":987654321
+            }))
+            .unwrap();
+        let fragment = std::fs::read_dir(directory.path())
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let events: Vec<serde_json::Value> = std::fs::read_to_string(fragment)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let begins: Vec<_> = events
+            .iter()
+            .filter(|event| event["name"] == "xtask.command" && event["ph"] == "B")
+            .collect();
+        let phase = events
+            .iter()
+            .find(|event| event["name"] == "xtask.dispatch" && event["ph"] == "B")
+            .unwrap();
+        assert_eq!(begins.len(), 1);
+        assert_eq!(begins[0]["pid"], phase["pid"]);
+        assert_eq!(begins[0]["tid"], phase["tid"]);
+        let flows: Vec<_> = events
+            .iter()
+            .filter(|event| event["ph"] == "s" || event["ph"] == "f")
+            .collect();
+        assert_eq!(
+            flows.len(),
+            2,
+            "only the command root receives cross-process flow"
+        );
+        let marker_index = events
+            .iter()
+            .position(|event| event["name"] == "recorded child entry")
+            .unwrap();
+        assert_eq!(events[marker_index]["ph"], "i");
+        assert_eq!(events[marker_index]["s"], "t");
+        assert_eq!(events[marker_index]["pid"], 1234);
+        assert_eq!(events[marker_index]["tid"], 1234);
+        assert_eq!(events[marker_index]["args"]["parent_span_id"], "execute-id");
+        assert_eq!(events[marker_index]["args"]["child_name"], "xtask.command");
+        assert_eq!(&events[marker_index + 1], flows[0]);
+        assert_eq!(events[marker_index]["ts"], flows[0]["ts"]);
+        assert_eq!(flows[0]["id"], "000000003ade68b1");
+        assert_eq!(flows[1]["id"], flows[0]["id"]);
+        assert_eq!(flows[0]["pid"], 1234);
+        assert_eq!(flows[0]["args"]["parent_span_id"], "execute-id");
+        assert_eq!(flows[1]["name"], "xtask-execute-to-command");
+        assert_eq!(flows[1]["ts"], begins[0]["ts"]);
+    }
+
+    #[test]
     fn persistence_retains_each_run_and_reports_io_failures() {
+        use std::io;
         struct Broken {
             flush: bool,
         }
@@ -427,9 +792,10 @@ mod tests {
         let trace = Trace {
             bytes: b"[]".to_vec(),
             durations: BTreeMap::new(),
+            origin_ns: monotonic_ns(),
         };
-        let first = trace.persist(root.path()).unwrap();
-        let second = trace.persist(root.path()).unwrap();
+        let first = trace.persist_standalone(root.path()).unwrap();
+        let second = trace.persist_standalone(root.path()).unwrap();
         assert_ne!(first, second);
         assert_eq!(std::fs::read(&first).unwrap(), b"[]");
         assert_eq!(
@@ -443,7 +809,7 @@ mod tests {
         );
         let blocked = root.path().join("not-a-directory");
         std::fs::write(&blocked, "blocked").unwrap();
-        assert_eq!(trace.persist(&blocked), Err("directory-create"));
+        assert_eq!(trace.persist_standalone(&blocked), Err("directory-create"));
     }
 
     #[test]

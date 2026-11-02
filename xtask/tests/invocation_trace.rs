@@ -17,7 +17,15 @@ fn checkout(root: &Path, admitted: bool) {
 }
 
 fn invoke(root: &Path) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_xtask"))
+    invoke_with_runner_context(root, None)
+}
+
+fn invoke_with_runner_context(
+    root: &Path,
+    context: Option<&serde_json::Value>,
+) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
+    command
         .current_dir(root)
         // Temp roots may live inside the real checkout in CI. Keep discovery
         // fixture-local, including when the test is launched by a Git hook.
@@ -39,9 +47,13 @@ fn invoke(root: &Path) -> std::process::Output {
             "-p",
             "storage",
             "private-filter",
-        ])
-        .output()
-        .unwrap()
+        ]);
+    if let Some(context) = context {
+        command.env("JAUNDER_TRACED_RUN_CONTEXT", context.to_string());
+    } else {
+        command.env_remove("JAUNDER_TRACED_RUN_CONTEXT");
+    }
+    command.output().unwrap()
 }
 
 fn trace(output: &std::process::Output) -> Vec<serde_json::Value> {
@@ -54,7 +66,7 @@ fn trace(output: &std::process::Output) -> Vec<serde_json::Value> {
     let bytes = fs::read(path).unwrap();
     let text = String::from_utf8_lossy(&bytes);
     assert!(!text.contains("private-missing-bundle"));
-    assert!(!text.contains("private-filter"));
+    assert!(text.contains("\"test_selector\":\"private-filter\""));
     serde_json::from_slice(&bytes).unwrap()
 }
 
@@ -129,6 +141,86 @@ fn invocation_trace_failed_phase_keeps_json_sidecar_and_trace_timing_identical()
             .unwrap();
         assert_eq!(result_ms, ((end - begin) / 1000.0).floor() as u64);
     }
+}
+
+#[test]
+fn invocation_trace_with_runner_context_contributes_fragment_only() {
+    let temp = tempfile::tempdir().unwrap();
+    checkout(temp.path(), true);
+    let trace_dir = temp.path().join(".xtask/run/fixture.trace.d");
+    fs::create_dir_all(&trace_dir).unwrap();
+    let now = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+    let origin_ns = (now.tv_sec as u64) * 1_000_000_000 + now.tv_nsec as u64;
+    let context = serde_json::json!({
+        "run_id": "fixture",
+        "trace_dir": trace_dir,
+        "origin_ns": origin_ns,
+        "parent_span_id": "runner-parent",
+        "parent_pid": std::process::id(),
+        "parent_started_ns": origin_ns,
+        "parent_name": "xtask-execute",
+        "parent_flow_id": 123456
+    });
+
+    let output = invoke_with_runner_context(temp.path(), Some(&context));
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("xtask-trace: status=contributed"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let fragment_path = fs::read_dir(temp.path().join(".xtask/run/fixture.trace.d"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    assert!(
+        fragment_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("fragment-")
+    );
+    let fragment = fs::read_to_string(fragment_path).unwrap();
+    assert!(fragment.contains("xtask.command"));
+    assert!(fragment.contains("xtask.command.outcome"));
+    let events: Vec<serde_json::Value> = fragment
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let root = events
+        .iter()
+        .find(|event| event["name"] == "xtask.command" && event["ph"] == "B")
+        .unwrap();
+    assert_eq!(root["args"]["subcommand"], "test-local");
+    assert_eq!(root["args"]["package"], "storage");
+    assert_eq!(root["args"]["test_selector"], "private-filter");
+    let flows: Vec<_> = events
+        .iter()
+        .filter(|event| event["ph"] == "s" || event["ph"] == "f")
+        .collect();
+    assert_eq!(flows.len(), 2);
+    let marker_index = events
+        .iter()
+        .position(|event| event["name"] == "recorded child entry")
+        .unwrap();
+    assert_eq!(events[marker_index]["pid"], std::process::id());
+    assert_eq!(events[marker_index]["tid"], std::process::id());
+    assert_eq!(events[marker_index + 1]["id"], flows[0]["id"]);
+    assert_eq!(events[marker_index + 1]["ph"], "s");
+    assert_eq!(events[marker_index]["ts"], flows[0]["ts"]);
+    assert_eq!(flows[0]["id"], flows[1]["id"]);
+    assert_eq!(flows[0]["id"], "000000000001e240");
+    assert_eq!(flows[0]["name"], "xtask-execute-to-command");
+    assert_eq!(flows[0]["ph"], "s");
+    assert_eq!(flows[0]["pid"], std::process::id());
+    assert_eq!(flows[0]["args"]["parent_span_id"], "runner-parent");
+    assert_eq!(flows[1]["ph"], "f");
+    assert_eq!(flows[1]["pid"], root["pid"]);
+    assert!(!temp.path().join(".xtask/traces").exists());
+    assert!(temp.path().join(".xtask/last-result.json").is_file());
 }
 
 #[test]
