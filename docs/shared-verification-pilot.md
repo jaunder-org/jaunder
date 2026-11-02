@@ -2,9 +2,9 @@
 
 **Status:** #1862 established the leaf contract and bounded harness conclusions;
 approved #1863 routes production narrow precommit and clean prepush through that
-leaf on `x86_64-linux`, as specified below. Local actual-consumer proof is
-complete for the reviewed implementation. Hosted CI and the final intended-tree
-leaf verdict remain pending; CI routing itself is unchanged.
+leaf on `x86_64-linux`, as specified below. The routing is validated only on
+that host class; CI routing itself is unchanged, and hosted checks remain the
+per-ref integration authority.
 
 ## Contract
 
@@ -114,11 +114,13 @@ negatively exercised against a failed lane. These are local proof controls, not
 hosted CI results.
 
 The proof input and fault were temporary and are absent from the intended tree.
-The successful derivation included that temporary Markdown file, so it is not a
-final intended-PR tree verdict. The earlier #1862 harness derivation/results are
-historical foundation only; source/docs changed afterward, so its identity is
-not the current final-tree identity. Obtain normal final-tree leaf verification
-and hosted required CI on the eventual delivered ref before claiming delivery.
+The successful fixture derivation included that temporary Markdown file, so it
+is not by itself a final-tree verdict. A separate clean prepush and hosted CI
+were exercised on the reviewed delivery candidate; those results apply only to
+the exact head tested. The earlier #1862 harness derivation/results remain
+historical foundation only; source/docs changed afterward, so their identity is
+not the production consumer's current leaf identity. Do not infer final-head or
+cross-platform results from an earlier source identity.
 
 ## Ownership and update trigger
 
