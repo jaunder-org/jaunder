@@ -6,19 +6,20 @@ definitive working hub for humans and agents.
 
 ## Durable docs
 
-| Doc                                                           | What it's for                                                                      |
-| ------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| [CONTRIBUTING](../CONTRIBUTING.md)                            | Definitive working guide: setup, hooks, workflow, testing, invariants. Read first. |
-| [CONTEXT](../CONTEXT.md)                                      | Domain glossary / ubiquitous language for Jaunder.                                 |
-| [ARCHITECTURE](ARCHITECTURE.md)                               | System architecture (Leptos, single-binary, storage); links the ADRs.              |
-| [DESIGN](DESIGN.md)                                           | High-level design / how an instance runs.                                          |
-| [codebase-audits](codebase-audits.md)                         | Method for finding and remediating accumulated design and maintenance cruft.       |
-| [ROADMAP](ROADMAP.md)                                         | Completed-milestone ledger and direction.                                          |
-| [observability](observability.md)                             | OpenTelemetry tracing for backend + e2e.                                           |
-| [web-style-guide](web-style-guide.md)                         | Conventions for the `web/` Leptos components and widgets.                          |
-| [themes](themes.md)                                           | Create, test, modify, publish, and deploy custom public themes.                    |
-| [atompub-marsedit-acceptance](atompub-marsedit-acceptance.md) | Manual MarsEdit/AtomPub (RFC 5023) acceptance checklist.                           |
-| [production-baseline](production-baseline.md)                 | Opt-in immutable NixOS deployment/recovery qualification and evidence runbook.     |
+| Doc                                                           | What it's for                                                                                 |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| [CONTRIBUTING](../CONTRIBUTING.md)                            | Definitive working guide: setup, hooks, workflow, testing, invariants. Read first.            |
+| [shared-verification-pilot](shared-verification-pilot.md)     | Approved x86_64-linux Markdown verification pilot contract; production routing remains #1863. |
+| [CONTEXT](../CONTEXT.md)                                      | Domain glossary / ubiquitous language for Jaunder.                                            |
+| [ARCHITECTURE](ARCHITECTURE.md)                               | System architecture (Leptos, single-binary, storage); links the ADRs.                         |
+| [DESIGN](DESIGN.md)                                           | High-level design / how an instance runs.                                                     |
+| [codebase-audits](codebase-audits.md)                         | Method for finding and remediating accumulated design and maintenance cruft.                  |
+| [ROADMAP](ROADMAP.md)                                         | Completed-milestone ledger and direction.                                                     |
+| [observability](observability.md)                             | OpenTelemetry tracing for backend + e2e.                                                      |
+| [web-style-guide](web-style-guide.md)                         | Conventions for the `web/` Leptos components and widgets.                                     |
+| [themes](themes.md)                                           | Create, test, modify, publish, and deploy custom public themes.                               |
+| [atompub-marsedit-acceptance](atompub-marsedit-acceptance.md) | Manual MarsEdit/AtomPub (RFC 5023) acceptance checklist.                                      |
+| [production-baseline](production-baseline.md)                 | Opt-in immutable NixOS deployment/recovery qualification and evidence runbook.                |
 
 ## Architecture Decision Records
 
