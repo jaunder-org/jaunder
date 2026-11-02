@@ -194,16 +194,30 @@ without pre-existing unstaged changes. It always takes its after-snapshot and
 reconciles once, including after a narrow-surface failure; mixed tracked paths,
 newly-created untracked files, and changed delete/rename states fail closed,
 while pre-existing delete/rename state and untracked files stay unstaged and
-tolerated. Bypass with `SKIP_PRE_COMMIT=1 git commit` for WIP.
+tolerated. On `x86_64-linux`, successful narrow staged-Markdown checks and
+reconciliation are followed by admission (no remaining unstaged or nonignored
+untracked changes, and raw worktree/index blob identity for every tracked
+Markdown, `.prettierrc.json`, and `.prettierignore` input consumed by
+`static-docs`, excluding `.claude`) and then the ordinary Git-backed
+`.#checks.x86_64-linux.static-docs` request with lock update/write disabled. A
+post-request status/index check fails on tracked, staged, or nonignored
+untracked mutation without restaging. Admission or host/staging failure skips
+Nix; Nix failure remains the hook verdict and is preserved if the post-check
+also fails. Other platforms and the broad route retain host-only behavior.
+Bypass with `SKIP_PRE_COMMIT=1 git commit` for WIP.
 
-**`pre-push`** runs `cargo xtask prepush`: the fast, non-hermetic verify-only
-host/static surface, existing auxiliary `xtask`/`tools` non-doc tests,
-host-native product Rust tests, and `workspace-doctests` after the product
-tests. `workspace-doctests` executes `cargo test --workspace --doc` and the same
+**`pre-push`** runs `cargo xtask prepush`: the fast verify-only host/static
+surface, existing auxiliary `xtask`/`tools` non-doc tests, host-native product
+Rust tests, and `workspace-doctests` after the product tests.
+`workspace-doctests` executes `cargo test --workspace --doc` and the same
 bidirectional root-workspace fence reconciliation as the Nix doctest gate. The
-hook has the same clean-tree refusal as `validate`. After launcher realization,
-its gate invokes no hermetic check derivations. Hermetic check proof remains
-CI/explicit-`validate` work. Bypass with `SKIP_PRE_PUSH=1 git push` for WIP.
+hook has the same clean-tree refusal as `validate`. On `x86_64-linux`, only the
+host `prettier-markdown` Verify at its existing position is replaced with the
+same lock-write-disabled `static-docs` Nix leaf. Before the request, the clean
+consumer also checks raw/index identity for the complete tracked Markdown and
+formatter-config input population; afterward it verifies Git state stayed
+unchanged. Other checks retain their order, and other platforms keep host
+Markdown Verify. Bypass with `SKIP_PRE_PUSH=1 git push` for WIP.
 
 Both local hook commands use fail-fast execution: at every ordered boundary
 (individual static checks, host-gate steps, and prepush phases), the first
@@ -745,14 +759,14 @@ a hook failure or mutation. Use `cargo xtask check --no-test` or
 hermetic confidence is the question. Focused `test-local` is an accelerator, not
 a certification gate.
 
-| Command                         | Runs                                                                                                                                                                                                                                                 | Formatting    |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| `cargo xtask check --no-test`   | host static checks + clippy + repo-shape/type-safety gates + host tests — the precommit host surface                                                                                                                                                 | auto-fixes    |
-| `cargo xtask check`             | + `test-local` for root-workspace Rust tests, plus the Nix `wasm-tests` and `doctests`/`doctests-gate` checks                                                                                                                                        | auto-fixes    |
-| `cargo xtask precommit`         | host surface from `cargo xtask check --no-test`, then safe-staging reconciliation — the `.githooks/pre-commit` hook runs this path                                                                                                                   | auto-fixes    |
-| `cargo xtask prepush`           | verify-only host/static surface + auxiliary `xtask`/`tools` non-doc tests + `test-local` + `workspace-doctests`, with clean-tree refusal and no hermetic check derivations after launcher realization — the `.githooks/pre-push` hook runs this path | never mutates |
-| `cargo xtask validate --no-e2e` | verify-only host/static surface plus Nix static proof, `wasm-budget`, Nix `wasm-tests`, Rust `coverage`/`coverage-gate`, Nix `doctests`/`doctests-gate`, and authoritative `elisp-coverage-producer` plus host consumer                              | never mutates |
-| `cargo xtask validate`          | inherits the authoritative Emacs verdict, then adds the retained two unsplit Chromium and six split Firefox E2E lanes with host reconciliation, plus authoritative SQLite/Chromium server-function coverage verification — the full local gate       | never mutates |
+| Command                         | Runs                                                                                                                                                                                                                                                              | Formatting    |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| `cargo xtask check --no-test`   | host static checks + clippy + repo-shape/type-safety gates + host tests — the precommit host surface                                                                                                                                                              | auto-fixes    |
+| `cargo xtask check`             | + `test-local` for root-workspace Rust tests, plus the Nix `wasm-tests` and `doctests`/`doctests-gate` checks                                                                                                                                                     | auto-fixes    |
+| `cargo xtask precommit`         | host surface from `cargo xtask check --no-test`, then safe-staging reconciliation — the `.githooks/pre-commit` hook runs this path                                                                                                                                | auto-fixes    |
+| `cargo xtask prepush`           | verify-only host/static surface + auxiliary `xtask`/`tools` non-doc tests + `test-local` + `workspace-doctests`, with clean-tree refusal; on x86_64-linux only, shared `static-docs` replaces host Markdown Verify — the `.githooks/pre-push` hook runs this path | never mutates |
+| `cargo xtask validate --no-e2e` | verify-only host/static surface plus Nix static proof, `wasm-budget`, Nix `wasm-tests`, Rust `coverage`/`coverage-gate`, Nix `doctests`/`doctests-gate`, and authoritative `elisp-coverage-producer` plus host consumer                                           | never mutates |
+| `cargo xtask validate`          | inherits the authoritative Emacs verdict, then adds the retained two unsplit Chromium and six split Firefox E2E lanes with host reconciliation, plus authoritative SQLite/Chromium server-function coverage verification — the full local gate                    | never mutates |
 
 The CI host lane captures filesystem capacity/inodes, memory/swap and allocated
 bytes for checkout-owned Cargo targets before validation. It does not traverse
@@ -824,11 +838,11 @@ different environments. They have the following explicit authority split
 
 | `validate --no-e2e` surface                              | `prepush` coverage                                                                                                 | Authority / rationale                                                                                                                                                              |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Verify-only host/static surface                          | Runs the same host surface.                                                                                        | Prepush is the fast host verdict; Nix static proof remains authoritative for the sandboxed offline environment.                                                                    |
+| Verify-only host/static surface                          | Runs the same host surface except `x86_64-linux` replaces only `prettier-markdown` Verify with `static-docs`.      | Prepush provides the Markdown leaf verdict; other Nix static proof remains authoritative for the sandboxed offline environment.                                                    |
 | Auxiliary `xtask`/`tools` non-doc tests                  | Runs once.                                                                                                         | The host tests are the applicable verdict; they are outside the application coverage/Nix test gates.                                                                               |
 | Host-native product Rust tests                           | Runs `test-local`.                                                                                                 | The host-native product verdict is cheap and cache-friendly.                                                                                                                       |
 | Root-workspace doctests and fence reconciliation         | Runs `workspace-doctests`: `cargo test --workspace --doc` plus the same bidirectional root-workspace fence census. | Prepush is authoritative for host-toolchain example execution and reconciliation; Nix `doctests`/`doctests-gate` remains authoritative for the pinned sandbox/offline environment. |
-| Nix static proof                                         | Does not run.                                                                                                      | Only the sandboxed offline Cargo environment proves the hermetic static definitions.                                                                                               |
+| Nix static proof                                         | Only the shared `static-docs` leaf runs on `x86_64-linux`; other static derivations do not.                        | The leaf shares the docs formatting verdict; other static definitions still require the sandboxed offline environment.                                                             |
 | Rust coverage/CRAP                                       | Does not run.                                                                                                      | Instrumentation and SQLite/PostgreSQL backend parity are part of the verdict.                                                                                                      |
 | Wasm browser tests                                       | Does not run.                                                                                                      | The verdict exercises wasm browser primitives unavailable to a cheap host lane.                                                                                                    |
 | Elisp coverage                                           | Does not run.                                                                                                      | The coverage VM is the authoritative execution environment.                                                                                                                        |

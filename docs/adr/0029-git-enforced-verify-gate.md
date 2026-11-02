@@ -213,3 +213,30 @@ retain their existing authority. `xtask/tools-only` routing is deliberately
 rejected because those workspaces define gate behavior and repository scanners
 that must be exercised against their full product, documentation, CI, and e2e
 input populations.
+
+## Supplement (#1863): shared Markdown verification routing
+
+On `x86_64-linux`, the narrow staged-Markdown precommit keeps its existing
+ordered host Fix and distinct Markdown-sensitive checks, then performs its
+existing final snapshot and safe stage-plan application exactly once. Only when
+all host checks and reconciliation succeed does a focused admission require no
+remaining unstaged changes or nonignored untracked files and compare raw
+worktree blob OIDs with index OIDs for the complete tracked input population
+selected by `static-docs`: Markdown, `.prettierrc.json`, and `.prettierignore`
+at any depth, excluding `.claude`. It rejects nonidentity clean/EOL conversion
+before Nix reads bytes different from the intended index. The admitted request
+is the ordinary Git-backed `.#checks.x86_64-linux.static-docs` through
+`build_check`, with lock-update and lock-write disabled. After the request, a
+status plus raw staged-diff check verifies tracked, staged, and nonignored
+untracked Git state is unchanged and rechecks static-docs raw/index identity;
+query failure or mutation fails without another restaging pass and preserves a
+Nix failure. Host, stage, or admission failure skips Nix. The broad route and
+all non-x86_64 behavior are unchanged.
+
+At the existing `prettier-markdown` Verify position in clean prepush,
+`x86_64-linux` first requires the same full tracked-input raw/index identity,
+then requests the same leaf, and checks Git state afterward; no other host
+checks or later phases move. A dirty tree still refuses before any request. CI's
+existing hermetic request and required aggregate are unchanged. This is a
+cooperative single-writer guarantee, not protection against a concurrent
+external writer.

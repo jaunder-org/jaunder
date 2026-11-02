@@ -63,6 +63,10 @@ impl NixBuildObservation {
         self.finish_with(installable, observe)
     }
 
+    pub(crate) fn finish_readonly(self, installable: &str) -> NixReport {
+        self.finish_with(installable, observe_readonly)
+    }
+
     fn finish_with(
         self,
         installable: &str,
@@ -75,7 +79,18 @@ impl NixBuildObservation {
 
 /// Run the non-realizing Nix observation commands for an installable.
 pub(crate) fn observe(installable: &str) -> NixBuildObservation {
-    observe_with(installable, |arguments| {
+    observe_with_flags(installable, &[])
+}
+
+pub(crate) fn observe_readonly(installable: &str) -> NixBuildObservation {
+    observe_with_flags(
+        installable,
+        &["--no-update-lock-file", "--no-write-lock-file"],
+    )
+}
+
+fn observe_with_flags(installable: &str, flags: &[&str]) -> NixBuildObservation {
+    observe_with(installable, flags, |arguments| {
         Command::new("nix")
             .args(arguments)
             .output()
@@ -92,6 +107,7 @@ pub(crate) fn observe(installable: &str) -> NixBuildObservation {
 /// must not turn a successful later build into a gate failure.
 fn observe_with(
     installable: &str,
+    flags: &[&str],
     mut run: impl FnMut(&[String]) -> std::io::Result<NixCommandOutput>,
 ) -> NixBuildObservation {
     let dry_run = vec![
@@ -102,6 +118,14 @@ fn observe_with(
         "--accept-flake-config".into(),
         installable.into(),
     ];
+    let dry_run = if flags.is_empty() {
+        dry_run
+    } else {
+        let mut args = dry_run;
+        let at = args.len() - 1;
+        args.splice(at..at, flags.iter().map(|flag| (*flag).to_owned()));
+        args
+    };
     let Ok(dry_run) = run(&dry_run) else {
         return indeterminate_observation();
     };
@@ -337,7 +361,28 @@ mod tests {
         path_info: Result<NixCommandOutput, io::Error>,
     ) -> NixBuildObservation {
         let mut commands = [dry_run, path_info].into_iter();
-        observe_with(INSTALLABLE, |_| commands.next().unwrap())
+        observe_with(INSTALLABLE, &[], |_| commands.next().unwrap())
+    }
+
+    #[test]
+    fn readonly_observation_disables_lock_updates_and_writes() {
+        let mut commands = [
+            NixCommandOutput::success(dry_run(&format!(r#"{{"out":"{OUT}"}}"#))),
+            NixCommandOutput::success(path_info("\"bbb-site\":{}")),
+        ]
+        .into_iter();
+        let mut observed = Vec::new();
+        let _ = observe_with(
+            INSTALLABLE,
+            &["--no-update-lock-file", "--no-write-lock-file"],
+            |args| {
+                observed.push(args.to_vec());
+                Ok(commands.next().unwrap())
+            },
+        );
+        assert!(observed[0].contains(&"--no-update-lock-file".to_owned()));
+        assert!(observed[0].contains(&"--no-write-lock-file".to_owned()));
+        assert!(observed[1].iter().any(|arg| arg == "path-info"));
     }
 
     #[test]

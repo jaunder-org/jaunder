@@ -1,11 +1,8 @@
 # Shared verification pilot: Markdown formatting
 
-**Status:** human-approved x86_64-linux proof contract, under Manager-relayed
-request `2f4fdfaf-0b52-43dc-a70f-c0aebe353e2d` (`pilot1862-markdown-v1`), for
-bounded proof only. Production hook/CI routing is not implemented. This page
-records the enduring contract and qualified proof conclusions from #1862 for its
-downstream consumer, #1863. It is not a description of the current local hooks
-and does not authorize implementation or policy changes.
+**Status:** #1862 established the leaf contract and bounded harness conclusions;
+approved #1863 now routes production narrow precommit and clean prepush through
+that leaf on `x86_64-linux`, as specified below. CI routing remains unchanged.
 
 ## Contract
 
@@ -16,11 +13,11 @@ Prettier. Its verdict is the formatter/derivation exit status, not a status
 artifact. Preserve ADR-0178's existing ordered, duplicate-free `static-docs`
 then `static-code` partition; this pilot neither reorders nor expands it.
 
-| Entry point                      | Current behavior                                                                                                                  | Contract to preserve in any separately approved routing                                                                                                  |
-| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Narrow staged-Markdown precommit | Host Fix-mode formatting and Markdown-sensitive host checks, followed by host index reconciliation.                               | Model/request only after global host Fix and safe restaging; compare the immutable Nix input to the resulting admitted index before requesting the leaf. |
-| Clean prepush                    | Clean-tree refusal, then host verify-only checks, auxiliary/product tests and workspace doctests; no hermetic derivation request. | A future consumer must establish clean-tree admission before requesting the same leaf; retain all existing host checks.                                  |
-| CI                               | Existing x86_64-linux validation requests `static-docs` within its hermetic lanes and required aggregate.                         | Preserve the required lane and aggregate. A shared-verdict harness is not evidence that production CI routing changed.                                   |
+| Entry point                      | Current behavior                                                                                             | Contract to preserve in any separately approved routing                                                                                                                                                    |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Narrow staged-Markdown precommit | Existing ordered host Fix and distinct Markdown-sensitive checks, followed by one safe index reconciliation. | After success, require no unstaged/nonignored-untracked changes and raw/index identity for every tracked Markdown and formatter-config input; then request the leaf and verify Git state stayed unchanged. |
+| Clean prepush                    | Clean-tree refusal, host verify-only checks, auxiliary/product tests and workspace doctests.                 | At the existing Markdown Verify position, replace only `prettier-markdown`; require the same full input identity before request and unchanged Git state afterward.                                         |
+| CI                               | Existing x86_64-linux validation requests `static-docs` within its hermetic lanes and required aggregate.    | Preserve the required lane and aggregate. A shared-verdict harness is not evidence that production CI routing changed.                                                                                     |
 
 The current staged-Markdown route is broader than this one leaf: it also runs
 identifier/sequence checks, ADR checks, document-link checks and flow-document
@@ -43,13 +40,22 @@ Prettier, its configuration, and the Nix platform. Compare evaluated derivation
 identity and semantic inputs; a textual Nix edit alone does not imply
 invalidation.
 
-The admitted precommit input is limited to the existing staged-only set of
+The admitted precommit changes remain limited to the existing staged-only set of
 regular Markdown additions/modifications. Host finishes global
-`prettier -w **/*.md` Fix and safe restaging first. The Nix snapshot must match
-the admitted index for every relevant source/config input; mismatch refuses the
-shared request rather than using stale input. No partially staged, unstaged,
-untracked, deleted, renamed, non-Markdown or otherwise dirty-state expansion is
-included.
+`prettier -w **/*.md` Fix and safe restaging first. A small status/raw-index
+guard refuses residual unstaged or nonignored-untracked state and compares raw
+worktree blob OIDs with index OIDs for every tracked input selected by
+`staticDocsSrc`: Markdown, `.prettierrc.json`, and `.prettierignore` at any
+depth, excluding `.claude`. This rejects clean/EOL conversion even for unchanged
+files, so ordinary Git-flake worktree bytes match the indexed inputs. The clean
+prepush consumer applies the same full-population guard. After either request,
+the existing Git status and raw staged diff are compared; tracked, staged, or
+nonignored-untracked mutation/query failure fails the hook without restaging,
+while retaining any original Nix failure. No new eligibility or broader check
+family is introduced. The request uses existing `build_check` for
+`.#checks.x86_64-linux.static-docs` with
+`--no-update-lock-file --no-write-lock-file`; tracked `flake.lock` must remain
+unchanged.
 
 Host owns Git admission/classification, formatting writes, restaging,
 commit/push cleanliness, index reconciliation and hook ordering. Nix owns
@@ -76,17 +82,18 @@ status and the gate rejected it. The producer's exit-0 run receipt was pruned
 and remains executor-reported, while the output status, gate dependency and
 failing gate verdict were retained and independently reviewed.
 
-These results establish harness behavior only. No actual hook or CI workflow was
-routed through Nix; no production equivalence, other platform, broader check
-family, full validation, or untested tool/config invalidation is claimed. The
-x86_64-linux result is not cross-platform evidence. No ADR or production policy
-changed.
+The harness receipts establish only their recorded leaf-level behavior and do
+not replace Git-backed production hook proof. Production routing is
+x86_64-linux-only: host/stage/admission failures skip the precommit leaf while
+retaining one safe reconciliation, and leaf failure does not restage again;
+prepush replaces only Markdown Verify after clean-tree admission. Other
+platforms retain prior host behavior. The guarantee assumes a cooperative single
+writer, not immunity to concurrent external mutation. CI retains its existing
+hermetic leaf and aggregate; no workflow duplication or broader platform
+equivalence is claimed.
 
 ## Ownership and update trigger
 
-#1863 exclusively owns any production hook/CI routing and must update this page
-and the current verification guide to match the implemented behavior and
-validated scope. Do not infer routing, platform expansion, or admission changes
-from this approved pilot. Those decisions require their own approval. Preserve
-producer-plus-verdict coupling for status-as-data checks; do not treat producer
-success alone as the verdict.
+Production routing is owned by #1863 and follows the approved narrow contract
+above. Preserve producer-plus-verdict coupling for status-as-data checks; do not
+treat producer success alone as the verdict.

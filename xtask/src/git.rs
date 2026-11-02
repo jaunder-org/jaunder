@@ -163,6 +163,175 @@ pub fn working_tree_status(dir: &Path) -> Result<String> {
     output(dir, &["status", "--porcelain"])
 }
 
+/// Admit a narrow staged-Markdown tree for the shared static-docs request.
+/// The ordinary Git flake reads worktree bytes, so require a clean worktree and
+/// raw worktree blob identity equal to each staged blob before asking Nix.
+pub fn shared_markdown_admission(dir: &Path) -> Result<SharedVerdictGitState> {
+    let state = shared_verdict_git_state(dir)?;
+    let snapshot = &state.snapshot;
+    anyhow::ensure!(
+        snapshot.uncertainty.is_empty(),
+        "Git status evidence is uncertain: {:?}",
+        snapshot.uncertainty
+    );
+    anyhow::ensure!(
+        snapshot
+            .paths
+            .values()
+            .all(|entry| !entry.unstaged && !entry.untracked),
+        "unstaged or nonignored untracked changes remain after reconciliation"
+    );
+    for (path, entry) in &snapshot.paths {
+        anyhow::ensure!(
+            entry.staged
+                && path.ends_with(".md")
+                && matches!(entry.index_mode, Some(0o100644 | 0o100755)),
+            "post-reconciliation index is outside staged regular Markdown admission: {path}"
+        );
+    }
+    static_docs_worktree_matches_index(dir)?;
+    Ok(state)
+}
+
+/// The clean prepush consumer uses the same complete Markdown/config byte
+/// correspondence before requesting the ordinary Git-backed leaf.
+pub fn shared_static_docs_clean_admission(dir: &Path) -> Result<SharedVerdictGitState> {
+    let state = shared_verdict_git_state(dir)?;
+    anyhow::ensure!(
+        state.snapshot.uncertainty.is_empty() && state.snapshot.paths.is_empty(),
+        "prepush tree is not provably clean: {:?}",
+        state.snapshot.uncertainty
+    );
+    static_docs_worktree_matches_index(dir)?;
+    Ok(state)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedVerdictGitState {
+    snapshot: GitStatusSnapshot,
+    staged_raw_diff: Vec<u8>,
+}
+
+/// Capture the current Git status and raw staged-diff identity before a leaf
+/// request. This preserves staged content, not just its status letters.
+pub fn shared_verdict_git_state(dir: &Path) -> Result<SharedVerdictGitState> {
+    let snapshot = status_snapshot(dir)?;
+    let staged = at(dir)
+        .args([
+            "diff",
+            "--cached",
+            "--raw",
+            "-z",
+            "--no-abbrev",
+            "--no-renames",
+        ])
+        .output()
+        .with_context(|| "running NUL-delimited cached raw diff")?;
+    anyhow::ensure!(
+        staged.status.success(),
+        "git diff --cached --raw failed: {}",
+        String::from_utf8_lossy(&staged.stderr).trim()
+    );
+    Ok(SharedVerdictGitState {
+        snapshot,
+        staged_raw_diff: staged.stdout,
+    })
+}
+
+/// Fail if the Nix request changed the admitted Git state or if the bytes the
+/// ordinary Git flake would read no longer match its index.
+pub fn shared_verdict_state_unchanged(dir: &Path, before: &SharedVerdictGitState) -> Result<()> {
+    let after = shared_verdict_git_state(dir)?;
+    anyhow::ensure!(
+        before == &after,
+        "tracked, staged, or nonignored untracked Git state changed during static-docs request"
+    );
+    static_docs_worktree_matches_index(dir)
+}
+
+fn static_docs_worktree_matches_index(dir: &Path) -> Result<()> {
+    let index = at(dir)
+        .args(["ls-files", "--stage", "-z"])
+        .output()
+        .with_context(|| "running NUL-delimited git ls-files --stage")?;
+    anyhow::ensure!(
+        index.status.success(),
+        "git ls-files --stage failed: {}",
+        String::from_utf8_lossy(&index.stderr).trim()
+    );
+
+    let mut selected = Vec::new();
+    let mut records = index
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty());
+    for record in &mut records {
+        let separator = record
+            .iter()
+            .position(|byte| *byte == b'\t')
+            .context("malformed NUL-delimited stage record")?;
+        let (metadata, path_with_tab) = record.split_at(separator);
+        let path = &path_with_tab[1..];
+        if !is_static_docs_input_bytes(path) {
+            continue;
+        }
+        let path = std::str::from_utf8(path).context("non-UTF-8 static-docs input path")?;
+        let metadata = std::str::from_utf8(metadata).context("non-UTF-8 index metadata")?;
+        let fields = metadata.split_whitespace().collect::<Vec<_>>();
+        anyhow::ensure!(
+            fields.len() == 3 && fields[2] == "0",
+            "non-stage-0 index entry: {path}"
+        );
+        selected.push((path.to_owned(), fields[1].to_owned()));
+    }
+    if index.stdout.last() != Some(&0) && !index.stdout.is_empty() {
+        anyhow::bail!("unterminated NUL-delimited index record");
+    }
+
+    if selected.is_empty() {
+        return Ok(());
+    }
+    let paths = selected
+        .iter()
+        .map(|(path, _)| path.as_str())
+        .collect::<Vec<_>>();
+    let mut command = at(dir);
+    command.args(["hash-object", "--no-filters", "--"]);
+    command.args(&paths);
+    let hashes = command
+        .output()
+        .with_context(|| "hashing static-docs worktree inputs")?;
+    anyhow::ensure!(
+        hashes.status.success(),
+        "git hash-object --no-filters failed: {}",
+        String::from_utf8_lossy(&hashes.stderr).trim()
+    );
+    let hashes = std::str::from_utf8(&hashes.stdout).context("non-UTF-8 hash-object output")?;
+    let actual = hashes.lines().collect::<Vec<_>>();
+    anyhow::ensure!(
+        actual.len() == selected.len(),
+        "hash-object returned an incomplete input set"
+    );
+    for ((path, expected), actual) in selected.iter().zip(actual) {
+        anyhow::ensure!(
+            actual == expected,
+            "raw worktree bytes differ from staged index blob: {path}"
+        );
+    }
+    Ok(())
+}
+
+fn is_static_docs_input_bytes(path: &[u8]) -> bool {
+    if path == b".claude" || path.starts_with(b".claude/") {
+        return false;
+    }
+    path.ends_with(b".md")
+        || path == b".prettierrc.json"
+        || path.ends_with(b"/.prettierrc.json")
+        || path == b".prettierignore"
+        || path.ends_with(b"/.prettierignore")
+}
+
 /// Snapshot the complete dirty working tree and its staged index evidence.
 /// NUL-delimited porcelain preserves whitespace and prevents a path from being
 /// mistaken for status syntax; cached raw diff supplies the index mode.
@@ -833,6 +1002,73 @@ mod tests {
         let head = output(&dir, &["rev-parse", "HEAD"]).unwrap();
         assert_eq!(head.len(), 40, "full sha, trimmed: {head:?}");
         assert!(output(&dir, &["not-a-subcommand"]).is_err());
+    }
+
+    #[test]
+    fn static_docs_input_selector_matches_only_leaf_sources() {
+        assert!(is_static_docs_input_bytes(b"guide.md"));
+        assert!(is_static_docs_input_bytes(b"docs/nested/.prettierrc.json"));
+        assert!(is_static_docs_input_bytes(b".prettierignore"));
+        assert!(!is_static_docs_input_bytes(b"README.MD"));
+        assert!(!is_static_docs_input_bytes(b"tools/src/main.rs"));
+        assert!(!is_static_docs_input_bytes(b".claude/notes.md"));
+    }
+
+    #[test]
+    fn shared_markdown_admission_checks_raw_index_identity_and_clean_worktree() {
+        let dir = temp_repo("shared-markdown-admission");
+        commit(&dir, "guide.md", "# Guide\n");
+        write(&dir, "guide.md", "# Guide\nChanged\n");
+        git_ok(&dir, &["add", "guide.md"]);
+        assert!(shared_markdown_admission(&dir).is_ok());
+
+        write(&dir, "guide.md", "# Guide\nNot staged\n");
+        assert!(shared_markdown_admission(&dir).is_err());
+    }
+
+    #[test]
+    fn shared_markdown_admission_rejects_clean_tracked_markdown_conversion() {
+        let dir = temp_repo("shared-markdown-clean-md-eol");
+        write(&dir, ".gitattributes", "*.md text eol=crlf\n");
+        commit(&dir, ".gitattributes", "*.md text eol=crlf\n");
+        write(&dir, "untouched.md", "# Untouched\r\n");
+        commit(&dir, "untouched.md", "# Untouched\r\n");
+        assert!(output(&dir, &["status", "--porcelain"]).unwrap().is_empty());
+        assert!(shared_markdown_admission(&dir).is_err());
+        assert!(shared_static_docs_clean_admission(&dir).is_err());
+    }
+
+    #[test]
+    fn shared_markdown_admission_rejects_clean_config_conversion() {
+        let dir = temp_repo("shared-markdown-clean-config-eol");
+        write(
+            &dir,
+            ".gitattributes",
+            "**/.prettierrc.json text eol=crlf\n**/.prettierignore text eol=crlf\n",
+        );
+        commit(
+            &dir,
+            ".gitattributes",
+            "**/.prettierrc.json text eol=crlf\n**/.prettierignore text eol=crlf\n",
+        );
+        write(&dir, "docs/nested/.prettierrc.json", "{}\r\n");
+        commit(&dir, "docs/nested/.prettierrc.json", "{}\r\n");
+        write(&dir, "docs/nested/.prettierignore", "*.tmp\r\n");
+        commit(&dir, "docs/nested/.prettierignore", "*.tmp\r\n");
+        assert!(output(&dir, &["status", "--porcelain"]).unwrap().is_empty());
+        assert!(shared_markdown_admission(&dir).is_err());
+        assert!(shared_static_docs_clean_admission(&dir).is_err());
+    }
+
+    #[test]
+    fn shared_markdown_admission_rejects_clean_eol_conversion() {
+        let dir = temp_repo("shared-markdown-eol");
+        write(&dir, ".gitattributes", "*.md text eol=crlf\n");
+        commit(&dir, ".gitattributes", "*.md text eol=crlf\n");
+        write(&dir, "guide.md", "# Guide\r\nChanged\r\n");
+        git_ok(&dir, &["add", "guide.md"]);
+        assert!(output(&dir, &["diff", "--quiet"]).is_ok());
+        assert!(shared_markdown_admission(&dir).is_err());
     }
 
     #[test]
