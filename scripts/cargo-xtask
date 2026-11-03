@@ -21,4 +21,9 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR G
 root=$(git rev-parse --show-toplevel)
 # Keep checkout names out of installable syntax (#, ? and % are delimiters).
 cd -- "$root"
-exec nix run .#xtask -- "$@"
+# Build the host executable without a result symlink, then run it on the host.
+# The two nested launcher spans share this invocation's traced-run timeline.
+xtask_output=$(traced-run --launcher --name xtask-acquire -- \
+  nix build .#xtask --no-link --print-out-paths)
+exec traced-run --launcher --name xtask-execute -- \
+  "$xtask_output/bin/xtask" "$@"

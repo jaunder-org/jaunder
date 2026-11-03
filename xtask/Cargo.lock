@@ -5562,6 +5562,8 @@ dependencies = [
  "tar",
  "tempfile",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "url",
  "wasm-encoder",
  "wasmparser",
