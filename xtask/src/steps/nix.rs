@@ -37,6 +37,7 @@ const STATIC_CHECKS: [(&str, &str); 3] = [
     ("nix-static-docs", "static-docs"),
     ("nix-static-code", "static-code"),
     ("nix-static-ert", "static-ert"),
+    ("nix-xtask-format", "xtask-format"),
 ];
 
 /// Whether every result appended by the browser/backend E2E combinations passed.
@@ -2722,6 +2723,7 @@ mod tests {
                 ("nix-static-docs", "static-docs"),
                 ("nix-static-code", "static-code"),
                 ("nix-static-ert", "static-ert"),
+                ("nix-xtask-format", "xtask-format"),
             ]
         );
         assert!(

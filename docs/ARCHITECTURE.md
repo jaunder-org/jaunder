@@ -4402,21 +4402,31 @@ checks (`byte-compile`, `tsc`, `cargo-deny`, `clippy`, `web-server-clippy`,
 `xtask/src/lib.rs`):
 
 The host _step_ above runs the listed sub-steps through host-local lanes. The
-hermetic surface has `static-docs` running `devtool check --group docs` over
-Markdown and Prettier configuration, `static-code` running
-`devtool check --group code --sandbox-cargo` over the remaining non-document
-checks with workspace-specific offline Cargo homes, and `static-ert` running
-`devtool check --group ert`. The ERT leaf receives the complete non-Markdown
-`elisp/` tree in a writable copy, shared `devtoolBin`, existing `emacsForCi`
-(including plz, Undercover and cmarkEl), Git and `TZDIR`. It preserves the
-standalone runner's population and is non-substitutable, but valid local outputs
-may still be reused. Elisp source overlap remains in `static-code` for
-formatting and byte compilation; no speedup or source-cache isolation is
-claimed.
+The hermetic shared static surface has `static-docs` running
+`devtool check --group docs` over Markdown and Prettier configuration,
+`static-code` running `devtool check --group code --sandbox-cargo` over the
+remaining non-document checks with workspace-specific offline Cargo homes, and
+`static-ert` running `devtool check --group ert`. The ERT leaf receives the
+complete non-Markdown `elisp/` tree in a writable copy, shared `devtoolBin`,
+existing `emacsForCi` (including plz, Undercover and cmarkEl), Git and `TZDIR`.
+It preserves the standalone runner's population and is non-substitutable, but
+valid local outputs may still be reused. Elisp source overlap remains in
+`static-code` for formatting and byte compilation; no speedup or source-cache
+isolation is claimed.
 
-`validate --no-e2e` builds `nix-static-docs`, `nix-static-code`, then
-`nix-static-ert` before the Nix test checks. ADR-0178 established the original
-two-group/two-leaf documentation split, not a generic extraction policy
+The independent `xtask-format` leaf runs pinned raw
+`cargo fmt --manifest-path xtask/Cargo.toml --check`, without `--all`, devtool,
+or offline Cargo homes. Its bounded direct filter admits xtask Rust targets and
+required Cargo manifests/configuration, with dependency target placeholders for
+metadata but no dependency implementation sources. It is required once by
+`nix flake check` and hermetic validation, and never executes xtask. This narrow
+source-admission exception preserves ADR-0028's host-only xtask execution
+boundary.
+
+`validate --no-e2e` builds `nix-static-docs`, `nix-static-code`,
+`nix-static-ert`, and `nix-xtask-format` before the Nix test checks. ADR-0178
+established the original two-group/two-leaf documentation split, not a generic
+extraction policy
 ([hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md)).
 The concrete further ERT extraction was separately approved in the
 [ERT spec](https://github.com/jaunder-org/jaunder/blob/ba7fdf416d8ec7b14c86b163ead41feaf3dc12c7/docs/superpowers/specs/2026-11-03-issue-1864-elisp-ert.md)
@@ -4482,9 +4492,9 @@ evaluation can require declared source preparation. Identity stability alone is
 not local/remote cache or compiler freshness evidence.
 
 The full `cargo xtask validate` is still the aggregate ship gate: its `--no-e2e`
-prefix builds both static groups and the Nix-backed test checks, then adds all
-eight retained E2E lanes, both Firefox reconciliations, and server-function
-coverage verification.
+prefix builds both static groups, `xtask-format`, and the Nix-backed test
+checks, then adds all eight retained E2E lanes, both Firefox reconciliations,
+and server-function coverage verification.
 [Measuring Nix invalidation](../CONTRIBUTING.md#measuring-nix-invalidation)
 defines optional historical reproduction of the controlled invalidation matrix,
 including markers and sidecars. The current tooling dependency campaign uses the
@@ -4520,7 +4530,12 @@ existing static-check mechanism while retaining host-local Cargo artifacts and
 sccache for Rust-compiling checks; sandboxed Nix lanes execute the same
 definitions through their `docs` or `code` group, with the code group using
 workspace-specific offline Cargo homes. `xtask-fmt` and `xtask-clippy` remain
-native host checks because `xtask/` is excluded from the flake source.
+native host checks. The independent `xtask-format` flake check runs only pinned
+`cargo fmt --manifest-path xtask/Cargo.toml --check`, without `--all`, devtool,
+or offline Cargo homes. Its direct source filter admits xtask Rust targets,
+required manifests/configuration, and dependency metadata target placeholders,
+not dependency implementation sources. This narrow source exception preserves
+ADR-0028: Nix never executes xtask.
 
 | Step                                       | Guards                                                                                                                                                           |
 | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -4667,10 +4682,11 @@ whose every line appears in a plain fence **in the same doc comment**; the run
 is `cargo test --workspace --doc`, never package-scoped. `workspace-doctests`
 runs and reconciles the root-workspace population during `prepush`; the Nix
 `doctests` producer/gate remains the sandbox/offline authority for that same
-population. The `doctest-fences` step covers `xtask/` and `tools`, which the
-flake's source filter excludes (`xtask/src/steps/doctest_fences.rs`). Doctests
-feed no coverage: `llvm-cov --doctests` is unstable, so `--doc` runs outside
-instrumentation.
+population. The `doctest-fences` step covers `xtask/` and `tools`, which remain
+outside the root-workspace Nix doctest population
+(`xtask/src/steps/doctest_fences.rs`). The `xtask-format` source exception
+grants only raw formatting, not doctest execution. Doctests feed no coverage:
+`llvm-cov --doctests` is unstable, so `--doc` runs outside instrumentation.
 
 ### Server-fn gates
 
@@ -4815,10 +4831,11 @@ interface; devtool has no `run` subcommand or runner dependency.
 
 **xtask is host-only — an enforced invariant.** Nix derivations never invoke
 xtask; the flow is strictly one-directional (host `cargo xtask` → `nix build`).
-The application source filter excludes `xtask/` (`!hasInfix "/xtask/" path` in
-`nix/packages.nix:22-41`), so an accidental `cargo xtask` inside a derivation
-fails loudly rather than running a stale copy, and frequently-edited gate logic
-never busts the coverage/e2e cache
+The independent raw `xtask-format` verdict admits xtask source only as
+Cargo/rustfmt input, never for execution. The application source filter excludes
+`xtask/` (`!hasInfix "/xtask/" path` in `nix/packages.nix:22-41`), so an
+accidental `cargo xtask` inside a derivation fails loudly rather than running a
+stale copy, and frequently-edited gate logic never busts the coverage/e2e cache
 ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)). xtask is also excluded from
 the root cargo workspace (`exclude = ["xtask"]`, with its own `[workspace]` in
 `xtask/Cargo.toml`), and `tools/` is a second standalone workspace (`coverage`,

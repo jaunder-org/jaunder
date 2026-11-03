@@ -17,7 +17,7 @@ implement the unapproved Rust-format or Clippy proposals.
 
 ## Task outline
 
-- [ ] Task 1: Add the raw xtask-format Nix leaf and bounded source closure.
+- [x] Task 1: Add the raw xtask-format Nix leaf and bounded source closure.
   - Contract: In `nix/checks.nix`, define a separately named terminal verdict
     that runs the exact Cargo command above: no `--all`, no `cargo xtask`, no
     compiled devtool, and no product/tools offline Cargo homes. Admit xtask's
@@ -43,7 +43,7 @@ implement the unapproved Rust-format or Clippy proposals.
     verify the leaf fails, restore/discard it and confirm the working source
     tree is unchanged.
 
-- [ ] Task 2: Require the leaf in both consumers and reconcile maintained
+- [x] Task 2: Require the leaf in both consumers and reconcile maintained
       documentation.
   - Contract: Add the leaf exactly once to `nix flake check` exposure in the
     checks set and to the hermetic `validate --no-e2e` static-check consumer in

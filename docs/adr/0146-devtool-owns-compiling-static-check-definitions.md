@@ -44,8 +44,16 @@ removed only with replacement wiring that keeps the expanded hermetic
 `cargo xtask validate --no-e2e` builds it as the `nix-static-checks` step before
 the Nix test checks.
 
-`xtask-fmt` and `xtask-clippy` remain native host checks. `xtask/` is excluded
-from the flake source and must not be invoked from Nix derivations.
+`xtask-fmt` and `xtask-clippy` remain native host checks. The separate
+`xtask-format` Nix verdict also runs the exact raw
+`cargo fmt --manifest-path xtask/Cargo.toml --check` with pinned Cargo/rustfmt,
+without `--all`. Its narrow source exception admits xtask Rust targets and
+required manifests/configuration, with dependency target placeholders rather
+than dependency implementation sources. It uses neither compiled devtool nor
+offline Cargo homes. Flake checks and hermetic validation require this leaf
+alongside the shared static groups. This source admission does not authorize
+executing xtask inside a derivation: ADR-0028's host-only execution boundary
+remains binding.
 
 ## Consequences
 
