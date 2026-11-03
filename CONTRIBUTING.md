@@ -955,11 +955,11 @@ The Emacs client lives in `elisp/` (see [`elisp/README.md`](elisp/README.md)).
 Its ERT suite, formatter, and byte-compilation run in the verify ladder: `ert`,
 `elisp-fmt`, and `byte-compile` (which byte-compiles the package modules with
 warnings promoted to errors) are `cargo xtask check`/`validate` steps that run
-through `devtool check` — the same implementations the `static-code` Nix
-derivation runs, so `nix flake check` covers them too, with no duplicated
-sibling to drift (#188). prettier cannot format Emacs Lisp, so `elisp-fmt` uses
-built-in `emacs-lisp-mode` indentation (auto-fix under `check`, verify under
-`validate`).
+through `devtool check` — the same implementations the `static-ert` (pure ERT)
+and `static-code` (formatting/byte-compilation) Nix derivations run, so
+`nix flake check` covers them too, with no duplicated sibling to drift (#188).
+prettier cannot format Emacs Lisp, so `elisp-fmt` uses built-in
+`emacs-lisp-mode` indentation (auto-fix under `check`, verify under `validate`).
 
 `validate --no-e2e` builds `elisp-coverage-producer`, which runs the pure and
 self-booting live ERT populations once in a hermetic VM. Its fixed
@@ -1711,15 +1711,17 @@ omits instrumentation/minicov and diagnostic exports—the precisely measured
 differences.
 
 **Nix invalidation-boundary guard (`cargo xtask nix probe-source`).** The
-hermetic static surface is two semantic derivations, not a singular
+hermetic static surface has separate semantic derivations, not a singular
 `static-checks`: `static-docs` owns Markdown formatting and its configuration;
-`static-code` owns every other hermetic static definition. The CSR/site source
-closure contains workspace manifests, the resolved `csr` target closure, its
-required shell inputs, and deterministic workspace placeholders. The client
-wasm-test closure analogously contains workspace manifests, the resolved
-`client` wasm-test target closure, and its required inputs/placeholders.
-`common` and `macros` remain wherever a resolved target reaches them; unrelated
-`server`, `storage`, and host-only sources are absent from both closures.
+`static-ert` owns standalone pure ERT, and `static-code` owns the remaining
+hermetic static definitions. The existing probe below covers its original
+boundaries; it does not yet probe `static-ert`. The CSR/site source closure
+contains workspace manifests, the resolved `csr` target closure, its required
+shell inputs, and deterministic workspace placeholders. The client wasm-test
+closure analogously contains workspace manifests, the resolved `client`
+wasm-test target closure, and its required inputs/placeholders. `common` and
+`macros` remain wherever a resolved target reaches them; unrelated `server`,
+`storage`, and host-only sources are absent from both closures.
 
 `cargo xtask nix probe-source` creates isolated tracked marker perturbations and
 **evaluates** the flake `.drv` identities without realizing outputs. It fails
@@ -1781,10 +1783,25 @@ reconciliation, and server-function coverage verification.
   Markdown-formatting and configuration boundary.
 - `checks.x86_64-linux.static-code` —
   `devtool check --group code --sandbox-cargo`, every remaining shared static
-  definition (including end-to-end formatting, TypeScript, Elisp, Rust/tools
-  compilation and formatting, cargo-deny, clippy, and repository scanners),
-  executed with the same offline Cargo homes as the prior hermetic proof. The
-  host `devtool check --all` aggregate remains the exact, duplicate-free union.
+  definition outside standalone ERT (including end-to-end formatting,
+  TypeScript, Elisp formatting/byte-compilation, Rust/tools compilation and
+  formatting, cargo-deny, clippy, and repository scanners), executed with the
+  same offline Cargo homes as the prior hermetic proof. The host
+  `devtool check --all` aggregate remains the exact ordered, duplicate-free
+  union of `docs`, `code`, and `ert`, with ERT still after `tools-clippy`.
+- `checks.x86_64-linux.static-ert` — `devtool check --group ert`, the standalone
+  pure runner over the complete non-Markdown Elisp tree, in a writable copy,
+  with existing `emacsForCi`, Git and timezone inputs. The separate combined
+  pure/live coverage producer below is unchanged. `validate` builds static
+  leaves in docs/code/ert order; TypeScript's separately owned integration will
+  add its leaf between docs and code. The ERT leaf is non-substitutable but may
+  reuse a valid local output. Child timing is separate from request duration:
+  host xtask accepts only current captured devtool stderr. The ERT Nix request
+  uses current live `internal-json` local-builder activity correlation, verified
+  with Nix 2.34.9: exact selected derivation, active activity-ID-linked child
+  event and matching stop. Reuse or missing/malformed/ambiguous/unsupported
+  evidence leaves execution timing unavailable; retained logs are never timing
+  inputs. Request duration and reuse classification remain separate.
 - `checks.x86_64-linux.wasm-tests` — `wasm-bindgen-test` cases executed in
   headless Nix-store Chromium through the matching Nix-store chromedriver. This
   is behavioral pass/fail execution for irreducible browser code, not wasm line
