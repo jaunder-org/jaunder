@@ -385,6 +385,27 @@ mod tests {
     }
 
     #[test]
+    fn parentless_request_hit_remains_a_no_parent_orphan() {
+        let mut spans = sample_spans();
+        let request = spans
+            .iter_mut()
+            .find(|span| span.name == "request" && span.uri.starts_with("/api/create_post"))
+            .expect("create_post request");
+        request.parent_span_id.clear();
+
+        let coverage = extract(&spans, &sample_inventory());
+        assert!(
+            !coverage.covered.contains_key("posts::create_post"),
+            "a parentless request must not be credited to a test"
+        );
+        assert_eq!(
+            coverage.orphans.get("posts::create_post"),
+            Some(&BTreeSet::from(["no-parent".to_string()])),
+            "the request and instrument hit remain explicitly orphaned"
+        );
+    }
+
+    #[test]
     fn orphan_reasons_are_distinguishable() {
         use super::OrphanReason;
         // Each variant renders to its own key, so the snapshot can be read for

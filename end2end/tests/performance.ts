@@ -496,15 +496,33 @@ export function navigationTopTelemetryFrom(
  * Must be called for EVERY context a test uses: `browser.newContext()` does not
  * inherit the config-level `extraHTTPHeaders`, so a throwaway context would
  * otherwise send no traceparent whatsoever and its traffic would be orphaned.
+ * Pass the resolved default or helper-context option headers so all non-parent
+ * headers survive; any case-insensitive existing `traceparent` is replaced.
  */
+type ExtraHTTPHeaders = Parameters<BrowserContext["setExtraHTTPHeaders"]>[0];
+
+function withTestTraceparent(
+  headers: ExtraHTTPHeaders | undefined,
+  traceparent: string,
+): ExtraHTTPHeaders {
+  const withoutExistingTraceparent = Object.fromEntries(
+    Object.entries(headers ?? {}).filter(
+      ([name]) => name.toLowerCase() !== "traceparent",
+    ),
+  );
+  return { ...withoutExistingTraceparent, traceparent };
+}
+
+/** Add the per-test parent while preserving configured request headers. */
 export async function applyTestTraceparent(
   context: BrowserContext,
   traceId: string,
   testSpanId: string,
+  extraHTTPHeaders?: ExtraHTTPHeaders,
 ): Promise<void> {
-  await context.setExtraHTTPHeaders({
-    traceparent: `00-${traceId}-${testSpanId}-01`,
-  });
+  await context.setExtraHTTPHeaders(
+    withTestTraceparent(extraHTTPHeaders, `00-${traceId}-${testSpanId}-01`),
+  );
 }
 
 export const lifecycleStartFixture = [
@@ -519,6 +537,33 @@ export const lifecycleStartFixture = [
 export const testSpanIdFixture = async ({}, use: Use<string>) => {
   await use(newSpanId());
 };
+
+export const autoTestTraceparentFixture = [
+  async (
+    {
+      context,
+      testSpanId,
+      extraHTTPHeaders,
+    }: {
+      context: BrowserContext;
+      testSpanId: string;
+      extraHTTPHeaders: ExtraHTTPHeaders | undefined;
+    },
+    use: Use<void>,
+  ) => {
+    const { traceId } = traceContextFromEnvironment();
+    await applyTestTraceparent(context, traceId, testSpanId, extraHTTPHeaders);
+    await use();
+  },
+  { auto: true },
+] satisfies AutoFixture<
+  {
+    context: BrowserContext;
+    testSpanId: string;
+    extraHTTPHeaders: ExtraHTTPHeaders | undefined;
+  },
+  void
+>;
 
 export const bootTimingFixture = async (
   { testSpanId }: { testSpanId: string },
@@ -553,7 +598,12 @@ export const tracedContextFixture = async (
   try {
     await use(async (options) => {
       const context = await browser.newContext(options);
-      await applyTestTraceparent(context, traceId, testSpanId);
+      await applyTestTraceparent(
+        context,
+        traceId,
+        testSpanId,
+        options?.extraHTTPHeaders,
+      );
       // Same instrumentation the default page gets, through the same code path —
       // an uninstrumented extra context makes a multi-context test under-report
       // its own client cost (#794).
@@ -608,7 +658,13 @@ export const autoPerfSpanFixture = [
       page,
       testSpanId,
       _lifecycleStart,
-    }: { page: Page; testSpanId: string; _lifecycleStart: number },
+      extraHTTPHeaders,
+    }: {
+      page: Page;
+      testSpanId: string;
+      _lifecycleStart: number;
+      extraHTTPHeaders: ExtraHTTPHeaders | undefined;
+    },
     use: Use<void>,
     testInfo: TestInfo,
   ) => {
@@ -633,6 +689,7 @@ export const autoPerfSpanFixture = [
       page.context(),
       traceContext.traceId,
       testSpanId,
+      extraHTTPHeaders,
     );
     const testStartMs = Date.now();
     const testKey = `${testInfo.file}::${testInfo.title}::${testInfo.project.name}::${testInfo.retry}`;
@@ -995,6 +1052,7 @@ export const autoPerfSpanFixture = [
     page: Page;
     testSpanId: string;
     _lifecycleStart: number;
+    extraHTTPHeaders: ExtraHTTPHeaders | undefined;
   },
   void
 >;
