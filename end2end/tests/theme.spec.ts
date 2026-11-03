@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 import { test, expect } from "./fixtures";
 import { BASE_URL, goto, signInAsNewUser } from "./helpers";
 import {
@@ -99,6 +101,7 @@ test(
     await expect(page.getByRole("button", { name: "Actions" })).toHaveCount(2);
     await expectVisual(page, "home-timeline.png", {
       mask: [page.locator(".j-post-time")],
+      stylePath: join(__dirname, "home-timeline.visual.css"),
     });
     await expectAccessible(page);
   },

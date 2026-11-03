@@ -12,6 +12,7 @@ import { autoBootBudgetFixture } from "./bootBudget";
 import {
   applyTestTraceparent,
   autoPerfSpanFixture,
+  autoTestTraceparentFixture,
   bootTimingFixture,
   browserTraceFixture,
   lifecycleStartFixture,
@@ -43,6 +44,7 @@ const test = base.extend<{
   _autoDurationBudget: void;
   _autoBootBudget: void;
   _autoPerfSpan: void;
+  _autoTestTraceparent: void;
   testSpanId: string;
   tracedContext: NewTracedContext;
   bootTiming: () => Promise<DocumentTiming | undefined>;
@@ -62,6 +64,9 @@ const test = base.extend<{
   tracedContext: tracedContextFixture,
   _autoTestTimeout: autoTestTimeoutFixture,
   _autoDurationBudget: autoDurationBudgetFixture,
+  // Apply attribution after timeout policy, but before page-dependent fixtures:
+  // a derived page fixture can navigate before yielding to `_autoPerfSpan`.
+  _autoTestTraceparent: autoTestTraceparentFixture,
   firstNav: firstNavFixture,
   registeredPage: registeredPageFixture,
   user: userFixture,
@@ -81,11 +86,14 @@ const testWithoutAutoBootBudget = test.extend({
 /**
  * The project fixture surface without browser-backed setup.
  *
- * Pure tests retain timeout and lifecycle policy while overriding both
- * automatic fixtures that request `page`.
+ * Pure tests retain timeout and lifecycle policy while overriding automatic
+ * fixtures that require browser-backed setup.
  */
 const nonBrowserTest = testWithoutAutoBootBudget.extend({
   _autoPerfSpan: async ({}, use) => {
+    await use();
+  },
+  _autoTestTraceparent: async ({}, use) => {
     await use();
   },
 });
