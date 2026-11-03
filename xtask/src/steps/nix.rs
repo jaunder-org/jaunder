@@ -1820,7 +1820,25 @@ fn finish_build_with(
 /// --accept-flake-config honors the jaunder-org cachix substituter for the
 /// untrusted local user; --out-link makes the closure a GC root.
 fn build_check(step_name: &str, check: &str) -> StepResult {
-    build_installable(step_name, check, &format!(".#checks.{SYSTEM}.{check}"))
+    build_check_with_flags(step_name, check, &[])
+}
+
+fn build_check_with_flags(step_name: &str, check: &str, flags: &[&str]) -> StepResult {
+    build_installable_with_flags(
+        step_name,
+        check,
+        &format!(".#checks.{SYSTEM}.{check}"),
+        flags,
+    )
+}
+
+/// The hook's ordinary Git-flake request must not update or write the lock file.
+pub(crate) fn shared_static_docs_check() -> StepResult {
+    build_check_with_flags(
+        "nix-static-docs",
+        "static-docs",
+        &["--no-update-lock-file", "--no-write-lock-file"],
+    )
 }
 
 /// Build an on-demand package through the same diagnostic-preserving host seam
@@ -1834,6 +1852,15 @@ fn build_package(step_name: &str, package: &str) -> StepResult {
 }
 
 fn build_installable(step_name: &str, check: &str, installable: &str) -> StepResult {
+    build_installable_with_flags(step_name, check, installable, &[])
+}
+
+fn build_installable_with_flags(
+    step_name: &str,
+    check: &str,
+    installable: &str,
+    extra_flags: &[&str],
+) -> StepResult {
     let start = std::time::Instant::now();
     let mut provenance = check
         .strip_prefix("e2e-")
@@ -1851,7 +1878,11 @@ fn build_installable(step_name: &str, check: &str, installable: &str) -> StepRes
     };
     let out_link = format!(".xtask/gcroots/{check}");
     let log_dir = format!(".xtask/diagnostics/{check}");
-    let before = nix_build::observe(installable);
+    let before = if extra_flags.is_empty() {
+        nix_build::observe(installable)
+    } else {
+        nix_build::observe_readonly(installable)
+    };
     if let Some(request) = &mut provenance {
         request.selected(before.evidence());
     }
@@ -1875,8 +1906,9 @@ fn build_installable(step_name: &str, check: &str, installable: &str) -> StepRes
                 "--accept-flake-config",
                 "--out-link",
                 &out_link,
-                installable,
             ])
+            .args(extra_flags)
+            .arg(installable)
             .inherit_stdin()
             .stdout(StdioMode::Inherit)
             .stderr(StdioMode::Piped)
@@ -1907,7 +1939,13 @@ fn build_installable(step_name: &str, check: &str, installable: &str) -> StepRes
         },
         || write_failure_excerpt(&log_path),
         || rescue_diagnostics(check, &mut capture_recovery),
-        || before.finish(installable),
+        || {
+            if extra_flags.is_empty() {
+                before.finish(installable)
+            } else {
+                before.finish_readonly(installable)
+            }
+        },
         &mut io::stderr(),
     )
     .with_duration(start.elapsed());

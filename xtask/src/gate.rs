@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use xshell::Shell;
 
 use crate::{
@@ -62,14 +64,26 @@ impl HostGateStep {
     ) {
         match self {
             Self::StaticChecks(phase) => {
-                run_static_phase_with(
-                    sh,
-                    mode,
-                    *phase,
-                    policy,
-                    result,
-                    steps::static_checks::run_spec,
-                );
+                if matches!(phase, steps::static_checks::Phase::SourceConsistency)
+                    && result.command == "prepush"
+                {
+                    run_prepush_source_consistency(
+                        sh,
+                        mode,
+                        policy,
+                        result,
+                        cfg!(all(target_os = "linux", target_arch = "x86_64")),
+                    );
+                } else {
+                    run_static_phase_with(
+                        sh,
+                        mode,
+                        *phase,
+                        policy,
+                        result,
+                        steps::static_checks::run_spec,
+                    );
+                }
             }
             Self::ResultOnly { name, run, .. } => {
                 debug_assert!(!name.is_empty());
@@ -173,6 +187,52 @@ pub(crate) fn run_static_phase_with(
                 eprintln!("xtask-check-step-start: {}", spec.name);
             }
             result.push(run(sh, &spec));
+        },
+    );
+}
+
+fn run_prepush_source_consistency(
+    sh: &Shell,
+    mode: Mode,
+    policy: ExecutionPolicy,
+    result: &mut CommandResult,
+    use_shared_docs: bool,
+) {
+    run_prepush_source_consistency_with(
+        mode,
+        policy,
+        result,
+        use_shared_docs,
+        |spec| steps::static_checks::run_spec(sh, spec),
+        |result| {
+            crate::lifecycle::run_shared_static_docs_request(
+                Path::new("."),
+                true,
+                steps::nix::shared_static_docs_check,
+                result,
+            );
+        },
+    );
+}
+
+fn run_prepush_source_consistency_with(
+    mode: Mode,
+    policy: ExecutionPolicy,
+    result: &mut CommandResult,
+    use_shared_docs: bool,
+    mut run_host: impl FnMut(&steps::static_checks::StepSpec) -> StepResult,
+    mut run_shared: impl FnMut(&mut CommandResult),
+) {
+    run_with_policy(
+        policy,
+        result,
+        steps::static_checks::specs_for_phase(steps::static_checks::Phase::SourceConsistency, mode),
+        |spec, result| {
+            if use_shared_docs && spec.name == "prettier-markdown" {
+                run_shared(result);
+            } else {
+                result.push(run_host(&spec));
+            }
         },
     );
 }
@@ -653,6 +713,93 @@ mod tests {
             .iter()
             .position(|candidate| *candidate == name)
             .unwrap_or_else(|| panic!("{name} is present"))
+    }
+
+    #[test]
+    fn prepush_replaces_only_markdown_verify_at_its_existing_position() {
+        let mut result = CommandResult::new("prepush");
+        let mut names = Vec::new();
+        let host_steps = std::cell::Cell::new(0);
+        let shared_position = std::cell::Cell::new(usize::MAX);
+        run_prepush_source_consistency_with(
+            Mode::Check,
+            ExecutionPolicy::Exhaustive,
+            &mut result,
+            true,
+            |spec| {
+                names.push(spec.name);
+                host_steps.set(host_steps.get() + 1);
+                StepResult::ok(spec.name)
+            },
+            |result| {
+                shared_position.set(host_steps.get());
+                result.push(StepResult::ok("nix-static-docs"));
+            },
+        );
+        assert_eq!(
+            shared_position.get(),
+            2,
+            "the Markdown Verify slot follows fmt and leptosfmt"
+        );
+        assert_eq!(
+            result.steps[2].name, "nix-static-docs",
+            "the leaf takes exactly the existing Markdown Verify slot"
+        );
+        assert_eq!(names.len() + 1, result.steps.len());
+        assert_eq!(
+            names
+                .iter()
+                .copied()
+                .filter(|name| *name == "prettier-end2end")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn prepush_leaf_failure_stops_later_source_checks() {
+        let mut result = CommandResult::new("prepush");
+        let mut names = Vec::new();
+        run_prepush_source_consistency_with(
+            Mode::Check,
+            ExecutionPolicy::FailFast,
+            &mut result,
+            true,
+            |spec| {
+                names.push(spec.name);
+                StepResult::ok(spec.name)
+            },
+            |result| result.push(StepResult::fail("nix-static-docs").detail("leaf failure")),
+        );
+        assert_eq!(names, ["fmt", "leptosfmt"]);
+        assert_eq!(result.steps.last().unwrap().name, "nix-static-docs");
+        assert!(!result.ok);
+    }
+
+    #[test]
+    fn prepush_non_x86_fallback_runs_host_markdown_verify_without_leaf_request() {
+        let mut result = CommandResult::new("prepush");
+        let mut names = Vec::new();
+        let shared_requested = std::cell::Cell::new(false);
+        run_prepush_source_consistency_with(
+            Mode::Check,
+            ExecutionPolicy::Exhaustive,
+            &mut result,
+            false,
+            |spec| {
+                names.push(spec.name);
+                StepResult::ok(spec.name)
+            },
+            |_| shared_requested.set(true),
+        );
+        assert!(names.contains(&"prettier-markdown"));
+        assert!(!shared_requested.get());
+        assert!(
+            !result
+                .steps
+                .iter()
+                .any(|step| step.name == "nix-static-docs")
+        );
     }
 
     #[test]

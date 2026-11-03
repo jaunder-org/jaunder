@@ -62,6 +62,37 @@ pub(crate) fn run_precommit_with_host_gate(
     dir: &Path,
     run_gate: impl FnOnce(git::PrecommitChangeClass, &mut CommandResult),
 ) -> anyhow::Result<CommandResult> {
+    run_precommit_with_shared_verdict(dir, run_gate, |_| {
+        #[cfg(test)]
+        {
+            StepResult::ok("mock-nix")
+        }
+        #[cfg(not(test))]
+        {
+            crate::steps::nix::shared_static_docs_check()
+        }
+    })
+}
+
+fn run_precommit_with_shared_verdict(
+    dir: &Path,
+    run_gate: impl FnOnce(git::PrecommitChangeClass, &mut CommandResult),
+    request: impl FnOnce(&Path) -> StepResult,
+) -> anyhow::Result<CommandResult> {
+    run_precommit_with_shared_verdict_for_platform(
+        dir,
+        cfg!(all(target_os = "linux", target_arch = "x86_64")),
+        run_gate,
+        request,
+    )
+}
+
+fn run_precommit_with_shared_verdict_for_platform(
+    dir: &Path,
+    shared_docs_enabled: bool,
+    run_gate: impl FnOnce(git::PrecommitChangeClass, &mut CommandResult),
+    request: impl FnOnce(&Path) -> StepResult,
+) -> anyhow::Result<CommandResult> {
     let start = std::time::Instant::now();
     let before = git::status_snapshot(dir)?;
     let class = git::classify_precommit_change(&before);
@@ -71,8 +102,48 @@ pub(crate) fn run_precommit_with_host_gate(
     let after = git::status_snapshot(dir)?;
     let plan = git::precommit_stage_plan(&before, &after);
     result.push(git::apply_precommit_stage_plan(dir, &plan));
+    let host_and_stage_succeeded = !result.steps.iter().any(StepResult::is_blocking_failure);
+    if matches!(class, git::PrecommitChangeClass::StagedMarkdownOnly)
+        && shared_docs_enabled
+        && host_and_stage_succeeded
+    {
+        run_shared_static_docs_request(dir, false, || request(dir), &mut result);
+    }
     finalize(&mut result, start);
     Ok(result)
+}
+
+/// Admit, request, and then verify the post-request Git state without staging
+/// or reconciling a second time.
+pub(crate) fn run_shared_static_docs_request(
+    dir: &Path,
+    require_clean: bool,
+    request: impl FnOnce() -> StepResult,
+    result: &mut CommandResult,
+) {
+    let before = if require_clean {
+        git::shared_static_docs_clean_admission(dir)
+    } else {
+        git::shared_markdown_admission(dir)
+    };
+    let before = match before {
+        Ok(state) => {
+            result.push(StepResult::ok("shared-static-docs-admission"));
+            state
+        }
+        Err(error) => {
+            result.push(
+                StepResult::fail("shared-static-docs-admission").detail(format!("{error:#}")),
+            );
+            return;
+        }
+    };
+    result.push(request());
+    let post_check = match git::shared_verdict_state_unchanged(dir, &before) {
+        Ok(()) => StepResult::ok("shared-static-docs-state"),
+        Err(error) => StepResult::fail("shared-static-docs-state").detail(format!("{error:#}")),
+    };
+    result.push(post_check);
 }
 
 #[cfg(test)]
@@ -206,6 +277,26 @@ mod tests {
             Some("class=staged-markdown-only reason=isolated-staged-markdown")
         );
         assert!(result.ok);
+        let mut expected = vec![
+            "precommit-routing",
+            "fake-markdown-host-gate",
+            "precommit-staging",
+        ];
+        if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            expected.extend([
+                "shared-static-docs-admission",
+                "mock-nix",
+                "shared-static-docs-state",
+            ]);
+        }
+        assert_eq!(
+            result
+                .steps
+                .iter()
+                .map(|step| step.name.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
         assert_eq!(
             git::output(&dir, &["diff", "--cached", "--name-only"]).expect("cached paths"),
             "guide.md"
@@ -250,6 +341,295 @@ mod tests {
                 .filter(|step| step.name == "precommit-staging")
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn staging_failure_skips_shared_request_after_one_reconciliation_attempt() {
+        let dir = crate::test_support::temp_repo("precommit", "stage-admission-failure");
+        crate::test_support::commit(&dir, "guide.md", "# Guide\n");
+        crate::test_support::write(&dir, "guide.md", "# Guide\nChanged\n");
+        crate::test_support::git_ok(&dir, &["add", "guide.md"]);
+        let requested = std::cell::Cell::new(false);
+        let result = run_precommit_with_shared_verdict(
+            &dir,
+            |_, result| {
+                crate::test_support::write(&dir, "guide.md", "# Guide\nChanged\nFormatted\n");
+                crate::test_support::write(&dir, "unexpected.md", "not admitted\n");
+                result.push(StepResult::ok("host-checks"));
+            },
+            |_| {
+                requested.set(true);
+                StepResult::ok("unexpected-nix")
+            },
+        )
+        .unwrap();
+        assert!(!requested.get());
+        assert_eq!(
+            result
+                .steps
+                .iter()
+                .filter(|step| step.name == "precommit-staging")
+                .count(),
+            1
+        );
+        assert!(
+            result
+                .steps
+                .iter()
+                .any(|step| step.name == "precommit-staging" && !step.ok)
+        );
+    }
+
+    #[test]
+    fn conversion_mismatch_refuses_shared_request_after_reconciliation() {
+        let dir = crate::test_support::temp_repo("precommit", "eol-admission");
+        crate::test_support::write(&dir, ".gitattributes", "*.md text eol=crlf\n");
+        crate::test_support::commit(&dir, ".gitattributes", "*.md text eol=crlf\n");
+        crate::test_support::write(&dir, "guide.md", "# Guide\r\nChanged\r\n");
+        crate::test_support::git_ok(&dir, &["add", "guide.md"]);
+        let requested = std::cell::Cell::new(false);
+        let result = run_precommit_with_shared_verdict_for_platform(
+            &dir,
+            true,
+            |_, result| result.push(StepResult::ok("host-checks")),
+            |_| {
+                requested.set(true);
+                StepResult::ok("unexpected-nix")
+            },
+        )
+        .unwrap();
+        assert!(!requested.get());
+        assert!(
+            result
+                .steps
+                .iter()
+                .any(|step| step.name == "shared-static-docs-admission" && !step.ok)
+        );
+        assert_eq!(
+            result
+                .steps
+                .iter()
+                .filter(|step| step.name == "precommit-staging")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn shared_leaf_failure_occurs_after_one_reconciliation_without_retry() {
+        let dir = crate::test_support::temp_repo("precommit", "leaf-failure");
+        crate::test_support::commit(&dir, "guide.md", "# Guide\n");
+        crate::test_support::write(&dir, "guide.md", "# Guide\nChanged\n");
+        crate::test_support::git_ok(&dir, &["add", "guide.md"]);
+        let result = run_precommit_with_shared_verdict_for_platform(
+            &dir,
+            true,
+            |_, result| result.push(StepResult::ok("host-checks")),
+            |_| StepResult::fail("nix-static-docs").detail("leaf failure"),
+        )
+        .unwrap();
+        assert!(!result.ok);
+        assert_eq!(
+            result
+                .steps
+                .iter()
+                .filter(|step| step.name == "precommit-staging")
+                .count(),
+            1
+        );
+        assert!(result.steps.iter().any(|step| {
+            step.name == "nix-static-docs" && step.detail.as_deref() == Some("leaf failure")
+        }));
+        assert!(result.steps.last().unwrap().ok);
+    }
+
+    #[test]
+    fn clean_pre_push_uses_shared_admission_and_post_request_state_check() {
+        let dir = crate::test_support::temp_repo("prepush", "clean-shared-docs");
+        crate::test_support::commit(&dir, "guide.md", "# Guide\n");
+        let requested = std::cell::Cell::new(false);
+        let mut result = CommandResult::new("prepush");
+        run_shared_static_docs_request(
+            &dir,
+            true,
+            || {
+                requested.set(true);
+                StepResult::ok("nix-static-docs")
+            },
+            &mut result,
+        );
+        assert!(requested.get());
+        assert!(result.ok);
+        assert_eq!(
+            result
+                .steps
+                .iter()
+                .map(|step| step.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "shared-static-docs-admission",
+                "nix-static-docs",
+                "shared-static-docs-state"
+            ]
+        );
+    }
+
+    #[test]
+    fn non_x86_precommit_keeps_host_fallback_without_shared_request() {
+        let dir = crate::test_support::temp_repo("precommit", "non-x86-fallback");
+        crate::test_support::commit(&dir, "guide.md", "# Guide\n");
+        crate::test_support::write(&dir, "guide.md", "# Guide\nChanged\n");
+        crate::test_support::git_ok(&dir, &["add", "guide.md"]);
+        let requested = std::cell::Cell::new(false);
+        let result = run_precommit_with_shared_verdict_for_platform(
+            &dir,
+            false,
+            |_, result| result.push(StepResult::ok("host-markdown-fix-and-checks")),
+            |_| {
+                requested.set(true);
+                StepResult::ok("unexpected-nix")
+            },
+        )
+        .unwrap();
+        assert!(!requested.get());
+        assert!(result.ok);
+        assert_eq!(
+            result
+                .steps
+                .iter()
+                .map(|step| step.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "precommit-routing",
+                "host-markdown-fix-and-checks",
+                "precommit-staging"
+            ]
+        );
+    }
+
+    fn assert_request_mutation_fails(path: &str, replacement: &str) {
+        let dir = crate::test_support::temp_repo("precommit", "post-request-mutation");
+        crate::test_support::commit(&dir, "guide.md", "# Guide\n");
+        crate::test_support::commit(&dir, ".prettierrc.json", "{}\n");
+        crate::test_support::commit(&dir, "README.md", "# Readme\n");
+        crate::test_support::commit(&dir, "flake.lock", "lock\n");
+        crate::test_support::write(&dir, "guide.md", "# Guide\nChanged\n");
+        crate::test_support::git_ok(&dir, &["add", "guide.md"]);
+        let mut result = CommandResult::new("precommit");
+        run_shared_static_docs_request(
+            &dir,
+            false,
+            || {
+                crate::test_support::write(&dir, path, replacement);
+                StepResult::fail("nix-static-docs").detail("original Nix failure")
+            },
+            &mut result,
+        );
+        assert!(result.steps.iter().any(|step| {
+            step.name == "nix-static-docs" && step.detail.as_deref() == Some("original Nix failure")
+        }));
+        assert!(
+            result
+                .steps
+                .iter()
+                .any(|step| step.name == "shared-static-docs-state" && !step.ok)
+        );
+        assert!(!result.ok);
+    }
+
+    #[test]
+    fn post_request_check_detects_tracked_markdown_mutation() {
+        assert_request_mutation_fails("README.md", "# Mutated\n");
+    }
+
+    #[test]
+    fn post_request_check_detects_tracked_config_mutation() {
+        assert_request_mutation_fails(".prettierrc.json", "{\"semi\":true}\n");
+    }
+
+    #[test]
+    fn post_request_check_detects_lock_mutation() {
+        assert_request_mutation_fails("flake.lock", "changed lock\n");
+    }
+
+    #[test]
+    fn post_request_check_detects_new_staged_mutation() {
+        let dir = crate::test_support::temp_repo("precommit", "post-request-staged-mutation");
+        crate::test_support::commit(&dir, "guide.md", "# Guide\n");
+        crate::test_support::write(&dir, "guide.md", "# Guide\nChanged\n");
+        crate::test_support::git_ok(&dir, &["add", "guide.md"]);
+        let mut result = CommandResult::new("precommit");
+        run_shared_static_docs_request(
+            &dir,
+            false,
+            || {
+                crate::test_support::write(&dir, "README.md", "# New staged mutation\n");
+                crate::test_support::git_ok(&dir, &["add", "README.md"]);
+                StepResult::ok("nix-static-docs")
+            },
+            &mut result,
+        );
+        assert!(
+            result
+                .steps
+                .iter()
+                .any(|step| step.name == "shared-static-docs-state" && !step.ok)
+        );
+    }
+
+    #[test]
+    fn post_request_check_detects_nonignored_untracked_source_mutation() {
+        let dir = crate::test_support::temp_repo("precommit", "post-request-untracked-mutation");
+        crate::test_support::commit(&dir, "guide.md", "# Guide\n");
+        crate::test_support::write(&dir, "guide.md", "# Guide\nChanged\n");
+        crate::test_support::git_ok(&dir, &["add", "guide.md"]);
+        let mut result = CommandResult::new("precommit");
+        run_shared_static_docs_request(
+            &dir,
+            false,
+            || {
+                crate::test_support::write(&dir, "new-doc.md", "# New input\n");
+                StepResult::ok("nix-static-docs")
+            },
+            &mut result,
+        );
+        assert!(
+            result
+                .steps
+                .iter()
+                .any(|step| step.name == "shared-static-docs-state" && !step.ok)
+        );
+    }
+
+    #[test]
+    fn post_request_query_failure_preserves_original_leaf_failure() {
+        let dir = crate::test_support::temp_repo("precommit", "post-request-query-failure");
+        crate::test_support::commit(&dir, "guide.md", "# Guide\n");
+        crate::test_support::write(&dir, "guide.md", "# Guide\nChanged\n");
+        crate::test_support::git_ok(&dir, &["add", "guide.md"]);
+        let mut result = CommandResult::new("precommit");
+        run_shared_static_docs_request(
+            &dir,
+            false,
+            || {
+                std::fs::rename(dir.join(".git"), dir.join(".git-hidden"))
+                    .expect("hide repository metadata to force a Git query error");
+                StepResult::fail("nix-static-docs").detail("original leaf failure")
+            },
+            &mut result,
+        );
+        assert!(
+            result
+                .steps
+                .iter()
+                .any(|step| step.name == "nix-static-docs" && !step.ok)
+        );
+        assert!(
+            result
+                .steps
+                .iter()
+                .any(|step| step.name == "shared-static-docs-state" && !step.ok)
         );
     }
 
