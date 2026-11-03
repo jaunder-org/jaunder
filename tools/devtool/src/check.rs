@@ -1,7 +1,7 @@
 //! The migrated static checks. This is the single home of their tool + args:
 //! the host verify ladder runs each check via `cargo run -p devtool -- check
 //! <name>` (so a local `tools/` edit is reflected), while Nix runs the `docs`,
-//! `rust-format`, `code`, and `ert` groups from prebuilt devtool inputs.
+//! `typescript`, `rust-format`, `code`, and `ert` groups from prebuilt devtool inputs.
 //! Cargo-backed checks use
 //! separate host and sandbox lanes from this shared definition.
 
@@ -19,9 +19,12 @@ mod leptosfmt;
 pub enum CheckGroup {
     /// Markdown formatting only.
     Docs,
+    /// The TypeScript type check.
+    #[value(name = "typescript")]
+    TypeScript,
     /// Product/tools Rust formatting and scoped Leptos formatting.
     RustFormat,
-    /// Static checks outside the documentation, Rust-format and standalone ERT groups.
+    /// Static checks outside documentation, TypeScript, Rust-format and ERT.
     Code,
     /// Standalone pure Elisp tests.
     Ert,
@@ -31,6 +34,7 @@ impl CheckGroup {
     fn names(self) -> &'static [&'static str] {
         match self {
             Self::Docs => &["prettier-markdown"],
+            Self::TypeScript => &["tsc"],
             Self::Ert => &["ert"],
             Self::RustFormat => &["fmt", "leptosfmt", "tools-fmt"],
             Self::Code => &[
@@ -40,7 +44,6 @@ impl CheckGroup {
                 "ast-grep-tests",
                 "no-full-reload",
                 "byte-compile",
-                "tsc",
                 "cargo-deny",
                 "clippy",
                 "web-server-clippy",
@@ -442,13 +445,13 @@ pub fn run(
     Ok(())
 }
 
-/// Measure only the ERT child, not launcher setup. The bounded versioned event
-/// is emitted once after completion, including unsuccessful exits.
+/// Measure only the tsc or ERT child, not provisioning or launcher setup.
+/// Emit one bounded versioned event after completion, including unsuccessful exits.
 fn run_check(name: &str, command: &mut Command, timing_output: &mut dyn Write) -> Result<()> {
     if name == "leptosfmt" {
         return leptosfmt::run(command, &std::env::current_dir()?);
     }
-    if name == "ert" {
+    if matches!(name, "tsc" | "ert") {
         return run_timed_check(name, command, timing_output);
     }
     let status = command.status().with_context(|| {
@@ -1134,6 +1137,47 @@ mod tests {
     }
 
     #[test]
+    fn named_tsc_check_keeps_its_existing_command() {
+        assert_eq!(
+            build_host("tsc", false),
+            BuiltCommand {
+                program: "tsc",
+                args: vec![
+                    "--noEmit".into(),
+                    "-p".into(),
+                    "end2end/tsconfig.json".into()
+                ],
+                env: Vec::new(),
+            }
+        );
+        assert_eq!(selected_names(Some("tsc"), None, false).unwrap(), ["tsc"]);
+        assert_eq!(
+            <CheckGroup as clap::ValueEnum>::from_str("typescript", true).unwrap(),
+            CheckGroup::TypeScript
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tsc_emits_one_timing_event_for_success_and_failure() {
+        for (exit, outcome) in [(0, "success"), (23, "failure")] {
+            let mut child = Command::new("sh");
+            child.args(["-c", &format!("sleep 0.03; exit {exit}")]);
+            let mut events = Vec::new();
+            let result = run_check("tsc", &mut child, &mut events);
+            assert_eq!(result.is_ok(), exit == 0);
+            assert!(events.len() < 256);
+            assert_eq!(events.iter().filter(|b| **b == b'\n').count(), 1);
+            let event: serde_json::Value = serde_json::from_slice(&events).unwrap();
+            assert_eq!(event["event"], "devtool-check-timing");
+            assert_eq!(event["schema_version"], 1);
+            assert_eq!(event["check"], "tsc");
+            assert_eq!(event["outcome"], outcome);
+            assert!(event["duration_ms"].as_u64().unwrap() >= 20);
+        }
+    }
+
+    #[test]
     fn unknown_check_errors() {
         assert!(spec("nope", false).is_err());
     }
@@ -1141,6 +1185,11 @@ mod tests {
     #[test]
     fn groups_are_an_ordered_disjoint_complete_partition() {
         assert_eq!(CheckGroup::Docs.names(), ["prettier-markdown"]);
+        assert_eq!(CheckGroup::TypeScript.names(), ["tsc"]);
+        assert_eq!(
+            selected_names(None, Some(CheckGroup::TypeScript), false).unwrap(),
+            ["tsc"]
+        );
         assert_eq!(
             CheckGroup::RustFormat.names(),
             ["fmt", "leptosfmt", "tools-fmt"]
@@ -1148,6 +1197,7 @@ mod tests {
         let mut partition = Vec::new();
         for group in [
             CheckGroup::Docs,
+            CheckGroup::TypeScript,
             CheckGroup::RustFormat,
             CheckGroup::Code,
             CheckGroup::Ert,
@@ -1169,7 +1219,6 @@ mod tests {
                 "ast-grep-tests",
                 "no-full-reload",
                 "byte-compile",
-                "tsc",
                 "cargo-deny",
                 "clippy",
                 "web-server-clippy",

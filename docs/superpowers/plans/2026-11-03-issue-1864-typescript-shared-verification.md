@@ -14,7 +14,8 @@ positively correlate tsc timing with the current Nix builder request, or mark
 execution duration unavailable. Only after this vertical slice is understood,
 expand to compiler-population, failure, invalidation and reuse proofs. Preserve
 the accepted `e2ePackage` whole-`end2end` dependency coupling. The approved spec
-and ADR define the full contract.
+defines the behavior contract; maintained architecture and contributor
+documentation record the current system.
 
 ## Scope
 
@@ -30,7 +31,7 @@ approval.
 
 ## Task outline
 
-- [ ] Task 1: Preserve and expose the named TypeScript check.
+- [x] Task 1: Preserve and expose the named TypeScript check.
   - Contract: `devtool check tsc` remains named and runs the existing
     command/project. Add a `typescript` group containing only `tsc`, remove only
     `tsc` from `code`, and preserve the existing ordered, duplicate-free `--all`
@@ -40,7 +41,7 @@ approval.
   - Verification: focused devtool test with controlled child commands proves
     event duration/outcome for success and nonzero exit; catalog tests prove
     direct selector, group membership, and full `--all` order/population.
-- [ ] Task 2: Wire the minimum TS leaf/consumer and resolve current-builder
+- [x] Task 2: Wire the minimum TS leaf/consumer and resolve current-builder
       timing attribution.
   - Contract: add the smallest `static-typescript` leaf invoking the existing
     `devtool check tsc` definition, plus its distinct xtask validation consumer.
@@ -65,7 +66,9 @@ approval.
     positively correlate execution. Confirm a subsequent reused-output request
     reports request/reuse evidence but no current tsc execution time. Do not
     expand the proof matrix until this boundary is resolved.
-- [ ] Task 3: Prove the complete TS population and verdict/input contract.
+- [x] Task 3: Prove the complete TS population and verdict/input contract.
+  - Accepted proof: `.xtask/issue-1864-task3-proof.md` and retained files under
+    `.xtask/evidence/issue-1864-ts/`; review `result:spec-soundness#16`.
   - Contract: preserve host `tsc --noEmit -p end2end/tsconfig.json`, pinned
     tools, provisioning, direct source inputs and existing `e2ePackage`
     transitive coupling. `static-code` retains its other checks. Host and Nix
@@ -110,10 +113,17 @@ serialize only on actual shared-file conflicts.
 
 ## Approval and delivery boundary
 
-The spec and ADR direction are approved; this outline is not. Obtain outline
-approval before implementation. After that approval, use `jaunder-commit` to
-commit the approved spec, ADR draft, architecture projection and outline before
-code work. Implement one task at a time with focused proof; Lead reviews the
-exact intended tree. Normal hook-backed commits and required validation follow
-existing policy. No hook/required-CI/merge approval is conferred by this
-outline.
+The qualified outline was approved by the human on 2026-11-03 (request
+`dec3b374-1fa9-459a-9dba-f9b76b26161f`, “Approve outline and begin”); later
+qualification of documentation scope does not revoke that approval. No
+standalone ADR is required for routine TypeScript extraction; ADR-0178 receives
+a narrow supersession note and maintained architecture/CONTRIBUTING
+documentation records the implemented contract. Task 3 is accepted by review
+(`result:spec-soundness#16`): retained compiler file-list evidence and
+deliberate-error/restoration results through the scoped xtask consumer close the
+prior proof gaps. Task 4 documentation is updated, but the aggregate validation
+remains pending. Issue #1864 remains open: this is a partial TypeScript slice,
+not completion of the issue. Implement one task at a time with focused proof;
+Lead reviews the exact intended tree. Normal hook-backed commits and required
+validation follow existing policy. No hook/required-CI/merge approval is
+conferred by this outline.

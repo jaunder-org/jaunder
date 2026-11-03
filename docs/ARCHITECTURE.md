@@ -4404,16 +4404,17 @@ checks (`byte-compile`, `tsc`, `cargo-deny`, `clippy`, `web-server-clippy`,
 The host _step_ above runs the listed sub-steps through host-local lanes. The
 hermetic shared static surface has `static-docs` running
 `devtool check --group docs` over Markdown and Prettier configuration,
-`static-code` running `devtool check --group code --sandbox-cargo` over the
-remaining checks outside Rust formatting and standalone ERT, with
-workspace-specific offline Cargo homes, and `static-ert` running
-`devtool check --group ert`. The ERT leaf receives the complete non-Markdown
-`elisp/` tree in a writable copy, shared `devtoolBin`, existing `emacsForCi`
-(including plz, Undercover and cmarkEl), Git and `TZDIR`. It preserves the
-standalone runner's population and is non-substitutable, but valid local outputs
-may still be reused. Elisp source overlap remains in `static-code` for
-formatting and byte compilation; no speedup or source-cache isolation is
-claimed.
+`static-typescript` running the named `devtool check tsc`, `rust-format` running
+`devtool check --group rust-format --sandbox-cargo`, and `static-code` running
+`devtool check --group code --sandbox-cargo` over the remaining checks outside
+tsc, Rust formatting and standalone ERT, with workspace-specific offline Cargo
+homes, and `static-ert` running `devtool check --group ert`. The ERT leaf
+receives the complete non-Markdown `elisp/` tree in a writable copy, shared
+`devtoolBin`, existing `emacsForCi` (including plz, Undercover and cmarkEl), Git
+and `TZDIR`. It preserves the standalone runner's population and is
+non-substitutable, but valid local outputs may still be reused. Elisp source
+overlap remains in `static-code` for formatting and byte compilation; no speedup
+or source-cache isolation is claimed.
 
 The independent `xtask-format` leaf runs pinned raw
 `cargo fmt --manifest-path xtask/Cargo.toml --check`, without `--all`, devtool,
@@ -4424,38 +4425,40 @@ metadata but no dependency implementation sources. It is required once by
 source-admission exception preserves ADR-0028's host-only xtask execution
 boundary.
 
-`validate --no-e2e` builds `nix-static-docs`, `nix-rust-format`,
-`nix-static-code`, `nix-static-ert`, and `nix-xtask-format` before the Nix test
-checks. ADR-0178 established the original two-group/two-leaf documentation
-split, not a generic extraction policy
+`validate --no-e2e` builds `nix-static-docs`, `nix-static-typescript`,
+`nix-rust-format`, `nix-static-code`, `nix-static-ert`, and `nix-xtask-format`
+before the Nix test checks. ADR-0178 established the original two-group/two-leaf
+documentation split, not a generic extraction policy
 ([hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md)).
 The concrete further ERT extraction was separately approved in the
 [ERT spec](https://github.com/jaunder-org/jaunder/blob/ba7fdf416d8ec7b14c86b163ead41feaf3dc12c7/docs/superpowers/specs/2026-11-03-issue-1864-elisp-ert.md)
 (`issue1864-ert-spec-v1`, “approved, with the caveat that I don't think we
 actually need an ADR for this, do we?”); no new ADR or generic policy is
-implied. TypeScript extraction is a separately approved direction, not a
-prerequisite implemented by these slices. Its later integration retains
-TypeScript between docs and residual code, with ERT last and corresponding Nix
-leaves.
+implied. The separately approved TypeScript extraction is now integrated. The
+shared groups and Nix leaves are ordered docs, typescript, rust-format, code,
+ert, followed by independent `xtask-format` in Nix validation. The complete
+`--all` inventory retains its established order and uniqueness, with tsc at its
+former position and ERT last.
 
-ERT emits one bounded versioned stderr timing event around only its child using
-a monotonic clock. Host xtask projects only current captured child stderr into
-`GateExecution`, separately from step duration. Only the `static-ert` Nix
-request selects `--log-format internal-json`: its current live stderr tee
-correlates the exact selected derivation's local build activity, a
-timing-bearing log result on that active ID, and its matching stop. This
-narrowly supports the observed Nix 2.34.9 local-builder/daemon protocol
-(`actBuild=105`, `resBuildLogLine=101`, empty machine field); it is not a
-universal Nix schema promise. Nix merges child stdout/stderr, so the shared
-bounded event parser allows an unterminated Emacs stdout prefix. Stop closes
-attribution, not the check verdict: the marker's success/failure remains
-separate from Nix status. Missing, malformed, duplicate, unsupported or
-incomplete activity evidence and ordinary local reuse leave execution timing
-unavailable. Parser buffering is bounded without interrupting diagnostic
-draining. Neither request duration, local validity, realization/reuse nor
-retained logs establish execution; saved logs and nested/replayed JSON messages
-are never timing inputs. Combined pure/live coverage, hooks, workflows and
-required CI routing are unchanged.
+Both tsc and ERT use one shared producer to emit a bounded versioned stderr
+timing event around only their child using a monotonic clock. Host xtask
+projects only current captured child stderr into `GateExecution`, separately
+from step duration. The `static-typescript` and `static-ert` Nix requests select
+`--log-format internal-json`: one shared parser, parameterized by selected
+derivation and check, consumes their current live stderr tee and correlates the
+exact selected derivation's local build activity, a timing-bearing log result on
+that active ID, and its matching stop. This narrowly supports the observed Nix
+2.34.9 local-builder/daemon protocol (`actBuild=105`, `resBuildLogLine=101`,
+empty machine field); it is not a universal Nix schema promise. Nix merges child
+stdout/stderr, so the shared bounded event parser allows an unterminated Emacs
+stdout prefix. Stop closes attribution, not the check verdict: the marker's
+success/failure remains separate from Nix status. Missing, malformed, duplicate,
+unsupported or incomplete activity evidence and ordinary local reuse leave
+execution timing unavailable. Parser buffering is bounded without interrupting
+diagnostic draining. Neither request duration, local validity, realization/reuse
+nor retained logs establish execution; saved logs and nested/replayed JSON
+messages are never timing inputs. Combined pure/live coverage, hooks, workflows
+and required CI routing are unchanged.
 
 The Rust-format boundary runs
 `devtool check --group rust-format --sandbox-cargo` (`fmt`, scoped `leptosfmt`,
@@ -4475,23 +4478,25 @@ full closure independence; valid local-store reuse is allowed and no speedup is
 claimed. `static-code` runs the remaining shared definitions with
 `devtool check --group code --sandbox-cargo` over non-document inputs and
 workspace-specific offline Cargo homes. `validate --no-e2e` builds
-`nix-static-docs`, `nix-rust-format`, `nix-static-code`, `nix-static-ert`, and
-`nix-xtask-format` before the Nix test checks, with each shared definition
-consumed exactly once. CI fails if a hermetic boundary drifts from the host
-definitions
+`nix-static-docs`, `nix-static-typescript`, `nix-rust-format`,
+`nix-static-code`, `nix-static-ert`, and `nix-xtask-format` before the Nix test
+checks, with each shared definition consumed exactly once. CI fails if a
+hermetic boundary drifts from the host definitions
 ([hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md);
 [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
 
-**Approved direction — not yet implemented:** `devtool check tsc` will remain a
-named check and move into a `typescript` group with its own `static-typescript`
-Nix leaf and xtask validation verdict. The complete `--all` check inventory
-keeps its existing order and uniqueness; `static-code` retains its other checks,
-including those that consume TypeScript files. The dedicated leaf's direct
-source filter is narrower, but the existing `e2ePackage` still makes all
-`end2end/` changes transitive inputs. Host whole-step time, Nix request/reuse
-evidence, and current tsc execution time remain distinct; only a timing event
-observed and attributed to the current builder request counts as execution
-([proposed TypeScript shared-verification leaf](adr/drafts/typescript-shared-verification-leaf.md)).
+The TypeScript leaf provisions the pinned type dependencies before the unchanged
+named `devtool check tsc`. Its direct filter admits TypeScript sources,
+`tsconfig.json`, and dependency manifests, but the existing `e2ePackage` still
+makes all `end2end/` changes transitive inputs. It is non-substitutable, without
+forcing valid local outputs to rerun. `static-code` retains TypeScript
+formatting and the census contract; it explicitly provisions node modules before
+that census rather than depending on tsc's provisioning side effect. This
+narrowly refines the historical partition for TypeScript, not `devtool` command
+ownership ([ADR-0178](adr/0178-split-hermetic-static-check-boundaries.md)). The
+independently landed Rust-format and xtask-format boundaries remain intact; the
+TypeScript split does not equate distinct formatter or Clippy populations,
+permanently defer further design, or close the parent issue.
 
 The two CSR-facing source filters follow resolved target reachability rather
 than crate names. The `.#site`/CSR closure contains workspace manifests, the
@@ -4565,9 +4570,10 @@ because `web` test dependencies are host-oriented and cannot compile for
 `wasm32-unknown-unknown`. Host xtask lanes execute each definition through their
 existing static-check mechanism while retaining host-local Cargo artifacts and
 sccache for Rust-compiling checks; sandboxed Nix lanes execute the same
-definitions through their `docs` or `code` group, with the code group using
-workspace-specific offline Cargo homes. `xtask-fmt` and `xtask-clippy` remain
-native host checks. The independent `xtask-format` flake check runs only pinned
+definitions through their `docs`, `rust-format`, `code`, or `ert` group and the
+named `tsc` check, with Cargo-backed groups using workspace-specific offline
+Cargo homes. `xtask-fmt` and `xtask-clippy` remain native host checks. The
+independent `xtask-format` flake check runs only pinned
 `cargo fmt --manifest-path xtask/Cargo.toml --check`, without `--all`, devtool,
 or offline Cargo homes. Its direct source filter admits xtask Rust targets,
 required manifests/configuration, and dependency metadata target placeholders,
@@ -4845,7 +4851,7 @@ interface; devtool has no `run` subcommand or runner dependency.
   context propagates independently, preserving one root for nested launches
   without stale-skipping later independent invocations. See
   [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md).
-- **`devtool check <name> | --group <docs|rust-format|code|ert> | --all [--fix] [--sandbox-cargo]`**
+- **`devtool check <name> | --group <docs|typescript|rust-format|code|ert> | --all [--fix] [--sandbox-cargo]`**
   is the single command-definition surface for the migrated static checks
   (`fmt`, `leptosfmt`, `prettier-markdown`, `prettier-end2end`, `prettier-css`,
   `tsc`, `elisp-fmt`, `ert`, `byte-compile`, `cargo-deny`, generic product
@@ -4855,13 +4861,13 @@ interface; devtool has no `run` subcommand or runner dependency.
   `tools/devtool/src/check.rs`). Both gates invoke the same definitions: the
   host verify ladder delegates each through its static-check mechanism,
   preserving host-local Cargo artifacts and sccache for Rust-compiling checks;
-  the Nix `static-docs`, `rust-format`, `static-code`, and `static-ert`
-  `runCommand`s run the `docs`, sandboxed `rust-format`, sandboxed `code`, and
-  standalone `ert` groups respectively (the docs leaf uses `docsDevtoolBin`, the
-  others `devtoolBin`). The code group retains workspace-specific offline Cargo
-  homes; Cargo-deny keeps a split policy: host mode runs full
-  `cargo deny check`, while sandbox mode skips `advisories`
-  ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
+  the Nix `static-docs`, `static-typescript`, `rust-format`, `static-code`, and
+  `static-ert` `runCommand`s run the `docs`, named `tsc`, sandboxed
+  `rust-format`, sandboxed `code`, and standalone `ert` checks respectively (the
+  docs leaf uses `docsDevtoolBin`, the others `devtoolBin`). The code group
+  retains workspace-specific offline Cargo homes; Cargo-deny keeps a split
+  policy: host mode runs full `cargo deny check`, while sandbox mode skips
+  `advisories` ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
   [Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md),
   [devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md),
   [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md),

@@ -34,10 +34,10 @@ pub fn step_with_env(
     }
     let result = match cmd.output() {
         Ok(output) => {
-            let phases = (name == "ert").then(|| {
+            let phases = matches!(name, "ert" | "tsc").then(|| {
                 // Check uniqueness across both completion outcomes first. Only
                 // the sole event may then be matched to the devtool status.
-                let phase = ert_child_phase(&output.stderr);
+                let phase = child_phase(&output.stderr, name);
                 let expected = if output.status.success() {
                     PhaseOutcome::Success
                 } else {
@@ -48,7 +48,7 @@ pub fn step_with_env(
                 } else {
                     PhaseRecord::unavailable(
                         PhaseName::GateExecution,
-                        "ert: missing or conflicting current child evidence",
+                        format!("{name}: missing or conflicting current child evidence"),
                     )
                 }
             });
@@ -70,7 +70,7 @@ pub fn step_with_env(
             step.phases(phases)
         }
         Err(err) => {
-            let phases = (name == "ert").then(|| ert_child_phase(&[]));
+            let phases = matches!(name, "ert" | "tsc").then(|| child_phase(&[], name));
             StepResult::fail(name)
                 .detail(err.to_string())
                 .phases(phases)
@@ -87,7 +87,24 @@ pub fn step_with_env(
 
 /// Only the current devtool subprocess's captured stderr is eligible. Do not
 /// use retained diagnostic logs or Nix realization as child timing evidence.
-pub(crate) fn ert_child_phase(stderr: &[u8]) -> PhaseRecord {
+pub(crate) fn child_phase(stderr: &[u8], check: &str) -> PhaseRecord {
+    match child_timing_evidence(stderr, check) {
+        ChildTimingEvidence::Valid(phase) => phase,
+        _ => PhaseRecord::unavailable(
+            PhaseName::GateExecution,
+            format!("{check}: missing, invalid or ambiguous current child event"),
+        ),
+    }
+}
+
+/// Absence and invalidity must stay distinct across separate builder results.
+pub(crate) enum ChildTimingEvidence {
+    NoCandidate,
+    Valid(PhaseRecord),
+    Invalid,
+}
+
+pub(crate) fn child_timing_evidence(stderr: &[u8], check: &str) -> ChildTimingEvidence {
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Event {
@@ -98,12 +115,7 @@ pub(crate) fn ert_child_phase(stderr: &[u8]) -> PhaseRecord {
         outcome: String,
     }
     const MARKER: &[u8] = b"devtool-check-timing";
-    let unavailable = || {
-        PhaseRecord::unavailable(
-            PhaseName::GateExecution,
-            "ert: missing, invalid or ambiguous current child event",
-        )
-    };
+    let unavailable = || ChildTimingEvidence::Invalid;
     let mut observed = None;
     for line in stderr.split(|b| *b == b'\n') {
         // Ordinary diagnostics are not events. Once the completion-event name
@@ -117,7 +129,10 @@ pub(crate) fn ert_child_phase(stderr: &[u8]) -> PhaseRecord {
         let Some(start) = line.iter().rposition(|b| *b == b'{') else {
             return unavailable();
         };
-        if line.len() - start > 256 || line[..start].windows(MARKER.len()).any(|w| w == MARKER) {
+        if line.len() > 1024
+            || line.len() - start > 256
+            || line[..start].windows(MARKER.len()).any(|w| w == MARKER)
+        {
             return unavailable();
         }
         let Ok(event) = serde_json::from_slice::<Event>(&line[start..]) else {
@@ -125,7 +140,7 @@ pub(crate) fn ert_child_phase(stderr: &[u8]) -> PhaseRecord {
         };
         if event.event != "devtool-check-timing"
             || event.schema_version != 1
-            || event.check != "ert"
+            || event.check != check
             || !matches!(event.outcome.as_str(), "success" | "failure")
             || observed.is_some()
         {
@@ -134,9 +149,9 @@ pub(crate) fn ert_child_phase(stderr: &[u8]) -> PhaseRecord {
         observed = Some(event);
     }
     let Some(event) = observed else {
-        return unavailable();
+        return ChildTimingEvidence::NoCandidate;
     };
-    PhaseRecord {
+    ChildTimingEvidence::Valid(PhaseRecord {
         name: PhaseName::GateExecution,
         duration_ms: Some(u128::from(event.duration_ms)),
         outcome: if event.outcome == "success" {
@@ -144,15 +159,205 @@ pub(crate) fn ert_child_phase(stderr: &[u8]) -> PhaseRecord {
         } else {
             PhaseOutcome::Failed
         },
-        detail: "ert: current devtool child (monotonic interval)".into(),
+        detail: format!("{check}: current devtool child (monotonic interval)"),
         nix: None,
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::result::{PhaseName, PhaseOutcome};
+
+    #[test]
+    fn current_tsc_child_event_becomes_execution_phase() {
+        let sh = Shell::new().unwrap();
+        let event = r#"{"event":"devtool-check-timing","schema_version":1,"check":"tsc","duration_ms":37,"outcome":"success"}"#;
+        let result = step(
+            &sh,
+            "tsc",
+            "sh",
+            &["-c", "printf '%s' \"$1\" >&2", "child", event],
+        );
+        assert!(result.ok);
+        assert_eq!(result.phases[0].duration_ms, Some(37));
+        assert_eq!(result.phases[0].outcome, PhaseOutcome::Success);
+    }
+
+    #[test]
+    fn failed_current_tsc_child_preserves_verdict_diagnostics_and_event_outcome() {
+        let sh = Shell::new().unwrap();
+        let event = r#"{"event":"devtool-check-timing","schema_version":1,"check":"tsc","duration_ms":29,"outcome":"failure"}"#;
+        let stderr = format!("compiler diagnostic\n{event}");
+        let result = step(
+            &sh,
+            "tsc",
+            "sh",
+            &["-c", "printf '%s' \"$1\" >&2; exit 23", "child", &stderr],
+        );
+        assert!(!result.ok);
+        assert_eq!(result.detail.as_deref(), Some(stderr.as_str()));
+        assert_eq!(result.phases[0].duration_ms, Some(29));
+        assert_eq!(result.phases[0].outcome, PhaseOutcome::Failed);
+    }
+
+    #[test]
+    fn invalid_timing_candidate_beside_valid_marker_is_unavailable() {
+        let valid = r#"{"event":"devtool-check-timing","schema_version":1,"check":"tsc","duration_ms":37,"outcome":"success"}"#;
+        let sh = Shell::new().unwrap();
+        for candidate in [
+            valid.replace("\"schema_version\":1", "\"schema_version\":2"),
+            r#"{"event":"devtool-check-timing","schema_version":1,"check":"tsc","duration_ms":"#
+                .into(),
+            format!("{valid}{}", " ".repeat(1024)),
+            valid.replace("success", "failure"),
+            "literal devtool-check-timing prose".into(),
+        ] {
+            for markers in [
+                format!("{valid}\n{candidate}"),
+                format!("{candidate}\n{valid}"),
+            ] {
+                for exit in ["0", "23"] {
+                    let stderr = format!("compiler diagnostic\n{markers}\nlast diagnostic");
+                    let result = step(
+                        &sh,
+                        "tsc",
+                        "sh",
+                        &[
+                            "-c",
+                            "printf '%s' \"$1\" >&2; exit \"$2\"",
+                            "child",
+                            &stderr,
+                            exit,
+                        ],
+                    );
+                    assert_eq!(result.ok, exit == "0");
+                    assert_eq!(
+                        result.detail.as_deref(),
+                        (exit != "0").then_some(stderr.as_str())
+                    );
+                    assert_eq!(
+                        result.phases[0].outcome,
+                        PhaseOutcome::Unavailable,
+                        "{stderr}"
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            child_phase(
+                format!("ordinary diagnostic\n{valid}\nmore diagnostics").as_bytes(),
+                "tsc"
+            )
+            .duration_ms,
+            Some(37)
+        );
+    }
+
+    #[test]
+    fn mixed_completion_outcomes_are_unavailable_without_changing_verdict_or_diagnostics() {
+        let success = r#"{"event":"devtool-check-timing","schema_version":1,"check":"tsc","duration_ms":37,"outcome":"success"}"#;
+        let failure = success.replace("success", "failure");
+        let sh = Shell::new().unwrap();
+        for markers in [
+            format!("{success}\n{failure}"),
+            format!("{failure}\n{success}"),
+        ] {
+            let stderr = format!("compiler diagnostic\n{markers}");
+            for exit in ["0", "23"] {
+                let result = step(
+                    &sh,
+                    "tsc",
+                    "sh",
+                    &[
+                        "-c",
+                        "printf '%s' \"$1\" >&2; exit \"$2\"",
+                        "child",
+                        &stderr,
+                        exit,
+                    ],
+                );
+                assert_eq!(result.ok, exit == "0");
+                assert_eq!(
+                    result.detail.as_deref(),
+                    (exit != "0").then_some(stderr.as_str())
+                );
+                assert_eq!(result.phases[0].duration_ms, None);
+                assert_eq!(result.phases[0].outcome, PhaseOutcome::Unavailable);
+            }
+        }
+    }
+
+    #[test]
+    fn absent_or_invalid_timing_never_changes_current_child_verdict() {
+        let event = r#"{"event":"devtool-check-timing","schema_version":1,"check":"tsc","duration_ms":37,"outcome":"success"}"#;
+        let sh = Shell::new().unwrap();
+        for stderr in [
+            String::new(),
+            "compiler diagnostics\n{malformed json".into(),
+            event.replace("devtool-check-timing", "other-event"),
+            event.replace("\"schema_version\":1", "\"schema_version\":2"),
+            event.replace("\"check\":\"tsc\"", "\"check\":\"ert\""),
+            event.replace("\"duration_ms\":37", "\"duration_ms\":-1"),
+            event.replace("\"duration_ms\":37", "\"duration_ms\":1.5"),
+            event.replace("\"duration_ms\":37", "\"duration_ms\":\"37\""),
+            event.replace("success", "unknown"),
+            format!("{event}\n{event}"),
+            format!("{event}{}", " ".repeat(1024)),
+        ] {
+            for exit in ["0", "23"] {
+                let result = step(
+                    &sh,
+                    "tsc",
+                    "sh",
+                    &[
+                        "-c",
+                        "printf '%s\\n' \"$1\" >&2; exit \"$2\"",
+                        "child",
+                        &stderr,
+                        exit,
+                    ],
+                );
+                assert_eq!(result.ok, exit == "0");
+                assert_eq!(
+                    result.phases[0].outcome,
+                    PhaseOutcome::Unavailable,
+                    "{stderr}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_current_named_child_stderr_is_timing_evidence() {
+        let sh = Shell::new().unwrap();
+        let event = r#"{"event":"devtool-check-timing","schema_version":1,"check":"tsc","duration_ms":37,"outcome":"success"}"#;
+        let retained = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(retained.path(), event).unwrap();
+        for (name, script) in [
+            ("tsc", "exit 0"),
+            ("tsc", "printf '%s' \"$1\""),
+            ("tsc", "printf '%s' \"$1\" >&2; exit 23"),
+        ] {
+            let result = step(&sh, name, "sh", &["-c", script, "child", event]);
+            assert_eq!(result.phases[0].outcome, PhaseOutcome::Unavailable);
+        }
+        let wrong_child = step(
+            &sh,
+            "other-check",
+            "sh",
+            &["-c", "printf '%s' \"$1\" >&2", "child", event],
+        );
+        assert!(wrong_child.ok);
+        assert!(wrong_child.phases.is_empty());
+        let not_spawned = step(&sh, "tsc", "/nonexistent/issue-1864-tsc", &[]);
+        assert!(!not_spawned.ok);
+        assert_eq!(not_spawned.phases[0].outcome, PhaseOutcome::Unavailable);
+    }
+
+    fn ert_child_phase(stderr: &[u8]) -> PhaseRecord {
+        child_phase(stderr, "ert")
+    }
 
     const EVENT: &str = r#"{"event":"devtool-check-timing","schema_version":1,"check":"ert","duration_ms":31,"outcome":"success"}"#;
 

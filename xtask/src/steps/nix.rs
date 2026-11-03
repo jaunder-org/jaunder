@@ -33,8 +33,9 @@ pub(crate) enum TestCheck {
 }
 
 const CHECK_SUPPORTING_TEST_CHECKS: [TestCheck; 2] = [TestCheck::Wasm, TestCheck::Doctests];
-const STATIC_CHECKS: [(&str, &str); 5] = [
+const STATIC_CHECKS: [(&str, &str); 6] = [
     ("nix-static-docs", "static-docs"),
+    ("nix-static-typescript", "static-typescript"),
     ("nix-rust-format", "rust-format"),
     ("nix-static-code", "static-code"),
     ("nix-static-ert", "static-ert"),
@@ -1555,12 +1556,13 @@ impl BuildCaptureState {
     }
 }
 
-/// Correlate only the current static-ert request's local builder. Nix 2.34.9
+/// Correlate only the selected check request's current local builder. Nix 2.34.9
 /// uses actBuild=105 with [drv, machine, 1, 1], and resBuildLogLine=101 on
 /// the same activity ID (BuildLog and worker-protocol-connection.cc). This is
 /// deliberately not a general Nix event model or a parser for retained logs.
-struct ErtBuildTiming {
+struct CheckBuildTiming {
     target: Option<String>,
+    check: &'static str,
     line: Vec<u8>,
     invalid: bool,
     id: Option<u64>,
@@ -1569,10 +1571,11 @@ struct ErtBuildTiming {
     event: Option<PhaseRecord>,
 }
 
-impl ErtBuildTiming {
-    fn new(target: Option<String>) -> Self {
+impl CheckBuildTiming {
+    fn new(target: Option<String>, check: &'static str) -> Self {
         Self {
             target,
+            check,
             line: Vec::new(),
             invalid: false,
             id: None,
@@ -1655,12 +1658,15 @@ impl ErtBuildTiming {
                     self.invalid = true;
                     return;
                 }
-                if text.contains("devtool-check-timing") {
-                    let phase = crate::sh::ert_child_phase(text.as_bytes());
-                    if phase.duration_ms.is_none() || self.event.is_some() {
-                        self.invalid = true;
-                    } else {
-                        self.event = Some(phase);
+                match crate::sh::child_timing_evidence(text.as_bytes(), self.check) {
+                    crate::sh::ChildTimingEvidence::NoCandidate => {}
+                    crate::sh::ChildTimingEvidence::Invalid => self.invalid = true,
+                    crate::sh::ChildTimingEvidence::Valid(phase) => {
+                        if self.event.is_some() {
+                            self.invalid = true;
+                        } else {
+                            self.event = Some(phase);
+                        }
                     }
                 }
             }
@@ -1693,13 +1699,18 @@ impl ErtBuildTiming {
             && let Some(event) = &self.event
         {
             let mut phase = event.clone();
-            phase.detail =
-                "ert: current local Nix builder activity (monotonic child interval)".into();
+            phase.detail = format!(
+                "{}: current local Nix builder activity (monotonic child interval)",
+                self.check
+            );
             return phase;
         }
         PhaseRecord::unavailable(
             PhaseName::GateExecution,
-            "ert: no unambiguous current local builder timing",
+            format!(
+                "{}: no single timing event correlated to an unambiguous current local builder",
+                self.check
+            ),
         )
     }
 }
@@ -1711,7 +1722,7 @@ struct BuildStderrTee<A, B> {
     diagnostic: A,
     primary: B,
     state: BuildCaptureState,
-    ert_timing: Option<Arc<Mutex<ErtBuildTiming>>>,
+    check_timing: Option<Arc<Mutex<CheckBuildTiming>>>,
 }
 
 impl<A, B> BuildStderrTee<A, B> {
@@ -1722,14 +1733,14 @@ impl<A, B> BuildStderrTee<A, B> {
                 diagnostic,
                 primary,
                 state: state.clone(),
-                ert_timing: None,
+                check_timing: None,
             },
             state,
         )
     }
 
-    fn observe_ert(mut self, timing: Arc<Mutex<ErtBuildTiming>>) -> Self {
-        self.ert_timing = Some(timing);
+    fn observe_check(mut self, timing: Arc<Mutex<CheckBuildTiming>>) -> Self {
+        self.check_timing = Some(timing);
         self
     }
 }
@@ -1740,7 +1751,7 @@ impl<A: Write + Unpin, B: Write + Unpin> AsyncWrite for BuildStderrTee<A, B> {
         _cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        if let Some(timing) = &self.ert_timing
+        if let Some(timing) = &self.check_timing
             && let Ok(mut timing) = timing.lock()
         {
             timing.push(buf);
@@ -1992,19 +2003,31 @@ fn build_check(step_name: &str, check: &str) -> StepResult {
 }
 
 fn build_check_with_flags(step_name: &str, check: &str, flags: &[&str]) -> StepResult {
-    let mut step = build_installable_with_flags(
+    let step = build_installable_with_flags(
         step_name,
         check,
         &format!(".#checks.{SYSTEM}.{check}"),
         flags,
     );
-    if check == "static-ert"
+    with_check_execution_evidence(check, step)
+}
+
+fn timing_check(check: &str) -> Option<&'static str> {
+    match check {
+        "static-ert" => Some("ert"),
+        "static-typescript" => Some("tsc"),
+        _ => None,
+    }
+}
+
+fn with_check_execution_evidence(check: &str, mut step: StepResult) -> StepResult {
+    if let Some(child) = timing_check(check)
         && !step
             .phases
             .iter()
             .any(|p| p.name == PhaseName::GateExecution)
     {
-        step.phases.push(ErtBuildTiming::new(None).phase());
+        step.phases.push(CheckBuildTiming::new(None, child).phase());
     }
     step
 }
@@ -2072,13 +2095,17 @@ fn build_installable_with_flags(
         }
     };
     let (stderr_tee, capture_state) = BuildStderrTee::new(diagnostic, io::stderr());
-    let ert_timing = (check == "static-ert")
-        .then(|| Arc::new(Mutex::new(ErtBuildTiming::new(before.derivation.clone()))));
-    let stderr_tee = match &ert_timing {
-        Some(timing) => stderr_tee.observe_ert(timing.clone()),
+    let check_timing = timing_check(check).map(|child| {
+        Arc::new(Mutex::new(CheckBuildTiming::new(
+            before.derivation.clone(),
+            child,
+        )))
+    });
+    let stderr_tee = match &check_timing {
+        Some(timing) => stderr_tee.observe_check(timing.clone()),
         None => stderr_tee,
     };
-    let log_flags: &[&str] = if ert_timing.is_some() {
+    let log_flags: &[&str] = if check_timing.is_some() {
         &["--log-format", "internal-json"]
     } else {
         &[]
@@ -2139,14 +2166,16 @@ fn build_installable_with_flags(
         &mut io::stderr(),
     )
     .with_duration(start.elapsed());
-    if let Some(timing) = ert_timing {
+    if let Some(timing) = check_timing {
         step.phases.push(
             timing
                 .lock()
                 .ok()
                 .filter(|_| timing_reliable)
                 .map(|t| t.phase())
-                .unwrap_or_else(|| ErtBuildTiming::new(None).phase()),
+                .unwrap_or_else(|| {
+                    CheckBuildTiming::new(None, timing_check(check).unwrap()).phase()
+                }),
         );
     }
     append_capture_recovery_detail(&mut step, &capture_recovery);
@@ -2633,7 +2662,7 @@ mod tests {
                 PhaseOutcome::Failed,
             ),
         ] {
-            let mut timing = super::ErtBuildTiming::new(Some(ERT_DRV.into()));
+            let mut timing = super::CheckBuildTiming::new(Some(ERT_DRV.into()), "ert");
             // Arbitrary processkit chunks must not change line framing.
             for bytes in ert_live_stream(&marker).as_bytes().chunks(3) {
                 timing.push(bytes);
@@ -2684,7 +2713,7 @@ mod tests {
             format!("{}\n{valid}", "x".repeat(65_537)),
             ert_live_stream(&format!("historical internal-json: {}", lines[1].trim())),
         ] {
-            let mut timing = super::ErtBuildTiming::new(Some(ERT_DRV.into()));
+            let mut timing = super::CheckBuildTiming::new(Some(ERT_DRV.into()), "ert");
             timing.push(stream.as_bytes());
             assert_eq!(
                 timing.phase().outcome,
@@ -2692,7 +2721,7 @@ mod tests {
                 "{stream}"
             );
         }
-        let mut timing = super::ErtBuildTiming::new(None);
+        let mut timing = super::CheckBuildTiming::new(None, "ert");
         timing.push(valid.as_bytes());
         assert_eq!(timing.phase().outcome, PhaseOutcome::Unavailable);
     }
@@ -2706,13 +2735,14 @@ mod tests {
                 None,
             ),
         ] {
-            let timing = std::sync::Arc::new(std::sync::Mutex::new(super::ErtBuildTiming::new(
+            let timing = std::sync::Arc::new(std::sync::Mutex::new(super::CheckBuildTiming::new(
                 Some(ERT_DRV.into()),
+                "ert",
             )));
             let (diagnostic, diagnostic_bytes) = recording_sink();
             let (primary, primary_bytes) = recording_sink();
             let (tee, state) = BuildStderrTee::new(diagnostic, primary);
-            drive_tee(tee.observe_ert(timing.clone()), input.as_bytes());
+            drive_tee(tee.observe_check(timing.clone()), input.as_bytes());
             assert_eq!(timing.lock().unwrap().phase().duration_ms, expected);
             assert_eq!(*diagnostic_bytes.borrow(), input.as_bytes());
             assert_eq!(*primary_bytes.borrow(), input.as_bytes());
@@ -2721,12 +2751,273 @@ mod tests {
         }
     }
 
+    fn tsc_builder_line(action: &str, id: u64, kind: u64, fields: serde_json::Value) -> String {
+        format!(
+            "@nix {}\n",
+            serde_json::json!({"action":action,"id":id,"type":kind,"fields":fields})
+        )
+    }
+
+    const TSC_EVENT: &str = r#"{"event":"devtool-check-timing","schema_version":1,"check":"tsc","duration_ms":37,"outcome":"success"}"#;
+
+    fn tsc_start() -> String {
+        tsc_builder_line(
+            "start",
+            7,
+            105,
+            serde_json::json!(["/nix/store/ts.drv", "", 1, 1]),
+        )
+    }
+
+    #[test]
+    fn invalid_timing_candidate_is_sticky_across_current_builder_results() {
+        let start = tsc_start();
+        let stop = tsc_builder_line("stop", 7, 0, serde_json::json!([]));
+        for candidate in [
+            TSC_EVENT.replace("\"schema_version\":1", "\"schema_version\":2"),
+            r#"{"event":"devtool-check-timing","schema_version":1,"check":"tsc","duration_ms":"#
+                .into(),
+            format!("{TSC_EVENT}{}", " ".repeat(1024)),
+            format!("{TSC_EVENT}{}", " ".repeat(9000)),
+            format!("{}{TSC_EVENT}", " ".repeat(9000)),
+            format!("{}{TSC_EVENT}", " ".repeat(65536)),
+        ] {
+            for lines in [
+                [TSC_EVENT, candidate.as_str()],
+                [candidate.as_str(), TSC_EVENT],
+            ] {
+                for multiline in [true, false] {
+                    let results = if multiline {
+                        tsc_builder_line("result", 7, 101, serde_json::json!([lines.join("\n")]))
+                    } else {
+                        lines
+                            .iter()
+                            .map(|line| {
+                                tsc_builder_line("result", 7, 101, serde_json::json!([line]))
+                            })
+                            .collect::<String>()
+                    };
+                    let input = format!("{start}{results}{stop}");
+                    let observer = Arc::new(std::sync::Mutex::new(super::CheckBuildTiming::new(
+                        Some("/nix/store/ts.drv".into()),
+                        "tsc",
+                    )));
+                    let (diagnostic, diagnostic_bytes) = recording_sink();
+                    let (primary, primary_bytes) = recording_sink();
+                    let (tee, state) = BuildStderrTee::new(diagnostic, primary);
+                    drive_tee(tee.observe_check(observer.clone()), input.as_bytes());
+                    assert!(!state.outcome().diagnostic_failed);
+                    assert!(!state.outcome().primary_failed);
+                    assert_eq!(*diagnostic_bytes.borrow(), input.as_bytes());
+                    assert_eq!(*primary_bytes.borrow(), input.as_bytes());
+                    let phase = observer.lock().unwrap().phase();
+                    assert_eq!(phase.outcome, PhaseOutcome::Unavailable, "{input}");
+                    for ok in [true, false] {
+                        let step = if ok {
+                            StepResult::ok("nix-static-typescript")
+                        } else {
+                            StepResult::fail("nix-static-typescript")
+                        };
+                        let step = super::with_check_execution_evidence(
+                            "static-typescript",
+                            step.detail(&input).phases([phase.clone()]),
+                        );
+                        assert_eq!(step.ok, ok);
+                        assert_eq!(step.detail.as_deref(), Some(input.as_str()));
+                    }
+                }
+            }
+        }
+        let mut observer = super::CheckBuildTiming::new(Some("/nix/store/ts.drv".into()), "tsc");
+        let results = tsc_builder_line(
+            "result",
+            7,
+            101,
+            serde_json::json!([format!(
+                "ordinary diagnostics\n{TSC_EVENT}\nmore diagnostics"
+            )]),
+        );
+        let diagnostic = tsc_builder_line(
+            "result",
+            7,
+            101,
+            serde_json::json!(["ordinary diagnostic ".repeat(900)]),
+        );
+        observer.push(format!("{start}{diagnostic}{results}{diagnostic}{stop}").as_bytes());
+        assert_eq!(observer.phase().duration_ms, Some(37));
+    }
+
+    #[test]
+    fn typescript_current_builder_activity_supplies_child_execution() {
+        let mut observer = super::CheckBuildTiming::new(Some("/nix/store/ts.drv".into()), "tsc");
+        observer.push(tsc_start().as_bytes());
+        observer
+            .push(tsc_builder_line("result", 7, 101, serde_json::json!([TSC_EVENT])).as_bytes());
+        observer.push(tsc_builder_line("stop", 7, 0, serde_json::json!([])).as_bytes());
+        let phase = observer.phase();
+        assert_eq!(phase.duration_ms, Some(37));
+        assert_eq!(phase.outcome, PhaseOutcome::Success);
+    }
+
+    #[test]
+    fn typescript_live_tee_observes_timing_without_changing_diagnostic_bytes() {
+        let observer = Arc::new(std::sync::Mutex::new(super::CheckBuildTiming::new(
+            Some("/nix/store/ts.drv".into()),
+            "tsc",
+        )));
+        let input = format!(
+            "{}{}{}",
+            tsc_start(),
+            tsc_builder_line("result", 7, 101, serde_json::json!([TSC_EVENT])),
+            tsc_builder_line("stop", 7, 0, serde_json::json!([]))
+        );
+        let (diagnostic, diagnostic_bytes) = recording_sink();
+        let (primary, primary_bytes) = recording_sink();
+        let (tee, state) = BuildStderrTee::new(diagnostic, primary);
+        drive_tee(tee.observe_check(observer.clone()), input.as_bytes());
+        assert!(!state.outcome().diagnostic_failed);
+        assert!(!state.outcome().primary_failed);
+        assert_eq!(*diagnostic_bytes.borrow(), input.as_bytes());
+        assert_eq!(*primary_bytes.borrow(), input.as_bytes());
+        assert_eq!(observer.lock().unwrap().phase().duration_ms, Some(37));
+    }
+
+    #[test]
+    fn typescript_builder_timing_requires_live_target_activity_and_valid_child_event() {
+        let start = tsc_start();
+        let stop = tsc_builder_line("stop", 7, 0, serde_json::json!([]));
+        let event = TSC_EVENT.replace("success", "failure");
+        let result = tsc_builder_line("result", 7, 101, serde_json::json!([event]));
+        let valid = format!("{start}{result}{stop}");
+        for (input, derivation) in [
+            (String::new(), Some("/nix/store/ts.drv")),
+            (result.clone(), Some("/nix/store/ts.drv")),
+            (format!("{start}{result}"), Some("/nix/store/ts.drv")),
+            (
+                valid.replace("\"\",1,1", "\"remote\",1,1"),
+                Some("/nix/store/ts.drv"),
+            ),
+            (
+                valid.replace("\"\",1,1", "\"\",0,1"),
+                Some("/nix/store/ts.drv"),
+            ),
+            (format!("{start}{stop}{result}"), Some("/nix/store/ts.drv")),
+            (valid.clone(), Some("/nix/store/other.drv")),
+            (valid.clone(), None),
+            (
+                format!("{start}{}{stop}", result.replace("\"id\":7", "\"id\":8")),
+                Some("/nix/store/ts.drv"),
+            ),
+            (
+                valid.replace("\"type\":101", "\"type\":100"),
+                Some("/nix/store/ts.drv"),
+            ),
+            (
+                format!(
+                    "{start}{}{stop}",
+                    tsc_builder_line("msg", 7, 101, serde_json::json!([event]))
+                ),
+                Some("/nix/store/ts.drv"),
+            ),
+            (
+                format!(
+                    "{start}{}{stop}",
+                    tsc_builder_line("result", 7, 101, serde_json::json!(["{malformed"]))
+                ),
+                Some("/nix/store/ts.drv"),
+            ),
+            (
+                format!("{start}{result}{result}{stop}"),
+                Some("/nix/store/ts.drv"),
+            ),
+            (
+                format!("{start}{start}{result}{stop}"),
+                Some("/nix/store/ts.drv"),
+            ),
+            (
+                format!("{start}{}", result.trim_end()),
+                Some("/nix/store/ts.drv"),
+            ),
+            (valid.replace("tsc", "ert"), Some("/nix/store/ts.drv")),
+        ] {
+            let mut observer = super::CheckBuildTiming::new(derivation.map(str::to_owned), "tsc");
+            observer.push(input.as_bytes());
+            assert_eq!(
+                observer.phase().outcome,
+                PhaseOutcome::Unavailable,
+                "{input}"
+            );
+        }
+        let mut observer = super::CheckBuildTiming::new(Some("/nix/store/ts.drv".into()), "tsc");
+        let input = format!("{}\n{valid}", "x".repeat(9000));
+        for chunk in input.as_bytes().chunks(3) {
+            observer.push(chunk);
+        }
+        let phase = observer.phase();
+        assert_eq!(phase.duration_ms, Some(37));
+        assert_eq!(phase.outcome, PhaseOutcome::Failed);
+        let step = super::with_check_execution_evidence(
+            "static-typescript",
+            StepResult::fail("nix-static-typescript").phases([phase.clone()]),
+        );
+        assert!(!step.ok);
+        assert_eq!(step.phases, [phase]);
+    }
+
+    #[test]
+    fn typescript_nix_transport_and_historical_output_never_imply_current_execution() {
+        let historical_log = tempfile::NamedTempFile::new().unwrap();
+        let retained = format!(
+            "{}{}{}",
+            tsc_start(),
+            tsc_builder_line("result", 7, 101, serde_json::json!([TSC_EVENT])),
+            tsc_builder_line("stop", 7, 0, serde_json::json!([]))
+        );
+        std::fs::write(historical_log.path(), retained).unwrap();
+        let historical_detail = format!("retained log: {}", historical_log.path().display());
+        for detail in ["", TSC_EVENT, &historical_detail] {
+            for realization in [
+                NixRealization::Reused,
+                NixRealization::Realized,
+                NixRealization::Unknown,
+            ] {
+                for ok in [true, false] {
+                    let report = injected_nix_report(realization);
+                    let phases = report.phase_records();
+                    let step = if ok {
+                        StepResult::ok("nix-static-typescript")
+                    } else {
+                        StepResult::fail("nix-static-typescript")
+                    }
+                    .detail(detail)
+                    .with_duration(std::time::Duration::from_millis(91))
+                    .phases(phases.clone())
+                    .nix(report);
+                    let step = super::with_check_execution_evidence("static-typescript", step);
+                    assert_eq!(step.ok, ok);
+                    assert_eq!(step.duration_ms, 91);
+                    assert_eq!(step.detail.as_deref(), Some(detail));
+                    assert_eq!(step.nix.as_ref().unwrap().realization, realization);
+                    assert_eq!(&step.phases[..3], &phases);
+                    assert_eq!(step.phases[3].outcome, PhaseOutcome::Unavailable);
+                    assert_eq!(step.phases[3].duration_ms, None);
+                }
+            }
+        }
+        assert!(
+            super::with_check_execution_evidence("static-code", StepResult::ok("nix-static-code"))
+                .phases
+                .is_empty()
+        );
+    }
+
     #[test]
     fn static_check_catalog_has_no_aggregate() {
         assert_eq!(
             STATIC_CHECKS.as_slice(),
             [
                 ("nix-static-docs", "static-docs"),
+                ("nix-static-typescript", "static-typescript"),
                 ("nix-rust-format", "rust-format"),
                 ("nix-static-code", "static-code"),
                 ("nix-static-ert", "static-ert"),
@@ -2756,6 +3047,7 @@ mod tests {
             requests,
             [
                 "static-docs",
+                "static-typescript",
                 "rust-format",
                 "static-code",
                 "static-ert",
@@ -2763,10 +3055,14 @@ mod tests {
             ]
         );
         assert!(!result.ok);
-        assert_eq!(result.steps[1].name, "nix-rust-format");
-        assert!(!result.steps[1].ok);
+        assert_eq!(result.steps[2].name, "nix-rust-format");
+        assert!(!result.steps[2].ok);
         assert!(
-            result.steps[0].ok && result.steps[2].ok && result.steps[3].ok && result.steps[4].ok
+            result.steps[0].ok
+                && result.steps[1].ok
+                && result.steps[3].ok
+                && result.steps[4].ok
+                && result.steps[5].ok
         );
     }
 
