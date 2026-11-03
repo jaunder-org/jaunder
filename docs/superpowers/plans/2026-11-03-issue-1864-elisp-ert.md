@@ -60,9 +60,10 @@ must retain this provenance per ADR-0127.
 
 ## Boundaries and later gates
 
-These are proposed acceptance proofs, not performed work or present authority.
-Obtain outline approval before implementation/proofs. Preserve the later
-integrated-tree review and commit/verification boundaries; no hook, workflow, CI
-topology, required-check, shared architecture/catalog/Nix/xtask or tracker
-changes outside the stated shared-owner integration. No implementation or proof
-is authorized by this outline itself.
+These are proposed acceptance proofs, not performed work. Outline approval has
+been received; applicable implementation/proof authorization gates and the later
+integrated-tree review and commit/verification boundaries remain binding. No
+hook, workflow, CI topology, required-check, shared
+architecture/catalog/Nix/xtask or tracker changes outside the stated
+shared-owner integration. No implementation or proof is authorized by this
+outline itself.
