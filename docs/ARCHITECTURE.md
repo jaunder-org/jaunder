@@ -4482,6 +4482,17 @@ definitions
 ([hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md);
 [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
 
+**Approved direction — not yet implemented:** `devtool check tsc` will remain a
+named check and move into a `typescript` group with its own `static-typescript`
+Nix leaf and xtask validation verdict. The complete `--all` check inventory
+keeps its existing order and uniqueness; `static-code` retains its other checks,
+including those that consume TypeScript files. The dedicated leaf's direct
+source filter is narrower, but the existing `e2ePackage` still makes all
+`end2end/` changes transitive inputs. Host whole-step time, Nix request/reuse
+evidence, and current tsc execution time remain distinct; only a timing event
+observed and attributed to the current builder request counts as execution
+([proposed TypeScript shared-verification leaf](adr/drafts/typescript-shared-verification-leaf.md)).
+
 The two CSR-facing source filters follow resolved target reachability rather
 than crate names. The `.#site`/CSR closure contains workspace manifests, the
 sources reachable from the `csr` target, required shell inputs, and
