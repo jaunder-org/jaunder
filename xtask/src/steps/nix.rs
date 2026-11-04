@@ -33,7 +33,7 @@ pub(crate) enum TestCheck {
 }
 
 const CHECK_SUPPORTING_TEST_CHECKS: [TestCheck; 2] = [TestCheck::Wasm, TestCheck::Doctests];
-const STATIC_CHECKS: [(&str, &str); 3] = [
+const STATIC_CHECKS: [(&str, &str); 4] = [
     ("nix-static-docs", "static-docs"),
     ("nix-static-code", "static-code"),
     ("nix-static-ert", "static-ert"),
