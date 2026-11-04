@@ -3300,6 +3300,47 @@ xtask-format =
       cargo fmt --manifest-path xtask/Cargo.toml --check
       touch $out
     '');
+# Cargo fmt's product/tools populations overlap. Keep their shared verdict and
+# the scoped Leptos formatter together, without compiling the residual checks.
+rust-format =
+  let
+    rustFormatSourceFilter = path: type:
+      let
+        relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
+      in
+      !(relative == "xtask" || pkgs.lib.hasPrefix "xtask/" relative)
+      && (
+        type == "directory"
+        || pkgs.lib.hasSuffix ".rs" path
+        || builtins.any (suffix: pkgs.lib.hasSuffix suffix path) [
+          "/Cargo.toml"
+          "/Cargo.lock"
+          "/rust-toolchain.toml"
+          "/.rustfmt.toml"
+          "/rustfmt.toml"
+          "/leptosfmt.toml"
+        ]
+        || pkgs.lib.hasPrefix ".cargo/" relative
+      );
+    rustFormatSrc = pkgs.lib.cleanSourceWith {
+      src = craneLib.path ../.;
+      filter = rustFormatSourceFilter;
+    };
+  in
+  nonSubstitutable (pkgs.runCommand "rust-format"
+    {
+      # These bring their real transitive source/vendor/build closures; the
+      # direct source filter alone does not promise cache isolation.
+      nativeBuildInputs = [ devtoolBin toolchain leptosfmt ];
+      JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
+      JAUNDER_DEVTOOL_TOOLS_CARGO_HOME = "${toolsOfflineCargoHome}";
+    }
+    ''
+      cp --no-preserve=mode -r ${rustFormatSrc} src
+      cd src
+      devtool check --group rust-format --sandbox-cargo
+      touch $out
+    '');
 static-code =
   # Force the optional performance surface in the existing static gate so
   # shared VM-wrapper changes cannot silently leave measurement producers stale.
@@ -3375,7 +3416,6 @@ static-code =
         toolchain
         pkgs.cargo-deny
         pkgs.ast-grep
-        leptosfmt
         pkgs.prettier
         pkgs.nodejs
         pkgs.typescript
