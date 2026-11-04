@@ -17,6 +17,7 @@ let
     cargoTargetSource
     cargoMemberSource
     cargoPackageClosure
+    withWorkspacePlaceholders
     cargoArtifacts
     leanTestProfile
     leanDevAndTestProfile
@@ -3235,6 +3236,68 @@ static-ert =
       cp --no-preserve=mode -r ${staticErtSrc} src
       cd src
       devtool check --group ert
+      touch $out
+    '');
+# Cargo resolves dependency manifests even without `--all`; placeholders satisfy
+# that metadata walk without admitting or formatting dependency implementations.
+xtask-format =
+  let
+    members = cargoPackageClosure [ "xtask" ];
+    metadataMembers = builtins.filter (member: member != "xtask") members;
+    metadataInputs = [
+      "Cargo.toml"
+      "tools/Cargo.toml"
+      "xtask/Cargo.lock"
+      "rust-toolchain.toml"
+      ".rustfmt.toml"
+      ".cargo/config.toml"
+    ] ++ map (member: "${member}/Cargo.toml") members;
+    targetDirectories = map (directory: "xtask/${directory}") [ "src" "tests" "examples" "benches" ];
+    formatSourceFilter =
+      path: type:
+      let
+        relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
+      in
+      if type == "directory" then
+        toString path == toString ../.
+        || builtins.any (input: pkgs.lib.hasPrefix "${relative}/" input) metadataInputs
+        || builtins.any (
+          directory: relative == directory || pkgs.lib.hasPrefix "${directory}/" relative
+        ) targetDirectories
+      else
+        builtins.elem relative metadataInputs
+        || (
+          pkgs.lib.hasSuffix ".rs" relative
+          && (
+            relative == "xtask/build.rs"
+            || builtins.any (directory: pkgs.lib.hasPrefix "${directory}/" relative) targetDirectories
+          )
+        );
+    formatSource = pkgs.lib.cleanSourceWith {
+      src = craneLib.path ../.;
+      filter =
+        assert formatSourceFilter (cargoSourcePath "xtask/src/lib.rs") "regular";
+        assert formatSourceFilter (cargoSourcePath "xtask/tests/build_provenance.rs") "regular";
+        assert formatSourceFilter (cargoSourcePath "xtask/build.rs") "regular";
+        assert formatSourceFilter (cargoSourcePath "common/Cargo.toml") "regular";
+        assert !(formatSourceFilter (cargoSourcePath "common/src/lib.rs") "regular");
+        assert !(formatSourceFilter (cargoSourcePath "tools/devtool/src/main.rs") "regular");
+        assert !(formatSourceFilter (cargoSourcePath "xtask/notes.rs") "regular");
+        assert !(formatSourceFilter (cargoSourcePath "server") "directory");
+        formatSourceFilter;
+    };
+    formatSrc = withWorkspacePlaceholders "xtask-format-source" formatSource metadataMembers;
+  in
+  nonSubstitutable (pkgs.runCommand "xtask-format"
+    {
+      nativeBuildInputs = [ toolchain ];
+    }
+    ''
+      cp --no-preserve=mode -r ${formatSrc} src
+      cd src
+      export HOME="$TMPDIR/home"
+      mkdir -p "$HOME"
+      cargo fmt --manifest-path xtask/Cargo.toml --check
       touch $out
     '');
 static-code =

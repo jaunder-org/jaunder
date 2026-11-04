@@ -1332,10 +1332,10 @@ Test paths follow the nested module path to the test name. A shallow file yields
 root workspace on the host during `prepush`; the Nix `doctests`/`doctests-gate`
 producer/consumer remains the sandbox/offline authority for that same root
 population. The host-side `doctest-fences` step covers `xtask/` and `tools`,
-which no Nix check can see. Each applicable path reads rustdoc fences with `syn`
-and **reconciles** its population against what the runner reported, in both
-directions. A fence that exists but never ran is a failure, and so is a reported
-doctest the scanner did not find.
+whose doctests remain outside that Nix population. Each applicable path reads
+rustdoc fences with `syn` and **reconciles** its population against what the
+runner reported, in both directions. A fence that exists but never ran is a
+failure, and so is a reported doctest the scanner did not find.
 
 Run them directly with `cargo test --workspace --doc`. Use `--workspace`, never
 `-p`: package scoping silently drops the `#[cfg(feature = "sanitize")]` fences
@@ -1713,9 +1713,11 @@ differences.
 **Nix invalidation-boundary guard (`cargo xtask nix probe-source`).** The
 hermetic static surface has separate semantic derivations, not a singular
 `static-checks`: `static-docs` owns Markdown formatting and its configuration;
-`static-ert` owns standalone pure ERT, and `static-code` owns the remaining
-hermetic static definitions. The existing probe below covers its original
-boundaries; it does not yet probe `static-ert`. The CSR/site source closure
+`static-code` owns the remaining shared devtool definitions, while `static-ert`
+owns standalone pure ERT. The independent `xtask-format` leaf verifies xtask
+Rust formatting with pinned Cargo/rustfmt; it is not part of a devtool group or
+the existing source drift probe. That probe covers its original boundaries but
+does not yet probe `static-ert` or `xtask-format`. The CSR/site source closure
 contains workspace manifests, the resolved `csr` target closure, its required
 shell inputs, and deterministic workspace placeholders. The client wasm-test
 closure analogously contains workspace manifests, the resolved `client`
@@ -1802,6 +1804,14 @@ reconciliation, and server-function coverage verification.
   event and matching stop. Reuse or missing/malformed/ambiguous/unsupported
   evidence leaves execution timing unavailable; retained logs are never timing
   inputs. Request duration and reuse classification remain separate.
+- `checks.x86_64-linux.xtask-format` — pinned raw
+  `cargo fmt --manifest-path xtask/Cargo.toml --check`, without `--all`. Its
+  bounded source includes xtask Rust targets and required Cargo/configuration
+  inputs, plus dependency target placeholders for metadata, not dependency
+  implementation sources. It requires neither compiled devtool nor offline Cargo
+  homes and never executes xtask. Hermetic validation requires it once alongside
+  `static-docs` and `static-code`; host `xtask-fmt` and Fix/index behavior
+  remain unchanged.
 - `checks.x86_64-linux.wasm-tests` — `wasm-bindgen-test` cases executed in
   headless Nix-store Chromium through the matching Nix-store chromedriver. This
   is behavioral pass/fail execution for irreducible browser code, not wasm line

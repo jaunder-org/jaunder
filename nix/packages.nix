@@ -1249,6 +1249,7 @@ in
       cargoTargetSource
       cargoMemberSource
       cargoPackageClosure
+      withWorkspacePlaceholders
       appOfflineCargoHome
       toolsOfflineCargoHome
       cargoArtifacts
