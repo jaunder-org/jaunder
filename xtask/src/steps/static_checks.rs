@@ -65,9 +65,10 @@ pub fn specs_for_phase(phase: Phase, mode: Mode) -> Vec<StepSpec> {
             // `tsc-deps` step, now folded in) then type-checks; verify-only.
             devtool_check("tsc", mode),
             devtool_check("cargo-deny", mode),
-            devtool_compile_check("clippy", mode),
+            devtool_compile_check("product-core-clippy", mode),
             devtool_compile_check("web-server-clippy", mode),
             devtool_compile_check("web-no-server-clippy", mode),
+            devtool_compile_check("client-host-clippy", mode),
             devtool_compile_check("wasm-clippy", mode),
             devtool_compile_check("tools-clippy", mode),
             cargo_compile_check(
@@ -273,7 +274,7 @@ mod tests {
     #[test]
     fn cache_warning_preserves_runner_outcome_and_detail() {
         let catalog = specs(Mode::Check);
-        let spec = find(&catalog, "clippy");
+        let spec = find(&catalog, "product-core-clippy");
         for ok in [true, false] {
             for detail in [None, Some("command detail")] {
                 for warning in [None, Some("cache warning")] {
@@ -498,9 +499,10 @@ mod tests {
 
         for name in [
             "cargo-deny",
-            "clippy",
+            "product-core-clippy",
             "web-server-clippy",
             "web-no-server-clippy",
+            "client-host-clippy",
             "wasm-clippy",
             "tools-clippy",
         ] {
@@ -524,7 +526,7 @@ mod tests {
         }
 
         assert!(find(&s, "cargo-deny").cache_rustc);
-        assert!(find(&s, "clippy").cache_rustc);
+        assert!(find(&s, "product-core-clippy").cache_rustc);
         assert!(find(&s, "web-server-clippy").cache_rustc);
         assert!(find(&s, "web-no-server-clippy").cache_rustc);
         assert!(find(&s, "wasm-clippy").cache_rustc);
@@ -549,9 +551,10 @@ mod tests {
             "byte-compile",
             "tsc",
             "cargo-deny",
-            "clippy",
+            "product-core-clippy",
             "web-server-clippy",
             "web-no-server-clippy",
+            "client-host-clippy",
             "wasm-clippy",
             "tools-clippy",
             "xtask-clippy",
@@ -590,7 +593,8 @@ mod tests {
             .map(|s| s.name)
             .collect();
         assert_eq!(compile_names.first(), Some(&"byte-compile"));
-        assert!(compile_names.contains(&"clippy"));
+        assert!(compile_names.contains(&"product-core-clippy"));
+        assert!(compile_names.contains(&"client-host-clippy"));
         assert!(compile_names.contains(&"web-no-server-clippy"));
         assert!(!compile_names.contains(&"ert"));
 

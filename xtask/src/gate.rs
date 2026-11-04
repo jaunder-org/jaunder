@@ -884,7 +884,7 @@ mod tests {
 
         let fmt = position(&names, "fmt");
         let flow_docs = position(&names, "flow-docs");
-        let clippy = position(&names, "clippy");
+        let clippy = position(&names, "product-core-clippy");
         let host_tests = position(&names, "host-tests");
 
         assert!(

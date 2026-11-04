@@ -45,9 +45,10 @@ impl CheckGroup {
                 "no-full-reload",
                 "byte-compile",
                 "cargo-deny",
-                "clippy",
+                "product-core-clippy",
                 "web-server-clippy",
                 "web-no-server-clippy",
+                "client-host-clippy",
                 "wasm-clippy",
                 "tools-clippy",
             ],
@@ -72,9 +73,10 @@ fn all_names() -> Vec<&'static str> {
         "byte-compile",
         "tsc",
         "cargo-deny",
-        "clippy",
+        "product-core-clippy",
         "web-server-clippy",
         "web-no-server-clippy",
+        "client-host-clippy",
         "wasm-clippy",
         "tools-clippy",
         "ert",
@@ -316,9 +318,22 @@ fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
             host_args: owned(&["deny", "check"]),
             sandbox_args: owned(&["deny", "check", "bans", "licenses", "sources"]),
         }),
-        "clippy" => cargo_check(
+        "product-core-clippy" => cargo_check(
             CargoWorkspace::Product,
-            &["clippy", "--all-targets", "--", "-D", "warnings"],
+            &[
+                "clippy",
+                "--workspace",
+                "--exclude",
+                "web",
+                "--exclude",
+                "client",
+                "--exclude",
+                "csr",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings",
+            ],
         ),
         "web-server-clippy" => cargo_check(
             CargoWorkspace::Product,
@@ -341,6 +356,20 @@ fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
                 "-p",
                 "web",
                 "--no-default-features",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings",
+            ],
+        ),
+        "client-host-clippy" => cargo_check(
+            CargoWorkspace::Product,
+            &[
+                "clippy",
+                "-p",
+                "client",
+                "--features",
+                "csr",
                 "--all-targets",
                 "--",
                 "-D",
@@ -376,7 +405,14 @@ fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
         ),
         "tools-clippy" => cargo_check(
             CargoWorkspace::Tools,
-            &["clippy", "--all-targets", "--", "-D", "warnings"],
+            &[
+                "clippy",
+                "--workspace",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings",
+            ],
         ),
         other => bail!("unknown check '{other}' (known: {:?})", all_names()),
     })
@@ -739,16 +775,29 @@ mod tests {
     }
 
     #[test]
-    fn clippy_matches_existing_host_ladder_args() {
-        let cmd = build_host("clippy", false);
+    fn product_core_clippy_matches_selected_workspace_args() {
+        let cmd = build_host("product-core-clippy", false);
 
         assert_eq!(cmd.program, "cargo");
         assert_eq!(
             cmd.args,
-            vec!["clippy", "--all-targets", "--", "-D", "warnings"]
+            vec![
+                "clippy",
+                "--workspace",
+                "--exclude",
+                "web",
+                "--exclude",
+                "client",
+                "--exclude",
+                "csr",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings"
+            ]
         );
         assert!(cmd.env.is_empty());
-        assert_eq!(build_host("clippy", true), cmd);
+        assert_eq!(build_host("product-core-clippy", true), cmd);
     }
 
     #[test]
@@ -797,6 +846,27 @@ mod tests {
     }
 
     #[test]
+    fn client_host_clippy_selects_csr_all_targets() {
+        let cmd = build_host("client-host-clippy", false);
+        assert_eq!(
+            cmd.args,
+            vec![
+                "clippy",
+                "-p",
+                "client",
+                "--features",
+                "csr",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings"
+            ]
+        );
+        assert!(cmd.env.is_empty());
+        assert_eq!(build_host("client-host-clippy", true), cmd);
+    }
+
+    #[test]
     fn wasm_clippy_matches_existing_host_ladder_args() {
         let cmd = build_host("wasm-clippy", false);
 
@@ -835,6 +905,7 @@ mod tests {
                 "clippy",
                 "--manifest-path",
                 "tools/Cargo.toml",
+                "--workspace",
                 "--all-targets",
                 "--",
                 "-D",
@@ -887,7 +958,7 @@ mod tests {
 
     #[test]
     fn sandbox_clippy_uses_product_offline_home() {
-        let cmd = spec("clippy", false)
+        let cmd = spec("product-core-clippy", false)
             .unwrap()
             .build_with_env(CargoMode::Sandbox, |name| match name {
                 "JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME" => {
@@ -904,6 +975,13 @@ mod tests {
             vec![
                 "--offline",
                 "clippy",
+                "--workspace",
+                "--exclude",
+                "web",
+                "--exclude",
+                "client",
+                "--exclude",
+                "csr",
                 "--all-targets",
                 "--",
                 "-D",
@@ -1022,6 +1100,7 @@ mod tests {
                 "clippy",
                 "--manifest-path",
                 "tools/Cargo.toml",
+                "--workspace",
                 "--all-targets",
                 "--",
                 "-D",
@@ -1220,9 +1299,10 @@ mod tests {
                 "no-full-reload",
                 "byte-compile",
                 "cargo-deny",
-                "clippy",
+                "product-core-clippy",
                 "web-server-clippy",
                 "web-no-server-clippy",
+                "client-host-clippy",
                 "wasm-clippy",
                 "tools-clippy",
             ]
@@ -1242,9 +1322,10 @@ mod tests {
                 "byte-compile",
                 "tsc",
                 "cargo-deny",
-                "clippy",
+                "product-core-clippy",
                 "web-server-clippy",
                 "web-no-server-clippy",
+                "client-host-clippy",
                 "wasm-clippy",
                 "tools-clippy",
                 "ert",
@@ -1276,14 +1357,15 @@ mod tests {
         );
         let clippy_start = all
             .iter()
-            .position(|name| *name == "clippy")
+            .position(|name| *name == "product-core-clippy")
             .expect("generic clippy present");
         assert_eq!(
-            &all[clippy_start..=clippy_start + 3],
+            &all[clippy_start..=clippy_start + 4],
             [
-                "clippy",
+                "product-core-clippy",
                 "web-server-clippy",
                 "web-no-server-clippy",
+                "client-host-clippy",
                 "wasm-clippy",
             ]
         );
