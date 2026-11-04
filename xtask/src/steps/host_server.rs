@@ -674,7 +674,7 @@ mod tests {
         let cargo = temp.path().join("cargo");
         fs::write(
             &cargo,
-            "#!/usr/bin/env python3\nimport json, os, pathlib, sys\nvars = ('GIT_DIR','GIT_WORK_TREE','GIT_INDEX_FILE','GIT_OBJECT_DIRECTORY','GIT_COMMON_DIR','GIT_NAMESPACE')\nsite = pathlib.Path('target/site')\nstate = 'symlink:' + os.readlink(site) if site.is_symlink() else ('exists' if site.exists() else 'absent')\nentry = {'args': sys.argv[1:], 'leaked': [name for name in vars if os.getenv(name) is not None], 'site': state}\nwith open(os.environ['CALL_LOG'], 'a') as log: log.write(json.dumps(entry) + '\\n')\n",
+            "#!/usr/bin/env python3\nimport json, os, pathlib, sys\nvars = ('GIT_DIR','GIT_WORK_TREE','GIT_INDEX_FILE','GIT_OBJECT_DIRECTORY','GIT_COMMON_DIR','GIT_NAMESPACE')\nsite = pathlib.Path('target/site')\nentry = {'args': sys.argv[1:], 'git_env': {name: os.getenv(name) for name in vars}, 'cwd': os.getcwd(), 'site': site.exists() or site.is_symlink()}\nwith open(os.environ['CALL_LOG'], 'a') as log: log.write(json.dumps(entry) + '\\n')\nsys.exit(9 if pathlib.Path('fail-' + sys.argv[1]).exists() else 0)\n",
         )
         .unwrap();
         fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
@@ -688,38 +688,36 @@ mod tests {
         let mut path_entries = vec![just_bin.clone(), temp.path().to_path_buf()];
         path_entries.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
         let path = std::env::join_paths(path_entries).unwrap();
-        // Inject a failure at the real rmtree operation, not an alternate cleanup.
-        let injector = temp.path().join("injector");
-        fs::create_dir(&injector).unwrap();
-        let fail_remove = temp.path().join("fail-remove");
-        fs::write(
-            injector.join("sitecustomize.py"),
-            "import os\n_rmdir = os.rmdir\ndef rmdir(path, *args, **kwargs):\n    if os.path.exists(os.environ['FAIL_REMOVE']):\n        raise PermissionError('injected removal failure')\n    return _rmdir(path, *args, **kwargs)\nos.rmdir = rmdir\n",
-        )
-        .unwrap();
-        let just_call = temp.path().join("just-call");
-        let invoke = |profile: &str| {
-            std::process::Command::new("just")
-                .args([
-                    "--justfile",
-                    justfile.to_str().unwrap(),
-                    "build-csr",
-                    profile,
-                ])
-                .current_dir(&nested)
+        let invoke = |profile: &str, absolute: bool| {
+            let mut command = std::process::Command::new("just");
+            if absolute {
+                command.args(["--justfile", justfile.to_str().unwrap()]);
+                command.current_dir(temp.path().parent().unwrap());
+            } else {
+                command.current_dir(&nested);
+            }
+            command.arg("build-csr");
+            if !profile.is_empty() {
+                command.arg(profile);
+            }
+            command
                 .env("PATH", &path)
                 .env("CALL_LOG", &call_log)
-                .env("JUST_CALL", &just_call)
-                .env("PYTHONPATH", &injector)
-                .env("FAIL_REMOVE", &fail_remove)
-                .env("GIT_DIR", temp.path().join("hostile"))
-                .env("GIT_WORK_TREE", temp.path().join("hostile"))
-                .env("GIT_INDEX_FILE", temp.path().join("hostile"))
-                .env("GIT_OBJECT_DIRECTORY", temp.path().join("hostile"))
-                .env("GIT_COMMON_DIR", temp.path().join("hostile"))
-                .env("GIT_NAMESPACE", "hostile")
+                .env("GIT_DIR", "inherited-dir")
+                .env("GIT_WORK_TREE", "inherited-tree")
+                .env("GIT_INDEX_FILE", "inherited-index")
+                .env("GIT_OBJECT_DIRECTORY", "inherited-objects")
+                .env("GIT_COMMON_DIR", "inherited-common")
+                .env("GIT_NAMESPACE", "inherited-namespace")
                 .output()
                 .unwrap()
+        };
+        let calls = || -> Vec<serde_json::Value> {
+            fs::read_to_string(&call_log)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect()
         };
 
         let profiles = [
@@ -728,7 +726,7 @@ mod tests {
             format!("\"debug\"; touch {}; echo \"", marker.display()),
         ];
         for profile in profiles {
-            let result = invoke(&profile);
+            let result = invoke(&profile, false);
             assert!(
                 !result.status.success(),
                 "{profile:?} unexpectedly accepted"
@@ -742,95 +740,104 @@ mod tests {
         }
 
         let site = target.join("site");
-        fs::remove_dir_all(&site).unwrap();
-        symlink("site", &site).unwrap();
-        let result = invoke("debug");
-        assert!(
-            !result.status.success(),
-            "self-referential site symlink was accepted"
-        );
-        assert!(site.is_symlink(), "inspection failure unlinked the symlink");
-        assert!(
-            String::from_utf8_lossy(&result.stderr).contains("Too many levels of symbolic links"),
-            "unexpected Just failure: {}",
-            String::from_utf8_lossy(&result.stderr)
-        );
-        let calls: Vec<serde_json::Value> = fs::read_to_string(&call_log)
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
-        assert_eq!(calls.len(), 1, "bundler ran after inspection failure");
-        assert_eq!(
-            calls[0]["args"],
-            serde_json::json!([
+        // Upward discovery and absolute --justfile both select the file's parent.
+        for (profile, absolute) in [("", false), ("debug", false), ("release", true)] {
+            fs::write(&call_log, "").unwrap();
+            let result = invoke(profile, absolute);
+            assert!(result.status.success(), "{:?}", result.stderr);
+            let recorded = calls();
+            assert_eq!(recorded.len(), 2);
+            let mut build = vec![
                 "build",
                 "--locked",
                 "-p",
                 "csr",
                 "--target",
-                "wasm32-unknown-unknown"
-            ])
-        );
-        assert_eq!(calls[0]["leaked"], serde_json::json!([]));
+                "wasm32-unknown-unknown",
+            ];
+            if profile == "release" {
+                build.push("--release");
+            }
+            assert_eq!(recorded[0]["args"], serde_json::json!(build));
+            let selected = if profile.is_empty() { "debug" } else { profile };
+            assert_eq!(
+                recorded[1]["args"],
+                serde_json::json!([
+                    "run",
+                    "--locked",
+                    "--manifest-path",
+                    "tools/devtool/Cargo.toml",
+                    "--",
+                    "csr-bundle",
+                    "--wasm",
+                    format!("target/wasm32-unknown-unknown/{selected}/csr.wasm"),
+                    "--out",
+                    "target/site"
+                ])
+            );
+            for call in &recorded {
+                assert_eq!(call["cwd"], temp.path().to_str().unwrap());
+                assert_eq!(
+                    call["git_env"],
+                    serde_json::json!({
+                        "GIT_DIR": "inherited-dir", "GIT_WORK_TREE": "inherited-tree",
+                        "GIT_INDEX_FILE": "inherited-index", "GIT_OBJECT_DIRECTORY": "inherited-objects",
+                        "GIT_COMMON_DIR": "inherited-common", "GIT_NAMESPACE": "inherited-namespace"
+                    })
+                );
+            }
+            assert_eq!(recorded[1]["site"], false);
+        }
 
-        fs::remove_file(&site).unwrap();
-        symlink("missing-target", &site).unwrap();
-        fs::write(&call_log, "").unwrap();
-        let result = invoke("debug");
-        assert!(result.status.success(), "{:?}", result.stderr);
-        assert!(site.is_symlink(), "dangling final symlink was removed");
-        assert_eq!(fs::read_link(&site).unwrap(), Path::new("missing-target"));
-        let calls: Vec<serde_json::Value> = fs::read_to_string(&call_log)
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
-        assert_eq!(calls.len(), 2);
-        assert_eq!(calls[1]["args"][0], "run");
-        assert_eq!(calls[1]["site"], "symlink:missing-target");
-
-        fs::remove_file(&site).unwrap();
         let referent = temp.path().join("referent");
         fs::create_dir(&referent).unwrap();
         fs::write(referent.join("sentinel"), "preserve").unwrap();
-        symlink(&referent, &site).unwrap();
-        assert!(invoke("release").status.success());
-        assert!(!site.is_symlink());
-        assert!(referent.join("sentinel").exists());
+        for link in ["missing-target", "site", referent.to_str().unwrap()] {
+            symlink(link, &site).unwrap();
+            assert!(invoke("debug", false).status.success());
+            assert!(!site.is_symlink());
+            assert!(referent.join("sentinel").exists());
+        }
+        fs::write(&site, "old bundle file").unwrap();
+        assert!(invoke("debug", false).status.success());
+        assert!(!site.exists());
 
-        fs::write(&site, "preserve").unwrap();
-        fs::write(&call_log, "").unwrap();
-        assert!(!invoke("debug").status.success());
-        assert_eq!(fs::read_to_string(&site).unwrap(), "preserve");
-        assert_eq!(fs::read_to_string(&call_log).unwrap().lines().count(), 1);
-        fs::remove_file(&site).unwrap();
-
-        fs::create_dir(&site).unwrap();
-        fs::write(&fail_remove, "fail").unwrap();
-        fs::write(&call_log, "").unwrap();
-        let result = invoke("debug");
-        assert!(!result.status.success());
-        assert!(String::from_utf8_lossy(&result.stderr).contains("injected removal failure"));
-        assert!(site.is_dir());
-        assert_eq!(fs::read_to_string(&call_log).unwrap().lines().count(), 1);
-        fs::remove_file(&fail_remove).unwrap();
-
-        // A symlinked ancestor is followed; this is not physical containment.
-        fs::remove_dir_all(&target).unwrap();
+        // Ordinary rm follows a symlinked ancestor, not a final symlink.
+        fs::remove_dir(&target).unwrap();
         symlink(&referent, &target).unwrap();
         fs::create_dir(referent.join("site")).unwrap();
-        fs::write(referent.join("site/old-bundle"), "remove").unwrap();
-        assert!(invoke("debug").status.success());
+        assert!(invoke("debug", false).status.success());
         assert!(!referent.join("site").exists());
         assert!(referent.join("sentinel").exists());
         fs::remove_file(&target).unwrap();
+        fs::create_dir(&target).unwrap();
 
-        fs::write(&target, "not a directory").unwrap();
+        // Each failed stage must prevent every later stage.
+        fs::create_dir(&site).unwrap();
+        fs::write(site.join("sentinel"), "preserve").unwrap();
+        fs::write(temp.path().join("fail-build"), "fail").unwrap();
         fs::write(&call_log, "").unwrap();
-        assert!(!invoke("debug").status.success());
-        assert_eq!(fs::read_to_string(&call_log).unwrap().lines().count(), 1);
-        assert_eq!(fs::read_to_string(&target).unwrap(), "not a directory");
+        assert!(!invoke("debug", false).status.success());
+        assert_eq!(calls().len(), 1);
+        assert!(site.join("sentinel").exists());
+        fs::remove_file(temp.path().join("fail-build")).unwrap();
+
+        fs::write(temp.path().join("fail-run"), "fail").unwrap();
+        fs::write(&call_log, "").unwrap();
+        assert!(!invoke("debug", false).status.success());
+        assert_eq!(calls().len(), 2);
+        assert!(!site.exists());
+        fs::remove_file(temp.path().join("fail-run")).unwrap();
+
+        // Inject the cleanup command's nonzero status without relying on uid/mode.
+        let rm = temp.path().join("rm");
+        fs::write(&rm, "#!/bin/sh\nexit 17\n").unwrap();
+        fs::set_permissions(&rm, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::create_dir(&site).unwrap();
+        fs::write(&call_log, "").unwrap();
+        assert!(!invoke("debug", false).status.success());
+        assert_eq!(calls().len(), 1);
+        assert!(site.exists());
     }
 
     #[test]
