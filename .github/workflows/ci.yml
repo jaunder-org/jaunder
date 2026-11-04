@@ -168,16 +168,88 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Capture coverage storage baseline
+        id: coverage-storage-baseline
+        continue-on-error: true
+        run: |
+          mkdir -p .xtask
+          report=.xtask/coverage-storage-snapshot.txt
+          printf 'Post-setup/cache storage snapshot\n' > "$report"
+          printf 'Configured workspace temporary path: %s\n' "$GITHUB_WORKSPACE/.xtask/tmp/workspace" >> "$report"
+          probe() {
+            printf '\n%s\n' "$1" >> "$report"
+            shift
+            if "$@" >> "$report" 2>&1; then
+              printf 'capture_exit=0\n' >> "$report"
+            else
+              code=$?
+              printf 'capture_exit=%s missing_evidence=true\n' "$code" >> "$report"
+            fi
+          }
+          probe timestamp date --utc +%FT%TZ
+          printf 'TMPDIR=%s\n' "${TMPDIR-<unset>}" >> "$report"
+          probe configured-workspace printf '%s\n' "$GITHUB_WORKSPACE"
+          for path in /nix/store "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.xtask/tmp" /tmp; do
+            probe "filesystem bytes: $path" df -h -- "$path"
+            probe "filesystem inodes: $path" df -i -- "$path"
+            if command -v findmnt >/dev/null 2>&1; then
+              probe "mount: $path" findmnt --target "$path"
+            else
+              printf '\nmount: %s\nfindmnt unavailable\n' "$path" >> "$report"
+            fi
+          done
       - name: Validate Rust coverage lane (via xtask)
         run:
           nix develop .#ci --accept-flake-config -c cargo xtask ci-validate
           coverage
+      - name: Capture coverage storage final snapshot
+        if: always()
+        continue-on-error: true
+        run: |
+          mkdir -p .xtask
+          report=.xtask/coverage-storage-snapshot.txt
+          printf '\nFinal storage measurements (diagnostic only)\n' >> "$report"
+          probe() {
+            printf '\n%s\n' "$1" >> "$report"
+            shift
+            if "$@" >> "$report" 2>&1; then
+              printf 'capture_exit=0\n' >> "$report"
+            else
+              code=$?
+              printf 'capture_exit=%s missing_evidence=true\n' "$code" >> "$report"
+            fi
+          }
+          probe timestamp date --utc +%FT%TZ
+          printf 'TMPDIR=%s\n' "${TMPDIR-<unset>}" >> "$report"
+          probe configured-workspace printf '%s\n' "$GITHUB_WORKSPACE"
+          probe configured-workspace-temp printf '%s\n' "$GITHUB_WORKSPACE/.xtask/tmp/workspace"
+          for path in /nix/store "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.xtask/tmp" /tmp; do
+            probe "filesystem bytes: $path" df -h -- "$path"
+            probe "filesystem inodes: $path" df -i -- "$path"
+            if command -v findmnt >/dev/null 2>&1; then
+              probe "mount: $path" findmnt --target "$path"
+            else
+              printf '\nmount: %s\nfindmnt unavailable\n' "$path" >> "$report"
+            fi
+          done
+          for path in /nix/store "$GITHUB_WORKSPACE/.xtask/tmp" "$GITHUB_WORKSPACE"; do
+            probe "allocated bytes: $path" timeout 10s du -shx -- "$path"
+          done
       - name: Preserve coverage validation result
         if: always()
         run: |
           if test -f .xtask/last-result.json; then
             cp .xtask/last-result.json .xtask/coverage-result.json
           fi
+      - name: Upload coverage storage snapshot
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: validate-coverage-storage-snapshot
+          path: .xtask/coverage-storage-snapshot.txt
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Upload coverage validation diagnostics
         if: always()
         uses: actions/upload-artifact@v7.0.1
@@ -258,10 +330,83 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Capture Firefox lane storage baseline
+        id: firefox-storage-baseline
+        continue-on-error: true
+        run: |
+          mkdir -p .xtask
+          report=.xtask/firefox-storage-snapshot.txt
+          printf 'Configured workspace temporary path: %s\n' "$GITHUB_WORKSPACE/.xtask/tmp/workspace" >> "$report"
+          probe() {
+            printf '\n%s\n' "$1" >> "$report"
+            shift
+            if "$@" >> "$report" 2>&1; then
+              printf 'capture_exit=0\n' >> "$report"
+            else
+              code=$?
+              printf 'capture_exit=%s missing_evidence=true\n' "$code" >> "$report"
+            fi
+          }
+          probe timestamp date --utc +%FT%TZ
+          printf 'TMPDIR=%s\n' "${TMPDIR-<unset>}" >> "$report"
+          probe configured-workspace printf '%s\n' "$GITHUB_WORKSPACE"
+          for path in /nix/store "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.xtask/tmp" /tmp; do
+            probe "filesystem bytes: $path" df -h -- "$path"
+            probe "filesystem inodes: $path" df -i -- "$path"
+            if command -v findmnt >/dev/null 2>&1; then
+              probe "mount: $path" findmnt --target "$path"
+            else
+              printf '\nmount: %s\nfindmnt unavailable\n' "$path" >> "$report"
+            fi
+          done
       - name: Run isolated Firefox lane
         run:
           nix develop .#ci --accept-flake-config -c cargo xtask e2e-lane ${{
           matrix.backend }}-firefox-${{ matrix.lane }}
+      - name: Capture Firefox lane final storage snapshot
+        if: always()
+        continue-on-error: true
+        run: |
+          mkdir -p .xtask
+          report=.xtask/firefox-storage-snapshot.txt
+          printf '\nFinal storage measurements (diagnostic only)\n' >> "$report"
+          probe() {
+            printf '\n%s\n' "$1" >> "$report"
+            shift
+            if "$@" >> "$report" 2>&1; then
+              printf 'capture_exit=0\n' >> "$report"
+            else
+              code=$?
+              printf 'capture_exit=%s missing_evidence=true\n' "$code" >> "$report"
+            fi
+          }
+          probe timestamp date --utc +%FT%TZ
+          printf 'TMPDIR=%s\n' "${TMPDIR-<unset>}" >> "$report"
+          probe configured-workspace printf '%s\n' "$GITHUB_WORKSPACE"
+          probe configured-workspace-temp printf '%s\n' "$GITHUB_WORKSPACE/.xtask/tmp/workspace"
+          for path in /nix/store "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.xtask/tmp" /tmp; do
+            probe "filesystem bytes: $path" df -h -- "$path"
+            probe "filesystem inodes: $path" df -i -- "$path"
+            if command -v findmnt >/dev/null 2>&1; then
+              probe "mount: $path" findmnt --target "$path"
+            else
+              printf '\nmount: %s\nfindmnt unavailable\n' "$path" >> "$report"
+            fi
+          done
+          for path in /nix/store "$GITHUB_WORKSPACE/.xtask/tmp" "$GITHUB_WORKSPACE"; do
+            probe "allocated bytes: $path" timeout 10s du -shx -- "$path"
+          done
+      - name: Upload lane storage snapshot
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name:
+            e2e-firefox-storage-snapshot-${{ matrix.backend }}-${{ matrix.lane
+            }}
+          path: .xtask/firefox-storage-snapshot.txt
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Upload lane-qualified e2e evidence
         if: always()
         uses: actions/upload-artifact@v7.0.1
