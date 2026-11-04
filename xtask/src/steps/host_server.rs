@@ -656,7 +656,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn just_recipe_rejects_shell_input_and_stops_on_inspection_errors() {
+    fn just_recipe_preserves_profile_environment_and_cleanup_contracts() {
         use std::os::unix::fs::{PermissionsExt, symlink};
 
         let Some((temp, _shell)) = preparation_fixture() else {
@@ -688,6 +688,15 @@ mod tests {
         let mut path_entries = vec![just_bin.clone(), temp.path().to_path_buf()];
         path_entries.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
         let path = std::env::join_paths(path_entries).unwrap();
+        // Inject a failure at the real rmtree operation, not an alternate cleanup.
+        let injector = temp.path().join("injector");
+        fs::create_dir(&injector).unwrap();
+        let fail_remove = temp.path().join("fail-remove");
+        fs::write(
+            injector.join("sitecustomize.py"),
+            "import os\n_rmdir = os.rmdir\ndef rmdir(path, *args, **kwargs):\n    if os.path.exists(os.environ['FAIL_REMOVE']):\n        raise PermissionError('injected removal failure')\n    return _rmdir(path, *args, **kwargs)\nos.rmdir = rmdir\n",
+        )
+        .unwrap();
         let just_call = temp.path().join("just-call");
         let invoke = |profile: &str| {
             std::process::Command::new("just")
@@ -701,8 +710,14 @@ mod tests {
                 .env("PATH", &path)
                 .env("CALL_LOG", &call_log)
                 .env("JUST_CALL", &just_call)
+                .env("PYTHONPATH", &injector)
+                .env("FAIL_REMOVE", &fail_remove)
                 .env("GIT_DIR", temp.path().join("hostile"))
                 .env("GIT_WORK_TREE", temp.path().join("hostile"))
+                .env("GIT_INDEX_FILE", temp.path().join("hostile"))
+                .env("GIT_OBJECT_DIRECTORY", temp.path().join("hostile"))
+                .env("GIT_COMMON_DIR", temp.path().join("hostile"))
+                .env("GIT_NAMESPACE", "hostile")
                 .output()
                 .unwrap()
         };
@@ -774,6 +789,48 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[1]["args"][0], "run");
         assert_eq!(calls[1]["site"], "symlink:missing-target");
+
+        fs::remove_file(&site).unwrap();
+        let referent = temp.path().join("referent");
+        fs::create_dir(&referent).unwrap();
+        fs::write(referent.join("sentinel"), "preserve").unwrap();
+        symlink(&referent, &site).unwrap();
+        assert!(invoke("release").status.success());
+        assert!(!site.is_symlink());
+        assert!(referent.join("sentinel").exists());
+
+        fs::write(&site, "preserve").unwrap();
+        fs::write(&call_log, "").unwrap();
+        assert!(!invoke("debug").status.success());
+        assert_eq!(fs::read_to_string(&site).unwrap(), "preserve");
+        assert_eq!(fs::read_to_string(&call_log).unwrap().lines().count(), 1);
+        fs::remove_file(&site).unwrap();
+
+        fs::create_dir(&site).unwrap();
+        fs::write(&fail_remove, "fail").unwrap();
+        fs::write(&call_log, "").unwrap();
+        let result = invoke("debug");
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("injected removal failure"));
+        assert!(site.is_dir());
+        assert_eq!(fs::read_to_string(&call_log).unwrap().lines().count(), 1);
+        fs::remove_file(&fail_remove).unwrap();
+
+        // A symlinked ancestor is followed; this is not physical containment.
+        fs::remove_dir_all(&target).unwrap();
+        symlink(&referent, &target).unwrap();
+        fs::create_dir(referent.join("site")).unwrap();
+        fs::write(referent.join("site/old-bundle"), "remove").unwrap();
+        assert!(invoke("debug").status.success());
+        assert!(!referent.join("site").exists());
+        assert!(referent.join("sentinel").exists());
+        fs::remove_file(&target).unwrap();
+
+        fs::write(&target, "not a directory").unwrap();
+        fs::write(&call_log, "").unwrap();
+        assert!(!invoke("debug").status.success());
+        assert_eq!(fs::read_to_string(&call_log).unwrap().lines().count(), 1);
+        assert_eq!(fs::read_to_string(&target).unwrap(), "not a directory");
     }
 
     #[test]
