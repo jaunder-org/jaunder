@@ -3207,6 +3207,61 @@ static-docs =
       devtool check --group docs
       touch $out
     '';
+# Keep the compiler project explicit; dependencies still come from the existing
+# whole-end2end e2ePackage, whose broader invalidation coupling is intentional.
+static-typescript =
+  let
+    staticTypeScriptSourceFilter =
+      path: type:
+      let
+        relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
+      in
+      type == "directory"
+      || (
+        pkgs.lib.hasPrefix "end2end/" relative
+        && (
+          pkgs.lib.hasSuffix ".ts" path
+          || pkgs.lib.hasSuffix ".tsx" path
+          || builtins.elem relative [
+            "end2end/tsconfig.json"
+            "end2end/package.json"
+            "end2end/package-lock.json"
+          ]
+        )
+      );
+    staticTypeScriptSrc = pkgs.lib.cleanSourceWith {
+      src = craneLib.path ../.;
+      filter =
+        assert staticTypeScriptSourceFilter "${toString ../.}/end2end/tests/example.ts" "regular";
+        assert staticTypeScriptSourceFilter "${toString ../.}/end2end/tests/example.tsx" "regular";
+        assert staticTypeScriptSourceFilter "${toString ../.}/end2end/types/example.d.ts" "regular";
+        assert staticTypeScriptSourceFilter "${toString ../.}/end2end/tsconfig.json" "regular";
+        assert staticTypeScriptSourceFilter "${toString ../.}/end2end/package.json" "regular";
+        assert staticTypeScriptSourceFilter "${toString ../.}/end2end/package-lock.json" "regular";
+        assert !(staticTypeScriptSourceFilter "${toString ../.}/server/src/lib.rs" "regular");
+        assert !(staticTypeScriptSourceFilter "${toString ../.}/end2end/README.md" "regular");
+        staticTypeScriptSourceFilter;
+    };
+  in
+  nonSubstitutable (
+    pkgs.runCommand "static-typescript"
+      {
+        nativeBuildInputs = [
+          devtoolBin
+          pkgs.nodejs
+          pkgs.typescript
+        ];
+        E2E_TYPES_NODE_MODULES = "${e2ePackage}/node_modules";
+        E2E_PLAYWRIGHT_TEST = "${pkgs.playwright-test}/lib/node_modules/@playwright/test";
+      }
+      ''
+        # Provisioning owns ignored node_modules, not the checkout source filter.
+        cp --no-preserve=mode -r ${staticTypeScriptSrc} src
+        cd src
+        devtool check tsc
+        touch $out
+      ''
+  );
 # Standalone pure ERT verdict; formatting/byte-compilation retain their Elisp
 # inputs in static-code. The combined pure/live coverage producer is separate.
 static-ert =
@@ -3425,9 +3480,8 @@ static-code =
       # The server build script now links the host compiler, including native
       # decoding dependencies. Cargo executes it before any output fixup.
       LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ];
-      # Elisp checks retain the zone DB (#160); tsc needs BOTH node-dep envs
-      # (`devtool provision-node-modules`'s resolver errors on each when
-      # unset).
+      # Elisp checks retain the zone DB (#160). The census still needs the
+      # complete pinned end2end dependency environment after tsc moves out.
       TZDIR = "${pkgs.tzdata}/share/zoneinfo";
       E2E_TYPES_NODE_MODULES = "${e2ePackage}/node_modules";
       E2E_PLAYWRIGHT_TEST = "${pkgs.playwright-test}/lib/node_modules/@playwright/test";
@@ -3436,11 +3490,12 @@ static-code =
       JAUNDER_DEVTOOL_TOOLS_CARGO_HOME = "${toolsOfflineCargoHome}";
     }
     ''
-      # Writable copy: `devtool check tsc` provisions end2end/node_modules
-      # in-process (#229).
+      # Code checks retain their complete non-Markdown source population.
       cp --no-preserve=mode -r ${staticCodeSrc} src
       cd src
       devtool check --group code --sandbox-cargo
+      # The census loads Playwright config independently of the TypeScript leaf.
+      devtool provision-node-modules
       node end2end/e2eCensusContract.ts
       touch $out
     '');

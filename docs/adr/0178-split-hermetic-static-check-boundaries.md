@@ -67,3 +67,12 @@ existing static inventory, while the host `--all` order is preserved
 independently of leaf boundaries. Host and hermetic callers still share each
 command and its arguments exactly once. The residual code boundary remains broad
 by design.
+
+### TypeScript refinement (#1864)
+
+The approved TypeScript slice adds a `typescript` group and `static-typescript`
+leaf for the existing named `tsc` check. This narrowly refines the historical
+partition for that check, alongside the independently landed Rust-format
+refinement above. The original Decision remains the historical record. `devtool`
+retains command-definition ownership; the other checks and their guarantees are
+unchanged by the TypeScript split.

@@ -1719,11 +1719,16 @@ differences.
 **Nix invalidation-boundary guard (`cargo xtask nix probe-source`).** The
 hermetic static surface has separate semantic derivations, not a singular
 `static-checks`: `static-docs` owns Markdown formatting and its configuration;
-`rust-format` owns `fmt`, scoped `leptosfmt`, and `tools-fmt`; `static-ert` owns
-standalone pure ERT; `static-code` owns the remaining shared devtool
-definitions. The independent `xtask-format` leaf verifies xtask Rust formatting
-with pinned Cargo/rustfmt; it is not part of a devtool group. The existing
-source drift probe covers its original boundaries, not `rust-format`,
+`static-typescript` owns the named `tsc` check; `rust-format` owns `fmt`, scoped
+`leptosfmt`, and `tools-fmt`; `static-ert` owns standalone pure ERT;
+`static-code` owns the remaining shared devtool definitions. TypeScript
+formatting and `e2eCensusContract.ts` remain in Code; Code explicitly provisions
+node modules before the census. The TypeScript split changes neither the
+independently landed Rust formatting boundary nor distinct feature/target/tools
+Clippy commands, and makes no equivalence, permanent deferral or closure claim.
+The independent `xtask-format` leaf verifies xtask Rust formatting with pinned
+Cargo/rustfmt; it is not part of a devtool group. The existing source drift
+probe covers its original boundaries, not `static-typescript`, `rust-format`,
 `static-ert`, or `xtask-format`. The CSR/site source closure contains workspace
 manifests, the resolved `csr` target closure, its required shell inputs, and
 deterministic workspace placeholders. The client wasm-test closure analogously
@@ -1790,6 +1795,11 @@ reconciliation, and server-function coverage verification.
 
 - `checks.x86_64-linux.static-docs` — `devtool check --group docs`, the isolated
   Markdown-formatting and configuration boundary.
+- `checks.x86_64-linux.static-typescript` — the unchanged named
+  `devtool check tsc`, with its own validation verdict and pinned type
+  dependencies. Its narrow direct TypeScript/config/manifest filter still has
+  the accepted whole-end2end transitive coupling through `e2ePackage`. The leaf
+  is non-substitutable, but valid local outputs can be reused.
 - `checks.x86_64-linux.rust-format` —
   `devtool check --group rust-format --sandbox-cargo`: product `fmt`, scoped
   `leptosfmt`, then `tools-fmt --all`. Product/tools Cargo populations overlap,
@@ -1805,24 +1815,25 @@ reconciliation, and server-function coverage verification.
   formatter execution, and no speedup or narrow-cache claim follows.
 - `checks.x86_64-linux.static-code` —
   `devtool check --group code --sandbox-cargo`, every remaining shared static
-  definition outside Rust formatting and standalone ERT (including end-to-end
-  formatting, TypeScript, Elisp formatting/byte-compilation, Rust/tools
+  definition outside tsc, Rust formatting and standalone ERT (including
+  end-to-end formatting, Elisp formatting/byte-compilation, Rust/tools
   compilation, cargo-deny, clippy, and repository scanners), executed with the
   same offline Cargo homes as the prior hermetic proof. The host
   `devtool check --all` aggregate remains the exact ordered, duplicate-free
-  union of `docs`, `rust-format`, `code`, and `ert`, with ERT still after
-  `tools-clippy`.
+  union of `docs`, `typescript`, `rust-format`, `code`, and `ert`, with tsc in
+  its former position and ERT still after `tools-clippy`.
 - `checks.x86_64-linux.static-ert` — `devtool check --group ert`, the standalone
   pure runner over the complete non-Markdown Elisp tree, in a writable copy,
   with existing `emacsForCi`, Git and timezone inputs. The separate combined
   pure/live coverage producer below is unchanged. `validate` builds static
-  leaves in docs/rust-format/code/ert/xtask-format order; TypeScript's
-  separately owned integration will add its leaf between docs and code. The ERT
+  leaves in docs/typescript/rust-format/code/ert/xtask-format order. The ERT
   leaf is non-substitutable but may reuse a valid local output. Child timing is
   separate from request duration: host xtask accepts only current captured
-  devtool stderr. The ERT Nix request uses current live `internal-json`
-  local-builder activity correlation, verified with Nix 2.34.9: exact selected
-  derivation, active activity-ID-linked child event and matching stop. Reuse or
+  devtool stderr through one check-parameterized bounded parser. Both tsc and
+  ERT use the same child timing producer. Their Nix requests share current live
+  `internal-json` local-builder activity correlation parameterized by selected
+  derivation and check, verified with Nix 2.34.9: exact selected derivation,
+  active activity-ID-linked child event and matching stop. Reuse or
   missing/malformed/ambiguous/unsupported evidence leaves execution timing
   unavailable; retained logs are never timing inputs. Request duration and reuse
   classification remain separate.
@@ -1832,8 +1843,8 @@ reconciliation, and server-function coverage verification.
   inputs, plus dependency target placeholders for metadata, not dependency
   implementation sources. It requires neither compiled devtool nor offline Cargo
   homes and never executes xtask. Hermetic validation requires it once alongside
-  `static-docs` and `static-code`; host `xtask-fmt` and Fix/index behavior
-  remain unchanged.
+  `static-docs`, `static-typescript`, `rust-format`, `static-code`, and
+  `static-ert`; host `xtask-fmt` and Fix/index behavior remain unchanged.
 - `checks.x86_64-linux.wasm-tests` — `wasm-bindgen-test` cases executed in
   headless Nix-store Chromium through the matching Nix-store chromedriver. This
   is behavioral pass/fail execution for irreducible browser code, not wasm line
