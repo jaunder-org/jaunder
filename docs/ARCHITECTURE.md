@@ -1935,16 +1935,16 @@ lanes check their documented production boundaries; test gates exercise the
 explicitly enabled test surfaces. These checks do not certify the absence of
 `common/test-support` from every production dependency graph.
 
-`cargo xtask build-csr` compiles `csr` to wasm and hands the artifact to
-`devtool csr-bundle` for wasm-bindgen, `wasm-opt -Oz`, and content addressing
-(`xtask/src/steps/build_csr.rs`). Devtool rewrites the acyclic runtime import
-graph dependency-first, gives every runtime asset a full SHA-256 filename, and
-emits a role-tagged manifest covering identity and compressed representations.
-That manifest is the sole asset-naming interface: it renders the static CSR
-shell, drives server staging and public-projector shell generation, and tells
-host audits which file carries the WASM role. Producers and consumers reject
-cycles, incomplete inventories, unsafe paths, and digest mismatches rather than
-guessing roles from filenames
+`just build-csr [debug|release]` compiles `csr` to wasm and hands the artifact
+to checked-out `tools/devtool`'s `csr-bundle` recipe for wasm-bindgen,
+`wasm-opt -Oz`, and content addressing. Devtool rewrites the acyclic runtime
+import graph dependency-first, gives every runtime asset a full SHA-256
+filename, and emits a role-tagged manifest covering identity and compressed
+representations. That manifest is the sole asset-naming interface: it renders
+the static CSR shell, drives server staging and public-projector shell
+generation, and tells host audits which file carries the WASM role. Producers
+and consumers reject cycles, incomplete inventories, unsafe paths, and digest
+mismatches rather than guessing roles from filenames
 ([content-addressed CSR bundle manifest](adr/0175-content-addressed-csr-bundle-manifest.md)).
 Names cannot live in `web`, because compiling the final WASM name into the WASM
 would make the content hash self-referential.

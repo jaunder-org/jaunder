@@ -410,14 +410,6 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                 .unwrap_or(0);
             Ok(result)
         }
-        Command::BuildCsr { release } => {
-            let sh = Shell::new()?;
-            let start = Instant::now();
-            let mut result = CommandResult::new("build-csr");
-            steps::build_csr::run(&sh, &mut result, release);
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
         Command::Adr(AdrCommand::SyncReadme) => {
             let start = Instant::now();
             let mut result = CommandResult::new("adr-sync-readme");

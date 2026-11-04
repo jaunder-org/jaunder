@@ -2038,8 +2038,8 @@ nix build .#checks.x86_64-linux.elisp-coverage-producer
   subsystem. How the wiring is built is in
   [Dependency injection and composition roots](docs/ARCHITECTURE.md#dependency-injection-and-composition-roots).
 - The web framework is Leptos in CSR (client-side-rendering) mode (ADR-0040);
-  the wasm bundle is built by `cargo xtask build-csr` and served by
-  `jaunder serve` (no cargo-leptos).
+  the wasm bundle is built by `just build-csr` and served by `jaunder serve` (no
+  cargo-leptos).
 - Leptos components should only render data; business logic belongs in server
   functions or pure transformation functions.
 - API methods are automatically prefixed with `/api`.

@@ -51,7 +51,6 @@ mod web_server_fns;
 mod steps {
     pub mod adr_check;
     pub mod boot_decomposition_coverage;
-    pub mod build_csr;
     pub mod common_host_target_closure;
     pub mod csr_prerequisite;
     pub mod doc_links;

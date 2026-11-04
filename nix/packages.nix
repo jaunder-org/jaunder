@@ -908,7 +908,7 @@ let
       ''
         # Post-process the crane-built csr.wasm into a content-addressed CSR
         # bundle via the shared `devtool csr-bundle` — the SAME implementation
-        # the host build (`cargo xtask build-csr`) runs, so host and Nix cannot
+        # the host Just recipe runs, so host and Nix cannot
         # drift (#236). The resulting root holds the build-only manifest,
         # rendered shell, and served `pkg/` assets.
         devtool csr-bundle --wasm ${wasm}/lib/csr.wasm --out $out${

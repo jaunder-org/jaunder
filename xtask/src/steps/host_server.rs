@@ -149,10 +149,34 @@ impl HostArtifacts {
             }
         } else {
             if config.include_csr {
-                super::build_csr::run(sh, result, config.csr_profile == HostBuildProfile::Release);
-                if !result.ok {
+                let root = match git::toplevel(&sh.current_dir()) {
+                    Ok(root) => PathBuf::from(root),
+                    Err(error) => {
+                        result.push(
+                            StepResult::fail(config.server_label)
+                                .detail(format!("cannot locate repo root: {error}")),
+                        );
+                        return None;
+                    }
+                };
+                sh.change_dir(&root);
+                let profile = match config.csr_profile {
+                    HostBuildProfile::Debug => "debug",
+                    HostBuildProfile::Release => "release",
+                };
+                let started = Instant::now();
+                if cmd!(sh, "just --justfile {root}/Justfile build-csr {profile}")
+                    .run()
+                    .is_err()
+                {
+                    result.push(
+                        StepResult::fail(config.server_label)
+                            .detail("just build-csr failed")
+                            .with_duration(started.elapsed()),
+                    );
                     return None;
                 }
+                result.push(StepResult::ok("host-csr-bundle").with_duration(started.elapsed()));
             }
             None
         };
@@ -531,6 +555,10 @@ mod tests {
         fs::write(temp.path().join(".git/info/exclude"), "*\n").unwrap();
         for (name, body) in [
             ("cargo", "#!/bin/sh\ntouch \"$COMPILED\"\nexit 0\n"),
+            (
+                "just",
+                "#!/usr/bin/env python3\nimport fcntl, os, sys\nwith open(os.environ['JUST_CALL'], 'w') as call: call.write(os.getcwd() + '|' + ' '.join(sys.argv[1:]))\nif os.environ.get('LOCK_PATH'):\n    lock = open(os.environ['LOCK_PATH'], 'r+')\n    try:\n        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)\n    except BlockingIOError:\n        pass\n    else:\n        sys.exit(18)\nsys.exit(int(os.environ.get('JUST_EXIT', '0')))\n",
+            ),
             ("nix", "#!/bin/sh\nexit 37\n"),
         ] {
             let path = temp.path().join(name);
@@ -548,7 +576,204 @@ mod tests {
             ),
         );
         shell.set_var("COMPILED", temp.path().join("compiled"));
+        shell.set_var("JUST_CALL", temp.path().join("just-call"));
         Some((temp, shell))
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn csr_uses_just_with_selected_profile_and_checkout_root_before_host_build() {
+        let Some((temp, shell)) = preparation_fixture() else {
+            return;
+        };
+        let mut config = HostArtifactConfig::sandbox_server();
+        config.csr_profile = HostBuildProfile::Release;
+        let mut result = CommandResult::new("sandbox");
+        let prepared = HostArtifacts::prepare_interruptible(&shell, &mut result, config, || None)
+            .expect("successful Just and host builds prepare artifacts");
+        let call = fs::read_to_string(temp.path().join("just-call")).unwrap();
+        assert_eq!(
+            call.trim(),
+            format!(
+                "{}|--justfile {}/Justfile build-csr release",
+                temp.path().display(),
+                temp.path().display()
+            )
+        );
+        assert!(temp.path().join("compiled").exists());
+        assert!(result.ok, "{:?}", result.steps);
+        drop(prepared);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn nested_shell_hands_checkout_root_to_just_while_holding_its_lock() {
+        let Some((temp, shell)) = preparation_fixture() else {
+            return;
+        };
+        let nested = temp.path().join("nested");
+        fs::create_dir(&nested).unwrap();
+        shell.change_dir(&nested);
+        shell.set_var("LOCK_PATH", nested.join(".xtask/host-artifacts.lock"));
+        let mut config = HostArtifactConfig::sandbox_server();
+        config.csr_profile = HostBuildProfile::Release;
+        let mut result = CommandResult::new("sandbox");
+        let prepared = HostArtifacts::prepare_interruptible(&shell, &mut result, config, || None)
+            .expect("Just sees the checkout root while artifact ownership remains held");
+        assert_eq!(
+            fs::read_to_string(temp.path().join("just-call")).unwrap(),
+            format!(
+                "{}|--justfile {}/Justfile build-csr release",
+                temp.path().display(),
+                temp.path().display()
+            )
+        );
+        assert!(temp.path().join("compiled").exists());
+        assert!(result.ok, "{:?}", result.steps);
+        drop(prepared);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn failed_just_csr_preparation_prevents_host_build() {
+        let Some((temp, shell)) = preparation_fixture() else {
+            return;
+        };
+        shell.set_var("JUST_EXIT", "19");
+        let mut result = CommandResult::new("sandbox");
+        assert!(
+            HostArtifacts::prepare_interruptible(
+                &shell,
+                &mut result,
+                HostArtifactConfig::sandbox_server(),
+                || None
+            )
+            .is_none()
+        );
+        assert!(!result.ok);
+        assert!(!temp.path().join("compiled").exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn just_recipe_rejects_shell_input_and_stops_on_inspection_errors() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let Some((temp, _shell)) = preparation_fixture() else {
+            return;
+        };
+        let justfile = temp.path().join("Justfile");
+        fs::write(&justfile, include_str!("../../../Justfile")).unwrap();
+        let nested = temp.path().join("nested");
+        fs::create_dir(&nested).unwrap();
+        let target = temp.path().join("target");
+        fs::create_dir_all(target.join("site")).unwrap();
+        fs::write(target.join("site/sentinel"), "preserve").unwrap();
+        let call_log = temp.path().join("cargo-calls");
+        let marker = temp.path().join("profile-injected");
+        let cargo = temp.path().join("cargo");
+        fs::write(
+            &cargo,
+            "#!/usr/bin/env python3\nimport json, os, pathlib, sys\nvars = ('GIT_DIR','GIT_WORK_TREE','GIT_INDEX_FILE','GIT_OBJECT_DIRECTORY','GIT_COMMON_DIR','GIT_NAMESPACE')\nsite = pathlib.Path('target/site')\nstate = 'symlink:' + os.readlink(site) if site.is_symlink() else ('exists' if site.exists() else 'absent')\nentry = {'args': sys.argv[1:], 'leaked': [name for name in vars if os.getenv(name) is not None], 'site': state}\nwith open(os.environ['CALL_LOG'], 'a') as log: log.write(json.dumps(entry) + '\\n')\n",
+        )
+        .unwrap();
+        fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+        let just_bin = temp.path().join("just-bin");
+        fs::create_dir(&just_bin).unwrap();
+        let just_executable = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|directory| directory.join("just"))
+            .find(|path| path.is_file())
+            .expect("Just is provided by the devShell");
+        symlink(just_executable, just_bin.join("just")).unwrap();
+        let mut path_entries = vec![just_bin.clone(), temp.path().to_path_buf()];
+        path_entries.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+        let path = std::env::join_paths(path_entries).unwrap();
+        let just_call = temp.path().join("just-call");
+        let invoke = |profile: &str| {
+            std::process::Command::new("just")
+                .args([
+                    "--justfile",
+                    justfile.to_str().unwrap(),
+                    "build-csr",
+                    profile,
+                ])
+                .current_dir(&nested)
+                .env("PATH", &path)
+                .env("CALL_LOG", &call_log)
+                .env("JUST_CALL", &just_call)
+                .env("GIT_DIR", temp.path().join("hostile"))
+                .env("GIT_WORK_TREE", temp.path().join("hostile"))
+                .output()
+                .unwrap()
+        };
+
+        let profiles = [
+            "bad".to_owned(),
+            format!("$(touch {})", marker.display()),
+            format!("\"debug\"; touch {}; echo \"", marker.display()),
+        ];
+        for profile in profiles {
+            let result = invoke(&profile);
+            assert!(
+                !result.status.success(),
+                "{profile:?} unexpectedly accepted"
+            );
+            assert!(!marker.exists(), "profile was executed as shell source");
+            assert!(!call_log.exists(), "Cargo was invoked");
+            assert_eq!(
+                fs::read_to_string(target.join("site/sentinel")).unwrap(),
+                "preserve"
+            );
+        }
+
+        let site = target.join("site");
+        fs::remove_dir_all(&site).unwrap();
+        symlink("site", &site).unwrap();
+        let result = invoke("debug");
+        assert!(
+            !result.status.success(),
+            "self-referential site symlink was accepted"
+        );
+        assert!(site.is_symlink(), "inspection failure unlinked the symlink");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("Too many levels of symbolic links"),
+            "unexpected Just failure: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let calls: Vec<serde_json::Value> = fs::read_to_string(&call_log)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(calls.len(), 1, "bundler ran after inspection failure");
+        assert_eq!(
+            calls[0]["args"],
+            serde_json::json!([
+                "build",
+                "--locked",
+                "-p",
+                "csr",
+                "--target",
+                "wasm32-unknown-unknown"
+            ])
+        );
+        assert_eq!(calls[0]["leaked"], serde_json::json!([]));
+
+        fs::remove_file(&site).unwrap();
+        symlink("missing-target", &site).unwrap();
+        fs::write(&call_log, "").unwrap();
+        let result = invoke("debug");
+        assert!(result.status.success(), "{:?}", result.stderr);
+        assert!(site.is_symlink(), "dangling final symlink was removed");
+        assert_eq!(fs::read_link(&site).unwrap(), Path::new("missing-target"));
+        let calls: Vec<serde_json::Value> = fs::read_to_string(&call_log)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[1]["args"][0], "run");
+        assert_eq!(calls[1]["site"], "symlink:missing-target");
     }
 
     #[test]
