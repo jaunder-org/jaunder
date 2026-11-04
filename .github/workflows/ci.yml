@@ -478,6 +478,353 @@ jobs:
             echo "observation_status=failure exit=$status" >&2
           fi
 
+  # Temporary, non-required broad/narrow acquisition pair for the previously
+  # failing exact producer identity. Matrix entries run on independent fresh VMs.
+  e2e-acquisition-pair:
+    name: E2E acquisition (${{ matrix.shell }} / sqlite-firefox-ordinary-2-of-2)
+    if:
+      github.event_name == 'pull_request' && github.event.pull_request.number ==
+      1882
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [ci, ci-e2e]
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ github.token }}
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            extra-substituters = https://jaunder-org.cachix.org
+            extra-trusted-public-keys = jaunder-org.cachix.org-1:usr4hb9a8+Ykafq+ZmX8ROwK8TXQXFwqGSDRLQysJeo=
+      # Match setup-ci's Cargo cache paths/key; the public Nix cache is read-only.
+      - id: cargo-cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            xtask/target
+          key:
+            xtask-${{ runner.os }}-${{ hashFiles('xtask/Cargo.lock',
+            'flake.lock') }}
+          restore-keys: |
+            xtask-${{ runner.os }}-
+      - name: Acquisition baseline
+        run: |
+          echo "runner_image_os=${ImageOS:-unknown} runner_image_version=${ImageVersion:-unknown} cargo_cache_hit=${{ steps.cargo-cache.outputs.cache-hit }}"
+          if df -P / /nix/store "$GITHUB_WORKSPACE"; then
+            echo "observation_status=success"
+          else
+            status=$?
+            echo "observation_status=failure exit=$status" >&2
+          fi
+      - name: Check known candidates before evaluation
+        continue-on-error: true
+        run: |
+          set +e
+          dir=.xtask/acquisition/${{ matrix.shell }}
+          mkdir -p "$dir"
+          grep -v '^#' .github/workflows/issue1879-acquisition-seed.txt > "$dir/known-candidates.txt"
+          cp .github/workflows/issue1879-acquisition-seed.txt "$dir/seed-provenance.txt"
+          nix-store --check-validity --print-invalid $(<"$dir/known-candidates.txt") > "$dir/known-invalid-before-eval.txt" 2> "$dir/known-validity-before-eval.log"
+          status=$?
+          echo "$status" > "$dir/known-validity-exit.txt"
+          sort -u "$dir/known-candidates.txt" -o "$dir/known-candidates.txt"
+          sort -u "$dir/known-invalid-before-eval.txt" -o "$dir/known-invalid-before-eval.txt"
+          if [ "$status" -eq 0 ]; then
+            comm -23 "$dir/known-candidates.txt" "$dir/known-invalid-before-eval.txt" > "$dir/known-present-before-eval.txt"
+          else
+            : > "$dir/known-present-before-eval.txt"
+            echo "known_candidate_start_validity=unknown query did not succeed"
+          fi
+          if [ -s "$dir/known-present-before-eval.txt" ]; then
+            nix path-info --json $(<"$dir/known-present-before-eval.txt") > "$dir/known-start-nar.json" 2> "$dir/known-start-nar.log"
+            nar_status=$?
+            echo "$nar_status" > "$dir/known-start-nar-exit.txt"
+            echo "known_candidate_start_nar_exit=$nar_status"
+          fi
+          echo "known_candidate_validity_exit=$status (invalid-list is evidence)"
+          cat "$dir/known-validity-before-eval.log" "$dir/known-start-nar.log"
+          exit 0
+      - name: Evaluate roots and inventory bounded derivation inputs
+        continue-on-error: true
+        env:
+          SHELL_NAME: ${{ matrix.shell }}
+        run: |
+          set +e
+          dir=".xtask/acquisition/${SHELL_NAME}"
+          mkdir -p "$dir"
+          nix eval --accept-flake-config --raw ".#devShells.x86_64-linux.${SHELL_NAME}.drvPath" > "$dir/shell.drv-path" 2> "$dir/shell-evaluation.log"
+          shell_status=$?
+          nix eval --accept-flake-config --raw .#packages.x86_64-linux.xtask.drvPath > "$dir/xtask.drv-path" 2> "$dir/xtask-evaluation.log"
+          xtask_status=$?
+          nix eval --accept-flake-config --raw .#checks.x86_64-linux.e2e-sqlite-firefox-ordinary-2-of-2.drvPath > "$dir/producer.drv-path" 2> "$dir/producer-evaluation.log"
+          producer_status=$?
+          cat "$dir/shell-evaluation.log" "$dir/xtask-evaluation.log" "$dir/producer-evaluation.log"
+          echo "drv_evaluation_status shell=$shell_status xtask=$xtask_status producer=$producer_status"
+          if [ "$shell_status" -eq 0 ] && [ "$xtask_status" -eq 0 ] && [ "$producer_status" -eq 0 ]; then
+            shell_drv="$(<"$dir/shell.drv-path")"
+            xtask_drv="$(<"$dir/xtask.drv-path")"
+            producer_drv="$(<"$dir/producer.drv-path")"
+            nix derivation show --recursive "$shell_drv" "$xtask_drv" "$producer_drv" > "$dir/derivations.json" 2> "$dir/derivation-show.log"
+            graph_status=$?
+            cat "$dir/derivation-show.log"
+            echo "recursive_derivation_status=$graph_status"
+            if [ "$graph_status" -eq 0 ]; then
+              python3 - "$dir/derivations.json" "$dir/candidates.txt" "$dir/post-evaluation-validity.json" "$dir/known-candidates.txt" <<'PY'
+          import json
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          graph_path, candidate_path, validity_path, seed_path = map(Path, sys.argv[1:])
+          graph = json.loads(graph_path.read_text())["derivations"]
+          candidates = set(seed_path.read_text().splitlines())
+          seeded = set(candidates)
+          for derivation in graph.values():
+              candidates.update("/nix/store/" + path for path in derivation.get("inputs", {}).get("srcs", []))
+              candidates.update(
+                  "/nix/store/" + output["path"]
+                  for output in derivation.get("outputs", {}).values()
+                  if output.get("path")
+              )
+          paths = sorted(candidates)
+          candidate_path.write_text("".join(path + "\n" for path in paths))
+          inventory = {}
+          start_validity = {path: "unknown" for path in paths}
+          batches = []
+          for start in range(0, len(paths), 128):
+              batch = paths[start : start + 128]
+              result = subprocess.run(
+                  ["nix-store", "--check-validity", "--print-invalid", *batch],
+                  check=False, capture_output=True, text=True,
+              )
+              invalid = set(result.stdout.splitlines())
+              batches.append({"exit_code": result.returncode, "stderr": result.stderr})
+              for path in batch:
+                  inventory[path] = (
+                      "absent" if result.returncode == 0 and path in invalid else
+                      "present" if result.returncode == 0 and path not in invalid else
+                      "unknown"
+                  )
+          validity_path.write_text(json.dumps({"candidate_count": len(paths), "starting_validity": start_validity, "post_evaluation_validity": inventory, "query_batches": batches}, indent=2) + "\n")
+          (validity_path.parent / "post-evaluation-invalid.txt").write_text("".join(path + "\n" for path in paths if inventory[path] == "absent"))
+          present = [path for path in paths if inventory[path] == "present"]
+          (validity_path.parent / "post-evaluation-present.txt").write_text("".join(path + "\n" for path in present))
+          (validity_path.parent / "post-evaluation-present-unseeded.txt").write_text("".join(path + "\n" for path in present if path not in seeded))
+          nar_batches = []
+          for index, start in enumerate(range(0, len(present), 128)):
+              batch = present[start : start + 128]
+              result = subprocess.run(
+                  ["nix", "path-info", "--json", *batch],
+                  check=False, capture_output=True, text=True,
+              )
+              (validity_path.parent / f"post-evaluation-nar-{index:04d}.json").write_text(result.stdout)
+              nar_batches.append({"exit_code": result.returncode, "stderr": result.stderr})
+          (validity_path.parent / "post-evaluation-nar-status.json").write_text(json.dumps(nar_batches, indent=2) + "\n")
+          print(f"post-evaluation candidate identities: {len(paths)}; currently-valid={len(present)}; starting status unknown")
+          PY
+              inventory_status=$?
+              echo "$inventory_status" > "$dir/candidate-inventory-exit.txt"
+              if [ "$inventory_status" -eq 0 ] && [ "$(<"$dir/known-validity-exit.txt")" = 0 ]; then
+                comm -12 "$dir/known-invalid-before-eval.txt" "$dir/post-evaluation-present.txt" > "$dir/validated-during-evaluation.txt"
+              else
+                : > "$dir/validated-during-evaluation.txt"
+              fi
+              echo "candidate_inventory_status=$inventory_status"
+            else
+              echo "candidate_inventory_status=unavailable"
+            fi
+          else
+            echo "candidate_inventory_status=unavailable"
+          fi
+          # Query actual shell environment roots only after recording the bounded
+          # known-candidate baseline. This does not build the shell output sentinel.
+          nix print-dev-env --json ".#devShells.x86_64-linux.${SHELL_NAME}" --accept-flake-config > "$dir/shell-dev-env.json" 2> "$dir/shell-dev-env.log"
+          dev_env_status=$?
+          cat "$dir/shell-dev-env.log"
+          echo "shell_dev_env_status=$dev_env_status"
+          if [ "$dev_env_status" -eq 0 ]; then
+            python3 - "$dir/shell-dev-env.json" "$dir/shell-env-roots.txt" <<'PY'
+          import json, re, sys
+          from pathlib import Path
+          value = json.loads(Path(sys.argv[1]).read_text())
+          roots = sorted(set(re.findall(r"/nix/store/[0-9a-z]{32}-[A-Za-z0-9+._?=-]+", json.dumps(value))))
+          Path(sys.argv[2]).write_text("".join(root + "\n" for root in roots))
+          PY
+            if [ -s "$dir/shell-env-roots.txt" ]; then
+              nix-store --check-validity --print-invalid $(<"$dir/shell-env-roots.txt") > "$dir/shell-env-invalid.txt" 2> "$dir/shell-env-validity.log"
+              env_validity_status=$?
+              echo "$env_validity_status" > "$dir/shell-env-validity-exit.txt"
+              if [ "$env_validity_status" -eq 0 ]; then
+                sort -u "$dir/shell-env-invalid.txt" -o "$dir/shell-env-invalid.txt"
+                sort -u "$dir/shell-env-roots.txt" -o "$dir/shell-env-roots.txt"
+                comm -23 "$dir/shell-env-roots.txt" "$dir/shell-env-invalid.txt" > "$dir/shell-env-valid-roots.txt"
+                if [ -s "$dir/shell-env-valid-roots.txt" ]; then
+                  mapfile -t env_roots < "$dir/shell-env-valid-roots.txt"
+                  nix path-info --recursive --json "${env_roots[@]}" > "$dir/shell-env-closure.json" 2> "$dir/shell-env-closure.log"
+                  echo "shell_env_closure_status=$?"
+                fi
+              else
+                echo "shell_env_validity=unknown query_exit=$env_validity_status"
+              fi
+            fi
+          fi
+          if nix-store --check-validity --print-invalid $(<"$dir/candidates.txt") > "$dir/after-print-dev-env-invalid.txt" 2> "$dir/after-print-dev-env-validity.log"; then
+            sort -u "$dir/after-print-dev-env-invalid.txt" -o "$dir/after-print-dev-env-invalid.txt"
+            comm -23 "$dir/candidates.txt" "$dir/after-print-dev-env-invalid.txt" > "$dir/after-print-dev-env-valid.txt"
+            echo "success" > "$dir/after-print-dev-env-validity-status.txt"
+            comm -23 "$dir/post-evaluation-invalid.txt" "$dir/after-print-dev-env-invalid.txt" > "$dir/validated-during-print-dev-env.txt"
+          else
+            : > "$dir/after-print-dev-env-valid.txt"
+            : > "$dir/validated-during-print-dev-env.txt"
+            echo "unknown" > "$dir/after-print-dev-env-validity-status.txt"
+          fi
+          # IFD/substitute/build activity above is preserved separately in evaluation logs.
+          exit 0
+      - name: Acquisition observation after shell entry
+        continue-on-error: true
+        env:
+          SHELL_NAME: ${{ matrix.shell }}
+        run: |
+          dir=".xtask/acquisition/${SHELL_NAME}"
+          if nix develop ".#${SHELL_NAME}" --accept-flake-config -c df -P / /nix/store "$GITHUB_WORKSPACE" > "$dir/shell-entry.log" 2>&1; then
+            cat "$dir/shell-entry.log"
+            echo "observation_status=success"
+          else
+            status=$?
+            cat "$dir/shell-entry.log"
+            echo "observation_status=failure exit=$status" >&2
+          fi
+          if [ "$(<"$dir/after-print-dev-env-validity-status.txt")" = success ] && [ -s "$dir/candidates.txt" ] && nix-store --check-validity --print-invalid $(<"$dir/candidates.txt") > "$dir/after-shell-entry-invalid.txt" 2> "$dir/after-shell-entry-validity.log"; then
+            sort -u "$dir/after-shell-entry-invalid.txt" -o "$dir/after-shell-entry-invalid.txt"
+            comm -23 "$dir/after-print-dev-env-invalid.txt" "$dir/after-shell-entry-invalid.txt" > "$dir/validated-during-shell-entry.txt"
+            echo "success" > "$dir/after-shell-entry-validity-status.txt"
+          else
+            : > "$dir/validated-during-shell-entry.txt"
+            echo "unknown" > "$dir/after-shell-entry-validity-status.txt"
+          fi
+      - name: Run exact paired producer
+        env:
+          SHELL_NAME: ${{ matrix.shell }}
+        run:
+          nix develop ".#${SHELL_NAME}" --accept-flake-config -c cargo xtask
+          e2e-lane sqlite-firefox-ordinary-2-of-2
+      - name: Acquisition observation after producer
+        if: always()
+        continue-on-error: true
+        run: |
+          dir=".xtask/acquisition/${{ matrix.shell }}"
+          if df -P / /nix/store "$GITHUB_WORKSPACE" > "$dir/after-producer-df.log" 2>&1; then
+            cat "$dir/after-producer-df.log"
+            echo "observation_status=success"
+          else
+            status=$?
+            cat "$dir/after-producer-df.log"
+            echo "observation_status=failure exit=$status" >&2
+          fi
+      - name: Collect realized output closures and final validity
+        if: always()
+        continue-on-error: true
+        env:
+          SHELL_NAME: ${{ matrix.shell }}
+        run: |
+          set +e
+          dir=".xtask/acquisition/${SHELL_NAME}"
+          if [ ! -s "$dir/derivations.json" ]; then
+            echo "closure_inventory_status=unavailable" > "$dir/closure-status.txt"
+            exit 0
+          fi
+          for root in xtask producer; do
+            drv="$(<"$dir/$root.drv-path")"
+            drv_base="${drv##*/}"
+            output_name="$(jq -r --arg drv "$drv_base" '.derivations[$drv].outputs.out.path // empty' "$dir/derivations.json")"
+            output="${output_name:+/nix/store/$output_name}"
+            printf '%s\n' "$output" > "$dir/$root.output-path"
+            if [ -z "$output" ] || ! nix-store --check-validity "$output" 2> "$dir/$root-output-validity.log"; then
+              echo "$root output unavailable; not built for sizing" | tee -a "$dir/closure-status.txt"
+              continue
+            fi
+            nix path-info --recursive --json "$output" > "$dir/$root-closure.json" 2> "$dir/$root-closure.log"
+            query_status=$?
+            echo "$root closure query exit=$query_status" >> "$dir/closure-status.txt"
+            cat "$dir/$root-closure.log"
+          done
+          if [ -s "$dir/candidates.txt" ]; then
+            : > "$dir/invalid-after-run.txt"
+            : > "$dir/final-validity.log"
+            validity_status=0
+            split -l 128 "$dir/candidates.txt" "$dir/final-validity-batch-"
+            for batch in "$dir"/final-validity-batch-*; do
+              [ -f "$batch" ] || continue
+              mapfile -t paths < "$batch"
+              nix-store --check-validity --print-invalid "${paths[@]}" >> "$dir/invalid-after-run.txt" 2>> "$dir/final-validity.log"
+              batch_status=$?
+              if [ "$batch_status" -ne 0 ]; then validity_status=$batch_status; fi
+            done
+            rm -f "$dir"/final-validity-batch-*
+            sort -u "$dir/invalid-after-run.txt" -o "$dir/invalid-after-run.txt"
+            sort -u "$dir/candidates.txt" -o "$dir/candidates.txt"
+            if [ "$validity_status" -eq 0 ]; then
+              echo "success" > "$dir/after-producer-validity-status.txt"
+              comm -23 "$dir/candidates.txt" "$dir/invalid-after-run.txt" > "$dir/present-after-run.txt"
+              if [ "$(<"$dir/after-shell-entry-validity-status.txt")" = success ]; then
+                comm -23 "$dir/after-shell-entry-invalid.txt" "$dir/invalid-after-run.txt" > "$dir/validated-during-producer.txt"
+              else
+                : > "$dir/validated-during-producer.txt"
+                echo "producer-phase acquisition attribution=unknown prior validity unavailable" >> "$dir/closure-status.txt"
+              fi
+            else
+              echo "unknown" > "$dir/after-producer-validity-status.txt"
+              : > "$dir/present-after-run.txt"
+              : > "$dir/validated-during-producer.txt"
+              echo "final candidate validity=unknown query failed" >> "$dir/closure-status.txt"
+            fi
+            if [ -s "$dir/present-after-run.txt" ]; then
+              split -l 128 "$dir/present-after-run.txt" "$dir/after-run-paths-"
+              for batch in "$dir"/after-run-paths-*; do
+                [ -f "$batch" ] || continue
+                mapfile -t paths < "$batch"
+                nix path-info --json "${paths[@]}" > "$batch.nar.json" 2> "$batch.nar.log"
+                echo "post-run candidate path-info exit=$? file=$batch.nar.json" >> "$dir/closure-status.txt"
+              done
+            fi
+            echo "post-run validity query exit=$validity_status" >> "$dir/closure-status.txt"
+            cat "$dir/final-validity.log"
+          fi
+      - name: Upload acquisition diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name:
+            e2e-acquisition-${{ matrix.shell }}-sqlite-firefox-ordinary-2-of-2
+          path: |
+            .xtask/acquisition/${{ matrix.shell }}/
+            .xtask/diagnostics/
+            .xtask/last-result.json
+            .xtask/run/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Final acquisition observation
+        if: always()
+        continue-on-error: true
+        run: |
+          dir=".xtask/acquisition/${{ matrix.shell }}"
+          if df -P / /nix/store "$GITHUB_WORKSPACE" > "$dir/final-df.log" 2>&1; then
+            cat "$dir/final-df.log"
+            echo "observation_status=success"
+          else
+            status=$?
+            cat "$dir/final-df.log"
+            echo "observation_status=failure exit=$status" >&2
+          fi
+
   e2e-firefox-reconcile:
     name: e2e reconcile (${{ matrix.backend }}/firefox)
     runs-on: ubuntu-24.04

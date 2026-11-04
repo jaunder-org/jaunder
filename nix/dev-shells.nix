@@ -86,11 +86,11 @@ let
     ];
 
   # Host-only E2E orchestration shell. Keep this separate from ciInputs:
-  # the two E2E producers need Rust dispatch and the native xtask launcher,
-  # not the validation toolchain union. Guest/test dependencies are declared
-  # by the Nix checks and are intentionally unaffected.
+  # Cargo is only the external-subcommand dispatcher here; scripts/cargo-xtask
+  # builds its executable with Nix and runs that binary on the host. Guest/test
+  # dependencies are declared by the Nix checks and are intentionally unaffected.
   ciE2eInputs = [
-    toolchain
+    pkgs.cargo
     xtaskLauncher
     pkgs.git
     tracedRunBin

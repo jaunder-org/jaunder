@@ -90,7 +90,7 @@ fn ci_e2e_shell_environment_and_library_prepend_are_exact() {
     let output = Command::new("nix")
         .args([
             "eval", "--impure", "--json", ".#devShells", "--apply",
-            "all: let shells = all.${builtins.currentSystem}; in if builtins.hasAttr \"ci-e2e\" shells then let shell = shells.ci-e2e; omitted = [ \"PLAYWRIGHT_BROWSERS_PATH\" \"PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD\" \"FONTCONFIG_FILE\" \"RUST_SRC_PATH\" \"JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME\" \"E2E_TYPES_NODE_MODULES\" \"E2E_PLAYWRIGHT_TEST\" \"JAUNDER_THEME_THUMBNAIL_BROWSER\" ]; in { hook = shell.shellHook; lc_all = shell.LC_ALL; tz = shell.TZ; tzdir = shell.TZDIR; omitted = builtins.listToAttrs (map (name: { inherit name; value = builtins.hasAttr name shell; }) omitted); } else null",
+            "all: let shells = all.${builtins.currentSystem}; toolchains = builtins.filter (path: builtins.match \".*-rust-[0-9].*\" path != null) (map toString shells.ci.buildInputs); in if builtins.hasAttr \"ci-e2e\" shells then let shell = shells.ci-e2e; omitted = [ \"PLAYWRIGHT_BROWSERS_PATH\" \"PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD\" \"FONTCONFIG_FILE\" \"RUST_SRC_PATH\" \"JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME\" \"E2E_TYPES_NODE_MODULES\" \"E2E_PLAYWRIGHT_TEST\" \"JAUNDER_THEME_THUMBNAIL_BROWSER\" ]; in { hook = shell.shellHook; inputs = map toString shell.buildInputs; ci_toolchains = toolchains; lc_all = shell.LC_ALL; tz = shell.TZ; tzdir = shell.TZDIR; omitted = builtins.listToAttrs (map (name: { inherit name; value = builtins.hasAttr name shell; }) omitted); } else null",
         ])
         .current_dir(checkout)
         .output()
@@ -107,6 +107,27 @@ fn ci_e2e_shell_environment_and_library_prepend_are_exact() {
     }
     assert_eq!(contract["lc_all"], "C.UTF-8");
     assert_eq!(contract["tz"], "UTC");
+    let inputs = contract["inputs"].as_array().unwrap();
+    assert!(
+        inputs.iter().any(|path| {
+            path.as_str().unwrap().contains("-cargo-")
+                && !path.as_str().unwrap().contains("cargo-xtask")
+        }),
+        "ci-e2e must keep the Cargo subcommand dispatcher"
+    );
+    let ci_toolchains = contract["ci_toolchains"].as_array().unwrap();
+    assert_eq!(
+        ci_toolchains.len(),
+        1,
+        "expected one Fenix toolchain in .#ci"
+    );
+    let selected_toolchain = ci_toolchains[0].as_str().unwrap();
+    assert!(
+        inputs
+            .iter()
+            .all(|input| input.as_str() != Some(selected_toolchain)),
+        "selected .#ci Rust toolchain must not be a direct ci-e2e input"
+    );
     assert!(
         contract["tzdir"]
             .as_str()
