@@ -1,11 +1,13 @@
 //! The migrated static checks. This is the single home of their tool + args:
 //! the host verify ladder runs each check via `cargo run -p devtool -- check
-//! <name>` (so a local `tools/` edit is reflected), while Nix runs the `docs`
-//! and `code` groups from the prebuilt `devtoolBin`. Cargo-backed checks use
+//! <name>` (so a local `tools/` edit is reflected), while Nix runs the `docs`,
+//! `code`, and `ert` groups from prebuilt devtool inputs. Cargo-backed checks use
 //! separate host and sandbox lanes from this shared definition.
 
 use std::ffi::OsString;
+use std::io::Write;
 use std::process::Command;
+use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 
@@ -14,14 +16,17 @@ use anyhow::{Context, Result, bail};
 pub enum CheckGroup {
     /// Markdown formatting only.
     Docs,
-    /// Every static check outside the documentation group.
+    /// Static checks outside the documentation and standalone ERT groups.
     Code,
+    /// Standalone pure Elisp tests.
+    Ert,
 }
 
 impl CheckGroup {
     fn names(self) -> &'static [&'static str] {
         match self {
             Self::Docs => &["prettier-markdown"],
+            Self::Ert => &["ert"],
             Self::Code => &[
                 "fmt",
                 "leptosfmt",
@@ -39,7 +44,6 @@ impl CheckGroup {
                 "web-no-server-clippy",
                 "wasm-clippy",
                 "tools-clippy",
-                "ert",
             ],
         }
     }
@@ -48,14 +52,19 @@ impl CheckGroup {
 /// The complete static inventory in its prior effective order, without aliases
 /// or duplicates.
 fn all_names() -> Vec<&'static str> {
-    let mut names =
-        Vec::with_capacity(CheckGroup::Docs.names().len() + CheckGroup::Code.names().len());
+    let mut names = Vec::with_capacity(
+        CheckGroup::Docs.names().len()
+            + CheckGroup::Code.names().len()
+            + CheckGroup::Ert.names().len(),
+    );
     for &name in CheckGroup::Code.names() {
         if name == "prettier-end2end" {
             names.extend(CheckGroup::Docs.names());
         }
         names.push(name);
     }
+    // ERT remains last in --all even though it has its own hermetic verdict.
+    names.extend(CheckGroup::Ert.names());
     names
 }
 
@@ -414,14 +423,50 @@ pub fn run(
             crate::provision::run(std::path::Path::new("."), &paths)
                 .context("provisioning end2end/node_modules for tsc")?;
         }
-        let st = Command::new(cmd.program)
-            .args(&cmd.args)
-            .envs(cmd.env)
-            .status()
-            .with_context(|| format!("spawning `{}` for check {n}", cmd.program))?;
-        if !st.success() {
-            bail!("check {n} failed ({st})");
-        }
+        let mut command = Command::new(cmd.program);
+        command.args(&cmd.args).envs(cmd.env);
+        run_check(n, &mut command, &mut std::io::stderr().lock())?;
+    }
+    Ok(())
+}
+
+/// Measure only the ERT child, not launcher setup. The bounded versioned event
+/// is emitted once after completion, including unsuccessful exits.
+fn run_check(name: &str, command: &mut Command, timing_output: &mut dyn Write) -> Result<()> {
+    if name == "ert" {
+        return run_timed_check(name, command, timing_output);
+    }
+    let status = command.status().with_context(|| {
+        format!(
+            "spawning `{}` for check {name}",
+            command.get_program().to_string_lossy()
+        )
+    })?;
+    if !status.success() {
+        bail!("check {name} failed ({status})");
+    }
+    Ok(())
+}
+
+fn run_timed_check(
+    check: &str,
+    command: &mut Command,
+    timing_output: &mut dyn Write,
+) -> Result<()> {
+    let started = Instant::now();
+    let status = command
+        .status()
+        .with_context(|| format!("spawning `{check}` for check {check}"))?;
+    let event = serde_json::json!({
+        "event": "devtool-check-timing",
+        "schema_version": 1,
+        "check": check,
+        "duration_ms": started.elapsed().as_millis(),
+        "outcome": if status.success() { "success" } else { "failure" },
+    });
+    writeln!(timing_output, "{event}").with_context(|| format!("writing {check} timing event"))?;
+    if !status.success() {
+        bail!("check {check} failed ({status})");
     }
     Ok(())
 }
@@ -1011,6 +1056,55 @@ mod tests {
     }
 
     #[test]
+    fn ert_group_preserves_named_command() {
+        assert_eq!(CheckGroup::Ert.names(), ["ert"]);
+        assert_eq!(
+            <CheckGroup as clap::ValueEnum>::from_str("ert", true).unwrap(),
+            CheckGroup::Ert
+        );
+        assert!(!CheckGroup::Code.names().contains(&"ert"));
+        assert_eq!(selected_names(Some("ert"), None, false).unwrap(), ["ert"]);
+        assert_eq!(
+            selected_names(None, Some(CheckGroup::Ert), false).unwrap(),
+            ["ert"]
+        );
+        let command = build_host("ert", false);
+        assert_eq!(command.program, "emacs");
+        assert_eq!(
+            command.args,
+            ["--batch", "-Q", "-l", "elisp/scripts/run-tests.el"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ert_emits_one_bounded_child_event_on_success_and_failure() {
+        for (exit, outcome) in [(0, "success"), (23, "failure")] {
+            let mut child = Command::new("sh");
+            child.args(["-c", &format!("sleep 0.03; exit {exit}")]);
+            let mut events = Vec::new();
+            let outer = std::time::Instant::now();
+            let result = run_check("ert", &mut child, &mut events);
+            let outer_ms = outer.elapsed().as_millis();
+            assert_eq!(result.is_ok(), exit == 0);
+            assert!(events.len() < 256);
+            assert_eq!(events.iter().filter(|b| **b == b'\n').count(), 1);
+            let event: serde_json::Value = serde_json::from_slice(&events).unwrap();
+            assert_eq!(event["event"], "devtool-check-timing");
+            assert_eq!(event["schema_version"], 1);
+            assert_eq!(event["check"], "ert");
+            assert_eq!(event["outcome"], outcome);
+            let duration = u128::from(event["duration_ms"].as_u64().unwrap());
+            assert!(duration >= 20 && duration <= outer_ms);
+        }
+        let mut child = Command::new("sh");
+        child.args(["-c", "exit 0"]);
+        let mut events = Vec::new();
+        run_check("byte-compile", &mut child, &mut events).unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
     fn unknown_check_errors() {
         assert!(spec("nope", false).is_err());
     }
@@ -1037,7 +1131,6 @@ mod tests {
                 "web-no-server-clippy",
                 "wasm-clippy",
                 "tools-clippy",
-                "ert",
             ]
         );
         assert_eq!(

@@ -6,8 +6,8 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::pin::Pin;
 use std::process::{Command, ExitStatus};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
 use std::task::Poll;
 
 use anyhow::{Context, Result, bail};
@@ -33,9 +33,10 @@ pub(crate) enum TestCheck {
 }
 
 const CHECK_SUPPORTING_TEST_CHECKS: [TestCheck; 2] = [TestCheck::Wasm, TestCheck::Doctests];
-const STATIC_CHECKS: [(&str, &str); 2] = [
+const STATIC_CHECKS: [(&str, &str); 3] = [
     ("nix-static-docs", "static-docs"),
     ("nix-static-code", "static-code"),
+    ("nix-static-ert", "static-ert"),
 ];
 
 /// Whether every result appended by the browser/backend E2E combinations passed.
@@ -1548,6 +1549,155 @@ impl BuildCaptureState {
     }
 }
 
+/// Correlate only the current static-ert request's local builder. Nix 2.34.9
+/// uses actBuild=105 with [drv, machine, 1, 1], and resBuildLogLine=101 on
+/// the same activity ID (BuildLog and worker-protocol-connection.cc). This is
+/// deliberately not a general Nix event model or a parser for retained logs.
+struct ErtBuildTiming {
+    target: Option<String>,
+    line: Vec<u8>,
+    invalid: bool,
+    id: Option<u64>,
+    active: bool,
+    stopped: bool,
+    event: Option<PhaseRecord>,
+}
+
+impl ErtBuildTiming {
+    fn new(target: Option<String>) -> Self {
+        Self {
+            target,
+            line: Vec::new(),
+            invalid: false,
+            id: None,
+            active: false,
+            stopped: false,
+            event: None,
+        }
+    }
+
+    fn push(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            if byte == b'\n' {
+                if !self.invalid {
+                    let line = std::mem::take(&mut self.line);
+                    self.record(&line);
+                }
+                self.line.clear();
+            } else if self.line.len() < 65_536 {
+                self.line.push(byte);
+            } else {
+                // Bound memory, but never interrupt draining the process pipe.
+                self.invalid = true;
+            }
+        }
+    }
+
+    fn record(&mut self, line: &[u8]) {
+        let Some(json) = line.strip_prefix(b"@nix ") else {
+            return;
+        };
+        let Ok(record) = serde_json::from_slice::<serde_json::Value>(json) else {
+            self.invalid = true;
+            return;
+        };
+        let action = record["action"].as_str();
+        if action.is_none() {
+            self.invalid = true;
+            return;
+        }
+        if !matches!(action, Some("start" | "result" | "stop")) {
+            return;
+        }
+        let Some(id) = record["id"].as_u64() else {
+            self.invalid = true;
+            return;
+        };
+        match action {
+            Some("start") => {
+                if self.id == Some(id) {
+                    self.invalid = true;
+                }
+                if record["type"].as_u64() != Some(105) {
+                    return;
+                }
+                let fields = &record["fields"];
+                if fields[0].as_str() != self.target.as_deref() || self.target.is_none() {
+                    return;
+                }
+                if self.id.is_some()
+                    || fields.as_array().map(Vec::len) != Some(4)
+                    || fields[1].as_str() != Some("")
+                    || fields[2].as_u64() != Some(1)
+                    || fields[3].as_u64() != Some(1)
+                {
+                    self.invalid = true;
+                    return;
+                }
+                self.id = Some(id);
+                self.active = true;
+            }
+            Some("result") if self.id == Some(id) && record["type"].as_u64().is_none() => {
+                self.invalid = true;
+            }
+            Some("result") if record["type"].as_u64() == Some(101) && self.id == Some(id) => {
+                let Some(text) = record["fields"][0].as_str() else {
+                    self.invalid = true;
+                    return;
+                };
+                if !self.active || record["fields"].as_array().map(Vec::len) != Some(1) {
+                    self.invalid = true;
+                    return;
+                }
+                if text.contains("devtool-check-timing") {
+                    let phase = crate::sh::ert_child_phase(text.as_bytes());
+                    if phase.duration_ms.is_none() || self.event.is_some() {
+                        self.invalid = true;
+                    } else {
+                        self.event = Some(phase);
+                    }
+                }
+            }
+            Some("result")
+                if record["type"].as_u64() == Some(101)
+                    && record["fields"][0]
+                        .as_str()
+                        .is_some_and(|text| text.contains("devtool-check-timing")) =>
+            {
+                // An unmatched completion cannot be repaired by a later valid
+                // sequence: current-child attribution is then ambiguous.
+                self.invalid = true;
+            }
+            Some("stop") if self.id == Some(id) => {
+                if !self.active {
+                    self.invalid = true;
+                }
+                self.active = false;
+                self.stopped = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn phase(&self) -> PhaseRecord {
+        if !self.invalid
+            && self.line.is_empty()
+            && self.stopped
+            && !self.active
+            && let Some(event) = &self.event
+        {
+            let mut phase = event.clone();
+            phase.detail =
+                "ert: current local Nix builder activity (monotonic child interval)".into();
+            return phase;
+        }
+        PhaseRecord::unavailable(
+            PhaseName::GateExecution,
+            "ert: no unambiguous current local builder timing",
+        )
+    }
+}
+
 /// Fans every processkit-provided byte chunk to the diagnostic sink and then
 /// the primary stderr sink. Sink failures are recorded rather than returned so
 /// processkit continues draining the child pipe and driving the other sink.
@@ -1555,6 +1705,7 @@ struct BuildStderrTee<A, B> {
     diagnostic: A,
     primary: B,
     state: BuildCaptureState,
+    ert_timing: Option<Arc<Mutex<ErtBuildTiming>>>,
 }
 
 impl<A, B> BuildStderrTee<A, B> {
@@ -1565,9 +1716,15 @@ impl<A, B> BuildStderrTee<A, B> {
                 diagnostic,
                 primary,
                 state: state.clone(),
+                ert_timing: None,
             },
             state,
         )
+    }
+
+    fn observe_ert(mut self, timing: Arc<Mutex<ErtBuildTiming>>) -> Self {
+        self.ert_timing = Some(timing);
+        self
     }
 }
 
@@ -1577,6 +1734,11 @@ impl<A: Write + Unpin, B: Write + Unpin> AsyncWrite for BuildStderrTee<A, B> {
         _cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
+        if let Some(timing) = &self.ert_timing
+            && let Ok(mut timing) = timing.lock()
+        {
+            timing.push(buf);
+        }
         if self.diagnostic.write_all(buf).is_err() {
             self.state.record(DIAGNOSTIC_FAILED);
         }
@@ -1824,12 +1986,21 @@ fn build_check(step_name: &str, check: &str) -> StepResult {
 }
 
 fn build_check_with_flags(step_name: &str, check: &str, flags: &[&str]) -> StepResult {
-    build_installable_with_flags(
+    let mut step = build_installable_with_flags(
         step_name,
         check,
         &format!(".#checks.{SYSTEM}.{check}"),
         flags,
-    )
+    );
+    if check == "static-ert"
+        && !step
+            .phases
+            .iter()
+            .any(|p| p.name == PhaseName::GateExecution)
+    {
+        step.phases.push(ErtBuildTiming::new(None).phase());
+    }
+    step
 }
 
 /// The hook's ordinary Git-flake request must not update or write the lock file.
@@ -1895,6 +2066,17 @@ fn build_installable_with_flags(
         }
     };
     let (stderr_tee, capture_state) = BuildStderrTee::new(diagnostic, io::stderr());
+    let ert_timing = (check == "static-ert")
+        .then(|| Arc::new(Mutex::new(ErtBuildTiming::new(before.derivation.clone()))));
+    let stderr_tee = match &ert_timing {
+        Some(timing) => stderr_tee.observe_ert(timing.clone()),
+        None => stderr_tee,
+    };
+    let log_flags: &[&str] = if ert_timing.is_some() {
+        &["--log-format", "internal-json"]
+    } else {
+        &[]
+    };
     let process = match Process::start(
         processkit::Command::new("nix")
             .args([
@@ -1907,6 +2089,7 @@ fn build_installable_with_flags(
                 "--out-link",
                 &out_link,
             ])
+            .args(log_flags)
             .args(extra_flags)
             .arg(installable)
             .inherit_stdin()
@@ -1927,6 +2110,7 @@ fn build_installable_with_flags(
         }
     };
     let outcome = process.wait();
+    let timing_reliable = outcome.is_ok();
     let mut capture_recovery = CaptureRecoverySummary::default();
     let mut step = finish_build_with(
         BuildCompletion {
@@ -1949,6 +2133,16 @@ fn build_installable_with_flags(
         &mut io::stderr(),
     )
     .with_duration(start.elapsed());
+    if let Some(timing) = ert_timing {
+        step.phases.push(
+            timing
+                .lock()
+                .ok()
+                .filter(|_| timing_reliable)
+                .map(|t| t.phase())
+                .unwrap_or_else(|| ErtBuildTiming::new(None).phase()),
+        );
+    }
     append_capture_recovery_detail(&mut step, &capture_recovery);
     if let Some(request) = &mut provenance {
         request.completed(step.ok);
@@ -2411,6 +2605,115 @@ mod tests {
         );
     }
 
+    const ERT_DRV: &str = "/nix/store/fixture-static-ert.drv";
+    const ERT_EVENT: &str = r#"{"event":"devtool-check-timing","schema_version":1,"check":"ert","duration_ms":31,"outcome":"success"}"#;
+
+    fn ert_live_stream(marker: &str) -> String {
+        format!(
+            "@nix {}\n@nix {}\n@nix {}\n",
+            serde_json::json!({"action":"start","id":41,"type":105,"fields":[ERT_DRV,"",1,1]}),
+            serde_json::json!({"action":"result","id":41,"type":101,"fields":[format!("Emacs stdout without newline{marker}")]}),
+            serde_json::json!({"action":"stop","id":41})
+        )
+    }
+
+    #[test]
+    fn ert_live_builder_success_and_failure_require_complete_activity() {
+        for (marker, outcome) in [
+            (ERT_EVENT.to_string(), PhaseOutcome::Success),
+            (
+                ERT_EVENT.replace("success", "failure"),
+                PhaseOutcome::Failed,
+            ),
+        ] {
+            let mut timing = super::ErtBuildTiming::new(Some(ERT_DRV.into()));
+            // Arbitrary processkit chunks must not change line framing.
+            for bytes in ert_live_stream(&marker).as_bytes().chunks(3) {
+                timing.push(bytes);
+            }
+            let phase = timing.phase();
+            assert_eq!(phase.duration_ms, Some(31));
+            assert_eq!(phase.outcome, outcome);
+        }
+    }
+
+    #[test]
+    fn ert_live_builder_rejects_historical_missing_malformed_and_ambiguous_evidence() {
+        let valid = ert_live_stream(ERT_EVENT);
+        let lines: Vec<_> = valid.split_inclusive('\n').collect();
+        for stream in [
+            String::new(), // Ordinary valid local-store reuse: no builder events.
+            format!("historical build.log: {ERT_EVENT}\n"),
+            lines[1].into(),
+            format!("@nix broken-json\n{valid}"),
+            ert_live_stream(&ERT_EVENT.replace("schema_version\":1", "schema_version\":2")),
+            ert_live_stream(&format!(
+                "{ERT_EVENT}\n{}",
+                ERT_EVENT.replace("schema_version\":1", "schema_version\":2")
+            )),
+            ert_live_stream(&format!(
+                "{ERT_EVENT}\n{}",
+                ERT_EVENT.replace("duration_ms\":31", "duration_ms\":\"31\"")
+            )),
+            ert_live_stream(&format!("{ERT_EVENT}\n{}", ERT_EVENT.trim_end_matches('}'))),
+            ert_live_stream(&format!("{ERT_EVENT}\n{ERT_EVENT}{}", " ".repeat(256))),
+            ert_live_stream(&ERT_EVENT.replace("ert", "tsc")),
+            ert_live_stream("no timing marker"),
+            format!(
+                "@nix {}\n",
+                serde_json::json!({"action":"msg", "msg":valid})
+            ),
+            format!("@nix []\n{valid}"),
+            format!("{}{}{}", lines[1], lines[0], lines[2]),
+            format!("{}{}{}{}", lines[1], lines[0], lines[1], lines[2]),
+            format!("{}{}{}{}", lines[0], lines[1], lines[1], lines[2]),
+            format!("{}{}{}{}", lines[0], lines[0], lines[1], lines[2]),
+            format!("{}{}{}", lines[0], lines[2], lines[1]),
+            valid.replace("\"id\":41,\"type\":101", "\"id\":42,\"type\":101"),
+            valid.replace(ERT_DRV, "/nix/store/unrelated.drv"),
+            valid.replace("\"\",1,1", "\"remote\",1,1"),
+            format!("{}{}", lines[0], lines[1]),
+            valid.trim_end().into(),
+            format!("{}\n{valid}", "x".repeat(65_537)),
+            ert_live_stream(&format!("historical internal-json: {}", lines[1].trim())),
+        ] {
+            let mut timing = super::ErtBuildTiming::new(Some(ERT_DRV.into()));
+            timing.push(stream.as_bytes());
+            assert_eq!(
+                timing.phase().outcome,
+                PhaseOutcome::Unavailable,
+                "{stream}"
+            );
+        }
+        let mut timing = super::ErtBuildTiming::new(None);
+        timing.push(valid.as_bytes());
+        assert_eq!(timing.phase().outcome, PhaseOutcome::Unavailable);
+    }
+
+    #[test]
+    fn ert_live_tee_observes_bytes_without_reading_diagnostic_history() {
+        for (input, expected) in [
+            (ert_live_stream(ERT_EVENT), Some(31)),
+            (
+                format!("{}\n{}", "x".repeat(65_537), ert_live_stream(ERT_EVENT)),
+                None,
+            ),
+        ] {
+            let timing = std::sync::Arc::new(std::sync::Mutex::new(super::ErtBuildTiming::new(
+                Some(ERT_DRV.into()),
+            )));
+            let (diagnostic, diagnostic_bytes) = recording_sink();
+            let (primary, primary_bytes) = recording_sink();
+            let (tee, state) = BuildStderrTee::new(diagnostic, primary);
+            drive_tee(tee.observe_ert(timing.clone()), input.as_bytes());
+            assert_eq!(timing.lock().unwrap().phase().duration_ms, expected);
+            assert_eq!(*diagnostic_bytes.borrow(), input.as_bytes());
+            assert_eq!(*primary_bytes.borrow(), input.as_bytes());
+            assert!(!state.outcome().diagnostic_failed);
+            assert!(!state.outcome().primary_failed);
+        }
+    }
+
     #[test]
     fn static_check_catalog_has_no_aggregate() {
         assert_eq!(
@@ -2418,6 +2721,7 @@ mod tests {
             [
                 ("nix-static-docs", "static-docs"),
                 ("nix-static-code", "static-code"),
+                ("nix-static-ert", "static-ert"),
             ]
         );
         assert!(

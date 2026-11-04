@@ -4191,8 +4191,9 @@ rather than failing the check, with the JSON report still recording it
 `elisp/` is a first-class, separately-tested subproject
 ([ADR-0031](adr/0031-elisp-separately-tested-subproject.md)): three elisp steps
 — `ert`, `elisp-fmt` and `byte-compile` — run in both `check` (Fix) and
-`validate` (Check), each as a `devtool check` step in the `static-code`
-derivation ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
+`validate` (Check), each as a `devtool check` step. Standalone pure `ert` runs
+in `static-ert`; `elisp-fmt` and `byte-compile` remain in `static-code`
+([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
 `xtask/src/steps/static_checks.rs:17-18`); one `emacsForCi` toolchain
 (`nix/packages.nix:372-404`) serves both.
 
@@ -4401,15 +4402,49 @@ checks (`byte-compile`, `tsc`, `cargo-deny`, `clippy`, `web-server-clippy`,
 `xtask/src/lib.rs`):
 
 The host _step_ above runs the listed sub-steps through host-local lanes. The
-hermetic surface is split at the documentation boundary: `static-docs` runs
-`devtool check --group docs` over Markdown and Prettier configuration, while
-`static-code` runs the remaining shared definitions with
-`devtool check --group code --sandbox-cargo` over non-document inputs and
-workspace-specific offline Cargo homes. `validate --no-e2e` builds
-`nix-static-docs`, then `nix-static-code`, before the Nix test checks, so CI
-fails if either hermetic boundary drifts from the host definitions
-([hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md);
-[proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
+hermetic surface has `static-docs` running `devtool check --group docs` over
+Markdown and Prettier configuration, `static-code` running
+`devtool check --group code --sandbox-cargo` over the remaining non-document
+checks with workspace-specific offline Cargo homes, and `static-ert` running
+`devtool check --group ert`. The ERT leaf receives the complete non-Markdown
+`elisp/` tree in a writable copy, shared `devtoolBin`, existing `emacsForCi`
+(including plz, Undercover and cmarkEl), Git and `TZDIR`. It preserves the
+standalone runner's population and is non-substitutable, but valid local outputs
+may still be reused. Elisp source overlap remains in `static-code` for
+formatting and byte compilation; no speedup or source-cache isolation is
+claimed.
+
+`validate --no-e2e` builds `nix-static-docs`, `nix-static-code`, then
+`nix-static-ert` before the Nix test checks. ADR-0178 established the original
+two-group/two-leaf documentation split, not a generic extraction policy
+([hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md)).
+The concrete further ERT extraction was separately approved in the
+[ERT spec](https://github.com/jaunder-org/jaunder/blob/ba7fdf416d8ec7b14c86b163ead41feaf3dc12c7/docs/superpowers/specs/2026-11-03-issue-1864-elisp-ert.md)
+(`issue1864-ert-spec-v1`, “approved, with the caveat that I don't think we
+actually need an ADR for this, do we?”); no new ADR or generic policy is
+implied. TypeScript extraction is a separately approved direction, not a
+prerequisite implemented by this slice. Its later integration preserves the
+final order `docs`, `typescript`, `code`, `ert` and the corresponding Nix
+leaves.
+
+ERT emits one bounded versioned stderr timing event around only its child using
+a monotonic clock. Host xtask projects only current captured child stderr into
+`GateExecution`, separately from step duration. Only the `static-ert` Nix
+request selects `--log-format internal-json`: its current live stderr tee
+correlates the exact selected derivation's local build activity, a
+timing-bearing log result on that active ID, and its matching stop. This
+narrowly supports the observed Nix 2.34.9 local-builder/daemon protocol
+(`actBuild=105`, `resBuildLogLine=101`, empty machine field); it is not a
+universal Nix schema promise. Nix merges child stdout/stderr, so the shared
+bounded event parser allows an unterminated Emacs stdout prefix. Stop closes
+attribution, not the check verdict: the marker's success/failure remains
+separate from Nix status. Missing, malformed, duplicate, unsupported or
+incomplete activity evidence and ordinary local reuse leave execution timing
+unavailable. Parser buffering is bounded without interrupting diagnostic
+draining. Neither request duration, local validity, realization/reuse nor
+retained logs establish execution; saved logs and nested/replayed JSON messages
+are never timing inputs. Combined pure/live coverage, hooks, workflows and
+required CI routing are unchanged.
 
 The two CSR-facing source filters follow resolved target reachability rather
 than crate names. The `.#site`/CSR closure contains workspace manifests, the
@@ -4757,7 +4792,7 @@ interface; devtool has no `run` subcommand or runner dependency.
   context propagates independently, preserving one root for nested launches
   without stale-skipping later independent invocations. See
   [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md).
-- **`devtool check <name> | --group <docs|code> | --all [--fix] [--sandbox-cargo]`**
+- **`devtool check <name> | --group <docs|code|ert> | --all [--fix] [--sandbox-cargo]`**
   is the single command-definition surface for the migrated static checks
   (`fmt`, `leptosfmt`, `prettier-markdown`, `prettier-end2end`, `prettier-css`,
   `tsc`, `elisp-fmt`, `ert`, `byte-compile`, `cargo-deny`, generic product
@@ -4767,11 +4802,12 @@ interface; devtool has no `run` subcommand or runner dependency.
   `tools/devtool/src/check.rs`). Both gates invoke the same definitions: the
   host verify ladder delegates each through its static-check mechanism,
   preserving host-local Cargo artifacts and sccache for Rust-compiling checks;
-  the Nix `static-docs` and `static-code` `runCommand`s run the `docs` and
-  sandboxed `code` groups respectively from the prebuilt `devtoolBin`. The code
-  group retains workspace-specific offline Cargo homes; Cargo-deny keeps a split
-  policy: host mode runs full `cargo deny check`, while sandbox mode skips
-  `advisories` ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
+  the Nix `static-docs`, `static-code`, and `static-ert` `runCommand`s run the
+  `docs`, sandboxed `code`, and standalone `ert` groups respectively from their
+  prebuilt devtool inputs. The code group retains workspace-specific offline
+  Cargo homes; Cargo-deny keeps a split policy: host mode runs full
+  `cargo deny check`, while sandbox mode skips `advisories`
+  ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
   [Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md),
   [devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md),
   [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md),

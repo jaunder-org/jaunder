@@ -3206,6 +3206,37 @@ static-docs =
       devtool check --group docs
       touch $out
     '';
+# Standalone pure ERT verdict; formatting/byte-compilation retain their Elisp
+# inputs in static-code. The combined pure/live coverage producer is separate.
+static-ert =
+  let
+    staticErtSourceFilter = path: type:
+      let
+        relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
+      in
+      type == "directory"
+      || (pkgs.lib.hasPrefix "elisp/" relative && !(pkgs.lib.hasSuffix ".md" path));
+    staticErtSrc = pkgs.lib.cleanSourceWith {
+      src = craneLib.path ../.;
+      filter =
+        assert staticErtSourceFilter "${toString ../.}/elisp/test/new-test.el" "regular";
+        assert staticErtSourceFilter "${toString ../.}/elisp/test/fixture.bin" "regular";
+        assert !(staticErtSourceFilter "${toString ../.}/elisp/README.md" "regular");
+        assert !(staticErtSourceFilter "${toString ../.}/server/src/lib.rs" "regular");
+        staticErtSourceFilter;
+    };
+  in
+  nonSubstitutable (pkgs.runCommand "static-ert"
+    {
+      nativeBuildInputs = [ devtoolBin emacsForCi pkgs.git ];
+      TZDIR = "${pkgs.tzdata}/share/zoneinfo";
+    }
+    ''
+      cp --no-preserve=mode -r ${staticErtSrc} src
+      cd src
+      devtool check --group ert
+      touch $out
+    '');
 static-code =
   # Force the optional performance surface in the existing static gate so
   # shared VM-wrapper changes cannot silently leave measurement producers stale.
@@ -3291,7 +3322,7 @@ static-code =
       # The server build script now links the host compiler, including native
       # decoding dependencies. Cargo executes it before any output fixup.
       LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ];
-      # ert needs a zone DB (#160); tsc needs BOTH node-dep envs
+      # Elisp checks retain the zone DB (#160); tsc needs BOTH node-dep envs
       # (`devtool provision-node-modules`'s resolver errors on each when
       # unset).
       TZDIR = "${pkgs.tzdata}/share/zoneinfo";
