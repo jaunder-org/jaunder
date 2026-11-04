@@ -23,7 +23,7 @@ Approval is recorded above.
 
 ## Task outline
 
-- [ ] **Task 1 — Adapt the existing xtask package derivation for raw all-target
+- [x] **Task 1 — Adapt the existing xtask package derivation for raw all-target
       Clippy.** Reuse `nix/xtask.nix`'s xtask package closure,
       `xtask/Cargo.lock`, pinned-fork vendor, native dependencies, and existing
       Nix build identity environment (`JAUNDER_XTASK_BUILD_NIX_OUTPUT`).
@@ -46,7 +46,7 @@ Approval is recorded above.
     Demonstrate unchanged valid local-store reuse without forced rebuild or
     cache purge.
 
-- [ ] **Task 2 — Wire one required Nix verdict and reconcile the boundary.**
+- [x] **Task 2 — Wire one required Nix verdict and reconcile the boundary.**
       Expose the raw unit in the flake checks and require it once through the
       existing Linux hermetic validation consumer, alongside and not within the
       six-unit aggregate. Reuse current static-check collection and
@@ -64,6 +64,40 @@ Approval is recorded above.
     Preserve honest request-duration, store-reuse, and current correlated
     execution observations; historical logs or derivation identity alone do not
     prove current execution.
+
+## Progress and focused proof
+
+Implementation is integrated in the worktree; no commit or staging performed.
+The Nix source-admission census is parked at
+`.xtask/evidence/issue-1864-xtask-clippy-include-census.txt`; its assertions and
+successful all-target build cover xtask targets/fixtures, workflow,
+`.gitignore`, Cargo configuration/toolchain/manifests/lock, local path
+dependencies, and compile-time external inputs. Census uncovered
+`test-support/src/lib.rs`, which had been replaced by a dependency target
+placeholder. The raw-only source clone now admits the actual compile-time
+include and omits that placeholder; final raw Clippy realization passed.
+Relevant Rust source, xtask manifest/lock, Cargo configuration, Rust toolchain,
+and test-support source changes each changed the full unit derivation path; a
+`CONTEXT.md` edit retained the same complete `.drvPath`, and
+`tools/devtool/src/main.rs` is rejected by the source assertion. Every probe was
+restored. This was a bounded representative identity matrix, not an exhaustive
+mutation of every tool or transitive dependency.
+
+A controlled unused-function lint failed both the leaf and the designated
+`cargo xtask validate --allow-dirty --no-e2e` consumer on the final source tree;
+after fixture removal, the same consumer succeeded. Durable consumer
+stdout/stderr and terminal sidecars for both outcomes are under
+`.xtask/evidence/issue-1864-final-consumer-*`; the failed sidecar records
+`ok:false` and `nix-xtask-clippy:false`, while the restored sidecar records both
+host and Nix Clippy steps green and the final derivation identity. Both runs
+used the same 3600s budget and completed without timeout. Detailed outcomes,
+identity, logs and timeout history are in
+`.xtask/evidence/issue-1864-implementation-review.md`. The host regression
+`cargo test --manifest-path xtask/Cargo.toml --lib static_check_catalog_has_no_aggregate`
+passed and pins one separate static check, not a new aggregate. The raw Nix
+derivation invokes only Cargo Clippy, never xtask or test binaries. The final
+leaf was re-requested unchanged without a build; no forced rebuild or cache
+purge occurred.
 
 ## Coordination and boundaries
 

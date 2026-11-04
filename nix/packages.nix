@@ -329,7 +329,7 @@ let
     else
       drv;
   xtaskBin = import ./xtask.nix {
-    inherit pkgs craneLib cargoPackageClosure cargoMemberSource workspaceMembers
+    inherit pkgs craneLib toolchain cargoPackageClosure cargoMemberSource workspaceMembers
       withWorkspacePlaceholders vendorPinnedFork;
   };
   cargoVendorDir = craneLib.vendorCargoDeps {
@@ -1265,6 +1265,7 @@ in
       devtoolBin
       tracedRunBin
       docsDevtoolBin
+      xtaskBin
       cargo-crap
       wasm-bindgen-cli
       wasmTestWebdriverConfig

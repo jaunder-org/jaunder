@@ -25,6 +25,7 @@ let
     testSupportBin
     devtoolBin
     docsDevtoolBin
+    xtaskBin
     cargo-crap
     wasm-bindgen-cli
     wasmTestWebdriverConfig
@@ -3396,6 +3397,7 @@ rust-format =
       devtool check --group rust-format --sandbox-cargo
       touch $out
     '');
+xtask-clippy = xtaskBin.rawClippy;
 static-code =
   # Force the optional performance surface in the existing static gate so
   # shared VM-wrapper changes cannot silently leave measurement producers stale.

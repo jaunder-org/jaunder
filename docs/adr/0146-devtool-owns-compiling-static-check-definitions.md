@@ -44,8 +44,13 @@ removed only with replacement wiring that keeps the expanded hermetic
 `cargo xtask validate --no-e2e` builds it as the `nix-static-checks` step before
 the Nix test checks.
 
-`xtask-fmt` and `xtask-clippy` remain native host checks. The separate
-`xtask-format` Nix verdict also runs the exact raw
+`xtask-fmt` remains a native host check. `xtask-clippy` remains required on the
+host and also has a separate cached raw Nix verdict: it runs the exact
+`cargo clippy --manifest-path xtask/Cargo.toml --all-targets -- -D warnings`
+command, reusing the xtask package lock, pinned-fork vendor, and native
+dependencies. This independent verdict is requested alongside the approved
+six-unit aggregate, not added to its population. The separate `xtask-format` Nix
+verdict also runs the exact raw
 `cargo fmt --manifest-path xtask/Cargo.toml --check` with pinned Cargo/rustfmt,
 without `--all`. Its narrow source exception admits xtask Rust targets and
 required manifests/configuration, with dependency target placeholders rather

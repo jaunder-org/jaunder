@@ -33,13 +33,14 @@ pub(crate) enum TestCheck {
 }
 
 const CHECK_SUPPORTING_TEST_CHECKS: [TestCheck; 2] = [TestCheck::Wasm, TestCheck::Doctests];
-const STATIC_CHECKS: [(&str, &str); 6] = [
+const STATIC_CHECKS: [(&str, &str); 7] = [
     ("nix-static-docs", "static-docs"),
     ("nix-static-typescript", "static-typescript"),
     ("nix-rust-format", "rust-format"),
     ("nix-static-code", "static-code"),
     ("nix-static-ert", "static-ert"),
     ("nix-xtask-format", "xtask-format"),
+    ("nix-xtask-clippy", "xtask-clippy"),
 ];
 
 /// Whether every result appended by the browser/backend E2E combinations passed.
@@ -3022,6 +3023,7 @@ mod tests {
                 ("nix-static-code", "static-code"),
                 ("nix-static-ert", "static-ert"),
                 ("nix-xtask-format", "xtask-format"),
+                ("nix-xtask-clippy", "xtask-clippy"),
             ]
         );
         assert!(
@@ -3051,7 +3053,8 @@ mod tests {
                 "rust-format",
                 "static-code",
                 "static-ert",
-                "xtask-format"
+                "xtask-format",
+                "xtask-clippy"
             ]
         );
         assert!(!result.ok);
@@ -3063,7 +3066,38 @@ mod tests {
                 && result.steps[3].ok
                 && result.steps[4].ok
                 && result.steps[5].ok
+                && result.steps[6].ok
         );
+    }
+
+    #[test]
+    fn xtask_clippy_failure_is_a_required_hermetic_consumer_failure() {
+        let mut result = CommandResult::new("ci-validate-hermetic");
+        let mut requests = Vec::new();
+        static_checks_with(&mut result, |step, check| {
+            requests.push(check.to_string());
+            if check == "xtask-clippy" {
+                StepResult::fail(step).detail("controlled xtask Clippy failure")
+            } else {
+                StepResult::ok(step)
+            }
+        });
+        assert_eq!(
+            requests,
+            [
+                "static-docs",
+                "static-typescript",
+                "rust-format",
+                "static-code",
+                "static-ert",
+                "xtask-format",
+                "xtask-clippy"
+            ]
+        );
+        assert!(!result.ok);
+        assert_eq!(result.steps[6].name, "nix-xtask-clippy");
+        assert!(!result.steps[6].ok);
+        assert!(result.steps[..6].iter().all(|step| step.ok));
     }
 
     #[test]
