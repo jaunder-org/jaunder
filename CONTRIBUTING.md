@@ -932,19 +932,19 @@ and the
 - `elisp-fmt`, `ert`, and `byte-compile` run the elisp subproject's formatter,
   ERT suite, and warnings-as-errors byte-compilation under `emacs --batch` (see
   the Elisp subproject section below).
-- `clippy`, `web-server-clippy`, `web-no-server-clippy`, `wasm-clippy`, and
-  `tools-clippy` run through `devtool check <name>` from the host ladder. The
-  commands still execute host-local Cargo with the devshell toolchain and
-  compile-cache environment, while sharing their argument definitions with the
-  Nix `static-code` derivation. The product has three distinct clippy surfaces:
-  generic workspace `clippy --all-targets` provides broad, feature-unified host
-  coverage; `web-no-server-clippy` runs `web`'s no-default-feature host tests in
-  isolation, so workspace feature unification cannot enable `web/server`; and
-  `wasm-clippy` lints only wasm library targets. `wasm-clippy` deliberately
-  excludes `--all-targets`, because `web`'s host-oriented test dependencies
-  cannot compile for `wasm32-unknown-unknown`. `web-server-clippy` remains the
-  explicit host check for `web`'s `feature = "server"` paths; workspace
-  `--all-features` is not gate policy.
+- Six discrete Clippy checks run through `devtool check <name>` from the host
+  ladder: `product-core-clippy`, `web-server-clippy`, `web-no-server-clippy`,
+  `client-host-clippy`, `wasm-clippy`, and `tools-clippy`. They use host-local
+  Cargo with the devshell toolchain and compile-cache environment; hermetic Nix
+  exposes one terminal derivation per unit and a narrow aggregate. Product core
+  excludes web, client, and csr as selected lint roots; their applicable server,
+  featureless, host-CSR, and wasm targets are checked separately. `wasm-clippy`
+  deliberately excludes `--all-targets`, because web's host-oriented test
+  dependencies cannot compile for `wasm32-unknown-unknown`. Root and tools
+  workspaces retain separate lock/test contexts (including `csr_bundle` and
+  `performance` in tools). The former combined root web(server+CSR)
+  configuration is intentionally not retained under approved request
+  `2f0929a1-ebbd-4735-9a6c-b53e99a7a141`; `xtask-clippy` remains host-only.
 - `cargo nextest run` runs the default Rust unit and integration test suite.
 - Whole-test budgets are **ambient** — an auto fixture gives every test a scaled
   `DEFAULT_TEST_BUDGET_MS`, which covers the entire suite (#270). Don't set one
@@ -1813,15 +1813,15 @@ reconciliation, and server-function coverage verification.
   invalidate this leaf even when its direct filter excludes that file. Valid
   local-store outputs may be reused; request duration is not evidence of current
   formatter execution, and no speedup or narrow-cache claim follows.
-- `checks.x86_64-linux.static-code` —
-  `devtool check --group code --sandbox-cargo`, every remaining shared static
-  definition outside tsc, Rust formatting and standalone ERT (including
-  end-to-end formatting, Elisp formatting/byte-compilation, Rust/tools
-  compilation, cargo-deny, clippy, and repository scanners), executed with the
-  same offline Cargo homes as the prior hermetic proof. The host
-  `devtool check --all` aggregate remains the exact ordered, duplicate-free
-  union of `docs`, `typescript`, `rust-format`, `code`, and `ert`, with tsc in
-  its former position and ERT still after `tools-clippy`.
+- `checks.x86_64-linux.static-code` — residual non-Clippy shared static
+  definitions outside TypeScript, Rust formatting and standalone ERT (including
+  end-to-end formatting, Elisp formatting/byte-compilation, cargo-deny, and
+  repository scanners), executed with existing offline Cargo homes. It requests
+  the narrow Clippy aggregate once; that aggregate depends on six independently
+  buildable terminal verdicts and executes no lint itself. The host
+  `devtool check --all` is the ordered, duplicate-free union of `docs`,
+  `typescript`, `rust-format`, `code`, and `ert`, including the six Clippy units
+  in the code group. Host xtask runs its separate host-only `xtask-clippy` step.
 - `checks.x86_64-linux.static-ert` — `devtool check --group ert`, the standalone
   pure runner over the complete non-Markdown Elisp tree, in a writable copy,
   with existing `emacsForCi`, Git and timezone inputs. The separate combined

@@ -2727,6 +2727,78 @@ mkWasmCoverageMeasurementProducer =
     (map (attr: { inherit attr; family = "coverage"; }) (map (name: "checks.${system}.${name}") (builtins.attrNames coverageSupportCacheChecks)))
     ++ (map (attr: { inherit attr; family = "e2e-package"; }) cacheSafetyPackageSupportAttrs)
     ++ (map (attr: { inherit attr; family = "e2e-driver"; }) cacheSafetyDriverAttrs);
+  clippySourceFilter =
+    path: type:
+    let
+      isXtask = pkgs.lib.hasSuffix "/xtask" path || pkgs.lib.hasInfix "/xtask/" path;
+    in
+    type == "directory"
+    || (
+      !(pkgs.lib.hasSuffix ".md" path)
+      && (
+        pkgs.lib.hasSuffix ".css" path
+        || pkgs.lib.hasSuffix "/nix/otel-processors.yaml" path
+        || pkgs.lib.hasSuffix "/testdata/theme-repository/minimal/preview.png" path
+        || (
+          !isXtask
+          && (
+            builtins.any (suffix: pkgs.lib.hasSuffix suffix path) [
+              "/Cargo.toml"
+              "/Cargo.lock"
+              "/rust-toolchain.toml"
+              "/deny.toml"
+              "/clippy.toml"
+              "/.rustfmt.toml"
+              "/.prettierrc.json"
+              "/.prettierignore"
+              "/sgconfig.yml"
+            ]
+            || builtins.any (directory: pkgs.lib.hasInfix "/${directory}/" path) [
+              ".cargo"
+              "ast-grep"
+              "common"
+              "macros"
+              "server"
+              "storage"
+              "web"
+              "client"
+              "csr"
+              "host"
+              "test-support"
+              "public"
+              "tools"
+              "end2end"
+              "elisp"
+            ]
+          )
+        )
+      )
+    );
+  clippySource = pkgs.lib.cleanSourceWith {
+    src = craneLib.path ../.;
+    filter =
+      assert clippySourceFilter "${toString ../.}/Cargo.toml" "regular";
+      assert clippySourceFilter "${toString ../.}/tools/Cargo.lock" "regular";
+      assert clippySourceFilter "${toString ../.}/server/build.rs" "regular";
+      assert clippySourceFilter "${toString ../.}/csr/index.html" "regular";
+      assert clippySourceFilter "${toString ../.}/testdata/theme-repository/minimal/preview.png" "regular";
+      assert !(clippySourceFilter "${toString ../.}/README.md" "regular");
+      assert !(clippySourceFilter "${toString ../.}/docs/ARCHITECTURE.md" "regular");
+      assert !(clippySourceFilter "${toString ../.}/xtask/src/lib.rs" "regular");
+      clippySourceFilter;
+  };
+  mkClippyLeaf = name: nonSubstitutable (pkgs.runCommand name {
+    nativeBuildInputs = [ pkgs.stdenv.cc devtoolBin toolchain ] ++ hostArgs.nativeBuildInputs;
+    buildInputs = hostArgs.buildInputs;
+    LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ];
+    JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
+    JAUNDER_DEVTOOL_TOOLS_CARGO_HOME = "${toolsOfflineCargoHome}";
+  } ''
+    cp --no-preserve=mode -r ${clippySource} src
+    cd src
+    devtool check ${name} --sandbox-cargo
+    touch $out
+  '');
 in
 {
 
@@ -3174,6 +3246,23 @@ e2eGateChecks
     '';
   };
 
+# Discrete terminal Clippy verdicts. Each runs one catalogued Cargo command;
+# the aggregate only depends on their outputs and never repeats linting.
+product-core-clippy = mkClippyLeaf "product-core-clippy";
+web-server-clippy = mkClippyLeaf "web-server-clippy";
+web-no-server-clippy = mkClippyLeaf "web-no-server-clippy";
+client-host-clippy = mkClippyLeaf "client-host-clippy";
+wasm-clippy = mkClippyLeaf "wasm-clippy";
+tools-clippy = mkClippyLeaf "tools-clippy";
+clippy-aggregate = nonSubstitutable (pkgs.runCommand "clippy-aggregate" { } ''
+  test -e ${self.checks.${system}.product-core-clippy}
+  test -e ${self.checks.${system}.web-server-clippy}
+  test -e ${self.checks.${system}.web-no-server-clippy}
+  test -e ${self.checks.${system}.client-host-clippy}
+  test -e ${self.checks.${system}.wasm-clippy}
+  test -e ${self.checks.${system}.tools-clippy}
+  touch $out
+'');
 # The docs-only build preserves `devtool`'s single command catalog without
 # importing the performance producer's product-storage source closure.
 static-docs =
@@ -3493,7 +3582,16 @@ static-code =
       # Code checks retain their complete non-Markdown source population.
       cp --no-preserve=mode -r ${staticCodeSrc} src
       cd src
-      devtool check --group code --sandbox-cargo
+      # Residual Code verdicts; Rust-format and TypeScript have separate leaves,
+      # while Clippy is requested once below through its own aggregate.
+      devtool check prettier-end2end --sandbox-cargo
+      devtool check prettier-css --sandbox-cargo
+      devtool check elisp-fmt --sandbox-cargo
+      devtool check ast-grep-tests --sandbox-cargo
+      devtool check no-full-reload --sandbox-cargo
+      devtool check byte-compile --sandbox-cargo
+      devtool check cargo-deny --sandbox-cargo
+      test -e ${self.checks.${system}.clippy-aggregate}
       # The census loads Playwright config independently of the TypeScript leaf.
       devtool provision-node-modules
       node end2end/e2eCensusContract.ts

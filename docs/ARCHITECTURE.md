@@ -4396,24 +4396,25 @@ invokes it back ([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)).
 In order, host `static-checks` runs source consistency (`fmt`, `leptosfmt`,
 `prettier-markdown`, `prettier-end2end`, `prettier-css`, `elisp-fmt`,
 `tools-fmt`, `ast-grep-tests`, `no-full-reload`, `xtask-fmt`), compile/type
-checks (`byte-compile`, `tsc`, `cargo-deny`, `clippy`, `web-server-clippy`,
-`web-no-server-clippy`, `wasm-clippy`, `tools-clippy`, `xtask-clippy`), then the
-`ert` runtime check. Both rungs run the same host steps (`run_host_gate` in
-`xtask/src/lib.rs`):
+checks (`byte-compile`, `tsc`, `cargo-deny`, `product-core-clippy`,
+`web-server-clippy`, `web-no-server-clippy`, `client-host-clippy`,
+`wasm-clippy`, `tools-clippy`, `xtask-clippy`), then the `ert` runtime check.
+Both rungs run the same host steps (`run_host_gate` in `xtask/src/lib.rs`):
 
 The host _step_ above runs the listed sub-steps through host-local lanes. The
 hermetic shared static surface has `static-docs` running
 `devtool check --group docs` over Markdown and Prettier configuration,
-`static-typescript` running the named `devtool check tsc`, `rust-format` running
-`devtool check --group rust-format --sandbox-cargo`, and `static-code` running
-`devtool check --group code --sandbox-cargo` over the remaining checks outside
-tsc, Rust formatting and standalone ERT, with workspace-specific offline Cargo
-homes, and `static-ert` running `devtool check --group ert`. The ERT leaf
-receives the complete non-Markdown `elisp/` tree in a writable copy, shared
-`devtoolBin`, existing `emacsForCi` (including plz, Undercover and cmarkEl), Git
-and `TZDIR`. It preserves the standalone runner's population and is
-non-substitutable, but valid local outputs may still be reused. Elisp source
-overlap remains in `static-code` for formatting and byte compilation; no speedup
+`static-typescript` runs the named `devtool check tsc`, `rust-format` runs
+`devtool check --group rust-format --sandbox-cargo`, and `static-code` runs the
+residual non-Clippy devtool checks outside TypeScript, Rust formatting and
+standalone ERT with workspace-specific offline Cargo homes. Static-code requests
+the narrow Clippy aggregate once; its six independently buildable terminal
+leaves run lint and the aggregate does not rerun it. `static-ert` runs
+`devtool check --group ert`. The ERT leaf receives the complete non-Markdown
+`elisp/` tree in a writable copy, shared `devtoolBin`, existing `emacsForCi`
+(including plz, Undercover and cmarkEl), Git and `TZDIR`. It preserves the
+standalone runner's population and is non-substitutable, but valid local outputs
+may still be reused. Elisp byte-compilation remains in static-code; no speedup
 or source-cache isolation is claimed.
 
 The independent `xtask-format` leaf runs pinned raw
@@ -4475,13 +4476,13 @@ Cargo/toolchain/formatter configuration. Its full closure includes `devtoolBin`,
 both workspace offline Cargo homes, the pinned formatter/toolchain, and their
 transitive build, source/vendor and embedded inputs. Direct filtering is not
 full closure independence; valid local-store reuse is allowed and no speedup is
-claimed. `static-code` runs the remaining shared definitions with
-`devtool check --group code --sandbox-cargo` over non-document inputs and
-workspace-specific offline Cargo homes. `validate --no-e2e` builds
-`nix-static-docs`, `nix-static-typescript`, `nix-rust-format`,
-`nix-static-code`, `nix-static-ert`, and `nix-xtask-format` before the Nix test
-checks, with each shared definition consumed exactly once. CI fails if a
-hermetic boundary drifts from the host definitions
+claimed. `static-code` runs residual non-Clippy shared definitions outside
+TypeScript, Rust formatting and standalone ERT, with workspace-specific offline
+Cargo homes. It requests the six-leaf Clippy aggregate once; the aggregate does
+not rerun lint. `validate --no-e2e` builds `nix-static-docs`,
+`nix-static-typescript`, `nix-rust-format`, `nix-static-code`, `nix-static-ert`,
+and `nix-xtask-format` before the Nix test checks, with each shared definition
+consumed once. CI fails if a hermetic boundary drifts from the host definitions
 ([hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md);
 [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
 
@@ -4560,20 +4561,21 @@ lanes ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
 [devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md),
 [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
 Alongside the compiling definitions, it owns the non-compiling ast-grep rule
-fixtures (`ast-grep-tests`) and `no-full-reload` repository scan. The product
-clippy commands deliberately cover three distinct surfaces: generic workspace
-clippy is broad, feature-unified host coverage; the isolated
-`web-no-server-clippy` checks `web`'s no-default-feature host test targets, so
-workspace feature unification cannot enable `web/server`; and `wasm-clippy`
-checks wasm library targets. The wasm step deliberately omits `--all-targets`,
-because `web` test dependencies are host-oriented and cannot compile for
-`wasm32-unknown-unknown`. Host xtask lanes execute each definition through their
-existing static-check mechanism while retaining host-local Cargo artifacts and
-sccache for Rust-compiling checks; sandboxed Nix lanes execute the same
-definitions through their `docs`, `rust-format`, `code`, or `ert` group and the
-named `tsc` check, with Cargo-backed groups using workspace-specific offline
-Cargo homes. `xtask-fmt` and `xtask-clippy` remain native host checks. The
-independent `xtask-format` flake check runs only pinned
+fixtures (`ast-grep-tests`) and `no-full-reload` repository scan. Six Clippy
+units preserve product core, web/server, web/featureless, client/host-CSR,
+CSR/wasm, and full tools workspace target configurations. Product core excludes
+`web`, `client`, and `csr` as selected lint roots; those packages may compile as
+dependencies. The wasm step deliberately omits `--all-targets`, because `web`
+test dependencies are host-oriented and cannot compile for
+`wasm32-unknown-unknown`. The former combined root web(server+CSR) configuration
+is intentionally removed under approved request
+`2f0929a1-ebbd-4735-9a6c-b53e99a7a141`; root/tools lock and test contexts remain
+distinct. Host xtask lanes execute each definition through their existing
+static-check mechanism while retaining host-local Cargo artifacts and sccache
+for Rust-compiling checks. Nix has independent docs, TypeScript, Rust-format,
+residual-code, ERT and raw xtask-format leaves; residual code requests the
+six-leaf Clippy aggregate once. `xtask-fmt` and `xtask-clippy` remain native
+host checks. The independent `xtask-format` flake check runs only pinned
 `cargo fmt --manifest-path xtask/Cargo.toml --check`, without `--all`, devtool,
 or offline Cargo homes. Its direct source filter admits xtask Rust targets,
 required manifests/configuration, and dependency metadata target placeholders,
@@ -4854,20 +4856,20 @@ interface; devtool has no `run` subcommand or runner dependency.
 - **`devtool check <name> | --group <docs|typescript|rust-format|code|ert> | --all [--fix] [--sandbox-cargo]`**
   is the single command-definition surface for the migrated static checks
   (`fmt`, `leptosfmt`, `prettier-markdown`, `prettier-end2end`, `prettier-css`,
-  `tsc`, `elisp-fmt`, `ert`, `byte-compile`, `cargo-deny`, generic product
-  `clippy`, `web-server-clippy`, isolated host-test `web-no-server-clippy`,
-  wasm-target `wasm-clippy`, `tools-fmt`, tools workspace `tools-clippy`, and
-  ast-grep `ast-grep-tests` plus the `no-full-reload` repository scan —
-  `tools/devtool/src/check.rs`). Both gates invoke the same definitions: the
-  host verify ladder delegates each through its static-check mechanism,
-  preserving host-local Cargo artifacts and sccache for Rust-compiling checks;
-  the Nix `static-docs`, `static-typescript`, `rust-format`, `static-code`, and
-  `static-ert` `runCommand`s run the `docs`, named `tsc`, sandboxed
-  `rust-format`, sandboxed `code`, and standalone `ert` checks respectively (the
-  docs leaf uses `docsDevtoolBin`, the others `devtoolBin`). The code group
-  retains workspace-specific offline Cargo homes; Cargo-deny keeps a split
-  policy: host mode runs full `cargo deny check`, while sandbox mode skips
-  `advisories` ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
+  `tsc`, `elisp-fmt`, `ert`, `byte-compile`, `cargo-deny`,
+  `product-core-clippy`, `web-server-clippy`, `web-no-server-clippy`,
+  `client-host-clippy`, wasm-target `wasm-clippy`, `tools-fmt`, tools workspace
+  `tools-clippy`, and ast-grep `ast-grep-tests` plus the `no-full-reload`
+  repository scan — `tools/devtool/src/check.rs`). The host verify ladder
+  delegates each relevant definition through its static-check mechanism,
+  preserving host-local Cargo artifacts and sccache for Rust-compiling checks.
+  Nix `static-docs`, `static-typescript`, `rust-format`, `static-code`, and
+  `static-ert` run docs, named `tsc`, Rust-format, residual code, and ERT
+  populations respectively. Static-code requests the six-leaf Clippy aggregate
+  once; its own derivation does not rerun those lints. Code retains
+  workspace-specific offline Cargo homes; Cargo-deny uses full
+  `cargo deny check` on host and skips `advisories` in sandbox mode
+  ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
   [Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md),
   [devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md),
   [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md),
