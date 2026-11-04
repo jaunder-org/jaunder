@@ -4402,17 +4402,18 @@ checks (`byte-compile`, `tsc`, `cargo-deny`, `clippy`, `web-server-clippy`,
 `xtask/src/lib.rs`):
 
 The host _step_ above runs the listed sub-steps through host-local lanes. The
-The hermetic shared static surface has `static-docs` running
+hermetic shared static surface has `static-docs` running
 `devtool check --group docs` over Markdown and Prettier configuration,
 `static-code` running `devtool check --group code --sandbox-cargo` over the
-remaining non-document checks with workspace-specific offline Cargo homes, and
-`static-ert` running `devtool check --group ert`. The ERT leaf receives the
-complete non-Markdown `elisp/` tree in a writable copy, shared `devtoolBin`,
-existing `emacsForCi` (including plz, Undercover and cmarkEl), Git and `TZDIR`.
-It preserves the standalone runner's population and is non-substitutable, but
-valid local outputs may still be reused. Elisp source overlap remains in
-`static-code` for formatting and byte compilation; no speedup or source-cache
-isolation is claimed.
+remaining checks outside Rust formatting and standalone ERT, with
+workspace-specific offline Cargo homes, and `static-ert` running
+`devtool check --group ert`. The ERT leaf receives the complete non-Markdown
+`elisp/` tree in a writable copy, shared `devtoolBin`, existing `emacsForCi`
+(including plz, Undercover and cmarkEl), Git and `TZDIR`. It preserves the
+standalone runner's population and is non-substitutable, but valid local outputs
+may still be reused. Elisp source overlap remains in `static-code` for
+formatting and byte compilation; no speedup or source-cache isolation is
+claimed.
 
 The independent `xtask-format` leaf runs pinned raw
 `cargo fmt --manifest-path xtask/Cargo.toml --check`, without `--all`, devtool,
@@ -4423,18 +4424,18 @@ metadata but no dependency implementation sources. It is required once by
 source-admission exception preserves ADR-0028's host-only xtask execution
 boundary.
 
-`validate --no-e2e` builds `nix-static-docs`, `nix-static-code`,
-`nix-static-ert`, and `nix-xtask-format` before the Nix test checks. ADR-0178
-established the original two-group/two-leaf documentation split, not a generic
-extraction policy
+`validate --no-e2e` builds `nix-static-docs`, `nix-rust-format`,
+`nix-static-code`, `nix-static-ert`, and `nix-xtask-format` before the Nix test
+checks. ADR-0178 established the original two-group/two-leaf documentation
+split, not a generic extraction policy
 ([hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md)).
 The concrete further ERT extraction was separately approved in the
 [ERT spec](https://github.com/jaunder-org/jaunder/blob/ba7fdf416d8ec7b14c86b163ead41feaf3dc12c7/docs/superpowers/specs/2026-11-03-issue-1864-elisp-ert.md)
 (`issue1864-ert-spec-v1`, “approved, with the caveat that I don't think we
 actually need an ADR for this, do we?”); no new ADR or generic policy is
 implied. TypeScript extraction is a separately approved direction, not a
-prerequisite implemented by this slice. Its later integration preserves the
-final order `docs`, `typescript`, `code`, `ert` and the corresponding Nix
+prerequisite implemented by these slices. Its later integration retains
+TypeScript between docs and residual code, with ERT last and corresponding Nix
 leaves.
 
 ERT emits one bounded versioned stderr timing event around only its child using
@@ -4455,6 +4456,31 @@ draining. Neither request duration, local validity, realization/reuse nor
 retained logs establish execution; saved logs and nested/replayed JSON messages
 are never timing inputs. Combined pure/live coverage, hooks, workflows and
 required CI routing are unchanged.
+
+The Rust-format boundary runs
+`devtool check --group rust-format --sandbox-cargo` (`fmt`, scoped `leptosfmt`,
+`tools-fmt --all`) as one verdict because the two Cargo formatting populations
+overlap. `leptosfmt` uses only `web/src` and `csr/src`, retaining pinned
+defaults (`view` and `leptos::view`, full paths). Checked scoped glob
+enumeration/reads and per-file error promotion close the pin's silent-success
+failure paths without adding a Rust parser or a placement policy. Future
+frontend roots are maintained explicitly in scope, Nix inputs and docs. Host Fix
+and Git/index admission are unchanged.
+
+`rust-format` directly admits non-xtask Rust sources and
+Cargo/toolchain/formatter configuration. Its full closure includes `devtoolBin`,
+both workspace offline Cargo homes, the pinned formatter/toolchain, and their
+transitive build, source/vendor and embedded inputs. Direct filtering is not
+full closure independence; valid local-store reuse is allowed and no speedup is
+claimed. `static-code` runs the remaining shared definitions with
+`devtool check --group code --sandbox-cargo` over non-document inputs and
+workspace-specific offline Cargo homes. `validate --no-e2e` builds
+`nix-static-docs`, `nix-rust-format`, `nix-static-code`, `nix-static-ert`, and
+`nix-xtask-format` before the Nix test checks, with each shared definition
+consumed exactly once. CI fails if a hermetic boundary drifts from the host
+definitions
+([hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md);
+[proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
 
 The two CSR-facing source filters follow resolved target reachability rather
 than crate names. The `.#site`/CSR closure contains workspace manifests, the
@@ -4492,9 +4518,9 @@ evaluation can require declared source preparation. Identity stability alone is
 not local/remote cache or compiler freshness evidence.
 
 The full `cargo xtask validate` is still the aggregate ship gate: its `--no-e2e`
-prefix builds both static groups, `xtask-format`, and the Nix-backed test
-checks, then adds all eight retained E2E lanes, both Firefox reconciliations,
-and server-function coverage verification.
+prefix builds the static groups, `xtask-format`, and the Nix-backed test checks,
+then adds all eight retained E2E lanes, both Firefox reconciliations, and
+server-function coverage verification.
 [Measuring Nix invalidation](../CONTRIBUTING.md#measuring-nix-invalidation)
 defines optional historical reproduction of the controlled invalidation matrix,
 including markers and sidecars. The current tooling dependency campaign uses the
@@ -4808,7 +4834,7 @@ interface; devtool has no `run` subcommand or runner dependency.
   context propagates independently, preserving one root for nested launches
   without stale-skipping later independent invocations. See
   [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md).
-- **`devtool check <name> | --group <docs|code|ert> | --all [--fix] [--sandbox-cargo]`**
+- **`devtool check <name> | --group <docs|rust-format|code|ert> | --all [--fix] [--sandbox-cargo]`**
   is the single command-definition surface for the migrated static checks
   (`fmt`, `leptosfmt`, `prettier-markdown`, `prettier-end2end`, `prettier-css`,
   `tsc`, `elisp-fmt`, `ert`, `byte-compile`, `cargo-deny`, generic product
@@ -4818,10 +4844,11 @@ interface; devtool has no `run` subcommand or runner dependency.
   `tools/devtool/src/check.rs`). Both gates invoke the same definitions: the
   host verify ladder delegates each through its static-check mechanism,
   preserving host-local Cargo artifacts and sccache for Rust-compiling checks;
-  the Nix `static-docs`, `static-code`, and `static-ert` `runCommand`s run the
-  `docs`, sandboxed `code`, and standalone `ert` groups respectively from their
-  prebuilt devtool inputs. The code group retains workspace-specific offline
-  Cargo homes; Cargo-deny keeps a split policy: host mode runs full
+  the Nix `static-docs`, `rust-format`, `static-code`, and `static-ert`
+  `runCommand`s run the `docs`, sandboxed `rust-format`, sandboxed `code`, and
+  standalone `ert` groups respectively (the docs leaf uses `docsDevtoolBin`, the
+  others `devtoolBin`). The code group retains workspace-specific offline Cargo
+  homes; Cargo-deny keeps a split policy: host mode runs full
   `cargo deny check`, while sandbox mode skips `advisories`
   ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
   [Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md),

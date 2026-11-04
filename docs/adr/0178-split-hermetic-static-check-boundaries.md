@@ -40,11 +40,30 @@ singular `static-checks`/`nix-static-checks` requirement. Their decisions that
 uses workspace-specific offline homes, and that hermetic static checks precede
 Nix test checks remain in force.
 
+## Scoped Rust-format refinement (#1864)
+
+The shared Rust-format checks now have their own `rust-format` leaf, running
+`devtool check --group rust-format --sandbox-cargo` in the established order
+`fmt`, `leptosfmt`, `tools-fmt`. They are removed from residual `code` exactly
+once; `--all` retains its prior order. Product/tools Cargo formatting
+populations overlap, so they stay in one verdict. The named Leptos formatter is
+bounded to `web/src` and `csr/src` in host Fix/Verify and Nix Verify, with
+checked enumeration and promotion of the pinned CLI's per-file errors. This is
+not an automatic syntax selector or a placement rule.
+
+Hermetic validation consumes docs, Rust-format, then residual code before test
+checks; flake checks expose each leaf once. This narrowly refines this ADR's
+original two-group partition and broad-code-only clauses. Shared devtool command
+ownership, offline workspace homes, and host-only xtask execution remain intact.
+The Rust-format direct source filter does not narrow its transitive
+`devtoolBin`, offline-home, vendor or toolchain closure. Valid local reuse is
+allowed; neither faster execution nor full cache isolation is promised.
+
 ## Consequences
 
 Markdown-only changes invalidate the documentation boundary without invalidating
-the code-static derivation. The two groups remain an ordered, duplicate-free
-partition of the existing static inventory, so host and hermetic callers still
-share each command and its arguments exactly once. The code boundary remains
-broad by design: a non-Markdown static input continues to invalidate every
-static definition that may inspect or compile it.
+the code-static derivation. The groups remain a duplicate-free partition of the
+existing static inventory, while the host `--all` order is preserved
+independently of leaf boundaries. Host and hermetic callers still share each
+command and its arguments exactly once. The residual code boundary remains broad
+by design.

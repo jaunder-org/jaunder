@@ -1,7 +1,8 @@
 //! The migrated static checks. This is the single home of their tool + args:
 //! the host verify ladder runs each check via `cargo run -p devtool -- check
 //! <name>` (so a local `tools/` edit is reflected), while Nix runs the `docs`,
-//! `code`, and `ert` groups from prebuilt devtool inputs. Cargo-backed checks use
+//! `rust-format`, `code`, and `ert` groups from prebuilt devtool inputs.
+//! Cargo-backed checks use
 //! separate host and sandbox lanes from this shared definition.
 
 use std::ffi::OsString;
@@ -11,12 +12,16 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 
+mod leptosfmt;
+
 /// A stable, closed partition of devtool's static check inventory.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
 pub enum CheckGroup {
     /// Markdown formatting only.
     Docs,
-    /// Static checks outside the documentation and standalone ERT groups.
+    /// Product/tools Rust formatting and scoped Leptos formatting.
+    RustFormat,
+    /// Static checks outside the documentation, Rust-format and standalone ERT groups.
     Code,
     /// Standalone pure Elisp tests.
     Ert,
@@ -27,13 +32,11 @@ impl CheckGroup {
         match self {
             Self::Docs => &["prettier-markdown"],
             Self::Ert => &["ert"],
+            Self::RustFormat => &["fmt", "leptosfmt", "tools-fmt"],
             Self::Code => &[
-                "fmt",
-                "leptosfmt",
                 "prettier-end2end",
                 "prettier-css",
                 "elisp-fmt",
-                "tools-fmt",
                 "ast-grep-tests",
                 "no-full-reload",
                 "byte-compile",
@@ -52,20 +55,27 @@ impl CheckGroup {
 /// The complete static inventory in its prior effective order, without aliases
 /// or duplicates.
 fn all_names() -> Vec<&'static str> {
-    let mut names = Vec::with_capacity(
-        CheckGroup::Docs.names().len()
-            + CheckGroup::Code.names().len()
-            + CheckGroup::Ert.names().len(),
-    );
-    for &name in CheckGroup::Code.names() {
-        if name == "prettier-end2end" {
-            names.extend(CheckGroup::Docs.names());
-        }
-        names.push(name);
-    }
-    // ERT remains last in --all even though it has its own hermetic verdict.
-    names.extend(CheckGroup::Ert.names());
-    names
+    // Group boundaries must not reorder the established host --all contract.
+    vec![
+        "fmt",
+        "leptosfmt",
+        "prettier-markdown",
+        "prettier-end2end",
+        "prettier-css",
+        "elisp-fmt",
+        "tools-fmt",
+        "ast-grep-tests",
+        "no-full-reload",
+        "byte-compile",
+        "tsc",
+        "cargo-deny",
+        "clippy",
+        "web-server-clippy",
+        "web-no-server-clippy",
+        "wasm-clippy",
+        "tools-clippy",
+        "ert",
+    ]
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -215,10 +225,12 @@ fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
         "leptosfmt" => CheckSpec::External {
             program: "leptosfmt",
             args: if fix {
-                owned(&["-x", ".direnv", "-x", ".git", "-x", "target", "**/*.rs"])
+                owned(&[
+                    "-x", ".direnv", "-x", ".git", "-x", "target", "web/src", "csr/src",
+                ])
             } else {
                 owned(&[
-                    "-x", ".direnv", "-x", ".git", "-x", "target", "--check", "**/*.rs",
+                    "-x", ".direnv", "-x", ".git", "-x", "target", "--check", "web/src", "csr/src",
                 ])
             },
         },
@@ -433,6 +445,9 @@ pub fn run(
 /// Measure only the ERT child, not launcher setup. The bounded versioned event
 /// is emitted once after completion, including unsuccessful exits.
 fn run_check(name: &str, command: &mut Command, timing_output: &mut dyn Write) -> Result<()> {
+    if name == "leptosfmt" {
+        return leptosfmt::run(command, &std::env::current_dir()?);
+    }
     if name == "ert" {
         return run_timed_check(name, command, timing_output);
     }
@@ -620,6 +635,20 @@ mod tests {
         .to_string();
 
         assert!(err.contains("JAUNDER_DEVTOOL_TOOLS_CARGO_HOME"), "{err}");
+    }
+
+    #[test]
+    fn leptosfmt_uses_only_frontend_roots_in_both_modes() {
+        for fix in [false, true] {
+            let cmd = build_host("leptosfmt", fix);
+            let mut expected = vec!["-x", ".direnv", "-x", ".git", "-x", "target"];
+            if !fix {
+                expected.push("--check");
+            }
+            expected.extend(["web/src", "csr/src"]);
+            assert_eq!(cmd.program, "leptosfmt");
+            assert_eq!(cmd.args, expected);
+        }
     }
 
     #[test]
@@ -1113,14 +1142,30 @@ mod tests {
     fn groups_are_an_ordered_disjoint_complete_partition() {
         assert_eq!(CheckGroup::Docs.names(), ["prettier-markdown"]);
         assert_eq!(
+            CheckGroup::RustFormat.names(),
+            ["fmt", "leptosfmt", "tools-fmt"]
+        );
+        let mut partition = Vec::new();
+        for group in [
+            CheckGroup::Docs,
+            CheckGroup::RustFormat,
+            CheckGroup::Code,
+            CheckGroup::Ert,
+        ] {
+            let names = selected_names(None, Some(group), false).unwrap();
+            assert_eq!(names, group.names());
+            partition.extend(names);
+        }
+        partition.sort();
+        let mut all = all_names();
+        all.sort();
+        assert_eq!(partition, all);
+        assert_eq!(
             CheckGroup::Code.names(),
             [
-                "fmt",
-                "leptosfmt",
                 "prettier-end2end",
                 "prettier-css",
                 "elisp-fmt",
-                "tools-fmt",
                 "ast-grep-tests",
                 "no-full-reload",
                 "byte-compile",

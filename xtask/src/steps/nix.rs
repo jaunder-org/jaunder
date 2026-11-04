@@ -33,8 +33,9 @@ pub(crate) enum TestCheck {
 }
 
 const CHECK_SUPPORTING_TEST_CHECKS: [TestCheck; 2] = [TestCheck::Wasm, TestCheck::Doctests];
-const STATIC_CHECKS: [(&str, &str); 4] = [
+const STATIC_CHECKS: [(&str, &str); 5] = [
     ("nix-static-docs", "static-docs"),
+    ("nix-rust-format", "rust-format"),
     ("nix-static-code", "static-code"),
     ("nix-static-ert", "static-ert"),
     ("nix-xtask-format", "xtask-format"),
@@ -91,8 +92,12 @@ pub(crate) fn check_supporting_test_check_names() -> impl ExactSizeIterator<Item
 /// already runs the host-local static lane, while CI's required validate job
 /// needs the same definitions proven inside Nix.
 pub fn static_checks(result: &mut CommandResult) {
+    static_checks_with(result, build_check);
+}
+
+fn static_checks_with(result: &mut CommandResult, mut build: impl FnMut(&str, &str) -> StepResult) {
     for (step, check) in STATIC_CHECKS {
-        result.push(build_check(step, check));
+        result.push(build(step, check));
     }
 }
 
@@ -2536,6 +2541,7 @@ mod tests {
         doctest_sentinel_detail, failed_build_after_diagnostics_with, failed_coverage_status_step,
         failed_status_step, finish_build_with, finish_e2e_combo, lift_elisp_coverage_artifacts,
         prepare_build_dirs_with, production_lane, report_build_diagnostic_failure, sentinel_detail,
+        static_checks_with,
     };
     use crate::audit_wasm::{ArtifactMetrics, AuditReport};
     use crate::e2e_lanes::Lane;
@@ -2718,9 +2724,10 @@ mod tests {
     #[test]
     fn static_check_catalog_has_no_aggregate() {
         assert_eq!(
-            STATIC_CHECKS,
+            STATIC_CHECKS.as_slice(),
             [
                 ("nix-static-docs", "static-docs"),
+                ("nix-rust-format", "rust-format"),
                 ("nix-static-code", "static-code"),
                 ("nix-static-ert", "static-ert"),
                 ("nix-xtask-format", "xtask-format"),
@@ -2730,6 +2737,36 @@ mod tests {
             !STATIC_CHECKS
                 .iter()
                 .any(|(_, check)| *check == "static-checks")
+        );
+    }
+
+    #[test]
+    fn rust_format_failure_is_a_required_hermetic_consumer_failure() {
+        let mut result = CommandResult::new("ci-validate-hermetic");
+        let mut requests = Vec::new();
+        static_checks_with(&mut result, |step, check| {
+            requests.push(check.to_string());
+            if check == "rust-format" {
+                StepResult::fail(step).detail("controlled formatter failure")
+            } else {
+                StepResult::ok(step)
+            }
+        });
+        assert_eq!(
+            requests,
+            [
+                "static-docs",
+                "rust-format",
+                "static-code",
+                "static-ert",
+                "xtask-format"
+            ]
+        );
+        assert!(!result.ok);
+        assert_eq!(result.steps[1].name, "nix-rust-format");
+        assert!(!result.steps[1].ok);
+        assert!(
+            result.steps[0].ok && result.steps[2].ok && result.steps[3].ok && result.steps[4].ok
         );
     }
 
