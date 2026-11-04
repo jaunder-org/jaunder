@@ -18,7 +18,7 @@ fn hooks() -> &'static BTreeMap<String, String> {
         let output = Command::new("nix")
             .args([
                 "eval", "--impure", "--json", ".#devShells", "--apply",
-                "all: let shells = all.${builtins.currentSystem}; in builtins.mapAttrs (_: shell: shell.shellHook) { inherit (shells) default ci mutants; }",
+                "all: let shells = all.${builtins.currentSystem}; selected = { inherit (shells) default ci mutants; } // (if builtins.hasAttr \"ci-e2e\" shells then { inherit (shells) ci-e2e; } else {}); in builtins.mapAttrs (_: shell: shell.shellHook) selected",
             ])
             .current_dir(checkout)
             .output()
@@ -85,6 +85,74 @@ fn enter(hook: &str, cwd: &Path, parent: &Path, record: &Path, body: &str) -> Ou
 }
 
 #[test]
+fn ci_e2e_shell_environment_and_library_prepend_are_exact() {
+    let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let output = Command::new("nix")
+        .args([
+            "eval", "--impure", "--json", ".#devShells", "--apply",
+            "all: let shells = all.${builtins.currentSystem}; in if builtins.hasAttr \"ci-e2e\" shells then let shell = shells.ci-e2e; omitted = [ \"PLAYWRIGHT_BROWSERS_PATH\" \"PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD\" \"FONTCONFIG_FILE\" \"RUST_SRC_PATH\" \"JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME\" \"E2E_TYPES_NODE_MODULES\" \"E2E_PLAYWRIGHT_TEST\" \"JAUNDER_THEME_THUMBNAIL_BROWSER\" ]; in { hook = shell.shellHook; lc_all = shell.LC_ALL; tz = shell.TZ; tzdir = shell.TZDIR; omitted = builtins.listToAttrs (map (name: { inherit name; value = builtins.hasAttr name shell; }) omitted); } else null",
+        ])
+        .current_dir(checkout)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let contract: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    if contract.is_null() {
+        // ci-e2e is intentionally Linux-only; preserve this test on Darwin.
+        return;
+    }
+    assert_eq!(contract["lc_all"], "C.UTF-8");
+    assert_eq!(contract["tz"], "UTC");
+    assert!(
+        contract["tzdir"]
+            .as_str()
+            .unwrap()
+            .ends_with("/share/zoneinfo")
+    );
+    for (name, present) in contract["omitted"].as_object().unwrap() {
+        assert!(!present.as_bool().unwrap(), "{name} must not enter ci-e2e");
+    }
+
+    let hook = contract["hook"].as_str().unwrap();
+    let assignment = hook
+        .lines()
+        .find(|line| line.starts_with("export LD_LIBRARY_PATH=\""))
+        .expect("ci-e2e exports LD_LIBRARY_PATH");
+    let prefix = assignment
+        .strip_prefix("export LD_LIBRARY_PATH=\"")
+        .unwrap()
+        .strip_suffix(":$LD_LIBRARY_PATH\"")
+        .expect("prepend must preserve inherited LD_LIBRARY_PATH");
+    let openssl = prefix.find("-openssl-").expect("OpenSSL path is prepended");
+    let dav1d = prefix.find("-dav1d-").expect("dav1d path is prepended");
+    assert!(openssl < dav1d, "native library prepend order changed");
+
+    let owned = owned_fixture();
+    let root = repository(owned.path(), "ci-e2e environment");
+    let record = owned.path().join("library-path");
+    let output = enter(
+        hook,
+        &root,
+        owned.path(),
+        &record,
+        "export LD_LIBRARY_PATH=/inherited-sentinel; eval \"$JAUNDER_TEST_SHELL_HOOK\"; printf '%s\\n' \"$LD_LIBRARY_PATH\"",
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("{prefix}:/inherited-sentinel\n")
+    );
+}
+
+#[test]
 fn shared_shell_entry_replaces_inherited_tmpdir_before_provisioning() {
     let owned = owned_fixture();
     for (name, hook) in hooks() {
@@ -116,10 +184,17 @@ fn shared_shell_entry_replaces_inherited_tmpdir_before_provisioning() {
             String::from_utf8(output.stdout).unwrap(),
             format!("shell={}\n{0}\n{0}\n{0}\n", expected.display())
         );
-        assert_eq!(
-            fs::read_to_string(record).unwrap(),
-            format!("{}\n", expected.display())
-        );
+        if name == "ci-e2e" {
+            assert!(
+                !record.exists(),
+                "ci-e2e must not provision IDE node modules"
+            );
+        } else {
+            assert_eq!(
+                fs::read_to_string(record).unwrap(),
+                format!("{}\n", expected.display())
+            );
+        }
         println!(
             "{name}: evaluated hook creates checkout-local TMPDIR before provisioning; direct/child/grandchild inherit it"
         );
@@ -176,10 +251,17 @@ printenv TMPDIR
             String::from_utf8(output.stdout).unwrap(),
             format!("{}\n", b.join(".xtask/tmp").display())
         );
-        assert_eq!(
-            fs::read_to_string(record).unwrap(),
-            format!("{}\n", b.join(".xtask/tmp").display())
-        );
+        if name == "ci-e2e" {
+            assert!(
+                !record.exists(),
+                "ci-e2e must not provision IDE node modules"
+            );
+        } else {
+            assert_eq!(
+                fs::read_to_string(record).unwrap(),
+                format!("{}\n", b.join(".xtask/tmp").display())
+            );
+        }
         println!("{name}: command override wins; cd retains A; fresh entry binds to B");
     }
 }

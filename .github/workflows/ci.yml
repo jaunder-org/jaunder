@@ -301,10 +301,35 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: E2E disk observation (post-setup baseline)
+        run: |
+          if df -P / /nix/store "$GITHUB_WORKSPACE"; then
+            echo "observation_status=success"
+          else
+            status=$?
+            echo "observation_status=failure exit=$status" >&2
+          fi
+      - name: E2E disk observation (after ci-e2e shell entry)
+        run: |
+          if nix develop .#ci-e2e --accept-flake-config -c df -P / /nix/store "$GITHUB_WORKSPACE"; then
+            echo "observation_status=success"
+          else
+            status=$?
+            echo "observation_status=failure exit=$status" >&2
+          fi
       - name: e2e (${{ matrix.backend }}/chromium, via xtask)
         run:
-          nix develop .#ci --accept-flake-config -c cargo xtask e2e ${{
+          nix develop .#ci-e2e --accept-flake-config -c cargo xtask e2e ${{
           matrix.backend }} chromium
+      - name: E2E disk observation (after producer)
+        if: always()
+        run: |
+          if df -P / /nix/store "$GITHUB_WORKSPACE"; then
+            echo "observation_status=success"
+          else
+            status=$?
+            echo "observation_status=failure exit=$status" >&2
+          fi
       - name: Upload e2e diagnostics
         if: always()
         uses: actions/upload-artifact@v7.0.1
@@ -315,6 +340,15 @@ jobs:
             .xtask/last-result.json
           if-no-files-found: ignore
           retention-days: 14
+      - name: E2E disk observation (final)
+        if: always()
+        run: |
+          if df -P / /nix/store "$GITHUB_WORKSPACE"; then
+            echo "observation_status=success"
+          else
+            status=$?
+            echo "observation_status=failure exit=$status" >&2
+          fi
 
   e2e-firefox-lane:
     name: e2e (${{ matrix.backend }}/firefox-${{ matrix.lane }})
@@ -359,10 +393,27 @@ jobs:
               printf '\nmount: %s\nfindmnt unavailable\n' "$path" >> "$report"
             fi
           done
+      - name: E2E disk observation (after ci-e2e shell entry)
+        run: |
+          if nix develop .#ci-e2e --accept-flake-config -c df -P / /nix/store "$GITHUB_WORKSPACE"; then
+            echo "observation_status=success"
+          else
+            status=$?
+            echo "observation_status=failure exit=$status" >&2
+          fi
       - name: Run isolated Firefox lane
         run:
-          nix develop .#ci --accept-flake-config -c cargo xtask e2e-lane ${{
+          nix develop .#ci-e2e --accept-flake-config -c cargo xtask e2e-lane ${{
           matrix.backend }}-firefox-${{ matrix.lane }}
+      - name: E2E disk observation (after producer)
+        if: always()
+        run: |
+          if df -P / /nix/store "$GITHUB_WORKSPACE"; then
+            echo "observation_status=success"
+          else
+            status=$?
+            echo "observation_status=failure exit=$status" >&2
+          fi
       - name: Capture Firefox lane final storage snapshot
         if: always()
         continue-on-error: true
@@ -417,6 +468,15 @@ jobs:
             .xtask/last-result.json
           if-no-files-found: ignore
           retention-days: 14
+      - name: E2E disk observation (final)
+        if: always()
+        run: |
+          if df -P / /nix/store "$GITHUB_WORKSPACE"; then
+            echo "observation_status=success"
+          else
+            status=$?
+            echo "observation_status=failure exit=$status" >&2
+          fi
 
   e2e-firefox-reconcile:
     name: e2e reconcile (${{ matrix.backend }}/firefox)
