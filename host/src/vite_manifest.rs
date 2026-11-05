@@ -67,14 +67,7 @@ pub fn csr_outputs(root: &Path) -> Result<CsrViteOutputs> {
         let entry = value
             .as_object()
             .with_context(|| format!("Vite manifest entry {key:?} must be an object"))?;
-        if let Some(file) = entry.get("file").and_then(Value::as_str) {
-            validate_output_path(file)?;
-            ensure!(
-                root.join(file).is_file(),
-                "Vite output file is missing: {file}"
-            );
-            files.insert(file.to_owned());
-        }
+        files.insert(file_for(key)?);
         for field in ["css", "assets"] {
             if let Some(paths) = entry.get(field) {
                 let paths = paths.as_array().with_context(|| {
@@ -148,6 +141,42 @@ mod tests {
                 files: vec!["assets/client.wasm".into(), "assets/entry.js".into()],
             }
         );
+    }
+
+    #[test]
+    fn rejects_an_inventory_entry_without_an_output_file() {
+        let root = tempdir().unwrap();
+        output(root.path(), "csr_bg.wasm");
+        let path = root.path().join(".vite/manifest.json");
+        let mut manifest: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        manifest["_shared.js"] = serde_json::json!({"css": []});
+        fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert_eq!(
+            csr_outputs(root.path()).unwrap_err().to_string(),
+            "Vite manifest has no output file for \"_shared.js\""
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_native_asset_lists() {
+        let root = tempdir().unwrap();
+        output(root.path(), "csr_bg.wasm");
+        let path = root.path().join(".vite/manifest.json");
+        let original: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        for field in ["css", "assets"] {
+            for (value, reason) in [
+                (serde_json::json!("assets/entry.js"), "must be an array"),
+                (serde_json::json!([false]), "must contain paths"),
+            ] {
+                let mut manifest = original.clone();
+                manifest["index.html"][field] = value;
+                fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+                assert_eq!(
+                    csr_outputs(root.path()).unwrap_err().to_string(),
+                    format!("Vite manifest entry \"index.html\" field {field:?} {reason}")
+                );
+            }
+        }
     }
 
     #[test]

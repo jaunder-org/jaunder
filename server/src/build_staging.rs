@@ -165,33 +165,80 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<(), BundleStageError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{cell::Cell, io};
+    use std::{cell::RefCell, io};
     use tempfile::tempdir;
 
     #[test]
-    fn build_script_staging_cleanup_failure_aborts_before_create_or_copy() {
-        let created = Cell::new(false);
-        let copied = Cell::new(false);
-        let site = Path::new("/injected/out/site");
-        let error = prepare_staging_with(
-            site,
-            |_| {
-                Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "injected remove failure",
-                ))
-            },
-            |_| {
-                created.set(true);
-                Ok(())
-            },
-            || copied.set(true),
-        )
-        .unwrap_err();
-        assert_eq!(error.operation, "removing");
-        assert_eq!(error.path, site);
-        assert!(!created.get());
-        assert!(!copied.get());
+    fn staging_runs_in_order_and_aborts_at_the_failed_operation() {
+        for failure in [None, Some("removing"), Some("creating")] {
+            let root = tempdir().unwrap();
+            let site = root.path().join("site");
+            let operations = RefCell::new(Vec::new());
+            let result = prepare_staging_with(
+                &site,
+                |_| {
+                    operations.borrow_mut().push("removing");
+                    if failure == Some("removing") {
+                        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "blocked"));
+                    }
+                    Ok(())
+                },
+                |path| {
+                    operations.borrow_mut().push("creating");
+                    if failure == Some("creating") {
+                        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "blocked"));
+                    }
+                    fs::create_dir_all(path)
+                },
+                || {
+                    operations.borrow_mut().push("staging");
+                    fs::write(site.join("index.html"), b"entry").unwrap();
+                },
+            );
+            if let Some(operation) = failure {
+                let error = result.unwrap_err();
+                assert_eq!(error.operation, operation);
+                assert_eq!(error.path, site);
+                assert_eq!(
+                    error.to_string(),
+                    format!("{operation} staging directory {}: blocked", site.display())
+                );
+                assert_eq!(
+                    std::error::Error::source(&error).unwrap().to_string(),
+                    "blocked"
+                );
+                assert!(!site.exists());
+            } else {
+                result.unwrap();
+                assert_eq!(fs::read(site.join("index.html")).unwrap(), b"entry");
+            }
+            let expected = match failure {
+                Some("removing") => vec!["removing"],
+                Some(_) => vec!["removing", "creating"],
+                None => vec!["removing", "creating", "staging"],
+            };
+            assert_eq!(*operations.borrow(), expected);
+        }
+    }
+
+    #[test]
+    fn staging_replaces_stale_outputs_and_tolerates_an_absent_directory() {
+        let root = tempdir().unwrap();
+        let site = root.path().join("site");
+        for _ in 0..2 {
+            prepare_staging_with(
+                &site,
+                |path| fs::remove_dir_all(path),
+                |path| fs::create_dir_all(path),
+                || {
+                    assert!(!site.join("stale.js").exists());
+                    fs::write(site.join("index.html"), b"new entry").unwrap();
+                },
+            )
+            .unwrap();
+            assert_eq!(fs::read(site.join("index.html")).unwrap(), b"new entry");
+            fs::write(site.join("stale.js"), b"old chunk").unwrap();
+        }
     }
 
     #[test]
@@ -244,11 +291,40 @@ mod tests {
     }
 
     #[test]
+    fn vite_staging_reports_source_and_destination_when_copying_fails() {
+        let root = tempdir().unwrap();
+        let site = tempdir().unwrap();
+        fs::write(root.path().join("index.html"), b"entry").unwrap();
+        fs::create_dir(site.path().join("index.html")).unwrap();
+        let error = stage_vite_output(root.path(), site.path()).unwrap_err();
+        assert!(error.to_string().starts_with(&format!(
+            "copying {} to {}:",
+            root.path().join("index.html").display(),
+            site.path().join("index.html").display()
+        )));
+        assert!(site.path().join("index.html").is_dir());
+    }
+
+    #[test]
+    fn absent_public_assets_leave_the_empty_local_site_unchanged() {
+        let root = tempdir().unwrap();
+        let site = tempdir().unwrap();
+        stage_public_tree(&root.path().join("absent"), site.path()).unwrap();
+        assert_eq!(fs::read_dir(site.path()).unwrap().count(), 0);
+    }
+
+    #[test]
     fn public_assets_stage_for_the_no_bundle_local_case() {
         let public = tempdir().unwrap();
         let site = tempdir().unwrap();
         fs::write(public.path().join("favicon.ico"), b"favicon").unwrap();
+        fs::create_dir(public.path().join("nested")).unwrap();
+        fs::write(public.path().join("nested/asset.txt"), b"nested asset").unwrap();
         stage_public_tree(public.path(), site.path()).unwrap();
+        assert_eq!(
+            fs::read(site.path().join("nested/asset.txt")).unwrap(),
+            b"nested asset"
+        );
         assert_eq!(
             fs::read(site.path().join("favicon.ico")).unwrap(),
             b"favicon"
