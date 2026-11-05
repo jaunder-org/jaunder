@@ -6,7 +6,7 @@
 
 On 2026-10-28, #1845 qualified the Session exclusion with typed Browser idle
 expiry and cleanup; see the
-[Browser Session lifecycle decision](drafts/persistent-browser-session-lifecycle.md)
+[Browser Session lifecycle decision](0229-persistent-browser-session-lifecycle.md)
 and [current architecture](../ARCHITECTURE.md#authentication).
 
 ## Context

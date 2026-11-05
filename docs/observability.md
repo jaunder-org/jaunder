@@ -101,15 +101,15 @@ queries, whole headers or raw parent input. Independent diagnostics are not OTLP
 logs and must not be re-exported as ordinary application records.
 
 See the
-[Collector-owned retention decision](adr/drafts/independent-log-and-trace-filtering.md)
-and [native OTLP process logs decision](adr/drafts/native-otlp-process-logs.md).
+[Collector-owned retention decision](adr/0222-independent-log-and-trace-filtering.md)
+and [native OTLP process logs decision](adr/0224-native-otlp-process-logs.md).
 
 ### Shared Collector privacy policy
 
 The qualified #1743 amendment selects stock appender 0.32.0/SDK batching and
 removal of application privacy/admission visitors, Debug parsing, classifiers
 and the proposed SpanProcessor decorator. The
-[native OTLP decision](adr/drafts/native-otlp-process-logs.md) records the
+[native OTLP decision](adr/0224-native-otlp-process-logs.md) records the
 approval provenance and precise producer-qualified policy. The stock bridge and
 shared policy are implemented and have focused seam proofs; this is not full
 matrix/coverage/CI certification or production activation.
@@ -187,7 +187,7 @@ log-only exception. No bind values are separately captured, and none are
 promised when SQLx does not emit them. This does not expand arbitrary-field,
 other-producer, trace-event or span retention. Non-SQLx bodyless records and
 historic logs are not repaired. See the
-[SQLx query-log decision](adr/drafts/sqlx-query-log-diagnostics.md) for the
+[SQLx query-log decision](adr/0233-sqlx-query-log-diagnostics.md) for the
 retention and body-population contract.
 
 Raw application SDK data, OTLP transport and trusted Collector input are

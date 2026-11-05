@@ -1,17 +1,17 @@
-# ADR-DRAFT: Reuse verified original Media destinations on matched Org pull
+# ADR-0219: Reuse verified original Media destinations on matched Org pull
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-07
 - Issue: [#1703](https://github.com/jaunder-org/jaunder/issues/1703)
 
 ## Context
 
-[ADR-0045](../0045-emacs-media-content-src.md) keeps authored local Media links
+[ADR-0045](0045-emacs-media-content-src.md) keeps authored local Media links
 unchanged while publishing harvested server URLs. Pull's
-[ADR-0160](../0160-emacs-pulled-media-local-copies.md) trust chain verifies
-remote bytes before creating durable Local Media Copies. Applied to
-[matched pull](../0200-revalidated-matched-post-pull.md) and
-[conflict staging](../0211-emacs-reconciliation-conflict-resolution.md), that
+[ADR-0160](0160-emacs-pulled-media-local-copies.md) trust chain verifies remote
+bytes before creating durable Local Media Copies. Applied to
+[matched pull](0200-revalidated-matched-post-pull.md) and
+[conflict staging](0211-emacs-reconciliation-conflict-resolution.md), that
 mandatory-copy rule replaces a still-usable original link with a second file.
 Server regeneration can therefore disrupt local authoring without changing
 Media.

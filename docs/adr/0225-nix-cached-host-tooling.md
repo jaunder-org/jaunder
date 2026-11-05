@@ -1,6 +1,6 @@
-# ADR-DRAFT: Nix owns cached host-tooling and qualification provenance
+# ADR-0225: Nix owns cached host-tooling and qualification provenance
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-10
 - Issue: [#1734](https://github.com/jaunder-org/jaunder/issues/1734)
 
@@ -12,10 +12,10 @@ embedded the current commit/dirty state, and watched every tracked file. This
 made executable freshness unnecessarily depend on unrelated repository edits and
 revisions.
 
-[ADR-0028](../0028-devtool-vs-xtask-boundary.md),
-[ADR-0052](../0052-devtool-unifies-static-checks.md), and
-[ADR-0146](../0146-devtool-owns-compiling-static-check-definitions.md) keep
-xtask execution out of derivations and its source out of expensive application
+[ADR-0028](0028-devtool-vs-xtask-boundary.md),
+[ADR-0052](0052-devtool-unifies-static-checks.md), and
+[ADR-0146](0146-devtool-owns-compiling-static-check-definitions.md) keep xtask
+execution out of derivations and its source out of expensive application
 producers. Those boundaries prevent recursive orchestration and cache coupling;
 they do not require Cargo to compile every host invocation or prohibit Nix from
 building an independently packaged host executable.
@@ -59,10 +59,10 @@ binary as a successful fallback.
 
 This narrowly replaces local-Cargo compilation and exact-commit executable
 matching as tool-provenance requirements. It preserves ADR-0028's execution
-litmus and [ADR-0141](../0141-cargo-workspace-execution-boundaries.md)'s
-separate workspace and explicit host-unit-test authorities. Cargo remains
-available for focused tests and explicit source-development diagnostics, not as
-a separate qualification lane.
+litmus and [ADR-0141](0141-cargo-workspace-execution-boundaries.md)'s separate
+workspace and explicit host-unit-test authorities. Cargo remains available for
+focused tests and explicit source-development diagnostics, not as a separate
+qualification lane.
 
 ## Consequences
 

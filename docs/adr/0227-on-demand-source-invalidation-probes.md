@@ -1,6 +1,6 @@
-# ADR-DRAFT: Run source-invalidation probes only on demand
+# ADR-0227: Run source-invalidation probes only on demand
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-31
 
 ## Context
@@ -17,11 +17,11 @@ result preservation and artifact references. Keep both manual commands and their
 implementations available for explicitly requested diagnostics.
 
 This narrowly supersedes only
-[ADR-0203](../0203-distribute-ci-validation-and-firefox-e2e-lanes.md)'s
-requirement that `test-checks` run the source-closure probe under `always()` and
-fail on its separate verdict. Its four validation lanes, real test and coverage
-verdicts, producer/consumer ownership, backend parity, E2E reconciliation and
-stable aggregate contexts remain unchanged.
+[ADR-0203](0203-distribute-ci-validation-and-firefox-e2e-lanes.md)'s requirement
+that `test-checks` run the source-closure probe under `always()` and fail on its
+separate verdict. Its four validation lanes, real test and coverage verdicts,
+producer/consumer ownership, backend parity, E2E reconciliation and stable
+aggregate contexts remain unchanged.
 
 ## Consequences
 

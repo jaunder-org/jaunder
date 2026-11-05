@@ -1,6 +1,6 @@
-# ADR-DRAFT: Prepare image uploads privately before assigning stored identity
+# ADR-0223: Prepare image uploads privately before assigning stored identity
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-19
 - Issue: [#1702](https://github.com/jaunder-org/jaunder/issues/1702)
 
@@ -31,7 +31,7 @@ the previously approved unreleased PNG fix
 followed release commit `c29c4b7a794de4b8d48fb3cabb1c22e10abf72ce`. The release
 changes only version/changelog/lock metadata, not native source or tests. Future
 source/release switches require a separate decision. The shared
-[MediaManager](../../../storage/src/media_manager.rs) requires an explicitly
+[MediaManager](../../storage/src/media_manager.rs) requires an explicitly
 injected upload preparer at composition; streamed Web and in-memory AtomPub
 uploads cannot select an unprepared path. Composition roots create it through
 `StorageFactory::media_manager`, which mints its three storage ports and
@@ -41,7 +41,7 @@ required dependencies into individual manager fields; neither a factory nor a
 parts bundle is retained or used for lazy lookup. The existing test-support
 boundary exposes explicit required parts only for test composition with
 overridden ports/scopes. This follows
-[constructor injection](../0016-dependency-injection-and-appstate.md).
+[constructor injection](0016-dependency-injection-and-appstate.md).
 
 Detect covered image formats from controlled extensionless private bytes rather
 than an author's filename or supplied MIME. Ordinary EXIF/XMP/IPTC personal,
@@ -57,9 +57,9 @@ content, source format, orientation, dimensions, intact ICC/color profiles, HDR
 signaling, animation and transparency must be preserved: no lossy re-encoding,
 resizing, automatic HEIF conversion or indiscriminate XMP deletion. The
 authoritative selection and post-read policy live in the
-[native adapter](../../../host/src/image_privacy/native.rs), not a duplicated
-tag table in this decision. SVG/non-image behavior is outside this raster
-policy. Malformed/unrecognized image-labelled raster input fails closed.
+[native adapter](../../host/src/image_privacy/native.rs), not a duplicated tag
+table in this decision. SVG/non-image behavior is outside this raster policy.
+Malformed/unrecognized image-labelled raster input fails closed.
 
 Receive privately, enforce the positive input/output Media size policy, edit and
 perform supported ordinary post-edit reads before assigning authoritative
@@ -73,21 +73,21 @@ residual metadata or failed checks reject, and blanket-family rejection is not
 delivery. A pinned editor limitation does not authorize an exclusion, fork,
 extra editor or weaker check.
 
-The [process owner](../../../host/src/image_privacy/process.rs) admits exactly
-TWO shared active attempts immediately or returns HTTP 503 Busy, without a
-waiting queue, including non-image/SVG attempts. It owns 0700 attempt
-directories and 0600 files under `media/tmp`, with input/output on the placement
-filesystem. Launch only the SAME deployed Jaunder executable's private worker,
-dispatched before ordinary server/database/logging startup. No shell, separate
-installed worker, runtime tool lookup, ExifTool/Perl or network acquisition
-participates in production preparation.
+The [process owner](../../host/src/image_privacy/process.rs) admits exactly TWO
+shared active attempts immediately or returns HTTP 503 Busy, without a waiting
+queue, including non-image/SVG attempts. It owns 0700 attempt directories and
+0600 files under `media/tmp`, with input/output on the placement filesystem.
+Launch only the SAME deployed Jaunder executable's private worker, dispatched
+before ordinary server/database/logging startup. No shell, separate installed
+worker, runtime tool lookup, ExifTool/Perl or network acquisition participates
+in production preparation.
 
 ONE 30-second deadline begins before child launch and includes processing,
 verification, bounded status and exit; the worker response is limited to 128 KiB
 before decoding. The owner kills when necessary and WAITs/reaps before private
 cleanup or slot release on cancellation, timeout, crash or failure. Success also
 requires child exit acknowledgement. Bounded
-[typed status/errors](../../../host/src/image_privacy/wire.rs) retain underlying
+[typed status/errors](../../host/src/image_privacy/wire.rs) retain underlying
 processing/I/O causes without private metadata or path-bearing diagnostics.
 
 After preparation, tracked MediaManager finalization owns the attempt, content
@@ -97,10 +97,9 @@ existing deduplicated files and author originals are not modified. Confirmed
 operation failure may clean an owned fresh placement; committed or
 CommitIndeterminate results must not be treated as rollback-confirmed failure
 and unlinked. This preserves
-[structural mutation outcomes](../0164-structural-write-scopes-and-mutation-outcomes.md).
-The [serve composition root](../../../server/src/commands/lifecycle.rs) refuses
-new work and drains private owners and finalizers before releasing its runtime
-lock.
+[structural mutation outcomes](0164-structural-write-scopes-and-mutation-outcomes.md).
+The [serve composition root](../../server/src/commands/lifecycle.rs) refuses new
+work and drains private owners and finalizers before releasing its runtime lock.
 
 ## Consequences
 
@@ -111,11 +110,10 @@ controls establish behavior; edit counts or helper-only success do not. Test
 oracles are not additional production editors.
 
 Current-reference replacement is separate from historical-byte retirement.
-Follow the
-[operator preparation/rehearsal procedure](../../media-replacement.md) without
-bypassing owner history, independent Media Records or global safety. Retained
-revisions, caches, backups and remote copies remain distinct from a record
-deletion. Dependency capability, licensing and production `x86_64-linux`
+Follow the [operator preparation/rehearsal procedure](../media-replacement.md)
+without bypassing owner history, independent Media Records or global safety.
+Retained revisions, caches, backups and remote copies remain distinct from a
+record deletion. Dependency capability, licensing and production `x86_64-linux`
 packaging remain acceptance obligations. ARM Linux is not a delivery
 requirement; Apple Silicon macOS targets only the development environment,
 checked periodically from committed changes rather than as a per-WIP production

@@ -1,12 +1,12 @@
-# ADR-DRAFT: Explicit one-shot PR re-enqueue
+# ADR-0220: Explicit one-shot PR re-enqueue
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-23
 - Issue: [#1817](https://github.com/jaunder-org/jaunder/issues/1817)
 
 ## Context
 
-[ADR-0087](../0087-xtask-github-pr-observation.md) separates observational
+[ADR-0087](0087-xtask-github-pr-observation.md) separates observational
 `pr watch` from approval-bearing `pr land` and refuses re-enqueue after an
 ejection. Operators need a supported, explicit recovery invocation when they
 judge that another enqueue is appropriate, without an automatic retry loop.

@@ -1,17 +1,17 @@
-# ADR-DRAFT: Native OTLP Process Logs
+# ADR-0224: Native OTLP Process Logs
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-11
 - Issue: [#1743](https://github.com/jaunder-org/jaunder/issues/1743)
 
 ## Context
 
-[ADR-0011](../0011-unified-observability.md) gives native processes a shared
-OTLP endpoint and process-owned telemetry lifetime.
-[ADR-0196](../0196-single-host-nixos-deployment-stack.md) used a journald
-receiver and JSON-body transformation before VictoriaLogs. Native OTLP logs
-replace that deployment-specific ingestion path with canonical message, severity
-and trace correlation through the same Collector as traces/metrics.
+[ADR-0011](0011-unified-observability.md) gives native processes a shared OTLP
+endpoint and process-owned telemetry lifetime.
+[ADR-0196](0196-single-host-nixos-deployment-stack.md) used a journald receiver
+and JSON-body transformation before VictoriaLogs. Native OTLP logs replace that
+deployment-specific ingestion path with canonical message, severity and trace
+correlation through the same Collector as traces/metrics.
 
 The earlier #1743 implementation used custom application projection and SDK
 isolation. The qualified human approval JAU-1743-COLLECTOR-AMENDMENT-001 (“both
@@ -40,7 +40,7 @@ filter precedence. With configured OTLP, ordinary logs are native records, not
 mirrored to stdout/journald, even on logger setup failure. CLI stdout results,
 local ErrorLayer/SpanTrace fields and independent WARN+/panic capture stay
 separate. The delivered
-[local-filter/AlwaysOn foundation](../drafts/independent-log-and-trace-filtering.md)
+[local-filter/AlwaysOn foundation](0222-independent-log-and-trace-filtering.md)
 remains semantic input: all application severities are offered regardless of
 local verbosity, with valid sampled/unsampled-parent IDs. No new application
 filter, synthetic span or invented correlation ID is selected.
@@ -94,7 +94,7 @@ warning explanation are intentionally lost.
 Other explicit messages and typed error carriers remain trusted under the
 existing constructor/source discipline, not universally sanitized. Source-level
 span admission under ADR-0011 and
-[ADR-0156](../0156-sink-specific-telemetry-interfaces.md) remains intact. Clear
+[ADR-0156](0156-sink-specific-telemetry-interfaces.md) remains intact. Clear
 span status descriptions but retain codes. Preserve existing operation
 names/determinants, IDs/times, resources, browser boot/test evidence and
 metrics; no global span allowlist. Remove explicit raw secondary aggregates, not
@@ -163,7 +163,7 @@ parser occurrence coverage for a workload that emitted none, a complete browser
 matrix, authoritative source coverage or shipping readiness. Review precedes
 final current-tree proof/CI. Keep existing resource, retry, time and
 verification requirements. The normal commands and confidence split are in
-[CONTRIBUTING](../../../CONTRIBUTING.md#running-e2e-tests-locally).
+[CONTRIBUTING](../../CONTRIBUTING.md#running-e2e-tests-locally).
 
 No production activation, merge, historical repair, storage Collector (#1753),
 new public interface, universal producer sanitizer or capacity-recovery promise

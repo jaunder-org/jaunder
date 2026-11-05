@@ -1,6 +1,6 @@
-# ADR-DRAFT: Unify bundled themes and application styling asset delivery
+# ADR-0235: Unify bundled themes and application styling asset delivery
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-07
 - Issue: [#1695](https://github.com/jaunder-org/jaunder/issues/1695)
 
@@ -10,10 +10,10 @@ Production Safari reused stale built-in CSS at stable `/style/` URLs. Clearing
 browser caches resolved the observed desktop and iPhone image-sizing symptoms;
 current CSS already expressed the intended sizing policy.
 
-[ADR-0003](../0003-asset-management.md) placed built-in CSS in a separate
-embedded file handler. [ADR-0184](../0184-css-package-public-themes.md) gives
-published Theme Packages digest-addressed immutable assets, durable eligibility,
-and reference/deadline-based retention. Separate built-in delivery permits these
+[ADR-0003](0003-asset-management.md) placed built-in CSS in a separate embedded
+file handler. [ADR-0184](0184-css-package-public-themes.md) gives published
+Theme Packages digest-addressed immutable assets, durable eligibility, and
+reference/deadline-based retention. Separate built-in delivery permits these
 contracts to diverge even though both style the same application.
 
 Adding revalidation to stable stylesheet URLs does not invalidate responses

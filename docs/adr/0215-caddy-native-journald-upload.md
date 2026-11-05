@@ -1,16 +1,16 @@
-# ADR-DRAFT: Caddy Logs Reach VictoriaLogs Through the Native Journal Upload Receiver
+# ADR-0215: Caddy Logs Reach VictoriaLogs Through the Native Journal Upload Receiver
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-02
 - Issue: [#1850](https://github.com/jaunder-org/jaunder/issues/1850)
 
 ## Context
 
-[ADR-0196](../0196-single-host-nixos-deployment-stack.md) established the
-managed single-host stack, Caddy ingress, and the loopback Victoria services.
-Jaunder's application logs now use the native OTLP/Collector route and shared
+[ADR-0196](0196-single-host-nixos-deployment-stack.md) established the managed
+single-host stack, Caddy ingress, and the loopback Victoria services. Jaunder's
+application logs now use the native OTLP/Collector route and shared
 `transform/jaunder_privacy` policy
-([native OTLP process logs](../drafts/native-otlp-process-logs.md)). Caddy's own
+([native OTLP process logs](0224-native-otlp-process-logs.md)). Caddy's own
 access and service logs are a separate source: they are not Jaunder application
 events and must not be admitted to that Collector policy.
 
@@ -75,6 +75,6 @@ losslessness. No deduplication layer is introduced.
 
 The focused VM and existing credential-reload VM prove their tested
 configurations and paths, not every host event or every failure schedule. See
-[the current architecture](../../ARCHITECTURE.md#what-the-flake-ships) for the
+[the current architecture](../ARCHITECTURE.md#what-the-flake-ships) for the
 implemented projection; the delivery and privacy boundaries above remain
 explicit.

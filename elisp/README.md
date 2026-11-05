@@ -616,7 +616,7 @@ a batch is not an HTTP/filesystem transaction. Sharing discovery accepts less
 repeated detection of newly faulty global duplicate Collection Entries;
 selected-Member validators and fresh local checks still guard mutations. Scope
 ends before the independent final refresh. See
-[operation-owned Collection evidence](../docs/adr/drafts/emacs-operation-scoped-collection-evidence.md).
+[operation-owned Collection evidence](../docs/adr/0218-emacs-operation-scoped-collection-evidence.md).
 
 A selection does not bypass safety checks. Unchanged Posts are no-ops; a true
 `conflict` is a uniquely matched Post whose local source and remote Member both

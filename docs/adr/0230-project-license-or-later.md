@@ -1,6 +1,6 @@
-# ADR-DRAFT: License Jaunder's own code under GPL version 3 or later
+# ADR-0230: License Jaunder's own code under GPL version 3 or later
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-19
 - Issue: [#1702](https://github.com/jaunder-org/jaunder/issues/1702)
 
