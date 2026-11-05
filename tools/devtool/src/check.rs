@@ -1,7 +1,8 @@
-//! The migrated static checks. This is the single home of their tool + args:
+//! The migrated static checks. Prettier dispatches to shared Just recipes;
+//! the other checks define their tool + args here:
 //! the host verify ladder runs each check via `cargo run -p devtool -- check
-//! <name>` (so a local `tools/` edit is reflected), while Nix runs the `docs`,
-//! `typescript`, `rust-format`, `code`, and `ert` groups from prebuilt devtool inputs.
+//! <name>` (so a local `tools/` edit is reflected). Nix calls the Prettier
+//! recipes directly and uses prebuilt devtool inputs for the other checks.
 //! Cargo-backed checks use
 //! separate host and sandbox lanes from this shared definition.
 
@@ -239,29 +240,16 @@ fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
                 ])
             },
         },
-        "prettier-markdown" => CheckSpec::External {
-            program: "prettier",
-            args: if fix {
-                owned(&["-w", "**/*.md"])
-            } else {
-                owned(&["--check", "**/*.md"])
-            },
-        },
-        "prettier-end2end" => CheckSpec::External {
-            program: "prettier",
-            args: if fix {
-                owned(&["-w", "end2end"])
-            } else {
-                owned(&["--check", "end2end"])
-            },
-        },
-        "prettier-css" => CheckSpec::External {
-            program: "prettier",
-            args: if fix {
-                owned(&["-w", "**/*.css"])
-            } else {
-                owned(&["--check", "**/*.css"])
-            },
+        "prettier-markdown" | "prettier-end2end" | "prettier-css" => CheckSpec::External {
+            program: "just",
+            args: owned(&[
+                "--justfile",
+                "recipes/prettier.just",
+                "--working-directory",
+                ".",
+                name,
+                if fix { "fix" } else { "verify" },
+            ]),
         },
         "tsc" => CheckSpec::External {
             program: "tsc",
@@ -697,43 +685,18 @@ mod tests {
     }
 
     #[test]
-    fn prettier_commands_preserve_their_distinct_populations() {
-        assert_eq!(
-            build_host("prettier-markdown", false),
-            BuiltCommand {
-                program: "prettier",
-                args: vec!["--check".into(), "**/*.md".into()],
-                env: Vec::new(),
-            }
-        );
-        assert_eq!(
-            build_host("prettier-end2end", false),
-            BuiltCommand {
-                program: "prettier",
-                args: vec!["--check".into(), "end2end".into()],
-                env: Vec::new(),
-            }
-        );
-        assert_eq!(
-            build_host("prettier-markdown", true).args,
-            vec!["-w", "**/*.md"]
-        );
-        assert_eq!(
-            build_host("prettier-end2end", true).args,
-            vec!["-w", "end2end"]
-        );
-        assert_eq!(
-            build_host("prettier-css", false),
-            BuiltCommand {
-                program: "prettier",
-                args: vec!["--check".into(), "**/*.css".into()],
-                env: Vec::new(),
-            }
-        );
-        assert_eq!(
-            build_host("prettier-css", true).args,
-            vec!["-w", "**/*.css"]
-        );
+    fn prettier_commands_dispatch_to_shared_recipes() {
+        for name in ["prettier-markdown", "prettier-end2end", "prettier-css"] {
+            let verify = build_host(name, false);
+            assert_eq!(verify.program, "just");
+            assert_eq!(
+                verify.args.join(" "),
+                format!("--justfile recipes/prettier.just --working-directory . {name} verify")
+            );
+            let mut fix = verify;
+            *fix.args.last_mut().unwrap() = "fix".into();
+            assert_eq!(build_host(name, true), fix);
+        }
     }
 
     #[test]

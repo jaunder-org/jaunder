@@ -27,6 +27,144 @@ doctests-workflow:
     nix build --no-update-lock-file --no-write-lock-file -L .#checks.x86_64-linux.doctests --out-link .xtask/gcroots/doctests
     nix build --no-update-lock-file --no-write-lock-file -L .#checks.x86_64-linux.doctests-gate --no-link
 
+# Local workflows fail fast. Producer commands own their evidence and cleanup.
+# Explicit variants avoid treating Just's own options as forwarded workflow flags.
+
+check-no-test: (_host "fix" "host") _host-tests
+
+check: check-no-test _product-tests _wasm-tests doctests
+
+precommit:
+    cargo xtask precommit-safety
+
+# Called only by the focused Git/index safety owner, never by public precommit.
+precommit-markdown-host: (_markdown "fix") _docs-shape
+
+precommit-broad-host: check-no-test
+
+prepush: _clean (_host "verify" "prepush") _host-tests _product-tests _workspace-doctests
+
+validate-no-e2e: _clean (_host "verify" "host") _platform _static _wasm-budget _host-tests _wasm-tests coverage doctests _elisp-coverage
+
+# Landed E2E entrypoints retain lane artifacts, Firefox reconciliation and the
+# authoritative SQLite/Chromium flow verdict. Replace these calls only after #1890 lands.
+validate: validate-no-e2e
+    cargo xtask e2e-lane sqlite-chromium-unsplit
+    cargo xtask e2e-lane postgres-chromium-unsplit
+    cargo xtask e2e sqlite firefox
+    cargo xtask e2e postgres firefox
+    cargo xtask check-leaf server-fn-flow
+
+ci-validate-host: _clean (_host "verify" "host") _platform _host-tests
+
+ci-validate-hermetic: _clean _static _wasm-budget
+
+ci-validate-test-checks: _clean _wasm-tests doctests _elisp-coverage
+
+ci-validate-coverage: coverage
+
+[private]
+_clean:
+    cargo xtask check-leaf clean-tree
+
+[private]
+_markdown mode:
+    devtool check prettier-markdown {{if mode == "fix" { "--fix" } else { "" }}}
+    devtool check prettier-end2end {{if mode == "fix" { "--fix" } else { "" }}}
+
+[private]
+_docs-shape:
+    cargo xtask check-leaf sequence-check
+    cargo xtask check-leaf adr-format
+    cargo xtask check-leaf adr-readme-parity
+    cargo xtask check-leaf adr-view-parity
+    cargo xtask check-leaf doc-links
+    cargo xtask check-leaf flow-docs
+
+[private]
+_host mode docs:
+    devtool check fmt {{if mode == "fix" { "--fix" } else { "" }}}
+    devtool check leptosfmt {{if mode == "fix" { "--fix" } else { "" }}}
+    {{if docs + "-" + os() + "-" + arch() == "prepush-linux-x86_64" { "cargo xtask check-leaf prepush-docs" } else { "devtool check prettier-markdown" + if mode == "fix" { " --fix" } else { "" } }}}
+    devtool check prettier-end2end {{if mode == "fix" { "--fix" } else { "" }}}
+    devtool check prettier-css {{if mode == "fix" { "--fix" } else { "" }}}
+    devtool check elisp-fmt {{if mode == "fix" { "--fix" } else { "" }}}
+    devtool check tools-fmt {{if mode == "fix" { "--fix" } else { "" }}}
+    devtool check ast-grep-tests {{if mode == "fix" { "--fix" } else { "" }}}
+    devtool check no-full-reload {{if mode == "fix" { "--fix" } else { "" }}}
+    cargo fmt --manifest-path xtask/Cargo.toml {{if mode == "fix" { "" } else { "--check" }}}
+    just _docs-shape
+    cargo xtask check-leaf test-patterns
+    cargo xtask check-leaf server-fn-registrar
+    cargo xtask check-leaf server-fn-tracing
+    cargo xtask check-leaf server-fn-coverage
+    cargo xtask check-leaf server-fn-wire-arg-error
+    cargo xtask check-leaf traced-context
+    cargo xtask check-leaf e2e-telemetry-boundary
+    cargo xtask check-leaf e2e-collector-config
+    cargo xtask check-leaf proffered-secret
+    cargo xtask check-leaf e2e-goto-wrapper
+    cargo xtask check-leaf e2e-server-fn-endpoints
+    cargo xtask check-leaf target-arch-placement
+    cargo xtask check-leaf write-transaction-contract
+    cargo xtask check-leaf common-host-target-closure
+    cargo xtask check-leaf lint-suppression
+    cargo xtask check-leaf thin-components
+    cargo xtask check-leaf sqlx-newtype-bind
+    cargo xtask check-leaf sqlx-newtype-decode
+    cargo xtask check-leaf doctest-fences
+    cargo xtask check-leaf raw-html-door
+    cargo xtask check-leaf html-sink
+    cargo xtask check-leaf e2e-scaffold
+    cargo xtask check-leaf xlang-literal
+    devtool check byte-compile {{if mode == "fix" { "--fix" } else { "" }}}
+    devtool check tsc {{if mode == "fix" { "--fix" } else { "" }}}
+    devtool check cargo-deny {{if mode == "fix" { "--fix" } else { "" }}}
+    devtool check product-core-clippy {{if mode == "fix" { "--fix" } else { "" }}}
+    devtool check web-server-clippy {{if mode == "fix" { "--fix" } else { "" }}}
+    devtool check web-no-server-clippy {{if mode == "fix" { "--fix" } else { "" }}}
+    devtool check client-host-clippy {{if mode == "fix" { "--fix" } else { "" }}}
+    devtool check wasm-clippy {{if mode == "fix" { "--fix" } else { "" }}}
+    devtool check tools-clippy {{if mode == "fix" { "--fix" } else { "" }}}
+    cargo clippy --manifest-path xtask/Cargo.toml --all-targets -- -D warnings
+    devtool check ert {{if mode == "fix" { "--fix" } else { "" }}}
+
+[private]
+_host-tests:
+    cargo test --manifest-path xtask/Cargo.toml --lib --bins --tests
+    cargo test --manifest-path tools/Cargo.toml --lib --bins --tests
+
+[private]
+_product-tests:
+    cargo xtask test-local
+
+[private]
+_workspace-doctests:
+    cargo xtask check-leaf workspace-doctests
+
+[private]
+_platform:
+    nix eval --impure --expr 'import ./nix/platform-contract.nix { flake = builtins.getFlake (toString ./.); }'
+
+[private]
+_static: (_nix "static-docs") (_nix "static-typescript") (_nix "rust-format") (_nix "static-code") (_nix "static-elisp") (_nix "static-e2e-census") (_nix "static-ert") (_nix "xtask-format") (_nix "xtask-clippy")
+
+[private]
+_wasm-budget:
+    cargo xtask check-leaf wasm-budget
+
+[private]
+_wasm-tests: (_nix "wasm-tests")
+
+[private]
+_elisp-coverage: (_nix "elisp-coverage-producer")
+    cargo xtask check-leaf elisp-coverage-consume
+
+[private]
+_nix check:
+    mkdir -p .xtask/gcroots
+    nix build -L --accept-flake-config --out-link .xtask/gcroots/{{check}} .#checks.x86_64-linux.{{check}}
+
 # Build the checkout's CSR bundle with its locked wasm toolchain and Vite.
 [default]
 build-csr $profile="debug":

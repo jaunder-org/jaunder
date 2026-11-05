@@ -1,7 +1,8 @@
 //! Callable boundary for Rust-only static checks invoked individually by Just.
 //!
 //! Each invocation dispatches one existing check. This module has no gate
-//! population, ordering, mode selection, or workflow reporting.
+//! population, ordering, mode selection, or workflow reporting. Consumer adapters
+//! invoke existing owners after Just has requested their producer outputs.
 
 use std::path::Path;
 
@@ -22,6 +23,27 @@ pub(crate) fn run(name: &str) -> Result<crate::result::StepResult> {
 fn run_at(name: &str, root: &Path) -> Result<crate::result::StepResult> {
     let mut result = CommandResult::new("check-leaf");
     match name {
+        "clean-tree" => result.push(crate::lifecycle::clean_tree_precheck(false)),
+        "prepush-docs" => {
+            crate::lifecycle::run_shared_static_docs_request(
+                root,
+                true,
+                steps::nix::shared_static_docs_check,
+                &mut result,
+            );
+            return consumer_result(name, result);
+        }
+        "workspace-doctests" => {
+            steps::doctest_fences::run_workspace(&xshell::Shell::new()?, &mut result);
+        }
+        "wasm-budget" => steps::wasm_budget::run(&mut result),
+        "server-fn-flow" => {
+            steps::server_fn_coverage_check::verify_after_validate(&mut result, true);
+        }
+        "elisp-coverage-consume" => {
+            steps::nix::consume_elisp_coverage(&mut result);
+            return consumer_result(name, result);
+        }
         "sequence-check" => steps::sequence_check::run(&mut result),
         "adr-format" => result.push(steps::adr_check::format_step_at(root)),
         "adr-readme-parity" => result.push(steps::adr_check::readme_parity_step_at(root)),
@@ -58,6 +80,27 @@ fn run_at(name: &str, root: &Path) -> Result<crate::result::StepResult> {
         "Rust check leaf `{name}` did not produce exactly one result"
     );
     Ok(result.steps.remove(0))
+}
+
+// These two existing owners produce multiple diagnostics for one safety/consumer
+// operation. Flatten only their text/status, never serialize a workflow envelope.
+fn consumer_result(name: &str, result: CommandResult) -> Result<crate::result::StepResult> {
+    ensure!(
+        !result.steps.is_empty(),
+        "leaf `{name}` produced no verdict"
+    );
+    let ok = result.steps.iter().all(|step| step.ok || step.skipped);
+    let detail = result
+        .steps
+        .into_iter()
+        .map(|step| format!("{}: {}", step.name, step.detail.unwrap_or_default()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(if ok {
+        crate::result::StepResult::ok(name).detail(detail)
+    } else {
+        crate::result::StepResult::fail(name).detail(detail)
+    })
 }
 
 #[cfg(test)]

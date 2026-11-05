@@ -7,7 +7,12 @@ use tempfile::TempDir;
 
 fn git(dir: &Path, args: &[&str]) -> Output {
     let mut command = Command::new("git");
-    command.arg("-C").arg(dir).args(args);
+    command
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_EDITOR", "true")
+        .env("GIT_SEQUENCE_EDITOR", "true");
     for variable in [
         "GIT_DIR",
         "GIT_WORK_TREE",
@@ -84,6 +89,37 @@ fn check_leaf_process_emits_plain_diagnostic_without_result_artifacts() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("[ ok ] doc-links"), "{stdout}");
     assert!(!stdout.contains("xtask PASSED"), "{stdout}");
+    assert!(!dir.path().join(".xtask/last-result.json").exists());
+    assert!(!summary.exists());
+}
+
+#[test]
+fn consumer_leaves_fail_closed_without_producer_evidence_or_report_artifacts() {
+    for leaf in ["coverage-consume", "elisp-coverage-consume"] {
+        let dir = checkout();
+        let summary = dir.path().join("github-summary.md");
+        let index_before = git(dir.path(), &["write-tree"]).stdout;
+        let output = run_leaf(dir.path(), leaf, &summary);
+        assert_eq!(output.status.code(), Some(1), "{leaf}: {output:?}");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("[FAIL]"));
+        assert!(!dir.path().join(".xtask/last-result.json").exists());
+        assert!(!summary.exists());
+        assert_eq!(git(dir.path(), &["write-tree"]).stdout, index_before);
+    }
+}
+
+#[test]
+fn clean_admission_leaf_is_plain_and_refuses_untracked_state() {
+    let dir = checkout();
+    let summary = dir.path().join("github-summary.md");
+    assert!(
+        run_leaf(dir.path(), "clean-tree", &summary)
+            .status
+            .success()
+    );
+    std::fs::write(dir.path().join("untracked"), "not admitted\n").unwrap();
+    let output = run_leaf(dir.path(), "clean-tree", &summary);
+    assert_eq!(output.status.code(), Some(1));
     assert!(!dir.path().join(".xtask/last-result.json").exists());
     assert!(!summary.exists());
 }

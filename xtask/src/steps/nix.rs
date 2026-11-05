@@ -111,7 +111,7 @@ pub fn check_supporting_test_checks(sh: &xshell::Shell, result: &mut CommandResu
         sh,
         "doctests",
         "just",
-        &["doctests-workflow"],
+        &["doctests"],
     ));
 }
 
@@ -127,7 +127,11 @@ pub fn elisp_coverage(result: &mut CommandResult) {
         return;
     }
     result.push(build);
+    consume_elisp_coverage(result);
+}
 
+/// Lift and consume the existing producer's fixed artifact set, without building it.
+pub(crate) fn consume_elisp_coverage(result: &mut CommandResult) {
     let artifacts = Path::new(".xtask/gcroots/elisp-coverage-producer/elisp-coverage");
     result.push(lift_elisp_coverage_artifacts(
         artifacts,

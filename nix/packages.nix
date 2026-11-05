@@ -571,61 +571,6 @@ let
         "test-support"
         "web"
       ];
-  docsToolsFilteredSrc = pkgs.lib.cleanSourceWith {
-    src = craneLib.path ../.;
-    filter =
-      path: type:
-      let
-        relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
-        requiredToolRoots = [
-          "tools/coverage"
-          "tools/devtool"
-          "tools/doctests"
-        ];
-        requiredToolPath = builtins.any (
-          root: relative == root || pkgs.lib.hasPrefix "${root}/" relative
-        ) requiredToolRoots;
-        requiredDirectory =
-          toString path == toString ../.
-          || relative == "common"
-          || relative == "common/src"
-          || relative == "csr"
-          || relative == "storage"
-          || relative == "storage/src"
-          || relative == "tools"
-          || requiredToolPath;
-      in
-      (type == "directory" && requiredDirectory)
-      || relative == "tools/Cargo.toml"
-      || relative == "tools/Cargo.lock"
-      || relative == "csr/index.html"
-      || (requiredToolPath && craneLib.filterCargoSources path type);
-  };
-  docsToolsSrc = pkgs.runCommand "jaunder-docs-devtool-cargo-source" { } ''
-    cp --no-preserve=mode -r ${docsToolsFilteredSrc}/. "$out/"
-    mkdir -p \
-      "$out/common/src" \
-      "$out/host/src" \
-      "$out/storage/src" \
-      "$out/tools/diagnostic-coverage-runtime/src" \
-      "$out/tools/performance/src" \
-      "$out/tools/traced-run/src"
-    printf '%s\n' '[package]' 'name = "common"' 'version = "0.1.0"' 'edition = "2024"' > "$out/common/Cargo.toml"
-    # Cargo still resolves optional path-dependency manifests with
-    # --no-default-features. Keep only a manifest/source placeholder here: the
-    # docs tool cannot enable devtool's system-artifact feature or build host.
-    printf '%s\n' '[package]' 'name = "host"' 'version = "0.1.0"' 'edition = "2024"' '[features]' 'qualification = []' > "$out/host/Cargo.toml"
-    printf '%s\n' '[package]' 'name = "storage"' 'version = "0.1.0"' 'edition = "2024"' > "$out/storage/Cargo.toml"
-    printf '%s\n' '[package]' 'name = "diagnostic-coverage-runtime"' 'version = "0.1.0"' 'edition = "2024"' > "$out/tools/diagnostic-coverage-runtime/Cargo.toml"
-    printf '%s\n' '[package]' 'name = "performance"' 'version = "0.1.0"' 'edition = "2024"' > "$out/tools/performance/Cargo.toml"
-    printf '%s\n' '[package]' 'name = "traced-run"' 'version = "0.1.0"' 'edition = "2024"' > "$out/tools/traced-run/Cargo.toml"
-    printf '%s\n' '# docs-only optional dependency placeholder' > "$out/common/src/lib.rs"
-    printf '%s\n' '# docs-only optional dependency placeholder' > "$out/host/src/lib.rs"
-    printf '%s\n' '# docs-only optional dependency placeholder' > "$out/storage/src/lib.rs"
-    printf '%s\n' '# docs-only workspace placeholder' > "$out/tools/diagnostic-coverage-runtime/src/lib.rs"
-    printf '%s\n' '# docs-only workspace placeholder' > "$out/tools/performance/src/lib.rs"
-    printf '%s\n' '# docs-only workspace placeholder' > "$out/tools/traced-run/src/lib.rs"
-  '';
   toolsBaseArgs = {
     src = toolsSrc;
     pname = "jaunder-tools";
@@ -695,23 +640,10 @@ let
   toolsArgs = toolsBaseArgs // {
     cargoVendorDir = toolsCargoVendorDir;
   };
-  docsToolsBaseArgs = toolsBaseArgs // {
-    src = docsToolsSrc;
-    pname = "jaunder-docs-devtool";
-    cargoExtraArgs = "--manifest-path tools/Cargo.toml -p devtool --no-default-features";
-    postPatch = ''
-      ln -sf ../Cargo.lock tools/Cargo.lock
-    '';
-  };
-  docsToolsCargoVendorDir = craneLib.vendorCargoDeps (docsToolsBaseArgs // toolsVendorArgs);
-  docsToolsArgs = docsToolsBaseArgs // {
-    cargoVendorDir = docsToolsCargoVendorDir;
-  };
   mkToolingCargo = import ./tooling-cargo.nix { inherit craneLib; };
   # Generated dependency sources and the file-scoped lock keep implementation edits
   # out of preparation, while every final consumer retains its complete real source.
   toolsBuild = mkToolingCargo toolsArgs;
-  docsToolsBuild = mkToolingCargo docsToolsArgs;
   toolsOfflineCargoHome = mkOfflineCargoHome {
     name = "jaunder-tools";
     vendorDir = toolsCargoVendorDir;
@@ -762,14 +694,6 @@ let
   qualificationDevtoolBin = mkDevtoolBin {
     pname = "jaunder-system-artifact-qualification-devtool";
     qualification = true;
-  };
-  docsDevtoolBin = docsToolsBuild.buildPackage {
-    doCheck = false;
-    installPhase = ''
-      mkdir -p $out/bin
-      cp target/release/devtool $out/bin/devtool
-    '';
-    doNotPostBuildInstallCargoBinaries = true;
   };
 
   cargo-crap = pkgs.callPackage (
@@ -1315,7 +1239,6 @@ in
       testSupportBin
       devtoolBin
       tracedRunBin
-      docsDevtoolBin
       xtaskBin
       cargo-crap
       wasm-bindgen-cli

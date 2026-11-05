@@ -197,14 +197,14 @@ while pre-existing delete/rename state and untracked files stay unstaged and
 tolerated. On `x86_64-linux`, successful narrow staged-Markdown checks and
 reconciliation are followed by admission (no remaining unstaged or nonignored
 untracked changes, and raw worktree/index blob identity for every tracked
-Markdown, `.prettierrc.json`, and `.prettierignore` input consumed by
-`static-docs`, excluding `.claude`) and then the ordinary Git-backed
-`.#checks.x86_64-linux.static-docs` request with lock update/write disabled. A
-post-request status/index check fails on tracked, staged, or nonignored
-untracked mutation without restaging. Admission or host/staging failure skips
-Nix; Nix failure remains the hook verdict and is preserved if the post-check
-also fails. Other platforms and the broad route retain host-only behavior.
-Bypass with `SKIP_PRE_COMMIT=1 git commit` for WIP.
+Markdown, `.prettierrc.json`, `.prettierignore`, and `recipes/prettier.just`
+input consumed by `static-docs`, excluding `.claude`) and then the ordinary
+Git-backed `.#checks.x86_64-linux.static-docs` request with lock update/write
+disabled. A post-request status/index check fails on tracked, staged, or
+nonignored untracked mutation without restaging. Admission or host/staging
+failure skips Nix; Nix failure remains the hook verdict and is preserved if the
+post-check also fails. Other platforms and the broad route retain host-only
+behavior. Bypass with `SKIP_PRE_COMMIT=1 git commit` for WIP.
 
 **`pre-push`** runs `cargo xtask prepush`: the fast verify-only host/static
 surface, existing auxiliary `xtask`/`tools` non-doc tests, host-native product

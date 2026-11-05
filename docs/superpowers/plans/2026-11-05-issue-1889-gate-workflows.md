@@ -35,14 +35,17 @@ preparation operation itself makes no source changes.
   - **Contract:** no gate population selection, sequencing, fail-fast policy, or
     gate-wide report is added to the Rust leaf boundary.
 
-- [ ] **2. Cut over workflows and callers.** Add concise Just recipes for hooks,
-      developer workflows, local validation and existing CI lanes; invoke
-      current producer/consumer entrypoints and preserve their artifacts,
-      verdicts and cleanup. Use #1890's human-approved design-v2 interface:
-      default full synchronous `just e2e` owns matrix, reconciliation and
-      authoritative server-function coverage, with its exit status
-      authoritative. CI may call its minimal producer/reconcile recipes; do not
-      create a shared result protocol or Nix-packaged workflow. Preserve
+- [ ] **2. Cut over workflows and callers.** Progress: the Just recipes and
+      focused workflow proofs are implemented and accepted; hooks, docs/CI
+      callers and legacy commands/selectors remain unchanged pending Manager's
+      external-readiness confirmation. This task is therefore incomplete. Add
+      concise Just recipes for hooks, developer workflows, local validation and
+      existing CI lanes; invoke current producer/consumer entrypoints and
+      preserve their artifacts, verdicts and cleanup. Use #1890's human-approved
+      design-v2 interface: default full synchronous `just e2e` owns matrix,
+      reconciliation and authoritative server-function coverage, with its exit
+      status authoritative. CI may call its minimal producer/reconcile recipes;
+      do not create a shared result protocol or Nix-packaged workflow. Preserve
       `e2e-lanes.json`. Reference this interface only after #1890 actually
       lands; its outline is still awaiting approval. Until then, use currently
       landed entrypoints independently—there is no implementation dependency or
@@ -60,7 +63,9 @@ preparation operation itself makes no source changes.
   - **Dependency:** readiness confirmation from Manager for external selector /
     policy cutover before removing commands those selectors invoke.
 
-- [ ] **3. Consume #1887 and reconcile architecture.** At component
+- [ ] **3. Consume #1887 and reconcile architecture.** Progress: the approved
+      shared Prettier component is implemented and accepted; architecture
+      projection and ownership retirement remain incomplete. At component
       implementation start, recheck #1887's live ownership. If it remains
       unowned and the existing Manager authorization applies, claim it In
       Progress and proceed; ask the Manager only if execution ownership is still
