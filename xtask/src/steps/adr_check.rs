@@ -22,20 +22,26 @@ use std::path::Path;
 use crate::adr_readme;
 use crate::result::{CommandResult, StepResult};
 
-/// Push the `adr-format`, `adr-readme-parity` and `adr-view-parity` steps.
+/// Push all three ADR checks for legacy gate callers. Just invokes the leaves
+/// individually through their own callable boundary.
 pub fn run(result: &mut CommandResult) {
-    result.push(format_step());
-    result.push(parity_step(adr_readme::parity_report(Path::new("."))));
-    result.push(view_parity_step());
+    let root = Path::new(".");
+    result.push(format_step_at(root));
+    result.push(readme_parity_step_at(root));
+    result.push(view_parity_step_at(root));
 }
 
-fn format_step() -> StepResult {
-    let problems = adr_readme::format_problems(Path::new("."));
+pub(crate) fn format_step_at(root: &Path) -> StepResult {
+    let problems = adr_readme::format_problems(root);
     if problems.is_empty() {
         StepResult::ok("adr-format")
     } else {
         StepResult::fail("adr-format").detail(problems.join("\n"))
     }
+}
+
+pub(crate) fn readme_parity_step_at(root: &Path) -> StepResult {
+    parity_step(adr_readme::parity_report(root))
 }
 
 pub(crate) fn parity_step(report: anyhow::Result<Vec<String>>) -> StepResult {
@@ -48,11 +54,11 @@ pub(crate) fn parity_step(report: anyhow::Result<Vec<String>>) -> StepResult {
     }
 }
 
-fn view_parity_step() -> StepResult {
+pub(crate) fn view_parity_step_at(root: &Path) -> StepResult {
     const RECOVERY: &str = "  recovery: none mechanical — describe each ADR above in the \
         relevant section of docs/ARCHITECTURE.md and cite it there, as a link to \
         `adr/NNNN-<slug>.md` or a bare `ADR-NNNN` token. There is no exemption list.";
-    match adr_readme::view_parity_problems(Path::new(".")) {
+    match adr_readme::view_parity_problems(root) {
         Ok(problems) if problems.is_empty() => StepResult::ok("adr-view-parity"),
         Ok(problems) => StepResult::fail("adr-view-parity")
             .detail(format!("{}\n{RECOVERY}", problems.join("\n"))),

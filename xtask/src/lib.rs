@@ -51,6 +51,7 @@ mod web_server_fns;
 mod steps {
     pub mod adr_check;
     pub mod boot_decomposition_coverage;
+    pub mod check_leaf;
     pub mod common_host_target_closure;
     pub mod csr_prerequisite;
     pub mod doc_links;
@@ -104,3 +105,19 @@ pub use dispatch::run;
 pub use host_tooling::prepare_checkout;
 pub use lifecycle::ensure_hooks_installed;
 pub use result::{CommandResult, Mode, StepResult};
+
+/// Run one Rust check leaf through the plain process-status boundary Just uses.
+pub fn run_check_leaf_process(name: &str) -> Result<StepResult, String> {
+    prepare_checkout().map_err(|error| format!("{error:#}"))?;
+    ensure_hooks_installed();
+    let start = std::time::Instant::now();
+    let step = steps::check_leaf::run(name).map_err(|error| format!("{error:#}"))?;
+    Ok(step.with_duration(start.elapsed()))
+}
+
+/// Run precommit's narrow Git/index safety wrapper without a result envelope.
+pub fn run_precommit_safety_process() -> Result<(), String> {
+    prepare_checkout().map_err(|error| format!("{error:#}"))?;
+    ensure_hooks_installed();
+    lifecycle::run_precommit_safety(std::path::Path::new("."))
+}

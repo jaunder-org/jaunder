@@ -20,7 +20,7 @@ preparation operation itself makes no source changes.
 
 ## Task outline
 
-- [ ] **1. Prove callable leaves and precommit safety.** Expose only the
+- [x] **1. Prove callable leaves and precommit safety.** Expose only the
       Rust-only checks that Just cannot invoke directly, one leaf per call;
       retain their algorithms and remove no check population. Keep precommit's
       classification, snapshot, staging reconciliation and docs admission safety

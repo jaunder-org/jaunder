@@ -179,6 +179,15 @@ pub enum Command {
     /// then re-stages only formatter/check mutations that are provably safe for the
     /// paths the author had already staged.
     Precommit,
+    /// Invoke one Rust-only check leaf from Just; hidden from the user workflow list.
+    #[command(hide = true)]
+    CheckLeaf {
+        #[arg(value_parser = nonempty)]
+        name: String,
+    },
+    /// Run Just's selected precommit host recipe inside the Git/index safety boundary.
+    #[command(hide = true)]
+    PrecommitSafety,
     /// Fast push-time gate. Refuses a dirty working tree, then runs the
     /// verify-only host surface plus the host-native product Rust test lane. This
     /// is the local hook path; hermetic Nix coverage, wasm, and doctest checks stay
@@ -756,6 +765,8 @@ impl Cli {
         match self.command {
             Command::Check { .. } => "check",
             Command::Precommit => "precommit",
+            Command::CheckLeaf { .. } => "check-leaf",
+            Command::PrecommitSafety => "precommit-safety",
             Command::Prepush => "prepush",
             Command::Validate { .. } => "validate",
             Command::CiValidate { lane } => lane.command_name(),
@@ -828,11 +839,13 @@ impl Command {
     pub fn produces_json_payload(&self) -> bool {
         !matches!(
             self,
-            Command::Traces(
-                TracesCommand::Analyze { .. }
-                    | TracesCommand::Run { .. }
-                    | TracesCommand::BootPhases { .. }
-            )
+            Command::CheckLeaf { .. }
+                | Command::PrecommitSafety
+                | Command::Traces(
+                    TracesCommand::Analyze { .. }
+                        | TracesCommand::Run { .. }
+                        | TracesCommand::BootPhases { .. }
+                )
         )
     }
 }
@@ -927,6 +940,22 @@ mod tests {
         assert!(
             matches!(cli.command, Command::E2eLane { identity } if identity == "sqlite-firefox-ordinary-1-of-2")
         );
+    }
+
+    #[test]
+    fn just_leaf_and_precommit_safety_commands_are_hidden_process_boundaries() {
+        let leaf = Cli::try_parse_from(["xtask", "check-leaf", "doc-links"]).unwrap();
+        assert_eq!(leaf.command_name(), "check-leaf");
+        assert!(!leaf.command.produces_json_payload());
+        assert!(matches!(
+            leaf.command,
+            Command::CheckLeaf { name } if name == "doc-links"
+        ));
+
+        let safety = Cli::try_parse_from(["xtask", "precommit-safety"]).unwrap();
+        assert_eq!(safety.command_name(), "precommit-safety");
+        assert!(!safety.command.produces_json_payload());
+        assert!(matches!(safety.command, Command::PrecommitSafety));
     }
 
     #[test]

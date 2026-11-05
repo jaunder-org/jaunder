@@ -49,6 +49,11 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             | ProductionBaselineCommand::Accept { .. }
             | ProductionBaselineCommand::QualifyStyling),
         ) => production_baseline::run(command),
+        Command::CheckLeaf { .. } | Command::PrecommitSafety => {
+            anyhow::bail!(
+                "internal leaf and precommit safety commands use the plain process boundary"
+            )
+        }
         Command::Check { no_test } => {
             let policy = gate::execution_policy(&Command::Check { no_test });
             let sh = Shell::new()?;
