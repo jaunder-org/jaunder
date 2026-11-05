@@ -4253,6 +4253,21 @@ boundary.
 
 ### The verify ladder & git-enforced gate
 
+#### Committed direction — Just-owned gate workflows
+
+The approved #1889 design makes the root `Justfile` the default owner of
+one-command developer, hook, local-validation and CI-lane workflow composition.
+It retains Rust-only check algorithms behind only the single-leaf invocation
+boundary Just needs, plus focused Git/index safety logic for precommit; it does
+not move Rust check populations, sequencing, or gate-wide reporting into another
+framework. The current gate architecture below remains the implemented reality
+until that migration lands. The approved #1887 component moves only the
+Markdown, `end2end`, and CSS Prettier definitions and removes the docs-only
+`docsDevtoolBin` build/source path; other `devtool` checks remain unchanged.
+Existing validation verdicts and independent CI lane results remain
+authoritative. See the
+[proposed Just-owned gate workflow decision](adr/drafts/just-owned-gate-workflows.md).
+
 The ladder has four local entrypoints, all driven by `xtask`
 (`xtask/src/lib.rs`: `run_host_gate`, `run_local_push_gate`, `Command::Check`,
 `Command::Precommit`, `Command::Prepush`, and `Command::Validate`):
