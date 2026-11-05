@@ -57,18 +57,10 @@ pub enum PhaseName {
     GateExecution,
     ResultLift,
     PostGateChecks,
-    CoverageWorkspaceResolution,
-    CoverageProfileCleanup,
-    CoverageTestCensus,
-    CoverageInstrumentedTestRun,
-    CoveragePopulationReconciliation,
-    CoverageTextReport,
-    CoverageLcovReport,
-    CoverageCrapReport,
 }
 
 impl PhaseName {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 7] = [
         Self::NixEvaluation,
         Self::NixSubstitution,
         Self::NixLocalBuild,
@@ -76,14 +68,6 @@ impl PhaseName {
         Self::GateExecution,
         Self::ResultLift,
         Self::PostGateChecks,
-        Self::CoverageWorkspaceResolution,
-        Self::CoverageProfileCleanup,
-        Self::CoverageTestCensus,
-        Self::CoverageInstrumentedTestRun,
-        Self::CoveragePopulationReconciliation,
-        Self::CoverageTextReport,
-        Self::CoverageLcovReport,
-        Self::CoverageCrapReport,
     ];
 
     const fn as_str(self) -> &'static str {
@@ -95,14 +79,6 @@ impl PhaseName {
             Self::GateExecution => "gate-execution",
             Self::ResultLift => "result-lift",
             Self::PostGateChecks => "post-gate-checks",
-            Self::CoverageWorkspaceResolution => "coverage-workspace-resolution",
-            Self::CoverageProfileCleanup => "coverage-profile-cleanup",
-            Self::CoverageTestCensus => "coverage-test-census",
-            Self::CoverageInstrumentedTestRun => "coverage-instrumented-test-run",
-            Self::CoveragePopulationReconciliation => "coverage-population-reconciliation",
-            Self::CoverageTextReport => "coverage-text-report",
-            Self::CoverageLcovReport => "coverage-lcov-report",
-            Self::CoverageCrapReport => "coverage-crap-report",
         }
     }
 }
@@ -358,8 +334,6 @@ pub struct CommandResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_override: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub coverage: Option<crate::coverage::CoverageReport>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub audit: Option<crate::audit_wasm::AuditReport>,
     /// Per-section and per-crate attribution from `audit-wasm --breakdown`
     /// (#836). Separate from `audit` because the two describe *different
@@ -532,7 +506,6 @@ impl CommandResult {
             steps: Vec::new(),
             e2e_concurrency: None,
             exit_override: None,
-            coverage: None,
             audit: None,
             breakdown: None,
             flaky: Vec::new(),
@@ -926,14 +899,6 @@ mod tests {
                 "gate-execution",
                 "result-lift",
                 "post-gate-checks",
-                "coverage-workspace-resolution",
-                "coverage-profile-cleanup",
-                "coverage-test-census",
-                "coverage-instrumented-test-run",
-                "coverage-population-reconciliation",
-                "coverage-text-report",
-                "coverage-lcov-report",
-                "coverage-crap-report",
             ]
         );
         assert!(

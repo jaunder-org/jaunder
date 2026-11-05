@@ -58,7 +58,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             if !no_test {
                 steps::test_local::run(&sh, &mut result, &[]);
             }
-            steps::nix::check_supporting_test_checks(&mut result, no_test);
+            steps::nix::check_supporting_test_checks(&sh, &mut result, no_test);
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
@@ -294,6 +294,13 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         }
         Command::Nix(NixCommand::ProductionBaselineSmoke) => {
             production_baseline::run_current_checkout_smoke()
+        }
+        Command::CoveragePolicy { out } => {
+            let start = Instant::now();
+            let mut result = CommandResult::new("coverage-policy");
+            result.push(coverage::run(&out).0.with_duration(start.elapsed()));
+            lifecycle::finalize(&mut result, start);
+            Ok(result)
         }
         Command::Coverage(CoverageCommand::ProbeSource) => {
             let start = Instant::now();
@@ -682,8 +689,12 @@ impl NonE2eValidationSurface {
             Self::WasmBudget => steps::wasm_budget::run(result),
             Self::HostTests => gate::HOST_TESTS_STEP.run(sh, Mode::Check, policy, result),
             Self::WasmTests => steps::nix::TestCheck::Wasm.run(result),
-            Self::RustCoverage => steps::nix::TestCheck::Coverage.run(result),
-            Self::Doctests => steps::nix::TestCheck::Doctests.run(result),
+            Self::RustCoverage => result.push(crate::sh::step(
+                sh, "coverage", "just", &["coverage-workflow"],
+            )),
+            Self::Doctests => result.push(crate::sh::step(
+                sh, "doctests", "just", &["doctests-workflow"],
+            )),
             Self::ElispCoverage => steps::nix::TestCheck::ElispCoverageProducer.run(result),
         }
     }

@@ -1161,7 +1161,8 @@ mod tests {
 
         assert!(test_local < wasm_tests);
         assert!(!names.contains(&"coverage"));
-        assert!(names.contains(&"doctests"));
+        // Doctests now runs through the direct Just workflow, not TestCheck.
+        assert!(!names.contains(&"doctests"));
     }
 
     #[test]

@@ -39,15 +39,36 @@ pub fn parse_text_report(report: &str, repo_root: &str) -> Result<Vec<FileCovera
             });
             continue;
         }
-        // Format: "<lineno>|<count>|<source...>". Split into at most 3.
+        // LLVM's sub-line region annotations do not change line attribution.
+        // Accept only the pinned table/annotation shapes; an unknown row must
+        // not silently discard an uncovered line beside valid covered rows.
+        if !line.contains('|') {
+            if line
+                .split_whitespace()
+                .all(|part| part.strip_prefix('^').is_some_and(valid_count))
+            {
+                continue;
+            }
+            bail!("unsupported coverage report row: {line}");
+        }
+        // Format: "<lineno>|<count>|<source...>". Preserve pipes in source text.
         let mut parts = line.splitn(3, '|');
-        let (Some(num_col), Some(count_col)) = (parts.next(), parts.next()) else {
-            continue;
+        let (Some(num_col), Some(count_col), Some(text)) =
+            (parts.next(), parts.next(), parts.next())
+        else {
+            bail!("malformed coverage report row: {line}");
         };
-        let Ok(lineno) = num_col.trim().parse::<u32>() else {
-            continue;
+        let lineno = num_col.trim().parse::<u32>().ok().filter(|line| *line > 0);
+        let Some(lineno) = lineno else {
+            bail!("invalid coverage line number: {line}");
         };
-        let text = parts.next().unwrap_or("");
+        if files.is_empty() {
+            bail!("coverage row has no source header: {line}");
+        }
+        let count = count_col.trim();
+        if !count.is_empty() && !valid_count(count) {
+            bail!("invalid coverage count at line {lineno}: {count}");
+        }
 
         // Marker detection runs on EVERY report line (executable or not) so a
         // marker sitting on a non-executable comment line is still honored, and
@@ -106,7 +127,6 @@ pub fn parse_text_report(report: &str, repo_root: &str) -> Result<Vec<FileCovera
         let Some(file) = files.last_mut() else {
             continue;
         };
-        let count = count_col.trim();
         if count.is_empty() {
             continue; // non-executable
         }
@@ -126,6 +146,15 @@ pub fn parse_text_report(report: &str, repo_root: &str) -> Result<Vec<FileCovera
     Ok(files)
 }
 
+/// LLVM's pinned human-readable counts are integers or decimals with k/M/G
+/// scaling. Validation does not recompute LLVM's region-to-line attribution.
+fn valid_count(count: &str) -> bool {
+    let number = count.strip_suffix(['k', 'M', 'G']).unwrap_or(count);
+    let mut parts = number.split('.');
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+    parts.next().is_some_and(digits) && parts.next().is_none_or(digits) && parts.next().is_none()
+}
+
 /// A count column is "zero" only if it is literally 0 (covered iff non-zero).
 fn is_zero_count(count: &str) -> bool {
     count == "0"
@@ -143,6 +172,72 @@ mod tests {
     4|  1.36k|    ok()
     5|     0|    impossible() // cov:ignore: platform-only signal handler
 ";
+
+    #[test]
+    fn pinned_llvm_line_attribution_is_not_reduced_from_regions() {
+        // Captured with pinned cargo-llvm-cov 0.9.0 / rustc 1.97.1, default
+        // report --text output; source headers and final newline normalized.
+        // generic is instantiated for u8 and u16; choose expands at its callsite.
+        let files = parse_text_report(include_str!("../testdata/coverage-line-table.txt"), "/repo")
+            .unwrap();
+        assert_eq!(
+            files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
+            ["src/main.rs", "src/other.rs"]
+        );
+        assert_eq!(
+            files[0].lines.iter().map(|l| l.line).collect::<Vec<_>>(),
+            [
+                5, 6, 7, 9, 10, 11, 12, 14, 15, 17, 19, 23, 24, 25, 26, 27, 28, 29
+            ]
+        );
+        assert_eq!(
+            files[0]
+                .lines
+                .iter()
+                .filter(|l| !l.covered)
+                .map(|l| l.line)
+                .collect::<Vec<_>>(),
+            [17]
+        );
+        // A zero-count sub-line region on line 10 does not make that line
+        // uncovered; blank gap rows and the unexpanded macro body stay absent.
+        assert!(
+            files[0]
+                .lines
+                .iter()
+                .find(|l| l.line == 10)
+                .unwrap()
+                .covered
+        );
+        assert_eq!(
+            files[0].lines.iter().find(|l| l.line == 28).unwrap().text,
+            "    assert_eq!(choose!(true), 11);"
+        );
+        assert_eq!(
+            files[1].lines,
+            [LineCov {
+                line: 1,
+                covered: true,
+                text: "pub fn called() {}".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn malformed_line_tables_never_hide_behind_a_valid_covered_row() {
+        for invalid in [
+            "    2|bogus|uncovered()",
+            "    2|     0",
+            "oops|     0|uncovered()",
+            "    0|     1|not_a_source_line()",
+            "    2|    -1|uncovered()",
+            "unsupported report format",
+        ] {
+            let report = format!("/repo/a.rs:\n    1|     1|covered()\n{invalid}\n");
+            assert!(parse_text_report(&report, "/repo").is_err(), "{invalid}");
+        }
+        assert!(parse_text_report("    1|     1|orphan()\n", "/repo").is_err());
+    }
 
     #[test]
     fn parses_executable_lines_with_covered_flag_and_text() {

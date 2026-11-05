@@ -235,12 +235,6 @@ jobs:
           for path in /nix/store "$GITHUB_WORKSPACE/.xtask/tmp" "$GITHUB_WORKSPACE"; do
             probe "allocated bytes: $path" timeout 10s du -shx -- "$path"
           done
-      - name: Preserve coverage validation result
-        if: always()
-        run: |
-          if test -f .xtask/last-result.json; then
-            cp .xtask/last-result.json .xtask/coverage-result.json
-          fi
       - name: Upload coverage storage snapshot
         if: always()
         continue-on-error: true
@@ -260,7 +254,6 @@ jobs:
             .xtask/gcroots/coverage/status.json
             .xtask/gcroots/coverage/diagnostics/
             .xtask/last-result.json
-            .xtask/coverage-result.json
           if-no-files-found: ignore
           retention-days: 14
 
