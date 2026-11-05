@@ -4,18 +4,14 @@ use std::io::Write as IoWrite;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use coverage::status::CoverageStatus;
 
 use super::{CoverageReport, crap, exempt, gate, report};
 use crate::git;
 use crate::result::StepResult;
 
-/// Post-process the Nix `coverage` check's `$out`: validate its producer status,
-/// parse its text + CRAP reports, and apply the stateless gate.
-///
-/// Requires a valid `tests-ok` `<out_dir>/status.json`, nonempty text evidence
-/// with executable lines, and `<out_dir>/crap-report.json`.
-pub fn run(out_dir: &str) -> (StepResult, Option<CoverageReport>) {
+/// Apply only host source policy to realized text + CRAP reports. The Just
+/// workflow must pass the hard Nix producer-status gate before invoking this leaf.
+pub fn run(out_dir: &Path) -> (StepResult, Option<CoverageReport>) {
     match run_inner(out_dir) {
         Ok(pair) => pair,
         Err(error) => (coverage_failure_step(error), None),
@@ -25,31 +21,14 @@ fn coverage_failure_step(error: anyhow::Error) -> StepResult {
     StepResult::fail("coverage").detail(format!("{error:#}"))
 }
 
-fn run_inner(out_dir: &str) -> Result<(StepResult, Option<CoverageReport>)> {
-    let status_path = format!("{out_dir}/status.json");
-    let report_path = format!("{out_dir}/coverage-report.txt");
-    let crap_path = format!("{out_dir}/crap-report.json");
-
-    fs::read_to_string(&status_path)
-        .with_context(|| format!("reading coverage status at {status_path}"))
-        .and_then(|raw| {
-            CoverageStatus::from_completed_json(&raw)
-                .context("validating completed coverage status")
-        })?;
-
-    let report = match fs::read_to_string(&report_path) {
-        Ok(s) => s,
-        Err(_) => {
-            return Ok((
-                StepResult::fail("coverage")
-                    .detail(format!("missing coverage report at {report_path}")),
-                None,
-            ));
-        }
-    };
+fn run_inner(out_dir: &Path) -> Result<(StepResult, Option<CoverageReport>)> {
+    let report_path = out_dir.join("coverage-report.txt");
+    let crap_path = out_dir.join("crap-report.json");
+    let report = fs::read_to_string(&report_path)
+        .with_context(|| format!("reading coverage report at {}", report_path.display()))?;
 
     if report.trim().is_empty() {
-        bail!("empty coverage report at {report_path}");
+        bail!("empty coverage report at {}", report_path.display());
     }
 
     let repo_root = git::toplevel(Path::new("."))?;
@@ -64,15 +43,8 @@ fn run_inner(out_dir: &str) -> Result<(StepResult, Option<CoverageReport>)> {
     // leave the source fully measured via an empty exemption set.
     let exemptions = exemption_population(&current, &repo_root, |path| fs::read_to_string(path))?;
 
-    let crap_report_str = match fs::read_to_string(&crap_path) {
-        Ok(s) => s,
-        Err(_) => {
-            return Ok((
-                StepResult::fail("coverage").detail(format!("missing CRAP report at {crap_path}")),
-                None,
-            ));
-        }
-    };
+    let crap_report_str = fs::read_to_string(&crap_path)
+        .with_context(|| format!("reading CRAP report at {}", crap_path.display()))?;
 
     let verdict = gate::evaluate(&current, |path| {
         exemptions.get(path).cloned().unwrap_or_default()
@@ -99,7 +71,6 @@ fn run_inner(out_dir: &str) -> Result<(StepResult, Option<CoverageReport>)> {
         guard_violations: verdict.guard_violations.len(),
         crap_fails: crap_fails.len(),
     };
-
     let step = if gate_fails {
         StepResult::fail("coverage").detail(failure_report(&verdict, &crap_fails))
     } else {
@@ -239,29 +210,6 @@ fn exemption_population(
 mod tests {
     use super::*;
 
-    fn complete_status() -> coverage::status::CoverageStatus {
-        coverage::status::CoverageStatus {
-            version: coverage::status::COVERAGE_STATUS_VERSION,
-            category: coverage::status::StatusCategory::TestsOk,
-            stages: coverage::status::RequiredStage::ALL
-                .into_iter()
-                .map(|stage| coverage::status::StageResult {
-                    stage,
-                    outcome: coverage::status::ProcessOutcome::Success,
-                    duration_ms: None,
-                })
-                .collect(),
-            population: coverage::status::Population {
-                expected: 1,
-                executed: 1,
-                ignored: 0,
-            },
-            failed_tests: Vec::new(),
-            missing_tests: Vec::new(),
-            infra_detail: None,
-        }
-    }
-
     fn write_reports(out: &std::path::Path, text_report: &str, crap_report: &str) {
         std::fs::write(out.join("coverage-report.txt"), text_report).unwrap();
         std::fs::write(out.join("crap-report.json"), crap_report).unwrap();
@@ -395,29 +343,17 @@ mod tests {
     #[test]
     fn run_rejects_missing_or_empty_text_evidence_before_crap_evaluation() {
         let missing = tempfile::tempdir().unwrap();
-        std::fs::write(
-            missing.path().join("status.json"),
-            complete_status().to_json(),
-        )
-        .unwrap();
-        let (step, report) = run(missing.path().to_str().unwrap());
+        let (step, _) = run(missing.path());
         assert!(!step.ok);
-        assert!(report.is_none());
         assert!(
-            step.detail.unwrap().contains("missing coverage report"),
+            step.detail.unwrap().contains("reading coverage report"),
             "missing text evidence must be named"
         );
 
         let empty = tempfile::tempdir().unwrap();
         write_reports(empty.path(), "", "not JSON");
-        std::fs::write(
-            empty.path().join("status.json"),
-            complete_status().to_json(),
-        )
-        .unwrap();
-        let (step, report) = run(empty.path().to_str().unwrap());
+        let (step, _) = run(empty.path());
         assert!(!step.ok);
-        assert!(report.is_none());
         let detail = step.detail.unwrap();
         assert!(
             detail.contains("empty coverage report"),
@@ -434,12 +370,9 @@ mod tests {
             &format!("{repo_root}/xtask/src/coverage/run.rs:\n"),
             "not JSON",
         );
-        std::fs::write(out.path().join("status.json"), complete_status().to_json()).unwrap();
-
-        let (step, report) = run(out.path().to_str().unwrap());
+        let (step, _) = run(out.path());
 
         assert!(!step.ok);
-        assert!(report.is_none());
         let detail = step.detail.unwrap();
         assert!(
             detail.contains("zero executable lines"),
@@ -448,34 +381,71 @@ mod tests {
     }
 
     #[test]
-    fn run_refuses_invalid_status_after_a_successful_nix_gate() {
-        let repo_root = crate::git::toplevel(std::path::Path::new(".")).unwrap();
-        let text_report = format!(
-            "{repo_root}/xtask/src/coverage/run.rs:\n    1|     1|use std::collections::BTreeMap;\n"
-        );
-        let mut contradiction = complete_status();
-        contradiction.infra_detail = Some("tests cannot both pass and be infra".into());
-        let mut incomplete = complete_status();
-        incomplete.stages.pop();
-
-        for (name, status) in [
-            ("malformed", "{".to_owned()),
-            ("contradictory", contradiction.to_json()),
-            ("incomplete", incomplete.to_json()),
+    fn policy_leaf_preserves_source_exceptions_a1_and_exclusive_crap_threshold() {
+        for (source, count, score, passes) in [
+            ("    ordinary();", "0", 0.0, false),
+            (
+                "    ordinary(); // cov:ignore: target-only path",
+                "0",
+                0.0,
+                true,
+            ),
+            ("    ordinary(); // cov:ignore", "0", 0.0, false),
+            ("    unreachable!(\"caller invariant\");", "0", 0.0, true),
+            ("    unreachable!(\"caller invariant\");", "1", 0.0, false),
+            (
+                "    std::unreachable!(\"unsupported path\");",
+                "0",
+                0.0,
+                false,
+            ),
+            ("    ordinary();", "1", 30.0, true),
+            ("    ordinary();", "1", 30.01, false),
+            (
+                "    ordinary(); // crap:allow: bounded dispatch",
+                "1",
+                30.01,
+                true,
+            ),
         ] {
             let out = tempfile::tempdir().unwrap();
-            write_reports(out.path(), &text_report, r#"{"entries":[]}"#);
-            std::fs::write(out.path().join("status.json"), status).unwrap();
-
-            let (step, report) = run(out.path().to_str().unwrap());
-
-            assert!(!step.ok, "{name} status must not be trusted");
-            assert!(report.is_none(), "{name} status must have no host verdict");
+            let path = out.path().join("sample.rs");
+            fs::write(&path, format!("fn sample() {{\n{source}\n}}\n")).unwrap();
+            write_reports(out.path(),
+                &format!("{}:\n    1|     1|fn sample() {{\n    2|{count}|{source}\n    3|     1|}}\n", path.display()),
+                &serde_json::json!({"entries": [{"file": path, "function": "sample", "line": 1, "crap": score}]}).to_string(),
+            );
+            let (step, _) = run(out.path());
+            assert_eq!(
+                step.ok, passes,
+                "{source} count={count} CRAP={score}: {:?}",
+                step.detail
+            );
         }
     }
 
     #[test]
-    fn run_preserves_the_coverage_verdict_after_complete_evidence() {
+    fn policy_leaf_rejects_malformed_text_and_missing_or_malformed_crap() {
+        for text in ["not a line table", "/repo/a.rs:\n1|bogus|uncovered()\n"] {
+            let out = tempfile::tempdir().unwrap();
+            write_reports(out.path(), text, r#"{"entries":[]}"#);
+            assert!(!run(out.path()).0.ok);
+        }
+        let out = tempfile::tempdir().unwrap();
+        let path = out.path().join("sample.rs");
+        fs::write(&path, "fn sample() {}\n").unwrap();
+        fs::write(
+            out.path().join("coverage-report.txt"),
+            format!("{}:\n1|1|fn sample() {{}}\n", path.display()),
+        )
+        .unwrap();
+        assert!(!run(out.path()).0.ok);
+        fs::write(out.path().join("crap-report.json"), "not JSON").unwrap();
+        assert!(!run(out.path()).0.ok);
+    }
+
+    #[test]
+    fn policy_leaf_accepts_complete_reports_without_producer_status() {
         let out = tempfile::tempdir().unwrap();
         let repo_root = crate::git::toplevel(std::path::Path::new(".")).unwrap();
         write_reports(
@@ -485,18 +455,8 @@ mod tests {
             ),
             r#"{"entries":[]}"#,
         );
-        std::fs::write(out.path().join("status.json"), complete_status().to_json()).unwrap();
-
-        let (step, report) = run(out.path().to_str().unwrap());
-
+        let (step, report) = run(out.path());
         assert!(step.ok, "{:?}", step.detail);
-        assert_eq!(
-            report,
-            Some(CoverageReport {
-                failures: 0,
-                guard_violations: 0,
-                crap_fails: 0,
-            })
-        );
+        assert_eq!(report, Some(CoverageReport::default()));
     }
 }

@@ -90,6 +90,20 @@ crate is absent from every Nix derivation
 [ADR-0031](adr/0031-elisp-separately-tested-subproject.md)) and `end2end/`
 (Playwright) are covered in their sections.
 
+**Coverage and doctests.** `just coverage` and `just doctests` require a clean
+checkout and directly run their Nix producer followed by its hard status gate.
+Coverage then calls the host-only `cargo xtask coverage-policy --out <output>`
+leaf: pinned LLVM line-table attribution, real-comment `cov:ignore` rules,
+fail-closed `unreachable!("msg")` AST spans with the A1 guard, and source-span
+`crap:allow` at the exclusive threshold 30. Output links stay under
+`.xtask/gcroots/{coverage,doctests}` without host copies. Nix never invokes host
+xtask; doctest fence reconciliation remains bidirectional and separate from
+instrumented root-workspace SQLite/PostgreSQL coverage. Existing Rust validation
+callers temporarily invoke the internal Just workflow recipes through
+`sh::step`; the CI lane catalog and job-result verdicts remain in place. Their
+retirement, CI cutover, and superseding ADR work belong to #1889, not this
+workflow boundary.
+
 **Performance evidence.** `cargo xtask perf <small|medium|large>` is a
 host-owned orchestration boundary. It gives every measurement a fresh nonce in
 the Nix derivation identity, invokes sandbox producers serially, validates their

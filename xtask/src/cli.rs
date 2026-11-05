@@ -297,6 +297,11 @@ pub enum Command {
         #[arg(long, value_enum, requires = "control_diagnostics_root")]
         control_workers: Option<E2eControlWorkers>,
     },
+    /// Apply source-aware coverage/CRAP policy to realized reports; never runs Nix.
+    CoveragePolicy {
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Compatibility command that builds and reconciles one backend's retained
     /// Firefox split lanes in one host process.
     E2eExperimental {
@@ -781,6 +786,7 @@ impl Cli {
             Command::Traces(TracesCommand::Run { .. }) => "traces-run",
             Command::Traces(TracesCommand::BootPhases { .. }) => "traces-boot-phases",
             Command::Nix(NixCommand::ProductionBaselineSmoke) => "nix-production-baseline-smoke",
+            Command::CoveragePolicy { .. } => "coverage-policy",
             Command::Coverage(CoverageCommand::ProbeSource) => "coverage-probe-source",
             Command::Coverage(CoverageCommand::BenchmarkLocal { .. }) => "coverage-benchmark-local",
             Command::WasmCoverage(WasmCoverageCommand::Probe) => "wasm-coverage-probe",

@@ -724,11 +724,19 @@ identities, and the terminal run records must reconcile exactly:
 `expected = executed + ignored`. Every required producer subprocess has its exit
 status checked; command output never turns a nonzero exit into success.
 
-The producer writes a versioned status record, and both the Nix gate and host
-consumer validate it before coverage/CRAP policy. A missing or empty text
-report, or a parsed report with zero executable lines, is rejected rather than
-reported green. Doctests and the auxiliary `xtask`/`tools` workspaces retain
-their separate test authorities outside this root-workspace nextest population.
+Run `just coverage` or `just doctests` for the direct single-command hermetic
+workflows. Each first requires a clean checkout, then realizes its producer at
+`.xtask/gcroots/{coverage,doctests}` and runs the hard Nix status gate. Coverage
+then invokes the host-only
+`cargo xtask coverage-policy --out .xtask/gcroots/coverage` leaf to apply
+source-aware line and CRAP policy; that leaf does not orchestrate producers or
+validate producer status. The Nix gate rejects missing, invalid, or non-success
+status before policy runs. A missing, malformed, or empty text report, or a
+report with zero executable lines, is rejected rather than reported green.
+Doctests and the auxiliary `xtask`/`tools` workspaces retain their separate test
+authorities outside this root-workspace nextest population. Existing Rust
+aggregate callers temporarily invoke the internal Just workflows; CI still
+selects its current `ci-validate` lanes until #1889's separate cutover.
 
 Within the host/local gate, health checks are ordered for fast, actionable
 feedback: clean/staged-tree preconditions first, source-format and generated-doc
@@ -776,8 +784,10 @@ the shared `/nix/store`: filesystem capacity comes from `df`, not a whole-store
 #### Measuring Nix invalidation
 
 Every `cargo xtask` invocation overwrites `.xtask/last-result.json`. Each
-successful Nix-backed step reports the requested installable, evaluated `.drv`
-identity when observable, conservative local realization state, and duration.
+successful step still using the Rust Nix adapter reports the requested
+installable, evaluated `.drv` identity when observable, conservative local
+realization state, and duration. Coverage/doctest Just workflows instead retain
+native Nix output and producer diagnostics, without host phase/report adapters.
 Compare identities directly; `reused` means the selected outputs were already
 locally valid, while `realized` means they became valid during the build.
 Neither state attributes compilation versus substitution.

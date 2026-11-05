@@ -71,6 +71,7 @@ let
     assert sourceAdmits "test-support/src/lib.rs" "regular";
     assert sourceAdmits "xtask/src/server_fn_coverage/testdata/coverage-sample.jsonl" "regular";
     assert sourceAdmits "xtask/src/testdata/e2e-evidence/ordinary-1-trace.jsonl" "regular";
+    assert sourceAdmits "xtask/src/testdata/coverage-line-table.txt" "regular";
     assert !(sourceAdmits "tools/devtool/src/main.rs" "regular");
     pkgs.lib.cleanSourceWith {
     src = craneLib.path ../.;

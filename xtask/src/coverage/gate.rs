@@ -2,15 +2,13 @@
 //! plus each file's structural exemptions ([`super::exempt`]) — no baseline, no
 //! anchor, no history. This is the authoritative coverage gate (its verdict
 //! feeds `gate_fails` in [`super`]): an executable line FAILS iff it is
-//! uncovered AND not structurally exempt (a `#[component]` body or a
-//! message-carrying `unreachable!` invocation) AND not suppressed by a
+//! uncovered AND not structurally exempt (a message-carrying `unreachable!`
+//! invocation) AND not suppressed by a
 //! `cov:ignore` marker.
 //!
 //! The A1-guard tripwire is the load-bearing safety check: a *covered* line
-//! inside an exempt span means the exemption's premise is violated — either a
-//! `#[component]` body is being exercised natively (breaking "components are
-//! never rendered natively", the assumption that makes blanket component
-//! exemption a wash) or an `unreachable!` assertion was actually reached. Such a
+//! inside an exempt span means the exemption's premise is violated — an
+//! `unreachable!` assertion was actually reached. Such a
 //! line is reported as a `guard_violation` so the gate fails until it is
 //! understood.
 
@@ -36,9 +34,8 @@ pub struct Fail {
 
 /// Stateless verdict: an executable line FAILS iff uncovered AND not exempt.
 ///
-/// Guard (A1 tripwire): a COVERED line inside an exempt (`#[component]` body or
-/// `unreachable!` assertion) span means the exemption's premise is violated (a
-/// component rendered natively, or an `unreachable!` reached) → it is reported in
+/// Guard (A1 tripwire): a COVERED line inside an exempt `unreachable!` assertion
+/// span means the exemption's premise is violated → it is reported in
 /// `guard_violations`.
 ///
 /// `exempt_of(path)` returns the exempt line set for that file (empty on any
@@ -103,7 +100,7 @@ mod tests {
     }
 
     #[test]
-    fn uncovered_in_component_passes() {
+    fn uncovered_in_exempt_span_passes() {
         let files = vec![fc("a.rs", &[(3, false, "view! { <div/> }")])];
         let exempt = exempt_from(BTreeMap::from([("a.rs", BTreeSet::from([3]))]));
         let v = evaluate(&files, exempt);
@@ -115,7 +112,7 @@ mod tests {
     }
 
     #[test]
-    fn covered_in_component_trips_guard() {
+    fn covered_in_exempt_span_trips_guard() {
         let files = vec![fc("a.rs", &[(3, true, "view! { <div/> }")])];
         let exempt = exempt_from(BTreeMap::from([("a.rs", BTreeSet::from([3]))]));
         let v = evaluate(&files, exempt);

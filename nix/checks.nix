@@ -3691,7 +3691,7 @@ doctests = craneLib.mkCargoDerivation (
       export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:''${LD_LIBRARY_PATH:-}"
       mkdir -p emit-out
       # devtool always exits 0 after writing emit-out/status.json;
-      # gating is the doctests-gate consumer + host xtask.
+      # the direct Just workflow gates through doctests-gate.
       devtool doctests emit --out emit-out
     '';
     installPhaseCommand = ''
@@ -3710,11 +3710,17 @@ doctests-gate =
     }
     ''
       cat ${self.checks.${system}.doctests}/status.json
-      cat=$(jq -r .category ${self.checks.${system}.doctests}/status.json)
-      if [ "$cat" != "ok" ]; then
-        echo "doctest gate failed: category=$cat" >&2
-        jq -r '.infra_detail // (.violations[] | if .line == null then "\(.file) [\(.kind)] \(.detail)" else "\(.file):\(.line) [\(.kind)] \(.detail)" end)' \
-          ${self.checks.${system}.doctests}/status.json >&2
+      # Match DoctestStatus's optional defaults, but accept only a single,
+      # supported success object with no contradictory failure evidence.
+      if ! jq -e -s '
+        length == 1 and (.[0] |
+          type == "object" and
+          ((keys - ["category", "violations", "infra_detail"]) | length == 0) and
+          .category == "ok" and
+          ((has("violations") | not) or .violations == []) and
+          .infra_detail == null)
+      ' ${self.checks.${system}.doctests}/status.json; then
+        echo "doctest gate failed: invalid or non-ok status" >&2
         exit 1
       fi
       touch $out

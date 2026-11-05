@@ -545,8 +545,7 @@ fn observe(root: &Path, tools: &ToolIdentity, observation: &mut Observation) {
             }
         }
     }
-    let output_text = output.to_string_lossy();
-    let (coverage_step, coverage_verdict) = evaluate_coverage(&output_text);
+    let (coverage_step, coverage_verdict) = evaluate_coverage(&output);
     if coverage_verdict.is_none() {
         observation.rejection =
             Some("coverage line or CRAP verdict is missing or malformed".to_owned());
