@@ -4198,8 +4198,8 @@ rather than failing the check, with the JSON report still recording it
 ([ADR-0031](adr/0031-elisp-separately-tested-subproject.md)): three elisp steps
 — `ert`, `elisp-fmt` and `byte-compile` — run in both `check` (Fix) and
 `validate` (Check), each as a `devtool check` step. Standalone pure `ert` runs
-in `static-ert`; `elisp-fmt` and `byte-compile` remain in `static-code`
-([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
+in `static-ert`; `elisp-fmt` and `byte-compile` run in the separate
+`static-elisp` leaf ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
 `xtask/src/steps/static_checks.rs:17-18`); one `emacsForCi` toolchain
 (`nix/packages.nix:372-404`) serves both.
 
@@ -4415,13 +4415,19 @@ hermetic shared static surface has `static-docs` running
 residual non-Clippy devtool checks outside TypeScript, Rust formatting and
 standalone ERT with workspace-specific offline Cargo homes. Static-code requests
 the narrow Clippy aggregate once; its six independently buildable terminal
-leaves run lint and the aggregate does not rerun it. `static-ert` runs
-`devtool check --group ert`. The ERT leaf receives the complete non-Markdown
-`elisp/` tree in a writable copy, shared `devtoolBin`, existing `emacsForCi`
-(including plz, Undercover and cmarkEl), Git and `TZDIR`. It preserves the
-standalone runner's population and is non-substitutable, but valid local outputs
-may still be reused. Elisp byte-compilation remains in static-code; no speedup
-or source-cache isolation is claimed.
+leaves run lint and the aggregate does not rerun it. `static-elisp` runs
+`devtool check elisp-fmt` in verify mode and `devtool check byte-compile` over
+the complete non-Markdown Elisp source tree in a writable copy. It has pinned
+`emacsForCi` and `TZDIR`, plus `devtoolBin` and its actual transitive tooling
+source/dependency closure. The commands need no offline Cargo home,
+Node/Playwright, or Git; any such build inputs enter only through `devtoolBin`.
+Elisp-source changes invalidate `static-elisp`; source-probe evaluation also
+shows `static-code`'s identity changing through an existing transitive input,
+despite Elisp's exclusion from its direct source filter. Shared devtool source
+or lock changes also invalidate this leaf through `devtoolBin`. The verdict is
+non-substitutable, while valid local output reuse remains possible. `static-ert`
+continues to run `devtool check --group ert` over its own complete population;
+the combined pure/live coverage producer is unchanged.
 
 The independent `xtask-format` leaf runs pinned raw
 `cargo fmt --manifest-path xtask/Cargo.toml --check`, without `--all`, devtool,
@@ -4433,9 +4439,9 @@ source-admission exception preserves ADR-0028's host-only xtask execution
 boundary.
 
 `validate --no-e2e` builds `nix-static-docs`, `nix-static-typescript`,
-`nix-rust-format`, `nix-static-code`, `nix-static-ert`, and `nix-xtask-format`
-before the Nix test checks. ADR-0178 established the original two-group/two-leaf
-documentation split, not a generic extraction policy
+`nix-rust-format`, `nix-static-code`, `nix-static-elisp`, `nix-static-ert`, and
+`nix-xtask-format` before the Nix test checks. ADR-0178 established the original
+two-group/two-leaf documentation split, not a generic extraction policy
 ([hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md)).
 The concrete further ERT extraction was separately approved in the
 [ERT spec](https://github.com/jaunder-org/jaunder/blob/ba7fdf416d8ec7b14c86b163ead41feaf3dc12c7/docs/superpowers/specs/2026-11-03-issue-1864-elisp-ert.md)
@@ -4443,9 +4449,9 @@ The concrete further ERT extraction was separately approved in the
 actually need an ADR for this, do we?”); no new ADR or generic policy is
 implied. The separately approved TypeScript extraction is now integrated. The
 shared groups and Nix leaves are ordered docs, typescript, rust-format, code,
-ert, followed by independent `xtask-format` in Nix validation. The complete
-`--all` inventory retains its established order and uniqueness, with tsc at its
-former position and ERT last.
+elisp, ert, followed by independent `xtask-format` in Nix validation. The
+complete `--all` inventory retains its established order and uniqueness, with
+tsc at its former position and ERT last.
 
 Both tsc and ERT use one shared producer to emit a bounded versioned stderr
 timing event around only their child using a monotonic clock. Host xtask
@@ -4483,12 +4489,14 @@ both workspace offline Cargo homes, the pinned formatter/toolchain, and their
 transitive build, source/vendor and embedded inputs. Direct filtering is not
 full closure independence; valid local-store reuse is allowed and no speedup is
 claimed. `static-code` runs residual non-Clippy shared definitions outside
-TypeScript, Rust formatting and standalone ERT, with workspace-specific offline
-Cargo homes. It requests the six-leaf Clippy aggregate once; the aggregate does
-not rerun lint. `validate --no-e2e` builds `nix-static-docs`,
-`nix-static-typescript`, `nix-rust-format`, `nix-static-code`, `nix-static-ert`,
-and `nix-xtask-format` before the Nix test checks, with each shared definition
-consumed once. CI fails if a hermetic boundary drifts from the host definitions
+TypeScript, Rust formatting, standalone ERT and Elisp verification, with
+workspace-specific offline Cargo homes. It requests the six-leaf Clippy
+aggregate once; the aggregate does not rerun lint. The separate `static-elisp`
+leaf owns Elisp formatting/byte-compilation. `validate --no-e2e` builds
+`nix-static-docs`, `nix-static-typescript`, `nix-rust-format`,
+`nix-static-code`, `nix-static-elisp`, `nix-static-ert`, and `nix-xtask-format`
+before the Nix test checks, with each shared definition consumed once. CI fails
+if a hermetic boundary drifts from the host definitions
 ([hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md);
 [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
 
@@ -4869,13 +4877,13 @@ interface; devtool has no `run` subcommand or runner dependency.
   repository scan — `tools/devtool/src/check.rs`). The host verify ladder
   delegates each relevant definition through its static-check mechanism,
   preserving host-local Cargo artifacts and sccache for Rust-compiling checks.
-  Nix `static-docs`, `static-typescript`, `rust-format`, `static-code`, and
-  `static-ert` run docs, named `tsc`, Rust-format, residual code, and ERT
-  populations respectively. Static-code requests the six-leaf Clippy aggregate
-  once; its own derivation does not rerun those lints. Code retains
-  workspace-specific offline Cargo homes; Cargo-deny uses full
-  `cargo deny check` on host and skips `advisories` in sandbox mode
-  ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
+  Nix `static-docs`, `static-typescript`, `rust-format`, `static-code`,
+  `static-elisp`, and `static-ert` run docs, named `tsc`, Rust-format, residual
+  code, Elisp formatting/byte-compilation, and ERT populations respectively.
+  Static-code requests the six-leaf Clippy aggregate once; its own derivation
+  does not rerun those lints. Code retains workspace-specific offline Cargo
+  homes; Cargo-deny uses full `cargo deny check` on host and skips `advisories`
+  in sandbox mode ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
   [Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md),
   [devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md),
   [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md),
