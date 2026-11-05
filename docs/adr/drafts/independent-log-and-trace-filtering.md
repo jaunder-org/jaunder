@@ -81,7 +81,7 @@ The qualified human approval JAU-1743-COLLECTOR-AMENDMENT-001, acknowledged by
 Lead against technical contract SHA256
 `c5ee2ad723645acbff1cda627e3154282f95e468ff04991ae8a28cec879580f6` and the
 latest decision card, selects the
-[native OTLP Collector privacy revision](native-otlp-process-logs.md).
+[native OTLP Collector privacy revision](../drafts/native-otlp-process-logs.md).
 Local-only filtering, AlwaysOn IDs, independent local fields/capture and
 process-owned bounded draining remain requirements. Application privacy
 visitors, Debug parsing, classifiers and proposed trace decorators are removed
