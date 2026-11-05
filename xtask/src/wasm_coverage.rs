@@ -14,7 +14,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use coverage::wasm::{Artifact, BrowserStatus, Outcome, Stage};
-use csr_bundle::{Manifest, Role};
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -546,6 +545,15 @@ fn unpack_archive(archive: &Path, destination: &Path, layout: ArchiveLayout<'_>)
     }
     Ok(())
 }
+fn served_module_from_bundle(bundle_root: &Path) -> Result<coverage::wasm::ServedModule> {
+    let outputs = host::vite_manifest::csr_outputs(bundle_root)?;
+    let bytes = fs::read(bundle_root.join(&outputs.wasm)).context("reading Vite WASM output")?;
+    Ok(coverage::wasm::ServedModule {
+        path: outputs.wasm,
+        sha256: crate::digest::lowercase_hex(Sha256::digest(bytes)),
+    })
+}
+
 fn merge_profiles(
     runner: &dyn CommandRunner,
     roots: &BTreeMap<String, PathBuf>,
@@ -553,16 +561,7 @@ fn merge_profiles(
 ) -> Result<MergedEvidence> {
     let csr = realize_csr(runner)?;
     let bundle_root = csr.join("pkg");
-    let manifest = Manifest::from_json(
-        &fs::read(bundle_root.join("manifest.json")).context("reading CSR manifest")?,
-    )
-    .context("parsing CSR manifest")?;
-    manifest
-        .verify_bundle(&bundle_root)
-        .context("verifying CSR manifest bundle")?;
-    let served = manifest
-        .role(Role::Wasm)
-        .context("finding CSR wasm module")?;
+    let served = served_module_from_bundle(&bundle_root)?;
     let served_path = served.path.as_str();
     let served_sha256 = served.sha256.as_str();
     if BROWSERS.iter().any(|browser| {
@@ -1181,6 +1180,27 @@ fn write_measurement_manifest(manifest: &MeasurementManifest) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnostic_bundle_identity_comes_from_native_vite_manifest_and_file_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join(".vite")).unwrap();
+        fs::create_dir_all(root.path().join("assets")).unwrap();
+        let wasm = b"diagnostic-wasm";
+        fs::write(root.path().join("assets/client.wasm"), wasm).unwrap();
+        fs::write(root.path().join("assets/entry.js"), b"export {}").unwrap();
+        fs::write(
+            root.path().join(".vite/manifest.json"),
+            r#"{"index.html":{"file":"assets/entry.js","src":"index.html","isEntry":true,"assets":["assets/client.wasm"]},"csr_bg.wasm":{"file":"assets/client.wasm","src":"csr_bg.wasm"}}"#,
+        )
+        .unwrap();
+        let module = served_module_from_bundle(root.path()).unwrap();
+        assert_eq!(module.path, "assets/client.wasm");
+        assert_eq!(
+            module.sha256,
+            crate::digest::lowercase_hex(Sha256::digest(wasm))
+        );
+    }
     use coverage::wasm::ServedModule;
     use tempfile::tempdir;
 

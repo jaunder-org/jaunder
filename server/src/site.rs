@@ -1,8 +1,8 @@
 //! The embedded CSR site tree + a precompression-aware serving handler.
 //!
-//! `server/build.rs` verifies a bundle manifest, stages its rendered `index.html`
-//! and content-addressed `pkg/**` representations (plus `public/` assets) into
-//! `$OUT_DIR/site/`; [`Site`] embeds the result (#237, #869, ADR-0003).
+//! `server/build.rs` reads Vite's build-only manifest, stages its rendered
+//! `index.html` and emitted assets (plus `public/` assets) into `$OUT_DIR/site/`;
+//! [`Site`] embeds the result (#237, #869, ADR-0003).
 //! This replaces the disk `ServeDir::new(&site_root)` fallback, so a released
 //! binary serves its own client with no external files.
 //!
@@ -279,7 +279,7 @@ pub async fn serve_site(req: Request) -> Response {
             hash,
             encoding,
             if_none_match,
-            crate::bundle::is_manifest_asset(&logical),
+            crate::bundle::is_vite_asset(&logical),
         );
         // The authoritative "did a body go over the wire" signal: `304` means none
         // did, whatever the client later reports. The browsers disagree about
@@ -523,6 +523,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn each_encoded_representation_has_its_own_validator() {
+        let identity = build_response(
+            "assets/app.js",
+            Bytes::from_static(b"identity"),
+            [1u8; 32],
+            Encoding::Identity,
+            None,
+            true,
+        );
+        let brotli = build_response(
+            "assets/app.js",
+            Bytes::from_static(b"brotli"),
+            [2u8; 32],
+            Encoding::Br,
+            None,
+            true,
+        );
+        assert_ne!(
+            identity.headers().get(header::ETAG),
+            brotli.headers().get(header::ETAG)
+        );
+        assert_eq!(
+            identity.headers().get(header::VARY).unwrap(),
+            "Accept-Encoding"
+        );
+        assert_eq!(
+            brotli.headers().get(header::VARY).unwrap(),
+            "Accept-Encoding"
+        );
+    }
+
+    #[tokio::test]
     async fn serve_site_falls_through_to_spa_shell_for_unknown_path() {
         let req = Request::builder()
             .uri("/definitely-not-an-embedded-asset-xyz")
@@ -620,116 +652,224 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manifest_wasm_variants_keep_logical_headers_and_immutable_304s() {
-        let Some(urls) = crate::bundle::boot_urls() else {
+    async fn vite_generated_variants_decode_and_keep_representation_validators() {
+        let Some(urls) = crate::bundle::boot_assets() else {
             return; // cov:ignore: Host test builds omit the generated CSR bundle required to exercise manifest variants.
         };
-        let logical = urls.wasm.trim_start_matches('/');
-        for (accept_encoding, expected_encoding) in [
+        for (url, mime) in [
+            (urls.wasm, "application/wasm"),
+            (urls.entry_js, "text/javascript"),
+        ] {
+            assert_vite_asset_representations(url, mime).await;
+        }
+    }
+
+    async fn assert_vite_asset_representations(url: &str, mime: &str) {
+        let logical = url.trim_start_matches('/');
+        let identity = Site::get(logical).expect("generated identity is embedded");
+        let mut validators = Vec::new();
+        for (accept, encoding) in [
             ("identity", None),
             ("gzip", Some("gzip")),
             ("br", Some("br")),
         ] {
-            let req = Request::builder()
-                .uri(urls.wasm)
-                .header(header::ACCEPT_ENCODING, accept_encoding)
+            let etag =
+                assert_encoded_representation(url, mime, accept, encoding, &identity.data).await;
+            for previous in &validators {
+                assert_ne!(&etag, previous, "each representation has its own validator");
+            }
+            validators.push(etag);
+        }
+        assert_q_zero_selection(url).await;
+        assert_cross_representation_validators(url, &validators).await;
+    }
+
+    async fn assert_encoded_representation(
+        url: &str,
+        mime: &str,
+        accept: &str,
+        encoding: Option<&str>,
+        identity: &[u8],
+    ) -> String {
+        let response = serve_site(
+            Request::builder()
+                .uri(url)
+                .header(header::ACCEPT_ENCODING, accept)
                 .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers().get(header::CONTENT_TYPE).unwrap(), mime);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_ENCODING)
+                .and_then(|value| value.to_str().ok()),
+            encoding
+        );
+        assert_eq!(
+            response.headers().get(header::VARY).unwrap(),
+            "Accept-Encoding"
+        );
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "public, max-age=31536000, immutable"
+        );
+        let etag = response
+            .headers()
+            .get(header::ETAG)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let variant = match encoding {
+            Some("br") => Encoding::Br,
+            Some("gzip") => Encoding::Gzip,
+            _ => Encoding::Identity,
+        };
+        let expected = Site::get(&variant_path(url.trim_start_matches('/'), variant))
+            .expect("manifest representation is embedded");
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body.as_ref(), expected.data.as_ref());
+        assert_eq!(
+            decode_representation(encoding, &body),
+            identity,
+            "{url}: {accept}"
+        );
+        assert_matching_representation_not_modified(url, mime, accept, encoding, &etag).await;
+        etag
+    }
+
+    fn decode_representation(encoding: Option<&str>, body: &[u8]) -> Vec<u8> {
+        let mut decoded = Vec::new();
+        match encoding {
+            Some("gzip") => {
+                std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(body), &mut decoded)
+                    .unwrap();
+            }
+            Some("br") => {
+                std::io::Read::read_to_end(
+                    &mut brotli::Decompressor::new(body, 4096),
+                    &mut decoded,
+                )
                 .unwrap();
-            let response = serve_site(req).await;
+            }
+            _ => decoded.extend_from_slice(body),
+        }
+        decoded
+    }
+
+    async fn assert_matching_representation_not_modified(
+        url: &str,
+        mime: &str,
+        accept: &str,
+        encoding: Option<&str>,
+        etag: &str,
+    ) {
+        let response = serve_site(
+            Request::builder()
+                .uri(url)
+                .header(header::ACCEPT_ENCODING, accept)
+                .header(header::IF_NONE_MATCH, etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(response.headers().get(header::ETAG).unwrap(), etag);
+        assert_eq!(
+            response.headers().get(header::VARY).unwrap(),
+            "Accept-Encoding"
+        );
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "public, max-age=31536000, immutable"
+        );
+        assert_eq!(response.headers().get(header::CONTENT_TYPE).unwrap(), mime);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_ENCODING)
+                .and_then(|value| value.to_str().ok()),
+            encoding
+        );
+        assert!(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    async fn assert_q_zero_selection(url: &str) {
+        for (accept, expected) in [
+            ("br;q=0, gzip", Some("gzip")),
+            ("gzip;q=0, br", Some("br")),
+            ("gzip;q=0, br;q=0", None),
+        ] {
+            let response = serve_site(
+                Request::builder()
+                    .uri(url)
+                    .header(header::ACCEPT_ENCODING, accept)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await;
             assert_eq!(response.status(), StatusCode::OK);
             assert_eq!(
-                response.headers().get(header::CONTENT_TYPE).unwrap(),
-                "application/wasm"
-            );
-            assert_eq!(
                 response
                     .headers()
                     .get(header::CONTENT_ENCODING)
-                    .and_then(|value| value.to_str().ok()),
-                expected_encoding
-            );
-            assert_eq!(
-                response.headers().get(header::VARY).unwrap(),
-                "Accept-Encoding"
-            );
-            assert_eq!(
-                response.headers().get(header::CACHE_CONTROL).unwrap(),
-                "public, max-age=31536000, immutable"
-            );
-            let etag = response
-                .headers()
-                .get(header::ETAG)
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .to_owned();
-            let expected = Site::get(&variant_path(
-                logical,
-                match expected_encoding {
-                    Some("br") => Encoding::Br,
-                    Some("gzip") => Encoding::Gzip,
-                    _ => Encoding::Identity,
-                },
-            ))
-            .expect("manifest representation is embedded");
-            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-            assert_eq!(body.as_ref(), expected.data.as_ref());
-
-            let conditional = Request::builder()
-                .uri(urls.wasm)
-                .header(header::ACCEPT_ENCODING, accept_encoding)
-                .header(header::IF_NONE_MATCH, &etag)
-                .body(Body::empty())
-                .unwrap();
-            let response = serve_site(conditional).await;
-            assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
-            assert_eq!(response.headers().get(header::ETAG).unwrap(), etag.as_str());
-            assert_eq!(
-                response.headers().get(header::VARY).unwrap(),
-                "Accept-Encoding"
-            );
-            assert_eq!(
-                response.headers().get(header::CACHE_CONTROL).unwrap(),
-                "public, max-age=31536000, immutable"
-            );
-            assert_eq!(
-                response.headers().get(header::CONTENT_TYPE).unwrap(),
-                "application/wasm"
-            );
-            assert_eq!(
-                response
-                    .headers()
-                    .get(header::CONTENT_ENCODING)
-                    .and_then(|value| value.to_str().ok()),
-                expected_encoding
+                    .map(|value| value.to_str().unwrap()),
+                expected
             );
         }
     }
+
+    async fn assert_cross_representation_validators(url: &str, validators: &[String]) {
+        for (selected, accept) in ["identity", "gzip", "br"].into_iter().enumerate() {
+            for (other, etag) in validators.iter().enumerate() {
+                if selected == other {
+                    continue;
+                }
+                let response = serve_site(
+                    Request::builder()
+                        .uri(url)
+                        .header(header::ACCEPT_ENCODING, accept)
+                        .header(header::IF_NONE_MATCH, etag)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await;
+                assert_eq!(response.status(), StatusCode::OK);
+            }
+        }
+    }
     #[test]
-    fn rendered_static_shell_uses_each_manifest_role_url_once_in_boot_order() {
-        let Some(urls) = crate::bundle::boot_urls() else {
+    fn rendered_static_shell_uses_vite_entry_and_early_wasm_url() {
+        let Some(urls) = crate::bundle::boot_assets() else {
             return; // cov:ignore: Host test builds omit the generated CSR bundle required to render this manifest-backed shell.
         };
         let shell = shell_html();
-        for url in [urls.glue, urls.wasm] {
+        for url in [urls.entry_js, urls.wasm] {
             assert_eq!(shell.matches(url).count(), 1, "{shell}");
         }
         let fetch = shell
             .find("window.__jaunderWasmFetch = fetch")
-            .expect("early fetch");
+            .expect("classic early fetch");
         let stylesheet = shell
             .find(r#"<link rel="stylesheet" href="/theme/"#)
             .expect("digest-addressed application stylesheet");
         assert!(!shell.contains("/style/"), "{shell}");
-        let import = shell.find("import {initMeasured}").expect("module import");
-        let mark = shell.find("performance.mark").expect("init mark");
-        let init = shell
-            .find("initMeasured(window.__jaunderWasmFetch")
-            .expect("initializer");
-        assert!(
-            fetch < stylesheet && stylesheet < import && import < mark && mark < init,
-            "{shell}"
-        );
+        let entry = shell.find(urls.entry_js).expect("Vite entry module");
+        let wasm_preload = shell.split("<link").any(|link| {
+            link.split('>')
+                .next()
+                .is_some_and(|tag| tag.contains("rel=\"preload\"") && tag.contains(urls.wasm))
+        });
+        assert!(!wasm_preload, "WASM must remain preload-free: {shell}");
+        assert!(fetch < stylesheet && stylesheet < entry, "{shell}");
     }
 
     #[test]

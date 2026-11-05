@@ -31,7 +31,7 @@ opt-level = 'z'
 #   - real risk — profiles are workspace-wide, so setting it here would also flip
 #     the *server's* release build from unwind to abort, and a panicking tokio
 #     task would kill the process instead of being isolated.
-# The bundle-size lever that does work is `wasm-opt` in `devtool csr-bundle`.
+# The bundle-size lever that does work is the production `wasm-opt -Oz` pass in the shared Vite pipeline.
 
 # Force web crate to a single CGU in test builds so inventory::submit! statics
 # are always linked when any web symbol is referenced.

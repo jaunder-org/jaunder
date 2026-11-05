@@ -96,7 +96,7 @@ pub enum Arm {
     CsrSource,
     CsrManifest,
     RootLock,
-    CsrBundleProducer,
+    CsrViteEntry,
     Toolchain,
     UnrelatedNote,
 }
@@ -131,7 +131,7 @@ impl Arm {
         Self::CsrSource,
         Self::CsrManifest,
         Self::RootLock,
-        Self::CsrBundleProducer,
+        Self::CsrViteEntry,
         Self::Toolchain,
         Self::UnrelatedNote,
     ];
@@ -166,7 +166,7 @@ impl Arm {
             Self::CsrSource => "csr-source",
             Self::CsrManifest => "csr-manifest",
             Self::RootLock => "root-lock",
-            Self::CsrBundleProducer => "csr-bundle-producer",
+            Self::CsrViteEntry => "csr-vite-entry",
             Self::Toolchain => "toolchain",
             Self::UnrelatedNote => "unrelated-note",
         }
@@ -202,7 +202,7 @@ impl Arm {
             Self::CsrSource => "csr/src/lib.rs",
             Self::CsrManifest => "csr/Cargo.toml",
             Self::RootLock => "Cargo.lock",
-            Self::CsrBundleProducer => "tools/devtool/src/csr_bundle.rs",
+            Self::CsrViteEntry => "csr/entry.js",
             Self::Toolchain => "rust-toolchain.toml",
             Self::UnrelatedNote => "__nix_source_probe_note.txt",
         }
@@ -215,7 +215,7 @@ impl Arm {
             Self::CsrSource
             | Self::CsrManifest
             | Self::RootLock
-            | Self::CsrBundleProducer
+            | Self::CsrViteEntry
             | Self::Toolchain => &[Boundary::CsrDebugBundle],
             // `static-code` retains an observed transitive input coupling even
             // though its direct Elisp source filter is narrow.
@@ -376,7 +376,7 @@ impl Arm {
                         | Self::CsrSource
                         | Self::CsrManifest
                         | Self::RootLock
-                        | Self::CsrBundleProducer
+                        | Self::CsrViteEntry
                         | Self::Toolchain,
                     Boundary::CsrDebugBundle
                 )
@@ -675,10 +675,7 @@ mod tests {
             (Arm::CsrSource, paths("docs", "code", "site", "wasm")),
             (Arm::CsrManifest, paths("docs", "code", "site", "wasm")),
             (Arm::RootLock, paths("docs", "code", "site", "wasm")),
-            (
-                Arm::CsrBundleProducer,
-                paths("docs", "code", "site", "wasm"),
-            ),
+            (Arm::CsrViteEntry, paths("docs", "code", "site", "wasm")),
             (Arm::Toolchain, paths("docs", "code", "site", "wasm")),
             (Arm::UnrelatedNote, paths("docs", "code", "site", "wasm")),
             (Arm::Common, paths("docs", "code-2", "site-2", "wasm-2")),
@@ -1124,7 +1121,7 @@ mod tests {
             Arm::CsrSource,
             Arm::CsrManifest,
             Arm::RootLock,
-            Arm::CsrBundleProducer,
+            Arm::CsrViteEntry,
             Arm::Toolchain,
         ] {
             assert_eq!(

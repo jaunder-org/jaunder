@@ -1,10 +1,7 @@
-use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-
-use csr_bundle::{Manifest, Role};
 
 #[derive(Debug)]
 pub struct StageError {
@@ -63,7 +60,6 @@ pub fn prepare_staging_with(
     Ok(())
 }
 
-/// Staging failure for a verified CSR bundle.
 #[derive(Debug)]
 pub struct BundleStageError(String);
 
@@ -75,115 +71,44 @@ impl fmt::Display for BundleStageError {
 
 impl std::error::Error for BundleStageError {}
 
-/// Copy the verified bundle and public assets, then verify the exact staged result.
+/// Copy Vite's output tree into the embedded site, excluding build-only output.
+/// The ordinary Vite manifest is consumed by the build script, not served; the
+/// independently verified system-theme inventory is staged in its private tree.
 ///
 /// # Errors
 ///
-/// Returns an error when a public asset would replace a reserved bundle path, a copy
-/// fails, or the final staged inventory, digests, or shell disagree with the manifest.
-pub fn stage_bundle(
-    root: &Path,
-    site: &Path,
-    public_src: &Path,
-    manifest: &Manifest,
-    application_stylesheet_url: &str,
-) -> Result<(), BundleStageError> {
-    reject_public_collisions(public_src, manifest)?;
-    copy_file(&root.join("index.html"), &site.join("index.html"))?;
-    for asset in &manifest.assets {
-        copy_file(&root.join(&asset.path), &site.join(&asset.path))?;
-        for representation in asset.representations.values() {
-            if representation.path != asset.path {
-                copy_file(
-                    &root.join(&representation.path),
-                    &site.join(&representation.path),
-                )?;
-            }
-        }
+/// Returns an error when `index.html` is absent or a tree copy fails.
+pub fn stage_vite_output(root: &Path, site: &Path) -> Result<(), BundleStageError> {
+    if !root.join("index.html").is_file() {
+        return Err(BundleStageError(format!(
+            "Vite output {} has no index.html",
+            root.display()
+        )));
     }
-    if public_src.is_dir() {
-        copy_tree(public_src, site)?;
-    }
-    verify_staged_bundle(site, manifest, application_stylesheet_url)
-}
-
-fn reject_public_collisions(
-    public_src: &Path,
-    manifest: &Manifest,
-) -> Result<(), BundleStageError> {
-    if !public_src.is_dir() {
-        return Ok(());
-    }
-    let mut reserved = BTreeSet::from(["index.html", "manifest.json"]);
-    for asset in &manifest.assets {
-        reserved.insert(asset.path.as_str());
-        for representation in asset.representations.values() {
-            reserved.insert(representation.path.as_str());
-        }
-    }
-    reject_public_collisions_below(public_src, Path::new(""), &reserved)
-}
-
-fn reject_public_collisions_below(
-    directory: &Path,
-    relative: &Path,
-    reserved: &BTreeSet<&str>,
-) -> Result<(), BundleStageError> {
-    for entry in fs::read_dir(directory)
-        .map_err(|error| BundleStageError(format!("reading {}: {error}", directory.display())))?
+    for entry in fs::read_dir(root)
+        .map_err(|error| BundleStageError(format!("reading {}: {error}", root.display())))?
     {
-        // cov:ignore-start: A ReadDir item error requires concurrent filesystem mutation; rustix exposes no deterministic item-error injection seam.
-        let entry = entry.map_err(|error| {
-            BundleStageError(format!("reading {}: {error}", directory.display()))
-        })?;
-        // cov:ignore-stop
-        let path = entry.path();
-        let child_relative = relative.join(entry.file_name());
-        let file_type = entry
+        let entry = entry
+            .map_err(|error| BundleStageError(format!("reading {}: {error}", root.display())))?;
+        if matches!(
+            entry.file_name().to_str(),
+            Some(".vite" | "system-artifacts")
+        ) {
+            continue;
+        }
+        let source = entry.path();
+        let destination = site.join(entry.file_name());
+        if entry
             .file_type()
-            .map_err(|error| BundleStageError(format!("stating {}: {error}", path.display())))?;
-        if file_type.is_dir() {
-            reject_public_collisions_below(&path, &child_relative, reserved)?;
+            .map_err(|error| BundleStageError(format!("stating {}: {error}", source.display())))?
+            .is_dir()
+        {
+            copy_tree(&source, &destination)?;
         } else {
-            let relative = child_relative.to_str().ok_or_else(|| {
-                BundleStageError(format!(
-                    "public asset path is not UTF-8: {}",
-                    child_relative.display()
-                ))
-            })?;
-            if reserved.contains(relative) {
-                return Err(BundleStageError(format!(
-                    "public asset {relative} overwrites a reserved CSR bundle path"
-                )));
-            }
+            copy_file(&source, &destination)?;
         }
     }
     Ok(())
-}
-
-fn verify_staged_bundle(
-    site: &Path,
-    manifest: &Manifest,
-    application_stylesheet_url: &str,
-) -> Result<(), BundleStageError> {
-    manifest.verify_bundle(site).map_err(|error| {
-        BundleStageError(format!("invalid staged bundle {}: {error}", site.display()))
-    })?;
-    let shell = fs::read_to_string(site.join("index.html"))
-        .map_err(|error| BundleStageError(format!("reading staged index.html: {error}")))?;
-    let glue = manifest
-        .role(Role::Glue)
-        .map_err(|error| BundleStageError(format!("verified glue role missing: {error}")))?;
-    let wasm = manifest
-        .role(Role::Wasm)
-        .map_err(|error| BundleStageError(format!("verified WASM role missing: {error}")))?;
-    csr_bundle::validate_rendered_shell(
-        &shell,
-        &format!("/{}", glue.path),
-        &format!("/{}", wasm.path),
-        application_stylesheet_url,
-    )
-    .map_err(|error| BundleStageError(error.to_string()))
 }
 
 fn copy_file(src: &Path, dst: &Path) -> Result<(), BundleStageError> {
@@ -214,69 +139,6 @@ pub fn stage_public_tree(src: &Path, dst: &Path) -> Result<(), BundleStageError>
     Ok(())
 }
 
-/// Verifies and copies the private producer inventory for binary embedding.
-///
-/// # Errors
-///
-/// Returns an error when the closed inventory cannot replay through the shared
-/// validator/compiler or when its private staging copy fails.
-#[cfg(test)]
-pub fn stage_system_artifacts(src: &Path, dst: &Path) -> Result<(), BundleStageError> {
-    let inventory = host::system_theme::load_system_artifact_inventory(
-        &host::system_theme::DirectorySystemArtifactSource::new(src),
-    )
-    .map_err(|error| BundleStageError(format!("invalid system artifacts: {error}")))?;
-    stage_verified_system_artifacts(&inventory, dst)
-}
-
-/// Stages a previously verified inventory, retaining its exact application identity
-/// across shell and private-artifact staging.
-pub fn stage_verified_system_artifacts(
-    inventory: &host::system_theme::SystemArtifactInventory,
-    dst: &Path,
-) -> Result<(), BundleStageError> {
-    host::system_theme::stage_system_artifact_inventory(inventory, dst)
-        .map_err(|error| BundleStageError(format!("staging system artifacts: {error}")))?;
-    let staged = host::system_theme::load_system_artifact_inventory(
-        &host::system_theme::DirectorySystemArtifactSource::new(dst),
-    )
-    .map_err(|error| BundleStageError(format!("invalid staged system artifacts: {error}")))?;
-    verify_staged_inventory(inventory, &staged)
-}
-
-fn verify_staged_inventory(
-    inventory: &host::system_theme::SystemArtifactInventory,
-    staged: &host::system_theme::SystemArtifactInventory,
-) -> Result<(), BundleStageError> {
-    if staged.application().content().bytes() != inventory.application().content().bytes()
-        || staged
-            .themes()
-            .zip(inventory.themes())
-            .any(|(staged, source)| staged.package_bytes() != source.package_bytes())
-    {
-        return Err(BundleStageError(
-            "staged system artifacts disagree with verified source".into(),
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod staged_identity_tests {
-    use super::*;
-
-    #[test]
-    fn staged_inventory_rejects_application_and_package_identity_changes() {
-        use host::system_theme::qualification::{self, Fixture};
-        let a = qualification::compile(Fixture::A).unwrap();
-        assert!(verify_staged_inventory(&a, &a).is_ok());
-        for fixture in [Fixture::BApplication, Fixture::BTheme] {
-            let changed = qualification::compile(fixture).unwrap();
-            assert!(verify_staged_inventory(&a, &changed).is_err());
-        }
-    }
-}
-
 fn copy_tree(src: &Path, dst: &Path) -> Result<(), BundleStageError> {
     fs::create_dir_all(dst)
         .map_err(|error| BundleStageError(format!("creating {}: {error}", dst.display())))?;
@@ -302,407 +164,94 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<(), BundleStageError> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::{BTreeMap, BTreeSet},
-        fs, io,
-        path::Path,
-    };
+    use super::*;
+    use std::{cell::Cell, io};
+    use tempfile::tempdir;
 
-    use csr_bundle::{Asset, Manifest, Representation, Role};
-
-    use super::{
-        copy_file, prepare_staging_with, reject_public_collisions, reject_public_collisions_below,
-        stage_bundle, stage_public_tree, stage_system_artifacts,
-    };
-
-    fn application_url() -> String {
-        format!("/theme/{}", "a".repeat(64))
-    }
-
-    fn shell(glue: &str, wasm: &str) -> String {
-        let application_url = application_url();
-        format!(
-            r#"<script>const __jaunderWasmUrl = "{wasm}"; window.__jaunderWasmFetch = fetch(__jaunderWasmUrl);</script>
-<link rel="stylesheet" href="{application_url}" data-jaunder-application-stylesheet />
-<script type="module">import {{initMeasured}} from "{glue}"; performance.mark("jaunder.module.before_init"); initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl);</script>"#
+    #[test]
+    fn build_script_staging_cleanup_failure_aborts_before_create_or_copy() {
+        let created = Cell::new(false);
+        let copied = Cell::new(false);
+        let site = Path::new("/injected/out/site");
+        let error = prepare_staging_with(
+            site,
+            |_| {
+                Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "injected remove failure",
+                ))
+            },
+            |_| {
+                created.set(true);
+                Ok(())
+            },
+            || copied.set(true),
         )
+        .unwrap_err();
+        assert_eq!(error.operation, "removing");
+        assert_eq!(error.path, site);
+        assert!(!created.get());
+        assert!(!copied.get());
     }
 
-    fn bundle_asset(role: Role, extension: &str, bytes: &[u8]) -> Asset {
-        let digest = csr_bundle::digest(bytes);
-        let path = format!("pkg/{digest}.{extension}");
-        let gzip = format!("{path}.gz");
-        let brotli = format!("{path}.br");
-        let representations = BTreeMap::from([
+    #[test]
+    fn stages_vite_outputs_and_sidecars_but_not_build_only_metadata() {
+        let root = tempdir().unwrap();
+        let site = tempdir().unwrap();
+        fs::create_dir_all(root.path().join(".vite")).unwrap();
+        fs::create_dir_all(root.path().join("assets")).unwrap();
+        fs::create_dir_all(root.path().join("system-artifacts")).unwrap();
+        for (path, bytes) in [
             (
-                "identity".into(),
-                Representation {
-                    path: path.clone(),
-                    sha256: digest.clone(),
-                },
+                "index.html",
+                b"<script src=\"/assets/app.js\"></script>".as_slice(),
             ),
-            (
-                "gzip".into(),
-                Representation {
-                    path: gzip,
-                    sha256: csr_bundle::digest(b"gzip"),
-                },
-            ),
-            (
-                "br".into(),
-                Representation {
-                    path: brotli,
-                    sha256: csr_bundle::digest(b"brotli"),
-                },
-            ),
-        ]);
-        Asset {
-            role: Some(role),
-            path,
-            sha256: digest,
-            representations,
+            ("assets/app.js", b"js".as_slice()),
+            ("assets/app.js.br", b"br".as_slice()),
+            ("assets/client.wasm", b"wasm".as_slice()),
+            ("assets/client.wasm.gz", b"gz".as_slice()),
+            (".vite/manifest.json", b"build-only".as_slice()),
+            ("system-artifacts/inventory.txt", b"private".as_slice()),
+        ] {
+            let path = root.path().join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
         }
-    }
-
-    fn write_bundle(root: &std::path::Path) -> Manifest {
-        let manifest = Manifest {
-            version: csr_bundle::VERSION,
-            assets: vec![
-                bundle_asset(Role::Glue, "js", b"glue"),
-                bundle_asset(Role::Wasm, "wasm", b"wasm"),
-            ],
-        };
-        for asset in &manifest.assets {
-            for representation in asset.representations.values() {
-                let bytes = match std::path::Path::new(&representation.path).extension() {
-                    Some(extension) if extension == "gz" => b"gzip".as_slice(),
-                    Some(extension) if extension == "br" => b"brotli".as_slice(),
-                    Some(extension) if extension == "js" => b"glue".as_slice(),
-                    _ => b"wasm".as_slice(),
-                };
-                let path = root.join(&representation.path);
-                fs::create_dir_all(path.parent().expect("bundle parent")).expect("create parent");
-                fs::write(path, bytes).expect("write representation");
-            }
+        stage_vite_output(root.path(), site.path()).unwrap();
+        for path in [
+            "index.html",
+            "assets/app.js",
+            "assets/app.js.br",
+            "assets/client.wasm",
+            "assets/client.wasm.gz",
+        ] {
+            assert!(site.path().join(path).is_file(), "missing {path}");
         }
-        let glue = manifest.role(Role::Glue).expect("glue role");
-        let wasm = manifest.role(Role::Wasm).expect("WASM role");
-        fs::write(
-            root.join("index.html"),
-            shell(&format!("/{}", glue.path), &format!("/{}", wasm.path)),
-        )
-        .expect("write shell");
-        manifest
+        assert!(!site.path().join(".vite/manifest.json").exists());
+        assert!(!site.path().join("system-artifacts/inventory.txt").exists());
     }
 
     #[test]
-    fn stages_private_system_artifacts_after_verifying_source_and_destination() {
-        let source = tempfile::tempdir().expect("system artifact source");
-        let destination = tempfile::tempdir().expect("system artifact destination");
-        let inventory = host::system_theme::compile_system_artifact_inventory()
-            .expect("compile system inventory");
-        host::system_theme::stage_system_artifact_inventory(&inventory, source.path())
-            .expect("stage system source");
-
-        stage_system_artifacts(source.path(), destination.path()).expect("private stage");
-        let loaded = host::system_theme::load_system_artifact_inventory(
-            &host::system_theme::DirectorySystemArtifactSource::new(destination.path()),
-        )
-        .expect("destination replays");
-        assert_eq!(
-            loaded.application().content_digest(),
-            inventory.application().content_digest()
-        );
-        assert_eq!(
-            fs::read(destination.path().join("application.css")).expect("copied application"),
-            inventory.application().content().bytes()
-        );
-    }
-
-    #[test]
-    fn private_staging_replaces_a_different_valid_destination_with_verified_source() {
-        let source = tempfile::tempdir().expect("system artifact source");
-        let destination = tempfile::tempdir().expect("system artifact destination");
-        let a = host::system_theme::qualification::compile(
-            host::system_theme::qualification::Fixture::A,
-        )
-        .expect("compile A");
-        let b = host::system_theme::qualification::compile(
-            host::system_theme::qualification::Fixture::BApplication,
-        )
-        .expect("compile B");
-        host::system_theme::stage_system_artifact_inventory(&a, source.path())
-            .expect("stage source");
-        host::system_theme::stage_system_artifact_inventory(&b, destination.path())
-            .expect("stage different destination");
-
-        stage_system_artifacts(source.path(), destination.path()).expect("stage verified source");
-        let staged = host::system_theme::load_system_artifact_inventory(
-            &host::system_theme::DirectorySystemArtifactSource::new(destination.path()),
-        )
-        .expect("destination replays source");
-        assert_eq!(
-            staged.application().content().bytes(),
-            a.application().content().bytes()
-        );
-        assert_ne!(
-            staged.application().content().bytes(),
-            b.application().content().bytes()
-        );
-    }
-
-    #[test]
-    fn rejects_invalid_private_system_artifact_source() {
-        let source = tempfile::tempdir().expect("system artifact source");
-        let destination = tempfile::tempdir().expect("system artifact destination");
-        fs::write(source.path().join("inventory.txt"), b"invalid")
-            .expect("write invalid inventory");
-        assert!(stage_system_artifacts(source.path(), destination.path()).is_err());
-        assert!(!destination.path().join("application.css").exists());
-    }
-
-    #[test]
-    fn stages_verified_bundle_and_nested_public_assets() {
-        let bundle = tempfile::tempdir().expect("bundle root");
-        let site = tempfile::tempdir().expect("site root");
-        let public = tempfile::tempdir().expect("public root");
-        let manifest = write_bundle(bundle.path());
-        let stylesheet = public.path().join("style/jaunder.css");
-        fs::create_dir_all(stylesheet.parent().expect("stylesheet parent"))
-            .expect("create stylesheet parent");
-        fs::write(&stylesheet, "body {}").expect("write stylesheet");
-
-        stage_bundle(
-            bundle.path(),
-            site.path(),
-            public.path(),
-            &manifest,
-            &application_url(),
-        )
-        .expect("stage bundle");
-
-        manifest
-            .verify_bundle(site.path())
-            .expect("staged bundle verifies");
-        assert_eq!(
-            fs::read_to_string(site.path().join("style/jaunder.css")).unwrap(),
-            "body {}"
-        );
-    }
-
-    #[test]
-    fn rejects_nested_public_bundle_collision() {
-        let bundle = tempfile::tempdir().expect("bundle root");
-        let public = tempfile::tempdir().expect("public root");
-        let manifest = write_bundle(bundle.path());
-        let glue = manifest.role(Role::Glue).expect("glue role");
-        let collision = public.path().join(&glue.path);
-        fs::create_dir_all(collision.parent().expect("collision parent"))
-            .expect("create collision parent");
-        fs::write(collision, "replacement").expect("write collision");
-
-        let error = reject_public_collisions(public.path(), &manifest).expect_err("collision");
-
+    fn vite_staging_requires_the_html_entry() {
+        let root = tempdir().unwrap();
+        let site = tempdir().unwrap();
         assert!(
-            error
+            stage_vite_output(root.path(), site.path())
+                .unwrap_err()
                 .to_string()
-                .contains("overwrites a reserved CSR bundle path")
+                .contains("no index.html")
         );
     }
 
     #[test]
-    fn staging_rejects_mismatched_application_stylesheet_url() {
-        let bundle = tempfile::tempdir().expect("bundle root");
-        let site = tempfile::tempdir().expect("site root");
-        let manifest = write_bundle(bundle.path());
-        let wrong_application_url = format!("/theme/{}", "b".repeat(64));
-        let error = stage_bundle(
-            bundle.path(),
-            site.path(),
-            &bundle.path().join("missing-public"),
-            &manifest,
-            &wrong_application_url,
-        )
-        .expect_err("staging must use the shared shell validator");
+    fn public_assets_stage_for_the_no_bundle_local_case() {
+        let public = tempdir().unwrap();
+        let site = tempdir().unwrap();
+        fs::write(public.path().join("favicon.ico"), b"favicon").unwrap();
+        stage_public_tree(public.path(), site.path()).unwrap();
         assert_eq!(
-            error.to_string(),
-            "staged shell must contain exactly one verified application stylesheet URL"
+            fs::read(site.path().join("favicon.ico")).unwrap(),
+            b"favicon"
         );
-    }
-
-    #[test]
-    fn public_tree_ignores_missing_source_and_copies_nested_assets() {
-        let source = tempfile::tempdir().expect("source root");
-        let destination = tempfile::tempdir().expect("destination root");
-        let nested = source.path().join("nested/asset");
-        fs::create_dir_all(nested.parent().expect("nested parent")).expect("create nested parent");
-        fs::write(&nested, "asset").expect("write asset");
-
-        stage_public_tree(source.path(), destination.path()).expect("copy public tree");
-        stage_public_tree(&source.path().join("missing"), destination.path())
-            .expect("ignore missing source");
-
-        assert_eq!(
-            fs::read_to_string(destination.path().join("nested/asset")).unwrap(),
-            "asset"
-        );
-    }
-    #[test]
-    fn staging_preparation_recreates_then_stages() {
-        let site = tempfile::tempdir().expect("temp dir");
-        let path = site.path().join("site");
-        let mut staged = false;
-
-        prepare_staging_with(&path, |_| Ok(()), |_| Ok(()), || staged = true)
-            .expect("prepare staging");
-
-        assert!(staged);
-    }
-
-    #[test]
-    fn staging_preparation_reports_remove_and_create_failures() {
-        let path = Path::new("/injected/site");
-        let remove_error = prepare_staging_with(
-            path,
-            |_| {
-                Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "remove denied",
-                ))
-            },
-            |_| unreachable!("remove failure must stop before creation"),
-            || unreachable!("remove failure must stop before staging"),
-        )
-        .expect_err("remove failure");
-        assert_eq!(
-            remove_error.to_string(),
-            "removing staging directory /injected/site: remove denied"
-        );
-        assert_eq!(
-            std::error::Error::source(&remove_error)
-                .map(ToString::to_string)
-                .as_deref(),
-            Some("remove denied")
-        );
-
-        let create_error = prepare_staging_with(
-            path,
-            |_| Err(io::Error::new(io::ErrorKind::NotFound, "absent")),
-            |_| {
-                Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "create denied",
-                ))
-            },
-            || unreachable!("create failure must stop before staging"),
-        )
-        .expect_err("create failure");
-        assert_eq!(
-            create_error.to_string(),
-            "creating staging directory /injected/site: create denied"
-        );
-    }
-
-    #[test]
-    fn staging_handles_missing_public_tree() {
-        let bundle = tempfile::tempdir().expect("bundle");
-        let site = tempfile::tempdir().expect("site");
-        let manifest = write_bundle(bundle.path());
-        stage_bundle(
-            bundle.path(),
-            site.path(),
-            &bundle.path().join("missing"),
-            &manifest,
-            &application_url(),
-        )
-        .expect("missing public tree is permitted");
-    }
-    #[test]
-    fn staging_reports_missing_tree_and_public_collision() {
-        let manifest = Manifest {
-            version: csr_bundle::VERSION,
-            assets: Vec::new(),
-        };
-        let missing = Path::new("/definitely-missing-jaunder-public-tree");
-        let error = reject_public_collisions_below(missing, Path::new(""), &BTreeSet::new())
-            .expect_err("missing tree");
-        assert!(error.to_string().contains("reading"));
-
-        let bundle = tempfile::tempdir().expect("bundle");
-        let site = tempfile::tempdir().expect("site");
-        fs::write(bundle.path().join("index.html"), "shell").expect("shell");
-        let error = stage_bundle(
-            bundle.path(),
-            site.path(),
-            bundle.path(),
-            &manifest,
-            &application_url(),
-        )
-        .expect_err("public shell collision");
-        assert!(error.to_string().contains("overwrites"));
-    }
-
-    #[test]
-    fn staging_reports_copy_and_invalid_staged_bundle_failures() {
-        let destination = tempfile::tempdir().expect("destination");
-        let error = copy_file(
-            Path::new("/definitely-missing-jaunder-staging-source"),
-            &destination.path().join("copied"),
-        )
-        .expect_err("missing source copy");
-        assert!(error.to_string().contains("copying"));
-
-        let bundle = tempfile::tempdir().expect("bundle");
-        let site = tempfile::tempdir().expect("site");
-        let public = tempfile::tempdir().expect("public");
-        let manifest = write_bundle(bundle.path());
-        let glue = manifest.role(Role::Glue).expect("glue role");
-        fs::write(bundle.path().join(&glue.path), "mutated").expect("mutate verified source");
-        let error = stage_bundle(
-            bundle.path(),
-            site.path(),
-            public.path(),
-            &manifest,
-            &application_url(),
-        )
-        .expect_err("invalid staged bundle");
-        assert!(error.to_string().contains("invalid staged bundle"));
-    }
-    #[test]
-    fn public_collision_rejection_reports_non_utf8_asset_path() {
-        let public = tempfile::tempdir().expect("public");
-        common::test_support::with_non_utf8_filename_fixture(public.path(), b"asset", |_path| {
-            let error =
-                reject_public_collisions_below(public.path(), Path::new(""), &BTreeSet::new())
-                    .expect_err("non-UTF8 public asset must be rejected");
-
-            assert!(error.to_string().contains("public asset path is not UTF-8"));
-        })
-        .expect("write non-UTF8 asset fixture");
-    }
-    #[test]
-    fn staging_propagates_missing_declared_representation_copy_failure() {
-        let bundle = tempfile::tempdir().expect("bundle");
-        let site = tempfile::tempdir().expect("site");
-        let public = tempfile::tempdir().expect("public");
-        let mut manifest = write_bundle(bundle.path());
-        manifest.assets[0].representations.insert(
-            "missing".into(),
-            Representation {
-                path: "pkg/absent.js".into(),
-                sha256: csr_bundle::digest(b"absent"),
-            },
-        );
-
-        let error = stage_bundle(
-            bundle.path(),
-            site.path(),
-            public.path(),
-            &manifest,
-            &application_url(),
-        )
-        .expect_err("missing declared representation must fail staging");
-
-        assert!(error.to_string().contains("copying"));
     }
 }

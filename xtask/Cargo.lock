@@ -717,16 +717,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "csr_bundle"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "cssparser"
 version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5530,11 +5520,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "brotli",
  "clap",
  "common",
  "coverage",
- "csr_bundle",
  "doctests",
  "flate2",
  "host",

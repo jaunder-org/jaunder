@@ -23,14 +23,14 @@ pub fn document_presentation(
 ) -> String {
     document_with_urls(
         presentation,
-        bundle::boot_urls(),
+        bundle::boot_assets(),
         application_stylesheet_url,
     )
 }
 
 fn document_with_urls(
     presentation: &PublicPresentation<PageSeed>,
-    urls: Option<bundle::BootUrls>,
+    urls: Option<bundle::BootAssets>,
     application_stylesheet_url: &common::root_relative_url::RootRelativeUrl,
 ) -> String {
     // Both arrive as `Markup` (trust is type-carried across the crate boundary);
@@ -42,9 +42,7 @@ fn document_with_urls(
     head.push_str(&app::render_theme_stylesheet(&presentation.theme).into_string());
     let body = app::render_shell(presentation).into_string();
     let blob = serde_json::to_string(presentation).unwrap_or_else(|_| "null".to_string());
-    let boot = urls.map_or_else(String::new, |urls| {
-        bundle::module_init_script(urls, app::MODULE_BEFORE_INIT_MARK)
-    });
+    let boot = urls.map_or_else(String::new, bundle::module_entry_script);
     format!(
         concat!(
             "<!DOCTYPE html><html lang=\"en\"><head>{prepaint}{head}</head><body>",
@@ -299,20 +297,20 @@ mod tests {
     }
 
     #[test]
-    fn projector_shell_uses_each_host_url_once_in_boot_order() {
+    fn projector_shell_uses_vite_entry_after_the_classic_early_fetch() {
         use super::document_with_urls;
 
-        let urls = crate::bundle::BootUrls {
-            glue: "/pkg/glue-content-hash.js",
-            wasm: "/pkg/wasm-content-hash.wasm",
-        };
+        let urls = crate::bundle::boot_assets().unwrap_or(crate::bundle::BootAssets {
+            entry_js: "/assets/entry-content-hash.js",
+            wasm: "/assets/wasm-content-hash.wasm",
+        });
         let doc = document_with_urls(
             &presentation(Theme::Studio),
             Some(urls),
             &"/theme/application".parse().unwrap(),
         );
 
-        for url in [urls.glue, urls.wasm] {
+        for url in [urls.entry_js, urls.wasm] {
             assert_eq!(doc.matches(url).count(), 1, "{doc}");
         }
         let fetch = doc
@@ -322,15 +320,12 @@ mod tests {
             .find(r#"<link rel="stylesheet" href="/theme/application" data-jaunder-application-stylesheet>"#)
             .expect("stylesheet");
         assert!(!doc.contains("/style/"), "{doc}");
-        let import = doc.find("import {initMeasured}").expect("glue import");
-        let mark = doc.find("performance.mark").expect("init mark");
-        let init = doc
-            .find("initMeasured(window.__jaunderWasmFetch")
-            .expect("initializer");
-        assert!(
-            fetch < stylesheet && stylesheet < import && import < mark && mark < init,
-            "{doc}"
+        let module_entry = format!(
+            "<script type=\"module\" src=\"{}\"></script>",
+            urls.entry_js
         );
+        let entry = doc.find(&module_entry).expect("Vite module entry");
+        assert!(fetch < stylesheet && stylesheet < entry, "{doc}");
         assert!(
             !doc.contains("modulepreload") && !doc.contains(r#"rel="preload""#),
             "{doc}"

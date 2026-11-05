@@ -1132,17 +1132,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "csr_bundle"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "cssparser"
 version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2517,10 +2506,10 @@ dependencies = [
  "axum-client-addr",
  "axum-embed",
  "base64 0.23.1",
+ "brotli 8.0.4",
  "clap",
  "common",
  "croner 4.0.0",
- "csr_bundle",
  "flate2",
  "futures-util",
  "host",

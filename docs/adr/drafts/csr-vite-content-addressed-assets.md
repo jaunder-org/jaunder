@@ -6,13 +6,23 @@
 
 ## Context
 
-ADR-0175 assigns `devtool csr-bundle` ownership of content-addressed CSR URLs,
+ADR-0175 assigned the former producer ownership of content-addressed CSR URLs,
 full-SHA filenames, cycle rejection, and a role-tagged inventory schema. The
-isolated Vite 8.3.5 proof establishes an HTML build, a native build manifest,
-and content-sensitive output URL changes for tested WASM and JavaScript changes.
-It does not establish full-SHA collision properties, preserve all prior graph
-policies, migrate consumers, or test production serving. The current manifest is
-build-only; browser startup uses rendered shell URLs.
+isolated Vite proof established feasibility, and the production migration now
+uses pinned Vite 8.3.5, `vite-plugin-compression2` 2.5.4, its native build-only
+manifest and ordinary content-sensitive filenames. Production proof passed the
+host and Nix builds, static shell/projector URL checks, URL stability and
+runtime JS/WASM mutation invalidation, and the retained embedded HTTP path. The
+native manifest is not served.
+
+Host and Nix optimized WASM artifacts differ in bytes and URLs: 4,212,240 bytes
+(host) and 4,222,496 bytes (Nix), both under the 5,000,000-byte ceiling. Pins,
+features, tool versions and optimizer flags were checked in both pipelines. Path
+provenance explains differing build contexts but does not prove the cause of
+every differing byte; Nix intermediates were no longer available. Byte identity
+across environments is not required. These measurements do not mean the
+canonical `wasm-budget` gate passed, and full browser/HTTP/coverage and final
+gate acceptance remains outstanding.
 
 ## Decision
 
@@ -39,6 +49,8 @@ independently of bundler naming.
 - Consumers must read the native manifest and ordinary output paths directly.
   Any retained adapters must express concrete consumer needs, not recreate the
   old schema.
-- This proposal is conditional on separately approved migration design and
-  demonstrated host/Nix, consumer, browser-ordering, and HTTP-serving behavior.
-  Until accepted, ADR-0175 remains current architecture.
+- Production migration and its bounded proofs are implemented, but this ADR
+  remains proposed pending outstanding browser/HTTP/coverage evidence and final
+  gates. The host/Nix byte difference is accepted as environment-specific, not
+  attributed solely to paths; measured sizes do not replace the canonical
+  `wasm-budget` verdict.

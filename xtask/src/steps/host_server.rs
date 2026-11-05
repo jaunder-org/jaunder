@@ -664,20 +664,89 @@ mod tests {
         };
         let justfile = temp.path().join("Justfile");
         fs::write(&justfile, include_str!("../../../Justfile")).unwrap();
+        for path in [
+            "csr/index.html",
+            "csr/entry.js",
+            "package.json",
+            "package-lock.json",
+            "vite.config.js",
+            "scripts/finalize-csr-html.mjs",
+            "tools/Cargo.toml",
+            "server/assets/jaunder.css",
+        ] {
+            let path = temp.path().join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "fixture").unwrap();
+        }
         let nested = temp.path().join("nested");
         fs::create_dir(&nested).unwrap();
         let target = temp.path().join("target");
         fs::create_dir_all(target.join("site")).unwrap();
         fs::write(target.join("site/sentinel"), "preserve").unwrap();
-        let call_log = temp.path().join("cargo-calls");
+        let call_log = temp.path().join("build-calls");
         let marker = temp.path().join("profile-injected");
-        let cargo = temp.path().join("cargo");
+        let tool = temp.path().join("fake-tool");
         fs::write(
-            &cargo,
-            "#!/usr/bin/env python3\nimport json, os, pathlib, sys\nvars = ('GIT_DIR','GIT_WORK_TREE','GIT_INDEX_FILE','GIT_OBJECT_DIRECTORY','GIT_COMMON_DIR','GIT_NAMESPACE')\nsite = pathlib.Path('target/site')\nentry = {'args': sys.argv[1:], 'git_env': {name: os.getenv(name) for name in vars}, 'cwd': os.getcwd(), 'site': site.exists() or site.is_symlink()}\nwith open(os.environ['CALL_LOG'], 'a') as log: log.write(json.dumps(entry) + '\\n')\nsys.exit(9 if pathlib.Path('fail-' + sys.argv[1]).exists() else 0)\n",
+            &tool,
+            r#"#!/usr/bin/env python3
+import json, os, pathlib, shutil, sys
+name = pathlib.Path(sys.argv[0]).name
+args = sys.argv[1:]
+vars = ('GIT_DIR','GIT_WORK_TREE','GIT_INDEX_FILE','GIT_OBJECT_DIRECTORY','GIT_COMMON_DIR','GIT_NAMESPACE')
+site = pathlib.Path('target/site')
+entry = {'name': name, 'args': args, 'git_env': {key: os.getenv(key) for key in vars}, 'cwd': os.getcwd(), 'site': site.exists() or site.is_symlink()}
+with open(os.environ['CALL_LOG'], 'a') as log: log.write(json.dumps(entry) + '\n')
+if name == 'nix':
+    print(os.environ['VITE_TOOLS'])
+elif name == 'cargo' and args and args[0] == 'build':
+    profile = 'release' if '--release' in args else 'debug'
+    output = pathlib.Path('target/wasm32-unknown-unknown') / profile / 'csr.wasm'
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(b'wasm')
+elif name == 'wasm-bindgen':
+    output = pathlib.Path(args[args.index('--out-dir') + 1])
+    output.mkdir(parents=True, exist_ok=True)
+    (output / 'csr_bg.wasm').write_bytes(b'wasm')
+    (output / 'csr.js').write_text('export {};')
+elif name == 'wasm-opt':
+    output = pathlib.Path(args[args.index('-o') + 1])
+    source = pathlib.Path(args[args.index('-o') - 1])
+    shutil.copyfile(source, output)
+elif name == 'cargo' and args and args[0] == 'run':
+    assert pathlib.Path(args[args.index('--manifest-path') + 1]) == pathlib.Path.cwd() / 'tools/Cargo.toml'
+    output = pathlib.Path(args[args.index('--out') + 1])
+    output.mkdir(parents=True, exist_ok=True)
+    (output / 'inventory.txt').write_text(pathlib.Path('server/assets/jaunder.css').read_text())
+elif name == 'vite':
+    output = pathlib.Path(os.environ['CSR_VITE_OUT_DIR'])
+    (output / '.vite').mkdir(parents=True, exist_ok=True)
+    (output / 'assets').mkdir(parents=True, exist_ok=True)
+    (output / 'assets/index.js').write_text('export {};')
+    (output / 'assets/client.wasm').write_bytes(b'wasm')
+    (output / '.vite/manifest.json').write_text('{"index.html":{"file":"assets/index.js","src":"index.html","isEntry":true},"csr_bg.wasm":{"file":"assets/client.wasm","src":"csr_bg.wasm"}}')
+    (output / 'index.html').write_text('<!doctype html>')
+if pathlib.Path('fail-' + name).exists() or (name == 'cargo' and args[0] == 'build' and pathlib.Path('fail-build').exists()) or (name == 'vite' and pathlib.Path(os.environ['CALL_LOG']).parent.joinpath('fail-vite').exists()):
+    sys.exit(9)
+"#,
         )
         .unwrap();
-        fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+        let fake_bin = temp.path().join("fake-bin");
+        fs::create_dir(&fake_bin).unwrap();
+        for name in [
+            "nix",
+            "cargo",
+            "wasm-bindgen",
+            "wasm-opt",
+            "devtool",
+            "node",
+        ] {
+            symlink(&tool, fake_bin.join(name)).unwrap();
+        }
+        let vite_tools = temp.path().join("vite-tools");
+        let vite_bin = vite_tools.join("node_modules/.bin");
+        fs::create_dir_all(&vite_bin).unwrap();
+        symlink(&tool, vite_bin.join("vite")).unwrap();
         let just_bin = temp.path().join("just-bin");
         fs::create_dir(&just_bin).unwrap();
         let just_executable = std::env::split_paths(&std::env::var_os("PATH").unwrap())
@@ -685,7 +754,7 @@ mod tests {
             .find(|path| path.is_file())
             .expect("Just is provided by the devShell");
         symlink(just_executable, just_bin.join("just")).unwrap();
-        let mut path_entries = vec![just_bin.clone(), temp.path().to_path_buf()];
+        let mut path_entries = vec![just_bin.clone(), fake_bin.clone()];
         path_entries.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
         let path = std::env::join_paths(path_entries).unwrap();
         let invoke = |profile: &str, absolute: bool| {
@@ -703,6 +772,7 @@ mod tests {
             command
                 .env("PATH", &path)
                 .env("CALL_LOG", &call_log)
+                .env("VITE_TOOLS", &vite_tools)
                 .env("GIT_DIR", "inherited-dir")
                 .env("GIT_WORK_TREE", "inherited-tree")
                 .env("GIT_INDEX_FILE", "inherited-index")
@@ -746,7 +816,31 @@ mod tests {
             let result = invoke(profile, absolute);
             assert!(result.status.success(), "{:?}", result.stderr);
             let recorded = calls();
-            assert_eq!(recorded.len(), 2);
+            assert_eq!(recorded.len(), 7);
+            assert_eq!(
+                recorded
+                    .iter()
+                    .map(|call| call["name"].as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                [
+                    "nix",
+                    "cargo",
+                    "wasm-bindgen",
+                    "wasm-opt",
+                    "cargo",
+                    "vite",
+                    "node"
+                ]
+            );
+            assert_eq!(
+                recorded[0]["args"],
+                serde_json::json!([
+                    "build",
+                    ".#csr-vite-node-modules",
+                    "--no-link",
+                    "--print-out-paths"
+                ])
+            );
             let mut build = vec![
                 "build",
                 "--locked",
@@ -758,25 +852,45 @@ mod tests {
             if profile == "release" {
                 build.push("--release");
             }
-            assert_eq!(recorded[0]["args"], serde_json::json!(build));
-            let selected = if profile.is_empty() { "debug" } else { profile };
+            assert_eq!(recorded[1]["args"], serde_json::json!(build));
+            assert!(
+                recorded[2]["args"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&serde_json::json!("--target"))
+            );
+            assert!(
+                recorded[3]["args"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&serde_json::json!("-Oz"))
+            );
+            assert_eq!(recorded[4]["args"][0], "run");
+            assert!(
+                recorded[4]["args"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&serde_json::json!("system-artifacts"))
+            );
             assert_eq!(
-                recorded[1]["args"],
+                recorded[5]["args"],
                 serde_json::json!([
-                    "run",
-                    "--locked",
-                    "--manifest-path",
-                    "tools/devtool/Cargo.toml",
-                    "--",
-                    "csr-bundle",
-                    "--wasm",
-                    format!("target/wasm32-unknown-unknown/{selected}/csr.wasm"),
-                    "--out",
-                    "target/site"
+                    "build",
+                    "--config",
+                    "vite.config.js",
+                    "--configLoader",
+                    "native"
                 ])
             );
-            for call in &recorded {
-                assert_eq!(call["cwd"], temp.path().to_str().unwrap());
+            assert_eq!(recorded[6]["args"][0], "scripts/finalize-csr-html.mjs");
+            assert!(site.join("index.html").is_file());
+            assert!(site.join("system-artifacts/inventory.txt").is_file());
+            for (index, call) in recorded.iter().enumerate() {
+                if index < 5 {
+                    assert_eq!(call["cwd"], temp.path().to_str().unwrap());
+                } else {
+                    assert!(call["cwd"].as_str().unwrap().ends_with("/project"));
+                }
                 assert_eq!(
                     call["git_env"],
                     serde_json::json!({
@@ -786,28 +900,41 @@ mod tests {
                     })
                 );
             }
-            assert_eq!(recorded[1]["site"], false);
         }
+
+        // Same recipe and PATH, no shell restart: read current styling inputs.
+        fs::write(
+            temp.path().join("server/assets/jaunder.css"),
+            "changed-style",
+        )
+        .unwrap();
+        assert!(invoke("debug", false).status.success());
+        assert_eq!(
+            fs::read_to_string(site.join("system-artifacts/inventory.txt")).unwrap(),
+            "changed-style"
+        );
 
         let referent = temp.path().join("referent");
         fs::create_dir(&referent).unwrap();
         fs::write(referent.join("sentinel"), "preserve").unwrap();
         for link in ["missing-target", "site", referent.to_str().unwrap()] {
+            fs::remove_dir_all(&site).unwrap();
             symlink(link, &site).unwrap();
             assert!(invoke("debug", false).status.success());
             assert!(!site.is_symlink());
             assert!(referent.join("sentinel").exists());
         }
+        fs::remove_dir_all(&site).unwrap();
         fs::write(&site, "old bundle file").unwrap();
         assert!(invoke("debug", false).status.success());
-        assert!(!site.exists());
+        assert!(site.join("index.html").exists());
 
         // Ordinary rm follows a symlinked ancestor, not a final symlink.
-        fs::remove_dir(&target).unwrap();
+        fs::remove_dir_all(&target).unwrap();
         symlink(&referent, &target).unwrap();
         fs::create_dir(referent.join("site")).unwrap();
         assert!(invoke("debug", false).status.success());
-        assert!(!referent.join("site").exists());
+        assert!(referent.join("site/index.html").exists());
         assert!(referent.join("sentinel").exists());
         fs::remove_file(&target).unwrap();
         fs::create_dir(&target).unwrap();
@@ -818,25 +945,25 @@ mod tests {
         fs::write(temp.path().join("fail-build"), "fail").unwrap();
         fs::write(&call_log, "").unwrap();
         assert!(!invoke("debug", false).status.success());
-        assert_eq!(calls().len(), 1);
+        assert_eq!(calls().len(), 2);
         assert!(site.join("sentinel").exists());
         fs::remove_file(temp.path().join("fail-build")).unwrap();
 
-        fs::write(temp.path().join("fail-run"), "fail").unwrap();
+        fs::write(temp.path().join("fail-vite"), "fail").unwrap();
         fs::write(&call_log, "").unwrap();
         assert!(!invoke("debug", false).status.success());
-        assert_eq!(calls().len(), 2);
+        assert_eq!(calls().len(), 6);
         assert!(!site.exists());
-        fs::remove_file(temp.path().join("fail-run")).unwrap();
+        fs::remove_file(temp.path().join("fail-vite")).unwrap();
 
         // Inject the cleanup command's nonzero status without relying on uid/mode.
-        let rm = temp.path().join("rm");
+        let rm = fake_bin.join("rm");
         fs::write(&rm, "#!/bin/sh\nexit 17\n").unwrap();
         fs::set_permissions(&rm, fs::Permissions::from_mode(0o755)).unwrap();
         fs::create_dir(&site).unwrap();
         fs::write(&call_log, "").unwrap();
         assert!(!invoke("debug", false).status.success());
-        assert_eq!(calls().len(), 1);
+        assert_eq!(calls().len(), 2);
         assert!(site.exists());
     }
 
@@ -849,8 +976,8 @@ mod tests {
         let stale = temp.path().join(".xtask/csr-debug-bundle");
         super::super::csr_prerequisite::tests::write_bundle(&stale);
         for input in ["missing", "corrupt"] {
-            fs::create_dir_all(temp.path().join("corrupt")).unwrap();
-            fs::write(temp.path().join("corrupt/manifest.json"), "corrupt").unwrap();
+            fs::create_dir_all(temp.path().join("corrupt/.vite")).unwrap();
+            fs::write(temp.path().join("corrupt/.vite/manifest.json"), "corrupt").unwrap();
             shell.set_var("JAUNDER_CSR_BUNDLE_DIR", input);
             let mut result = CommandResult::new("e2e-local");
             assert!(

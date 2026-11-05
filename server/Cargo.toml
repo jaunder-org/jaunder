@@ -75,10 +75,11 @@ url = { workspace = true }
 axum-client-addr = "0.2"
 
 [build-dependencies]
-csr_bundle = { path = "../tools/csr_bundle" }
 host = { path = "../host" }
+serde_json.workspace = true
 
 [dev-dependencies]
+brotli = "8.0.4"
 # ZIP is the checked-in fixture container only; restore inputs remain directories or tar/gzip.
 zip = { version = "9.0.4", default-features = false, features = ["deflate"] }
 # Independent pixel observations use the existing pinned decoder, never upload editing.
@@ -93,7 +94,6 @@ base64 = { workspace = true }
 common = { workspace = true, features = ["test-utils", "test-support"] }
 host = { workspace = true, features = ["qualification", "test-support", "test-utils"] }
 storage = { workspace = true, features = ["test-utils", "test-support"] }
-csr_bundle = { path = "../tools/csr_bundle" }
 nix = { version = "0.31.3", features = ["signal"] }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }

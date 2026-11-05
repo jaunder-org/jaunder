@@ -19,7 +19,7 @@ import {
   stylesheetModuleDiagnosticsFrom,
   type NavigationSummary,
 } from "./performance";
-import { goto } from "./helpers";
+import { BASE_URL, goto } from "./helpers";
 
 const wasm = {
   startTime: 10,
@@ -591,7 +591,11 @@ test("boot fetches the wasm once and the harness captures the full mark set", as
   const wasmRequests: string[] = [];
   page.on("request", (request) => {
     const { pathname } = new URL(request.url());
-    if (pathname.startsWith("/pkg/") && pathname.endsWith(".wasm")) {
+    if (
+      new URL(request.url()).origin === new URL(BASE_URL).origin &&
+      request.resourceType() === "fetch" &&
+      pathname.endsWith(".wasm")
+    ) {
       wasmRequests.push(request.url());
     }
   });
@@ -727,16 +731,24 @@ test("initializer records buffered after MIME-rejected streaming and restores AP
     scope.__jaunderOriginalStreaming = WebAssembly.instantiateStreaming;
     scope.__jaunderOriginalInstantiate = WebAssembly.instantiate;
   });
-  await page.route("**/pkg/*.wasm", async (route) => {
-    const response = await route.fetch();
-    await route.fulfill({
-      response,
-      headers: {
-        ...response.headers(),
-        "content-type": "application/octet-stream",
-      },
-    });
-  });
+  await page.route(
+    (url) =>
+      url.origin === new URL(BASE_URL).origin && url.pathname.endsWith(".wasm"),
+    async (route) => {
+      if (route.request().resourceType() !== "fetch") {
+        await route.continue();
+        return;
+      }
+      const response = await route.fetch();
+      await route.fulfill({
+        response,
+        headers: {
+          ...response.headers(),
+          "content-type": "application/octet-stream",
+        },
+      });
+    },
+  );
 
   await goto(page, "/");
   await page.waitForFunction(

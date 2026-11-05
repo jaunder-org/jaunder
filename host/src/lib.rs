@@ -43,6 +43,7 @@ pub mod theme_operations;
 pub mod theme_package;
 pub mod theme_repository;
 pub mod token;
+pub mod vite_manifest;
 
 /// True only when test-only cheap Argon2 parameters are compiled in.
 pub const CHEAP_KDF_ENABLED: bool = cfg!(feature = "cheap-kdf");

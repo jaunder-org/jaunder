@@ -1949,55 +1949,43 @@ lanes check their documented production boundaries; test gates exercise the
 explicitly enabled test surfaces. These checks do not certify the absence of
 `common/test-support` from every production dependency graph.
 
-`just build-csr [debug|release]` validates the profile (default: debug),
-compiles `csr` to wasm with locked Cargo inputs, removes fixed `target/site`
-with `rm -rf`, and hands the artifact to checked-out `tools/devtool`'s
-`csr-bundle` command. Just selects the root-level Justfile's parent as cwd; the
-recipe inherits the caller's environment, including `GIT_*`. Cleanup removes
-regular files and dangling final links as well as directories, without following
-a final symlink into its referent. Each stage must succeed before the next
-starts. The shared bundler owns wasm-bindgen, `wasm-opt -Oz`, and content
-addressing. Devtool rewrites the acyclic runtime import graph dependency-first,
-gives every runtime asset a full SHA-256 filename, and emits a role-tagged
-manifest covering identity and compressed representations. That manifest is the
-sole asset-naming interface: it renders the static CSR shell, drives server
-staging and public-projector shell generation, and tells host audits which file
-carries the WASM role. Producers and consumers reject cycles, incomplete
-inventories, unsafe paths, and digest mismatches rather than guessing roles from
-filenames
-([content-addressed CSR bundle manifest](adr/0175-content-addressed-csr-bundle-manifest.md)).
-Names cannot live in `web`, because compiling the final WASM name into the WASM
-would make the content hash self-referential.
-
-**Approved direction, not yet implemented:** migrate CSR graph/output naming to
-Vite and use its ordinary content-sensitive hashes and build-only native
-manifest, while preserving the runtime serving guarantees and build/consumer
-behavior described here. The phase-2 migration remains subject to implementation
-and verification; this statement does not mean the current producer or manifest
-has changed
+`just build-csr [debug|release]` selects the shared production pipeline. It
+compiles `csr` with locked Cargo inputs, runs `wasm-bindgen` and production
+`wasm-opt -Oz`, then invokes pinned Vite 8.3.5 and `vite-plugin-compression2`
+2.5.4. Vite's HTML entry and native build manifest own runtime graph processing,
+emitted content-sensitive names, and build inventory. Host and Nix use the same
+checked pins/features/optimizer flags, but outputs and URLs may differ: verified
+optimized WASM sizes were 4,212,240 bytes (host) and 4,222,496 bytes (Nix), each
+below the 5,000,000-byte ceiling. These are accepted environment-specific
+outputs; byte identity is not required. Path provenance explains build context
+but does not prove the cause of every differing byte. The native manifest is
+build-only; consumers resolve entry/WASM outputs without recreating a
+role-tagged schema or custom graph/hash machinery. The shell finalizer and
+necessary style/projector adapters preserve existing runtime and consumer
+contracts. Content-sensitive names are not a cryptographic integrity promise
 ([proposed Vite asset-output decision](adr/drafts/csr-vite-content-addressed-assets.md)).
 
 The server embeds the rendered SPA shell and falls back to it for anything the
 projector and static routes do not claim, keeping ADR-0003/ADR-0008's single
-binary intact. The bundle is fetched after the JS glue and is **not** preloaded:
-`render_head` carries no `<link rel="preload">`, a measured decision under a
-pre-registered abort rule rather than an oversight
-([ADR-0121](adr/0121-no-wasm-preload.md)). Manifest-driven shell checks preserve
-one early fetch, the fallback target, and initialization ordering without fixed
-`/pkg/jaunder.{js,wasm}` aliases.
+binary intact. `render_head` carries no `<link rel="preload">`, a measured
+decision under a pre-registered abort rule rather than an oversight
+([ADR-0121](adr/0121-no-wasm-preload.md)). The shell's classic script fetches
+WASM before module entry, exactly once; it also retains auth prepaint and the
+stylesheet marker. Necessary initialization/style/projector adapters connect
+Vite output to these runtime contracts; the build manifest itself is not served.
 
 The WASM artifact carries a hard budget
 ([ADR-0106](adr/0106-wasm-raw-size-budget.md)): `cargo xtask validate` resolves
-the manifest's WASM role and fails when its **raw** byte count exceeds
-`WASM_RAW_CEILING_BYTES` (5,000,000 bytes: decimal 5 MB, not 5 MiB, in
-`xtask/src/wasm_budget.rs`). Raw, not compressed, because the artifact is a
-compiler input rather than a download. The #1750 amendment accepts additional
-feature headroom while preserving the historical 4,009,656-byte achieved
-baseline for drift reporting. The historical weaker optimisation-level sizes now
-fit, so this size ceiling does not guarantee detection of an optimisation
-downgrade; production still uses `wasm-opt -Oz`. Unit tests enforce the
-inclusive limit and failure one byte above it. The higher ceiling is not
-evidence of measured or benign startup/download impact.
+the Vite manifest's `csr_bg.wasm` source mapping to its emitted `.wasm` file and
+fails when its **raw** byte count exceeds `WASM_RAW_CEILING_BYTES` (5,000,000
+bytes: decimal 5 MB, not 5 MiB, in `xtask/src/wasm_budget.rs`). Raw, not
+compressed, because the artifact is a compiler input rather than a download. The
+#1750 amendment accepts additional feature headroom while preserving the
+historical 4,009,656-byte achieved baseline for drift reporting. The historical
+weaker optimisation-level sizes now fit, so this size ceiling does not guarantee
+detection of an optimisation downgrade; production still uses `wasm-opt -Oz`.
+Unit tests enforce the inclusive limit and failure one byte above it. The higher
+ceiling is not evidence of measured or benign startup/download impact.
 
 ### Module layout — the per-vertical file split
 
@@ -2839,18 +2827,18 @@ on timeout. No administration secret or network control channel exists
   and verifies their bytes and atomically advances system references before
   serving. Stored metadata owns runtime digest URLs; missing or corrupt admitted
   content fails closed rather than falling back to embedded stylesheets.
-- `Site` (`server/src/site.rs`, `#[folder = "$OUT_DIR/site"]`) currently carries
-  the CSR client: full-SHA-256-named runtime assets, their precompressed
-  `.br`/`.gz` siblings, and the `public/` assets flattened to the site root
-  (`public/favicon.ico` → `favicon.ico`). `devtool csr-bundle` emits the
-  role-tagged manifest that defines the runtime inventory; `server/build.rs`
-  validates that manifest and stages the tree at compile time from
-  `JAUNDER_CSR_BUNDLE_DIR` (Nix) or `target/site` (host build). The rendered SPA
-  and public-projector shells consume the same manifest, so no source literal or
-  filename heuristic duplicates asset identity
-  ([content-addressed CSR bundle manifest](adr/0175-content-addressed-csr-bundle-manifest.md)).
-  The approved Vite migration is not implemented yet; the current site and
-  manifest descriptions remain factual until production changes are verified
+- `Site` (`server/src/site.rs`, `#[folder = "$OUT_DIR/site"]`) carries Vite-
+  emitted CSR runtime assets, their precompressed `.br`/`.gz` siblings, and
+  `public/` assets flattened to the site root (`public/favicon.ico` →
+  `favicon.ico`). The build-only native Vite manifest supplies entry and WASM
+  output paths to staging, audit and projector consumers; it is excluded from
+  the embedded/served site. `server/build.rs` stages assets at compile time from
+  `JAUNDER_CSR_BUNDLE_DIR` (Nix) or `target/site` (host build). `rust-embed` and
+  `site::serve_site` retain identity/gzip/Brotli negotiation, logical MIME,
+  `Vary`, cache policy and representation-specific ETags/304 behavior.
+  ADR-0175's former producer schema and graph/hash rules are no longer the
+  producer contract; the proposed Vite decision records this reconciliation and
+  remains in draft status
   ([proposed Vite asset-output decision](adr/drafts/csr-vite-content-addressed-assets.md)).
 
 [ADR-0003](adr/0003-asset-management.md) establishes single-binary asset
