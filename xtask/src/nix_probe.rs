@@ -99,11 +99,10 @@ pub enum Arm {
     CsrBundleProducer,
     Toolchain,
     UnrelatedNote,
-    CensusSource,
 }
 
 impl Arm {
-    const ALL: [Self; 31] = [
+    const ALL: [Self; 30] = [
         Self::Docs,
         Self::Server,
         Self::Web,
@@ -135,7 +134,6 @@ impl Arm {
         Self::CsrBundleProducer,
         Self::Toolchain,
         Self::UnrelatedNote,
-        Self::CensusSource,
     ];
 
     const fn name(self) -> &'static str {
@@ -171,7 +169,6 @@ impl Arm {
             Self::CsrBundleProducer => "csr-bundle-producer",
             Self::Toolchain => "toolchain",
             Self::UnrelatedNote => "unrelated-note",
-            Self::CensusSource => "census-source",
         }
     }
 
@@ -208,7 +205,6 @@ impl Arm {
             Self::CsrBundleProducer => "tools/devtool/src/csr_bundle.rs",
             Self::Toolchain => "rust-toolchain.toml",
             Self::UnrelatedNote => "__nix_source_probe_note.txt",
-            Self::CensusSource => "end2end/e2e-lanes.json",
         }
     }
 
@@ -216,7 +212,6 @@ impl Arm {
     // product/wasm/xtask contract.
     fn boundaries(self) -> &'static [Boundary] {
         match self {
-            Self::CensusSource => &[Boundary::StaticE2eCensus],
             Self::CsrSource
             | Self::CsrManifest
             | Self::RootLock
@@ -294,7 +289,6 @@ impl Arm {
             (self, boundary),
             (Self::Docs, Boundary::StaticDocs)
                 | (Self::Elisp, Boundary::StaticElisp | Boundary::StaticCode)
-                | (Self::CensusSource, Boundary::StaticCode | Boundary::StaticE2eCensus)
                 | (Self::Server, Boundary::StaticCode)
                 | (Self::Web, Boundary::StaticCode | Boundary::Site)
                 | (
@@ -313,7 +307,10 @@ impl Arm {
                     Self::Tooling | Self::ToolLock | Self::QualificationSchema,
                     Boundary::Xtask
                 )
-                | (Self::LaneCatalog, Boundary::StaticCode | Boundary::Xtask)
+                | (
+                    Self::LaneCatalog,
+                    Boundary::StaticCode | Boundary::StaticE2eCensus | Boundary::Xtask
+                )
                 | (
                     Self::Common
                         | Self::Macros
@@ -324,7 +321,7 @@ impl Arm {
                         | Self::BuildConfig
                         | Self::DevtoolSource
                         | Self::ToolsLock,
-                    Boundary::Devtool | Boundary::StaticElisp
+                    Boundary::Devtool | Boundary::StaticElisp | Boundary::StaticE2eCensus
                 )
                 // Docs and site transitively depend on their devtool executables.
                 | (
@@ -349,10 +346,11 @@ impl Arm {
                         | Boundary::StaticElisp
                         | Boundary::Devtool
                         | Boundary::ToolingDependencies
+                        | Boundary::StaticE2eCensus
                 )
                 | (
                     Self::CsrShell | Self::ThemeManifest | Self::Migration,
-                    Boundary::StaticCode | Boundary::StaticElisp | Boundary::Devtool
+                    Boundary::StaticCode | Boundary::StaticElisp | Boundary::Devtool | Boundary::StaticE2eCensus
                 )
                 | (Self::ServerBuildScript, Boundary::StaticCode)
                 // The final bundle includes both the WASM target closure and
@@ -673,11 +671,6 @@ mod tests {
         for (arm, changed) in [
             (Arm::Docs, paths("docs-2", "code", "site", "wasm")),
             (Arm::Server, paths("docs", "code-2", "site", "wasm")),
-            (Arm::CensusSource, {
-                let mut changed = paths("docs", "code-2", "site", "wasm");
-                changed.static_e2e_census = "census-2".to_owned();
-                changed
-            }),
             (Arm::Web, paths("docs", "code-2", "site-2", "wasm")),
             (Arm::CsrSource, paths("docs", "code", "site", "wasm")),
             (Arm::CsrManifest, paths("docs", "code", "site", "wasm")),
@@ -696,16 +689,14 @@ mod tests {
             ),
         ] {
             let mut changed = changed;
-            if !matches!(
-                arm,
-                Arm::Docs | Arm::Server | Arm::CensusSource | Arm::UnrelatedNote
-            ) {
+            if !matches!(arm, Arm::Docs | Arm::Server | Arm::UnrelatedNote) {
                 changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
             }
             if matches!(arm, Arm::Common | Arm::Macros | Arm::Performance) {
                 changed.xtask = "xtask-2".to_owned();
                 changed.devtool = "devtool-2".to_owned();
                 changed.static_elisp = "elisp-2".to_owned();
+                changed.static_e2e_census = "census-2".to_owned();
             }
             assert_eq!(compare_arm(&base, arm, &changed), Ok(()));
         }
@@ -793,10 +784,14 @@ mod tests {
             ) {
                 changed.devtool = "devtool-2".to_owned();
                 changed.static_elisp = "elisp-2".to_owned();
+                changed.static_e2e_census = "census-2".to_owned();
                 changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
             }
             if matches!(arm, Arm::BuildConfig) {
                 changed.tooling_dependencies = "tooling-dependencies-2".to_owned();
+            }
+            if matches!(arm, Arm::LaneCatalog) {
+                changed.static_e2e_census = "census-2".to_owned();
             }
             assert_eq!(compare_arm(&base, arm, &changed), Ok(()));
             assert!(matches!(
@@ -814,6 +809,7 @@ mod tests {
         changed.static_elisp = "elisp-2".to_owned();
         changed.devtool = "devtool-2".to_owned();
         changed.static_docs = "docs-2".to_owned();
+        changed.static_e2e_census = "census-2".to_owned();
         changed.site = "site-2".to_owned();
         changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
         assert_eq!(compare_arm(&base, Arm::DevtoolSource, &changed), Ok(()));
@@ -850,6 +846,13 @@ mod tests {
                 "static-elisp",
                 DrvPaths {
                     static_elisp: base.static_elisp.clone(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "static-e2e-census",
+                DrvPaths {
+                    static_e2e_census: base.static_e2e_census.clone(),
                     ..changed.clone()
                 },
             ),
@@ -900,6 +903,7 @@ mod tests {
         changed.static_elisp = "elisp-2".to_owned();
         changed.xtask = "xtask-2".to_owned();
         changed.devtool = "devtool-2".to_owned();
+        changed.static_e2e_census = "census-2".to_owned();
         changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
         assert!(matches!(
             compare_arm(&base, Arm::ToolsLock, &changed),
@@ -998,6 +1002,7 @@ mod tests {
             if arm != Arm::ServerBuildScript {
                 changed.devtool = "devtool-2".to_owned();
                 changed.static_elisp = "elisp-2".to_owned();
+                changed.static_e2e_census = "census-2".to_owned();
                 changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
             }
             if matches!(
@@ -1099,6 +1104,7 @@ mod tests {
         let mut changed = paths("docs-2", "code-2", "site-2", "wasm");
         changed.static_elisp = "elisp-2".to_owned();
         changed.devtool = "devtool-2".to_owned();
+        changed.static_e2e_census = "census-2".to_owned();
         assert_eq!(
             compare_arm(&base, Arm::DevtoolSource, &changed),
             Err(ProbeError::MissingChange {
