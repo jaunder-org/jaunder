@@ -33,11 +33,12 @@ pub(crate) enum TestCheck {
 }
 
 const CHECK_SUPPORTING_TEST_CHECKS: [TestCheck; 2] = [TestCheck::Wasm, TestCheck::Doctests];
-const STATIC_CHECKS: [(&str, &str); 7] = [
+const STATIC_CHECKS: [(&str, &str); 8] = [
     ("nix-static-docs", "static-docs"),
     ("nix-static-typescript", "static-typescript"),
     ("nix-rust-format", "rust-format"),
     ("nix-static-code", "static-code"),
+    ("nix-static-elisp", "static-elisp"),
     ("nix-static-ert", "static-ert"),
     ("nix-xtask-format", "xtask-format"),
     ("nix-xtask-clippy", "xtask-clippy"),
@@ -2291,6 +2292,7 @@ pub(crate) fn build_coverage_out_path(flake_dir: &Path) -> Result<String> {
 pub(crate) struct SourceProbeDrvPaths {
     pub(crate) static_docs: String,
     pub(crate) static_code: String,
+    pub(crate) static_elisp: String,
     pub(crate) site: String,
     pub(crate) wasm_tests: String,
     pub(crate) xtask: String,
@@ -2307,6 +2309,10 @@ pub(crate) fn eval_source_probe_drvpaths(flake_dir: &Path) -> Result<SourceProbe
     Ok(SourceProbeDrvPaths {
         static_docs: nix_eval_raw(Some(flake_dir), ".#checks.x86_64-linux.static-docs.drvPath")?,
         static_code: nix_eval_raw(Some(flake_dir), ".#checks.x86_64-linux.static-code.drvPath")?,
+        static_elisp: nix_eval_raw(
+            Some(flake_dir),
+            ".#checks.x86_64-linux.static-elisp.drvPath",
+        )?,
         site: nix_eval_raw(Some(flake_dir), ".#site.drvPath")?,
         wasm_tests: nix_eval_raw(Some(flake_dir), ".#checks.x86_64-linux.wasm-tests.drvPath")?,
         xtask: nix_eval_raw(Some(flake_dir), ".#xtask.drvPath")?,
@@ -3021,6 +3027,7 @@ mod tests {
                 ("nix-static-typescript", "static-typescript"),
                 ("nix-rust-format", "rust-format"),
                 ("nix-static-code", "static-code"),
+                ("nix-static-elisp", "static-elisp"),
                 ("nix-static-ert", "static-ert"),
                 ("nix-xtask-format", "xtask-format"),
                 ("nix-xtask-clippy", "xtask-clippy"),
@@ -3052,6 +3059,7 @@ mod tests {
                 "static-typescript",
                 "rust-format",
                 "static-code",
+                "static-elisp",
                 "static-ert",
                 "xtask-format",
                 "xtask-clippy"
@@ -3067,6 +3075,81 @@ mod tests {
                 && result.steps[4].ok
                 && result.steps[5].ok
                 && result.steps[6].ok
+        );
+    }
+
+    #[test]
+    fn elisp_formatter_failure_is_a_required_hermetic_consumer_failure() {
+        let mut result = CommandResult::new("ci-validate-hermetic");
+        let mut requests = Vec::new();
+        static_checks_with(&mut result, |step, check| {
+            requests.push(check.to_string());
+            if check == "static-elisp" {
+                StepResult::fail(step).detail("controlled elisp-fmt failure")
+            } else {
+                StepResult::ok(step)
+            }
+        });
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|check| *check == "static-elisp")
+                .count(),
+            1
+        );
+        assert!(!result.ok);
+        let step = result
+            .steps
+            .iter()
+            .find(|step| step.name == "nix-static-elisp")
+            .unwrap();
+        assert!(!step.ok);
+        assert_eq!(step.detail.as_deref(), Some("controlled elisp-fmt failure"));
+        assert!(
+            result
+                .steps
+                .iter()
+                .filter(|step| step.name != "nix-static-elisp")
+                .all(|step| step.ok)
+        );
+    }
+
+    #[test]
+    fn elisp_byte_compile_failure_is_a_required_hermetic_consumer_failure() {
+        let mut result = CommandResult::new("ci-validate-hermetic");
+        let mut requests = Vec::new();
+        static_checks_with(&mut result, |step, check| {
+            requests.push(check.to_string());
+            if check == "static-elisp" {
+                StepResult::fail(step).detail("controlled byte-compile failure")
+            } else {
+                StepResult::ok(step)
+            }
+        });
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|check| *check == "static-elisp")
+                .count(),
+            1
+        );
+        assert!(!result.ok);
+        let step = result
+            .steps
+            .iter()
+            .find(|step| step.name == "nix-static-elisp")
+            .unwrap();
+        assert!(!step.ok);
+        assert_eq!(
+            step.detail.as_deref(),
+            Some("controlled byte-compile failure")
+        );
+        assert!(
+            result
+                .steps
+                .iter()
+                .filter(|step| step.name != "nix-static-elisp")
+                .all(|step| step.ok)
         );
     }
 
@@ -3089,15 +3172,16 @@ mod tests {
                 "static-typescript",
                 "rust-format",
                 "static-code",
+                "static-elisp",
                 "static-ert",
                 "xtask-format",
                 "xtask-clippy"
             ]
         );
         assert!(!result.ok);
-        assert_eq!(result.steps[6].name, "nix-xtask-clippy");
-        assert!(!result.steps[6].ok);
-        assert!(result.steps[..6].iter().all(|step| step.ok));
+        assert_eq!(result.steps[7].name, "nix-xtask-clippy");
+        assert!(!result.steps[7].ok);
+        assert!(result.steps[..7].iter().all(|step| step.ok));
     }
 
     #[test]

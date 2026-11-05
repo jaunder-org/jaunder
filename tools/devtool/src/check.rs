@@ -737,6 +737,36 @@ mod tests {
     }
 
     #[test]
+    fn elisp_formatter_preserves_fix_and_verify_modes() {
+        assert_eq!(
+            build_host("elisp-fmt", false),
+            BuiltCommand {
+                program: "emacs",
+                args: vec![
+                    "--batch".into(),
+                    "-Q".into(),
+                    "-l".into(),
+                    "elisp/scripts/format.el".into(),
+                    "-f".into(),
+                    "jaunder-fmt-check".into(),
+                ],
+                env: Vec::new(),
+            }
+        );
+        assert_eq!(
+            build_host("elisp-fmt", true).args,
+            vec![
+                "--batch",
+                "-Q",
+                "-l",
+                "elisp/scripts/format.el",
+                "-f",
+                "jaunder-fmt-fix",
+            ]
+        );
+    }
+
+    #[test]
     fn ert_and_tsc_ignore_fix() {
         assert_eq!(build_host("ert", true), build_host("ert", false));
         assert_eq!(build_host("tsc", true), build_host("tsc", false));

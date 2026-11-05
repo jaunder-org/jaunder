@@ -3352,8 +3352,7 @@ static-typescript =
         touch $out
       ''
   );
-# Standalone pure ERT verdict; formatting/byte-compilation retain their Elisp
-# inputs in static-code. The combined pure/live coverage producer is separate.
+# Standalone pure ERT verdict. The combined pure/live coverage producer is separate.
 static-ert =
   let
     staticErtSourceFilter = path: type:
@@ -3381,6 +3380,43 @@ static-ert =
       cp --no-preserve=mode -r ${staticErtSrc} src
       cd src
       devtool check --group ert
+      touch $out
+    '');
+# Elisp formatter verification and warning-as-error byte-compilation share one
+# narrow leaf; devtool owns both command definitions on host and in Nix.
+static-elisp =
+  let
+    staticElispSourceFilter =
+      path: type:
+      let
+        relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
+      in
+      (type == "directory" && (toString path == toString ../. || relative == "elisp" || pkgs.lib.hasPrefix "elisp/" relative))
+      || (pkgs.lib.hasPrefix "elisp/" relative && !(pkgs.lib.hasSuffix ".md" path));
+    staticElispSrc = pkgs.lib.cleanSourceWith {
+      src = craneLib.path ../.;
+      filter =
+        assert staticElispSourceFilter (cargoSourcePath "elisp/scripts/format.el") "regular";
+        assert staticElispSourceFilter (cargoSourcePath "elisp/scripts/byte-compile.el") "regular";
+        assert staticElispSourceFilter (cargoSourcePath "elisp/test/jaunder-publish-test.el") "regular";
+        assert staticElispSourceFilter (cargoSourcePath "elisp") "directory";
+        assert !(staticElispSourceFilter (cargoSourcePath "elisp/README.md") "regular");
+        assert !(staticElispSourceFilter (cargoSourcePath "server/src/lib.rs") "regular");
+        assert !(staticElispSourceFilter (cargoSourcePath "server/src") "directory");
+        assert !(staticElispSourceFilter (cargoSourcePath "server") "directory");
+        staticElispSourceFilter;
+    };
+  in
+  nonSubstitutable (pkgs.runCommand "static-elisp"
+    {
+      nativeBuildInputs = [ devtoolBin emacsForCi ];
+      TZDIR = "${pkgs.tzdata}/share/zoneinfo";
+    }
+    ''
+      cp --no-preserve=mode -r ${staticElispSrc} src
+      cd src
+      devtool check elisp-fmt
+      devtool check byte-compile
       touch $out
     '');
 # Cargo resolves dependency manifests even without `--all`; placeholders satisfy
@@ -3497,7 +3533,8 @@ static-code =
       let
         isXtask = pkgs.lib.hasSuffix "/xtask" path || pkgs.lib.hasInfix "/xtask/" path;
       in
-      type == "directory"
+      (type == "directory"
+        && !(pkgs.lib.hasSuffix "/elisp" path || pkgs.lib.hasInfix "/elisp/" path))
       || (
         !(pkgs.lib.hasSuffix ".md" path)
         && (
@@ -3533,7 +3570,6 @@ static-code =
                 "public"
                 "tools"
                 "end2end"
-                "elisp"
               ]
             )
           )
@@ -3546,6 +3582,9 @@ static-code =
         assert staticCodeSourceFilter "/source/nix/otel-processors.yaml" "regular";
         assert staticCodeSourceFilter "/source/xtask" "directory";
         assert !(staticCodeSourceFilter "/source/xtask/src/lib.rs" "regular");
+        assert !(staticCodeSourceFilter "/source/elisp" "directory");
+        assert !(staticCodeSourceFilter "/source/elisp/scripts" "directory");
+        assert !(staticCodeSourceFilter "/source/elisp/scripts/format.el" "regular");
         assert (staticCodeSourceFilter "/source/testdata/theme-repository/minimal/preview.png" "regular");
         assert !(staticCodeSourceFilter "/source/testdata/unrelated.png" "regular");
         staticCodeSourceFilter;
@@ -3565,15 +3604,14 @@ static-code =
         pkgs.prettier
         pkgs.nodejs
         pkgs.typescript
-        emacsForCi
       ];
       buildInputs = hostArgs.buildInputs;
       # The server build script now links the host compiler, including native
       # decoding dependencies. Cargo executes it before any output fixup.
       LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ];
-      # Elisp checks retain the zone DB (#160). The census still needs the
-      # complete pinned end2end dependency environment after tsc moves out.
-      TZDIR = "${pkgs.tzdata}/share/zoneinfo";
+      # The census still needs the complete pinned end2end dependency
+      # environment after tsc moves out.
+
       E2E_TYPES_NODE_MODULES = "${e2ePackage}/node_modules";
       E2E_PLAYWRIGHT_TEST = "${pkgs.playwright-test}/lib/node_modules/@playwright/test";
       JAUNDER_E2E_PLAYWRIGHT_CLI = "${pkgs.playwright-test}/lib/node_modules/@playwright/test/cli.js";
@@ -3588,10 +3626,8 @@ static-code =
       # while Clippy is requested once below through its own aggregate.
       devtool check prettier-end2end --sandbox-cargo
       devtool check prettier-css --sandbox-cargo
-      devtool check elisp-fmt --sandbox-cargo
       devtool check ast-grep-tests --sandbox-cargo
       devtool check no-full-reload --sandbox-cargo
-      devtool check byte-compile --sandbox-cargo
       devtool check cargo-deny --sandbox-cargo
       test -e ${self.checks.${system}.clippy-aggregate}
       # The census loads Playwright config independently of the TypeScript leaf.

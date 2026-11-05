@@ -962,7 +962,7 @@ Its ERT suite, formatter, and byte-compilation run in the verify ladder: `ert`,
 `elisp-fmt`, and `byte-compile` (which byte-compiles the package modules with
 warnings promoted to errors) are `cargo xtask check`/`validate` steps that run
 through `devtool check` — the same implementations the `static-ert` (pure ERT)
-and `static-code` (formatting/byte-compilation) Nix derivations run, so
+and `static-elisp` (formatting/byte-compilation) Nix derivations run, so
 `nix flake check` covers them too, with no duplicated sibling to drift (#188).
 prettier cannot format Emacs Lisp, so `elisp-fmt` uses built-in
 `emacs-lisp-mode` indentation (auto-fix under `check`, verify under `validate`).
@@ -1721,51 +1721,56 @@ hermetic static surface has separate semantic derivations, not a singular
 `static-checks`: `static-docs` owns Markdown formatting and its configuration;
 `static-typescript` owns the named `tsc` check; `rust-format` owns `fmt`, scoped
 `leptosfmt`, and `tools-fmt`; `static-ert` owns standalone pure ERT;
-`static-code` owns the remaining shared devtool definitions. TypeScript
-formatting and `e2eCensusContract.ts` remain in Code; Code explicitly provisions
-node modules before the census. The TypeScript split changes neither the
-independently landed Rust formatting boundary nor distinct feature/target/tools
-Clippy commands, and makes no equivalence, permanent deferral or closure claim.
-The independent `xtask-format` leaf verifies xtask Rust formatting with pinned
-Cargo/rustfmt; it is not part of a devtool group. The existing source drift
-probe covers its original boundaries, not `static-typescript`, `rust-format`,
-`static-ert`, or `xtask-format`. The CSR/site source closure contains workspace
-manifests, the resolved `csr` target closure, its required shell inputs, and
-deterministic workspace placeholders. The client wasm-test closure analogously
-contains workspace manifests, the resolved `client` wasm-test target closure,
-and its required inputs/placeholders. `common` and `macros` remain wherever a
-resolved target reaches them; unrelated `server`, `storage`, and host-only
-sources are absent from both closures.
+`static-elisp` owns Elisp formatting and byte-compilation over its complete
+non-Markdown Elisp source filter; `static-code` owns the remaining shared
+devtool definitions. TypeScript formatting and `e2eCensusContract.ts` remain in
+Code; Code explicitly provisions node modules before the census. The TypeScript
+split changes neither the independently landed Rust formatting boundary nor
+distinct feature/target/tools Clippy commands, and makes no equivalence,
+permanent deferral or closure claim. The independent `xtask-format` leaf
+verifies xtask Rust formatting with pinned Cargo/rustfmt; it is not part of a
+devtool group. The source drift probe covers its original boundaries plus
+`static-elisp`, not `static-typescript`, `rust-format`, `static-ert`, or
+`xtask-format`. The CSR/site source closure contains workspace manifests, the
+resolved `csr` target closure, its required shell inputs, and deterministic
+workspace placeholders. The client wasm-test closure analogously contains
+workspace manifests, the resolved `client` wasm-test target closure, and its
+required inputs/placeholders. `common` and `macros` remain wherever a resolved
+target reaches them; unrelated `server`, `storage`, and host-only sources are
+absent from both closures.
 
 `cargo xtask nix probe-source` creates isolated tracked marker perturbations and
 **evaluates** the flake `.drv` identities without realizing outputs. It fails
 closed unless docs changes affect only `static-docs`; server changes affect
 `static-code` but neither wasm path; web changes affect `static-code` and
-`.#site` but not `wasm-tests`; and `common`, `macros`, and the shared
-performance contract affect the code, site, and wasm-test boundaries without
+`.#site` but not `wasm-tests`; Elisp-source changes affect `static-elisp` but
+not `static-code`; and `common`, `macros`, and the shared performance contract
+affect the code, Elisp, site, wasm-test, and xtask boundaries without
 invalidating `static-docs`. It also protects `devtool` and its compiled tooling
 dependency boundary: devtool implementation edits invalidate the real tool,
-`static-code`, `static-docs` (through its `docsDevtoolBin` build input), and
-site (through `csrWasmBundle`'s `devtoolBin` build input), but preserve
-`wasm-tests`, `xtask`, and the compiled tooling dependency identity. The
-documentation and site source filters remain narrow; derivation identity
+`static-code`, `static-elisp`, `static-docs` (through its `docsDevtoolBin` build
+input), and site (through `csrWasmBundle`'s `devtoolBin` build input), but
+preserve `wasm-tests`, `xtask`, and the compiled tooling dependency identity.
+The documentation and site source filters remain narrow; derivation identity
 includes transitive executable inputs as well as admitted sources.
 `tools/Cargo.lock` invalidates ordinary devtool, its dependency preparation,
-`static-code`, `xtask`, `static-docs` through `docsDevtoolBin`, and site through
-`csrWasmBundle`; `wasm-tests` remains stable. `xtask/Cargo.lock` affects only
-`xtask` among these boundaries. Root Cargo build configuration affects code,
-site, `wasm-tests`, `xtask`, ordinary devtool and tooling dependencies, but not
-the docs-only tool. The four manifest arms (root, tools workspace, devtool and
-shared common manifest) and four embedded-input arms (server build script, CSR
-shell, Theme Package manifest and migration) guard only `static-code`, `devtool`
-and tooling dependencies; they make no runtime assertions for the other four
-boundaries. Tooling preparation uses generated dummy sources and a file-scoped
-lockfile, with repository-root target alignment and nonempty archive admission
-for ordinary, documentation and qualification consumers. Release artifacts are
-not assumed to seed dev-profile clippy. The identity drift probe runs only on
-request; it builds no application/check outputs, although evaluation can require
-declared source preparation. It never purges the store. Stable identity is not
-proof of compiler freshness or local/remote realization reuse.
+`static-code`, `static-elisp`, `xtask`, `static-docs` through `docsDevtoolBin`,
+and site through `csrWasmBundle`; `wasm-tests` remains stable.
+`xtask/Cargo.lock` affects only `xtask` among these boundaries. Root Cargo build
+configuration affects code, Elisp, site, `wasm-tests`, `xtask`, ordinary devtool
+and tooling dependencies, but not the docs-only tool. The four manifest arms
+(root, tools workspace, devtool and shared common manifest) and four
+embedded-input arms (server build script, CSR shell, Theme Package manifest and
+migration) assert the appropriate `static-code`, `static-elisp`, `devtool`,
+tooling-dependency and CSR-bundle fan-out for each input; unrelated boundaries
+remain stable. Tooling preparation uses generated dummy sources and a
+file-scoped lockfile, with repository-root target alignment and nonempty archive
+admission for ordinary, documentation and qualification consumers. Release
+artifacts are not assumed to seed dev-profile clippy. The identity drift probe
+runs only on request; it builds no application/check outputs, although
+evaluation can require declared source preparation. It never purges the store.
+Stable identity is not proof of compiler freshness or local/remote realization
+reuse.
 
 Artifact compatibility includes compiler, target, profile, resolved features,
 flags and native inputs; incompatible work must rebuild. Dependency preparations
@@ -1814,21 +1819,31 @@ reconciliation, and server-function coverage verification.
   local-store outputs may be reused; request duration is not evidence of current
   formatter execution, and no speedup or narrow-cache claim follows.
 - `checks.x86_64-linux.static-code` — residual non-Clippy shared static
-  definitions outside TypeScript, Rust formatting and standalone ERT (including
-  end-to-end formatting, Elisp formatting/byte-compilation, cargo-deny, and
+  definitions outside TypeScript, Rust formatting, standalone ERT and Elisp
+  formatting/byte-compilation (including end-to-end formatting, cargo-deny, and
   repository scanners), executed with existing offline Cargo homes. It requests
   the narrow Clippy aggregate once; that aggregate depends on six independently
   buildable terminal verdicts and executes no lint itself. The host
   `devtool check --all` is the ordered, duplicate-free union of `docs`,
   `typescript`, `rust-format`, `code`, and `ert`, including the six Clippy units
   in the code group. Host xtask runs its separate host-only `xtask-clippy` step.
+- `checks.x86_64-linux.static-elisp` — the existing `devtool check elisp-fmt`
+  verify command followed by `devtool check byte-compile`, over the complete
+  non-Markdown Elisp source tree in a writable copy. Direct inputs include that
+  source, pinned `emacsForCi`, and `TZDIR`; compiled `devtoolBin` brings its
+  actual transitive tooling source/dependency closure. The commands need no
+  offline Cargo home, Node/Playwright, or Git; those build inputs, if needed,
+  enter only through `devtoolBin`. Elisp-source changes affect this leaf rather
+  than `static-code`; devtool/tool-lock changes may invalidate it through
+  `devtoolBin`. The verdict is non-substitutable, but valid local output reuse
+  remains possible.
 - `checks.x86_64-linux.static-ert` — `devtool check --group ert`, the standalone
   pure runner over the complete non-Markdown Elisp tree, in a writable copy,
   with existing `emacsForCi`, Git and timezone inputs. The separate combined
   pure/live coverage producer below is unchanged. `validate` builds static
-  leaves in docs/typescript/rust-format/code/ert/xtask-format order. The ERT
-  leaf is non-substitutable but may reuse a valid local output. Child timing is
-  separate from request duration: host xtask accepts only current captured
+  leaves in docs/typescript/rust-format/code/elisp/ert/xtask-format order. The
+  ERT leaf is non-substitutable but may reuse a valid local output. Child timing
+  is separate from request duration: host xtask accepts only current captured
   devtool stderr through one check-parameterized bounded parser. Both tsc and
   ERT use the same child timing producer. Their Nix requests share current live
   `internal-json` local-builder activity correlation parameterized by selected

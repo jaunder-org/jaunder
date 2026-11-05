@@ -26,6 +26,7 @@ const WORKTREE_DIR: &str = ".xtask/nix-source-probe.worktree";
 enum Boundary {
     StaticDocs,
     StaticCode,
+    StaticElisp,
     Site,
     WasmTests,
     Xtask,
@@ -35,9 +36,10 @@ enum Boundary {
 }
 
 impl Boundary {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::StaticDocs,
         Self::StaticCode,
+        Self::StaticElisp,
         Self::Site,
         Self::WasmTests,
         Self::Xtask,
@@ -50,6 +52,7 @@ impl Boundary {
         match self {
             Self::StaticDocs => "static-docs",
             Self::StaticCode => "static-code",
+            Self::StaticElisp => "static-elisp",
             Self::Site => "site",
             Self::WasmTests => "wasm-tests",
             Self::Xtask => "xtask",
@@ -76,6 +79,7 @@ pub enum Arm {
     QualificationSchema,
     ThemeCss,
     ApplicationCss,
+    Elisp,
     DevtoolSource,
     ToolsLock,
     RootManifest,
@@ -95,7 +99,7 @@ pub enum Arm {
 }
 
 impl Arm {
-    const ALL: [Self; 30] = [
+    const ALL: [Self; 31] = [
         Self::Docs,
         Self::Server,
         Self::Web,
@@ -110,6 +114,7 @@ impl Arm {
         Self::QualificationSchema,
         Self::ThemeCss,
         Self::ApplicationCss,
+        Self::Elisp,
         Self::DevtoolSource,
         Self::ToolsLock,
         Self::RootManifest,
@@ -144,6 +149,7 @@ impl Arm {
             Self::QualificationSchema => "qualification-schema",
             Self::ThemeCss => "theme-css",
             Self::ApplicationCss => "application-css",
+            Self::Elisp => "elisp",
             Self::DevtoolSource => "devtool-source",
             Self::ToolsLock => "tools-lock",
             Self::RootManifest => "root-manifest",
@@ -179,6 +185,7 @@ impl Arm {
             Self::QualificationSchema => "docs/production-baseline.schema.json",
             Self::ThemeCss => "host/system_theme_sources/studio/style.css",
             Self::ApplicationCss => "server/assets/jaunder.css",
+            Self::Elisp => "elisp/scripts/__nix_source_probe.el",
             Self::DevtoolSource => "tools/devtool/src/__nix_source_probe.rs",
             Self::ToolsLock => "tools/Cargo.lock",
             Self::RootManifest => "Cargo.toml",
@@ -198,16 +205,17 @@ impl Arm {
         }
     }
 
-    // Added cases guard their relevant boundaries without expanding the existing
-    // product/wasm/xtask invalidation contract.
+    // Added cases guard relevant boundaries without changing the pre-existing
+    // product/wasm/xtask contract.
     fn boundaries(self) -> &'static [Boundary] {
         match self {
             Self::CsrSource
             | Self::CsrManifest
             | Self::RootLock
             | Self::CsrBundleProducer
-            | Self::Toolchain
-            | Self::UnrelatedNote => &[Boundary::CsrDebugBundle],
+            | Self::Toolchain => &[Boundary::CsrDebugBundle],
+            Self::Elisp => &[Boundary::StaticElisp, Boundary::StaticCode],
+            Self::UnrelatedNote => &[Boundary::StaticElisp, Boundary::CsrDebugBundle],
             Self::RootManifest
             | Self::ToolsManifest
             | Self::DevtoolManifest
@@ -217,6 +225,7 @@ impl Arm {
             | Self::ThemeManifest
             | Self::Migration => &[
                 Boundary::StaticCode,
+                Boundary::StaticElisp,
                 Boundary::Devtool,
                 Boundary::ToolingDependencies,
                 Boundary::CsrDebugBundle,
@@ -270,15 +279,20 @@ impl Arm {
         matches!(
             (self, boundary),
             (Self::Docs, Boundary::StaticDocs)
+                | (Self::Elisp, Boundary::StaticElisp)
                 | (Self::Server, Boundary::StaticCode)
                 | (Self::Web, Boundary::StaticCode | Boundary::Site)
                 | (
                     Self::Common | Self::Macros | Self::Performance | Self::BuildConfig,
-                    Boundary::StaticCode | Boundary::Site | Boundary::WasmTests | Boundary::Xtask,
+                    Boundary::StaticCode
+                        | Boundary::StaticElisp
+                        | Boundary::Site
+                        | Boundary::WasmTests
+                        | Boundary::Xtask,
                 )
                 | (
                     Self::SharedHost | Self::ThemeCss | Self::ApplicationCss,
-                    Boundary::StaticCode | Boundary::Site | Boundary::Xtask
+                    Boundary::StaticCode | Boundary::StaticElisp | Boundary::Site | Boundary::Xtask
                 )
                 | (
                     Self::Tooling | Self::ToolLock | Self::QualificationSchema,
@@ -295,10 +309,13 @@ impl Arm {
                         | Self::BuildConfig
                         | Self::DevtoolSource
                         | Self::ToolsLock,
-                    Boundary::Devtool
+                    Boundary::Devtool | Boundary::StaticElisp
                 )
                 // Docs and site transitively depend on their devtool executables.
-                | (Self::DevtoolSource, Boundary::StaticDocs | Boundary::StaticCode | Boundary::Site)
+                | (
+                    Self::DevtoolSource,
+                    Boundary::StaticDocs | Boundary::StaticCode | Boundary::Site
+                )
                 | (
                     Self::ToolsLock,
                     Boundary::StaticDocs
@@ -313,11 +330,14 @@ impl Arm {
                         | Self::ToolsManifest
                         | Self::DevtoolManifest
                         | Self::SharedManifest,
-                    Boundary::StaticCode | Boundary::Devtool | Boundary::ToolingDependencies
+                    Boundary::StaticCode
+                        | Boundary::StaticElisp
+                        | Boundary::Devtool
+                        | Boundary::ToolingDependencies
                 )
                 | (
                     Self::CsrShell | Self::ThemeManifest | Self::Migration,
-                    Boundary::StaticCode | Boundary::Devtool
+                    Boundary::StaticCode | Boundary::StaticElisp | Boundary::Devtool
                 )
                 | (Self::ServerBuildScript, Boundary::StaticCode)
                 // The final bundle includes both the WASM target closure and
@@ -355,6 +375,7 @@ impl Arm {
 pub struct DrvPaths {
     static_docs: String,
     static_code: String,
+    static_elisp: String,
     site: String,
     wasm_tests: String,
     xtask: String,
@@ -368,6 +389,7 @@ impl DrvPaths {
         match boundary {
             Boundary::StaticDocs => &self.static_docs,
             Boundary::StaticCode => &self.static_code,
+            Boundary::StaticElisp => &self.static_elisp,
             Boundary::Site => &self.site,
             Boundary::WasmTests => &self.wasm_tests,
             Boundary::Xtask => &self.xtask,
@@ -447,7 +469,7 @@ pub fn compare_arm(base: &DrvPaths, arm: Arm, changed: &DrvPaths) -> Result<(), 
 pub fn probe_source() -> StepResult {
     match run_probe() {
         Ok(()) => StepResult::ok("nix-probe-source").detail(
-            "Nix invalidation boundary contract holds (product, tooling, locks/config and embedded resources)",
+            "Nix invalidation boundary contract holds (Elisp, product, tooling, locks/config and embedded resources)",
         ),
         Err(error) => StepResult::fail("nix-probe-source").detail(format!("{error:#}")),
     }
@@ -466,6 +488,7 @@ fn eval_paths_with(evaluate: impl FnOnce() -> Result<SourceProbeDrvPaths>) -> Re
     Ok(DrvPaths {
         static_docs: parse_drv_path(Boundary::StaticDocs.name(), &paths.static_docs)?,
         static_code: parse_drv_path(Boundary::StaticCode.name(), &paths.static_code)?,
+        static_elisp: parse_drv_path(Boundary::StaticElisp.name(), &paths.static_elisp)?,
         site: parse_drv_path(Boundary::Site.name(), &paths.site)?,
         wasm_tests: parse_drv_path(Boundary::WasmTests.name(), &paths.wasm_tests)?,
         xtask: parse_drv_path(Boundary::Xtask.name(), &paths.xtask)?,
@@ -612,6 +635,7 @@ mod tests {
         DrvPaths {
             static_docs: static_docs.to_owned(),
             static_code: static_code.to_owned(),
+            static_elisp: "elisp".to_owned(),
             site: site.to_owned(),
             wasm_tests: wasm_tests.to_owned(),
             xtask: "xtask".to_owned(),
@@ -651,9 +675,33 @@ mod tests {
             if matches!(arm, Arm::Common | Arm::Macros | Arm::Performance) {
                 changed.xtask = "xtask-2".to_owned();
                 changed.devtool = "devtool-2".to_owned();
+                changed.static_elisp = "elisp-2".to_owned();
             }
             assert_eq!(compare_arm(&base, arm, &changed), Ok(()));
         }
+    }
+
+    #[test]
+    fn elisp_source_invalidates_only_the_elisp_leaf() {
+        let base = paths("docs", "code", "site", "wasm");
+        let mut changed = base.clone();
+        changed.static_elisp = "elisp-2".to_owned();
+        assert_eq!(compare_arm(&base, Arm::Elisp, &changed), Ok(()));
+        assert!(matches!(
+            compare_arm(&base, Arm::Elisp, &base),
+            Err(ProbeError::MissingChange {
+                boundary: "static-elisp",
+                ..
+            })
+        ));
+        changed.static_code = "code-2".to_owned();
+        assert!(matches!(
+            compare_arm(&base, Arm::Elisp, &changed),
+            Err(ProbeError::UnexpectedChange {
+                boundary: "static-code",
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -703,6 +751,7 @@ mod tests {
                 Arm::SharedHost | Arm::BuildConfig | Arm::ThemeCss | Arm::ApplicationCss
             ) {
                 changed.devtool = "devtool-2".to_owned();
+                changed.static_elisp = "elisp-2".to_owned();
                 changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
             }
             if matches!(arm, Arm::BuildConfig) {
@@ -721,6 +770,7 @@ mod tests {
         let base = paths("docs", "code", "site", "wasm");
         let mut changed = base.clone();
         changed.static_code = "code-2".to_owned();
+        changed.static_elisp = "elisp-2".to_owned();
         changed.devtool = "devtool-2".to_owned();
         changed.static_docs = "docs-2".to_owned();
         changed.site = "site-2".to_owned();
@@ -752,6 +802,13 @@ mod tests {
                 "devtool",
                 DrvPaths {
                     devtool: base.devtool.clone(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "static-elisp",
+                DrvPaths {
+                    static_elisp: base.static_elisp.clone(),
                     ..changed.clone()
                 },
             ),
@@ -799,6 +856,7 @@ mod tests {
     fn tools_lock_changes_invalidate_the_tooling_dependency_graph() {
         let base = paths("docs", "code", "site", "wasm");
         let mut changed = paths("docs-2", "code-2", "site-2", "wasm");
+        changed.static_elisp = "elisp-2".to_owned();
         changed.xtask = "xtask-2".to_owned();
         changed.devtool = "devtool-2".to_owned();
         changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
@@ -823,6 +881,13 @@ mod tests {
                 "static-code",
                 DrvPaths {
                     static_code: base.static_code.clone(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "static-elisp",
+                DrvPaths {
+                    static_elisp: base.static_elisp.clone(),
                     ..changed.clone()
                 },
             ),
@@ -891,6 +956,7 @@ mod tests {
             changed.static_code = "code-2".to_owned();
             if arm != Arm::ServerBuildScript {
                 changed.devtool = "devtool-2".to_owned();
+                changed.static_elisp = "elisp-2".to_owned();
                 changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
             }
             if matches!(
@@ -990,6 +1056,7 @@ mod tests {
     fn debug_bundle_rejects_stale_final_identity_after_producer_changes() {
         let base = paths("docs", "code", "site", "wasm");
         let mut changed = paths("docs-2", "code-2", "site-2", "wasm");
+        changed.static_elisp = "elisp-2".to_owned();
         changed.devtool = "devtool-2".to_owned();
         assert_eq!(
             compare_arm(&base, Arm::DevtoolSource, &changed),
