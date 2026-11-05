@@ -102,7 +102,7 @@ pub enum Arm {
 }
 
 impl Arm {
-    const ALL: [Self; 30] = [
+    const ALL: [Self; 31] = [
         Self::Docs,
         Self::Server,
         Self::Web,

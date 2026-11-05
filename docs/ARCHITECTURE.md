@@ -4489,14 +4489,15 @@ both workspace offline Cargo homes, the pinned formatter/toolchain, and their
 transitive build, source/vendor and embedded inputs. Direct filtering is not
 full closure independence; valid local-store reuse is allowed and no speedup is
 claimed. `static-code` runs residual non-Clippy shared definitions outside
-TypeScript, Rust formatting, standalone ERT, Elisp verification and the census verdict, with
-workspace-specific offline Cargo homes. It requests the six-leaf Clippy
-aggregate once; the aggregate does not rerun lint. The separate `static-elisp`
-leaf owns Elisp formatting/byte-compilation. `validate --no-e2e` builds
-`nix-static-docs`, `nix-static-typescript`, `nix-rust-format`,
-`nix-static-code`, `nix-static-elisp`, `nix-static-e2e-census`, `nix-static-ert`, and `nix-xtask-format`
-before the Nix test checks, with each shared definition consumed once. CI fails
-if a hermetic boundary drifts from the host definitions
+TypeScript, Rust formatting, standalone ERT, Elisp verification and the census
+verdict, with workspace-specific offline Cargo homes. It requests the six-leaf
+Clippy aggregate once; the aggregate does not rerun lint. The separate
+`static-elisp` leaf owns Elisp formatting/byte-compilation. `validate --no-e2e`
+builds `nix-static-docs`, `nix-static-typescript`, `nix-rust-format`,
+`nix-static-code`, `nix-static-elisp`, `nix-static-e2e-census`,
+`nix-static-ert`, and `nix-xtask-format` before the Nix test checks, with each
+shared definition consumed once. CI fails if a hermetic boundary drifts from the
+host definitions
 ([hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md);
 [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
 
