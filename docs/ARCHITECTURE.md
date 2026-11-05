@@ -1973,14 +1973,14 @@ URL connect Vite output to these runtime contracts; the build manifest itself is
 not served.
 
 The WASM artifact carries a hard budget
-([ADR-0106](adr/0106-wasm-raw-size-budget.md)): `cargo xtask validate` resolves
-the Vite manifest's `csr_bg.wasm` source mapping to its emitted `.wasm` file and
-fails when its **raw** byte count exceeds `WASM_RAW_CEILING_BYTES` (5,000,000
-bytes: decimal 5 MB, not 5 MiB, in `xtask/src/wasm_budget.rs`). Raw, not
-compressed, because the artifact is a compiler input rather than a download. The
-#1750 amendment accepts additional feature headroom while preserving the
-historical 4,009,656-byte achieved baseline for drift reporting. The historical
-weaker optimisation-level sizes now fit, so this size ceiling does not guarantee
+([ADR-0106](adr/0106-wasm-raw-size-budget.md)): `just validate` resolves the Vite
+manifest's `csr_bg.wasm` source mapping to its emitted `.wasm` file and fails
+when its **raw** byte count exceeds `WASM_RAW_CEILING_BYTES` (5,000,000 bytes:
+decimal 5 MB, not 5 MiB, in `xtask/src/wasm_budget.rs`). Raw, not compressed,
+because the artifact is a compiler input rather than a download. The #1750
+amendment accepts additional feature headroom while preserving the historical
+4,009,656-byte achieved baseline for drift reporting. The historical weaker
+optimisation-level sizes now fit, so this size ceiling does not guarantee
 detection of an optimisation downgrade; production still uses `wasm-opt -Oz`.
 Unit tests enforce the inclusive limit and failure one byte above it. The higher
 ceiling is not evidence of measured or benign startup/download impact.
@@ -2363,8 +2363,8 @@ detailed user message.
 
 The earlier arrangement — the gate writing the `name = "…"` literal into
 `web/src`, and a `server_fn` field on the boundary log event — was retired with
-that addendum. Nothing under `web/src` is rewritten by `cargo xtask check` for
-span naming any more.
+that addendum. Nothing under `web/src` is rewritten by `just check` for span
+naming any more.
 
 ### Decision-path fields
 
@@ -4047,10 +4047,10 @@ duration pressure, panic phases, and boot traces. Missing, duplicated,
 misidentified, malformed, or failed evidence fails reconciliation; failed
 producers are still awaited and their recoverable evidence remains an aggregate
 input. The stable result-only `e2e gate` requires both Chromium jobs, all six
-Firefox producers, and both reconciliations. Local `cargo xtask validate`
-realizes the same eight enabled lanes concurrently and performs the same two
-Firefox reconciliations after every build settles. It inherits the non-e2e Elisp
-verdict and does not rerun live ERT
+Firefox producers, and both reconciliations. Local `just validate` invokes the
+currently landed producers synchronously between backend/browser commands; each
+Firefox command owns its three retained lanes and reconciliation. It inherits
+the non-e2e Elisp verdict and does not rerun live ERT
 ([distributed e2e](adr/0034-ci-e2e-matrix-distribution.md)).
 
 `end2end/playwright.config.ts` is the one config, loaded verbatim by both the VM
@@ -4210,9 +4210,9 @@ rather than failing the check, with the JSON report still recording it
 — `ert`, `elisp-fmt` and `byte-compile` — run in both `check` (Fix) and
 `validate` (Check), each as a `devtool check` step. Standalone pure `ert` runs
 in `static-ert`; `elisp-fmt` and `byte-compile` run in the separate
-`static-elisp` leaf ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
-`xtask/src/steps/static_checks.rs:17-18`); one `emacsForCi` toolchain
-(`nix/packages.nix:372-404`) serves both.
+`static-elisp` leaf ([ADR-0052](adr/0052-devtool-unifies-static-checks.md), the
+root `Justfile`); one `emacsForCi` toolchain (`nix/packages.nix:372-404`) serves
+both.
 
 The [Elisp stateless coverage gate](adr/0162-elisp-stateless-coverage-gate.md)
 runs the pure and live ERT observations in one hermetic NixOS producer and, for
@@ -4231,9 +4231,9 @@ trimmed non-empty reason. An ordinary point or LCOV observation on a structural
 candidate fails the guard; malformed markers and markers on covered,
 non-executable, or structural lines fail. Controlled producer statuses and
 coverage findings fail the consumer; uncontrolled Nix or VM infrastructure
-failures remain build failures. The check runs once in `validate --no-e2e` and
-the CI static lane; full `validate` inherits its verdict without rerunning the
-live suite.
+failures remain build failures. The check runs once in `just validate-no-e2e`
+and the CI test-checks lane; full `validate` inherits its verdict without
+rerunning the live suite.
 
 Live client behavior — transport, auth, publish and media round-trips — runs
 against a real server through the self-booting harness
@@ -4253,137 +4253,131 @@ boundary.
 
 ### The verify ladder & git-enforced gate
 
-#### Committed direction — Just-owned gate workflows
+#### Just-owned gate workflows
 
-The approved #1889 design makes the root `Justfile` the default owner of
-one-command developer, hook, local-validation and CI-lane workflow composition.
-It retains Rust-only check algorithms behind only the single-leaf invocation
-boundary Just needs, plus focused Git/index safety logic for precommit; it does
-not move Rust check populations, sequencing, or gate-wide reporting into another
-framework. The current gate architecture below remains the implemented reality
-until that migration lands. The approved #1887 component moves only the
-Markdown, `end2end`, and CSS Prettier definitions and removes the docs-only
-`docsDevtoolBin` build/source path; other `devtool` checks remain unchanged.
-Existing validation verdicts and independent CI lane results remain
-authoritative. See the
-[proposed Just-owned gate workflow decision](adr/drafts/just-owned-gate-workflows.md).
+The root `Justfile` owns developer, hook, local-validation and CI-lane workflow
+composition. Direct tools and existing producer APIs perform the work; Rust-only
+algorithms use `cargo xtask check-leaf <name>`. The Rust gate catalogs, phases,
+execution-policy switches and old cargo workflow aliases are removed, not
+forwarded. Just dependencies own success ordering and fail-fast process status;
+there is no gate-wide JSON/last-result contract. Unrelated xtask commands retain
+their own result contracts. `recipes/prettier.just` owns the three shared
+Markdown, `end2end`, and CSS command definitions; the exclusive docsDevtoolBin
+pipeline is gone. Other devtool checks remain devtool-owned. See the
+[Just-owned gate workflow decision](adr/drafts/just-owned-gate-workflows.md).
 
-The ladder has four local entrypoints, all driven by `xtask`
-(`xtask/src/lib.rs`: `run_host_gate`, `run_local_push_gate`, `Command::Check`,
-`Command::Precommit`, `Command::Prepush`, and `Command::Validate`):
+The explicit local workflows are:
 
-- **`cargo xtask check`** runs the host static checks in **Fix** mode
-  (formatters auto-fix), then every repo-shape and type-safety gate, then the
-  host unit tests, and — unless `--no-test` — the host-native `test-local`
-  product Rust suite plus the Nix-only `wasm-tests` and `doctests` derivations.
-- **`cargo xtask precommit`** is the hook entrypoint. Before gate work it
-  classifies the complete pre-run dirty-tree snapshot. The narrow
-  `staged-markdown-only` class requires a nonempty tree containing only
-  staged-only, regular, case-sensitive `.md` additions or modifications; any
-  unstaged, untracked, delete/rename, type-changing, non-Markdown, malformed,
-  unparseable, or otherwise unsupported evidence takes the broad route.
-  `precommit-routing` is an informational successful result emitted before the
-  selected gate: its detail is
-  `class=staged-markdown-only reason=isolated-staged-markdown`, or
+- **`just check-no-test`** runs host/static checks in **Fix** mode,
+  repository-shape and type-safety checks, then auxiliary host tests.
+  **`just check`** adds host-native `test-local`, Nix `wasm-tests`, and
+  `doctests`/`doctests-gate`.
+- **`just precommit`** is the hook entrypoint, invoking only the focused
+  `cargo xtask precommit-safety` owner. Before gate work it classifies the
+  complete pre-run dirty-tree snapshot. The narrow `staged-markdown-only` class
+  requires a nonempty tree containing only staged-only, regular, case-sensitive
+  `.md` additions or modifications; any unstaged, untracked, delete/rename,
+  type-changing, non-Markdown, malformed, unparseable, or otherwise unsupported
+  evidence takes the broad route. Classification precedes host execution and
+  distinguishes `class=staged-markdown-only reason=isolated-staged-markdown`, or
   `class=broad reason=<stable-kebab-case-reason>`. Broad reasons have stable
   precedence: `uncertain-status`, `empty-state`, `untracked-path`,
   `unstaged-path`, `delete-or-rename`, `unsupported-change`,
   `unsupported-index-mode`, then `non-markdown-path`.
 
-  The narrow route is a fixed ordered filter over the same production
-  host/static catalogs: `prettier-markdown`, `prettier-end2end`,
-  sequence/identifier collision checks, the ADR bundle, documentation links,
-  flow-document parity, and the error-swallowing inventory. It is not further
-  path-routed: `prettier-markdown` owns `**/*.md` formatting and
-  `prettier-end2end` owns global `end2end` formatting, ADRs project into
-  `docs/README.md` and this document, and document links and flow documents
-  consume repository-wide relationships. The isolated-tree predicate makes those
-  reads and formatter writes represent the staged Markdown state. All other
-  classifications run the existing broad host surface. The after-snapshot and
-  conservative safe-staging reconciliation always run, including after failure:
-  only formatter/check mutations to already-staged tracked paths with no
-  pre-existing unstaged change are restaged; mixed tracked paths, newly-created
-  untracked files, and changed delete/rename state fail closed. Pre-existing
-  delete/rename state and untracked files stay unstaged and tolerated. On
-  `x86_64-linux`, successful narrow host checks and this one reconciliation are
-  followed by admission requiring no unstaged/nonignored-untracked changes and
-  raw worktree/index blob identity for all tracked Markdown and formatter-config
-  inputs selected by `static-docs` (`.prettierrc.json` and `.prettierignore`,
-  excluding `.claude`). The ordinary Git-backed `static-docs` request then runs
-  with lock updates/writes disabled. A post-request status/index check fails on
-  tracked, staged, or nonignored-untracked mutation without restaging. Host,
-  staging, or admission failure skips Nix; a Nix failure remains recorded if the
-  post-check also fails. Broad routing and non-x86 behavior remain host-only.
+  The narrow host recipe runs `prettier-markdown`, `prettier-end2end`,
+  sequence/identifier collision checks, the three ADR leaves, documentation
+  links, and flow-document parity, in that order. It is not further path-routed:
+  `prettier-markdown` owns `**/*.md` formatting and `prettier-end2end` owns
+  global `end2end` formatting, ADRs project into `docs/README.md` and this
+  document, and document links and flow documents consume repository-wide
+  relationships. The isolated-tree predicate makes those reads and formatter
+  writes represent the staged Markdown state. All other classifications run the
+  existing broad host surface. The after-snapshot and conservative safe-staging
+  reconciliation always run, including after failure: only formatter/check
+  mutations to already-staged tracked paths with no pre-existing unstaged change
+  are restaged; mixed tracked paths, newly-created untracked files, and changed
+  delete/rename state fail closed. Pre-existing delete/rename state and
+  untracked files stay unstaged and tolerated. On `x86_64-linux`, successful
+  narrow host checks and this one reconciliation are followed by admission
+  requiring no unstaged/nonignored-untracked changes and raw worktree/index blob
+  identity for all tracked Markdown and formatter-config inputs selected by
+  `static-docs` (`.prettierrc.json`, `.prettierignore`, and
+  `recipes/prettier.just`, excluding `.claude`). The ordinary Git-backed
+  `static-docs` request then runs with lock updates/writes disabled. A
+  post-request status/index check fails on tracked, staged, or
+  nonignored-untracked mutation without restaging. Host, staging, or admission
+  failure skips Nix; a Nix failure remains recorded if the post-check also
+  fails. Broad routing and non-x86 behavior remain host-only.
 
-- **`cargo xtask prepush`** is the fast local push-hook entrypoint. It opens
-  with the same clean-tree precheck as `validate`, then runs the verify-only
-  host/static surface, the auxiliary `xtask`/`tools` non-doc tests, the
-  host-native `test-local` product Rust suite, and `workspace-doctests` after
-  the product tests. On `x86_64-linux`, only host `prettier-markdown` Verify is
-  replaced at its current position by the same lock-write-disabled `static-docs`
-  leaf. Before requesting the leaf, prepush verifies raw/index identity for the
+- **`just prepush`** is the fast local push-hook entrypoint. It opens with the
+  same clean-tree precheck as `validate`, then runs the verify-only host/static
+  surface, the auxiliary `xtask`/`tools` non-doc tests, the host-native
+  `test-local` product Rust suite, and `workspace-doctests` after the product
+  tests. On `x86_64-linux`, only host `prettier-markdown` Verify is replaced at
+  its current position by the same lock-write-disabled `static-docs` leaf.
+  Before requesting the leaf, prepush verifies raw/index identity for the
   complete tracked Markdown and formatter-config input population; afterward it
   checks Git state remained unchanged. All other phases remain ordered as
   before. Other platforms retain host Markdown Verify.
-- **`cargo xtask validate --no-e2e`** runs the verify-only host/static surface,
-  then adds `wasm-budget` (kept out of `check` because it costs a
-  `nix build .#site`, #836), the Nix static proof, Nix `wasm-tests`, Rust
-  `coverage`, Nix `doctests`, and the combined `elisp-coverage-producer`
-  followed by its host consumer. Full **`cargo xtask validate`** inherits that
-  verdict and — unless `--no-e2e` — adds the browser/backend e2e aggregate; it
-  never reruns live ERT.
+- **`just validate-no-e2e`** requires a clean tree, then runs Verify host/static
+  checks, the platform contract, all nine Nix static checks, `wasm-budget`,
+  auxiliary host tests, wasm tests, coverage producer/gate/host consumer,
+  doctest producer/gate, and Elisp producer/consumer. **`just validate`** adds
+  the currently landed E2E producers and final authoritative flow consumer; it
+  never reruns live ERT. Chromium runs once per backend; each backend's Firefox
+  command owns its three retained lanes and reconciliation. The public
+  `just e2e` and coverage/doctest workflows replace this temporary composition
+  only after #1890/#1891 actually land.
 
-CI distributes the same non-e2e surface through four independent
-`cargo xtask ci-validate <lane>` runners selected from one ordered surface
-catalog. `host` owns the verify-only host/static gate and auxiliary host tests;
-`hermetic` owns Nix static checks and the wasm budget; `test-checks` owns wasm
-tests, doctests, and Elisp coverage; and `coverage` owns Rust coverage plus its
-gate. Producer/consumer pairs never cross jobs. Source-invalidation probes
-remain manually callable diagnostics, not automatic CI steps
-([on-demand source probes](adr/0227-on-demand-source-invalidation-probes.md)). A
-result-only `Validate (no e2e)` job requires all four lanes, preserving the
-stable branch-protection context. Local `validate --no-e2e` selects the same
-catalog serially
+CI invokes four independent recipes: `just ci-validate-host`,
+`just ci-validate-hermetic`, `just ci-validate-test-checks`, and
+`just ci-validate-coverage`. `host` owns the verify-only host/static gate and
+auxiliary host tests; `hermetic` owns Nix static checks and the wasm budget;
+`test-checks` owns wasm tests, doctests, and Elisp coverage; and `coverage` owns
+Rust coverage plus its gate. Producer/consumer pairs never cross jobs.
+Source-invalidation probes remain manually callable diagnostics, not automatic
+CI steps
+([on-demand source probes](adr/0227-on-demand-source-invalidation-probes.md)).
+A result-only `Validate (no e2e)` job requires all four lanes, preserving the
+stable branch-protection context. Local `just validate-no-e2e` composes the same
+required surfaces in success-path order
 ([split non-e2e validation lanes](adr/0192-split-ci-non-e2e-validation-lanes.md);
 [distributed CI lane topology](adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md)).
 
-Both hook entrypoints select orchestration-owned **fail-fast** execution. At
-every ordered local boundary — individual static checks, host-gate steps, and
-prepush phases — the first newly appended failed, non-skipped step prevents
-later work. Unexecuted steps are absent from the command result, not
-green-skipped. Apart from precommit's selected routing surface, this does not
-alter command order, the clean-tree precondition, or staged-subset
-reconciliation authority. `prepush`, explicit **`cargo xtask check`** and
-**`cargo xtask validate`**, along with CI's corresponding surfaces, remain
-**broad** and **exhaustive**: they retain the same diagnostic catalog and
-existing authority. The sole x86_64-linux substitution is the shared
-`static-docs` leaf at prepush's existing Markdown Verify position.
+All gate recipes **fail fast** on a required child failure. They return nonzero
+without running later ordinary diagnostics or fabricating skipped success.
+Precommit's single reconciliation and docs post-request check still run on their
+required failure paths. Apart from precommit's selected routing surface, the
+workflows remain broad and preserve success-path ordering, clean-tree authority,
+and real check populations. Independent CI lanes and job results remain
+authoritative. The sole x86_64-linux host substitution is shared `static-docs`
+at prepush's Markdown Verify position.
 
 Enforcement is git-native ([ADR-0029](adr/0029-git-enforced-verify-gate.md)).
-`.githooks/pre-commit` calls `cargo xtask precommit`; the development-shell
+`.githooks/pre-commit` calls `just precommit`; the development-shell
 `cargo-xtask` transport selects the active checkout's `.#xtask` package. Nix
 owns its locked, standalone Cargo build, so launcher realization cannot rewrite
 `xtask/Cargo.lock` before the precommit snapshot. Git/index reconciliation lives
-in Rust rather than the shell hook. `.githooks/pre-push` calls
-`cargo xtask prepush`. `prepush` and `validate` both open with a `clean-tree`
-precheck that refuses a dirty tree unless explicitly bypassed
-(`validate --allow-dirty`, or `SKIP_PRE_PUSH=1` for the hook) and returns before
-any expensive step (`xtask/src/lib.rs`: `clean_tree_precheck`). The hook proves
-the fast local lane ran on the committed tip with no uncommitted files hiding;
-CI remains the non-bypassable hermetic authority; prepush's shared `static-docs`
-leaf is the deliberate x86_64-linux exception to its otherwise host-only gate.
-Every `cargo xtask` run self-heals `core.hooksPath` to the tracked, relative
-`.githooks` (`xtask/src/git.rs`: `ensure_hooks_path`). `SKIP_PRE_COMMIT=1` /
-`SKIP_PRE_PUSH=1` are deliberate local escapes; CI is the non-bypassable
-authority.
+in Rust rather than the shell hook. `.githooks/pre-push` calls `just prepush`.
+Verify workflows begin with `clean-tree` and refuse a dirty tree before
+expensive work (`xtask/src/lifecycle.rs`: `clean_tree_precheck`). There is no
+Just `--allow-dirty` option; `SKIP_PRE_PUSH=1` remains a deliberate hook escape.
+The hook proves the fast local lane ran on the committed tip with no uncommitted
+files hiding; CI remains the non-bypassable hermetic authority; prepush's shared
+`static-docs` leaf is the deliberate x86_64-linux exception to its otherwise
+host-only gate. Every `cargo xtask` run self-heals `core.hooksPath` to the
+tracked, relative `.githooks` (`xtask/src/git.rs`: `ensure_hooks_path`).
+`SKIP_PRE_COMMIT=1` / `SKIP_PRE_PUSH=1` are deliberate local escapes; CI is the
+non-bypassable authority.
 
 #### Prepush parity by failure surface
 
-The fast local lane and `validate --no-e2e` do not run the same tests in
+The fast local lane and `just validate-no-e2e` do not run the same tests in
 different environments. They have the following explicit authority split
 ([ADR-0029](adr/0029-git-enforced-verify-gate.md), #1117 supplement):
 
-| `validate --no-e2e` surface                              | `prepush` coverage                                                                                                 | Authority / rationale                                                                                                                                                              |
+| `just validate-no-e2e` surface                           | `prepush` coverage                                                                                                 | Authority / rationale                                                                                                                                                              |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Verify-only host/static surface                          | Runs the same host surface except `x86_64-linux` replaces only `prettier-markdown` Verify with `static-docs`.      | Prepush provides the Markdown leaf verdict; other Nix static proof remains authoritative for the sandboxed offline environment.                                                    |
 | Auxiliary `xtask`/`tools` non-doc tests                  | Runs once.                                                                                                         | The host tests are the applicable verdict; they are outside the application coverage/Nix test gates.                                                                               |
@@ -4394,48 +4388,41 @@ different environments. They have the following explicit authority split
 | Wasm browser tests                                       | Does not run.                                                                                                      | The verdict exercises wasm browser primitives unavailable to a cheap host lane.                                                                                                    |
 | Elisp coverage                                           | Does not run.                                                                                                      | The coverage VM is the authoritative execution environment.                                                                                                                        |
 | Wasm budget                                              | Does not run.                                                                                                      | The verdict is defined by the Nix-built artifact's size semantics.                                                                                                                 |
-| Server-function flow verification (full `validate` only) | Does not run.                                                                                                      | This is an e2e/full-validate responsibility outside the `validate --no-e2e` comparator.                                                                                            |
+| Server-function flow verification (full `validate` only) | Does not run.                                                                                                      | This is an e2e/full-validate responsibility outside the `just validate-no-e2e` comparator.                                                                                         |
 
 `workspace-doctests` and the Nix doctest producer/gate reconcile the same
 root-workspace fence population in both directions; neither path may silently
 shrink it. Only the Nix path establishes the pinned sandbox/offline verdict.
 
-The hermetic layer has two gate-owned Nix-build paths. `steps::nix::build_check`
-builds flake checks as
-`nix build -L --keep-failed --accept-flake-config --out-link .xtask/gcroots/<check> .#checks.x86_64-linux.<check>`;
-those flake-check out-links retain their selected outputs as GC roots.
-`steps::wasm_budget::run` separately builds `.#site` for the `wasm-budget`
-verdict through the existing no-link output-path helper
-(`nix_build::build_out_path`). On every successful build, both paths attach
-host-observed Nix evidence to their `StepResult`: the installable, the evaluated
-`.drv` path when available, and the conservative local-store realization
-(`reused`, `realized`, or `unknown`). That evidence says whether the
-installable's selected outputs were already locally valid or became valid during
-the gate; it does not attribute an output to local compilation or substitution.
-`wasm-tests` returns the browser test verdict directly. Rust coverage and
-doctests use producer/consumer pairs — `nix-coverage` + `nix-coverage-gate`,
-`nix-doctests` + `nix-doctests-gate` — whose producers cannot fail; xtask reads
-each verdict from the sandbox's `status.json` (`steps::nix::coverage` and
-`steps::nix::doctests`). The Elisp producer instead returns the fixed
-`elisp-coverage/{lcov.info,summary.txt,status.json}` set for every controlled
-outcome; xtask lifts it and its host consumer reconciles current source, census,
-LCOV, and strict same-line `;; cov:ignore: <reason>` markers. Uncontrolled Nix
-or VM failures remain build failures. xtask itself is host-only; Nix never
-invokes it back ([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)).
+Just requests hermetic leaves directly with
+`nix build -L --accept-flake-config --out-link .xtask/gcroots/<check> .#checks.x86_64-linux.<check>`.
+Their named output links retain producer evidence as GC roots; failure stops the
+workflow. The Rust `wasm-budget` leaf separately resolves and measures `.#site`.
+Coverage and doctests request both producer and Nix gate; the coverage consumer
+additionally validates completed status and host coverage/CRAP evidence. No
+gate-wide report substitutes for producer status. The Elisp producer returns
+`elisp-coverage/{lcov.info,summary.txt,status.json}` for controlled outcomes;
+the existing Rust consumer lifts these diagnostics and reconciles source,
+census, LCOV and same-line ignore markers. Uncontrolled Nix/VM failures remain
+failures. Existing E2E APIs retain their own diagnostic lift and reconciliation.
+xtask remains host-only; Nix never invokes it back
+([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)).
 
 ### What the ladder actually runs
 
-In order, host `static-checks` runs source consistency (`fmt`, `leptosfmt`,
+The host recipe runs source consistency (`fmt`, `leptosfmt`,
 `prettier-markdown`, `prettier-end2end`, `prettier-css`, `elisp-fmt`,
 `tools-fmt`, `ast-grep-tests`, `no-full-reload`, `xtask-fmt`), compile/type
 checks (`byte-compile`, `tsc`, `cargo-deny`, `product-core-clippy`,
 `web-server-clippy`, `web-no-server-clippy`, `client-host-clippy`,
 `wasm-clippy`, `tools-clippy`, `xtask-clippy`), then the `ert` runtime check.
-Both rungs run the same host steps (`run_host_gate` in `xtask/src/lib.rs`):
+Between source consistency and compilation, Just invokes the Rust-only
+repository-shape leaves in their established order. The same private host recipe
+serves Fix and Verify workflows.
 
 The host _step_ above runs the listed sub-steps through host-local lanes. The
-hermetic shared static surface has `static-docs` running
-`devtool check --group docs` over Markdown and Prettier configuration,
+hermetic shared static surface has `static-docs` running the shared
+`recipes/prettier.just` Markdown leaf over Markdown and formatter configuration,
 `static-typescript` runs the named `devtool check tsc`, `rust-format` runs
 `devtool check --group rust-format --sandbox-cargo`, and `static-code` runs the
 residual non-Clippy devtool checks outside TypeScript, Rust formatting and
@@ -4464,9 +4451,8 @@ metadata but no dependency implementation sources. It is required once by
 source-admission exception preserves ADR-0028's host-only xtask execution
 boundary.
 
-`validate --no-e2e` builds `nix-static-docs`, `nix-static-typescript`,
-`nix-rust-format`, `nix-static-code`, `nix-static-elisp`, `nix-static-ert`, and
-`nix-xtask-format` before the Nix test checks. ADR-0178 established the original
+`just validate-no-e2e` requests the nine independent static checks defined in
+the Justfile before the Nix test surfaces. ADR-0178 established the original
 two-group/two-leaf documentation split, not a generic extraction policy
 ([hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md)).
 The concrete further ERT extraction was separately approved in the
@@ -4479,25 +4465,11 @@ elisp, ert, followed by independent `xtask-format` in Nix validation. The
 complete `--all` inventory retains its established order and uniqueness, with
 tsc at its former position and ERT last.
 
-Both tsc and ERT use one shared producer to emit a bounded versioned stderr
-timing event around only their child using a monotonic clock. Host xtask
-projects only current captured child stderr into `GateExecution`, separately
-from step duration. The `static-typescript` and `static-ert` Nix requests select
-`--log-format internal-json`: one shared parser, parameterized by selected
-derivation and check, consumes their current live stderr tee and correlates the
-exact selected derivation's local build activity, a timing-bearing log result on
-that active ID, and its matching stop. This narrowly supports the observed Nix
-2.34.9 local-builder/daemon protocol (`actBuild=105`, `resBuildLogLine=101`,
-empty machine field); it is not a universal Nix schema promise. Nix merges child
-stdout/stderr, so the shared bounded event parser allows an unterminated Emacs
-stdout prefix. Stop closes attribution, not the check verdict: the marker's
-success/failure remains separate from Nix status. Missing, malformed, duplicate,
-unsupported or incomplete activity evidence and ordinary local reuse leave
-execution timing unavailable. Parser buffering is bounded without interrupting
-diagnostic draining. Neither request duration, local validity, realization/reuse
-nor retained logs establish execution; saved logs and nested/replayed JSON
-messages are never timing inputs. Combined pure/live coverage, hooks, workflows
-and required CI routing are unchanged.
+tsc and ERT retain producer-owned, versioned stderr timing events around their
+children. Just consumes command exit status, not a gate-wide timing projection.
+Neither request duration, local validity, realization/reuse nor retained logs
+establish current execution. Existing standalone producer diagnostics are not a
+new gate report protocol.
 
 The Rust-format boundary runs
 `devtool check --group rust-format --sandbox-cargo` (`fmt`, scoped `leptosfmt`,
@@ -4518,12 +4490,10 @@ claimed. `static-code` runs residual non-Clippy shared definitions outside
 TypeScript, Rust formatting, standalone ERT, Elisp verification and the census
 verdict, with workspace-specific offline Cargo homes. It requests the six-leaf
 Clippy aggregate once; the aggregate does not rerun lint. The separate
-`static-elisp` leaf owns Elisp formatting/byte-compilation. `validate --no-e2e`
-builds `nix-static-docs`, `nix-static-typescript`, `nix-rust-format`,
-`nix-static-code`, `nix-static-elisp`, `nix-static-e2e-census`,
-`nix-static-ert`, and `nix-xtask-format` before the Nix test checks, with each
-shared definition consumed once. CI fails if a hermetic boundary drifts from the
-host definitions
+`static-elisp` leaf owns Elisp formatting/byte-compilation.
+`just validate-no-e2e` requests the independent static checks before Nix test
+surfaces, with each shared definition consumed once. CI fails if a hermetic
+boundary drifts from the host definitions
 ([hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md);
 [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
 
@@ -4563,13 +4533,13 @@ Tooling dependency preparation uses Crane-generated dummy workspaces and a
 file-scoped tools lockfile. Compiler/target/profile/features/configuration and
 native dependencies remain artifact inputs; real local source and embedded data
 remain final-consumer inputs. Nested tools Cargo and archive export/import share
-the repository-root target directory, and ordinary, documentation and
-qualification tool builds require a nonempty dependency archive. Imported
-external artifacts do not justify treating changed local code as fresh. Release
-artifacts remain distinct from dev-profile clippy preparation. The delivered
-correction is release-tooling artifact/source reuse, not a production
-dev/all-targets clippy preparation layer. Linux evidence does not establish
-Darwin execution or cross-platform artifact reuse.
+the repository-root target directory, and ordinary and qualification tool builds
+require a nonempty dependency archive. Imported external artifacts do not
+justify treating changed local code as fresh. Release artifacts remain distinct
+from dev-profile clippy preparation. The delivered correction is release-tooling
+artifact/source reuse, not a production dev/all-targets clippy preparation
+layer. Linux evidence does not establish Darwin execution or cross-platform
+artifact reuse.
 
 `cargo xtask nix probe-source` protects these boundaries by applying isolated
 tracked markers and evaluating `.drv` identities. It fails closed unless a docs
@@ -4583,16 +4553,12 @@ runs only on request. It does not build application/check outputs, though
 evaluation can require declared source preparation. Identity stability alone is
 not local/remote cache or compiler freshness evidence.
 
-The full `cargo xtask validate` is still the aggregate ship gate: its `--no-e2e`
-prefix builds the static groups, `xtask-format`, and the Nix-backed test checks,
-then adds all eight retained E2E lanes, both Firefox reconciliations, and
-server-function coverage verification.
-[Measuring Nix invalidation](../CONTRIBUTING.md#measuring-nix-invalidation)
-defines optional historical reproduction of the controlled invalidation matrix,
-including markers and sidecars. The current tooling dependency campaign uses the
-accepted frozen baseline and ordinary meaningful comparisons, not a new matrix
-or fixed sample count. Results remain in ignored run storage or the PR; the
-store is not purged between arms.
+`just validate` composes `just validate-no-e2e`, the eight retained E2E lane
+producers, both Firefox reconciliations, and final server-function flow
+verification. Gate-wide JSON invalidation reports are retired. Existing
+source-boundary probes remain optional, named diagnostics; evidence belongs in
+ignored run storage or the PR. Do not purge the store or run routine measurement
+campaigns.
 
 #### Sandboxed cargo-deny
 
@@ -4807,7 +4773,7 @@ run emits, matched forward from the inventory by `#[tracing::instrument]` span
 name plus `code.namespace`. A documentary convention was rejected precisely
 because a doc naming a spec that never touches the fn would stay green forever.
 The gate has two lanes (`xtask/src/steps/server_fn_coverage_check.rs`): a static
-lane in `check`/`validate --no-e2e` that reads the sole committed
+lane in `just check`/`just validate-no-e2e` that reads the sole committed
 `docs/coverage/server-fns.json` snapshot plus the source-derived inventory, and
 an e2e lane (`server-fn-coverage-regenerate` / `-verify`) that recomputes that
 snapshot from the per-combo `cargo xtask e2e sqlite chromium` traces.
@@ -4851,12 +4817,13 @@ placed by a single litmus test — _where must this code execute?_
 ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)):
 
 - **`xtask`** — the host-side dev/CI driver
-  (`cargo xtask check | validate | e2e | …`). It invokes `nix build` and
-  consumes/analyzes exfiltrated build artifacts (coverage gate, CRAP gate,
-  reports). It owns the result envelope: every run rewrites the
-  `.xtask/last-result.json` sidecar through `result::CommandResult::report`.
-  Each `result::StepResult` records its name, outcome, duration, and optional
-  `result::NixReport` for a successful gate-owned Nix build (`installable`,
+  (`cargo xtask e2e | test-local | …`); Just owns gate composition. It invokes
+  `nix build` and consumes/analyzes exfiltrated build artifacts (coverage gate,
+  CRAP gate, reports). Retained public producer/diagnostic commands use
+  `result::CommandResult::report` and its `.xtask/last-result.json` sidecar.
+  Plain check leaves and precommit safety bypass that reporting boundary. Each
+  `result::StepResult` records its name, outcome, duration, and optional
+  `result::NixReport` for a successful producer-owned Nix build (`installable`,
   optional evaluated `derivation`, and conservative `realization`). It also
   prints an `xtask-done: command=… ok=… exit=… duration_ms=…` sentinel on stderr
   from every exit path (`main::main`), so a truncated log can still prove the
@@ -5236,11 +5203,11 @@ they are reading (`xtask/src/adr.rs:81`, `xtask/src/adr_readme/files.rs:125`,
 
 Identifier collisions remain loud
 ([ADR-0036](adr/0036-identifier-collision-policy.md)): the
-`identifier-collisions` gate in `cargo xtask check`/`validate` fails on
-duplicate numeric prefixes in `docs/adr/` and the migration directories. The
-serialized promoter prevents feature branches from allocating ADR numbers at
-all. The gate still runs against the merge-queue tree, where GitHub stacks the
-PR on an ephemeral queue branch and runs the required checks
+`identifier-collisions` gate in `just check`/`just validate` fails on duplicate
+numeric prefixes in `docs/adr/` and the migration directories. The serialized
+promoter prevents feature branches from allocating ADR numbers at all. The gate
+still runs against the merge-queue tree, where GitHub stacks the PR on an
+ephemeral queue branch and runs the required checks
 ([ADR-0077](adr/0077-adopt-github-merge-queue.md)).
 
 The ADR index table in `docs/README.md` is a generated projection of the ADR

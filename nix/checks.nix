@@ -2819,7 +2819,7 @@ in
         }
       );
 # The e2e aggregate: a symlinkJoin of every browser/backend `e2e-*`
-# check, exposed as `checks.e2e` and built by `cargo xtask validate`.
+# check, exposed as `checks.e2e`; Just uses the individual lane producers.
 # Adding a new browser/backend combo automatically joins it here. Its
 # `jaunder-e2e*` name keeps it out of the cachix push, so building it
 # always realizes the underlying VM checks rather than substituting a
@@ -2910,7 +2910,7 @@ e2eGateChecks
     }
   );
 
-  # The browser/backend e2e gate `cargo xtask validate` builds.
+  # Optional browser/backend join; Just preserves individual producer verdicts.
   # `e2e-checks` aggregates every browser/backend `checks.e2e-*` combo
   # (now 4); they are independent derivations realized in parallel up
   # to the host `max-jobs` (CI's install-nix-action sets `max-jobs =

@@ -71,15 +71,9 @@ jobs:
           path: .xtask/host-resource-baseline.txt
           if-no-files-found: error
           retention-days: 14
-      - name: Validate host lane (via xtask)
+      - name: Validate host lane (via Just)
         run:
-          nix develop .#ci --accept-flake-config -c cargo xtask ci-validate host
-      - name: Preserve host validation result
-        if: always()
-        run: |
-          if test -f .xtask/last-result.json; then
-            cp .xtask/last-result.json .xtask/host-result.json
-          fi
+          nix develop .#ci --accept-flake-config -c just ci-validate-host
       - name: Upload host validation diagnostics
         if: always()
         uses: actions/upload-artifact@v7.0.1
@@ -87,8 +81,6 @@ jobs:
           name: validate-host-diagnostics
           path: |
             .xtask/diagnostics/
-            .xtask/last-result.json
-            .xtask/host-result.json
           if-no-files-found: ignore
           retention-days: 14
 
@@ -101,16 +93,9 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      - name: Validate hermetic lane (via xtask)
+      - name: Validate hermetic lane (via Just)
         run:
-          nix develop .#ci --accept-flake-config -c cargo xtask ci-validate
-          hermetic
-      - name: Preserve hermetic validation result
-        if: always()
-        run: |
-          if test -f .xtask/last-result.json; then
-            cp .xtask/last-result.json .xtask/hermetic-result.json
-          fi
+          nix develop .#ci --accept-flake-config -c just ci-validate-hermetic
       - name: Upload hermetic validation diagnostics
         if: always()
         uses: actions/upload-artifact@v7.0.1
@@ -118,8 +103,6 @@ jobs:
           name: validate-hermetic-diagnostics
           path: |
             .xtask/diagnostics/
-            .xtask/last-result.json
-            .xtask/hermetic-result.json
           if-no-files-found: ignore
           retention-days: 14
 
@@ -132,20 +115,13 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      - name: Validate test checks lane (via xtask)
+      - name: Validate test checks lane (via Just)
         run:
-          nix develop .#ci --accept-flake-config -c cargo xtask ci-validate
-          test-checks
+          nix develop .#ci --accept-flake-config -c just ci-validate-test-checks
       - name: Build Emacs package for Cachix
         run:
           nix build --accept-flake-config --no-link
           .#emacsPackages.x86_64-linux.jaunder
-      - name: Preserve test checks validation result
-        if: always()
-        run: |
-          if test -f .xtask/last-result.json; then
-            cp .xtask/last-result.json .xtask/test-checks-result.json
-          fi
       - name: Upload test checks validation diagnostics
         if: always()
         uses: actions/upload-artifact@v7.0.1
@@ -154,8 +130,6 @@ jobs:
           path: |
             .xtask/diagnostics/
             .xtask/gcroots/elisp-coverage-producer/elisp-coverage/
-            .xtask/last-result.json
-            .xtask/test-checks-result.json
           if-no-files-found: ignore
           retention-days: 14
 
@@ -198,10 +172,9 @@ jobs:
               printf '\nmount: %s\nfindmnt unavailable\n' "$path" >> "$report"
             fi
           done
-      - name: Validate Rust coverage lane (via xtask)
+      - name: Validate Rust coverage lane (via Just)
         run:
-          nix develop .#ci --accept-flake-config -c cargo xtask ci-validate
-          coverage
+          nix develop .#ci --accept-flake-config -c just ci-validate-coverage
       - name: Capture coverage storage final snapshot
         if: always()
         continue-on-error: true
@@ -253,7 +226,6 @@ jobs:
             .xtask/diagnostics/
             .xtask/gcroots/coverage/status.json
             .xtask/gcroots/coverage/diagnostics/
-            .xtask/last-result.json
           if-no-files-found: ignore
           retention-days: 14
 

@@ -20,16 +20,7 @@
 use std::path::Path;
 
 use crate::adr_readme;
-use crate::result::{CommandResult, StepResult};
-
-/// Push all three ADR checks for legacy gate callers. Just invokes the leaves
-/// individually through their own callable boundary.
-pub fn run(result: &mut CommandResult) {
-    let root = Path::new(".");
-    result.push(format_step_at(root));
-    result.push(readme_parity_step_at(root));
-    result.push(view_parity_step_at(root));
-}
+use crate::result::StepResult;
 
 pub(crate) fn format_step_at(root: &Path) -> StepResult {
     let problems = adr_readme::format_problems(root);

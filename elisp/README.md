@@ -68,9 +68,9 @@ emacs --batch -Q -l elisp/scripts/format.el -f jaunder-fmt-fix
 ```
 
 The pure suite and format steps run automatically as the `ert` and `elisp-fmt`
-steps in `cargo xtask check` and `cargo xtask validate` — both via
-`devtool check` — and, through the same implementation, as part of the
-`static-checks` Nix check (so `nix flake check` covers them too).
+steps in `just check` and `just validate` — both via `devtool check` — and,
+through the same implementation, as part of the `static-checks` Nix check (so
+`nix flake check` covers them too).
 
 ## Diagnostics
 
@@ -324,13 +324,12 @@ JAUNDER_TEST_BINARY=target/debug/jaunder \
   emacs --batch -Q -l elisp/scripts/run-integration-tests.el
 ```
 
-The authoritative gate is `cargo xtask validate --no-e2e`. It builds one
-hermetic `elisp-coverage-producer` VM that runs the pure and live ERT
-populations once, then realizes
-`$out/elisp-coverage/{lcov.info,summary.txt,status.json}`. The host consumer
-reconciles its pre-test production module/form census against LCOV: every
-ordinary point has exactly one LCOV record. It automatically counts as
-ignored/exempt without a marker only a zero-stop form whose census contains
+The authoritative gate is `just validate-no-e2e`. It builds one hermetic
+`elisp-coverage-producer` VM that runs the pure and live ERT populations once,
+then realizes `$out/elisp-coverage/{lcov.info,summary.txt,status.json}`. The
+host consumer reconciles its pre-test production module/form census against
+LCOV: every ordinary point has exactly one LCOV record. It automatically counts
+as ignored/exempt without a marker only a zero-stop form whose census contains
 exactly its single synthetic opening-line point and which is `require`,
 `provide`, `declare-function`, `defgroup`, or `cl-defstruct`; or `defvar`,
 `defconst`, or `defcustom` with an absent, `nil`/`t`, number, string, character,
@@ -341,8 +340,8 @@ initializers remain measurable or need a trailing same-line
 point or LCOV observation on a structural candidate is a guard violation.
 Controlled ERT, instrumentation, or invalid-report statuses and coverage
 findings fail the consumer; uncontrolled Nix or VM failures remain build
-failures. Full `cargo xtask validate` inherits this verdict and does not rerun
-live ERT.
+failures. Full `just validate` inherits this verdict and does not rerun live
+ERT.
 
 ## Pulled media
 

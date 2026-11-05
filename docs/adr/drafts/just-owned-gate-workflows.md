@@ -6,7 +6,7 @@
 
 ## Context
 
-The current gate workflow is spread across Rust catalogs and dispatch in
+Before #1889, the gate workflow was spread across Rust catalogs and dispatch in
 `xtask/src/gate.rs`, `xtask/src/dispatch.rs`, `xtask/src/cli.rs`, and
 `xtask/src/steps/static_checks.rs`, Git-hook callers, CI lane callers, and
 structured per-step result plumbing. `Justfile` is already the repository's Just
@@ -50,11 +50,21 @@ failure, and performs the docs post-request state check even when the request
 fails. Producer evidence remains required, and independent CI job results and
 aggregates remain authoritative. CI sidecars are diagnostic only.
 
-Retire gate-wide result envelopes and old `cargo xtask` workflow aliases when
-hooks, repository documentation, CI, and the Manager-owned external agent
-selector/policy have reached the coordinated cutover checkpoint. Do not edit
-external policy in this change. There is no permanent compatibility forwarding
-layer.
+The repository cutover retires gate-wide result envelopes and the old
+`cargo xtask check/precommit/prepush/validate/ci-validate` aliases. Hooks and CI
+call the explicit Just recipes: `check-no-test`, `check`, `precommit`,
+`prepush`, `validate-no-e2e`, `validate`, and
+`ci-validate-{host,hermetic,test-checks,coverage}`. Just options are not
+forwarded; `just check --no-test` and `just validate --no-e2e` are not
+interfaces.
+
+Manager confirmed the coordinated external owner, exact mapping and post-landing
+handoff, not pre-deployed guidance. The human rollout correction is to “feed in
+the changes as the PRs land, to stay consistent.” External guidance therefore
+follows each confirmed landing incrementally; older active checkouts retain
+assignment-specific old-interface instructions. This change does not edit or
+activate external guidance, probe recipes, or add a fallback/registry. There is
+no permanent compatibility forwarding layer.
 
 As the approved #1887 component, the three Prettier command definitions for
 Markdown, `end2end`, and CSS move to the shared Just definitions; the exclusive
@@ -76,14 +86,26 @@ clauses and #1887's docs-only build path change. ADR-0146 and ADR-0161 remain
 unchanged; all other `devtool` leaf ownership and hermetic boundaries remain
 unchanged. ADR-0110's structural population/fail-closed rule continues to apply.
 
+## Approval provenance
+
+The human approved design-v2 (`issue1889-spec-v2`, Manager relay
+`1d21c0df-6e73-4c89-a40e-ddf5b67d92ba`, “Approve revised design”) and the
+risk-triggered outline-v1 (`issue1889-outline-v1`, relay
+`38808dc8-5ac2-422f-a9fe-3b3843758f43`, “Approve outline and begin”). They
+approve Just-first ownership, alias and gate-wide JSON retirement, local
+fail-fast behavior, retained Git/index safety and real producer/CI verdicts. The
+completed planning documents are removed before PR preparation; their branch
+history retains the full approved text. The later Manager readiness confirmation
+applies the human incremental-landings correction above.
+
 ## Consequences
 
 - One Justfile owns workflow composition rather than parallel Rust, CI, and Nix
   catalogs. Rust remains the implementation home for the checks that require it;
   the leaf boundary adds invocation, not a second algorithm or workflow engine.
-- Hook, developer, CI, and external agent-selector callers must cut over
-  together. External policy/selector readiness is a Manager-owned checkpoint,
-  not a reason to retain indefinite aliases.
+- Repository hook, developer and CI callers cut over with alias deletion.
+  Manager owns exact post-landing external guidance updates and older-checkout
+  instructions; pre-deployment is not a circular prerequisite to landing.
 - Gate recipes have the approved fail-fast behavior: local check/validate runs
   stop at the first blocking leaf instead of collecting later diagnostics.
   Mandatory precommit reconciliation still runs after failure; producer evidence

@@ -323,15 +323,14 @@ impl Arm {
                         | Self::ToolsLock,
                     Boundary::Devtool | Boundary::StaticElisp | Boundary::StaticE2eCensus
                 )
-                // Docs and site transitively depend on their devtool executables.
+                // Static docs uses pinned Just/Prettier directly, not devtool.
                 | (
                     Self::DevtoolSource,
-                    Boundary::StaticDocs | Boundary::StaticCode | Boundary::Site
+                    Boundary::StaticCode | Boundary::Site
                 )
                 | (
                     Self::ToolsLock,
-                    Boundary::StaticDocs
-                        | Boundary::StaticCode
+                    Boundary::StaticCode
                         | Boundary::Site
                         | Boundary::Xtask
                         | Boundary::ToolingDependencies
@@ -805,19 +804,20 @@ mod tests {
         changed.static_code = "code-2".to_owned();
         changed.static_elisp = "elisp-2".to_owned();
         changed.devtool = "devtool-2".to_owned();
-        changed.static_docs = "docs-2".to_owned();
         changed.static_e2e_census = "census-2".to_owned();
         changed.site = "site-2".to_owned();
         changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
         assert_eq!(compare_arm(&base, Arm::DevtoolSource, &changed), Ok(()));
+        let mut changed_docs = changed.clone();
+        changed_docs.static_docs = "docs-2".to_owned();
+        assert!(matches!(
+            compare_arm(&base, Arm::DevtoolSource, &changed_docs),
+            Err(ProbeError::UnexpectedChange {
+                boundary: "static-docs",
+                ..
+            })
+        ));
         for (boundary, stale) in [
-            (
-                "static-docs",
-                DrvPaths {
-                    static_docs: base.static_docs.clone(),
-                    ..changed.clone()
-                },
-            ),
             (
                 "static-code",
                 DrvPaths {
@@ -896,7 +896,7 @@ mod tests {
     #[test]
     fn tools_lock_changes_invalidate_the_tooling_dependency_graph() {
         let base = paths("docs", "code", "site", "wasm");
-        let mut changed = paths("docs-2", "code-2", "site-2", "wasm");
+        let mut changed = paths("docs", "code-2", "site-2", "wasm");
         changed.static_elisp = "elisp-2".to_owned();
         changed.xtask = "xtask-2".to_owned();
         changed.devtool = "devtool-2".to_owned();
@@ -911,14 +911,16 @@ mod tests {
         ));
         changed.tooling_dependencies = "tooling-dependencies-2".to_owned();
         assert_eq!(compare_arm(&base, Arm::ToolsLock, &changed), Ok(()));
+        let mut changed_docs = changed.clone();
+        changed_docs.static_docs = "docs-2".to_owned();
+        assert!(matches!(
+            compare_arm(&base, Arm::ToolsLock, &changed_docs),
+            Err(ProbeError::UnexpectedChange {
+                boundary: "static-docs",
+                ..
+            })
+        ));
         for (boundary, stale) in [
-            (
-                "static-docs",
-                DrvPaths {
-                    static_docs: base.static_docs.clone(),
-                    ..changed.clone()
-                },
-            ),
             (
                 "static-code",
                 DrvPaths {
@@ -1098,7 +1100,7 @@ mod tests {
     #[test]
     fn debug_bundle_rejects_stale_final_identity_after_producer_changes() {
         let base = paths("docs", "code", "site", "wasm");
-        let mut changed = paths("docs-2", "code-2", "site-2", "wasm");
+        let mut changed = paths("docs", "code-2", "site-2", "wasm");
         changed.static_elisp = "elisp-2".to_owned();
         changed.devtool = "devtool-2".to_owned();
         changed.static_e2e_census = "census-2".to_owned();

@@ -23,7 +23,7 @@ pub(crate) fn run(name: &str) -> Result<crate::result::StepResult> {
 fn run_at(name: &str, root: &Path) -> Result<crate::result::StepResult> {
     let mut result = CommandResult::new("check-leaf");
     match name {
-        "clean-tree" => result.push(crate::lifecycle::clean_tree_precheck(false)),
+        "clean-tree" => result.push(crate::lifecycle::clean_tree_precheck()),
         "prepush-docs" => {
             crate::lifecycle::run_shared_static_docs_request(
                 root,

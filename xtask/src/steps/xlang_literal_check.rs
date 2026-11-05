@@ -8,7 +8,7 @@
 //! necessary; nothing checked them.
 //!
 //! Drift in that class is silent at build time and maximally expensive at test
-//! time: nothing fails to compile, `cargo xtask check` never runs e2e, and the
+//! time: nothing fails to compile, `just check` never runs e2e, and the
 //! whole `{sqlite,postgres}×{chromium,firefox}` matrix goes red with dozens of
 //! Playwright timeouts whose output never names the one-word typo that caused
 //! them. This gate turns that into one line here.

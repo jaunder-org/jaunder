@@ -2,8 +2,7 @@
 
 `cargo xtask production-baseline` is an opt-in, host-side qualification harness.
 It deploys immutable `packages.jaunder` revisions through the supported NixOS
-module; it is not part of `cargo xtask check`, pre-push, CI, or
-`nix flake check`.
+module; it is not part of `just check`, pre-push, CI, or `nix flake check`.
 
 ## Prerequisites
 

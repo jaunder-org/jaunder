@@ -1,6 +1,6 @@
 //! Both lanes of the `#[server]` flow-coverage gate (#681).
 //!
-//! **The static lane** ([`run`]) belongs to `check` / `validate --no-e2e`: it
+//! **The static lane** ([`run`]) belongs to `just check` / `just validate-no-e2e`: it
 //! reads the committed snapshot plus the source-derived inventory — no traces,
 //! no e2e run — so adding a `#[server]` fn with no browser flow reddens the
 //! build immediately, without waiting for the e2e matrix.
@@ -72,7 +72,7 @@ fn check(web_src: &Path, snapshot_path: &Path) -> StepResult {
 }
 
 /// The static lane over the repo's real snapshot. Runs in `check` and
-/// `validate --no-e2e`.
+/// `just validate-no-e2e`.
 pub fn run(result: &mut CommandResult) {
     result.push(check(Path::new(WEB_SRC), Path::new(SNAPSHOT_PATH)));
 }
