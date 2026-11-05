@@ -4421,12 +4421,13 @@ the complete non-Markdown Elisp source tree in a writable copy. It has pinned
 `emacsForCi` and `TZDIR`, plus `devtoolBin` and its actual transitive tooling
 source/dependency closure. The commands need no offline Cargo home,
 Node/Playwright, or Git; any such build inputs enter only through `devtoolBin`.
-Elisp-source changes invalidate `static-elisp` and no longer invalidate
-`static-code`; shared devtool source or lock changes still invalidate the leaf
-through `devtoolBin`. The verdict is non-substitutable, while valid local output
-reuse remains possible. `static-ert` continues to run
-`devtool check --group ert` over its own complete population; the combined
-pure/live coverage producer is unchanged.
+Elisp-source changes invalidate `static-elisp`; source-probe evaluation also
+shows `static-code`'s identity changing through an existing transitive input,
+despite Elisp's exclusion from its direct source filter. Shared devtool source
+or lock changes also invalidate this leaf through `devtoolBin`. The verdict is
+non-substitutable, while valid local output reuse remains possible. `static-ert`
+continues to run `devtool check --group ert` over its own complete population;
+the combined pure/live coverage producer is unchanged.
 
 The independent `xtask-format` leaf runs pinned raw
 `cargo fmt --manifest-path xtask/Cargo.toml --check`, without `--all`, devtool,

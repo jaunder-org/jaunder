@@ -214,7 +214,13 @@ impl Arm {
             | Self::RootLock
             | Self::CsrBundleProducer
             | Self::Toolchain => &[Boundary::CsrDebugBundle],
-            Self::Elisp => &[Boundary::StaticElisp, Boundary::StaticCode],
+            // `static-code` retains an observed transitive input coupling even
+            // though its direct Elisp source filter is narrow.
+            Self::Elisp => &[
+                Boundary::StaticElisp,
+                Boundary::StaticCode,
+                Boundary::Devtool,
+            ],
             Self::UnrelatedNote => &[Boundary::StaticElisp, Boundary::CsrDebugBundle],
             Self::RootManifest
             | Self::ToolsManifest
@@ -279,7 +285,7 @@ impl Arm {
         matches!(
             (self, boundary),
             (Self::Docs, Boundary::StaticDocs)
-                | (Self::Elisp, Boundary::StaticElisp)
+                | (Self::Elisp, Boundary::StaticElisp | Boundary::StaticCode)
                 | (Self::Server, Boundary::StaticCode)
                 | (Self::Web, Boundary::StaticCode | Boundary::Site)
                 | (
@@ -682,10 +688,11 @@ mod tests {
     }
 
     #[test]
-    fn elisp_source_invalidates_only_the_elisp_leaf() {
+    fn elisp_source_invalidates_its_leaf_and_retains_static_code_coupling() {
         let base = paths("docs", "code", "site", "wasm");
         let mut changed = base.clone();
         changed.static_elisp = "elisp-2".to_owned();
+        changed.static_code = "code-2".to_owned();
         assert_eq!(compare_arm(&base, Arm::Elisp, &changed), Ok(()));
         assert!(matches!(
             compare_arm(&base, Arm::Elisp, &base),
@@ -694,11 +701,21 @@ mod tests {
                 ..
             })
         ));
-        changed.static_code = "code-2".to_owned();
+        let mut missing_code = changed.clone();
+        missing_code.static_code = base.static_code.clone();
         assert!(matches!(
-            compare_arm(&base, Arm::Elisp, &changed),
-            Err(ProbeError::UnexpectedChange {
+            compare_arm(&base, Arm::Elisp, &missing_code),
+            Err(ProbeError::MissingChange {
                 boundary: "static-code",
+                ..
+            })
+        ));
+        let mut unrelated_devtool = changed;
+        unrelated_devtool.devtool = "devtool-2".to_owned();
+        assert!(matches!(
+            compare_arm(&base, Arm::Elisp, &unrelated_devtool),
+            Err(ProbeError::UnexpectedChange {
+                boundary: "devtool",
                 ..
             })
         ));

@@ -1743,34 +1743,36 @@ absent from both closures.
 **evaluates** the flake `.drv` identities without realizing outputs. It fails
 closed unless docs changes affect only `static-docs`; server changes affect
 `static-code` but neither wasm path; web changes affect `static-code` and
-`.#site` but not `wasm-tests`; Elisp-source changes affect `static-elisp` but
-not `static-code`; and `common`, `macros`, and the shared performance contract
-affect the code, Elisp, site, wasm-test, and xtask boundaries without
-invalidating `static-docs`. It also protects `devtool` and its compiled tooling
-dependency boundary: devtool implementation edits invalidate the real tool,
-`static-code`, `static-elisp`, `static-docs` (through its `docsDevtoolBin` build
-input), and site (through `csrWasmBundle`'s `devtoolBin` build input), but
-preserve `wasm-tests`, `xtask`, and the compiled tooling dependency identity.
-The documentation and site source filters remain narrow; derivation identity
+`.#site` but not `wasm-tests`; Elisp-source changes affect `static-elisp` and
+also change `static-code`'s observed identity through an existing transitive
+input, despite exclusion from its direct Elisp source filter; and `common`,
+`macros`, and the shared performance contract affect `static-code`,
+`static-elisp`, site, wasm-test, and xtask boundaries without invalidating
+`static-docs`. It also protects `devtool` and its compiled tooling dependency
+boundary: devtool implementation edits invalidate the real tool, `static-code`,
+`static-elisp`, `static-docs` (through its `docsDevtoolBin` build input), and
+site (through `csrWasmBundle`'s `devtoolBin` build input), but preserve
+`wasm-tests`, `xtask`, and the compiled tooling dependency identity. The
+documentation and site source filters remain narrow; derivation identity
 includes transitive executable inputs as well as admitted sources.
 `tools/Cargo.lock` invalidates ordinary devtool, its dependency preparation,
 `static-code`, `static-elisp`, `xtask`, `static-docs` through `docsDevtoolBin`,
 and site through `csrWasmBundle`; `wasm-tests` remains stable.
 `xtask/Cargo.lock` affects only `xtask` among these boundaries. Root Cargo build
-configuration affects code, Elisp, site, `wasm-tests`, `xtask`, ordinary devtool
-and tooling dependencies, but not the docs-only tool. The four manifest arms
-(root, tools workspace, devtool and shared common manifest) and four
-embedded-input arms (server build script, CSR shell, Theme Package manifest and
-migration) assert the appropriate `static-code`, `static-elisp`, `devtool`,
-tooling-dependency and CSR-bundle fan-out for each input; unrelated boundaries
-remain stable. Tooling preparation uses generated dummy sources and a
-file-scoped lockfile, with repository-root target alignment and nonempty archive
-admission for ordinary, documentation and qualification consumers. Release
-artifacts are not assumed to seed dev-profile clippy. The identity drift probe
-runs only on request; it builds no application/check outputs, although
-evaluation can require declared source preparation. It never purges the store.
-Stable identity is not proof of compiler freshness or local/remote realization
-reuse.
+configuration affects `static-code`, `static-elisp`, site, `wasm-tests`,
+`xtask`, ordinary devtool and tooling dependencies, but not the docs-only tool.
+The four manifest arms (root, tools workspace, devtool and shared common
+manifest) and four embedded-input arms (server build script, CSR shell, Theme
+Package manifest and migration) assert the appropriate `static-code`,
+`static-elisp`, `devtool`, tooling-dependency and CSR-bundle fan-out for each
+input; unrelated boundaries remain stable. Tooling preparation uses generated
+dummy sources and a file-scoped lockfile, with repository-root target alignment
+and nonempty archive admission for ordinary, documentation and qualification
+consumers. Release artifacts are not assumed to seed dev-profile clippy. The
+identity drift probe runs only on request; it builds no application/check
+outputs, although evaluation can require declared source preparation. It never
+purges the store. Stable identity is not proof of compiler freshness or
+local/remote realization reuse.
 
 Artifact compatibility includes compiler, target, profile, resolved features,
 flags and native inputs; incompatible work must rebuild. Dependency preparations
@@ -1833,10 +1835,11 @@ reconciliation, and server-function coverage verification.
   source, pinned `emacsForCi`, and `TZDIR`; compiled `devtoolBin` brings its
   actual transitive tooling source/dependency closure. The commands need no
   offline Cargo home, Node/Playwright, or Git; those build inputs, if needed,
-  enter only through `devtoolBin`. Elisp-source changes affect this leaf rather
-  than `static-code`; devtool/tool-lock changes may invalidate it through
-  `devtoolBin`. The verdict is non-substitutable, but valid local output reuse
-  remains possible.
+  enter only through `devtoolBin`. Elisp-source changes affect this leaf and
+  also change `static-code`'s observed identity through an existing transitive
+  input, despite exclusion from its direct source filter. Devtool/tool-lock
+  changes may invalidate this leaf through `devtoolBin`. The verdict is
+  non-substitutable, but valid local output reuse remains possible.
 - `checks.x86_64-linux.static-ert` — `devtool check --group ert`, the standalone
   pure runner over the complete non-Markdown Elisp tree, in a writable copy,
   with existing `emacsForCi`, Git and timezone inputs. The separate combined
