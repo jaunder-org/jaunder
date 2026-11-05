@@ -29,6 +29,8 @@ let
       ) (manifestMembers ++ [ ".cargo" "csr" "server/assets" "docs" "end2end" "nix" ".github" ".github/workflows" "test-support/src" ])
     else cargoMemberSource members "${root}/${relative}" type
     || relative == "xtask/Cargo.lock"
+    # The all-target recipe regression embeds the checkout's Justfile.
+    || relative == "Justfile"
     || relative == ".gitignore"
     || relative == "test-support/src/lib.rs"
     || relative == "rust-toolchain.toml"
@@ -52,6 +54,7 @@ let
     assert sourceAdmits "xtask/tests/testdata" "directory";
     assert sourceAdmits "xtask/Cargo.toml" "regular";
     assert sourceAdmits "xtask/Cargo.lock" "regular";
+    assert sourceAdmits "Justfile" "regular";
     assert sourceAdmits "Cargo.toml" "regular";
     assert sourceAdmits "tools/Cargo.toml" "regular";
     assert sourceAdmits "tools/Cargo.lock" "regular";
