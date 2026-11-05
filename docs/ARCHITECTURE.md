@@ -4489,12 +4489,12 @@ both workspace offline Cargo homes, the pinned formatter/toolchain, and their
 transitive build, source/vendor and embedded inputs. Direct filtering is not
 full closure independence; valid local-store reuse is allowed and no speedup is
 claimed. `static-code` runs residual non-Clippy shared definitions outside
-TypeScript, Rust formatting, standalone ERT and Elisp verification, with
+TypeScript, Rust formatting, standalone ERT, Elisp verification and the census verdict, with
 workspace-specific offline Cargo homes. It requests the six-leaf Clippy
 aggregate once; the aggregate does not rerun lint. The separate `static-elisp`
 leaf owns Elisp formatting/byte-compilation. `validate --no-e2e` builds
 `nix-static-docs`, `nix-static-typescript`, `nix-rust-format`,
-`nix-static-code`, `nix-static-elisp`, `nix-static-ert`, and `nix-xtask-format`
+`nix-static-code`, `nix-static-elisp`, `nix-static-e2e-census`, `nix-static-ert`, and `nix-xtask-format`
 before the Nix test checks, with each shared definition consumed once. CI fails
 if a hermetic boundary drifts from the host definitions
 ([hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md);
@@ -4505,13 +4505,21 @@ named `devtool check tsc`. Its direct filter admits TypeScript sources,
 `tsconfig.json`, and dependency manifests, but the existing `e2ePackage` still
 makes all `end2end/` changes transitive inputs. It is non-substitutable, without
 forcing valid local outputs to rerun. `static-code` retains TypeScript
-formatting and the census contract; it explicitly provisions node modules before
-that census rather than depending on tsc's provisioning side effect. This
-narrowly refines the historical partition for TypeScript, not `devtool` command
-ownership ([ADR-0178](adr/0178-split-hermetic-static-check-boundaries.md)). The
+formatting, but no longer owns the census command. `static-e2e-census` runs the
+existing `devtool provision-node-modules` followed by
+`node end2end/e2eCensusContract.ts`, with a direct non-Markdown `end2end` source
+filter that includes Playwright configuration, selected tests, helpers,
+fixtures, and module-load assets. It is independently requested by hermetic
+validation; its existing `e2ePackage` and compiled `devtoolBin` dependencies
+remain broader transitive inputs, so their source/dependency changes may also
+invalidate the census leaf. The existing whole-end2end `e2ePackage` also remains
+a transitive input to TypeScript; no TypeScript input-isolation claim follows.
+The TypeScript and census leaves refine the historical partition without
+changing `devtool` command ownership
+([ADR-0178](adr/0178-split-hermetic-static-check-boundaries.md)). The
 independently landed Rust-format and xtask-format boundaries remain intact; the
-TypeScript split does not equate distinct formatter or Clippy populations,
-permanently defer further design, or close the parent issue.
+splits do not equate distinct formatter or Clippy populations, permanently defer
+further design, or close the parent issue.
 
 The two CSR-facing source filters follow resolved target reachability rather
 than crate names. The `.#site`/CSR closure contains workspace manifests, the
