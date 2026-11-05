@@ -2,8 +2,6 @@ import { readFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 
-throw new Error("controlled #1885 census failure propagation probe");
-
 type CensusTest = {
   file: string;
   line: number;
