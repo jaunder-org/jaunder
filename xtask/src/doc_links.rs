@@ -273,13 +273,52 @@ fn gated_files(repo: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
-/// Every dead link across [`gated_files`], formatted `<file>:<line> -> <target>`.
+/// Match the promoter's immediate regular Markdown drafts, not its README.
+fn relocating_draft(repo: &Path, rel: &str) -> bool {
+    let path = Path::new(rel);
+    path.parent() == Some(Path::new("docs/adr/drafts"))
+        && path.extension().is_some_and(|ext| ext == "md")
+        && path.file_name().is_some_and(|name| name != "README.md")
+        && std::fs::symlink_metadata(repo.join(path))
+            .is_ok_and(|metadata| metadata.file_type().is_file())
+}
+
+/// Every dead or promotion-unsafe link across [`gated_files`].
+/// Dead links retain the format `<file>:<line> -> <target>`.
 pub fn problems(repo: &Path) -> Result<Vec<String>> {
     let tracked = tracked_paths(repo)?;
     let mut out = Vec::new();
     for rel in gated_files(repo)? {
         for dead in dead_links_in_with_tracked(repo, &rel, &tracked)? {
             out.push(format!("{rel}:{} -> {}", dead.line, dead.target));
+        }
+        // This is a source-time gate only. Keep the promoter's shared dead-link
+        // resolver and successful-warning behavior strictly existence-based.
+        if !relocating_draft(repo, &rel) {
+            continue;
+        }
+        let body =
+            std::fs::read_to_string(repo.join(&rel)).with_context(|| format!("reading {rel}"))?;
+        for link in links_in(&body)
+            .into_iter()
+            .filter(|link| is_relative_target(&link.target))
+        {
+            let bare = link.target.split('#').next().unwrap_or_default();
+            let sibling = bare.strip_prefix("./").unwrap_or(bare);
+            if sibling.is_empty() || sibling.contains('/') {
+                continue;
+            }
+            let Some(target) = normalize_repo_rel(&Path::new("docs/adr/drafts").join(bare)) else {
+                continue;
+            };
+            if tracked.contains(&target) && relocating_draft(repo, &target) {
+                let fragment = &link.target[bare.len()..];
+                out.push(format!(
+                    "{rel}:{} -> {} (use ../drafts/{sibling}{fragment} to survive ADR promotion)",
+                    line_at(&body, link.span.start),
+                    link.target
+                ));
+            }
         }
     }
     Ok(out)
@@ -542,10 +581,125 @@ mod tests {
         commit(
             &d,
             "docs/adr/drafts/bbb.md",
-            "# ADR-DRAFT: Bbb\n\n[base](../0001-base.md) [aaa](../drafts/aaa.md)\n",
+            "# ADR-DRAFT: Bbb\n\n[base](../0001-base.md) [aaa](../drafts/aaa.md#fragment)\n",
         );
 
         assert!(problems(&d).unwrap().is_empty());
+    }
+
+    #[test]
+    fn gate_rejects_relocating_draft_sibling_links_with_a_canonical_remedy() {
+        let d = repo("draft-siblings");
+        commit(&d, "docs/adr/drafts/sibling.md", "# ADR-DRAFT: Sibling\n");
+        for (target, remedy) in [
+            ("sibling.md", "../drafts/sibling.md"),
+            ("./sibling.md", "../drafts/sibling.md"),
+            ("sibling.md#fragment", "../drafts/sibling.md#fragment"),
+            ("./sibling.md#fragment", "../drafts/sibling.md#fragment"),
+        ] {
+            commit(
+                &d,
+                "docs/adr/drafts/source.md",
+                &format!("# ADR-DRAFT: Source\n\n[sibling]({target})\n"),
+            );
+            assert_eq!(
+                problems(&d).unwrap(),
+                vec![format!(
+                    "docs/adr/drafts/source.md:3 -> {target} (use {remedy} to survive ADR promotion)"
+                )],
+                "target: {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn nonrelocating_sources_and_targets_keep_existence_validation() {
+        let d = repo("draft-exclusions");
+        commit(&d, "docs/adr/drafts/sibling.md", "# ADR-DRAFT: Sibling\n");
+        commit(
+            &d,
+            "docs/adr/drafts/README.md",
+            "[sibling](sibling.md#fragment) [dot](./sibling.md)\n",
+        );
+        commit(&d, "docs/adr/drafts/notes.txt", "notes\n");
+        commit(&d, "docs/adr/drafts/nested/sibling.md", "nested\n");
+        commit(
+            &d,
+            "docs/adr/drafts/nested/source.md",
+            "[sibling](sibling.md)\n",
+        );
+        commit(
+            &d,
+            "docs/adr/drafts/source.md",
+            "[readme](README.md#fragment) [dot](./README.md) [notes](notes.txt) [nested](nested/sibling.md)\n",
+        );
+        commit(&d, "docs/ordinary/sibling.md", "ordinary\n");
+        commit(
+            &d,
+            "docs/ordinary/source.md",
+            "[sibling](./sibling.md#fragment)\n",
+        );
+        assert!(problems(&d).unwrap().is_empty());
+
+        write(
+            &d,
+            "docs/adr/drafts/README.md",
+            "[missing](missing.md#fragment)\n",
+        );
+        write(&d, "docs/ordinary/source.md", "[missing](missing.md)\n");
+        assert_eq!(
+            problems(&d).unwrap(),
+            vec![
+                "docs/adr/drafts/README.md:1 -> missing.md#fragment",
+                "docs/ordinary/source.md:1 -> missing.md",
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_draft_source_keeps_existence_validation() {
+        let d = repo("symlink-draft-source");
+        commit(&d, "docs/adr/drafts/sibling.md", "# ADR-DRAFT: Sibling\n");
+        commit(
+            &d,
+            "docs/adr/source.txt",
+            "[sibling](./sibling.md#fragment)\n",
+        );
+        std::os::unix::fs::symlink("../source.txt", d.join("docs/adr/drafts/source.md")).unwrap();
+        crate::test_support::git_ok(&d, &["add", "docs/adr/drafts/source.md"]);
+        assert!(problems(&d).unwrap().is_empty());
+
+        write(
+            &d,
+            "docs/adr/source.txt",
+            "[missing](missing.md#fragment)\n",
+        );
+        assert_eq!(
+            problems(&d).unwrap(),
+            vec!["docs/adr/drafts/source.md:1 -> missing.md#fragment"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_draft_target_keeps_existence_validation() {
+        let d = repo("symlink-draft-target");
+        commit(&d, "docs/adr/sibling.txt", "sibling\n");
+        commit(
+            &d,
+            "docs/adr/drafts/source.md",
+            "[sibling](sibling.md#fragment)\n",
+        );
+        std::os::unix::fs::symlink("../sibling.txt", d.join("docs/adr/drafts/sibling.md")).unwrap();
+        crate::test_support::git_ok(&d, &["add", "docs/adr/drafts/sibling.md"]);
+        assert!(problems(&d).unwrap().is_empty());
+
+        write(&d, "docs/adr/drafts/source.md", "[missing](missing.md)\n");
+        assert_eq!(
+            problems(&d).unwrap(),
+            vec!["docs/adr/drafts/source.md:1 -> missing.md"]
+        );
     }
 
     #[test]

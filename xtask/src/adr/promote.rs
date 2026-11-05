@@ -362,6 +362,10 @@ mod tests {
             summary.contains("warning: unresolved link(s) — docs/adr/0002-d.md: nonexistent.md"),
             "summary: {summary}"
         );
+        assert_eq!(
+            crate::doc_links::problems(&tmp).unwrap(),
+            vec!["docs/adr/0002-d.md:3 -> nonexistent.md"]
+        );
     }
 
     #[test]
@@ -385,7 +389,7 @@ mod tests {
             &tmp,
             "docs/adr/drafts/bbb.md",
             "# ADR-DRAFT: Bbb\n\n\
-             Builds on [the numbered ADR](../0001-foo.md) and [aaa](../drafts/aaa.md).\n",
+             Builds on [the numbered ADR](../0001-foo.md) and [aaa](../drafts/aaa.md#fragment).\n",
         );
         git(&tmp, &["add", "docs/notes.md", DRAFTS_DIR]);
         git(&tmp, &["commit", "-qm", "feature: linked ADR drafts"]);
@@ -398,11 +402,52 @@ mod tests {
         assert!(!summary.contains("warning"), "summary: {summary}");
         let bbb = std::fs::read_to_string(tmp.join("docs/adr/0003-bbb.md")).unwrap();
         assert!(bbb.contains("](0001-foo.md)"), "bbb: {bbb}");
-        assert!(bbb.contains("](0002-aaa.md)"), "bbb: {bbb}");
+        assert!(bbb.contains("](0002-aaa.md#fragment)"), "bbb: {bbb}");
         let notes = std::fs::read_to_string(tmp.join("docs/notes.md")).unwrap();
         assert_eq!(notes, "See [Bbb](adr/0003-bbb.md).\n");
         let after = crate::doc_links::problems(&tmp).unwrap();
         assert!(after.is_empty(), "promoted links must resolve: {after:?}");
+    }
+
+    #[test]
+    fn observed_cross_draft_links_resolve_before_and_after_promotion() {
+        // Keep the four observed source/target pairs as a fixture, not an
+        // include of live drafts: the serialized promoter will move those files.
+        for (source, target) in [
+            (
+                "independent-log-and-trace-filtering",
+                "native-otlp-process-logs",
+            ),
+            (
+                "native-otlp-process-logs",
+                "independent-log-and-trace-filtering",
+            ),
+            (
+                "host-code-block-highlighting-and-projection-refresh",
+                "offline-code-migration-queue",
+            ),
+            ("caddy-native-journald-upload", "native-otlp-process-logs"),
+        ] {
+            let canonical = format!("../drafts/{target}.md");
+            let tmp = promote_repo(source);
+            write(
+                &tmp,
+                &format!("{DRAFTS_DIR}/{source}.md"),
+                &format!("# ADR-DRAFT: Source\n\n[target]({canonical})\n"),
+            );
+            write(
+                &tmp,
+                &format!("{DRAFTS_DIR}/{target}.md"),
+                "# ADR-DRAFT: Target\n",
+            );
+            git(&tmp, &["add", DRAFTS_DIR]);
+            git(&tmp, &["commit", "-qm", "feature: observed draft link"]);
+            assert!(crate::doc_links::problems(&tmp).unwrap().is_empty());
+            let summary = run_promote(&tmp).unwrap();
+            assert!(!summary.contains("warning"), "{summary}");
+            let after = crate::doc_links::problems(&tmp).unwrap();
+            assert!(after.is_empty(), "{source}: {after:?}");
+        }
     }
 
     #[test]

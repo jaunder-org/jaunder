@@ -10,9 +10,9 @@
 managed single-host stack, Caddy ingress, and the loopback Victoria services.
 Jaunder's application logs now use the native OTLP/Collector route and shared
 `transform/jaunder_privacy` policy
-([native OTLP process logs](native-otlp-process-logs.md)). Caddy's own access
-and service logs are a separate source: they are not Jaunder application events
-and must not be admitted to that Collector policy.
+([native OTLP process logs](../drafts/native-otlp-process-logs.md)). Caddy's own
+access and service logs are a separate source: they are not Jaunder application
+events and must not be admitted to that Collector policy.
 
 The retained human route approval for `3ea422e6-2db3-4b8b-89e0-994148751fca` /
 `1850-native-journal-route` selects the `jaunder` journal namespace and

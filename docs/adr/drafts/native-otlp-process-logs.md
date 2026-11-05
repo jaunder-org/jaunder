@@ -40,7 +40,7 @@ filter precedence. With configured OTLP, ordinary logs are native records, not
 mirrored to stdout/journald, even on logger setup failure. CLI stdout results,
 local ErrorLayer/SpanTrace fields and independent WARN+/panic capture stay
 separate. The delivered
-[local-filter/AlwaysOn foundation](independent-log-and-trace-filtering.md)
+[local-filter/AlwaysOn foundation](../drafts/independent-log-and-trace-filtering.md)
 remains semantic input: all application severities are offered regardless of
 local verbosity, with valid sampled/unsampled-parent IDs. No new application
 filter, synthetic span or invented correlation ID is selected.
