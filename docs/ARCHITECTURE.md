@@ -1969,6 +1969,14 @@ filenames
 Names cannot live in `web`, because compiling the final WASM name into the WASM
 would make the content hash self-referential.
 
+**Approved direction, not yet implemented:** migrate CSR graph/output naming to
+Vite and use its ordinary content-sensitive hashes and build-only native
+manifest, while preserving the runtime serving guarantees and build/consumer
+behavior described here. The phase-2 migration remains subject to implementation
+and verification; this statement does not mean the current producer or manifest
+has changed
+([proposed Vite asset-output decision](adr/drafts/csr-vite-content-addressed-assets.md)).
+
 The server embeds the rendered SPA shell and falls back to it for anything the
 projector and static routes do not claim, keeping ADR-0003/ADR-0008's single
 binary intact. The bundle is fetched after the JS glue and is **not** preloaded:
@@ -2831,9 +2839,9 @@ on timeout. No administration secret or network control channel exists
   and verifies their bytes and atomically advances system references before
   serving. Stored metadata owns runtime digest URLs; missing or corrupt admitted
   content fails closed rather than falling back to embedded stylesheets.
-- `Site` (`server/src/site.rs`, `#[folder = "$OUT_DIR/site"]`) carries the CSR
-  client: full-SHA-256-named runtime assets, their precompressed `.br`/`.gz`
-  siblings, and the `public/` assets flattened to the site root
+- `Site` (`server/src/site.rs`, `#[folder = "$OUT_DIR/site"]`) currently carries
+  the CSR client: full-SHA-256-named runtime assets, their precompressed
+  `.br`/`.gz` siblings, and the `public/` assets flattened to the site root
   (`public/favicon.ico` → `favicon.ico`). `devtool csr-bundle` emits the
   role-tagged manifest that defines the runtime inventory; `server/build.rs`
   validates that manifest and stages the tree at compile time from
@@ -2841,6 +2849,9 @@ on timeout. No administration secret or network control channel exists
   and public-projector shells consume the same manifest, so no source literal or
   filename heuristic duplicates asset identity
   ([content-addressed CSR bundle manifest](adr/0175-content-addressed-csr-bundle-manifest.md)).
+  The approved Vite migration is not implemented yet; the current site and
+  manifest descriptions remain factual until production changes are verified
+  ([proposed Vite asset-output decision](adr/drafts/csr-vite-content-addressed-assets.md)).
 
 [ADR-0003](adr/0003-asset-management.md) establishes single-binary asset
 provisioning. System and custom styling share persistent content eligibility;
