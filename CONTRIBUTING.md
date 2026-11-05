@@ -1757,7 +1757,13 @@ also change `static-code`'s observed identity through an existing transitive
 input, despite exclusion from its direct Elisp source filter; and `common`,
 `macros`, and the shared performance contract affect `static-code`,
 `static-elisp`, site, wasm-test, and xtask boundaries without invalidating
-`static-docs`. It also protects `devtool` and its compiled tooling dependency
+`static-docs`. For the census boundary, source-filter assertions establish
+membership of the census script, Playwright configuration, helper/fixture/font
+and package manifest/lock inputs, plus exclusion of Markdown and unrelated
+server source. Runtime identity perturbations cover the lane catalog and
+transitive devtool/tooling changes, with unrelated server-source stability;
+they do not separately perturb every census input category or prove that each
+has independent invalidation. It also protects `devtool` and its compiled tooling dependency
 boundary: devtool implementation edits invalidate the real tool, `static-code`,
 `static-elisp`, `static-docs` (through its `docsDevtoolBin` build input), and
 site (through `csrWasmBundle`'s `devtoolBin` build input), but preserve
