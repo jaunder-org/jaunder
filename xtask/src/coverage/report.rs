@@ -43,9 +43,11 @@ pub fn parse_text_report(report: &str, repo_root: &str) -> Result<Vec<FileCovera
         // Accept only the pinned table/annotation shapes; an unknown row must
         // not silently discard an uncovered line beside valid covered rows.
         if !line.contains('|') {
-            if line
-                .split_whitespace()
-                .all(|part| part.strip_prefix('^').is_some_and(valid_count))
+            let annotation = line.trim();
+            if annotation.is_empty()
+                || annotation
+                    .strip_prefix('^')
+                    .is_some_and(|counts| counts.split('^').all(|count| valid_count(count.trim())))
             {
                 continue;
             }
@@ -224,6 +226,22 @@ mod tests {
     }
 
     #[test]
+    fn adjacent_llvm_region_annotations_do_not_change_line_attribution() {
+        // Minimized from the real pinned coverage producer's mailbox.rs row.
+        // LLVM can render adjacent region counts without whitespace between ^s.
+        let report = concat!(
+            "common/src/mailbox.rs:\n",
+            "   68|    182|            .map_err(|e: email_address::Error| InvalidMailbox::Address(e.to_string()))?;\n",
+            "                                                                                     ^10^10          ^10\n",
+        );
+        let files = parse_text_report(report, "/repo").unwrap();
+        assert_eq!(files[0].path, "common/src/mailbox.rs");
+        assert_eq!(files[0].lines.len(), 1);
+        assert_eq!(files[0].lines[0].line, 68);
+        assert!(files[0].lines[0].covered);
+    }
+
+    #[test]
     fn malformed_line_tables_never_hide_behind_a_valid_covered_row() {
         for invalid in [
             "    2|bogus|uncovered()",
@@ -232,6 +250,10 @@ mod tests {
             "    0|     1|not_a_source_line()",
             "    2|    -1|uncovered()",
             "unsupported report format",
+            "    ^10^invalid",
+            "    ^10^^10",
+            "    ^10 10",
+            "    ^10^",
         ] {
             let report = format!("/repo/a.rs:\n    1|     1|covered()\n{invalid}\n");
             assert!(parse_text_report(&report, "/repo").is_err(), "{invalid}");
