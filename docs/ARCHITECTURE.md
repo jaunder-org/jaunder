@@ -4029,12 +4029,13 @@ class at `storage/src/postgres/backup.rs:28`).
 ### The e2e suite
 
 Each browser E2E lane is a NixOS-test VM running Playwright against a real
-served instance. One JSON catalog owns the retained topology, Nix derivations,
-local full gate, CI producers, and host reconciliation. Chromium has one unsplit
-lane per backend. Firefox has three isolated lanes per backend: two shards of
-the ordinary project and one serial-special lane owning visual,
-global-configuration, and invite projects in dependency order. Unsplit Firefox
-workers=2 and workers=4 remain package-only measurement controls
+served instance. One JSON catalog defines the retained topology consumed by Nix
+and the host driver; CI currently declares its producer matrices in workflow
+YAML. Chromium has one unsplit lane per backend. Firefox has three isolated
+lanes per backend: two shards of the ordinary project and one serial-special
+lane owning visual, global-configuration, and invite projects in dependency
+order. Unsplit Firefox workers=2 and workers=4 remain package-only measurement
+controls
 ([distributed CI lane topology](adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md)).
 
 CI runs two Chromium producers and six lane-qualified Firefox producers with
@@ -4052,6 +4053,21 @@ currently landed producers synchronously between backend/browser commands; each
 Firefox command owns its three retained lanes and reconciliation. It inherits
 the non-e2e Elisp verdict and does not rerun live ERT
 ([distributed e2e](adr/0034-ci-e2e-matrix-distribution.md)).
+
+#### Committed direction — Just-first E2E workflow (#1890)
+
+Human-approved design and outline record a future `just e2e` default local
+workflow with minimal parameterized producer/reconciliation recipes. CI is to
+derive its producer matrix from the catalog at runtime and retain its standard
+matrix, artifact, dependency, and aggregate responsibilities. The design
+requires continue-all local producer behavior, both Firefox reconciliations
+after producer settlement, and server-function coverage only after successful
+authoritative SQLite/Chromium production using existing archive-finalization,
+retention, and population checks. It adds no receipt/schema or general runner;
+only narrow evidence verifiers remain where standard tools do not provide the
+required verdict. This direction is not implemented: the current Rust host
+scheduler and workflow YAML remain as described above. See the
+[Just E2E workflow ownership draft](adr/drafts/just-e2e-workflow-ownership.md).
 
 `end2end/playwright.config.ts` is the one config, loaded verbatim by both the VM
 and the host loop ([ADR-0051](adr/0051-single-playwright-config.md)). Chromium's
