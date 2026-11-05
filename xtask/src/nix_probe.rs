@@ -27,6 +27,7 @@ enum Boundary {
     StaticDocs,
     StaticCode,
     StaticElisp,
+    StaticE2eCensus,
     Site,
     WasmTests,
     Xtask,
@@ -36,10 +37,11 @@ enum Boundary {
 }
 
 impl Boundary {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::StaticDocs,
         Self::StaticCode,
         Self::StaticElisp,
+        Self::StaticE2eCensus,
         Self::Site,
         Self::WasmTests,
         Self::Xtask,
@@ -53,6 +55,7 @@ impl Boundary {
             Self::StaticDocs => "static-docs",
             Self::StaticCode => "static-code",
             Self::StaticElisp => "static-elisp",
+            Self::StaticE2eCensus => "static-e2e-census",
             Self::Site => "site",
             Self::WasmTests => "wasm-tests",
             Self::Xtask => "xtask",
@@ -96,6 +99,7 @@ pub enum Arm {
     CsrBundleProducer,
     Toolchain,
     UnrelatedNote,
+    CensusSource,
 }
 
 impl Arm {
@@ -131,6 +135,7 @@ impl Arm {
         Self::CsrBundleProducer,
         Self::Toolchain,
         Self::UnrelatedNote,
+        Self::CensusSource,
     ];
 
     const fn name(self) -> &'static str {
@@ -166,6 +171,7 @@ impl Arm {
             Self::CsrBundleProducer => "csr-bundle-producer",
             Self::Toolchain => "toolchain",
             Self::UnrelatedNote => "unrelated-note",
+            Self::CensusSource => "census-source",
         }
     }
 
@@ -202,6 +208,7 @@ impl Arm {
             Self::CsrBundleProducer => "tools/devtool/src/csr_bundle.rs",
             Self::Toolchain => "rust-toolchain.toml",
             Self::UnrelatedNote => "__nix_source_probe_note.txt",
+            Self::CensusSource => "end2end/e2e-lanes.json",
         }
     }
 
@@ -209,6 +216,7 @@ impl Arm {
     // product/wasm/xtask contract.
     fn boundaries(self) -> &'static [Boundary] {
         match self {
+            Self::CensusSource => &[Boundary::StaticE2eCensus],
             Self::CsrSource
             | Self::CsrManifest
             | Self::RootLock
@@ -286,6 +294,7 @@ impl Arm {
             (self, boundary),
             (Self::Docs, Boundary::StaticDocs)
                 | (Self::Elisp, Boundary::StaticElisp | Boundary::StaticCode)
+                | (Self::CensusSource, Boundary::StaticCode | Boundary::StaticE2eCensus)
                 | (Self::Server, Boundary::StaticCode)
                 | (Self::Web, Boundary::StaticCode | Boundary::Site)
                 | (
@@ -382,6 +391,7 @@ pub struct DrvPaths {
     static_docs: String,
     static_code: String,
     static_elisp: String,
+    static_e2e_census: String,
     site: String,
     wasm_tests: String,
     xtask: String,
@@ -396,6 +406,7 @@ impl DrvPaths {
             Boundary::StaticDocs => &self.static_docs,
             Boundary::StaticCode => &self.static_code,
             Boundary::StaticElisp => &self.static_elisp,
+            Boundary::StaticE2eCensus => &self.static_e2e_census,
             Boundary::Site => &self.site,
             Boundary::WasmTests => &self.wasm_tests,
             Boundary::Xtask => &self.xtask,
@@ -495,6 +506,10 @@ fn eval_paths_with(evaluate: impl FnOnce() -> Result<SourceProbeDrvPaths>) -> Re
         static_docs: parse_drv_path(Boundary::StaticDocs.name(), &paths.static_docs)?,
         static_code: parse_drv_path(Boundary::StaticCode.name(), &paths.static_code)?,
         static_elisp: parse_drv_path(Boundary::StaticElisp.name(), &paths.static_elisp)?,
+        static_e2e_census: parse_drv_path(
+            Boundary::StaticE2eCensus.name(),
+            &paths.static_e2e_census,
+        )?,
         site: parse_drv_path(Boundary::Site.name(), &paths.site)?,
         wasm_tests: parse_drv_path(Boundary::WasmTests.name(), &paths.wasm_tests)?,
         xtask: parse_drv_path(Boundary::Xtask.name(), &paths.xtask)?,
@@ -642,6 +657,7 @@ mod tests {
             static_docs: static_docs.to_owned(),
             static_code: static_code.to_owned(),
             static_elisp: "elisp".to_owned(),
+            static_e2e_census: "census".to_owned(),
             site: site.to_owned(),
             wasm_tests: wasm_tests.to_owned(),
             xtask: "xtask".to_owned(),
@@ -657,6 +673,11 @@ mod tests {
         for (arm, changed) in [
             (Arm::Docs, paths("docs-2", "code", "site", "wasm")),
             (Arm::Server, paths("docs", "code-2", "site", "wasm")),
+            (Arm::CensusSource, {
+                let mut changed = paths("docs", "code-2", "site", "wasm");
+                changed.static_e2e_census = "census-2".to_owned();
+                changed
+            }),
             (Arm::Web, paths("docs", "code-2", "site-2", "wasm")),
             (Arm::CsrSource, paths("docs", "code", "site", "wasm")),
             (Arm::CsrManifest, paths("docs", "code", "site", "wasm")),
@@ -675,7 +696,10 @@ mod tests {
             ),
         ] {
             let mut changed = changed;
-            if !matches!(arm, Arm::Docs | Arm::Server | Arm::UnrelatedNote) {
+            if !matches!(
+                arm,
+                Arm::Docs | Arm::Server | Arm::CensusSource | Arm::UnrelatedNote
+            ) {
                 changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
             }
             if matches!(arm, Arm::Common | Arm::Macros | Arm::Performance) {

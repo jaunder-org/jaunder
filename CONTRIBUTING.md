@@ -1722,28 +1722,37 @@ hermetic static surface has separate semantic derivations, not a singular
 `static-typescript` owns the named `tsc` check; `rust-format` owns `fmt`, scoped
 `leptosfmt`, and `tools-fmt`; `static-ert` owns standalone pure ERT;
 `static-elisp` owns Elisp formatting and byte-compilation over its complete
-non-Markdown Elisp source filter; `static-code` owns the remaining shared
-devtool definitions. TypeScript formatting and `e2eCensusContract.ts` remain in
-Code; Code explicitly provisions node modules before the census. The TypeScript
-split changes neither the independently landed Rust formatting boundary nor
-distinct feature/target/tools Clippy commands, and makes no equivalence,
-permanent deferral or closure claim. The independent `xtask-format` leaf
-verifies xtask Rust formatting with pinned Cargo/rustfmt; it is not part of a
-devtool group. The source drift probe covers its original boundaries plus
-`static-elisp`, not `static-typescript`, `rust-format`, `static-ert`, or
-`xtask-format`. The CSR/site source closure contains workspace manifests, the
-resolved `csr` target closure, its required shell inputs, and deterministic
-workspace placeholders. The client wasm-test closure analogously contains
-workspace manifests, the resolved `client` wasm-test target closure, and its
-required inputs/placeholders. `common` and `macros` remain wherever a resolved
-target reaches them; unrelated `server`, `storage`, and host-only sources are
-absent from both closures.
+non-Markdown Elisp source filter;
+`static-e2e-census` owns the existing provision-and-census command; and
+`static-code` owns the remaining shared devtool definitions. TypeScript
+formatting remains in Code. The census leaf retains the existing Playwright
+listing configuration, test/helper/fixture files, including module-load assets,
+and package manifests/lock inputs. Its direct source filter excludes unrelated
+repository sources; its actual closure still includes the existing whole-
+`end2end` `e2ePackage` and compiled `devtoolBin`, so package provisioning and
+tooling changes can invalidate it transitively. This is documented coupling, not
+a claim of full source isolation. The TypeScript split changes neither the
+independently landed Rust formatting boundary nor distinct feature/target/tools
+Clippy commands, and makes no equivalence, permanent deferral or closure claim.
+The independent `xtask-format` leaf verifies xtask Rust formatting with pinned
+Cargo/rustfmt; it is not part of a devtool group. The existing source drift
+probe covers its original boundaries plus `static-elisp` and
+`static-e2e-census`, not `static-typescript`, `rust-format`,
+`static-ert`, or `xtask-format`. The CSR/site source closure contains workspace
+manifests, the resolved `csr` target closure, its required shell inputs, and
+deterministic workspace placeholders. The client wasm-test closure analogously
+contains workspace manifests, the resolved `client` wasm-test target closure,
+and its required inputs/placeholders. `common` and `macros` remain wherever a
+resolved target reaches them; unrelated `server`, `storage`, and host-only
+sources are absent from both closures.
 
 `cargo xtask nix probe-source` creates isolated tracked marker perturbations and
 **evaluates** the flake `.drv` identities without realizing outputs. It fails
 closed unless docs changes affect only `static-docs`; server changes affect
 `static-code` but neither wasm path; web changes affect `static-code` and
-`.#site` but not `wasm-tests`; Elisp-source changes affect `static-elisp` and
+`.#site` but not `wasm-tests`; an end2end lane-catalog perturbation affects
+`static-code` (its formatter population) and `static-e2e-census`;
+Elisp-source changes affect `static-elisp` and
 also change `static-code`'s observed identity through an existing transitive
 input, despite exclusion from its direct Elisp source filter; and `common`,
 `macros`, and the shared performance contract affect `static-code`,
@@ -1821,8 +1830,8 @@ reconciliation, and server-function coverage verification.
   local-store outputs may be reused; request duration is not evidence of current
   formatter execution, and no speedup or narrow-cache claim follows.
 - `checks.x86_64-linux.static-code` — residual non-Clippy shared static
-  definitions outside TypeScript, Rust formatting, standalone ERT and Elisp
-  formatting/byte-compilation (including end-to-end formatting, cargo-deny, and
+  definitions outside TypeScript, Rust formatting, standalone ERT, the census
+  verdict and Elisp formatting/byte-compilation (including end-to-end formatting, cargo-deny, and
   repository scanners), executed with existing offline Cargo homes. It requests
   the narrow Clippy aggregate once; that aggregate depends on six independently
   buildable terminal verdicts and executes no lint itself. The host
@@ -1840,18 +1849,28 @@ reconciliation, and server-function coverage verification.
   input, despite exclusion from its direct source filter. Devtool/tool-lock
   changes may invalidate this leaf through `devtoolBin`. The verdict is
   non-substitutable, but valid local output reuse remains possible.
+- `checks.x86_64-linux.static-e2e-census` — `devtool provision-node-modules`
+  followed by `node end2end/e2eCensusContract.ts`, preserving the existing
+  census population independently of `tsc`. Its direct sources are the
+  non-Markdown `end2end` tree (Playwright config/projects, tests, fixtures,
+  helpers, and module-load assets) plus the census script. The existing
+  `e2ePackage` and compiled `devtoolBin` supply transitive pinned npm/tooling
+  closures, which are broader than the direct census filter and may invalidate
+  the leaf. It is non-substitutable, may reuse a valid local output, and is
+  requested once by hermetic static validation; host `devtool check --all`
+  remains unchanged.
 - `checks.x86_64-linux.static-ert` — `devtool check --group ert`, the standalone
   pure runner over the complete non-Markdown Elisp tree, in a writable copy,
   with existing `emacsForCi`, Git and timezone inputs. The separate combined
   pure/live coverage producer below is unchanged. `validate` builds static
-  leaves in docs/typescript/rust-format/code/elisp/ert/xtask-format order. The
-  ERT leaf is non-substitutable but may reuse a valid local output. Child timing
-  is separate from request duration: host xtask accepts only current captured
-  devtool stderr through one check-parameterized bounded parser. Both tsc and
-  ERT use the same child timing producer. Their Nix requests share current live
-  `internal-json` local-builder activity correlation parameterized by selected
-  derivation and check, verified with Nix 2.34.9: exact selected derivation,
-  active activity-ID-linked child event and matching stop. Reuse or
+  leaves in docs/typescript/rust-format/code/elisp/e2e-census/ert/xtask-format order.
+  The ERT leaf is non-substitutable but may reuse a valid local output. Child
+  timing is separate from request duration: host xtask accepts only current
+  captured devtool stderr through one check-parameterized bounded parser. Both
+  tsc and ERT use the same child timing producer. Their Nix requests share
+  current live `internal-json` local-builder activity correlation parameterized
+  by selected derivation and check, verified with Nix 2.34.9: exact selected
+  derivation, active activity-ID-linked child event and matching stop. Reuse or
   missing/malformed/ambiguous/unsupported evidence leaves execution timing
   unavailable; retained logs are never timing inputs. Request duration and reuse
   classification remain separate.
@@ -1861,8 +1880,9 @@ reconciliation, and server-function coverage verification.
   inputs, plus dependency target placeholders for metadata, not dependency
   implementation sources. It requires neither compiled devtool nor offline Cargo
   homes and never executes xtask. Hermetic validation requires it once alongside
-  `static-docs`, `static-typescript`, `rust-format`, `static-code`, and
-  `static-ert`; host `xtask-fmt` and Fix/index behavior remain unchanged.
+  `static-docs`, `static-typescript`, `rust-format`, `static-code`,
+  `static-e2e-census`, and `static-ert`; host `xtask-fmt` and Fix/index behavior
+  remain unchanged.
 - `checks.x86_64-linux.wasm-tests` — `wasm-bindgen-test` cases executed in
   headless Nix-store Chromium through the matching Nix-store chromedriver. This
   is behavioral pass/fail execution for irreducible browser code, not wasm line
