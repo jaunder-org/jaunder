@@ -2078,9 +2078,8 @@ mod tests {
     use super::{
         BuildCaptureOutcome, BuildCompletion, BuildStderrTee, CandidateBuild, CommandResult,
         FailedBuildDiagnostics, Process, StepResult, build_candidate_lanes,
-        collect_candidate_artifacts,
-        failed_build_after_diagnostics_with, finish_build_with, finish_e2e_combo,
-        lift_elisp_coverage_artifacts, prepare_build_dirs_with, production_lane,
+        collect_candidate_artifacts, failed_build_after_diagnostics_with, finish_build_with,
+        finish_e2e_combo, lift_elisp_coverage_artifacts, prepare_build_dirs_with, production_lane,
         report_build_diagnostic_failure,
     };
     use crate::audit_wasm::{ArtifactMetrics, AuditReport};

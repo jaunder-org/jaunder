@@ -95,7 +95,8 @@ fn check_leaf_process_emits_plain_diagnostic_without_result_artifacts() {
 
 #[test]
 fn consumer_leaves_fail_closed_without_producer_evidence_or_report_artifacts() {
-    for leaf in ["coverage-consume", "elisp-coverage-consume"] {
+    {
+        let leaf = "elisp-coverage-consume";
         let dir = checkout();
         let summary = dir.path().join("github-summary.md");
         let index_before = git(dir.path(), &["write-tree"]).stdout;

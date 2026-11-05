@@ -709,10 +709,14 @@ source-aware line and CRAP policy; that leaf does not orchestrate producers or
 validate producer status. The Nix gate rejects missing, invalid, or non-success
 status before policy runs. A missing, malformed, or empty text report, or a
 report with zero executable lines, is rejected rather than reported green.
-Doctests and the auxiliary `xtask`/`tools` workspaces retain their separate test
-authorities outside this root-workspace nextest population. Existing Rust
-aggregate callers temporarily invoke the internal Just workflows; CI still
-selects its current `ci-validate` lanes until #1889's separate cutover.
+Validation and CI call these clean-gated public workflows. Fix-mode `just check`
+instead uses the existing internal `doctests-workflow`, preserving its
+dirty-tree formatting behavior and full doctest producer/gate population without
+applying public `just doctests` clean-tree admission. Doctests and the auxiliary
+`xtask`/`tools` workspaces retain their separate test authorities outside this
+root-workspace nextest population. The Rust gate aggregates are retired; the
+four `just ci-validate-*` recipes compose the public workflows while preserving
+independent lane verdicts.
 
 Within the host/local gate, health checks are ordered for fast, actionable
 feedback: clean/staged-tree preconditions first, source-format and generated-doc

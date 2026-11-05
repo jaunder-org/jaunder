@@ -98,11 +98,11 @@ fail-closed `unreachable!("msg")` AST spans with the A1 guard, and source-span
 `crap:allow` at the exclusive threshold 30. Output links stay under
 `.xtask/gcroots/{coverage,doctests}` without host copies. Nix never invokes host
 xtask; doctest fence reconciliation remains bidirectional and separate from
-instrumented root-workspace SQLite/PostgreSQL coverage. Existing Rust validation
-callers temporarily invoke the internal Just workflow recipes through
-`sh::step`; the CI lane catalog and job-result verdicts remain in place. Their
-retirement, CI cutover, and superseding ADR work belong to #1889, not this
-workflow boundary.
+instrumented root-workspace SQLite/PostgreSQL coverage. Just owns validation and
+CI composition through the clean-gated public workflows; the Rust gate callers
+and CI catalog are retired. Fix-mode `just check` uses the existing internal
+`doctests-workflow` to retain dirty-tree operation and the same producer and
+hard-gate population. Independent CI job results remain authoritative.
 
 **Performance evidence.** `cargo xtask perf <small|medium|large>` is a
 host-owned orchestration boundary. It gives every measurement a fresh nonce in
@@ -4322,13 +4322,13 @@ The explicit local workflows are:
   before. Other platforms retain host Markdown Verify.
 - **`just validate-no-e2e`** requires a clean tree, then runs Verify host/static
   checks, the platform contract, all nine Nix static checks, `wasm-budget`,
-  auxiliary host tests, wasm tests, coverage producer/gate/host consumer,
-  doctest producer/gate, and Elisp producer/consumer. **`just validate`** adds
-  the currently landed E2E producers and final authoritative flow consumer; it
-  never reruns live ERT. Chromium runs once per backend; each backend's Firefox
-  command owns its three retained lanes and reconciliation. The public
-  `just e2e` and coverage/doctest workflows replace this temporary composition
-  only after #1890/#1891 actually land.
+  auxiliary host tests, wasm tests, public `just coverage` and `just doctests`,
+  and Elisp producer/consumer. **`just validate`** adds the currently landed E2E
+  producers and final authoritative flow consumer; it never reruns live ERT.
+  Chromium runs once per backend; each backend's Firefox command owns its three
+  retained lanes and reconciliation. Landed #1891 owns coverage/doctest
+  composition and hard status gates; the temporary coverage consumer adapter is
+  gone. Only E2E composition awaits #1890's actual landing.
 
 CI invokes four independent recipes: `just ci-validate-host`,
 `just ci-validate-hermetic`, `just ci-validate-test-checks`, and
@@ -4398,8 +4398,10 @@ Just requests hermetic leaves directly with
 `nix build -L --accept-flake-config --out-link .xtask/gcroots/<check> .#checks.x86_64-linux.<check>`.
 Their named output links retain producer evidence as GC roots; failure stops the
 workflow. The Rust `wasm-budget` leaf separately resolves and measures `.#site`.
-Coverage and doctests request both producer and Nix gate; the coverage consumer
-additionally validates completed status and host coverage/CRAP evidence. No
+The public coverage/doctest recipes retain clean-tree admission, producer then
+hard Nix status gate ordering, and output roots. Only after the coverage gate
+succeeds does `coverage-policy --out` consume reports and apply source-aware
+coverage/CRAP policy; it does not validate producer status or invoke Nix. No
 gate-wide report substitutes for producer status. The Elisp producer returns
 `elisp-coverage/{lcov.info,summary.txt,status.json}` for controlled outcomes;
 the existing Rust consumer lifts these diagnostics and reconciles source,

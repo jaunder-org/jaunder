@@ -13,7 +13,8 @@ _clean-tree:
       exit 1
     fi
 
-# Internal transition entrypoints also serve existing dirty-capable Rust callers.
+# Internal implementations; Fix-mode check also uses doctests-workflow without
+# imposing the public doctests clean-tree admission.
 [private]
 coverage-workflow:
     mkdir -p .xtask/gcroots
@@ -32,7 +33,7 @@ doctests-workflow:
 
 check-no-test: (_host "fix" "host") _host-tests
 
-check: check-no-test _product-tests _wasm-tests doctests
+check: check-no-test _product-tests _wasm-tests doctests-workflow
 
 precommit:
     cargo xtask precommit-safety

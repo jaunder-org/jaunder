@@ -15,7 +15,7 @@ impl Workflow {
         .unwrap();
         let bin = root.path().join("bin");
         fs::create_dir(&bin).unwrap();
-        for tool in ["cargo", "nix", "devtool", "prettier"] {
+        for tool in ["cargo", "nix", "devtool", "prettier", "git"] {
             let path = bin.join(tool);
             fs::write(
                 &path,
@@ -24,6 +24,9 @@ set -eu
 name=${0##*/}
 printf '%s\t' "$name" "$@" >> "$FAKE_LOG"
 printf '\n' >> "$FAKE_LOG"
+if [ "$name" = git ] && [ -f dirty-status ]; then
+    printf ' M tracked.rs\n'
+fi
 if [ "$name $*" = "cargo xtask test-local" ]; then
     touch producer-resource
     trap 'rm producer-resource; printf "cleaned\n" >> producer-cleanup' EXIT
@@ -209,14 +212,31 @@ fn static_checks() -> Vec<Vec<String>> {
     .to_vec()
 }
 
+fn public_clean() -> Vec<Vec<String>> {
+    commands(&["git status --porcelain --untracked-files=all"])
+}
+
+fn producer_and_gate(check: &str) -> Vec<Vec<String>> {
+    commands(&[
+        &format!(
+            "nix build --no-update-lock-file --no-write-lock-file -L .#checks.x86_64-linux.{check} --out-link .xtask/gcroots/{check}"
+        ),
+        &format!(
+            "nix build --no-update-lock-file --no-write-lock-file -L .#checks.x86_64-linux.{check}-gate --no-link"
+        ),
+    ])
+}
+
 fn coverage() -> Vec<Vec<String>> {
-    let mut argv = vec![nix("coverage"), nix("coverage-gate")];
-    argv.extend(commands(&["cargo xtask check-leaf coverage-consume"]));
+    let mut argv = producer_and_gate("coverage");
+    argv.extend(commands(&[
+        "cargo xtask coverage-policy --out .xtask/gcroots/coverage",
+    ]));
     argv
 }
 
 fn doctests() -> Vec<Vec<String>> {
-    vec![nix("doctests"), nix("doctests-gate")]
+    producer_and_gate("doctests")
 }
 fn elisp() -> Vec<Vec<String>> {
     let mut argv = vec![nix("elisp-coverage-producer")];
@@ -229,6 +249,31 @@ fn commands(lines: &[&str]) -> Vec<Vec<String>> {
         .iter()
         .map(|line| line.split(' ').map(str::to_owned).collect())
         .collect()
+}
+
+#[test]
+fn dirty_fix_check_keeps_doctest_population_while_public_doctests_refuses_dirty_state() {
+    let workflow = Workflow::new();
+    fs::write(
+        workflow.root.path().join("dirty-status"),
+        "fixture dirty status",
+    )
+    .unwrap();
+
+    let (ok, actual, stderr) = workflow.run(&["check"], "");
+    assert!(ok, "dirty Fix check must reach its doctest gate: {stderr}");
+    assert!(actual.ends_with(&doctests()));
+    assert!(
+        !actual
+            .iter()
+            .any(|argv| argv.first().is_some_and(|name| name == "git"))
+    );
+    assert!(actual.contains(&devtool("fmt", "fix")));
+
+    let (ok, actual, stderr) = workflow.run(&["doctests"], "");
+    assert!(!ok, "public doctests must refuse dirty state");
+    assert_eq!(actual, public_clean(), "no producer work after refusal");
+    assert!(stderr.contains("require a clean checkout"), "{stderr}");
 }
 
 #[test]
@@ -272,6 +317,7 @@ fn validation_and_ci_lanes_preserve_required_populations_and_argument_boundaries
     let mut hermetic = static_checks();
     hermetic.extend(commands(&["cargo xtask check-leaf wasm-budget"]));
     let mut test_checks = vec![nix("wasm-tests")];
+    test_checks.extend(public_clean());
     test_checks.extend(doctests());
     test_checks.extend(elisp());
     for (recipe, mut expected) in [
@@ -284,7 +330,14 @@ fn validation_and_ci_lanes_preserve_required_populations_and_argument_boundaries
         ("ci-validate-test-checks", test_checks),
         ("ci-validate-coverage", coverage()),
     ] {
-        expected.splice(0..0, clean.clone());
+        expected.splice(
+            0..0,
+            if recipe == "ci-validate-coverage" {
+                public_clean()
+            } else {
+                clean.clone()
+            },
+        );
         let (ok, actual, stderr) = workflow.run(&[recipe], "");
         assert!(ok, "{recipe}: {stderr}");
         assert_eq!(actual, expected, "{recipe}");
@@ -301,6 +354,8 @@ fn validation_and_ci_lanes_preserve_required_populations_and_argument_boundaries
     validate.extend(hermetic);
     validate.extend(host_tests());
     validate.push(nix("wasm-tests"));
+    // The public coverage/doctest recipes share one Just clean dependency.
+    validate.extend(public_clean());
     validate.extend(coverage());
     validate.extend(doctests());
     validate.extend(elisp());
