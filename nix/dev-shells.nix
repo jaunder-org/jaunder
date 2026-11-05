@@ -85,6 +85,20 @@ let
       wasm-bindgen-cli
     ];
 
+  # Host-only E2E orchestration shell. Keep this separate from ciInputs:
+  # Cargo is only the external-subcommand dispatcher here; scripts/cargo-xtask
+  # builds its executable with Nix and runs that binary on the host. Guest/test
+  # dependencies are declared by the Nix checks and are intentionally unaffected.
+  ciE2eInputs = [
+    pkgs.cargo
+    xtaskLauncher
+    pkgs.git
+    tracedRunBin
+    pkgs.jq
+    pkgs.openssl
+    pkgs.dav1d
+  ];
+
   # Interactive-only tools that `cargo xtask validate` never invokes and no
   # Nix check pulls (the language servers are the bulk). Kept out of
   # `devShells.ci` so CI does not download/build them.
@@ -185,6 +199,33 @@ in
   # Full interactive shell for local development.
   default = pkgs.mkShell (shellEnv // { buildInputs = ciInputs ++ devOnly; });
 } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+  # Only e2e-chromium and e2e-firefox-lane enter this host shell. Keep the
+  # checkout-bound TMPDIR contract and native library prepend from shellEnv,
+  # but do not inherit validation, browser, IDE-provisioning, or theme tools.
+  ci-e2e = pkgs.mkShell {
+    buildInputs = ciE2eInputs;
+    LC_ALL = "C.UTF-8";
+    TZ = "UTC";
+    TZDIR = "${pkgs.tzdata}/share/zoneinfo";
+    shellHook = ''
+      if ! jaunder_checkout_root="$(git rev-parse --show-toplevel)" || [[ "$jaunder_checkout_root" != /* ]]; then
+        printf 'jaunder: cannot resolve an absolute Git checkout root for TMPDIR\n' >&2
+        exit 1
+      fi
+      jaunder_tmpdir="$jaunder_checkout_root/.xtask/tmp"
+      if ! mkdir -p -- "$jaunder_tmpdir" || ! jaunder_tmp_probe="$(mktemp "$jaunder_tmpdir/.shell-entry.XXXXXXXXXX")"; then
+        printf 'jaunder: cannot create or use TMPDIR %s\n' "$jaunder_tmpdir" >&2
+        exit 1
+      fi
+      if ! rm -- "$jaunder_tmp_probe"; then
+        printf 'jaunder: cannot remove TMPDIR usability probe %s\n' "$jaunder_tmp_probe" >&2
+        exit 1
+      fi
+      export TMPDIR="$jaunder_tmpdir"
+      unset jaunder_checkout_root jaunder_tmpdir jaunder_tmp_probe
+      export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:$LD_LIBRARY_PATH"
+    '';
+  };
   theme-thumbnail = pkgs.mkShell {
     buildInputs = [ themeThumbnailEnvironment ];
     FONTCONFIG_FILE = "${visualFontConfig}";
