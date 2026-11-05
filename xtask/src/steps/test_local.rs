@@ -115,13 +115,7 @@ fn run_with_producer(
     let (env, cache_detail) = compile_cache::cargo_compile_env();
     // Storage and seeding tests need the application worker, not their test
     // harness executable. Build it even when nextest selects only storage.
-    let worker_build = step_with_env(
-        sh,
-        "test-local-image-worker",
-        "cargo",
-        &["build", "--locked", "-p", "jaunder", "--bin", "jaunder"],
-        &env,
-    );
+    let worker_build = build_image_worker(sh, &env, sh.var_os("CFLAGS"));
     let worker_ok = worker_build.ok;
     result.push(worker_build);
     if !worker_ok {
@@ -139,6 +133,23 @@ fn run_with_producer(
         });
     }
     result.push(step);
+}
+
+fn build_image_worker(
+    sh: &Shell,
+    env: &[(String, String)],
+    inherited_cflags: Option<std::ffi::OsString>,
+) -> StepResult {
+    // aws-lc-sys uses CFLAGS presence to scope -U_FORTIFY_SOURCE to its
+    // required -O0 jitterentropy sub-build; preserve inherited flags unchanged.
+    let _cflags = sh.push_env("CFLAGS", inherited_cflags.unwrap_or_default());
+    step_with_env(
+        sh,
+        "test-local-image-worker",
+        "cargo",
+        &["build", "--locked", "-p", "jaunder", "--bin", "jaunder"],
+        env,
+    )
 }
 
 pub fn args_for(nextest_args: &[String]) -> Vec<String> {
@@ -174,6 +185,44 @@ mod tests {
     use super::*;
 
     static ORCHESTRATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    #[cfg(unix)]
+    fn image_worker_build_sets_missing_cflags_empty_and_preserves_existing_value() {
+        use std::os::unix::ffi::OsStringExt;
+        use std::{fs, os::unix::fs::PermissionsExt};
+
+        for (inherited, expected) in [
+            (None, b"".as_slice()),
+            (Some(std::ffi::OsString::new()), b"".as_slice()),
+            (
+                Some("-O2 -fstack-protector".into()),
+                b"-O2 -fstack-protector".as_slice(),
+            ),
+            (
+                Some(std::ffi::OsString::from_vec(vec![0xff, b'x'])),
+                &[0xff, b'x'],
+            ),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let cargo = temp.path().join("cargo");
+            fs::write(
+                &cargo,
+                "#!/bin/sh\nprintf '%s' \"${CFLAGS+x}\" > \"$OBSERVED_PRESENT\"\nprintf '%s' \"$CFLAGS\" > \"$OBSERVED_VALUE\"\n",
+            )
+            .unwrap();
+            fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+            let sh = Shell::new().unwrap();
+            sh.change_dir(temp.path());
+            sh.set_var("PATH", temp.path());
+            sh.set_var("OBSERVED_PRESENT", temp.path().join("present"));
+            sh.set_var("OBSERVED_VALUE", temp.path().join("value"));
+            let result = build_image_worker(&sh, &[], inherited);
+            assert!(result.ok, "{result:?}");
+            assert_eq!(fs::read(temp.path().join("present")).unwrap(), b"x");
+            assert_eq!(fs::read(temp.path().join("value")).unwrap(), expected);
+        }
+    }
 
     #[test]
     #[cfg(unix)]
