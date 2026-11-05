@@ -2038,8 +2038,16 @@ nix build .#checks.x86_64-linux.elisp-coverage-producer
   subsystem. How the wiring is built is in
   [Dependency injection and composition roots](docs/ARCHITECTURE.md#dependency-injection-and-composition-roots).
 - The web framework is Leptos in CSR (client-side-rendering) mode (ADR-0040);
-  the wasm bundle is built by `cargo xtask build-csr` and served by
-  `jaunder serve` (no cargo-leptos).
+  the wasm bundle is built by `just build-csr [debug|release]` (default: debug)
+  and served by `jaunder serve` (no cargo-leptos). Just runs from the selected
+  root-level Justfile's parent, including upward discovery from a nested
+  directory or an absolute `--justfile` without `--working-directory`. The
+  recipe inherits the caller's environment, including `GIT_*`. After a
+  successful locked wasm build, `rm -rf -- target/site` removes the fixed old
+  output, including regular files and dangling final symlinks, before invoking
+  checked-out `tools/devtool`. Final symlink referents are not removed; this is
+  ordinary recursive removal, not a physical-containment guarantee. Invalid
+  profiles fail before build or cleanup, and any failed stage stops the recipe.
 - Leptos components should only render data; business logic belongs in server
   functions or pure transformation functions.
 - API methods are automatically prefixed with `/api`.

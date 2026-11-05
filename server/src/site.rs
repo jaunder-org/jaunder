@@ -554,7 +554,7 @@ mod tests {
     /// surfaces as a 404 no spec asserts, not a build failure.
     ///
     /// **Deliberately unguarded**, unlike the wasm test below. `pkg/` needs
-    /// `cargo xtask build-csr` to exist, so that test guards its assertions;
+    /// `just build-csr` to exist, so that test guards its assertions;
     /// `public/` has no build prerequisite and is always in the tree, so a guard
     /// here would only let the regression pass silently — the one outcome this
     /// test exists to prevent.

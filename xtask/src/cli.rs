@@ -344,15 +344,6 @@ pub enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         nextest_args: Vec<String>,
     },
-    /// Build the CSR wasm bundle on the host (`cargo build -p csr` + the shared
-    /// `devtool csr-bundle` post-processing) — the cargo-leptos-free bundle build
-    /// (#236). Output to `target/site/pkg/`. Debug by default; `--release` matches
-    /// CI's optimized wasm. Host only.
-    BuildCsr {
-        /// Build optimized (release) wasm instead of debug.
-        #[arg(long)]
-        release: bool,
-    },
     /// ADR maintenance.
     #[command(subcommand)]
     Adr(AdrCommand),
@@ -774,7 +765,6 @@ impl Cli {
             Command::E2eExperimental { .. } => "e2e-experimental",
             Command::E2eLocal { .. } => "e2e-local",
             Command::TestLocal { .. } => "test-local",
-            Command::BuildCsr { .. } => "build-csr",
             Command::Adr(AdrCommand::SyncReadme) => "adr-sync-readme",
             Command::Adr(AdrCommand::Promote) => "adr-promote",
             Command::Adr(AdrCommand::Promoter) => "adr-promoter",
@@ -846,6 +836,11 @@ mod tests {
     use super::*;
     use clap::Parser;
     use std::path::PathBuf;
+
+    #[test]
+    fn standalone_csr_build_has_no_xtask_command_alias() {
+        assert!(Cli::try_parse_from(["xtask", "build-csr"]).is_err());
+    }
 
     #[test]
     fn feedback_help_distinguishes_focused_proof_from_boundary_gates() {

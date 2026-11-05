@@ -79,9 +79,9 @@ let
       # `SCCACHE_BASEDIRS` registry at runtime.
       pkgs.sccache
       # `wasm-opt`, run by `devtool csr-bundle` after `wasm-bindgen` (#836).
-      # In `ciInputs` rather than `devOnly` because `cargo xtask build-csr`
-      # invokes it on the host, so the CI shell needs it too.
       pkgs.binaryen
+      # The standalone and host-server CSR build callers share this recipe.
+      pkgs.just
       wasm-bindgen-cli
     ];
 
