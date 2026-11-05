@@ -3523,6 +3523,40 @@ rust-format =
       touch $out
     '');
 xtask-clippy = xtaskBin.rawClippy;
+static-e2e-census =
+  let
+    censusSourceFilter = path: type:
+      let relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
+      in type == "directory"
+        || (pkgs.lib.hasPrefix "end2end/" relative && !(pkgs.lib.hasSuffix ".md" relative));
+    censusSrc = pkgs.lib.cleanSourceWith {
+      src = craneLib.path ../.;
+      filter =
+        assert censusSourceFilter "${toString ../.}/end2end/e2eCensusContract.ts" "regular";
+        assert censusSourceFilter "${toString ../.}/end2end/playwright.config.ts" "regular";
+        assert censusSourceFilter "${toString ../.}/end2end/tests/theme-helpers.ts" "regular";
+        assert censusSourceFilter "${toString ../.}/end2end/tests/fixtures/theme-package/roboto-regular.woff2" "regular";
+        assert censusSourceFilter "${toString ../.}/end2end/package.json" "regular";
+        assert censusSourceFilter "${toString ../.}/end2end/package-lock.json" "regular";
+        assert !(censusSourceFilter "${toString ../.}/end2end/README.md" "regular");
+        assert !(censusSourceFilter "${toString ../.}/server/src/lib.rs" "regular");
+        censusSourceFilter;
+    };
+  in
+  nonSubstitutable (pkgs.runCommand "static-e2e-census"
+    {
+      nativeBuildInputs = [ devtoolBin pkgs.nodejs pkgs.playwright-test ];
+      E2E_TYPES_NODE_MODULES = "${e2ePackage}/node_modules";
+      E2E_PLAYWRIGHT_TEST = "${pkgs.playwright-test}/lib/node_modules/@playwright/test";
+      JAUNDER_E2E_PLAYWRIGHT_CLI = "${pkgs.playwright-test}/lib/node_modules/@playwright/test/cli.js";
+    }
+    ''
+      cp --no-preserve=mode -r ${censusSrc} src
+      cd src
+      devtool provision-node-modules
+      node end2end/e2eCensusContract.ts
+      touch $out
+    '');
 static-code =
   # Force the optional performance surface in the existing static gate so
   # shared VM-wrapper changes cannot silently leave measurement producers stale.
@@ -3609,12 +3643,6 @@ static-code =
       # The server build script now links the host compiler, including native
       # decoding dependencies. Cargo executes it before any output fixup.
       LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ];
-      # The census still needs the complete pinned end2end dependency
-      # environment after tsc moves out.
-
-      E2E_TYPES_NODE_MODULES = "${e2ePackage}/node_modules";
-      E2E_PLAYWRIGHT_TEST = "${pkgs.playwright-test}/lib/node_modules/@playwright/test";
-      JAUNDER_E2E_PLAYWRIGHT_CLI = "${pkgs.playwright-test}/lib/node_modules/@playwright/test/cli.js";
       JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
       JAUNDER_DEVTOOL_TOOLS_CARGO_HOME = "${toolsOfflineCargoHome}";
     }
@@ -3630,9 +3658,6 @@ static-code =
       devtool check no-full-reload --sandbox-cargo
       devtool check cargo-deny --sandbox-cargo
       test -e ${self.checks.${system}.clippy-aggregate}
-      # The census loads Playwright config independently of the TypeScript leaf.
-      devtool provision-node-modules
-      node end2end/e2eCensusContract.ts
       touch $out
     '');
 # Doctests: the one suite nextest structurally cannot run, so the

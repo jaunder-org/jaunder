@@ -33,12 +33,13 @@ pub(crate) enum TestCheck {
 }
 
 const CHECK_SUPPORTING_TEST_CHECKS: [TestCheck; 2] = [TestCheck::Wasm, TestCheck::Doctests];
-const STATIC_CHECKS: [(&str, &str); 8] = [
+const STATIC_CHECKS: [(&str, &str); 9] = [
     ("nix-static-docs", "static-docs"),
     ("nix-static-typescript", "static-typescript"),
     ("nix-rust-format", "rust-format"),
     ("nix-static-code", "static-code"),
     ("nix-static-elisp", "static-elisp"),
+    ("nix-static-e2e-census", "static-e2e-census"),
     ("nix-static-ert", "static-ert"),
     ("nix-xtask-format", "xtask-format"),
     ("nix-xtask-clippy", "xtask-clippy"),
@@ -2293,6 +2294,7 @@ pub(crate) struct SourceProbeDrvPaths {
     pub(crate) static_docs: String,
     pub(crate) static_code: String,
     pub(crate) static_elisp: String,
+    pub(crate) static_e2e_census: String,
     pub(crate) site: String,
     pub(crate) wasm_tests: String,
     pub(crate) xtask: String,
@@ -2312,6 +2314,10 @@ pub(crate) fn eval_source_probe_drvpaths(flake_dir: &Path) -> Result<SourceProbe
         static_elisp: nix_eval_raw(
             Some(flake_dir),
             ".#checks.x86_64-linux.static-elisp.drvPath",
+        )?,
+        static_e2e_census: nix_eval_raw(
+            Some(flake_dir),
+            ".#checks.x86_64-linux.static-e2e-census.drvPath",
         )?,
         site: nix_eval_raw(Some(flake_dir), ".#site.drvPath")?,
         wasm_tests: nix_eval_raw(Some(flake_dir), ".#checks.x86_64-linux.wasm-tests.drvPath")?,
@@ -3028,6 +3034,7 @@ mod tests {
                 ("nix-rust-format", "rust-format"),
                 ("nix-static-code", "static-code"),
                 ("nix-static-elisp", "static-elisp"),
+                ("nix-static-e2e-census", "static-e2e-census"),
                 ("nix-static-ert", "static-ert"),
                 ("nix-xtask-format", "xtask-format"),
                 ("nix-xtask-clippy", "xtask-clippy"),
@@ -3041,41 +3048,49 @@ mod tests {
     }
 
     #[test]
-    fn rust_format_failure_is_a_required_hermetic_consumer_failure() {
+    fn census_failure_is_a_required_hermetic_consumer_failure() {
         let mut result = CommandResult::new("ci-validate-hermetic");
         let mut requests = Vec::new();
         static_checks_with(&mut result, |step, check| {
             requests.push(check.to_string());
-            if check == "rust-format" {
-                StepResult::fail(step).detail("controlled formatter failure")
+            if check == "static-e2e-census" {
+                StepResult::fail(step).detail("controlled census failure")
             } else {
                 StepResult::ok(step)
             }
         });
         assert_eq!(
-            requests,
-            [
-                "static-docs",
-                "static-typescript",
-                "rust-format",
-                "static-code",
-                "static-elisp",
-                "static-ert",
-                "xtask-format",
-                "xtask-clippy"
-            ]
+            requests
+                .iter()
+                .filter(|check| *check == "static-e2e-census")
+                .count(),
+            1
         );
+        assert!(!result.ok);
+        assert_eq!(result.steps[5].name, "nix-static-e2e-census");
+        assert!(!result.steps[5].ok);
+        assert!(
+            result
+                .steps
+                .iter()
+                .enumerate()
+                .all(|(index, step)| index == 5 || step.ok)
+        );
+    }
+
+    #[test]
+    fn rust_format_failure_is_a_required_hermetic_consumer_failure() {
+        let mut result = CommandResult::new("ci-validate-hermetic");
+        static_checks_with(&mut result, |step, check| {
+            if check == "rust-format" {
+                StepResult::fail(step)
+            } else {
+                StepResult::ok(step)
+            }
+        });
         assert!(!result.ok);
         assert_eq!(result.steps[2].name, "nix-rust-format");
         assert!(!result.steps[2].ok);
-        assert!(
-            result.steps[0].ok
-                && result.steps[1].ok
-                && result.steps[3].ok
-                && result.steps[4].ok
-                && result.steps[5].ok
-                && result.steps[6].ok
-        );
     }
 
     #[test]
@@ -3173,15 +3188,16 @@ mod tests {
                 "rust-format",
                 "static-code",
                 "static-elisp",
+                "static-e2e-census",
                 "static-ert",
                 "xtask-format",
                 "xtask-clippy"
             ]
         );
         assert!(!result.ok);
-        assert_eq!(result.steps[7].name, "nix-xtask-clippy");
-        assert!(!result.steps[7].ok);
-        assert!(result.steps[..7].iter().all(|step| step.ok));
+        assert_eq!(result.steps[8].name, "nix-xtask-clippy");
+        assert!(!result.steps[8].ok);
+        assert!(result.steps[..8].iter().all(|step| step.ok));
     }
 
     #[test]

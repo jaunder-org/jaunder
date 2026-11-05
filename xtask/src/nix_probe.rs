@@ -27,6 +27,7 @@ enum Boundary {
     StaticDocs,
     StaticCode,
     StaticElisp,
+    StaticE2eCensus,
     Site,
     WasmTests,
     Xtask,
@@ -36,10 +37,11 @@ enum Boundary {
 }
 
 impl Boundary {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::StaticDocs,
         Self::StaticCode,
         Self::StaticElisp,
+        Self::StaticE2eCensus,
         Self::Site,
         Self::WasmTests,
         Self::Xtask,
@@ -53,6 +55,7 @@ impl Boundary {
             Self::StaticDocs => "static-docs",
             Self::StaticCode => "static-code",
             Self::StaticElisp => "static-elisp",
+            Self::StaticE2eCensus => "static-e2e-census",
             Self::Site => "site",
             Self::WasmTests => "wasm-tests",
             Self::Xtask => "xtask",
@@ -304,7 +307,10 @@ impl Arm {
                     Self::Tooling | Self::ToolLock | Self::QualificationSchema,
                     Boundary::Xtask
                 )
-                | (Self::LaneCatalog, Boundary::StaticCode | Boundary::Xtask)
+                | (
+                    Self::LaneCatalog,
+                    Boundary::StaticCode | Boundary::StaticE2eCensus | Boundary::Xtask
+                )
                 | (
                     Self::Common
                         | Self::Macros
@@ -315,7 +321,7 @@ impl Arm {
                         | Self::BuildConfig
                         | Self::DevtoolSource
                         | Self::ToolsLock,
-                    Boundary::Devtool | Boundary::StaticElisp
+                    Boundary::Devtool | Boundary::StaticElisp | Boundary::StaticE2eCensus
                 )
                 // Docs and site transitively depend on their devtool executables.
                 | (
@@ -340,10 +346,11 @@ impl Arm {
                         | Boundary::StaticElisp
                         | Boundary::Devtool
                         | Boundary::ToolingDependencies
+                        | Boundary::StaticE2eCensus
                 )
                 | (
                     Self::CsrShell | Self::ThemeManifest | Self::Migration,
-                    Boundary::StaticCode | Boundary::StaticElisp | Boundary::Devtool
+                    Boundary::StaticCode | Boundary::StaticElisp | Boundary::Devtool | Boundary::StaticE2eCensus
                 )
                 | (Self::ServerBuildScript, Boundary::StaticCode)
                 // The final bundle includes both the WASM target closure and
@@ -382,6 +389,7 @@ pub struct DrvPaths {
     static_docs: String,
     static_code: String,
     static_elisp: String,
+    static_e2e_census: String,
     site: String,
     wasm_tests: String,
     xtask: String,
@@ -396,6 +404,7 @@ impl DrvPaths {
             Boundary::StaticDocs => &self.static_docs,
             Boundary::StaticCode => &self.static_code,
             Boundary::StaticElisp => &self.static_elisp,
+            Boundary::StaticE2eCensus => &self.static_e2e_census,
             Boundary::Site => &self.site,
             Boundary::WasmTests => &self.wasm_tests,
             Boundary::Xtask => &self.xtask,
@@ -495,6 +504,10 @@ fn eval_paths_with(evaluate: impl FnOnce() -> Result<SourceProbeDrvPaths>) -> Re
         static_docs: parse_drv_path(Boundary::StaticDocs.name(), &paths.static_docs)?,
         static_code: parse_drv_path(Boundary::StaticCode.name(), &paths.static_code)?,
         static_elisp: parse_drv_path(Boundary::StaticElisp.name(), &paths.static_elisp)?,
+        static_e2e_census: parse_drv_path(
+            Boundary::StaticE2eCensus.name(),
+            &paths.static_e2e_census,
+        )?,
         site: parse_drv_path(Boundary::Site.name(), &paths.site)?,
         wasm_tests: parse_drv_path(Boundary::WasmTests.name(), &paths.wasm_tests)?,
         xtask: parse_drv_path(Boundary::Xtask.name(), &paths.xtask)?,
@@ -642,6 +655,7 @@ mod tests {
             static_docs: static_docs.to_owned(),
             static_code: static_code.to_owned(),
             static_elisp: "elisp".to_owned(),
+            static_e2e_census: "census".to_owned(),
             site: site.to_owned(),
             wasm_tests: wasm_tests.to_owned(),
             xtask: "xtask".to_owned(),
@@ -682,6 +696,7 @@ mod tests {
                 changed.xtask = "xtask-2".to_owned();
                 changed.devtool = "devtool-2".to_owned();
                 changed.static_elisp = "elisp-2".to_owned();
+                changed.static_e2e_census = "census-2".to_owned();
             }
             assert_eq!(compare_arm(&base, arm, &changed), Ok(()));
         }
@@ -769,10 +784,14 @@ mod tests {
             ) {
                 changed.devtool = "devtool-2".to_owned();
                 changed.static_elisp = "elisp-2".to_owned();
+                changed.static_e2e_census = "census-2".to_owned();
                 changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
             }
             if matches!(arm, Arm::BuildConfig) {
                 changed.tooling_dependencies = "tooling-dependencies-2".to_owned();
+            }
+            if matches!(arm, Arm::LaneCatalog) {
+                changed.static_e2e_census = "census-2".to_owned();
             }
             assert_eq!(compare_arm(&base, arm, &changed), Ok(()));
             assert!(matches!(
@@ -790,6 +809,7 @@ mod tests {
         changed.static_elisp = "elisp-2".to_owned();
         changed.devtool = "devtool-2".to_owned();
         changed.static_docs = "docs-2".to_owned();
+        changed.static_e2e_census = "census-2".to_owned();
         changed.site = "site-2".to_owned();
         changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
         assert_eq!(compare_arm(&base, Arm::DevtoolSource, &changed), Ok(()));
@@ -826,6 +846,13 @@ mod tests {
                 "static-elisp",
                 DrvPaths {
                     static_elisp: base.static_elisp.clone(),
+                    ..changed.clone()
+                },
+            ),
+            (
+                "static-e2e-census",
+                DrvPaths {
+                    static_e2e_census: base.static_e2e_census.clone(),
                     ..changed.clone()
                 },
             ),
@@ -876,6 +903,7 @@ mod tests {
         changed.static_elisp = "elisp-2".to_owned();
         changed.xtask = "xtask-2".to_owned();
         changed.devtool = "devtool-2".to_owned();
+        changed.static_e2e_census = "census-2".to_owned();
         changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
         assert!(matches!(
             compare_arm(&base, Arm::ToolsLock, &changed),
@@ -974,6 +1002,7 @@ mod tests {
             if arm != Arm::ServerBuildScript {
                 changed.devtool = "devtool-2".to_owned();
                 changed.static_elisp = "elisp-2".to_owned();
+                changed.static_e2e_census = "census-2".to_owned();
                 changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
             }
             if matches!(
@@ -1075,6 +1104,7 @@ mod tests {
         let mut changed = paths("docs-2", "code-2", "site-2", "wasm");
         changed.static_elisp = "elisp-2".to_owned();
         changed.devtool = "devtool-2".to_owned();
+        changed.static_e2e_census = "census-2".to_owned();
         assert_eq!(
             compare_arm(&base, Arm::DevtoolSource, &changed),
             Err(ProbeError::MissingChange {
