@@ -1,3 +1,22 @@
+# Host Cargo compilation shares rustc artifacts across canonical worktree roots.
+# Git discovery failure retains the current root, as in xtask's cache policy.
+export RUSTC_WRAPPER := "sccache"
+export CARGO_INCREMENTAL := "0"
+export SCCACHE_BASEDIRS := ```
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_NAMESPACE
+    {
+      git worktree list --porcelain | while IFS= read -r line; do
+        case "$line" in
+          'worktree '*) root=${line#worktree }; [ ! -d "$root" ] || (cd "$root" && pwd -P) ;;
+        esac
+      done
+      pwd -P
+    } | LC_ALL=C sort -u | paste -sd ':'
+    ```
+
+devtool := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p devtool --bin devtool --"
+prettier := "just --justfile recipes/prettier.just --working-directory ."
+
 # Verify workflows refuse dirty or unavailable Git state before work.
 coverage: _clean-tree coverage-workflow
 
@@ -67,8 +86,8 @@ ci-validate-coverage: coverage
 
 [private]
 _markdown mode:
-    devtool check prettier-markdown {{if mode == "fix" { "--fix" } else { "" }}}
-    devtool check prettier-end2end {{if mode == "fix" { "--fix" } else { "" }}}
+    {{prettier}} prettier-markdown {{mode}}
+    {{prettier}} prettier-end2end {{mode}}
 
 [private]
 _docs-shape:
@@ -81,15 +100,15 @@ _docs-shape:
 
 [private]
 _host mode docs:
-    devtool check fmt {{if mode == "fix" { "--fix" } else { "" }}}
-    devtool check leptosfmt {{if mode == "fix" { "--fix" } else { "" }}}
-    {{if docs + "-" + os() + "-" + arch() == "prepush-linux-x86_64" { "cargo xtask check-leaf prepush-docs" } else { "devtool check prettier-markdown" + if mode == "fix" { " --fix" } else { "" } }}}
-    devtool check prettier-end2end {{if mode == "fix" { "--fix" } else { "" }}}
-    devtool check prettier-css {{if mode == "fix" { "--fix" } else { "" }}}
-    devtool check elisp-fmt {{if mode == "fix" { "--fix" } else { "" }}}
-    devtool check tools-fmt {{if mode == "fix" { "--fix" } else { "" }}}
-    devtool check ast-grep-tests {{if mode == "fix" { "--fix" } else { "" }}}
-    devtool check no-full-reload {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check fmt {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check leptosfmt {{if mode == "fix" { "--fix" } else { "" }}}
+    {{if docs + "-" + os() + "-" + arch() == "prepush-linux-x86_64" { "cargo xtask check-leaf prepush-docs" } else { prettier + " prettier-markdown " + mode }}}
+    {{prettier}} prettier-end2end {{mode}}
+    {{prettier}} prettier-css {{mode}}
+    {{devtool}} check elisp-fmt {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check tools-fmt {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check ast-grep-tests {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check no-full-reload {{if mode == "fix" { "--fix" } else { "" }}}
     cargo fmt --manifest-path xtask/Cargo.toml {{if mode == "fix" { "" } else { "--check" }}}
     just _docs-shape
     cargo xtask check-leaf test-patterns
@@ -115,17 +134,17 @@ _host mode docs:
     cargo xtask check-leaf html-sink
     cargo xtask check-leaf e2e-scaffold
     cargo xtask check-leaf xlang-literal
-    devtool check byte-compile {{if mode == "fix" { "--fix" } else { "" }}}
-    devtool check tsc {{if mode == "fix" { "--fix" } else { "" }}}
-    devtool check cargo-deny {{if mode == "fix" { "--fix" } else { "" }}}
-    devtool check product-core-clippy {{if mode == "fix" { "--fix" } else { "" }}}
-    devtool check web-server-clippy {{if mode == "fix" { "--fix" } else { "" }}}
-    devtool check web-no-server-clippy {{if mode == "fix" { "--fix" } else { "" }}}
-    devtool check client-host-clippy {{if mode == "fix" { "--fix" } else { "" }}}
-    devtool check wasm-clippy {{if mode == "fix" { "--fix" } else { "" }}}
-    devtool check tools-clippy {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check byte-compile {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check tsc {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check cargo-deny {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check product-core-clippy {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check web-server-clippy {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check web-no-server-clippy {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check client-host-clippy {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check wasm-clippy {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check tools-clippy {{if mode == "fix" { "--fix" } else { "" }}}
     cargo clippy --manifest-path xtask/Cargo.toml --all-targets -- -D warnings
-    devtool check ert {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check ert {{if mode == "fix" { "--fix" } else { "" }}}
 
 [private]
 _host-tests:

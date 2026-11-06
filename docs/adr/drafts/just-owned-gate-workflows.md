@@ -73,8 +73,13 @@ no permanent compatibility forwarding layer.
 
 As the approved #1887 component, the three Prettier command definitions for
 Markdown, `end2end`, and CSS move to the shared Just definitions; the exclusive
-docs-only `docsDevtoolBin` build/source pipeline and consumer are removed. Other
-`devtool` command definitions, including compiling checks, ast-grep, and Leptos
+docs-only `docsDevtoolBin` build/source pipeline and consumer are removed. Host
+composition calls those recipes directly, with no devtool Prettier selectors or
+docs group. The remaining host devtool checks use locked Cargo execution from
+the checkout, not a potentially older PATH executable. Just exports the existing
+host compile-cache policy for Cargo compilation, including canonical
+worktree-based `SCCACHE_BASEDIRS`, without resource overrides. Other `devtool`
+command definitions, including compiling checks, ast-grep, and Leptos
 formatting, remain with `devtool`.
 
 The approved CI lane topology and required aggregates remain. E2E retains

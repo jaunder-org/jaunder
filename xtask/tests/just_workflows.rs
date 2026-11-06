@@ -13,6 +13,12 @@ impl Workflow {
             root.path().join("Justfile"),
         )
         .unwrap();
+        fs::create_dir(root.path().join("recipes")).unwrap();
+        fs::copy(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../recipes/prettier.just"),
+            root.path().join("recipes/prettier.just"),
+        )
+        .unwrap();
         let bin = root.path().join("bin");
         fs::create_dir(&bin).unwrap();
         for tool in ["cargo", "nix", "devtool", "prettier", "git"] {
@@ -22,6 +28,13 @@ impl Workflow {
                 r#"#!/bin/sh
 set -eu
 name=${0##*/}
+if [ "$name $*" = 'git worktree list --porcelain' ]; then
+    printf 'worktree %s\n\nworktree %s/.\n\nworktree %s/cache-link\n' "$PWD" "$PWD" "$PWD"
+    exit 0
+fi
+if [ "$name" = cargo ]; then
+    printf '%s\n' "$RUSTC_WRAPPER" "$CARGO_INCREMENTAL" "$SCCACHE_BASEDIRS" > cache-env
+fi
 printf '%s\t' "$name" "$@" >> "$FAKE_LOG"
 printf '\n' >> "$FAKE_LOG"
 if [ "$name" = git ]; then
@@ -61,6 +74,7 @@ if [ "$name $*" = "${FAIL_COMMAND:-}" ]; then exit 17; fi
                 ),
             )
             .env("FAKE_LOG", &log)
+            .env("CARGO_TARGET_DIR", self.root.path().join("target"))
             // Exercise hook-style inherited overrides without touching real Git.
             .env("GIT_DIR", "foreign-git-dir")
             .env("GIT_WORK_TREE", "foreign-work-tree")
@@ -173,7 +187,25 @@ fn broad(mode: &str, shared_docs: bool) -> Vec<Vec<String>> {
 }
 
 fn devtool(name: &str, mode: &str) -> Vec<String> {
-    let mut argv = vec!["devtool".into(), "check".into(), name.into()];
+    if let Some(population) = name.strip_prefix("prettier-") {
+        return vec![
+            "prettier".into(),
+            if mode == "fix" { "-w" } else { "--check" }.into(),
+            match population {
+                "markdown" => "**/*.md",
+                "end2end" => "end2end",
+                "css" => "**/*.css",
+                _ => panic!("unexpected Prettier population"),
+            }
+            .into(),
+        ];
+    }
+    let mut argv = commands(&[
+        "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p devtool --bin devtool -- check",
+    ])
+    .pop()
+    .unwrap();
+    argv.push(name.into());
     if mode == "fix" {
         argv.push("--fix".into());
     }
@@ -576,6 +608,63 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
 }
 
 #[test]
+fn cargo_recipes_preserve_cache_environment_and_normalize_worktree_roots() {
+    let workflow = Workflow::new();
+    std::os::unix::fs::symlink(
+        workflow.root.path(),
+        workflow.root.path().join("cache-link"),
+    )
+    .unwrap();
+    for recipe in ["_host-tests", "check-no-test"] {
+        let (ok, _, stderr) = workflow.run(&[recipe], "");
+        assert!(ok, "{stderr}");
+        assert_eq!(
+            fs::read_to_string(workflow.root.path().join("cache-env")).unwrap(),
+            format!(
+                "sccache\n0\n{}\n",
+                workflow.root.path().canonicalize().unwrap().display()
+            )
+        );
+    }
+}
+
+#[test]
+fn host_devtool_launch_reflects_source_edits_without_shell_reentry() {
+    let workflow = Workflow::new();
+    // Use real Cargo on a tiny checkout-local devtool, not the PATH devtool stub.
+    fs::remove_file(workflow.root.path().join("bin/cargo")).unwrap();
+    let tools = workflow.root.path().join("tools");
+    fs::create_dir_all(tools.join("src")).unwrap();
+    fs::write(
+        tools.join("Cargo.toml"),
+        "[package]\nname = \"devtool\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    // A dependency-free lockfile permits the exact --locked host launch.
+    fs::write(
+        tools.join("Cargo.lock"),
+        "version = 4\n[[package]]\nname = \"devtool\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    for version in ["first", "edited"] {
+        fs::write(
+            tools.join("src/main.rs"),
+            format!(
+                "fn main() {{ std::fs::write(\"source-version\", \"{version}\").unwrap(); std::process::exit(17); }}"
+            ),
+        )
+        .unwrap();
+        let (ok, _, stderr) = workflow.run(&["_host", "verify", "host"], "");
+        assert!(!ok, "fixture must stop at its first devtool check");
+        assert!(stderr.contains("17"), "{stderr}");
+        assert_eq!(
+            fs::read_to_string(workflow.root.path().join("source-version")).unwrap(),
+            version
+        );
+    }
+}
+
+#[test]
 fn markdown_host_runs_the_complete_narrow_fix_surface_in_order() {
     let workflow = Workflow::new();
     let (ok, actual, stderr) = workflow.run(&["precommit-markdown-host"], "");
@@ -583,8 +672,8 @@ fn markdown_host_runs_the_complete_narrow_fix_surface_in_order() {
     assert_eq!(
         actual,
         commands(&[
-            "devtool check prettier-markdown --fix",
-            "devtool check prettier-end2end --fix",
+            "prettier -w **/*.md",
+            "prettier -w end2end",
             "cargo xtask check-leaf sequence-check",
             "cargo xtask check-leaf adr-format",
             "cargo xtask check-leaf adr-readme-parity",

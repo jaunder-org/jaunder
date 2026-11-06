@@ -1,5 +1,4 @@
-//! The migrated static checks. Prettier dispatches to shared Just recipes;
-//! the other checks define their tool + args here:
+//! Static checks other than Prettier define their tool + args here:
 //! the host verify ladder runs each check via `cargo run -p devtool -- check
 //! <name>` (so a local `tools/` edit is reflected). Nix calls the Prettier
 //! recipes directly and uses prebuilt devtool inputs for the other checks.
@@ -18,8 +17,6 @@ mod leptosfmt;
 /// A stable, closed partition of devtool's static check inventory.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
 pub enum CheckGroup {
-    /// Markdown formatting only.
-    Docs,
     /// The TypeScript type check.
     #[value(name = "typescript")]
     TypeScript,
@@ -34,13 +31,10 @@ pub enum CheckGroup {
 impl CheckGroup {
     fn names(self) -> &'static [&'static str] {
         match self {
-            Self::Docs => &["prettier-markdown"],
             Self::TypeScript => &["tsc"],
             Self::Ert => &["ert"],
             Self::RustFormat => &["fmt", "leptosfmt", "tools-fmt"],
             Self::Code => &[
-                "prettier-end2end",
-                "prettier-css",
                 "elisp-fmt",
                 "ast-grep-tests",
                 "no-full-reload",
@@ -64,9 +58,6 @@ fn all_names() -> Vec<&'static str> {
     vec![
         "fmt",
         "leptosfmt",
-        "prettier-markdown",
-        "prettier-end2end",
-        "prettier-css",
         "elisp-fmt",
         "tools-fmt",
         "ast-grep-tests",
@@ -208,9 +199,8 @@ impl CheckSpec {
     }
 }
 
-/// Pure: the command spec for `name` in the given mode. `fix` makes the seven
-/// formatters (`fmt`, `leptosfmt`, `prettier-markdown`, `prettier-end2end`,
-/// `prettier-css`, `elisp-fmt`, `tools-fmt`) mutate in place;
+/// Pure: the command spec for `name` in the given mode. `fix` makes the four
+/// formatters (`fmt`, `leptosfmt`, `elisp-fmt`, `tools-fmt`) mutate in place;
 /// `ert`/`tsc`/`byte-compile`/
 /// `ast-grep-tests`/`no-full-reload` have no autofix and ignore it.
 fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
@@ -239,17 +229,6 @@ fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
                     "-x", ".direnv", "-x", ".git", "-x", "target", "--check", "web/src", "csr/src",
                 ])
             },
-        },
-        "prettier-markdown" | "prettier-end2end" | "prettier-css" => CheckSpec::External {
-            program: "just",
-            args: owned(&[
-                "--justfile",
-                "recipes/prettier.just",
-                "--working-directory",
-                ".",
-                name,
-                if fix { "fix" } else { "verify" },
-            ]),
         },
         "tsc" => CheckSpec::External {
             program: "tsc",
@@ -682,21 +661,6 @@ mod tests {
     fn fmt_check_vs_fix() {
         assert_eq!(build_host("fmt", false).args, vec!["fmt", "--check"]);
         assert_eq!(build_host("fmt", true).args, vec!["fmt"]);
-    }
-
-    #[test]
-    fn prettier_commands_dispatch_to_shared_recipes() {
-        for name in ["prettier-markdown", "prettier-end2end", "prettier-css"] {
-            let verify = build_host(name, false);
-            assert_eq!(verify.program, "just");
-            assert_eq!(
-                verify.args.join(" "),
-                format!("--justfile recipes/prettier.just --working-directory . {name} verify")
-            );
-            let mut fix = verify;
-            *fix.args.last_mut().unwrap() = "fix".into();
-            assert_eq!(build_host(name, true), fix);
-        }
     }
 
     #[test]
@@ -1256,7 +1220,6 @@ mod tests {
 
     #[test]
     fn groups_are_an_ordered_disjoint_complete_partition() {
-        assert_eq!(CheckGroup::Docs.names(), ["prettier-markdown"]);
         assert_eq!(CheckGroup::TypeScript.names(), ["tsc"]);
         assert_eq!(
             selected_names(None, Some(CheckGroup::TypeScript), false).unwrap(),
@@ -1268,7 +1231,6 @@ mod tests {
         );
         let mut partition = Vec::new();
         for group in [
-            CheckGroup::Docs,
             CheckGroup::TypeScript,
             CheckGroup::RustFormat,
             CheckGroup::Code,
@@ -1285,8 +1247,6 @@ mod tests {
         assert_eq!(
             CheckGroup::Code.names(),
             [
-                "prettier-end2end",
-                "prettier-css",
                 "elisp-fmt",
                 "ast-grep-tests",
                 "no-full-reload",
@@ -1305,9 +1265,6 @@ mod tests {
             [
                 "fmt",
                 "leptosfmt",
-                "prettier-markdown",
-                "prettier-end2end",
-                "prettier-css",
                 "elisp-fmt",
                 "tools-fmt",
                 "ast-grep-tests",
@@ -1323,10 +1280,6 @@ mod tests {
                 "tools-clippy",
                 "ert",
             ]
-        );
-        assert_eq!(
-            selected_names(None, Some(CheckGroup::Docs), false).unwrap(),
-            CheckGroup::Docs.names().to_vec()
         );
         assert_eq!(selected_names(None, None, true).unwrap(), all_names());
         let selected = all_names();

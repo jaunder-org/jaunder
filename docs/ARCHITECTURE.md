@@ -4438,7 +4438,10 @@ checks (`byte-compile`, `tsc`, `cargo-deny`, `product-core-clippy`,
 `wasm-clippy`, `tools-clippy`, `xtask-clippy`), then the `ert` runtime check.
 Between source consistency and compilation, Just invokes the existing
 repository-shape checks in their established order. The same private host recipe
-serves Fix and Verify workflows.
+serves Fix and Verify workflows. It calls the shared Prettier recipes directly
+and launches the other devtool checks with locked Cargo from the checkout. Just
+exports `RUSTC_WRAPPER=sccache`, `CARGO_INCREMENTAL=0`, and canonical worktree
+roots in `SCCACHE_BASEDIRS` for host Cargo compilation.
 
 The host _step_ above runs the listed sub-steps through host-local lanes. The
 hermetic shared static surface has `static-docs` running the shared
@@ -4889,19 +4892,20 @@ interface; devtool has no `run` subcommand or runner dependency.
   context propagates independently, preserving one root for nested launches
   without stale-skipping later independent invocations. See
   [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md).
-- **`devtool check <name> | --group <docs|typescript|rust-format|code|ert> | --all [--fix] [--sandbox-cargo]`**
+- **`devtool check <name> | --group <typescript|rust-format|code|ert> | --all [--fix] [--sandbox-cargo]`**
   is the single command-definition surface for the migrated static checks
-  (`fmt`, `leptosfmt`, `prettier-markdown`, `prettier-end2end`, `prettier-css`,
-  `tsc`, `elisp-fmt`, `ert`, `byte-compile`, `cargo-deny`,
+  (`fmt`, `leptosfmt`, `tsc`, `elisp-fmt`, `ert`, `byte-compile`, `cargo-deny`,
   `product-core-clippy`, `web-server-clippy`, `web-no-server-clippy`,
   `client-host-clippy`, wasm-target `wasm-clippy`, `tools-fmt`, tools workspace
   `tools-clippy`, and ast-grep `ast-grep-tests` plus the `no-full-reload`
   repository scan — `tools/devtool/src/check.rs`). The host verify ladder
   delegates each relevant definition through its static-check mechanism,
   preserving host-local Cargo artifacts and sccache for Rust-compiling checks.
-  Nix `static-docs`, `static-typescript`, `rust-format`, `static-code`,
-  `static-elisp`, and `static-ert` run docs, named `tsc`, Rust-format, residual
-  code, Elisp formatting/byte-compilation, and ERT populations respectively.
+  Prettier is outside this inventory: host Just and Nix call the shared
+  `recipes/prettier.just` definitions directly. Nix `static-docs` runs Markdown;
+  `static-typescript`, `rust-format`, `static-code`, `static-elisp`, and
+  `static-ert` run named `tsc`, Rust-format, residual code (including end-to-end
+  and CSS Prettier), Elisp formatting/byte-compilation, and ERT respectively.
   Static-code requests the six-leaf Clippy aggregate once; its own derivation
   does not rerun those lints. Code retains workspace-specific offline Cargo
   homes; Cargo-deny uses full `cargo deny check` on host and skips `advisories`

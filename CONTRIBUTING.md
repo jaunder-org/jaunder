@@ -219,6 +219,17 @@ formatter-config input population; afterward it verifies Git state stayed
 unchanged. Other checks retain their order, and other platforms keep host
 Markdown Verify. Bypass with `SKIP_PRE_PUSH=1 git push` for WIP.
 
+Host Just recipes launch static `devtool` checks from the current checkout with
+`cargo run --locked --quiet --manifest-path tools/Cargo.toml -p devtool --bin devtool --`,
+not the shell's prebuilt `devtool`. Source edits therefore take effect without
+re-entering the shell. Prettier is composed directly from
+`recipes/prettier.just` in both host and hermetic callers. Just exports the host
+Cargo compile-cache policy (`RUSTC_WRAPPER=sccache`, `CARGO_INCREMENTAL=0`, and
+sorted, canonical Git worktree roots in `SCCACHE_BASEDIRS`, including the
+current root). Discovery failure retains the current root and Git's diagnostic.
+This environment reaches the devtool bootstrap and its compiling children as
+well as direct Cargo recipes; it adds no resource limits.
+
 All Just gate workflows fail fast: the first failed required command stops later
 ordinary checks. Prepush's clean-tree refusal remains its first boundary.
 Precommit still performs its after-snapshot and conservative staging
@@ -1781,10 +1792,11 @@ server-function coverage verification to `just validate-no-e2e`.
   formatting, cargo-deny, and repository scanners), executed with existing
   offline Cargo homes. It requests the narrow Clippy aggregate once; that
   aggregate depends on six independently buildable terminal verdicts and
-  executes no lint itself. The host `devtool check --all` is the ordered,
-  duplicate-free union of `docs`, `typescript`, `rust-format`, `code`, and
-  `ert`, including the six Clippy units in the code group. Host xtask runs its
-  separate host-only `xtask-clippy` step.
+  executes no lint itself. `devtool check --all` is the ordered, duplicate-free
+  union of `typescript`, `rust-format`, `code`, and `ert`, including the six
+  Clippy units in the code group; Prettier is outside this inventory and called
+  directly by Just/Nix. Just also runs the separate host-only `xtask-clippy`
+  step.
 - `checks.x86_64-linux.static-elisp` — the existing `devtool check elisp-fmt`
   verify command followed by `devtool check byte-compile`, over the complete
   non-Markdown Elisp source tree in a writable copy. Direct inputs include that
