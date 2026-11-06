@@ -264,6 +264,7 @@ convention). See the Status column below for each ADR's current status.
 | [0233](adr/0233-sqlx-query-log-diagnostics.md)                           | Retain SQLx query diagnostics in native logs                                                                 | accepted   |
 | [0234](adr/0234-supported-nix-platform-and-browser-boundaries.md)        | Supported Nix Platform and Browser Boundaries                                                                | accepted   |
 | [0235](adr/0235-unified-theme-and-application-assets.md)                 | Unify bundled themes and application styling asset delivery                                                  | accepted   |
+| [0236](adr/0236-csr-vite-content-addressed-assets.md)                    | Vite owns CSR asset output and build inventory                                                               | accepted   |
 
 <!-- adr-table:end -->
 
