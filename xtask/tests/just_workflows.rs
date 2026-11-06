@@ -637,7 +637,7 @@ fn host_devtool_launch_reflects_source_edits_without_shell_reentry() {
     fs::create_dir_all(tools.join("src")).unwrap();
     fs::write(
         tools.join("Cargo.toml"),
-        "[package]\nname = \"devtool\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        "[package]\nname = \"devtool\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n",
     )
     .unwrap();
     // A dependency-free lockfile permits the exact --locked host launch.
