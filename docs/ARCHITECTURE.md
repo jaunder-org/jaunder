@@ -1973,14 +1973,14 @@ URL connect Vite output to these runtime contracts; the build manifest itself is
 not served.
 
 The WASM artifact carries a hard budget
-([ADR-0106](adr/0106-wasm-raw-size-budget.md)): `just validate` resolves the Vite
-manifest's `csr_bg.wasm` source mapping to its emitted `.wasm` file and fails
-when its **raw** byte count exceeds `WASM_RAW_CEILING_BYTES` (5,000,000 bytes:
-decimal 5 MB, not 5 MiB, in `xtask/src/wasm_budget.rs`). Raw, not compressed,
-because the artifact is a compiler input rather than a download. The #1750
-amendment accepts additional feature headroom while preserving the historical
-4,009,656-byte achieved baseline for drift reporting. The historical weaker
-optimisation-level sizes now fit, so this size ceiling does not guarantee
+([ADR-0106](adr/0106-wasm-raw-size-budget.md)): `just validate` resolves the
+Vite manifest's `csr_bg.wasm` source mapping to its emitted `.wasm` file and
+fails when its **raw** byte count exceeds `WASM_RAW_CEILING_BYTES` (5,000,000
+bytes: decimal 5 MB, not 5 MiB, in `xtask/src/wasm_budget.rs`). Raw, not
+compressed, because the artifact is a compiler input rather than a download. The
+#1750 amendment accepts additional feature headroom while preserving the
+historical 4,009,656-byte achieved baseline for drift reporting. The historical
+weaker optimisation-level sizes now fit, so this size ceiling does not guarantee
 detection of an optimisation downgrade; production still uses `wasm-opt -Oz`.
 Unit tests enforce the inclusive limit and failure one byte above it. The higher
 ceiling is not evidence of measured or benign startup/download impact.
