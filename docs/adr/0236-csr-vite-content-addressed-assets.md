@@ -1,6 +1,6 @@
-# ADR-DRAFT: Vite owns CSR asset output and build inventory
+# ADR-0236: Vite owns CSR asset output and build inventory
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-04
 - Issue: [#1884](https://github.com/jaunder-org/jaunder/issues/1884)
 

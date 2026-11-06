@@ -1960,7 +1960,7 @@ independent system-artifact inventory. The ordinary native manifest is
 build-only and supplies output membership to actual consumers without a parallel
 role schema or custom graph/hash machinery. Content-sensitive names support
 cache invalidation but are not a cryptographic integrity promise
-([proposed Vite asset-output decision](adr/drafts/csr-vite-content-addressed-assets.md)).
+([proposed Vite asset-output decision](adr/0236-csr-vite-content-addressed-assets.md)).
 
 The server embeds the rendered SPA shell and falls back to it for anything the
 projector and static routes do not claim, keeping ADR-0003/ADR-0008's single
@@ -2837,7 +2837,7 @@ on timeout. No administration secret or network control channel exists
   ADR-0175's former producer schema and graph/hash rules are no longer the
   producer contract; the proposed Vite decision records this reconciliation and
   remains in draft status
-  ([proposed Vite asset-output decision](adr/drafts/csr-vite-content-addressed-assets.md)).
+  ([proposed Vite asset-output decision](adr/0236-csr-vite-content-addressed-assets.md)).
 
 [ADR-0003](adr/0003-asset-management.md) establishes single-binary asset
 provisioning. System and custom styling share persistent content eligibility;
