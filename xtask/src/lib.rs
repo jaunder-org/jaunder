@@ -103,7 +103,7 @@ pub use host_tooling::prepare_checkout;
 pub use lifecycle::ensure_hooks_installed;
 pub use result::{CommandResult, StepResult};
 
-/// Run one Rust check leaf through the plain process-status boundary Just uses.
+/// Run one check/safety adapter through the plain process-status boundary Just uses.
 pub fn run_check_leaf_process(name: &str) -> Result<StepResult, String> {
     prepare_checkout().map_err(|error| format!("{error:#}"))?;
     ensure_hooks_installed();

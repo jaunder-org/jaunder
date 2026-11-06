@@ -4256,15 +4256,29 @@ boundary.
 #### Just-owned gate workflows
 
 The root `Justfile` owns developer, hook, local-validation and CI-lane workflow
-composition. Direct tools and existing producer APIs perform the work; Rust-only
-algorithms use `cargo xtask check-leaf <name>`. The Rust gate catalogs, phases,
-execution-policy switches and old cargo workflow aliases are removed, not
-forwarded. Just dependencies own success ordering and fail-fast process status;
-there is no gate-wide JSON/last-result contract. Unrelated xtask commands retain
-their own result contracts. `recipes/prettier.just` owns the three shared
-Markdown, `end2end`, and CSS command definitions; the exclusive docsDevtoolBin
-pipeline is gone. Other devtool checks remain devtool-owned. See the
+composition. Direct tools and existing producer APIs perform the work;
+`cargo xtask check-leaf <name>` exposes existing checks and safety/consumer
+adapters. This is not a blanket Rust-necessity or permanent-ownership claim. The
+Rust gate catalogs, phases, execution-policy switches and old cargo workflow
+aliases are removed, not forwarded. Just dependencies own success ordering and
+fail-fast process status; there is no gate-wide JSON/last-result contract.
+Unrelated xtask commands retain their own result contracts.
+`recipes/prettier.just` owns the three shared Markdown, `end2end`, and CSS
+command definitions; the exclusive docsDevtoolBin pipeline is gone. Other
+devtool checks remain devtool-owned. See the
 [Just-owned gate workflow decision](adr/drafts/just-owned-gate-workflows.md).
+
+The remaining callable boundary mixes substantive parsers/censuses (including
+Rust and TypeScript AST analysis), small textual/ADR policies, Git/index safety,
+and execution/consumer adapters. The shared `CommandResult` signatures are
+retained compatibility inside that boundary, not workflow reporting or proof of
+algorithmic necessity. Workspace/auxiliary doctest execution and Elisp artifact
+lifting remain residual choreography around real reconciliation/consumer logic;
+small policy extraction has no automatically assigned owner. `server-fn-flow` is
+a separate temporary output-resolution bridge to authoritative trace/snapshot
+verification, with #1890 as its actual E2E migration boundary. The verifier must
+survive bridge retirement. These bounded deletions do not extract the remaining
+checks from the omnibus host executable.
 
 The explicit local workflows are:
 
@@ -4360,16 +4374,17 @@ Enforcement is git-native ([ADR-0029](adr/0029-git-enforced-verify-gate.md)).
 owns its locked, standalone Cargo build, so launcher realization cannot rewrite
 `xtask/Cargo.lock` before the precommit snapshot. Git/index reconciliation lives
 in Rust rather than the shell hook. `.githooks/pre-push` calls `just prepush`.
-Verify workflows begin with `clean-tree` and refuse a dirty tree before
-expensive work (`xtask/src/lifecycle.rs`: `clean_tree_precheck`). There is no
-Just `--allow-dirty` option; `SKIP_PRE_PUSH=1` remains a deliberate hook escape.
-The hook proves the fast local lane ran on the committed tip with no uncommitted
-files hiding; CI remains the non-bypassable hermetic authority; prepush's shared
-`static-docs` leaf is the deliberate x86_64-linux exception to its otherwise
-host-only gate. Every `cargo xtask` run self-heals `core.hooksPath` to the
-tracked, relative `.githooks` (`xtask/src/git.rs`: `ensure_hooks_path`).
-`SKIP_PRE_COMMIT=1` / `SKIP_PRE_PUSH=1` are deliberate local escapes; CI is the
-non-bypassable authority.
+Verify workflows share Just's direct `_clean-tree` Git-status admission and
+refuse dirty or unavailable state before expensive work. That simple check is
+not raw/index docs admission or precommit reconciliation, which remain in Rust.
+There is no Just `--allow-dirty` option; `SKIP_PRE_PUSH=1` remains a deliberate
+hook escape. The hook proves the fast local lane ran on the committed tip with
+no uncommitted files hiding; CI remains the non-bypassable hermetic authority;
+prepush's shared `static-docs` leaf is the deliberate x86_64-linux exception to
+its otherwise host-only gate. Every `cargo xtask` run self-heals
+`core.hooksPath` to the tracked, relative `.githooks` (`xtask/src/git.rs`:
+`ensure_hooks_path`). `SKIP_PRE_COMMIT=1` / `SKIP_PRE_PUSH=1` are deliberate
+local escapes; CI is the non-bypassable authority.
 
 #### Prepush parity by failure surface
 
@@ -4397,12 +4412,15 @@ shrink it. Only the Nix path establishes the pinned sandbox/offline verdict.
 Just requests hermetic leaves directly with
 `nix build -L --accept-flake-config --out-link .xtask/gcroots/<check> .#checks.x86_64-linux.<check>`.
 Their named output links retain producer evidence as GC roots; failure stops the
-workflow. The Rust `wasm-budget` leaf separately resolves and measures `.#site`.
-The public coverage/doctest recipes retain clean-tree admission, producer then
-hard Nix status gate ordering, and output roots. Only after the coverage gate
-succeeds does `coverage-policy --out` consume reports and apply source-aware
-coverage/CRAP policy; it does not validate producer status or invoke Nix. No
-gate-wide report substitutes for producer status. The Elisp producer returns
+workflow. The `wasm-budget` adapter resolves `.#csrBundle`, preserves manifest,
+generated-shell and name-section verification, and applies the raw-size budget.
+It no longer observes unrelated `.#site` realization or constructs discarded
+Nix/phase/audit report metadata. The public coverage/doctest recipes retain
+clean-tree admission, producer then hard Nix status gate ordering, and output
+roots. Only after the coverage gate succeeds does `coverage-policy --out`
+consume reports and apply source-aware coverage/CRAP policy; it does not
+validate producer status or invoke Nix. No gate-wide report substitutes for
+producer status. The Elisp producer returns
 `elisp-coverage/{lcov.info,summary.txt,status.json}` for controlled outcomes;
 the existing Rust consumer lifts these diagnostics and reconciles source,
 census, LCOV and same-line ignore markers. Uncontrolled Nix/VM failures remain
@@ -4418,8 +4436,8 @@ The host recipe runs source consistency (`fmt`, `leptosfmt`,
 checks (`byte-compile`, `tsc`, `cargo-deny`, `product-core-clippy`,
 `web-server-clippy`, `web-no-server-clippy`, `client-host-clippy`,
 `wasm-clippy`, `tools-clippy`, `xtask-clippy`), then the `ert` runtime check.
-Between source consistency and compilation, Just invokes the Rust-only
-repository-shape leaves in their established order. The same private host recipe
+Between source consistency and compilation, Just invokes the existing
+repository-shape checks in their established order. The same private host recipe
 serves Fix and Verify workflows.
 
 The host _step_ above runs the listed sub-steps through host-local lanes. The

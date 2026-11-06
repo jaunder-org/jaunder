@@ -674,6 +674,20 @@ unrelated commits. xtask still runs only on the host, never inside derivations.
 Runtime paths belong to the active checkout, not the tool's store build
 directory.
 
+`check-leaf` is an invocation/signature adapter, not a claim that every entry
+requires Rust. It currently mixes substantive source/evidence algorithms,
+Git/index safety, small textual/ADR policies, and execution/consumer glue. Most
+existing owners still accept `CommandResult`; the adapter returns plain
+status/detail without serializing it. Host doctest execution and Elisp artifact
+lifting remain alongside their substantive reconciliation/consumer algorithms.
+The small policies and signature coupling are acknowledged residuals, not
+completed extractions or automatically scheduled follow-up work. The explicit
+`server-fn-flow` bridge still resolves the authoritative E2E output and invokes
+trace/snapshot verification until #1890's landed E2E workflow owns that
+boundary. Verification's ordinary clean-tree admission is direct Just/Git;
+raw/index docs admission, post-request checks and precommit reconciliation
+remain distinct Rust safety operations.
+
 New, nonignored tooling inputs must be included in the Git-backed flake snapshot
 (`git add` or `git add -N`) before normal invocation. The Nix source declaration
 owns this admission; a missing input or failed realization is a refusal, not a

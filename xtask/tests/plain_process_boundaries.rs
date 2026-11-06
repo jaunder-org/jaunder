@@ -109,22 +109,6 @@ fn consumer_leaves_fail_closed_without_producer_evidence_or_report_artifacts() {
     }
 }
 
-#[test]
-fn clean_admission_leaf_is_plain_and_refuses_untracked_state() {
-    let dir = checkout();
-    let summary = dir.path().join("github-summary.md");
-    assert!(
-        run_leaf(dir.path(), "clean-tree", &summary)
-            .status
-            .success()
-    );
-    std::fs::write(dir.path().join("untracked"), "not admitted\n").unwrap();
-    let output = run_leaf(dir.path(), "clean-tree", &summary);
-    assert_eq!(output.status.code(), Some(1));
-    assert!(!dir.path().join(".xtask/last-result.json").exists());
-    assert!(!summary.exists());
-}
-
 #[cfg(unix)]
 #[test]
 fn precommit_safety_process_routes_once_and_emits_no_report_envelope() {

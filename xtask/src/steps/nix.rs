@@ -2082,10 +2082,8 @@ mod tests {
         finish_e2e_combo, lift_elisp_coverage_artifacts, prepare_build_dirs_with, production_lane,
         report_build_diagnostic_failure,
     };
-    use crate::audit_wasm::{ArtifactMetrics, AuditReport};
     use crate::e2e_lanes::Lane;
     use crate::result::{NixRealization, NixReport, PhaseOutcome};
-    use crate::steps::wasm_budget;
 
     fn enabled_combos() -> Vec<(String, String)> {
         crate::e2e_lanes::catalog()
@@ -3052,50 +3050,6 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         }
     }
 
-    #[test]
-    fn gate_owned_build_paths_attach_reports() {
-        let mut stderr = Vec::new();
-        let flake = finish_build_with(
-            BuildCompletion {
-                step_name: "nix-check",
-                installable: ".#checks.x86_64-linux.check",
-                log_path: "build.log",
-                diagnostic_failed: false,
-                capture: BuildCaptureOutcome::default(),
-                outcome: Ok(Outcome::Exited(0)),
-            },
-            || panic!("successful build must not write an excerpt"),
-            || panic!("successful build must not rescue diagnostics"),
-            || injected_nix_report(NixRealization::Reused),
-            &mut stderr,
-        );
-        let mut result = CommandResult::new("validate");
-        wasm_budget::run_with(
-            &mut result,
-            || Ok("/nix/store/site".to_owned()),
-            |_| {
-                Ok(AuditReport {
-                    site_path: "/nix/store/site".to_owned(),
-                    artifacts: vec![ArtifactMetrics {
-                        path: "/nix/store/site/pkg/app.wasm".to_owned(),
-                        raw_bytes: 1,
-                        gzip_bytes: 0,
-                        brotli_bytes: 0,
-                    }],
-                })
-            },
-            || NixReport {
-                installable: ".#site".to_owned(),
-                derivation: Some("/nix/store/site.drv".to_owned()),
-                realization: NixRealization::Reused,
-            },
-            || Duration::from_millis(1),
-        );
-
-        let wasm = result.steps.last().expect("wasm-budget step");
-        assert!(flake.nix.is_some());
-        assert!(wasm.nix.is_some());
-    }
     #[test]
     fn build_directory_population_fails_closed_but_diagnostics_are_best_effort() {
         let gcroot_error = prepare_build_dirs_with(

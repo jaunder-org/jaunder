@@ -1,4 +1,4 @@
-# Public hermetic workflows refuse source/report drift before producer work.
+# Verify workflows refuse dirty or unavailable Git state before work.
 coverage: _clean-tree coverage-workflow
 
 doctests: _clean-tree doctests-workflow
@@ -7,9 +7,10 @@ doctests: _clean-tree doctests-workflow
 _clean-tree:
     #!/usr/bin/env bash
     set -euo pipefail
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_NAMESPACE
     status=$(git status --porcelain --untracked-files=all)
     if [[ -n "$status" ]]; then
-      printf 'coverage/doctests require a clean checkout\n%s\n' "$status" >&2
+      printf 'verify workflows require a clean checkout\n%s\n' "$status" >&2
       exit 1
     fi
 
@@ -43,9 +44,9 @@ precommit-markdown-host: (_markdown "fix") _docs-shape
 
 precommit-broad-host: check-no-test
 
-prepush: _clean (_host "verify" "prepush") _host-tests _product-tests _workspace-doctests
+prepush: _clean-tree (_host "verify" "prepush") _host-tests _product-tests _workspace-doctests
 
-validate-no-e2e: _clean (_host "verify" "host") _platform _static _wasm-budget _host-tests _wasm-tests coverage doctests _elisp-coverage
+validate-no-e2e: _clean-tree (_host "verify" "host") _platform _static _wasm-budget _host-tests _wasm-tests coverage doctests _elisp-coverage
 
 # Landed E2E entrypoints retain lane artifacts, Firefox reconciliation and the
 # authoritative SQLite/Chromium flow verdict. Replace these calls only after #1890 lands.
@@ -56,17 +57,13 @@ validate: validate-no-e2e
     cargo xtask e2e postgres firefox
     cargo xtask check-leaf server-fn-flow
 
-ci-validate-host: _clean (_host "verify" "host") _platform _host-tests
+ci-validate-host: _clean-tree (_host "verify" "host") _platform _host-tests
 
-ci-validate-hermetic: _clean _static _wasm-budget
+ci-validate-hermetic: _clean-tree _static _wasm-budget
 
-ci-validate-test-checks: _clean _wasm-tests doctests _elisp-coverage
+ci-validate-test-checks: _clean-tree _wasm-tests doctests _elisp-coverage
 
 ci-validate-coverage: coverage
-
-[private]
-_clean:
-    cargo xtask check-leaf clean-tree
 
 [private]
 _markdown mode:

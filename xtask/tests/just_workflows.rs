@@ -24,8 +24,14 @@ set -eu
 name=${0##*/}
 printf '%s\t' "$name" "$@" >> "$FAKE_LOG"
 printf '\n' >> "$FAKE_LOG"
-if [ "$name" = git ] && [ -f dirty-status ]; then
-    printf ' M tracked.rs\n'
+if [ "$name" = git ]; then
+    if [ -n "${GIT_DIR+x}${GIT_WORK_TREE+x}${GIT_INDEX_FILE+x}${GIT_OBJECT_DIRECTORY+x}${GIT_COMMON_DIR+x}${GIT_NAMESPACE+x}" ]; then
+        printf 'Git inherited a repository override\n' >&2
+        exit 23
+    fi
+    if [ -f dirty-status ]; then
+        printf ' M tracked.rs\n'
+    fi
 fi
 if [ "$name $*" = "cargo xtask test-local" ]; then
     touch producer-resource
@@ -55,6 +61,13 @@ if [ "$name $*" = "${FAIL_COMMAND:-}" ]; then exit 17; fi
                 ),
             )
             .env("FAKE_LOG", &log)
+            // Exercise hook-style inherited overrides without touching real Git.
+            .env("GIT_DIR", "foreign-git-dir")
+            .env("GIT_WORK_TREE", "foreign-work-tree")
+            .env("GIT_INDEX_FILE", "foreign-index")
+            .env("GIT_OBJECT_DIRECTORY", "foreign-objects")
+            .env("GIT_COMMON_DIR", "foreign-common-dir")
+            .env("GIT_NAMESPACE", "foreign-namespace")
             .env("FAIL_COMMAND", failure)
             .output()
             .unwrap();
@@ -277,6 +290,42 @@ fn dirty_fix_check_keeps_doctest_population_while_public_doctests_refuses_dirty_
 }
 
 #[test]
+fn direct_clean_admission_refuses_dirty_or_failed_git_before_work() {
+    for recipe in [
+        "prepush",
+        "validate-no-e2e",
+        "ci-validate-host",
+        "ci-validate-hermetic",
+        "ci-validate-test-checks",
+        "ci-validate-coverage",
+        "coverage",
+        "doctests",
+    ] {
+        for failure in ["", "git status --porcelain --untracked-files=all"] {
+            let workflow = Workflow::new();
+            if failure.is_empty() {
+                fs::write(workflow.root.path().join("dirty-status"), "dirty fixture").unwrap();
+            }
+            let (ok, actual, stderr) = workflow.run(&[recipe], failure);
+            assert!(!ok, "{recipe} admitted dirty or unavailable Git state");
+            assert_eq!(
+                actual,
+                public_clean(),
+                "{recipe} started checks before admission"
+            );
+            assert!(
+                stderr.contains(if failure.is_empty() {
+                    "require a clean checkout"
+                } else {
+                    "17"
+                }),
+                "{recipe}: {stderr}"
+            );
+        }
+    }
+}
+
+#[test]
 fn broad_fix_and_verify_preserve_the_actual_complete_success_order() {
     let workflow = Workflow::new();
     let mut check = broad("fix", false);
@@ -293,7 +342,7 @@ fn broad_fix_and_verify_preserve_the_actual_complete_success_order() {
     assert!(ok, "{stderr}");
     assert_eq!(actual, check);
 
-    let mut prepush = commands(&["cargo xtask check-leaf clean-tree"]);
+    let mut prepush = public_clean();
     prepush.extend(broad(
         "verify",
         cfg!(all(target_os = "linux", target_arch = "x86_64")),
@@ -311,13 +360,12 @@ fn broad_fix_and_verify_preserve_the_actual_complete_success_order() {
 #[test]
 fn validation_and_ci_lanes_preserve_required_populations_and_argument_boundaries() {
     let workflow = Workflow::new();
-    let clean = commands(&["cargo xtask check-leaf clean-tree"]);
+    let clean = public_clean();
     let mut host = broad("verify", false);
     host.push(platform());
     let mut hermetic = static_checks();
     hermetic.extend(commands(&["cargo xtask check-leaf wasm-budget"]));
     let mut test_checks = vec![nix("wasm-tests")];
-    test_checks.extend(public_clean());
     test_checks.extend(doctests());
     test_checks.extend(elisp());
     for (recipe, mut expected) in [
@@ -330,14 +378,7 @@ fn validation_and_ci_lanes_preserve_required_populations_and_argument_boundaries
         ("ci-validate-test-checks", test_checks),
         ("ci-validate-coverage", coverage()),
     ] {
-        expected.splice(
-            0..0,
-            if recipe == "ci-validate-coverage" {
-                public_clean()
-            } else {
-                clean.clone()
-            },
-        );
+        expected.splice(0..0, clean.clone());
         let (ok, actual, stderr) = workflow.run(&[recipe], "");
         assert!(ok, "{recipe}: {stderr}");
         assert_eq!(actual, expected, "{recipe}");
@@ -354,8 +395,6 @@ fn validation_and_ci_lanes_preserve_required_populations_and_argument_boundaries
     validate.extend(hermetic);
     validate.extend(host_tests());
     validate.push(nix("wasm-tests"));
-    // The public coverage/doctest recipes share one Just clean dependency.
-    validate.extend(public_clean());
     validate.extend(coverage());
     validate.extend(doctests());
     validate.extend(elisp());

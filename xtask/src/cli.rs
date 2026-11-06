@@ -137,7 +137,7 @@ impl SandboxProfile {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Invoke one Rust-only check leaf from Just; hidden from the user workflow list.
+    /// Invoke one existing check/safety adapter from Just; hidden from the workflow list.
     #[command(hide = true)]
     CheckLeaf {
         #[arg(value_parser = nonempty)]

@@ -1,8 +1,13 @@
-//! Callable boundary for Rust-only static checks invoked individually by Just.
+//! Single-call boundary for existing checks, safety owners and residual adapters.
 //!
-//! Each invocation dispatches one existing check. This module has no gate
-//! population, ordering, mode selection, or workflow reporting. Consumer adapters
-//! invoke existing owners after Just has requested their producer outputs.
+//! Entries include substantive source/evidence algorithms, small textual/docs
+//! policies, and execution/consumer glue; existing Rust code is not evidence that
+//! every entry requires Rust or belongs permanently in xtask. Most owners still
+//! accept CommandResult, adapted here to plain status/detail without serialization.
+//! Just owns gate population, ordering and modes. Prepush docs retains raw/index
+//! admission and mandatory post-request verification. `server-fn-flow` is an
+//! explicit output-resolution bridge until landed #1890 owns authoritative E2E
+//! verification; its trace/snapshot algorithm is not disposable orchestration.
 
 use std::path::Path;
 
@@ -14,7 +19,7 @@ fn flow_docs(result: &mut CommandResult) {
     result.push(steps::flow_docs::run());
 }
 
-/// Run exactly one Rust-owned check, preserving its existing algorithm and leaf
+/// Run exactly one existing check or adapter, preserving its algorithm and leaf
 /// diagnostic. An unknown name is a caller error rather than a skipped success.
 pub(crate) fn run(name: &str) -> Result<crate::result::StepResult> {
     run_at(name, Path::new("."))
@@ -23,7 +28,6 @@ pub(crate) fn run(name: &str) -> Result<crate::result::StepResult> {
 fn run_at(name: &str, root: &Path) -> Result<crate::result::StepResult> {
     let mut result = CommandResult::new("check-leaf");
     match name {
-        "clean-tree" => result.push(crate::lifecycle::clean_tree_precheck()),
         "prepush-docs" => {
             crate::lifecycle::run_shared_static_docs_request(
                 root,
@@ -73,11 +77,11 @@ fn run_at(name: &str, root: &Path) -> Result<crate::result::StepResult> {
         "html-sink" => steps::html_sink_check::run(&mut result),
         "e2e-scaffold" => steps::e2e_scaffold_check::run(&mut result),
         "xlang-literal" => steps::xlang_literal_check::run(&mut result),
-        _ => bail!("unknown Rust check leaf `{name}`"),
+        _ => bail!("unknown check leaf `{name}`"),
     }
     ensure!(
         result.steps.len() == 1,
-        "Rust check leaf `{name}` did not produce exactly one result"
+        "check leaf `{name}` did not produce exactly one result"
     );
     Ok(result.steps.remove(0))
 }
@@ -114,14 +118,16 @@ mod tests {
     }
 
     #[test]
-    fn rust_only_check_leaf_runs_one_existing_check() {
+    fn check_leaf_runs_one_existing_check() {
         let step = run("flow-docs").expect("known leaf");
         assert_eq!(step.name, "flow-docs");
     }
 
     #[test]
-    fn unknown_rust_check_leaf_is_a_caller_error() {
-        assert!(run("not-a-check").is_err());
+    fn unknown_or_retired_check_leaf_is_a_caller_error() {
+        for name in ["not-a-check", "clean-tree"] {
+            assert!(run(name).is_err());
+        }
     }
 
     #[test]

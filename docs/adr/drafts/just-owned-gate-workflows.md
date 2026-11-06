@@ -14,23 +14,28 @@ entrypoint and `pkgs.just` is already pinned in the development shell. Keeping
 workflow ownership in Rust while adding a second recipe layer would preserve
 duplicated sequencing and reporting instead of simplifying the system.
 
-Several check algorithms are Rust-only functions with no command-line leaf, and
-precommit has proven Git/index reconciliation and failure-path obligations.
-Moving either into a mirrored shell implementation or deleting them would lose
-behavior. Separately, #1887 identifies three Prettier definitions and an
-exclusive docs-only `docsDevtoolBin` source/vendor/build path that can be
-removed while preserving host and hermetic verdicts.
+Existing check functions include substantive parsers/censuses, small textual
+policies and consumer/execution glue; their current Rust implementation alone
+does not establish language necessity. Precommit also has proven Git/index
+reconciliation and failure-path obligations. Replacing these with a mirrored
+shell implementation or deleting their real guarantees would lose behavior.
+Separately, #1887 identifies three Prettier definitions and an exclusive
+docs-only `docsDevtoolBin` source/vendor/build path that can be removed while
+preserving host and hermetic verdicts.
 
 ## Decision
 
 The root `Justfile` owns the default one-command developer, hook, local
 validation, and CI-lane workflow definitions. Just composes direct pinned tools
-and callable leaf checks; existing Rust check algorithms remain Rust-owned and
-are exposed only through a minimal single-leaf invocation boundary where Just
-cannot call them directly. That boundary does not select a gate population,
-sequence a workflow, or produce a gate-wide report. Nix provides pinned Just and
-tool runtimes as needed; it does not define a parallel workflow framework or
-invoke host-only `xtask` from derivations.
+and callable checks/adapters. Existing algorithms and residual
+function-signature adapters remain callable through a minimal single-leaf
+boundary; this does not claim every entry requires Rust or permanently belongs
+in xtask. Ordinary clean admission is direct Just/Git, while raw/index safety
+stays specialized. The explicit server-fn-flow bridge awaits #1890's actual E2E
+migration without retiring its substantive verifier. This boundary does not
+select a gate population, sequence a workflow, or produce a gate-wide report.
+Nix provides pinned Just and tool runtimes as needed; it does not define a
+parallel workflow framework or invoke host-only `xtask` from derivations.
 
 A focused single-process precommit owner retains only necessary Git/index
 classification, snapshots, safe staging reconciliation, and docs admission /

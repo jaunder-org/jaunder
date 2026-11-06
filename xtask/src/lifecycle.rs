@@ -35,22 +35,6 @@ pub(crate) fn finalize(result: &mut CommandResult, start: std::time::Instant) {
         .unwrap_or(0);
 }
 
-/// Fail closed when a verify workflow cannot prove a clean committed tree.
-pub(crate) fn clean_tree_precheck() -> StepResult {
-    match git::working_tree_status(Path::new(".")) {
-        Ok(status) if git::porcelain_is_dirty(&status) => {
-            StepResult::fail("clean-tree").detail(format!(
-                "working tree is dirty — commit/stash before verification:\n{}",
-                status.trim()
-            ))
-        }
-        Ok(_) => StepResult::ok("clean-tree"),
-        Err(e) => {
-            StepResult::fail("clean-tree").detail(format!("could not determine cleanliness: {e:#}"))
-        }
-    }
-}
-
 /// Run Just's selected precommit host recipe inside the Git/index safety
 /// boundary. Just owns the check population and ordering; this adapter owns only
 /// admission, one reconciliation attempt, and the conditional docs verdict.

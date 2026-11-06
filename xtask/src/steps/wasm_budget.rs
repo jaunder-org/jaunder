@@ -3,26 +3,17 @@
 //! Reads the same measurement `audit-wasm` produces for the shipped artifact, so
 //! the gate and the tool can never disagree about what the bundle weighs.
 
-use std::time::{Duration, Instant};
-
 use anyhow::Result;
 
 use crate::audit_wasm::{self, AuditReport};
-use crate::nix_build;
-use crate::result::{CommandResult, NixReport, StepResult};
+use crate::result::{CommandResult, StepResult};
 use crate::wasm_budget;
 
-const SITE_INSTALLABLE: &str = ".#site";
-
 pub fn run(result: &mut CommandResult) {
-    let start = Instant::now();
-    let before = nix_build::observe(SITE_INSTALLABLE);
     run_with(
         result,
         || audit_wasm::resolve_site_path(None),
         |site_path| audit_wasm::run(Some(site_path)),
-        || before.finish(SITE_INSTALLABLE),
-        || start.elapsed(),
     );
 }
 
@@ -30,21 +21,14 @@ pub(crate) fn run_with(
     result: &mut CommandResult,
     build: impl FnOnce() -> Result<String>,
     audit: impl FnOnce(&str) -> Result<AuditReport>,
-    nix_report: impl FnOnce() -> NixReport,
-    elapsed: impl FnOnce() -> Duration,
 ) {
     let site_path = match build() {
         Ok(site_path) => site_path,
         Err(error) => {
-            result.push(
-                StepResult::fail("wasm-budget")
-                    .detail(format!("{error:#}"))
-                    .with_duration(elapsed()),
-            );
+            result.push(StepResult::fail("wasm-budget").detail(format!("{error:#}")));
             return;
         }
     };
-    let nix = nix_report();
     let step = match audit(&site_path) {
         Err(error) => StepResult::fail("wasm-budget").detail(format!("{error:#}")),
         Ok(report) => {
@@ -53,10 +37,6 @@ pub(crate) fn run_with(
                 .iter()
                 .find(|artifact| artifact.path.ends_with(".wasm"))
                 .map(|artifact| artifact.raw_bytes);
-            // Keep the measurement: this step already paid for a `nix build .#site`, so
-            // discarding the sizes would waste it on a `--json` run.
-            result.audit = Some(report);
-
             match raw_bytes {
                 Some(raw_bytes) => {
                     let verdict =
@@ -87,22 +67,21 @@ pub(crate) fn run_with(
             }
         }
     };
-    result.push(step.nix(nix).with_duration(elapsed()));
+    result.push(step);
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use super::{SITE_INSTALLABLE, run_with};
+    use super::run_with;
     use crate::audit_wasm::{self, ArtifactMetrics, AuditReport};
-    use crate::result::{CommandResult, NixRealization, NixReport};
+    use crate::result::CommandResult;
+    use crate::wasm_budget::WASM_RAW_CEILING_BYTES;
 
     fn report_with_wasm(raw_bytes: u64) -> AuditReport {
         AuditReport {
-            site_path: "/nix/store/site".to_owned(),
+            site_path: "/fixture/csr-bundle".to_owned(),
             artifacts: vec![ArtifactMetrics {
-                path: "/nix/store/site/pkg/app.wasm".to_owned(),
+                path: "/fixture/csr-bundle/pkg/app.wasm".to_owned(),
                 raw_bytes,
                 gzip_bytes: 0,
                 brotli_bytes: 0,
@@ -110,80 +89,74 @@ mod tests {
         }
     }
 
-    fn nix_report(realization: NixRealization) -> NixReport {
-        NixReport {
-            installable: SITE_INSTALLABLE.to_owned(),
-            derivation: Some("/nix/store/site.drv".to_owned()),
-            realization,
-        }
-    }
-
     #[test]
-    fn successful_wasm_budget_attaches_the_injected_site_report() {
-        for realization in [
-            NixRealization::Reused,
-            NixRealization::Realized,
-            NixRealization::Unknown,
-        ] {
-            let mut result = CommandResult::new("validate");
+    fn wasm_budget_verdict_has_no_discarded_report_metadata() {
+        for bytes in [1, WASM_RAW_CEILING_BYTES, WASM_RAW_CEILING_BYTES + 1] {
+            let mut result = CommandResult::new("check-leaf");
             run_with(
                 &mut result,
-                || Ok("/nix/store/site".to_owned()),
-                |_| Ok(report_with_wasm(1)),
-                || nix_report(realization),
-                || Duration::from_millis(321),
+                || Ok("/fixture/csr-bundle".to_owned()),
+                |path| {
+                    assert_eq!(path, "/fixture/csr-bundle");
+                    Ok(report_with_wasm(bytes))
+                },
             );
-
             let step = result.steps.last().expect("wasm budget step");
-            assert!(step.ok);
-            assert_eq!(
-                step.nix.as_ref().expect("site report").installable,
-                SITE_INSTALLABLE
-            );
-            assert_eq!(
-                step.nix.as_ref().expect("site report").realization,
-                realization
-            );
-            assert_eq!(step.duration_ms, 321);
+            assert_eq!(step.ok, bytes <= WASM_RAW_CEILING_BYTES);
+            assert!(step.detail.as_ref().unwrap().contains(&bytes.to_string()));
+            assert!(step.nix.is_none());
+            assert!(step.phases.is_empty());
+            assert!(result.audit.is_none());
         }
     }
 
     #[test]
-    fn failed_build_preserves_the_existing_failure_without_nix_evidence() {
-        let mut result = CommandResult::new("validate");
-        run_with(
-            &mut result,
-            || Err(anyhow::anyhow!("nix build failed")),
-            |_| panic!("failed build must not audit artifacts"),
-            || panic!("failed build must not observe after completion"),
-            || Duration::from_millis(123),
-        );
-
-        let step = result.steps.last().expect("wasm budget step");
-        assert!(!step.ok);
-        assert_eq!(step.detail.as_deref(), Some("nix build failed"));
-        assert_eq!(step.duration_ms, 123);
-        assert!(step.nix.is_none());
+    fn failed_build_or_audit_keeps_the_original_diagnostic() {
+        for fail_build in [true, false] {
+            let mut result = CommandResult::new("check-leaf");
+            run_with(
+                &mut result,
+                || {
+                    if fail_build {
+                        Err(anyhow::anyhow!("nix build failed"))
+                    } else {
+                        Ok("/fixture/csr-bundle".to_owned())
+                    }
+                },
+                |_| {
+                    assert!(!fail_build, "failed build must not audit artifacts");
+                    Err(anyhow::anyhow!("reading artifact failed"))
+                },
+            );
+            let step = result.steps.last().unwrap();
+            assert!(!step.ok);
+            assert_eq!(
+                step.detail.as_deref(),
+                Some(if fail_build {
+                    "nix build failed"
+                } else {
+                    "reading artifact failed"
+                })
+            );
+        }
     }
 
     #[test]
-    fn post_build_audit_failure_retains_nix_evidence() {
-        let mut result = CommandResult::new("validate");
+    fn missing_wasm_is_not_a_passing_budget() {
+        let mut result = CommandResult::new("check-leaf");
         run_with(
             &mut result,
-            || Ok("/nix/store/site".to_owned()),
-            |_| Err(anyhow::anyhow!("reading artifact failed")),
-            || nix_report(NixRealization::Realized),
-            || Duration::from_millis(456),
+            || Ok("/fixture/csr-bundle".to_owned()),
+            |_| {
+                let mut report = report_with_wasm(1);
+                report.artifacts.clear();
+                Ok(report)
+            },
         );
-
-        let step = result.steps.last().expect("wasm budget step");
-        assert!(!step.ok);
-        assert_eq!(step.detail.as_deref(), Some("reading artifact failed"));
-        assert_eq!(step.duration_ms, 456);
+        assert!(!result.ok);
         assert_eq!(
-            step.nix.as_ref().expect("site report").realization,
-            NixRealization::Realized
+            result.steps[0].detail.as_deref(),
+            Some("audit-wasm reported no .wasm artifact")
         );
     }
 
