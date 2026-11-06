@@ -359,6 +359,16 @@ impl EvidenceCache {
         visiting: &mut BTreeSet<WorkflowKey>,
         run: &mut impl FnMut(&[&str]) -> Result<Value, ApiError>,
     ) -> Result<(), ApiError> {
+        for path in WorkflowGraph::catalog_matrix_source_paths(source)
+            .map_err(|error| ApiError::Malformed(format!("workflow graph: {error}")))?
+        {
+            let key = WorkflowKey {
+                path: path.into(),
+                sha: sha.into(),
+            };
+            let content = self.source(subject, &key, run)?;
+            sources.insert(path.into(), content);
+        }
         for path in WorkflowGraph::local_reusable_workflow_paths(source)
             .map_err(|error| ApiError::Malformed(format!("workflow graph: {error}")))?
         {
@@ -594,6 +604,48 @@ mod tests {
             head_committed_at: "2026-01-01T00:00:00Z".into(),
             checks: Vec::new(),
         }
+    }
+
+    #[test]
+    fn catalog_matrix_inputs_are_fetched_at_the_workflow_run_sha() {
+        let files = [
+            ".github/workflows/ci.yml",
+            "scripts/e2e-matrix.jq",
+            "end2end/e2e-lanes.json",
+        ];
+        let mut replies = vec![
+            serde_json::json!({"total_count":1,"workflow_runs":[{"id":1,"head_sha":"head","run_attempt":1,"status":"completed","path":files[0]}]}),
+            serde_json::json!({"total_count":1,"jobs":[{"id":1011,"check_run_url":"https://api.github.com/repos/o/r/check-runs/11","name":"e2e (sqlite/chromium)"}]}),
+        ];
+        for file in files {
+            let source =
+                std::fs::read_to_string(format!("{}/../{file}", env!("CARGO_MANIFEST_DIR")))
+                    .unwrap();
+            replies.push(serde_json::json!({"encoding":"base64","content":base64::engine::general_purpose::STANDARD.encode(source)}));
+        }
+        let mut replies = replies.into_iter();
+        let mut requests = Vec::new();
+        let evidence = collect_with(&subject(), &snapshot(), &BTreeSet::from([1]), |args| {
+            requests.push(args.join(" "));
+            replies
+                .next()
+                .ok_or_else(|| ApiError::Malformed("unexpected request".into()))
+        })
+        .unwrap();
+        for file in files {
+            assert!(
+                requests
+                    .iter()
+                    .any(|request| request == &format!("api /repos/o/r/contents/{file}?ref=head")),
+                "{requests:?}"
+            );
+        }
+        assert_eq!(
+            evidence.runs[0]
+                .graph
+                .classify(&evidence.runs[0].jobs[0], &["e2e gate".into()]),
+            Ok(crate::pr::workflow::Requirement::Transitive)
+        );
     }
 
     #[test]

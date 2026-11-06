@@ -253,13 +253,32 @@ jobs:
           test "$test_checks" = "success"
           test "$coverage" = "success"
 
+  e2e-catalog:
+    name: E2E catalog
+    runs-on: ubuntu-24.04
+    outputs:
+      chromium: ${{ steps.matrix.outputs.chromium }}
+      firefox: ${{ steps.matrix.outputs.firefox }}
+      backends: ${{ steps.matrix.outputs.backends }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: ./.github/actions/setup-ci
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Read enabled producer matrices from the catalog
+        id: matrix
+        run: |
+          nix develop .#ci-e2e --accept-flake-config -c jq -r -f scripts/e2e-matrix.jq end2end/e2e-lanes.json >> "$GITHUB_OUTPUT"
+
   e2e-chromium:
     name: e2e (${{ matrix.backend }}/chromium)
     runs-on: ubuntu-24.04
+    needs: [e2e-catalog]
     strategy:
       fail-fast: false
       matrix:
-        backend: [sqlite, postgres]
+        include: ${{ fromJSON(needs.e2e-catalog.outputs.chromium) }}
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: ./.github/actions/setup-ci
@@ -282,10 +301,12 @@ jobs:
             status=$?
             echo "observation_status=failure exit=$status" >&2
           fi
-      - name: e2e (${{ matrix.backend }}/chromium, via xtask)
+      - name:
+          Run isolated Chromium producer and authoritative coverage when
+          applicable
         run:
-          nix develop .#ci-e2e --accept-flake-config -c cargo xtask e2e ${{
-          matrix.backend }} chromium
+          nix develop .#ci-e2e --accept-flake-config -c just e2e-producer ${{
+          matrix.lane }}
       - name: E2E disk observation (after producer)
         if: always()
         run: |
@@ -300,9 +321,7 @@ jobs:
         uses: actions/upload-artifact@v7.0.1
         with:
           name: e2e-diagnostics-${{ matrix.backend }}-chromium
-          path: |
-            .xtask/diagnostics/
-            .xtask/last-result.json
+          path: .xtask/diagnostics/
           if-no-files-found: ignore
           retention-days: 14
       - name: E2E disk observation (final)
@@ -316,13 +335,13 @@ jobs:
           fi
 
   e2e-firefox-lane:
-    name: e2e (${{ matrix.backend }}/firefox-${{ matrix.lane }})
+    name: e2e (${{ matrix.lane }})
     runs-on: ubuntu-24.04
+    needs: [e2e-catalog]
     strategy:
       fail-fast: false
       matrix:
-        backend: [sqlite, postgres]
-        lane: [ordinary-1-of-2, ordinary-2-of-2, serial-special]
+        include: ${{ fromJSON(needs.e2e-catalog.outputs.firefox) }}
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: ./.github/actions/setup-ci
@@ -368,8 +387,8 @@ jobs:
           fi
       - name: Run isolated Firefox lane
         run:
-          nix develop .#ci-e2e --accept-flake-config -c cargo xtask e2e-lane ${{
-          matrix.backend }}-firefox-${{ matrix.lane }}
+          nix develop .#ci-e2e --accept-flake-config -c just e2e-producer ${{
+          matrix.lane }}
       - name: E2E disk observation (after producer)
         if: always()
         run: |
@@ -427,10 +446,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: e2e-firefox-${{ matrix.backend }}-${{ matrix.lane }}
-          path: |
-            .xtask/diagnostics/
-            .xtask/last-result.json
+          name: e2e-firefox-${{ matrix.lane }}
+          path: .xtask/diagnostics/
           if-no-files-found: ignore
           retention-days: 14
       - name: E2E disk observation (final)
@@ -446,12 +463,12 @@ jobs:
   e2e-firefox-reconcile:
     name: e2e reconcile (${{ matrix.backend }}/firefox)
     runs-on: ubuntu-24.04
-    needs: [e2e-firefox-lane]
+    needs: [e2e-catalog, e2e-firefox-lane]
     if: always()
     strategy:
       fail-fast: false
       matrix:
-        backend: [sqlite, postgres]
+        backend: ${{ fromJSON(needs.e2e-catalog.outputs.backends) }}
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: ./.github/actions/setup-ci
@@ -459,23 +476,24 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Download all backend Firefox evidence
+        continue-on-error: true
         uses: actions/download-artifact@v8.0.2
         with:
           pattern: e2e-firefox-${{ matrix.backend }}-*
           path: .xtask/e2e-firefox
           merge-multiple: true
-      - name: Reconcile Firefox evidence
-        run:
-          nix develop .#ci --accept-flake-config -c cargo xtask e2e-reconcile
-          ${{ matrix.backend }} --diagnostics-root
-          .xtask/e2e-firefox/diagnostics
+      - name: Reconcile Firefox evidence even when downloads are missing
+        if: always()
+        run: |
+          mkdir -p .xtask
+          nix develop .#ci-e2e --accept-flake-config -c just e2e-reconcile ${{ matrix.backend }} .xtask/e2e-firefox > .xtask/firefox-reconcile.log 2>&1
       - name: Upload Firefox reconciliation diagnostics
         if: always()
         uses: actions/upload-artifact@v7.0.1
         with:
           name: e2e-firefox-reconcile-${{ matrix.backend }}
-          path: .xtask/last-result.json
-          if-no-files-found: ignore
+          path: .xtask/firefox-reconcile.log
+          if-no-files-found: error
           retention-days: 14
 
   e2e-gate:
@@ -495,11 +513,12 @@ jobs:
     # tolerable only because the job depends on none of the image's preinstalled
     # software, which is exactly the property the paragraph above protects.
     runs-on: ubuntu-slim
-    needs: [e2e-chromium, e2e-firefox-lane, e2e-firefox-reconcile]
+    needs: [e2e-catalog, e2e-chromium, e2e-firefox-lane, e2e-firefox-reconcile]
     if: always()
     steps:
       - name: Require all e2e matrix jobs to pass
         run: |
+          test "${{ needs.e2e-catalog.result }}" = "success"
           chromium="${{ needs.e2e-chromium.result }}"
           firefox_lanes="${{ needs.e2e-firefox-lane.result }}"
           firefox_reconcile="${{ needs.e2e-firefox-reconcile.result }}"

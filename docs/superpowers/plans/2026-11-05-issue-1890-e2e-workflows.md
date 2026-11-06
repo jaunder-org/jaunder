@@ -4,14 +4,16 @@
 > outline” for `issue1890-design-v2` (background
 > `f709fe05-cf23-4fc6-aa59-0948aa12dec1`) and “Approve outline and begin” for
 > `issue1890-outline-v1` (background `b5f826ee-bcb5-473f-9b88-932bef7c7637`).
-> Implementation remains a separate lifecycle step after this docs-preparation
-> tree is accepted and committed; this preparation contains no implementation.
+> The initial docs preparation was accepted and committed. The human's outline
+> approval authorizes the scoped implementation now present in this working
+> tree; source delivery, integrated proof and lifecycle acceptance remain
+> separate.
 >
-> Integration note: #1885 PR #1899 has landed as
-> `a440e58f4a0c9589cf6cb04921ddee20a0a831f2`. This checkout remains at its
-> pre-merge base; do not rebase this docs-only preparation. Before source
-> implementation, integrate the actual landed change only. The reported green CI
-> is historical evidence, not proof for this checkout.
+> Integration note: #1885 PR #1899 landed as
+> `a440e58f4a0c9589cf6cb04921ddee20a0a831f2`; the accepted docs commit was
+> rebased cleanly onto that landed base as
+> `7363fbd48f5c9db96c41964e3a2108bbd4aab3a0`. Historical CI is not proof for
+> this implementation tree.
 >
 > Execute with `dev-cycle-iterate`. Outline required because this migration
 > moves durable workflow ownership across Just, CI and Rust host tooling.
@@ -29,7 +31,7 @@ implementation until separately approved.
 
 ## Task outline
 
-- [ ] **Task 1: Establish the minimal Just and CI workflow boundary.** Keep
+- [x] **Task 1: Establish the minimal Just and CI workflow boundary.** Keep
       `end2end/e2e-lanes.json` the single enabled-lane source; derive CI
       producer matrix data at runtime and retain standard matrix, dependency,
       artifact and aggregate jobs. Define the default `just e2e` plus
@@ -45,7 +47,7 @@ implementation until separately approved.
     inject an early producer failure and confirm later producers/reconciliations
     still run.
 
-- [ ] **Task 2: Move existing evidence verdicts behind artifact-input
+- [x] **Task 2: Move existing evidence verdicts behind artifact-input
       boundaries.** Adapt the narrow census/report ownership, retry-duration,
       boot-trace and server-function verifiers to explicit artifact paths and
       runtime lane/catalog expectations; remove presentation envelopes/build
@@ -61,7 +63,7 @@ implementation until separately approved.
     malformed, failed-producer and archive-incomplete/inconsistent evidence;
     verify static inventory remains independently checkable.
 
-- [ ] **Task 3: Switch callers, then retire Rust scheduling.** Migrate local and
+- [x] **Task 3: Switch callers, then retire Rust scheduling.** Migrate local and
       CI callers to the Just/COTS boundaries and verify the single-command
       experience before deletion. Then remove E2E scheduling-only paths and
       redundant build/report wrappers in `xtask/src/steps/nix.rs`, remove
@@ -89,6 +91,27 @@ implementation until separately approved.
     reconciliations wait for their producers; any producer or reconciliation
     failure fails the aggregate; server-function coverage remains gated by
     successful authoritative production and existing capture/population checks.
+
+## Implementation handoff state
+
+Tasks 1–3 have focused workflow, failure-injection and artifact-verdict proof.
+The Just workflow uses bounded COTS admission, preserves failed producer status,
+settles all enabled producers, and then attempts both reconciliations. The
+runtime catalog projection and retained domain verdicts are independently
+tested. Chromium catalog projects are selectors: Playwright dependency projects
+belong to the manifest/report runtime population, not a duplicated dependency
+graph.
+
+Task 4 remains open for Lead-owned integrated gate/runtime acceptance and final
+lifecycle cleanup. Real runtime attempts have run and failed: the original
+authoritative SQLite/Chromium producer hit its internal 1500-second timeout; the
+retry after the diagnostics repair failed the Content License/Atom rights test.
+The full default `just e2e` attempted and settled all eight producers; all eight
+failed, both backend reconciliations ran and failed, and the aggregate returned
+exit 1. No successful authoritative producer output or coverage verdict has been
+established. These failures are not an infrastructure diagnosis or green runtime
+acceptance. Keep these planning documents until final cleanup; focused fixture
+proofs are not a claim of full-matrix execution equivalence.
 
 ## Risk checks
 

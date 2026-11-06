@@ -5,9 +5,8 @@
 //! every entry requires Rust or belongs permanently in xtask. Most owners still
 //! accept CommandResult, adapted here to plain status/detail without serialization.
 //! Just owns gate population, ordering and modes. Prepush docs retains raw/index
-//! admission and mandatory post-request verification. `server-fn-flow` is an
-//! explicit output-resolution bridge until landed #1890 owns authoritative E2E
-//! verification; its trace/snapshot algorithm is not disposable orchestration.
+//! admission and mandatory post-request verification. The E2E workflow owns
+//! authoritative flow verification; the static inventory remains a separate leaf.
 
 use std::path::Path;
 
@@ -41,9 +40,6 @@ fn run_at(name: &str, root: &Path) -> Result<crate::result::StepResult> {
             steps::doctest_fences::run_workspace(&xshell::Shell::new()?, &mut result);
         }
         "wasm-budget" => steps::wasm_budget::run(&mut result),
-        "server-fn-flow" => {
-            steps::server_fn_coverage_check::verify_after_validate(&mut result, true);
-        }
         "elisp-coverage-consume" => {
             steps::nix::consume_elisp_coverage(&mut result);
             return consumer_result(name, result);
@@ -125,7 +121,7 @@ mod tests {
 
     #[test]
     fn unknown_or_retired_check_leaf_is_a_caller_error() {
-        for name in ["not-a-check", "clean-tree"] {
+        for name in ["not-a-check", "clean-tree", "server-fn-flow"] {
             assert!(run(name).is_err());
         }
     }

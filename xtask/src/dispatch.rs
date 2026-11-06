@@ -7,16 +7,42 @@ use crate::{
     adr, adr_readme, audit_wasm, cache_safety, census,
     cli::{
         AdrCommand, CacheSafetyCommand, Cli, Command, CoverageCommand, MutantsCommand, NixCommand,
-        PrCommand, ProductionBaselineCommand, ServerFnCoverageCommand, TracesCommand,
-        WasmCoverageCommand,
+        PrCommand, ProductionBaselineCommand, TracesCommand, WasmCoverageCommand,
     },
     coverage, issue, lifecycle, nix_probe, performance, pr, production_baseline,
     result::{CommandResult, StepResult},
-    server_fn_coverage, steps, traces, wasm_coverage,
+    steps, traces, wasm_coverage,
 };
 
-fn e2e_uses_retained_split(browser: &str) -> bool {
-    browser == "firefox"
+/// Artifact-only commands bypass lifecycle reporting and all build hooks.
+pub fn artifact_verdict(command: &Command) -> Option<Result<String, String>> {
+    match command {
+        Command::E2eVerify {
+            lane,
+            catalog,
+            artifacts,
+        } => Some(crate::e2e_evidence::verify_lane(lane, catalog, artifacts)),
+        Command::E2eReconcile {
+            backend,
+            catalog,
+            diagnostics_root,
+        } => Some(crate::e2e_evidence::reconcile_files(
+            backend.as_str(),
+            catalog,
+            diagnostics_root,
+        )),
+        Command::ServerFnCoverage(command) => {
+            let (inputs, regenerate) = match command {
+                crate::cli::ServerFnCoverageCommand::Verify(inputs) => (inputs, false),
+                crate::cli::ServerFnCoverageCommand::Regenerate(inputs) => (inputs, true),
+            };
+            Some(
+                steps::server_fn_coverage_check::from_producer(inputs, regenerate)
+                    .map_err(|error| format!("{error:#}")),
+            )
+        }
+        _ => None,
+    }
 }
 
 pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
@@ -123,92 +149,8 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
-        Command::E2eLane { identity } => {
-            let start = Instant::now();
-            let mut result = CommandResult::new("e2e-lane");
-            steps::nix::e2e_lane(&mut result, &identity);
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::E2eControl { backend, workers } => {
-            let start = Instant::now();
-            let mut result = CommandResult::new("e2e-control");
-            steps::nix::e2e_control(&mut result, backend.as_str(), workers.count());
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::E2eCandidate { identity } => {
-            let start = Instant::now();
-            let mut result = CommandResult::new("e2e-candidate");
-            steps::nix::e2e_lane(&mut result, &identity);
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::E2eReconcile {
-            backend,
-            diagnostics_root,
-        } => {
-            let start = Instant::now();
-            let mut result = CommandResult::new("e2e-reconcile");
-            steps::nix::e2e_experimental_reconcile(
-                &mut result,
-                backend.as_str(),
-                &diagnostics_root,
-                None,
-                None,
-            );
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::E2eExperimentalReconcile {
-            backend,
-            diagnostics_root,
-            control_diagnostics_root,
-            control_workers,
-        } => {
-            let start = Instant::now();
-            let mut result = CommandResult::new("e2e-experimental-reconcile");
-            steps::nix::e2e_experimental_reconcile(
-                &mut result,
-                backend.as_str(),
-                &diagnostics_root,
-                control_diagnostics_root.as_deref(),
-                control_workers.map(|workers| workers.count()),
-            );
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::E2eExperimental { backend } => {
-            let start = Instant::now();
-            let mut result = CommandResult::new("e2e-experimental");
-            steps::nix::e2e_experimental(&mut result, backend.as_str());
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::E2e { backend, browser } => {
-            let start = Instant::now();
-            let label = format!("e2e-{}-{}", backend.as_str(), browser.as_str());
-            let mut result = CommandResult::new(&label);
-            if e2e_uses_retained_split(browser.as_str()) {
-                // Preserve the established command while routing Firefox through
-                // all three retained VMs and their authoritative reconciliation.
-                steps::nix::e2e_experimental(&mut result, backend.as_str());
-            } else {
-                steps::nix::e2e_combo(&mut result, backend.as_str(), browser.as_str());
-                // Surface retried-but-passed tests from the report `e2e_combo` just
-                // lifted out of the VM (see steps::flaky). Informational — never
-                // fails the combo.
-                steps::flaky::collect(&mut result, backend.as_str(), browser.as_str());
-                // #681: only the SQLite/Chromium capture is the empirical
-                // server-function coverage authority.
-                steps::server_fn_coverage_check::verify_after_combo(
-                    &mut result,
-                    backend.as_str(),
-                    browser.as_str(),
-                );
-            }
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
+        Command::E2eVerify { .. } | Command::E2eReconcile { .. } | Command::ServerFnCoverage(_) => {
+            anyhow::bail!("artifact-input commands execute directly, without a CommandResult")
         }
         Command::CacheSafety(CacheSafetyCommand::Probe) => {
             let start = Instant::now();
@@ -465,26 +407,6 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
-        Command::ServerFnCoverage(sub) => {
-            let start = Instant::now();
-            use steps::server_fn_coverage_check::{REGENERATE_STEP, VERIFY_STEP};
-            let regenerate = matches!(sub, ServerFnCoverageCommand::Regenerate);
-            let mut result = CommandResult::new(if regenerate {
-                REGENERATE_STEP
-            } else {
-                VERIFY_STEP
-            });
-            // A missing/empty/unparseable capture propagates as Err → the exit-2
-            // path, never a green run: treating a broken capture as "nothing
-            // uncovered" would make the whole gate dishonest.
-            let step = steps::server_fn_coverage_check::from_capture(
-                Path::new(server_fn_coverage::io::CAPTURE_PATH),
-                regenerate,
-            )?;
-            result.push(step);
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
         Command::Issue(sub) => issue::execute(sub),
         Command::Pr(PrCommand::Cleanup { number }) => {
             let start = Instant::now();
@@ -571,12 +493,6 @@ fn trace_attribute_owner_result<T>(
 mod tests {
     use super::*;
     use std::path::PathBuf;
-
-    #[test]
-    fn firefox_e2e_command_uses_retained_split() {
-        assert!(e2e_uses_retained_split("firefox"));
-        assert!(!e2e_uses_retained_split("chromium"));
-    }
 
     #[test]
     fn run_rejects_json_for_traces_analyze() {

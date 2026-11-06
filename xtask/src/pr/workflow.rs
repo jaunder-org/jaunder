@@ -50,7 +50,7 @@ impl std::fmt::Display for GraphError {
             Self::MissingJobs => f.write_str("workflow has no jobs"),
             Self::InvalidWorkflow { detail } => write!(f, "invalid workflow: {detail}"),
             Self::MissingWorkflowSource { path } => {
-                write!(f, "missing local reusable workflow {path}")
+                write!(f, "missing immutable workflow input {path}")
             }
             Self::UnsupportedExpression { value } => {
                 write!(f, "unsupported workflow expression {value}")
@@ -98,12 +98,29 @@ impl WorkflowGraph {
     /// workflows and therefore do not contribute dependency-graph nodes. Deserializing
     /// only the top-level `jobs.*.uses` surface keeps those two concepts separate.
     pub fn local_reusable_workflow_paths(source: &str) -> Result<BTreeSet<String>, GraphError> {
-        parse_jobs(source).map(|jobs| {
-            jobs.into_iter()
+        definitions(source).map(|jobs| {
+            jobs.into_values()
                 .filter_map(|job| job.uses)
                 .filter(|uses| uses.starts_with("./"))
                 .collect()
         })
+    }
+
+    /// Lists the two immutable inputs for the one supported catalog projection.
+    pub fn catalog_matrix_source_paths(source: &str) -> Result<Vec<&'static str>, GraphError> {
+        let jobs = definitions(source)?;
+        Ok(
+            if jobs.iter().any(|(key, job)| {
+                job.strategy
+                    .as_ref()
+                    .and_then(|s| s.matrix.as_ref())
+                    .is_some_and(|matrix| catalog_output(key, matrix).is_some())
+            }) {
+                vec!["scripts/e2e-matrix.jq", "end2end/e2e-lanes.json"]
+            } else {
+                Vec::new()
+            },
+        )
     }
 
     /// Parses one immutable workflow source and expands its statically-known matrix.
@@ -130,7 +147,7 @@ impl WorkflowGraph {
         source: &str,
         local_sources: &BTreeMap<String, String>,
     ) -> Result<Self, GraphError> {
-        let jobs = parse_jobs(source)?;
+        let jobs = parse_jobs(source, local_sources)?;
         let mut nodes = Vec::new();
         let mut reusable_terminals = BTreeMap::new();
         for job in jobs {
@@ -435,9 +452,15 @@ struct Job {
     needs: Vec<String>,
     /// Matrix dimensions retain their workflow declaration order because GitHub
     /// uses that order in the generated display name of an unnamed matrix job.
-    matrix: Vec<(String, Vec<String>)>,
+    matrix: Matrix,
     fail_fast: Option<bool>,
     uses: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+enum Matrix {
+    Dimensions(Vec<(String, Vec<String>)>),
+    Rows(Vec<BTreeMap<String, String>>),
 }
 
 #[derive(Deserialize)]
@@ -452,6 +475,16 @@ struct JobDefinition {
     needs: Needs,
     strategy: Option<Strategy>,
     uses: Option<String>,
+    #[serde(default)]
+    outputs: BTreeMap<String, String>,
+    #[serde(default)]
+    steps: Vec<CatalogStep>,
+}
+
+#[derive(Deserialize)]
+struct CatalogStep {
+    id: Option<String>,
+    run: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -480,7 +513,93 @@ struct Strategy {
     fail_fast: Option<bool>,
 }
 
-fn parse_jobs(source: &str) -> Result<Vec<Job>, GraphError> {
+/// This is a fixed repository interface, not a GitHub expression evaluator.
+fn catalog_output(job: &str, matrix: &YamlValue) -> Option<&'static str> {
+    let (dimension, output) = match job {
+        "e2e-chromium" => ("include", "chromium"),
+        "e2e-firefox-lane" => ("include", "firefox"),
+        "e2e-firefox-reconcile" => ("backend", "backends"),
+        _ => return None,
+    };
+    let mapping = matrix.as_mapping()?;
+    let expression = mapping.get(YamlValue::String(dimension.into()))?.as_str()?;
+    (mapping.len() == 1
+        && expression.trim() == format!("${{{{ fromJSON(needs.e2e-catalog.outputs.{output}) }}}}"))
+    .then_some(output)
+}
+
+fn project_catalog(
+    jobs: &BTreeMap<String, JobDefinition>,
+    sources: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, serde_json::Value>, GraphError> {
+    let invalid = |detail: &str| GraphError::InvalidWorkflow {
+        detail: detail.into(),
+    };
+    let producer = jobs
+        .get("e2e-catalog")
+        .ok_or_else(|| invalid("missing e2e-catalog producer"))?;
+    for output in ["chromium", "firefox", "backends"] {
+        if producer.outputs.get(output)
+            != Some(&format!("${{{{ steps.matrix.outputs.{output} }}}}"))
+        {
+            return Err(invalid("unsupported e2e-catalog output binding"));
+        }
+    }
+    let command = producer
+        .steps
+        .iter()
+        .find(|step| step.id.as_deref() == Some("matrix"))
+        .and_then(|step| step.run.as_deref())
+        .ok_or_else(|| invalid("missing catalog matrix producer step"))?;
+    if command.split_whitespace().collect::<Vec<_>>().join(" ")
+        != "nix develop .#ci-e2e --accept-flake-config -c jq -r -f scripts/e2e-matrix.jq end2end/e2e-lanes.json >> \"$GITHUB_OUTPUT\""
+    {
+        return Err(invalid("unsupported catalog matrix producer command"));
+    }
+    // Fetching belongs to EvidenceCache. Only its immutable bytes enter jq;
+    // no shell, inherited secrets or host module search path is involved.
+    let temp = tempfile::tempdir().map_err(|error| invalid(&error.to_string()))?;
+    let filter = temp.path().join("matrix.jq");
+    let catalog = temp.path().join("lanes.json");
+    for (name, path) in [
+        ("scripts/e2e-matrix.jq", &filter),
+        ("end2end/e2e-lanes.json", &catalog),
+    ] {
+        let content = sources
+            .get(name)
+            .ok_or_else(|| GraphError::MissingWorkflowSource { path: name.into() })?;
+        std::fs::write(path, content).map_err(|error| invalid(&error.to_string()))?;
+    }
+    let output = std::process::Command::new("jq")
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .current_dir(temp.path())
+        .args(["-r", "-L"])
+        .arg(temp.path())
+        .arg("-f")
+        .arg(&filter)
+        .arg(&catalog)
+        .output()
+        .map_err(|error| invalid(&format!("catalog jq projection: {error}")))?;
+    if !output.status.success() {
+        return Err(invalid("catalog jq projection failed"));
+    }
+    String::from_utf8(output.stdout)
+        .map_err(|error| invalid(&error.to_string()))?
+        .lines()
+        .map(|line| {
+            let (name, value) = line
+                .split_once('=')
+                .ok_or_else(|| invalid("malformed catalog matrix output"))?;
+            Ok((
+                name.to_owned(),
+                serde_json::from_str(value).map_err(|error| invalid(&error.to_string()))?,
+            ))
+        })
+        .collect()
+}
+
+fn definitions(source: &str) -> Result<BTreeMap<String, JobDefinition>, GraphError> {
     let workflow: Workflow =
         serde_yaml::from_str(source).map_err(|error| GraphError::InvalidWorkflow {
             detail: error.to_string(),
@@ -489,6 +608,21 @@ fn parse_jobs(source: &str) -> Result<Vec<Job>, GraphError> {
     if jobs.is_empty() {
         return Err(GraphError::MissingJobs);
     }
+    Ok(jobs)
+}
+
+fn parse_jobs(source: &str, sources: &BTreeMap<String, String>) -> Result<Vec<Job>, GraphError> {
+    let jobs = definitions(source)?;
+    let projected = if jobs.iter().any(|(key, job)| {
+        job.strategy
+            .as_ref()
+            .and_then(|s| s.matrix.as_ref())
+            .is_some_and(|matrix| catalog_output(key, matrix).is_some())
+    }) {
+        Some(project_catalog(&jobs, sources)?)
+    } else {
+        None
+    };
     jobs.into_iter()
         .map(|(key, job)| {
             let (matrix, fail_fast) = job
@@ -500,11 +634,50 @@ fn parse_jobs(source: &str) -> Result<Vec<Job>, GraphError> {
                     )
                 })
                 .unwrap_or((YamlValue::Null, None));
-            let matrix = parse_matrix(&key, matrix)?;
+            let needs = job.needs.into_vec();
+            let matrix = if let Some(output) = catalog_output(&key, &matrix) {
+                if !needs.iter().any(|need| need == "e2e-catalog") || fail_fast != Some(false) {
+                    return Err(GraphError::InvalidMatrix {
+                        job_key: key,
+                        value: "catalog matrix requires needs: e2e-catalog and fail-fast: false"
+                            .into(),
+                    });
+                }
+                let value = projected
+                    .as_ref()
+                    .and_then(|values| values.get(output))
+                    .ok_or_else(|| GraphError::InvalidMatrix {
+                        job_key: key.clone(),
+                        value: output.into(),
+                    })?;
+                let rows = if output == "backends" {
+                    serde_json::from_value::<Vec<String>>(value.clone()).map(|backends| {
+                        backends
+                            .into_iter()
+                            .map(|backend| BTreeMap::from([("backend".into(), backend)]))
+                            .collect()
+                    })
+                } else {
+                    serde_json::from_value::<Vec<BTreeMap<String, String>>>(value.clone())
+                }
+                .map_err(|error| GraphError::InvalidMatrix {
+                    job_key: key.clone(),
+                    value: error.to_string(),
+                })?;
+                if rows.is_empty() {
+                    return Err(GraphError::InvalidMatrix {
+                        job_key: key,
+                        value: "empty catalog matrix".into(),
+                    });
+                }
+                Matrix::Rows(rows)
+            } else {
+                Matrix::Dimensions(parse_matrix(&key, matrix)?)
+            };
             Ok(Job {
                 key,
                 name: job.name,
-                needs: job.needs.into_vec(),
+                needs,
                 matrix,
                 fail_fast,
                 uses: job.uses,
@@ -564,8 +737,12 @@ fn yaml_scalar(job_key: &str, value: YamlValue) -> Result<String, GraphError> {
 
 fn expand_matrix(
     job_key: &str,
-    matrix: &[(String, Vec<String>)],
+    matrix: &Matrix,
 ) -> Result<Vec<BTreeMap<String, String>>, GraphError> {
+    let matrix = match matrix {
+        Matrix::Rows(rows) => return Ok(rows.clone()),
+        Matrix::Dimensions(dimensions) => dimensions,
+    };
     let mut result = vec![BTreeMap::new()];
     for (key, values) in matrix {
         if values.is_empty() {
@@ -590,18 +767,22 @@ fn expand_matrix(
 
 fn render_unnamed_job_name(
     job_key: &str,
-    dimensions: &[(String, Vec<String>)],
+    dimensions: &Matrix,
     matrix: &BTreeMap<String, String>,
 ) -> Result<String, GraphError> {
-    if dimensions.is_empty() {
+    let keys = match dimensions {
+        Matrix::Dimensions(dimensions) => dimensions.iter().map(|(key, _)| key).collect::<Vec<_>>(),
+        Matrix::Rows(_) => matrix.keys().collect(),
+    };
+    if keys.is_empty() {
         return Ok(job_key.to_string());
     }
-    let values = dimensions
+    let values = keys
         .iter()
-        .map(|(key, _)| {
-            matrix.get(key).ok_or_else(|| GraphError::InvalidMatrix {
+        .map(|key| {
+            matrix.get(*key).ok_or_else(|| GraphError::InvalidMatrix {
                 job_key: job_key.to_string(),
-                value: key.clone(),
+                value: (*key).clone(),
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -673,6 +854,86 @@ mod tests {
             .unwrap_or_else(|error| panic!("runtime fixture: {error}"))
     }
 
+    fn catalog_sources() -> BTreeMap<String, String> {
+        ["scripts/e2e-matrix.jq", "end2end/e2e-lanes.json"]
+            .into_iter()
+            .map(|path| {
+                (
+                    path.to_owned(),
+                    std::fs::read_to_string(format!("{}/../{path}", env!("CARGO_MANIFEST_DIR")))
+                        .unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn catalog_matrices_require_exact_references_and_immutable_source_evidence() {
+        let source = std::fs::read_to_string(format!(
+            "{}/../.github/workflows/ci.yml",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let sources = catalog_sources();
+        let graph = WorkflowGraph::parse_with_local_sources(&source, &sources).unwrap();
+        for (key, count) in [
+            ("e2e-chromium", 2),
+            ("e2e-firefox-lane", 6),
+            ("e2e-firefox-reconcile", 2),
+        ] {
+            assert_eq!(
+                graph
+                    .nodes
+                    .iter()
+                    .filter(|node| node.job_key == key)
+                    .count(),
+                count
+            );
+        }
+        assert_eq!(
+            graph.classify(&runtime("e2e (sqlite/chromium)"), &["e2e gate".into()]),
+            Ok(Requirement::Transitive)
+        );
+        assert_eq!(
+            graph.classify(&runtime("E2E catalog"), &["e2e gate".into()]),
+            Ok(Requirement::Transitive)
+        );
+        for broken in [
+            source.replace(
+                "${{ fromJSON(needs.e2e-catalog.outputs.chromium) }}",
+                "${{ }}",
+            ),
+            source.replace(
+                "fromJSON(needs.e2e-catalog.outputs.chromium)",
+                "fromJSON(needs.other.outputs.chromium)",
+            ),
+            source.replace(
+                "fromJSON(needs.e2e-catalog.outputs.chromium)",
+                "fromJSON(needs.e2e-catalog.outputs.firefox)",
+            ),
+            source.replacen("needs: [e2e-catalog]", "needs: []", 1),
+            source.replace(
+                "steps.matrix.outputs.chromium",
+                "steps.other.outputs.chromium",
+            ),
+            source.replace("-f scripts/e2e-matrix.jq", "-f scripts/other.jq"),
+            source.replacen("fail-fast: false", "fail-fast: true", 1),
+        ] {
+            assert!(
+                WorkflowGraph::parse_with_local_sources(&broken, &sources).is_err(),
+                "unsupported catalog matrix accepted"
+            );
+        }
+        for path in sources.keys() {
+            let mut missing = sources.clone();
+            missing.remove(path);
+            assert!(WorkflowGraph::parse_with_local_sources(&source, &missing).is_err());
+        }
+        let mut malformed = sources;
+        malformed.insert("end2end/e2e-lanes.json".into(), "{}".into());
+        assert!(WorkflowGraph::parse_with_local_sources(&source, &malformed).is_err());
+    }
+
     #[test]
     fn production_ci_e2e_matrix_explicitly_keeps_fail_fast_disabled() {
         let source = std::fs::read_to_string(format!(
@@ -680,9 +941,12 @@ mod tests {
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap_or_else(|error| panic!("production CI workflow: {error}"));
-        let graph = WorkflowGraph::parse(&source).unwrap_or_else(|error| {
-            panic!("production CI workflow must remain supported by the workflow parser: {error}")
-        });
+        let graph = WorkflowGraph::parse_with_local_sources(&source, &catalog_sources())
+            .unwrap_or_else(|error| {
+                panic!(
+                    "production CI workflow must remain supported by the workflow parser: {error}"
+                )
+            });
 
         for job in ["e2e-chromium", "e2e-firefox-lane", "e2e-firefox-reconcile"] {
             assert_eq!(

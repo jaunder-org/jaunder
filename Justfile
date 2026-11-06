@@ -67,14 +67,10 @@ prepush: _clean-tree (_host "verify" "prepush") _host-tests _product-tests _work
 
 validate-no-e2e: _clean-tree (_host "verify" "host") _platform _static _wasm-budget _host-tests _wasm-tests coverage doctests _elisp-coverage
 
-# Landed E2E entrypoints retain lane artifacts, Firefox reconciliation and the
-# authoritative SQLite/Chromium flow verdict. Replace these calls only after #1890 lands.
+# The full E2E workflow owns producer settlement, reconciliation and authoritative
+# SQLite/Chromium flow verification; static inventory remains in the host surface.
 validate: validate-no-e2e
-    cargo xtask e2e-lane sqlite-chromium-unsplit
-    cargo xtask e2e-lane postgres-chromium-unsplit
-    cargo xtask e2e sqlite firefox
-    cargo xtask e2e postgres firefox
-    cargo xtask check-leaf server-fn-flow
+    just e2e
 
 ci-validate-host: _clean-tree (_host "verify" "host") _platform _host-tests
 
@@ -212,3 +208,18 @@ build-csr $profile="debug":
       "target/wasm32-unknown-unknown/$cargo_profile/csr.wasm" "$project" "$input" "$system_artifacts" "$dist"
     mkdir -p "$checkout/target/site"
     cp -a "$dist/." "$checkout/target/site/"
+
+# Full hermetic E2E workflow: continue all producers, then reconcile both backends.
+e2e jobs="":
+    bash scripts/e2e-workflow all {{quote(jobs)}}
+
+# CI uses the same isolated producer and artifact-only reconciliation boundaries.
+e2e-producer lane:
+    bash scripts/e2e-workflow producer {{quote(lane)}}
+
+# Intentional snapshot update; ordinary producers and the full workflow only verify.
+e2e-regenerate-coverage:
+    bash scripts/e2e-workflow producer sqlite-chromium-unsplit regenerate
+
+e2e-reconcile backend artifacts=".xtask/diagnostics":
+    cargo xtask e2e-reconcile {{quote(backend)}} --catalog end2end/e2e-lanes.json --diagnostics-root {{quote(artifacts)}}

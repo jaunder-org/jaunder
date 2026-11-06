@@ -15,7 +15,7 @@ fn another_repository_is_refused_before_its_hook_configuration_changes() {
         assert!(xtask::git::at(&root).args(args).status().unwrap().success());
     }
     let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
-        .args(["--json", "traces", "analyze", "absent.jsonl"])
+        .args(["traces", "analyze", "absent.jsonl"])
         .current_dir(&root)
         .output()
         .unwrap();
@@ -26,5 +26,6 @@ fn another_repository_is_refused_before_its_hook_configuration_changes() {
         .unwrap();
     assert!(hooks.status.success());
     assert_eq!(hooks.stdout, b"caller-owned-hooks\n");
-    assert!(String::from_utf8_lossy(&output.stderr).contains("Jaunder checkout marker"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Jaunder checkout marker"), "{stderr}");
 }

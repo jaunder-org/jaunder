@@ -246,7 +246,10 @@ impl Request {
             .join(format!("producer-checkout-{}.json", self.lane))
     }
 
-    pub(crate) fn selected(&mut self, selection: Value) {
+    // Fixture support for retained attribution verdict tests; production local
+    // capture does not select hermetic producer outputs.
+    #[cfg(test)]
+    fn selected(&mut self, selection: Value) {
         self.selection = selection;
         // Persist before spawn: failed builds have no ordinary successful NixReport.
         self.persist(None);

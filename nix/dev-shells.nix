@@ -50,6 +50,8 @@ let
       tracedRunBin
       emacsForCi
       pkgs.jq
+      # Just producers invoke Nix directly, not through the xtask launcher.
+      pkgs.nix
       # Independent metadata reads in upload privacy tests, never a runtime editor.
       pkgs.exiftool
       leptosfmt
@@ -90,6 +92,11 @@ let
   # builds its executable with Nix and runs that binary on the host. Guest/test
   # dependencies are declared by the Nix checks and are intentionally unaffected.
   ciE2eInputs = [
+    pkgs.bash
+    pkgs.coreutils
+    pkgs.findutils
+    pkgs.just
+    pkgs.nix
     pkgs.cargo
     xtaskLauncher
     pkgs.git
