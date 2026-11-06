@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Just dependencies fail fast; this bounded loop must instead retain every verdict.
+set -euo pipefail
+catalog=end2end/e2e-lanes.json
+root=.xtask/diagnostics
+jq -er -f scripts/e2e-matrix.jq "$catalog" >/dev/null
+
+if [[ ${1-} == all ]]; then
+  status=0
+  lanes=$(jq -er '[.lanes[] | select(.enabled) | .identity] | .[]' "$catalog")
+  backends=$(jq -er '[.lanes[] | select(.enabled and .browser == "firefox") | .backend] | unique | .[]' "$catalog")
+  enabled=$(jq '[.lanes[] | select(.enabled)] | length' "$catalog")
+  jobs=${2:-$enabled}
+  [[ $jobs =~ ^[1-9][0-9]*$ ]] || { echo 'jobs must be positive' >&2; exit 2; }
+  jobs=$(jq -n --argjson requested "$jobs" --argjson enabled "$enabled" '[$requested, $enabled] | min')
+  # xargs owns bounded admission; normalize child failures so exit 255 cannot
+  # cancel pending producers. All producers settle before reconciliation.
+  printf '%s\n' "$lanes" | xargs -P "$jobs" -n 1 bash -c 'just e2e-producer "$1" || exit 1' _ || status=1
+  for backend in $backends; do
+    just e2e-reconcile "$backend" "$root" || status=1
+  done
+  exit "$status"
+fi
+
+[[ ${1-} == producer ]] || { echo 'expected all or producer' >&2; exit 2; }
+lane=${2:?expected lane identity}
+action=${3:-verify}
+[[ $action == verify || $lane:$action == sqlite-chromium-unsplit:regenerate ]] || { echo 'invalid coverage action' >&2; exit 2; }
+jq -e --arg lane "$lane" '[.lanes[] | select(.enabled and .identity == $lane)] | length == 1' "$catalog" >/dev/null
+check="e2e-$lane"
+installable=".#checks.x86_64-linux.$check"
+destination="$root/$check"
+mkdir -p "$destination" .xtask/gcroots
+# These are this producer's files, never an ambient temporary/build directory.
+rm -f -- "$destination"/*-"$lane".* "$destination/build.json" "$destination/build.log"
+status=0
+nix build -L --keep-failed --log-lines 50 --accept-flake-config \
+  --out-link ".xtask/gcroots/$check" --json "$installable" \
+  >"$destination/build.json" 2> >(tee "$destination/build.log" >&2) || status=$?
+# Wait for the diagnostic tee as well as Nix before returning to artifact upload.
+wait
+if (( status == 0 )); then
+  output=$(jq -er 'if length == 1 then .[0].outputs.out else error("expected one output") end | select(startswith("/nix/store/"))' "$destination/build.json") || exit 1
+else
+  # Kept outputs are diagnostic only, never coverage authority.
+  output=$(nix eval --raw --accept-flake-config "$installable.outPath") || output=
+fi
+lift_status=0
+if [[ -n $output && -d $output ]]; then
+  shopt -s nullglob
+  for artifact in "$output"/*-"$lane".*; do
+    if ! cp --no-preserve=mode -- "$artifact" "$destination/"; then
+      # The existing producer-input sidecar is attribution, never verdict evidence.
+      case ${artifact##*/} in
+        producer-input-"$lane".json) printf 'warning: optional attribution unavailable: %s\n' "$artifact" >&2 || true ;;
+        *) lift_status=1 ;;
+      esac
+    fi
+  done
+fi
+# Recover only the failed build named by this invocation, never ambient builds.
+if (( status != 0 )); then
+  kept=$(jq -Rrs '
+    [split("\n")[] | capture("^note: keeping build directory \"(?<path>/[^\"]+)\"$").path
+     | select(test("^/[^/]+(/[^/]+)*$") and (split("/") | all(. != "." and . != "..")))]
+    | unique | if length == 1 then .[0] else empty end
+  ' "$destination/build.log") || kept=
+  if [[ -n $kept && -d $kept/emit-out/diagnostics ]]; then
+    shopt -s nullglob
+    for artifact in "$kept/emit-out/diagnostics"/*-"$lane".*; do
+      cp --no-preserve=mode -- "$artifact" "$destination/" || true
+    done
+  else
+    printf 'warning: current failed-build diagnostics unavailable or ambiguous\n' >&2 || true
+  fi
+  exit "$status"
+fi
+(( lift_status == 0 )) || exit 1
+if [[ $lane == sqlite-chromium-unsplit ]]; then
+  # The coverage consumer owns lane verification before comparing or regenerating.
+  cargo xtask server-fn-coverage "$action" --capture "$output/capture-$lane.tar.gz" \
+    --producer-output "$output" --lane "$lane" --catalog "$catalog"
+else
+  cargo xtask e2e-verify --lane "$lane" --catalog "$catalog" --artifacts "$output"
+fi

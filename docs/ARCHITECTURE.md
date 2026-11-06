@@ -4029,8 +4029,10 @@ class at `storage/src/postgres/backup.rs:28`).
 ### The e2e suite
 
 Each browser E2E lane is a NixOS-test VM running Playwright against a real
-served instance. One JSON catalog owns the retained topology, Nix derivations,
-local full gate, CI producers, and host reconciliation. Chromium has one unsplit
+served instance. One JSON catalog, `end2end/e2e-lanes.json`, defines the
+retained topology consumed by Nix and runtime artifact verifiers. Pinned `jq`
+projects CI matrices at runtime; Actions `fromJSON` consumes that data rather
+than maintaining a second lane list in workflow YAML. Chromium has one unsplit
 lane per backend. Firefox has three isolated lanes per backend: two shards of
 the ordinary project and one serial-special lane owning visual,
 global-configuration, and invite projects in dependency order. Unsplit Firefox
@@ -4047,11 +4049,39 @@ duration pressure, panic phases, and boot traces. Missing, duplicated,
 misidentified, malformed, or failed evidence fails reconciliation; failed
 producers are still awaited and their recoverable evidence remains an aggregate
 input. The stable result-only `e2e gate` requires both Chromium jobs, all six
-Firefox producers, and both reconciliations. Local `just validate` invokes the
-currently landed producers synchronously between backend/browser commands; each
-Firefox command owns its three retained lanes and reconciliation. It inherits
-the non-e2e Elisp verdict and does not rerun live ERT
+Firefox producers, the catalog projection, and both reconciliations. Local
+`just validate` inherits the non-E2E Elisp verdict, then calls the same
+synchronous `just e2e` workflow; it does not rerun live ERT
 ([distributed e2e](adr/0034-ci-e2e-matrix-distribution.md)).
+
+#### Just-first E2E workflow (#1890)
+
+`just e2e` is the default full local workflow. The Justfile exposes the full
+workflow, one parameterized producer, artifact-only backend reconciliation and
+explicit `e2e-regenerate-coverage` snapshot regeneration. Ordinary workflows
+verify without regenerating. `scripts/e2e-workflow` uses `xargs -P` for bounded
+admission and normalizes child failures so all enabled producers are attempted.
+Both Firefox reconciliations run after producers settle, even when evidence is
+absent or producers failed. The aggregate remains failed if any producer or
+reconciliation failed. CI owns its standard matrix, `needs`, `always()`,
+artifact transport and aggregate job; reconciliation still executes after
+missing/failed artifact downloads.
+
+Nix retains the existing lane installables and required capture-retention,
+writer-quiescence and archive hash/size checks. The producer helper retains GC
+roots, parks the invocation's `nix build --json` output and lifts diagnostics
+before returning the real producer failure. Only successful authoritative
+SQLite/Chromium production can invoke server-function coverage, with its capture
+and explicit selected immutable output. Failed kept outputs remain diagnostic
+only. Artifact verifiers read runtime lane/catalog expectations; the embedded
+Rust catalog, Rust lane scheduler and E2E result/report envelopes are deleted.
+Reusable ownership, retry-duration, boot-trace and coverage verdicts stay in
+place. Static inventory checking remains independent and regeneration explicit.
+No new receipt/schema or hidden-omission guarantee is introduced: authority is
+bounded by the existing producer-observed archive and tested population checks.
+Focused workflow/failure proofs do not establish a full VM/browser matrix pass.
+See the
+[Just E2E workflow ownership draft](adr/drafts/just-e2e-workflow-ownership.md).
 
 `end2end/playwright.config.ts` is the one config, loaded verbatim by both the VM
 and the host loop ([ADR-0051](adr/0051-single-playwright-config.md)). Chromium's
@@ -4274,11 +4304,11 @@ and execution/consumer adapters. The shared `CommandResult` signatures are
 retained compatibility inside that boundary, not workflow reporting or proof of
 algorithmic necessity. Workspace/auxiliary doctest execution and Elisp artifact
 lifting remain residual choreography around real reconciliation/consumer logic;
-small policy extraction has no automatically assigned owner. `server-fn-flow` is
-a separate temporary output-resolution bridge to authoritative trace/snapshot
-verification, with #1890 as its actual E2E migration boundary. The verifier must
-survive bridge retirement. These bounded deletions do not extract the remaining
-checks from the omnibus host executable.
+small policy extraction has no automatically assigned owner. The E2E workflow
+now owns authoritative output selection and trace/snapshot verification; its
+temporary `server-fn-flow` bridge is retired. The independent static coverage
+leaf and artifact verifier remain. These bounded deletions do not extract the
+remaining checks from the omnibus host executable.
 
 The explicit local workflows are:
 
@@ -4576,12 +4606,12 @@ runs only on request. It does not build application/check outputs, though
 evaluation can require declared source preparation. Identity stability alone is
 not local/remote cache or compiler freshness evidence.
 
-`just validate` composes `just validate-no-e2e`, the eight retained E2E lane
-producers, both Firefox reconciliations, and final server-function flow
-verification. Gate-wide JSON invalidation reports are retired. Existing
-source-boundary probes remain optional, named diagnostics; evidence belongs in
-ignored run storage or the PR. Do not purge the store or run routine measurement
-campaigns.
+`just validate` composes `just validate-no-e2e` and the synchronous `just e2e`
+workflow, which settles all eight retained producers before both Firefox
+reconciliations and owns authoritative SQLite/Chromium flow verification.
+Gate-wide JSON invalidation reports are retired. Existing source-boundary probes
+remain optional, named diagnostics; evidence belongs in ignored run storage or
+the PR. Do not purge the store or run routine measurement campaigns.
 
 #### Sandboxed cargo-deny
 
@@ -4799,7 +4829,10 @@ The gate has two lanes (`xtask/src/steps/server_fn_coverage_check.rs`): a static
 lane in `just check`/`just validate-no-e2e` that reads the sole committed
 `docs/coverage/server-fns.json` snapshot plus the source-derived inventory, and
 an e2e lane (`server-fn-coverage-regenerate` / `-verify`) that recomputes that
-snapshot from the per-combo `cargo xtask e2e sqlite chromium` traces.
+snapshot from the successful SQLite/Chromium output selected by
+`just e2e-producer sqlite-chromium-unsplit`, with explicit capture, output, lane
+and runtime catalog inputs. Static inventory checking remains independent of E2E
+production; regeneration is explicit.
 
 No server-fn host gate carries an **endpoint-drift check**, and that is
 deliberate ([ADR-0120](adr/0120-no-endpoint-drift-check.md)). The retired

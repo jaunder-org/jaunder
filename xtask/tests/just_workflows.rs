@@ -19,6 +19,18 @@ impl Workflow {
             root.path().join("recipes/prettier.just"),
         )
         .unwrap();
+        fs::create_dir(root.path().join("scripts")).unwrap();
+        // Gate composition observes only the aggregate boundary. The actual helper's
+        // settlement, artifact and failure behavior is exercised by e2e_workflow.
+        fs::write(
+            root.path().join("scripts/e2e-workflow"),
+            r#"set -eu
+[ "$#" -eq 2 ] && [ "$1" = all ] && [ -z "$2" ]
+printf 'e2e-workflow\tall\n' >> "$FAKE_LOG"
+if [ "${FAIL_COMMAND:-}" = 'e2e-workflow all' ]; then exit 17; fi
+"#,
+        )
+        .unwrap();
         let bin = root.path().join("bin");
         fs::create_dir(&bin).unwrap();
         for tool in ["cargo", "nix", "devtool", "prettier", "git"] {
@@ -433,13 +445,7 @@ fn validation_and_ci_lanes_preserve_required_populations_and_argument_boundaries
     let (ok, actual, stderr) = workflow.run(&["validate-no-e2e"], "");
     assert!(ok, "{stderr}");
     assert_eq!(actual, validate);
-    validate.extend(commands(&[
-        "cargo xtask e2e-lane sqlite-chromium-unsplit",
-        "cargo xtask e2e-lane postgres-chromium-unsplit",
-        "cargo xtask e2e sqlite firefox",
-        "cargo xtask e2e postgres firefox",
-        "cargo xtask check-leaf server-fn-flow",
-    ]));
+    validate.extend(commands(&["e2e-workflow all"]));
     let (ok, actual, stderr) = workflow.run(&["validate"], "");
     assert!(ok, "{stderr}");
     assert_eq!(actual, validate);
@@ -602,8 +608,54 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
     assert!(source.contains(".xtask/gcroots/elisp-coverage-producer/elisp-coverage/"));
     assert_eq!(
         jobs["e2e-gate"]["needs"],
-        serde_yaml::to_value(["e2e-chromium", "e2e-firefox-lane", "e2e-firefox-reconcile"])
-            .unwrap()
+        serde_yaml::to_value([
+            "e2e-catalog",
+            "e2e-chromium",
+            "e2e-firefox-lane",
+            "e2e-firefox-reconcile",
+        ])
+        .unwrap()
+    );
+    assert_eq!(jobs["e2e-gate"]["if"], "always()");
+    for producer in ["e2e-chromium", "e2e-firefox-lane"] {
+        assert_eq!(
+            jobs[producer]["needs"],
+            serde_yaml::to_value(["e2e-catalog"]).unwrap()
+        );
+    }
+    let reconcile = &jobs["e2e-firefox-reconcile"];
+    assert_eq!(
+        reconcile["needs"],
+        serde_yaml::to_value(["e2e-catalog", "e2e-firefox-lane"]).unwrap()
+    );
+    assert_eq!(reconcile["if"], "always()");
+    let lines = jobs["e2e-gate"]["steps"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .filter_map(|step| step["run"].as_str())
+        .flat_map(str::lines)
+        .map(str::trim)
+        .collect::<std::collections::BTreeSet<_>>();
+    for binding in [
+        "chromium=\"${{ needs.e2e-chromium.result }}\"",
+        "firefox_lanes=\"${{ needs.e2e-firefox-lane.result }}\"",
+        "firefox_reconcile=\"${{ needs.e2e-firefox-reconcile.result }}\"",
+    ] {
+        assert!(lines.contains(binding), "aggregate missing {binding}");
+    }
+    assert_eq!(
+        lines
+            .iter()
+            .copied()
+            .filter(|line| line.starts_with("test "))
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from([
+            "test \"${{ needs.e2e-catalog.result }}\" = \"success\"",
+            "test \"$chromium\" = \"success\"",
+            "test \"$firefox_lanes\" = \"success\"",
+            "test \"$firefox_reconcile\" = \"success\"",
+        ])
     );
 }
 

@@ -19,9 +19,6 @@ use crate::traces::parse::{Filters, parse_spans};
 pub const WEB_SRC: &str = "web/src";
 /// The committed, generated coverage snapshot — the byte-compared artifact.
 pub const SNAPSHOT_PATH: &str = "docs/coverage/server-fns.json";
-/// Where `cargo xtask e2e sqlite chromium` lifts the authoritative lane capture.
-pub const CAPTURE_PATH: &str =
-    ".xtask/diagnostics/e2e-sqlite-chromium-unsplit/capture-sqlite-chromium-unsplit.tar.gz";
 
 /// Every `#[macros::server]` fn under `web/src`, sorted by qualified name. A file
 /// that cannot be enumerated is a hard error: a file we cannot read could hide a fn,
@@ -55,7 +52,7 @@ pub fn coverage_from_jsonl(jsonl: &str, inventory: &[ServerFn]) -> Result<Covera
     if spans.is_empty() {
         bail!(
             "the e2e capture contains no spans — refusing to treat an empty capture as \
-             full coverage; re-run `cargo xtask e2e sqlite chromium`"
+             full coverage; re-run `just e2e-producer sqlite-chromium-unsplit`"
         );
     }
     Ok(extract(&spans, inventory))
@@ -66,7 +63,7 @@ pub fn coverage_from_jsonl(jsonl: &str, inventory: &[ServerFn]) -> Result<Covera
 pub fn coverage_from_capture(tarball: &Path, inventory: &[ServerFn]) -> Result<Coverage> {
     if !tarball.exists() {
         bail!(
-            "no e2e capture at {} — run `cargo xtask e2e sqlite chromium` first (coverage is \
+            "no e2e capture at {} — run `just e2e-producer sqlite-chromium-unsplit` first (coverage is \
              derived from that combo's traces, per the spec's D6)",
             tarball.display()
         );

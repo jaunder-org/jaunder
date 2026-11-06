@@ -1,9 +1,51 @@
 //! Fail-closed reconciliation of an independent E2E census and candidate lanes.
 
-use crate::e2e_lanes::Lane;
+use std::collections::BTreeSet;
+use std::path::Path;
+
 use crate::playwright_report::PlaywrightReport;
 use serde::Deserialize;
-use std::collections::BTreeSet;
+
+/// Runtime expectations for artifact ownership, not a build/scheduling lane.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExpectedLane {
+    pub backend: String,
+    pub browser: String,
+    pub partition: String,
+    #[serde(rename = "shardIndex")]
+    pub shard_index: Option<u8>,
+    #[serde(rename = "shardCount")]
+    pub shard_count: Option<u8>,
+    pub identity: String,
+    pub projects: Vec<String>,
+    pub enabled: bool,
+}
+
+/// Read caller-selected ownership expectations without embedding the catalog.
+pub fn read_catalog(path: &Path) -> Result<Vec<ExpectedLane>, String> {
+    #[derive(Deserialize)]
+    struct Catalog {
+        #[serde(rename = "schemaVersion")]
+        schema_version: u8,
+        lanes: Vec<ExpectedLane>,
+    }
+    let raw = std::fs::read_to_string(path)
+        .map_err(|error| format!("reading {}: {error}", path.display()))?;
+    let catalog: Catalog = serde_json::from_str(&raw)
+        .map_err(|error| format!("parsing {}: {error}", path.display()))?;
+    if catalog.schema_version != 1 || catalog.lanes.is_empty() {
+        return Err("unsupported or empty ownership catalog".into());
+    }
+    let identities = catalog
+        .lanes
+        .iter()
+        .map(|lane| &lane.identity)
+        .collect::<BTreeSet<_>>();
+    if identities.len() != catalog.lanes.len() {
+        return Err("duplicate ownership catalog identity".into());
+    }
+    Ok(catalog.lanes)
+}
 
 type Identity = (String, String, String);
 #[derive(Deserialize)]
@@ -94,7 +136,7 @@ fn report_identities(raw: &str, lane: &str) -> Result<BTreeSet<Identity>, String
 pub(crate) fn validate_unsplit_control(
     backend: &str,
     browser: &str,
-    lane: &Lane,
+    lane: &ExpectedLane,
     expected_topology: &str,
     census_raw: &str,
     report_raw: &str,
@@ -140,11 +182,53 @@ pub(crate) fn validate_unsplit_control(
     Ok(())
 }
 
+/// Validate a producer's manifest/report against runtime ownership expectations.
+/// Unsplit catalog projects are selectors: Playwright also executes their
+/// dependencies. The manifest/report pair, not a duplicated dependency graph,
+/// defines that full runtime population (ADR-0165).
+pub fn validate_population(
+    lane: &ExpectedLane,
+    report_raw: &str,
+    manifest_raw: &str,
+) -> Result<(), String> {
+    let manifest: Manifest = serde_json::from_str(manifest_raw)
+        .map_err(|error| format!("malformed lane manifest: {error}"))?;
+    if manifest.schema_version != 1
+        || !manifest.complete
+        || manifest.lane != lane.identity
+        || manifest.backend != lane.backend
+        || manifest.browser != lane.browser
+        || manifest.partition != lane.partition
+        || manifest.shard_index != lane.shard_index
+        || manifest.shard_count != lane.shard_count
+    {
+        return Err("mismatched or incomplete lane manifest".into());
+    }
+    let selected = identities(manifest.tests, "lane manifest")?;
+    let reported = report_identities(report_raw, &lane.identity)?;
+    if selected.is_empty() || selected != reported {
+        return Err("lane manifest/report population mismatch".into());
+    }
+    let projects = selected
+        .iter()
+        .map(|(_, project, _)| project.as_str())
+        .collect::<BTreeSet<_>>();
+    let expected = lane
+        .projects
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    if !expected.is_subset(&projects) || (lane.partition != "unsplit" && projects != expected) {
+        return Err("lane project population differs from catalog selectors".into());
+    }
+    Ok(())
+}
+
 /// Evidence is `(lane identity, expected census, report, authenticated manifest)`.
 pub fn reconcile(
     backend: &str,
     browser: &str,
-    catalog: &[Lane],
+    catalog: &[ExpectedLane],
     evidence: &[(String, String, String, String)],
 ) -> Result<String, String> {
     let lanes = catalog
@@ -243,8 +327,17 @@ pub fn reconcile(
 }
 #[cfg(test)]
 mod tests {
+    use super::read_catalog;
     use super::reconcile;
-    use crate::e2e_lanes::catalog;
+
+    fn catalog() -> Vec<super::ExpectedLane> {
+        read_catalog(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../end2end/e2e-lanes.json")
+                .as_path(),
+        )
+        .unwrap()
+    }
     const C: &str = include_str!("testdata/e2e-ownership/expected-census.json");
     const R1: &str = include_str!("testdata/e2e-ownership/ordinary-1-report.json");
     const R2: &str = include_str!("testdata/e2e-ownership/ordinary-2-report.json");
@@ -275,8 +368,34 @@ mod tests {
         ]
     }
     #[test]
+    fn unsplit_population_includes_playwright_dependency_projects() {
+        let lane = catalog()
+            .into_iter()
+            .find(|lane| lane.identity == "sqlite-chromium-unsplit")
+            .unwrap();
+        let report = r#"{"suites":[{"specs":[{"id":"ordinary","tests":[{"projectId":"chromium","projectName":"chromium"}]},{"id":"admin","tests":[{"projectId":"chromium-admin","projectName":"chromium-admin"}]},{"id":"visual","tests":[{"projectId":"chromium-visual","projectName":"chromium-visual"}]}]}]}"#;
+        let manifest = r#"{"schema_version":1,"complete":true,"lane":"sqlite-chromium-unsplit","backend":"sqlite","browser":"chromium","partition":"unsplit","shard_index":null,"shard_count":null,"tests":[{"project_id":"chromium","project_name":"chromium","test_id":"ordinary"},{"project_id":"chromium-admin","project_name":"chromium-admin","test_id":"admin"},{"project_id":"chromium-visual","project_name":"chromium-visual","test_id":"visual"}]}"#;
+        assert!(super::validate_population(&lane, report, manifest).is_ok());
+    }
+
+    #[test]
+    fn producer_population_rejects_missing_projects_mixed_reports_and_wrong_lane() {
+        let lane = catalog()
+            .into_iter()
+            .find(|lane| lane.identity == "sqlite-firefox-ordinary-1-of-2")
+            .unwrap();
+        assert!(super::validate_population(&lane, R1, M1).is_ok());
+        assert!(super::validate_population(&lane, R2, M1).is_err());
+        assert!(super::validate_population(&lane, R1, M2).is_err());
+        assert!(super::validate_population(&lane, "{", M1).is_err());
+        let mut incomplete = lane.clone();
+        incomplete.projects.push("missing-project".into());
+        assert!(super::validate_population(&incomplete, R1, M1).is_err());
+    }
+
+    #[test]
     fn passing_and_fail_closed_evidence() {
-        let lanes = catalog().unwrap().lanes;
+        let lanes = catalog();
         assert!(reconcile("sqlite", "firefox", &lanes, &e()).is_ok());
         let mut x = e();
         x.pop();

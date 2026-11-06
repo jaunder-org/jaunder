@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::{issue, steps};
+use crate::issue;
 const VERSION: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     " (",
@@ -62,22 +62,6 @@ pub enum E2eBackend {
 pub enum E2eBrowser {
     Chromium,
     Firefox,
-}
-
-/// The measurement-only Firefox control resource profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum E2eControlWorkers {
-    Workers2,
-    Workers4,
-}
-
-impl E2eControlWorkers {
-    pub(crate) const fn count(self) -> u8 {
-        match self {
-            Self::Workers2 => 2,
-            Self::Workers4 => 4,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -184,33 +168,14 @@ pub enum Command {
         #[arg(long, requires = "breakdown")]
         wasm: Option<String>,
     },
-    /// Run one backend/browser E2E verdict through the same diagnostic-preserving
-    /// paths `validate` uses: one unsplit Chromium VM, or all three retained
-    /// Firefox lanes plus reconciliation. Runs on the host only.
-    E2e {
-        #[arg(value_enum)]
-        backend: E2eBackend,
-        #[arg(value_enum)]
-        browser: E2eBrowser,
-    },
-    /// Build one retained Firefox split lane by catalog identity. CI uses this
-    /// host-only command for each isolated lane producer.
-    E2eLane {
-        #[arg(value_parser = nonempty)]
-        identity: String,
-    },
-    /// Build one workers=2 or workers=4 Firefox unsplit control for measurement
-    /// only. This is a host-only package output and never changes production topology.
-    E2eControl {
-        #[arg(value_enum)]
-        backend: E2eBackend,
-        #[arg(value_enum)]
-        workers: E2eControlWorkers,
-    },
-    /// Compatibility alias for `e2e-lane`; builds one retained Firefox split lane.
-    E2eCandidate {
-        #[arg(value_parser = nonempty)]
-        identity: String,
+    /// Verify one lane's explicit artifacts without building a VM.
+    E2eVerify {
+        #[arg(long)]
+        lane: String,
+        #[arg(long)]
+        catalog: PathBuf,
+        #[arg(long)]
+        artifacts: PathBuf,
     },
     /// Reconcile one backend's already-lifted retained Firefox lane evidence
     /// without invoking Nix. `diagnostics_root` contains `e2e-<lane>` directories.
@@ -219,36 +184,18 @@ pub enum Command {
         backend: E2eBackend,
         #[arg(long)]
         diagnostics_root: PathBuf,
-    },
-    /// Measurement compatibility alias with optional unsplit-control comparison.
-    E2eExperimentalReconcile {
-        #[arg(value_enum)]
-        backend: E2eBackend,
         #[arg(long)]
-        diagnostics_root: PathBuf,
-        /// Root containing the lifted unsplit control `e2e-<backend>-firefox-unsplit`
-        /// directory for exact population comparison.
-        #[arg(long, requires = "control_workers")]
-        control_diagnostics_root: Option<PathBuf>,
-        /// The explicit control profile that produced `control_diagnostics_root`.
-        #[arg(long, value_enum, requires = "control_diagnostics_root")]
-        control_workers: Option<E2eControlWorkers>,
+        catalog: PathBuf,
     },
     /// Apply source-aware coverage/CRAP policy to realized reports; never runs Nix.
     CoveragePolicy {
         #[arg(long)]
         out: PathBuf,
     },
-    /// Compatibility command that builds and reconciles one backend's retained
-    /// Firefox split lanes in one host process.
-    E2eExperimental {
-        #[arg(value_enum)]
-        backend: E2eBackend,
-    },
     /// Focused browser proof: use a spec or file:line selector while iterating.
     ///
     /// Rerun the same focused command after a fix. Use representative hermetic
-    /// `e2e <backend> <browser>` proof when backend/browser parity, release-build
+    /// `just e2e-producer <identity>` proof when backend/browser parity, release-build
     /// behavior or the hermetic environment is load-bearing; local proof does not
     /// replace CI/full validation.
     ///
@@ -510,21 +457,23 @@ pub enum PrCommand {
 /// `server-fn-coverage` subcommands (#681).
 #[derive(Subcommand)]
 pub enum ServerFnCoverageCommand {
-    /// Re-derive the coverage snapshot from the `sqlite × chromium` e2e capture
-    /// and write it to `docs/coverage/server-fns.json`.
-    ///
-    /// Run after `cargo xtask e2e sqlite chromium`, which lifts the capture this
-    /// reads. That one combo is authoritative (spec D6): neither backend nor
-    /// browser changes which server fns the UI invokes, and running it per-combo
-    /// avoids the aggregate `checks.e2e` join, where both sqlite combos' captures
-    /// collide under the same file name.
-    #[command(after_help = "EXAMPLES:\n  cargo xtask e2e sqlite chromium\n  \
-        cargo xtask server-fn-coverage regenerate")]
-    Regenerate,
-    /// Re-derive the snapshot and fail if it differs from the committed copy.
-    /// The e2e-lane half of the gate.
-    #[command(after_help = "EXAMPLES:\n  cargo xtask server-fn-coverage verify")]
-    Verify,
+    /// Explicitly regenerate the committed snapshot from selected producer evidence.
+    Regenerate(ProducerCapture),
+    /// Compare selected producer evidence with the committed snapshot.
+    Verify(ProducerCapture),
+}
+
+/// Evidence selected by a successful producer's nix build --json invocation.
+#[derive(clap::Args)]
+pub struct ProducerCapture {
+    #[arg(long)]
+    pub capture: PathBuf,
+    #[arg(long)]
+    pub producer_output: PathBuf,
+    #[arg(long)]
+    pub lane: String,
+    #[arg(long)]
+    pub catalog: PathBuf,
 }
 
 /// `adr` subcommands.
@@ -695,13 +644,8 @@ impl Cli {
             Command::PrecommitSafety => "precommit-safety",
             Command::Census => "census",
             Command::AuditWasm { .. } => "audit-wasm",
-            Command::E2e { .. } => "e2e",
-            Command::E2eLane { .. } => "e2e-lane",
-            Command::E2eControl { .. } => "e2e-control",
-            Command::E2eCandidate { .. } => "e2e-candidate",
+            Command::E2eVerify { .. } => "e2e-verify",
             Command::E2eReconcile { .. } => "e2e-reconcile",
-            Command::E2eExperimentalReconcile { .. } => "e2e-experimental-reconcile",
-            Command::E2eExperimental { .. } => "e2e-experimental",
             Command::E2eLocal { .. } => "e2e-local",
             Command::TestLocal { .. } => "test-local",
             Command::Adr(AdrCommand::SyncReadme) => "adr-sync-readme",
@@ -727,11 +671,11 @@ impl Cli {
             Command::WasmCoverage(WasmCoverageCommand::Measure { .. }) => "wasm-coverage-measure",
             Command::Nix(NixCommand::ProbeSource) => "nix-probe-source",
             Command::CacheSafety(CacheSafetyCommand::Probe) => "cache-safety-probe",
-            Command::ServerFnCoverage(ServerFnCoverageCommand::Regenerate) => {
-                steps::server_fn_coverage_check::REGENERATE_STEP
+            Command::ServerFnCoverage(ServerFnCoverageCommand::Regenerate(_)) => {
+                "server-fn-coverage-regenerate"
             }
-            Command::ServerFnCoverage(ServerFnCoverageCommand::Verify) => {
-                steps::server_fn_coverage_check::VERIFY_STEP
+            Command::ServerFnCoverage(ServerFnCoverageCommand::Verify(_)) => {
+                "server-fn-coverage-verify"
             }
             Command::ProductionBaseline(ProductionBaselineCommand::Discover { .. }) => {
                 "production-baseline-discover"
@@ -769,6 +713,9 @@ impl Command {
                         | TracesCommand::Run { .. }
                         | TracesCommand::BootPhases { .. }
                 )
+                | Command::E2eVerify { .. }
+                | Command::E2eReconcile { .. }
+                | Command::ServerFnCoverage(_)
         )
     }
 }
@@ -813,6 +760,7 @@ mod tests {
                     "same focused command",
                     "hermetic",
                     "parity",
+                    "just e2e-producer",
                 ][..],
             ),
         ] {
@@ -855,13 +803,20 @@ mod tests {
     }
 
     #[test]
-    fn e2e_lane_parses_as_a_production_command() {
-        let cli =
-            Cli::try_parse_from(["xtask", "e2e-lane", "sqlite-firefox-ordinary-1-of-2"]).unwrap();
-        assert_eq!(cli.command_name(), "e2e-lane");
-        assert!(
-            matches!(cli.command, Command::E2eLane { identity } if identity == "sqlite-firefox-ordinary-1-of-2")
-        );
+    fn artifact_verification_requires_explicit_runtime_inputs() {
+        assert!(Cli::try_parse_from(["xtask", "e2e-verify"]).is_err());
+        let cli = Cli::try_parse_from([
+            "xtask",
+            "e2e-verify",
+            "--lane",
+            "sqlite-chromium-unsplit",
+            "--catalog",
+            "lanes.json",
+            "--artifacts",
+            "output",
+        ])
+        .unwrap();
+        assert_eq!(cli.command_name(), "e2e-verify");
     }
 
     #[test]
@@ -1092,55 +1047,16 @@ mod tests {
     }
 
     #[test]
-    fn e2e_combo_parses_backend_and_browser() {
-        let cli = Cli::try_parse_from(["xtask", "e2e", "postgres", "firefox"]).unwrap();
-        match cli.command {
-            Command::E2e { backend, browser } => {
-                assert_eq!(backend, E2eBackend::Postgres);
-                assert_eq!(browser, E2eBrowser::Firefox);
-            }
-            _ => panic!("expected e2e"),
+    fn retired_schedulers_are_not_parallel_entrypoints() {
+        for command in [
+            "e2e",
+            "e2e-lane",
+            "e2e-control",
+            "e2e-candidate",
+            "e2e-experimental",
+        ] {
+            assert!(Cli::try_parse_from(["xtask", command, "sqlite"]).is_err());
         }
-    }
-
-    #[test]
-    fn measurement_e2e_commands_parse_without_production_routing() {
-        let control = Cli::try_parse_from(["xtask", "e2e-control", "sqlite", "workers4"]).unwrap();
-        assert_eq!(control.command_name(), "e2e-control");
-        assert!(matches!(
-            control.command,
-            Command::E2eControl {
-                backend: E2eBackend::Sqlite,
-                workers: E2eControlWorkers::Workers4,
-            }
-        ));
-
-        let candidate =
-            Cli::try_parse_from(["xtask", "e2e-candidate", "sqlite-firefox-ordinary-1-of-2"])
-                .unwrap();
-        assert_eq!(candidate.command_name(), "e2e-candidate");
-        assert!(matches!(candidate.command, Command::E2eCandidate { .. }));
-
-        let reconcile = Cli::try_parse_from([
-            "xtask",
-            "e2e-experimental-reconcile",
-            "postgres",
-            "--diagnostics-root",
-            "/tmp/candidates",
-            "--control-diagnostics-root",
-            "/tmp/control",
-            "--control-workers",
-            "workers2",
-        ])
-        .unwrap();
-        assert_eq!(reconcile.command_name(), "e2e-experimental-reconcile");
-        assert!(matches!(
-            reconcile.command,
-            Command::E2eExperimentalReconcile {
-                backend: E2eBackend::Postgres,
-                ..
-            }
-        ));
     }
 
     #[test]
@@ -1593,18 +1509,45 @@ mod tests {
     fn server_fn_coverage_parses_both_subcommands() {
         // Both spellings appear verbatim in the gate's failure messages and in
         // CONTRIBUTING, so a rename must break a test rather than a developer.
-        let cli = Cli::try_parse_from(["xtask", "server-fn-coverage", "regenerate"]).unwrap();
+        assert!(Cli::try_parse_from(["xtask", "server-fn-coverage", "regenerate"]).is_err());
+        let cli = Cli::try_parse_from([
+            "xtask",
+            "server-fn-coverage",
+            "regenerate",
+            "--capture",
+            "capture.tar.gz",
+            "--producer-output",
+            "/nix/store/selected",
+            "--lane",
+            "sqlite-chromium-unsplit",
+            "--catalog",
+            "lanes.json",
+        ])
+        .unwrap();
         assert_eq!(cli.command_name(), "server-fn-coverage-regenerate");
         assert!(matches!(
             cli.command,
-            Command::ServerFnCoverage(ServerFnCoverageCommand::Regenerate)
+            Command::ServerFnCoverage(ServerFnCoverageCommand::Regenerate(_))
         ));
 
-        let cli = Cli::try_parse_from(["xtask", "server-fn-coverage", "verify"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "xtask",
+            "server-fn-coverage",
+            "verify",
+            "--capture",
+            "capture.tar.gz",
+            "--producer-output",
+            "/nix/store/selected",
+            "--lane",
+            "sqlite-chromium-unsplit",
+            "--catalog",
+            "lanes.json",
+        ])
+        .unwrap();
         assert_eq!(cli.command_name(), "server-fn-coverage-verify");
         assert!(matches!(
             cli.command,
-            Command::ServerFnCoverage(ServerFnCoverageCommand::Verify)
+            Command::ServerFnCoverage(ServerFnCoverageCommand::Verify(_))
         ));
     }
 

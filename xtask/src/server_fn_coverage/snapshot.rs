@@ -24,7 +24,7 @@ use crate::server_fns::ServerFn;
 
 /// The regenerate command named in every failure message, so an author who hits
 /// the gate needs no external context.
-pub const REGENERATE_CMD: &str = "cargo xtask server-fn-coverage regenerate";
+pub const REGENERATE_CMD: &str = "just e2e-regenerate-coverage";
 
 /// Which server fns a real browser session drove, as committed to
 /// `docs/coverage/server-fns.json`. **This is the byte-compared artifact.**

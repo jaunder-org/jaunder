@@ -1,46 +1,18 @@
-//! Both lanes of the `#[server]` flow-coverage gate (#681).
-//!
-//! **The static lane** ([`run`]) belongs to `just check` / `just validate-no-e2e`: it
-//! reads the committed snapshot plus the source-derived inventory — no traces,
-//! no e2e run — so adding a `#[server]` fn with no browser flow reddens the
-//! build immediately, without waiting for the e2e matrix.
-//!
-//! **The e2e lane** ([`from_capture`], [`verify_from_capture`],
-//! [`verify_after_combo`]) is the half that keeps the snapshot honest: only a real
-//! run produces traces, so only there can the gate notice that the committed
-//! snapshot no longer matches what the suite exercises. `regenerate` rewrites it
-//! from the standalone command's diagnostics capture; `verify` fails on any
-//! difference. The per-combo command reads its uncollided diagnostics capture,
-//! while aggregate callers pass an explicit uncollided individual-output capture
-//! rather than reading the colliding `checks.e2e` join.
-//!
-//! Neither half is sufficient alone: traces exist only in the e2e lane, and fast
-//! feedback only in the static one.
+//! Independent static inventory and explicit producer-artifact flow verification.
+//! The workflow, never this consumer, selects/builds the authoritative output.
 
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 
 use crate::result::{CommandResult, StepResult};
 use crate::server_fn_coverage::io::{
-    CAPTURE_PATH, SNAPSHOT_PATH, WEB_SRC, coverage_from_capture, inventory, read_snapshot,
-    write_snapshot,
+    SNAPSHOT_PATH, WEB_SRC, coverage_from_capture, inventory, read_snapshot, write_snapshot,
 };
 use crate::server_fn_coverage::{REGENERATE_CMD, Snapshot, render, verdict};
 
 /// The static lane's step name.
 const STATIC_STEP: &str = "server-fn-coverage";
-/// The e2e lane's step names. `pub` because `lib.rs` labels the `CommandResult`
-/// and its `command_name()` arm with the same strings — spelling them again there
-/// would let a rename desync the reported command from the step it ran.
-pub const REGENERATE_STEP: &str = "server-fn-coverage-regenerate";
-pub const VERIFY_STEP: &str = "server-fn-coverage-verify";
-
-/// The one combo whose traces are authoritative (spec D6). `chromium` and
-/// `chromium-admin` are exact complements over all spec files and no test is
-/// browser- or backend-conditional, so picking one combo drops no coverage.
-const AUTHORITATIVE: (&str, &str) = ("sqlite", "chromium");
-
 /// The static-lane check, over explicit paths so it is testable without the repo.
 ///
 /// A missing snapshot, an unscannable `web/src`, or an unparseable snapshot is a
@@ -87,47 +59,32 @@ fn regenerate_or_verify(
     capture: &Path,
     snapshot_path: &Path,
     regenerate: bool,
-) -> Result<StepResult> {
-    let name = if regenerate {
-        REGENERATE_STEP
-    } else {
-        VERIFY_STEP
-    };
+) -> Result<String> {
     let inventory = inventory(web_src)?;
     let snapshot = coverage_from_capture(capture, &inventory)?.into_snapshot();
     let covered = snapshot.covered.len();
 
     if regenerate {
-        return regenerate_snapshot(name, snapshot_path, &snapshot);
+        return regenerate_snapshot(snapshot_path, &snapshot);
     }
 
     // The deterministic snapshot is the sole generated artifact and the sole
     // value compared by verification.
     let committed = std::fs::read_to_string(snapshot_path).unwrap_or_default();
-    compare_rendered(
-        name,
-        &committed,
-        &render(&snapshot)?,
-        snapshot_path,
-        covered,
-    )
+    compare_rendered(&committed, &render(&snapshot)?, snapshot_path, covered)
 }
 
 /// Write the one generated artifact from an already-derived snapshot. Keeping
 /// this edge separate makes the one-output regeneration contract testable
 /// without manufacturing a capture tarball.
-fn regenerate_snapshot(
-    name: &'static str,
-    snapshot_path: &Path,
-    snapshot: &Snapshot,
-) -> Result<StepResult> {
+fn regenerate_snapshot(snapshot_path: &Path, snapshot: &Snapshot) -> Result<String> {
     let covered = snapshot.covered.len();
     let orphans = snapshot.orphans.len();
     write_snapshot(snapshot_path, snapshot)?;
-    Ok(StepResult::ok(name).detail(format!(
+    Ok(format!(
         "{covered} covered, {orphans} fn(s) with unattributed hits → {}",
         snapshot_path.display()
-    )))
+    ))
 }
 
 /// The verify verdict for bytes already derived — pure over its inputs, so the
@@ -136,115 +93,60 @@ fn regenerate_snapshot(
 /// A missing snapshot reaches here as an empty `committed`, which never equals
 /// rendered output and so fails — the strict reading, not a lenient one.
 fn compare_rendered(
-    name: &'static str,
     committed: &str,
     rendered: &str,
     snapshot_path: &Path,
     covered: usize,
-) -> Result<StepResult> {
+) -> Result<String> {
     if committed == rendered {
-        return Ok(StepResult::ok(name).detail(format!("{covered} covered; snapshot current")));
+        return Ok(format!("{covered} covered; snapshot current"));
     }
-    Ok(StepResult::fail(name).detail(format!(
-        "{} is out of date with this run's traces — regenerate it with `{REGENERATE_CMD}` and \
-         commit the result",
+    bail!(
+        "{} is out of date with this run's traces — regenerate it with `{REGENERATE_CMD}` and commit the result",
         snapshot_path.display()
-    )))
+    )
 }
 
-/// rewrite the committed snapshot (`regenerate`) or fail on any difference from
-/// it (`verify`).
-pub fn from_capture(capture: &Path, regenerate: bool) -> Result<StepResult> {
+/// Consume only the selected successful immutable producer output. Nix owns
+/// writer quiescence, retention and archive member hash/size checks; the existing
+/// population and trace verdicts corroborate the artifacts, not hidden omissions.
+pub fn from_producer(inputs: &crate::cli::ProducerCapture, regenerate: bool) -> Result<String> {
+    validate_selected_capture(&inputs.capture, &inputs.producer_output, &inputs.lane)?;
+    crate::e2e_evidence::verify_lane(&inputs.lane, &inputs.catalog, &inputs.producer_output)
+        .map_err(anyhow::Error::msg)?;
     regenerate_or_verify(
         Path::new(WEB_SRC),
-        capture,
+        &inputs.capture,
         Path::new(SNAPSHOT_PATH),
         regenerate,
     )
 }
 
-/// Verify a caller-owned, uncollided E2E capture and append the usual e2e-lane
-/// result. Capture, extraction, inventory, rendering, and byte-comparison policy
-/// remain shared with the standalone command through [`from_capture`].
-///
-/// This turns every capture-plumbing failure into the named fail-closed result so
-/// aggregate callers can retain it alongside their other gate steps.
-pub fn verify_from_capture(result: &mut CommandResult, capture: &Path) {
-    let step = from_capture(capture, false)
-        .unwrap_or_else(|e| StepResult::fail(VERIFY_STEP).detail(format!("{e:#}")));
-    result.push(step);
-}
-
-/// The explicit-path form of [`verify_from_capture`] for focused behavior tests.
-/// Production callers always use the repository's source and snapshot paths.
-#[cfg(test)]
-fn verify_from_capture_at(
-    result: &mut CommandResult,
-    web_src: &Path,
-    capture: &Path,
-    snapshot_path: &Path,
-) {
-    let step = regenerate_or_verify(web_src, capture, snapshot_path, false)
-        .unwrap_or_else(|e| StepResult::fail(VERIFY_STEP).detail(format!("{e:#}")));
-    result.push(step);
-}
-
-/// After the authoritative combo, confirm the committed snapshot still matches
-/// what the suite exercised. A no-op for every other combo (D8/D6).
-///
-/// Skipped when the combo itself failed: a failed run's capture is partial or
-/// absent, so drift against it would be noise reported on top of the real
-/// failure. `result` carries the combo's verdict at this point — the only other
-/// step run before this one is the informational flaky scan, which never fails.
-pub fn verify_after_combo(result: &mut CommandResult, backend: &str, browser: &str) {
-    if (backend, browser) != AUTHORITATIVE {
-        return;
+fn validate_selected_capture(capture: &Path, output: &Path, lane: &str) -> Result<()> {
+    if lane != "sqlite-chromium-unsplit" {
+        bail!("only sqlite-chromium-unsplit is authoritative for flow coverage");
     }
-    if !result.ok {
-        result.push(StepResult::skip(VERIFY_STEP).detail("combo failed — no trustworthy capture"));
-        return;
+    let output = output
+        .canonicalize()
+        .context("resolving selected producer output")?;
+    if output.parent() != Some(Path::new("/nix/store")) {
+        bail!("producer output is not an immutable Nix output");
     }
-    verify_from_capture(result, Path::new(CAPTURE_PATH));
-}
-
-/// After validate's four-combination E2E portion, verify the authoritative
-/// individual derivation output without realizing another VM.
-pub fn verify_after_validate(result: &mut CommandResult, combinations_ok: bool) {
-    verify_after_validate_with(
-        result,
-        combinations_ok,
-        || crate::steps::nix::eval_out_path("e2e-sqlite-chromium"),
-        verify_from_capture,
-    );
-}
-
-fn verify_after_validate_with(
-    result: &mut CommandResult,
-    combinations_ok: bool,
-    resolve_out_path: impl FnOnce() -> Result<String>,
-    verify: impl FnOnce(&mut CommandResult, &Path),
-) {
-    if !combinations_ok {
-        result.push(
-            StepResult::skip(VERIFY_STEP)
-                .detail("E2E combinations failed — no trustworthy authoritative capture"),
-        );
-        return;
+    let capture = capture.canonicalize().context("resolving capture")?;
+    if capture != output.join(format!("capture-{lane}.tar.gz")) {
+        bail!("capture does not belong to the selected producer output");
     }
-
-    let out_path = match resolve_out_path() {
-        Ok(path) => path,
-        Err(error) => {
-            result.push(StepResult::fail(VERIFY_STEP).detail(format!(
-                "cannot resolve authoritative E2E outPath: {error:#}"
-            )));
-            return;
-        }
-    };
-    let capture_name = Path::new(CAPTURE_PATH)
-        .file_name()
-        .expect("authoritative diagnostics capture has a filename");
-    verify(result, &Path::new(&out_path).join(capture_name));
+    // A kept failed output is not registered as a valid store path. Merely
+    // finding its capture (or a stale success-only gcroot) cannot grant authority.
+    let status = std::process::Command::new("nix")
+        .args(["path-info", "--offline"])
+        .arg(&output)
+        .status()
+        .context("checking selected producer output validity")?;
+    if !status.success() {
+        bail!("selected producer output is not a successful registered Nix output");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -369,9 +271,7 @@ mod tests {
             orphans: Default::default(),
         };
 
-        let step =
-            regenerate_snapshot(REGENERATE_STEP, &snapshot_path, &snapshot).expect("regenerates");
-        assert!(step.ok, "{:?}", step.detail);
+        regenerate_snapshot(&snapshot_path, &snapshot).expect("regenerates");
         assert_eq!(
             read_snapshot(&snapshot_path).expect("snapshot parses"),
             snapshot
@@ -411,16 +311,14 @@ mod tests {
 
     #[test]
     fn identical_bytes_verify_clean() {
-        let step = compare_rendered(
-            VERIFY_STEP,
+        let detail = compare_rendered(
             "same\n",
             "same\n",
             Path::new("docs/coverage/server-fns.json"),
             54,
         )
-        .expect("compares");
-        assert!(step.ok, "{:?}", step.detail);
-        assert!(step.detail.unwrap_or_default().contains("54 covered"));
+        .unwrap();
+        assert!(detail.contains("54 covered"));
     }
 
     #[test]
@@ -428,16 +326,9 @@ mod tests {
         // Byte equality, not parsed equality: a hand-edit that happens to parse
         // equal is still drift, which is what makes the committed artifact
         // provably what regeneration produces.
-        let step = compare_rendered(
-            VERIFY_STEP,
-            "a\n",
-            "b\n",
-            Path::new("docs/coverage/server-fns.json"),
-            54,
-        )
-        .expect("compares");
-        assert!(!step.ok);
-        let detail = step.detail.unwrap_or_default();
+        let detail = compare_rendered("a\n", "b\n", Path::new("docs/coverage/server-fns.json"), 54)
+            .unwrap_err()
+            .to_string();
         assert!(detail.contains("docs/coverage/server-fns.json"), "{detail}");
         assert!(
             detail.contains(REGENERATE_CMD),
@@ -450,30 +341,31 @@ mod tests {
         // `regenerate_or_verify` passes `unwrap_or_default()` for an unreadable
         // file; empty never equals rendered output, so it fails — the strict
         // reading, not a lenient one.
-        let step = compare_rendered(
-            VERIFY_STEP,
-            "",
-            "anything\n",
-            Path::new("docs/coverage/server-fns.json"),
-            0,
-        )
-        .expect("compares");
-        assert!(!step.ok);
+        assert!(
+            compare_rendered(
+                "",
+                "anything\n",
+                Path::new("docs/coverage/server-fns.json"),
+                0
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn whitespace_only_difference_is_still_drift() {
         // The failure mode a parsed comparison would wave through: same value,
         // different bytes. This is exactly what byte-comparison is for.
-        let step = compare_rendered(
-            VERIFY_STEP,
-            "{\n  \"covered\": []\n}\n",
-            "{\n    \"covered\": []\n}\n",
-            Path::new("docs/coverage/server-fns.json"),
-            0,
-        )
-        .expect("compares");
-        assert!(!step.ok, "reformatted-but-equal must still be drift");
+        assert!(
+            compare_rendered(
+                "{\n  \"covered\": []\n}\n",
+                "{\n    \"covered\": []\n}\n",
+                Path::new("docs/coverage/server-fns.json"),
+                0
+            )
+            .is_err(),
+            "reformatted-but-equal must still be drift"
+        );
     }
 
     fn write_sample_capture(path: &Path) {
@@ -538,13 +430,7 @@ mod tests {
         write_sample_capture(&capture);
         current_snapshot_for(&capture, tmp.path(), &snapshot);
 
-        let mut result = CommandResult::new("validate");
-        verify_from_capture_at(&mut result, tmp.path(), &capture, &snapshot);
-
-        assert_eq!(result.steps.len(), 1);
-        let step = &result.steps[0];
-        assert_eq!(step.name, VERIFY_STEP);
-        assert!(step.ok, "{:?}", step.detail);
+        assert!(regenerate_or_verify(tmp.path(), &capture, &snapshot, false).is_ok());
     }
 
     #[test]
@@ -556,13 +442,8 @@ mod tests {
         write_sample_capture(&capture);
         write_json(&snapshot, "stale\n");
 
-        let mut result = CommandResult::new("validate");
-        verify_from_capture_at(&mut result, tmp.path(), &capture, &snapshot);
-
-        let step = result.steps.last().expect("verification step");
-        assert_eq!(step.name, VERIFY_STEP);
-        assert!(!step.ok);
-        let detail = step.detail.as_deref().unwrap_or_default();
+        let error = regenerate_or_verify(tmp.path(), &capture, &snapshot, false).unwrap_err();
+        let detail = error.to_string();
         assert!(detail.contains("server-fns.json"), "{detail}");
         assert!(detail.contains(REGENERATE_CMD), "{detail}");
     }
@@ -584,49 +465,18 @@ mod tests {
             malformed,
             directory,
         ] {
-            let mut result = CommandResult::new("validate");
-            verify_from_capture_at(
-                &mut result,
-                tmp.path(),
-                &capture,
-                &tmp.path().join("server-fns.json"),
-            );
-
-            let step = result.steps.last().expect("verification step");
-            assert_eq!(step.name, VERIFY_STEP, "{}", capture.display());
-            assert!(!step.ok, "{}: {:?}", capture.display(), step.detail);
-            assert!(!step.skipped, "{} must fail, not skip", capture.display());
-        }
-    }
-
-    #[test]
-    fn e2e_lane_is_a_no_op_for_a_non_authoritative_combo() {
-        // D8: only the sqlite × chromium combo has an uncollided capture.
-        for (backend, browser) in [
-            ("sqlite", "firefox"),
-            ("postgres", "chromium"),
-            ("postgres", "firefox"),
-        ] {
-            let mut result = CommandResult::new("e2e");
-            verify_after_combo(&mut result, backend, browser);
             assert!(
-                result.steps.is_empty(),
-                "{backend} × {browser} must not touch the snapshot"
+                regenerate_or_verify(
+                    tmp.path(),
+                    &capture,
+                    &tmp.path().join("server-fns.json"),
+                    false
+                )
+                .is_err(),
+                "{} must fail, not skip",
+                capture.display()
             );
         }
-    }
-
-    #[test]
-    fn e2e_lane_skips_when_the_combo_failed() {
-        // A failed combo's capture is partial or absent; drift against it would be
-        // noise stacked on the real failure.
-        let mut result = CommandResult::new("e2e-sqlite-chromium");
-        result.push(StepResult::fail("nix-e2e-sqlite-chromium"));
-        verify_after_combo(&mut result, "sqlite", "chromium");
-
-        let last = result.steps.last().expect("a step");
-        assert_eq!(last.name, VERIFY_STEP);
-        assert!(last.skipped, "reported as skipped, not as a second failure");
     }
 
     // ── Assertions against the real seeding capture (spec AC2/AC11) ──────────
@@ -942,60 +792,58 @@ mod tests {
         assert!(inventory(tmp.path()).expect("inventory scans").is_empty());
     }
     #[test]
-    fn validate_skips_coverage_without_trustworthy_combinations() {
-        let mut result = CommandResult::new("validate");
-        verify_after_validate_with(
-            &mut result,
-            false,
-            || panic!("failed combinations must not resolve an outPath"),
-            |_, _| panic!("failed combinations must not verify a capture"),
+    fn selected_immutable_output_rejects_a_capture_from_another_output() {
+        fn store_capture(bytes: &str) -> std::path::PathBuf {
+            let temp = tempfile::tempdir().unwrap();
+            std::fs::write(
+                temp.path().join("capture-sqlite-chromium-unsplit.tar.gz"),
+                bytes,
+            )
+            .unwrap();
+            let output = std::process::Command::new("nix")
+                .args(["store", "add-path", "--name", "coverage-input-fixture"])
+                .arg(temp.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).unwrap().trim().into()
+        }
+        let selected = store_capture("selected");
+        let other = store_capture("stale");
+        let name = "capture-sqlite-chromium-unsplit.tar.gz";
+        assert!(
+            validate_selected_capture(&selected.join(name), &selected, "sqlite-chromium-unsplit")
+                .is_ok()
         );
-
-        let step = result.steps.last().expect("coverage skip");
-        assert_eq!(step.name, VERIFY_STEP);
-        assert!(step.skipped);
-        assert!(step.detail.as_deref().unwrap().contains("no trustworthy"));
+        let error =
+            validate_selected_capture(&other.join(name), &selected, "sqlite-chromium-unsplit")
+                .unwrap_err();
+        assert!(error.to_string().contains("does not belong"));
+        assert!(
+            validate_selected_capture(
+                &selected.join("missing"),
+                &selected,
+                "sqlite-chromium-unsplit"
+            )
+            .is_err()
+        );
     }
 
     #[test]
-    fn validate_fails_closed_when_the_authoritative_out_path_cannot_resolve() {
-        let mut result = CommandResult::new("validate");
-        verify_after_validate_with(
-            &mut result,
-            true,
-            || anyhow::bail!("eval failed"),
-            |_, _| panic!("an unresolved outPath has no capture"),
-        );
-
-        let step = result.steps.last().expect("coverage failure");
-        assert_eq!(step.name, VERIFY_STEP);
-        assert!(!step.ok);
-        assert!(step.detail.as_deref().unwrap().contains("eval failed"));
-    }
-
-    #[test]
-    fn validate_uses_the_individual_out_path_despite_an_earlier_failure() {
-        let mut result = CommandResult::new("validate");
-        result.push(StepResult::fail("earlier-static-check"));
-        let expected = Path::new("/nix/store/authoritative").join(
-            Path::new(CAPTURE_PATH)
-                .file_name()
-                .expect("capture filename"),
-        );
-        let observed = std::cell::RefCell::new(None);
-
-        verify_after_validate_with(
-            &mut result,
-            true,
-            || Ok("/nix/store/authoritative".to_owned()),
-            |result, capture| {
-                observed.replace(Some(capture.to_owned()));
-                result.push(StepResult::ok(VERIFY_STEP));
-            },
-        );
-
-        assert_eq!(observed.into_inner().as_deref(), Some(expected.as_path()));
-        assert!(!result.ok, "the earlier failure remains authoritative");
-        assert!(result.steps.last().expect("coverage result").ok);
+    fn capture_authority_rejects_other_lanes_missing_outputs_and_mutable_copies() {
+        let temp = tempfile::tempdir().unwrap();
+        let capture = temp.path().join("capture-sqlite-chromium-unsplit.tar.gz");
+        write_sample_capture(&capture);
+        for (lane, output) in [
+            ("postgres-chromium-unsplit", temp.path().to_owned()),
+            ("sqlite-chromium-unsplit", temp.path().join("missing")),
+            ("sqlite-chromium-unsplit", temp.path().to_owned()),
+        ] {
+            assert!(validate_selected_capture(&capture, &output, lane).is_err());
+        }
     }
 }

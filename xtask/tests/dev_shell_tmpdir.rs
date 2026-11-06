@@ -115,6 +115,14 @@ fn ci_e2e_shell_environment_and_library_prepend_are_exact() {
         }),
         "ci-e2e must keep the Cargo subcommand dispatcher"
     );
+    for tool in ["-just-", "-nix-", "-findutils-", "-coreutils-", "-bash-"] {
+        assert!(
+            inputs
+                .iter()
+                .any(|path| path.as_str().unwrap().contains(tool)),
+            "ci-e2e must pin workflow tool {tool}"
+        );
+    }
     let ci_toolchains = contract["ci_toolchains"].as_array().unwrap();
     assert_eq!(
         ci_toolchains.len(),

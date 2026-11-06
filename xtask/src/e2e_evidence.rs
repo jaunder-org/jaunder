@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::e2e_lanes::Lane;
+use crate::e2e_ownership::ExpectedLane;
 use crate::result::{PhaseName, PhaseOutcome, PhaseRecord};
 
 #[derive(Clone)]
@@ -142,7 +142,7 @@ fn source_population(raw: &str, kind: &str) -> Result<BTreeSet<SourceIdentity>, 
 pub fn compare_control_population(
     backend: &str,
     split: &[LaneEvidence],
-    lanes: &[Lane],
+    lanes: &[ExpectedLane],
     control_topology: &str,
     control_census: &Path,
     control_report: &Path,
@@ -194,7 +194,7 @@ pub fn compare_control_population(
 pub fn reconcile(
     backend: &str,
     browser: &str,
-    lanes: &[Lane],
+    lanes: &[ExpectedLane],
     evidence: &[LaneEvidence],
 ) -> Result<String, Vec<String>> {
     let mut errors = Vec::new();
@@ -285,6 +285,49 @@ pub fn reconcile(
     }
 }
 
+/// File naming is shared by local and distributed artifact consumers.
+pub fn lane_evidence(identity: &str, root: &Path) -> LaneEvidence {
+    LaneEvidence {
+        identity: identity.into(),
+        census: root.join(format!("e2e-census-{identity}.json")),
+        report: root.join(format!("playwright-report-{identity}.json")),
+        lane_manifest: root.join(format!("e2e-lane-manifest-{identity}.json")),
+        duration_manifest: root.join(format!("duration-budget-manifest-{identity}.json")),
+        capture: root.join(format!("capture-{identity}.tar.gz")),
+        phase: root.join(format!("e2e-phase-{identity}.json")),
+    }
+}
+
+/// Narrow artifact verdicts: no build selection, report envelope, or scheduler.
+pub fn verify_lane(identity: &str, catalog: &Path, root: &Path) -> Result<String, String> {
+    let lanes = crate::e2e_ownership::read_catalog(catalog)?;
+    let lane = lanes
+        .iter()
+        .find(|lane| lane.enabled && lane.identity == identity)
+        .ok_or_else(|| "unknown or disabled lane".to_owned())?;
+    let evidence = lane_evidence(identity, root);
+    crate::e2e_ownership::validate_population(
+        lane,
+        &read(&evidence.report, "report")?,
+        &read(&evidence.lane_manifest, "manifest")?,
+    )?;
+    crate::steps::duration_budget::validate_files(&evidence.report, &evidence.duration_manifest)?;
+    crate::steps::boot_decomposition_coverage::validate_files(&evidence.report, &evidence.capture)?;
+    Ok(format!(
+        "{identity}: population, retry-duration and boot evidence verified"
+    ))
+}
+
+pub fn reconcile_files(backend: &str, catalog: &Path, root: &Path) -> Result<String, String> {
+    let lanes = crate::e2e_ownership::read_catalog(catalog)?;
+    let evidence = lanes
+        .iter()
+        .filter(|lane| lane.enabled && lane.backend == backend && lane.browser == "firefox")
+        .map(|lane| lane_evidence(&lane.identity, &root.join(format!("e2e-{}", lane.identity))))
+        .collect::<Vec<_>>();
+    reconcile(backend, "firefox", &lanes, &evidence).map_err(|errors| errors.join("\n"))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use std::fs;
@@ -295,7 +338,16 @@ pub(crate) mod tests {
     use serde_json::Value;
 
     use super::{LaneEvidence, reconcile};
-    use crate::e2e_lanes::catalog;
+    fn catalog() -> Result<TestCatalog, String> {
+        Ok(TestCatalog {
+            lanes: crate::e2e_ownership::read_catalog(
+                &Path::new(env!("CARGO_MANIFEST_DIR")).join("../end2end/e2e-lanes.json"),
+            )?,
+        })
+    }
+    struct TestCatalog {
+        lanes: Vec<super::ExpectedLane>,
+    }
     use crate::traces::run::TRACE_MEMBER;
 
     const CENSUS: &str = include_str!("testdata/e2e-ownership/expected-census.json");

@@ -308,9 +308,10 @@ For a changed browser flow, use the supported focused SQLite loop, for example
 `traced-run -- cargo xtask e2e-local auth.spec.ts`. This builds and validates
 current CSR assets and exercises a real server/Collector/browser lifecycle; it
 is not PostgreSQL parity, complete CSR lint, authoritative source coverage or a
-full matrix. Use `traced-run -- cargo xtask e2e postgres chromium` for that
-backend's full hermetic Chromium lane. Firefox uses the retained `e2e-lane`
-producers plus `e2e-reconcile`, not a serial-special result alone. The complete
+full matrix. Use `traced-run -- just e2e-producer postgres-chromium-unsplit` for
+that backend's full hermetic Chromium lane. Firefox requires all three
+`just e2e-producer` lanes and `just e2e-reconcile` per backend, not a
+serial-special result alone; `just e2e` owns the complete workflow. The complete
 commands and final validation ladder remain in
 [CONTRIBUTING](../CONTRIBUTING.md#running-e2e-tests-locally).
 
@@ -749,38 +750,38 @@ name in one module.
 **Two lanes, and neither is sufficient alone.** Traces exist only in the e2e
 lane; fast feedback only in the static one.
 
-- **Static** (`just check`, `just validate-no-e2e`): committed snapshot +
-  allowlist + `syn` inventory. No capture, so a new `#[server]` fn with no flow
-  reddens the build without an e2e run.
-- **E2e** (`cargo xtask e2e sqlite chromium`): regenerates from that run's
-  capture and fails on any difference from the committed snapshot.
+- **Static** (`just check`, `just validate-no-e2e`): committed snapshot + `syn`
+  inventory. No capture, so a new `#[server]` fn with no flow reddens the build
+  without an e2e run.
+- **E2e** (`just e2e`, or `just e2e-producer sqlite-chromium-unsplit`): derives
+  the snapshot from that successful producer's selected immutable Nix output and
+  fails on any difference; it never regenerates automatically.
 
-**Regeneration is per-combo only.** Every output is lane-qualified, so the
-aggregate has no filename collisions. The `sqlite`/`chromium` lane remains the
-single authoritative empirical source: `cargo xtask e2e sqlite chromium`
-verifies it directly, while local `just validate` resolves that already realized
-lane after all eight builds. In CI the `sqlite`/`chromium` producer carries the
-drift check ([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)).
+**Regeneration is explicit and per-lane only.** Every output is lane-qualified.
+The SQLite/Chromium producer remains the sole empirical source in local and CI
+workflows. It passes the selected successful output and capture explicitly;
+verification neither builds a VM nor guesses an output from an old root or a
+lifted diagnostics directory. Nix retains the existing finalization, archive
+hash/size and retention checks, and host population/trace checks remain required
+([Just E2E workflow ownership](adr/drafts/just-e2e-workflow-ownership.md)).
 
 `sqlite × chromium` is authoritative because `chromium`'s `testIgnore` and
 `chromium-admin`'s `testMatch` are exact complements over all spec files and no
 test is browser- or backend-conditional — so one combo drops no coverage.
 
-To regenerate and verify after adding a flow:
-
-```bash
-cargo xtask e2e sqlite chromium            # writes .xtask/diagnostics/e2e-sqlite-chromium-unsplit/capture-sqlite-chromium-unsplit.tar.gz
-cargo xtask server-fn-coverage regenerate  # rewrites server-fns.json only
-cargo xtask server-fn-coverage verify      # compares the capture-derived snapshot byte-for-byte
-```
+For intentional regeneration after adding a flow, run
+`just e2e-regenerate-coverage`. It supplies the successful producer selection
+and explicit artifact arguments internally, checks the evidence and rewrites
+only the snapshot. Ordinary verification never regenerates. See
+[the flow-coverage workflow](../CONTRIBUTING.md#testing).
 
 `server-fns.json` is the sole generated server-fn coverage artifact.
 `regenerate` writes it; `verify` recomputes and compares it. Per-test
 attribution remains internal to extraction and is not persisted. Note that a
-second `cargo xtask e2e sqlite chromium` on an unchanged tree replays the cached
-Nix derivation in seconds and re-lifts the same capture, so it cannot be used to
-confirm that a regenerated artifact is stable — that is a statement about
-_different_ runs, and `nix build --rebuild` is what forces one.
+second `just e2e-producer sqlite-chromium-unsplit` on an unchanged tree replays
+the cached Nix derivation in seconds and re-lifts the same capture, so it cannot
+be used to confirm that a regenerated artifact is stable — that is a statement
+about _different_ runs, and `nix build --rebuild` is what forces one.
 
 **Everything fails closed.** A missing, empty, or unparseable capture is an
 error, never "no uncovered fns" — otherwise the failure mode the gate guards
