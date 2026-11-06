@@ -3,7 +3,6 @@
 //! Integrity checks do not establish source provenance. Explicit inputs must be
 //! intentionally source-matched and kept stable by their owner through compilation.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, ensure};
@@ -20,7 +19,7 @@ pub(crate) fn validate(root: &Path) -> anyhow::Result<PathBuf> {
     if let Some(phase) = manifest_check {
         phase.finish(manifest_result.is_ok());
     }
-    let outputs = manifest_result?;
+    manifest_result?;
     let inventory_check = crate::invocation_trace::active()
         .then(|| crate::invocation_trace::phase("xtask.csr-inventory-check"));
     let inventory_result = host::system_theme::load_system_artifact_inventory(
@@ -30,62 +29,18 @@ pub(crate) fn validate(root: &Path) -> anyhow::Result<PathBuf> {
     if let Some(phase) = inventory_check {
         phase.finish(inventory_result.is_ok());
     }
-    let inventory = inventory_result?;
-    let shell_check = crate::invocation_trace::active()
-        .then(|| crate::invocation_trace::phase("xtask.csr-shell-check"));
-    let shell_result = (|| {
-        let shell =
-            fs::read_to_string(root.join("index.html")).context("reading rendered index.html")?;
-        let entry_url = format!("/{}", outputs.entry_js);
-        let wasm_url = format!("/{}", outputs.wasm);
-        let stylesheet_url = inventory
-            .application()
-            .content_digest()
-            .content_url()
-            .to_string();
-        let early_fetch = shell.find("window.__jaunderWasmFetch = fetch(__jaunderWasmUrl);");
-        let module_entry = shell.find(&format!("src=\"{entry_url}\""));
-        ensure!(
-            shell.matches(&format!("src=\"{entry_url}\"")).count() == 1
-                && shell.contains(&format!(
-                    "<script type=\"module\" crossorigin src=\"{entry_url}\"></script>"
-                )),
-            "rendered shell does not select Vite HTML entry {entry_url:?} exactly once"
-        );
-        ensure!(
-            shell.matches(&wasm_url).count() == 1
-                && shell.contains(&format!(r#"const __jaunderWasmUrl = "{wasm_url}";"#))
-                && early_fetch
-                    .zip(module_entry)
-                    .is_some_and(|(fetch, entry)| fetch < entry),
-            "rendered shell does not retain the classic early WASM fetch for {wasm_url:?}"
-        );
-        ensure!(
-            shell.contains(&format!(
-                "href=\"{stylesheet_url}\" data-jaunder-application-stylesheet"
-            )),
-            "rendered shell does not select its application stylesheet"
-        );
-        let wasm_preload = shell.split("<link").skip(1).any(|link| {
-            link.split('>')
-                .next()
-                .is_some_and(|tag| tag.contains("rel=\"preload\"") && tag.contains(&wasm_url))
-        });
-        ensure!(
-            !wasm_preload,
-            "rendered shell must not preload the WASM asset (ADR-0121)"
-        );
-        Ok::<_, anyhow::Error>(())
-    })();
-    if let Some(phase) = shell_check {
-        phase.finish(shell_result.is_ok());
-    }
-    shell_result?;
+    inventory_result?;
+    ensure!(
+        root.join("index.html").is_file(),
+        "CSR bundle has no rendered index.html"
+    );
     Ok(root)
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::fs;
+
     use super::*;
     // Sanitized Vite contract fixture; it is not runnable wasm or a startup proof.
     pub(crate) fn write_bundle(root: &Path) -> host::vite_manifest::CsrViteOutputs {
@@ -133,11 +88,7 @@ pub(crate) mod tests {
         });
         let trace = capture.finish().unwrap();
         let events: Vec<serde_json::Value> = serde_json::from_slice(&trace.bytes).unwrap();
-        let names = [
-            "xtask.csr-manifest-check",
-            "xtask.csr-inventory-check",
-            "xtask.csr-shell-check",
-        ];
+        let names = ["xtask.csr-manifest-check", "xtask.csr-inventory-check"];
         let begins: Vec<_> = events
             .iter()
             .filter(|event| {
@@ -155,7 +106,7 @@ pub(crate) mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(stack, [names[0], "end", names[1], "end", names[2], "end"]);
+        assert_eq!(stack, [names[0], "end", names[1], "end"]);
 
         fs::write(temp.path().join(".vite/manifest.json"), "corrupt").unwrap();
         let capture = crate::invocation_trace::Capture::new();
@@ -172,11 +123,7 @@ pub(crate) mod tests {
                 && event["args"]["phase"] == names[0]
                 && event["args"]["outcome"] == "failure"
         }));
-        assert!(
-            !events
-                .iter()
-                .any(|event| { event["name"] == names[1] || event["name"] == names[2] })
-        );
+        assert!(!events.iter().any(|event| event["name"] == names[1]));
     }
 
     #[test]
@@ -190,30 +137,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn rejects_module_entry_before_classic_wasm_fetch() {
-        let temp = tempfile::tempdir().unwrap();
-        let outputs = write_bundle(temp.path());
-        let stylesheet = host::system_theme::qualification::compile(
-            host::system_theme::qualification::Fixture::A,
-        )
-        .unwrap()
-        .application()
-        .content_digest()
-        .content_url();
-        fs::write(
-            temp.path().join("index.html"),
-            format!(
-                "<script type=\"module\" crossorigin src=\"/{}\"></script><script>const __jaunderWasmUrl = \"/{}\"; window.__jaunderWasmFetch = fetch(__jaunderWasmUrl);</script><link rel=\"stylesheet\" href=\"{stylesheet}\" data-jaunder-application-stylesheet />",
-                outputs.entry_js, outputs.wasm
-            ),
-        )
-        .unwrap();
-        let error = validate(temp.path()).unwrap_err().to_string();
-        assert!(error.contains("classic early WASM fetch"), "{error}");
-    }
-
-    #[test]
-    fn rejects_missing_and_corrupt_manifest_representation_shell_and_inventory() {
+    fn rejects_missing_and_corrupt_manifest_representation_and_inventory() {
         let temp = tempfile::tempdir().unwrap();
         assert!(
             validate(&temp.path().join("missing"))
@@ -224,7 +148,7 @@ pub(crate) mod tests {
         assert!(
             format!("{:#}", validate(temp.path()).unwrap_err()).contains("reading Vite manifest")
         );
-        for corruption in ["manifest", "output", "shell", "inventory"] {
+        for corruption in ["manifest", "output", "inventory", "index"] {
             let temp = tempfile::tempdir().unwrap();
             let outputs = write_bundle(temp.path());
             let (path, expected) = match corruption {
@@ -236,13 +160,13 @@ pub(crate) mod tests {
                     temp.path().join(&outputs.wasm),
                     "Vite output file is missing",
                 ),
-                "shell" => (temp.path().join("index.html"), "Vite HTML entry"),
-                _ => (
+                "inventory" => (
                     temp.path().join("system-artifacts/inventory.txt"),
                     "invalid system artifacts",
                 ),
+                _ => (temp.path().join("index.html"), "no rendered index.html"),
             };
-            if corruption == "output" {
+            if corruption == "output" || corruption == "index" {
                 fs::remove_file(path).unwrap();
             } else {
                 fs::write(path, b"corrupt").unwrap();

@@ -49,30 +49,11 @@ build-csr $profile="debug":
     system_artifacts="$work/system-artifacts"
     mkdir -p "$project" "$input" "$system_artifacts"
     cp "$checkout/package.json" "$checkout/package-lock.json" "$checkout/vite.config.js" "$project/"
-    mkdir -p "$project/csr" "$project/scripts"
+    mkdir -p "$project/csr"
     cp "$checkout/csr/index.html" "$checkout/csr/entry.js" "$project/csr/"
-    cp "$checkout/scripts/finalize-csr-html.mjs" "$project/scripts/"
     ln -s "$vite_tools/node_modules" "$project/node_modules"
-    cp "$checkout/csr/index.html" "$input/index.html"
-    cp "$checkout/csr/entry.js" "$input/entry.js"
-    wasm-bindgen --target web --out-dir "$input" "target/wasm32-unknown-unknown/$cargo_profile/csr.wasm"
-    wasm-opt -Oz \
-      --enable-bulk-memory \
-      --enable-multivalue \
-      --enable-mutable-globals \
-      --enable-nontrapping-float-to-int \
-      --enable-reference-types \
-      --enable-sign-ext \
-      "$input/csr_bg.wasm" -o "$input/csr_bg.opt.wasm"
-    mv "$input/csr_bg.opt.wasm" "$input/csr_bg.wasm"
     cargo run --locked --manifest-path "$checkout/tools/Cargo.toml" -p devtool -- system-artifacts --out "$system_artifacts"
-    cd "$project"
-    CSR_VITE_INPUT_DIR="$input" \
-      CSR_VITE_OUT_DIR="$dist" \
-      CSR_VITE_PUBLIC_DIR="$checkout/public" \
-      CSR_SYSTEM_ARTIFACTS_DIR="$system_artifacts" \
-      ./node_modules/.bin/vite build --config vite.config.js --configLoader native
-    CSR_SYSTEM_ARTIFACTS_DIR="$system_artifacts" node scripts/finalize-csr-html.mjs "$dist"
-    cp -a "$system_artifacts" "$dist/system-artifacts"
+    CSR_VITE_PUBLIC_DIR="$checkout/public" bash "$checkout/scripts/build-csr-assets.sh" \
+      "target/wasm32-unknown-unknown/$cargo_profile/csr.wasm" "$project" "$input" "$system_artifacts" "$dist"
     mkdir -p "$checkout/target/site"
     cp -a "$dist/." "$checkout/target/site/"

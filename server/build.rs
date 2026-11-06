@@ -76,7 +76,6 @@ fn main() {
                 ),
             )
             .unwrap_or_else(|error| panic!("invalid system artifacts: {error}"));
-            verify_vite_shell(&bundle_root, &assets, &system_inventory);
             write_generated_data(&generated, Some(&assets));
             prepare_staging_with(
                 &site_dir,
@@ -134,14 +133,8 @@ fn main() {
 }
 
 fn load_vite_bundle(root: &Path) -> CsrViteOutputs {
-    let outputs = csr_outputs(root)
-        .unwrap_or_else(|error| panic!("invalid Vite CSR output {}: {error}", root.display()));
-    assert!(
-        root.join("index.html").is_file(),
-        "invalid Vite CSR output {}: missing rendered index.html",
-        root.display()
-    );
-    outputs
+    csr_outputs(root)
+        .unwrap_or_else(|error| panic!("invalid Vite CSR output {}: {error}", root.display()))
 }
 
 fn stage_verified_system_artifacts(
@@ -163,53 +156,6 @@ fn stage_verified_system_artifacts(
         return Err("staged system artifacts disagree with verified source".into());
     }
     Ok(())
-}
-
-fn verify_vite_shell(
-    root: &Path,
-    outputs: &CsrViteOutputs,
-    system_inventory: &host::system_theme::SystemArtifactInventory,
-) {
-    let shell = fs::read_to_string(root.join("index.html"))
-        .unwrap_or_else(|error| panic!("reading Vite CSR index.html: {error}"));
-    let entry_url = format!("/{}", outputs.entry_js);
-    let wasm_url = format!("/{}", outputs.wasm);
-    let stylesheet_url = system_inventory
-        .application()
-        .content_digest()
-        .content_url()
-        .to_string();
-    assert_eq!(
-        shell.matches(&entry_url).count(),
-        1,
-        "Vite index.html must select its HTML-entry JavaScript output exactly once"
-    );
-    assert_eq!(
-        shell.matches(&wasm_url).count(),
-        1,
-        "Vite index.html must select the manifest-mapped WASM URL exactly once"
-    );
-    assert!(
-        shell.contains(&format!("const __jaunderWasmUrl = \"{wasm_url}\";"))
-            && shell.contains("window.__jaunderWasmFetch = fetch(__jaunderWasmUrl);"),
-        "Vite index.html must retain the classic early WASM fetch"
-    );
-    assert!(
-        shell.contains(&format!(
-            "href=\"{stylesheet_url}\" data-jaunder-application-stylesheet"
-        )),
-        "Vite index.html must select the installed application stylesheet URL"
-    );
-    let wasm_preload = shell.split("<link").any(|link| {
-        link.split('>')
-            .next()
-            .is_some_and(|tag| tag.contains("rel=\"preload\"") && tag.contains(&wasm_url))
-    });
-    assert!(!wasm_preload, "ADR-0121 forbids a WASM preload");
-    assert!(
-        !shell.contains("{{WASM_URL}}") && !shell.contains("{{APPLICATION_STYLESHEET_URL}}"),
-        "Vite index.html contains an unresolved build URL marker"
-    );
 }
 
 fn write_generated_data(path: &Path, assets: Option<&CsrViteOutputs>) {

@@ -1465,8 +1465,8 @@ This is a test/seeding input, not a production upload setting. Direct test or
 seeder invocations must supply the matching real application executable; there
 is no test-harness executable, PATH-search or no-op fallback.
 
-An explicit `JAUNDER_CSR_BUNDLE_DIR` is intentional input: missing or invalid
-CSR manifest/representations, rendered shell, or system-artifact inventory fails
+An explicit `JAUNDER_CSR_BUNDLE_DIR` is intentional input: a missing or invalid
+Vite manifest/output, rendered index file, or system-artifact inventory fails
 before test compilation, with no fallback production. Supply it only from
 matching resolved producer source inputs, toolchain and profile, or
 independently verified equivalent inputs. The validators establish internal

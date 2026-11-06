@@ -269,7 +269,7 @@ let
       "vite.config.js"
       "csr/index.html"
       "csr/entry.js"
-      "scripts/finalize-csr-html.mjs"
+      "scripts/build-csr-assets.sh"
     ];
   csrViteSrc = pkgs.lib.cleanSourceWith {
     src = craneLib.path ../.;
@@ -967,26 +967,11 @@ let
         mkdir -p "$input" "$system_artifacts"
         cp csr/index.html "$input/index.html"
         cp csr/entry.js "$input/entry.js"
-        wasm-bindgen --target web --out-dir "$input" "$CSR_WASM_INPUT"
-        wasm-opt -Oz \
-          --enable-bulk-memory \
-          --enable-multivalue \
-          --enable-mutable-globals \
-          --enable-nontrapping-float-to-int \
-          --enable-reference-types \
-          --enable-sign-ext \
-          "$input/csr_bg.wasm" -o "$input/csr_bg.opt.wasm"
-        mv "$input/csr_bg.opt.wasm" "$input/csr_bg.wasm"
         devtool system-artifacts --out "$system_artifacts"${
           pkgs.lib.optionalString (fixture != null) " --fixture ${fixture}"
         }
-        CSR_VITE_INPUT_DIR="$input" \
-          CSR_VITE_OUT_DIR="$dist" \
-          CSR_VITE_PUBLIC_DIR="${../public}" \
-          CSR_SYSTEM_ARTIFACTS_DIR="$system_artifacts" \
-          ./node_modules/.bin/vite build --config vite.config.js --configLoader native
-        CSR_SYSTEM_ARTIFACTS_DIR="$system_artifacts" node scripts/finalize-csr-html.mjs "$dist"
-        cp -a "$system_artifacts" "$dist/system-artifacts"
+        CSR_VITE_PUBLIC_DIR="${../public}" bash scripts/build-csr-assets.sh \
+          "$CSR_WASM_INPUT" "$PWD" "$input" "$system_artifacts" "$dist"
         runHook postBuild
       '';
       installPhase = ''
@@ -1111,28 +1096,9 @@ let
           system_artifacts="$work/system-artifacts"
           dist="$work/dist"
           mkdir -p "$input" "$system_artifacts"
-          cp "$vite_project/csr/index.html" "$input/index.html"
-          cp "$vite_project/csr/entry.js" "$input/entry.js"
-          wasm-bindgen --target web --out-dir "$input" "$out/instrumented/csr.wasm"
-          cp "$input/csr_bg.wasm" "$work/wasm-bindgen.wasm"
-          wasm-opt -Oz \
-            --enable-bulk-memory \
-            --enable-multivalue \
-            --enable-mutable-globals \
-            --enable-nontrapping-float-to-int \
-            --enable-reference-types \
-            --enable-sign-ext \
-            "$input/csr_bg.wasm" -o "$work/wasm-opt.wasm"
-          mv "$work/wasm-opt.wasm" "$input/csr_bg.wasm"
           devtool system-artifacts --out "$system_artifacts"
-          cd "$vite_project"
-          CSR_VITE_INPUT_DIR="$input" \
-            CSR_VITE_OUT_DIR="$dist" \
-            CSR_VITE_PUBLIC_DIR="${../public}" \
-            CSR_SYSTEM_ARTIFACTS_DIR="$system_artifacts" \
-            ./node_modules/.bin/vite build --config vite.config.js --configLoader native
-          CSR_SYSTEM_ARTIFACTS_DIR="$system_artifacts" node scripts/finalize-csr-html.mjs "$dist"
-          cp -a "$system_artifacts" "$dist/system-artifacts"
+          CSR_VITE_PUBLIC_DIR="${../public}" bash "$vite_project/scripts/build-csr-assets.sh" \
+            "$out/instrumented/csr.wasm" "$vite_project" "$input" "$system_artifacts" "$dist" "$work/wasm-bindgen.wasm"
           mkdir -p "$out/pkg"
           cp -a "$dist/." "$out/pkg/"
           devtool diagnostic-build write-coverage-artifacts \
@@ -1186,27 +1152,9 @@ let
         system_artifacts="$work/system-artifacts"
         dist="$work/dist"
         mkdir -p "$input" "$system_artifacts"
-        cp "$vite_project/csr/index.html" "$input/index.html"
-        cp "$vite_project/csr/entry.js" "$input/entry.js"
-        wasm-bindgen --target web --out-dir "$input" "$work/target/wasm32-unknown-unknown/release/csr.wasm"
-        wasm-opt -Oz \
-          --enable-bulk-memory \
-          --enable-multivalue \
-          --enable-mutable-globals \
-          --enable-nontrapping-float-to-int \
-          --enable-reference-types \
-          --enable-sign-ext \
-          "$input/csr_bg.wasm" -o "$input/csr_bg.opt.wasm"
-        mv "$input/csr_bg.opt.wasm" "$input/csr_bg.wasm"
         devtool system-artifacts --out "$system_artifacts"
-        cd "$vite_project"
-        CSR_VITE_INPUT_DIR="$input" \
-          CSR_VITE_OUT_DIR="$dist" \
-          CSR_VITE_PUBLIC_DIR="${../public}" \
-          CSR_SYSTEM_ARTIFACTS_DIR="$system_artifacts" \
-          ./node_modules/.bin/vite build --config vite.config.js --configLoader native
-        CSR_SYSTEM_ARTIFACTS_DIR="$system_artifacts" node scripts/finalize-csr-html.mjs "$dist"
-        cp -a "$system_artifacts" "$dist/system-artifacts"
+        CSR_VITE_PUBLIC_DIR="${../public}" bash "$vite_project/scripts/build-csr-assets.sh" \
+          "$work/target/wasm32-unknown-unknown/release/csr.wasm" "$vite_project" "$input" "$system_artifacts" "$dist"
         mkdir -p "$out/pkg"
         cp -a "$dist/." "$out/pkg/"
         devtool diagnostic-build write-baseline-status --status "$out/status.json"

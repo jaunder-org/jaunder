@@ -193,7 +193,7 @@ mod tests {
             "vite.config.js",
             "package.json",
             "package-lock.json",
-            "scripts/finalize-csr-html.mjs",
+            "scripts/build-csr-assets.sh",
             "Justfile",
             "server/assets/jaunder.css",
             "host/system_theme_sources/new.css",

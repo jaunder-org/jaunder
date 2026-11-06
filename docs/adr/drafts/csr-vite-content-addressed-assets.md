@@ -7,50 +7,37 @@
 ## Context
 
 ADR-0175 assigned the former producer ownership of content-addressed CSR URLs,
-full-SHA filenames, cycle rejection, and a role-tagged inventory schema. The
-isolated Vite proof established feasibility, and the production migration now
-uses pinned Vite 8.3.5, `vite-plugin-compression2` 2.5.4, its native build-only
-manifest and ordinary content-sensitive filenames. Production proof passed the
-host and Nix builds, static shell/projector URL checks, URL stability and
-runtime JS/WASM mutation invalidation, and the retained embedded HTTP path. The
-native manifest is not served.
+full-SHA filenames, cycle rejection, and a role-tagged inventory schema. These
+responsibilities coupled a custom graph rewriter and hash implementation to
+consumers that needed only emitted paths and runtime serving behavior.
 
-Host and Nix optimized WASM artifacts differ in bytes and URLs: 4,212,240 bytes
-(host) and 4,222,496 bytes (Nix), both under the 5,000,000-byte ceiling. Pins,
-features, tool versions and optimizer flags were checked in both pipelines. Path
-provenance explains differing build contexts but does not prove the cause of
-every differing byte; Nix intermediates were no longer available. Byte identity
-across environments is not required. These measurements do not mean the
-canonical `wasm-budget` gate passed, and full browser/HTTP/coverage and final
-gate acceptance remains outstanding.
+Vite provides the HTML entry, emitted asset names, and a native build-only
+manifest. Its build HTML transform receives the emitted output bundle, allowing
+the shell's early classic WASM fetch to use the actual output name. The
+application stylesheet remains an independently produced system artifact.
 
 ## Decision
 
-If the proposed migration is approved and its acceptance evidence passes, use
-the pinned Vite build and its ordinary content-sensitive output naming as the
-source of CSR asset URLs and its native build manifest as build-only inventory.
-Do not require full-SHA filenames or reproduce a role-tagged parallel schema,
-custom graph rewriter, hash implementation, or cycle policy. Content-sensitive
-names support cache invalidation for tested outputs; they are not a
-cryptographic integrity or collision-resistance promise. Compute file digests
-only where a concrete audit, qualification, or coverage consumer needs them.
+Use the pinned Vite build and its native content-sensitive output names and
+manifest for CSR build inventory. Do not require full-SHA filenames or reproduce
+a parallel role-tagged schema, graph rewriter, hash implementation, or cycle
+policy. Content-sensitive names support cache invalidation; they are not a
+cryptographic integrity or collision-resistance promise. Compute digests only
+where a concrete audit, qualification, or coverage consumer needs them.
 
-The existing `rust-embed` and `site.rs` path remains responsible for serving
-identity and compressed representations with logical-path MIME, `Vary`,
-representation-specific validators, and immutable caching. Keep the manifest
-outside the served site. Preserve raw post-`wasm-opt -Oz` size measurement
-independently of bundler naming.
+Keep the manifest outside the served site. The existing `rust-embed` and
+`site.rs` path remains responsible for identity and compressed representations,
+logical-path MIME, `Vary`, representation-specific validators, and immutable
+caching. Preserve the raw post-`wasm-opt -Oz` size measurement independently of
+bundler naming.
 
 ## Consequences
 
-- ADR-0175's producer-owned full-SHA naming, mandatory cycle rejection, and sole
-  role-tagged manifest clauses would be superseded; its runtime serving
-  guarantees remain in force.
-- Consumers must read the native manifest and ordinary output paths directly.
-  Any retained adapters must express concrete consumer needs, not recreate the
-  old schema.
-- Production migration and its bounded proofs are implemented, but this ADR
-  remains proposed pending outstanding browser/HTTP/coverage evidence and final
-  gates. The host/Nix byte difference is accepted as environment-specific, not
-  attributed solely to paths; measured sizes do not replace the canonical
-  `wasm-budget` verdict.
+- The former producer-owned full-SHA naming, mandatory cycle rejection, and
+  role-tagged manifest are no longer required; runtime serving guarantees
+  remain.
+- Consumers read native manifest paths for their actual needs without
+  reconstructing the former schema.
+- Content-sensitive names are an output-naming behavior, not an integrity
+  assertion; the serving and cache-membership contracts remain independently
+  enforced.

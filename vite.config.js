@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { defineConfig } from "vite";
@@ -7,6 +8,39 @@ const projectRoot = fileURLToPath(new URL(".", import.meta.url));
 const inputRoot = resolve(
   process.env.CSR_VITE_INPUT_DIR ?? resolve(projectRoot, "csr"),
 );
+const systemArtifacts = process.env.CSR_SYSTEM_ARTIFACTS_DIR;
+
+// Resolve the classic fetch URL from Vite's completed build bundle and the
+// separately generated stylesheet digest before Vite emits index.html.
+function csrHtml() {
+  return {
+    name: "jaunder-csr-html",
+    transformIndexHtml(html, context) {
+      if (!context.bundle) return html;
+      const wasm = Object.values(context.bundle).find(
+        (output) => output.type === "asset" && output.name === "csr_bg.wasm",
+      );
+      if (!wasm) throw new Error("Vite did not emit csr_bg.wasm");
+      if (!systemArtifacts)
+        throw new Error("CSR_SYSTEM_ARTIFACTS_DIR is required");
+      const inventory = readFileSync(
+        resolve(systemArtifacts, "inventory.txt"),
+        "utf8",
+      );
+      const application = inventory
+        .split(/\r?\n/)
+        .find((line) => line.startsWith("application\t"));
+      const digest = application?.match(/\tdigest=([0-9a-f]{64})(?:\t|$)/)?.[1];
+      if (!digest)
+        throw new Error(
+          "system artifact inventory has no application stylesheet digest",
+        );
+      return html
+        .replace("{{WASM_URL}}", `/${wasm.fileName}`)
+        .replace("{{APPLICATION_STYLESHEET_URL}}", `/theme/${digest}`);
+    },
+  };
+}
 
 export default defineConfig({
   root: inputRoot,
@@ -22,6 +56,7 @@ export default defineConfig({
     ),
   },
   plugins: [
+    csrHtml(),
     compression({
       include: /\.(js|wasm)$/,
       algorithms: [

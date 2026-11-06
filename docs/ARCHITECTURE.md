@@ -1949,20 +1949,17 @@ lanes check their documented production boundaries; test gates exercise the
 explicitly enabled test surfaces. These checks do not certify the absence of
 `common/test-support` from every production dependency graph.
 
-`just build-csr [debug|release]` selects the shared production pipeline. It
-compiles `csr` with locked Cargo inputs, runs `wasm-bindgen` and production
-`wasm-opt -Oz`, then invokes pinned Vite 8.3.5 and `vite-plugin-compression2`
-2.5.4. Vite's HTML entry and native build manifest own runtime graph processing,
-emitted content-sensitive names, and build inventory. Host and Nix use the same
-checked pins/features/optimizer flags, but outputs and URLs may differ: verified
-optimized WASM sizes were 4,212,240 bytes (host) and 4,222,496 bytes (Nix), each
-below the 5,000,000-byte ceiling. These are accepted environment-specific
-outputs; byte identity is not required. Path provenance explains build context
-but does not prove the cause of every differing byte. The native manifest is
-build-only; consumers resolve entry/WASM outputs without recreating a
-role-tagged schema or custom graph/hash machinery. The shell finalizer and
-necessary style/projector adapters preserve existing runtime and consumer
-contracts. Content-sensitive names are not a cryptographic integrity promise
+`just build-csr [debug|release]` owns host compilation and profile selection;
+the host producer, production Nix bundle, diagnostic coverage bundle, and
+coverage baseline share `scripts/build-csr-assets.sh` for wasm-bindgen,
+`wasm-opt -Oz`, and pinned Vite output. Nix derivations select and produce their
+own compiled WASM, system-artifact inventory, and diagnostic snapshots; xtask
+never runs in a derivation. Vite's native HTML build hook resolves the emitted
+WASM asset from its output bundle and the application stylesheet digest from the
+independent system-artifact inventory. The ordinary native manifest is
+build-only and supplies output membership to actual consumers without a parallel
+role schema or custom graph/hash machinery. Content-sensitive names support
+cache invalidation but are not a cryptographic integrity promise
 ([proposed Vite asset-output decision](adr/drafts/csr-vite-content-addressed-assets.md)).
 
 The server embeds the rendered SPA shell and falls back to it for anything the
@@ -1971,8 +1968,9 @@ binary intact. `render_head` carries no `<link rel="preload">`, a measured
 decision under a pre-registered abort rule rather than an oversight
 ([ADR-0121](adr/0121-no-wasm-preload.md)). The shell's classic script fetches
 WASM before module entry, exactly once; it also retains auth prepaint and the
-stylesheet marker. Necessary initialization/style/projector adapters connect
-Vite output to these runtime contracts; the build manifest itself is not served.
+stylesheet marker. The native HTML hook and independently generated stylesheet
+URL connect Vite output to these runtime contracts; the build manifest itself is
+not served.
 
 The WASM artifact carries a hard budget
 ([ADR-0106](adr/0106-wasm-raw-size-budget.md)): `cargo xtask validate` resolves

@@ -294,7 +294,6 @@ pub(crate) fn phase(name: &'static str) -> Phase {
         "xtask.csr-build",
         "xtask.csr-manifest-check",
         "xtask.csr-inventory-check",
-        "xtask.csr-shell-check",
         "test-local-csr-prerequisite",
         "test-local-image-worker",
         "test-local"

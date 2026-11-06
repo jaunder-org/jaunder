@@ -1,8 +1,9 @@
+// Start from the classic shell's early WASM fetch and mark the actual instantiate
+// path, API duration, and module shape for startup diagnostics and coverage.
 import init from "./csr.js";
 import wasmUrl from "./csr_bg.wasm?url";
 
-// Keep the browser's instrumentable wasm-bindgen exports on the same Vite entry
-// module used by the application. Coverage imports this entry after the boot.
+// Coverage reads the instrumentable wasm-bindgen exports from this entry.
 export * from "./csr.js";
 
 const experimentArm = import.meta.env.VITE_WASM_EXPERIMENT_ARM;

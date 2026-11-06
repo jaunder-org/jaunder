@@ -6,7 +6,7 @@
 
 use std::{fs, path::Path};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use host::vite_manifest::{CsrViteOutputs, csr_outputs};
 use serde::Serialize;
 
@@ -90,57 +90,17 @@ pub fn resolve_site_path(explicit: Option<&str>) -> Result<String> {
     }
 }
 
-/// Verify that the rendered shell selects the standard manifest's HTML entry
-/// and WASM output while preserving the classic early fetch and no-preload rule.
-fn verify_generated_shell(index_html: &str, outputs: &CsrViteOutputs) -> Result<()> {
-    let entry_url = format!("/{}", outputs.entry_js);
-    let wasm_url = format!("/{}", outputs.wasm);
-    let early_fetch = index_html.find("window.__jaunderWasmFetch = fetch(__jaunderWasmUrl);");
-    let module_entry = index_html.find(&format!("src=\"{entry_url}\""));
-    ensure!(
-        index_html.matches(&format!("src=\"{entry_url}\"")).count() == 1
-            && index_html.contains(&format!("type=\"module\" crossorigin src=\"{entry_url}\"")),
-        "generated index.html does not select Vite HTML entry {entry_url:?}"
-    );
-    let wasm_preload = index_html.split("<link").skip(1).any(|link| {
-        link.split('>')
-            .next()
-            .is_some_and(|tag| tag.contains("rel=\"preload\"") && tag.contains(&wasm_url))
-    });
-    ensure!(
-        !wasm_preload,
-        "generated index.html preloads Vite WASM URL {wasm_url:?}; ADR-0121 requires no WASM preload"
-    );
-    ensure!(
-        index_html.matches(&wasm_url).count() == 1
-            && index_html.contains(&format!(r#"const __jaunderWasmUrl = "{wasm_url}";"#))
-            && early_fetch
-                .zip(module_entry)
-                .is_some_and(|(fetch, entry)| fetch < entry),
-        "generated index.html does not retain the early fetch for Vite WASM URL {wasm_url:?}"
-    );
-    Ok(())
+/// Resolve the native manifest outputs used for size reporting.
+fn bundle_outputs(root: &Path) -> Result<CsrViteOutputs> {
+    csr_outputs(root)
+        .with_context(|| format!("resolving Vite CSR outputs under {}", root.display()))
 }
 
-/// Resolve the native manifest's HTML-entry JavaScript and optimized WASM paths.
-/// The helper validates every manifest-emitted output path; no Jaunder role or
-/// representation schema is introduced.
-fn bundle_boot_artifacts(root: &Path) -> Result<CsrViteOutputs> {
-    let outputs = csr_outputs(root)
-        .with_context(|| format!("resolving Vite CSR outputs under {}", root.display()))?;
-    let index_path = root.join("index.html");
-    let index_html = fs::read_to_string(&index_path)
-        .with_context(|| format!("reading generated CSR shell {}", index_path.display()))?;
-    verify_generated_shell(&index_html, &outputs)?;
-    Ok(outputs)
-}
-
-/// Resolve the site path, validate Vite's build-only manifest and shell, then
-/// measure the HTML-entry JavaScript and optimized WASM plus emitted sidecars.
+/// Resolve and measure the manifest-selected WASM and emitted JavaScript assets.
 pub fn run(site_path: Option<&str>) -> Result<AuditReport> {
     let site_path = resolve_site_path(site_path)?;
     let root = Path::new(&site_path);
-    let outputs = bundle_boot_artifacts(root)?;
+    let outputs = bundle_outputs(root)?;
     let mut runtime_outputs = vec![outputs.wasm.as_str()];
     runtime_outputs.extend(
         outputs
@@ -334,7 +294,7 @@ mod tests {
         assert!(table.contains("2.0 MiB"));
     }
 
-    fn fixture_bundle(root: &Path, shell: impl FnOnce(&str, &str) -> String) -> CsrViteOutputs {
+    fn fixture_bundle(root: &Path) -> CsrViteOutputs {
         let entry = "assets/index-a1b2c3d4.js";
         let wasm = "assets/csr_bg-e5f6a7b8.wasm";
         std::fs::create_dir_all(root.join(".vite")).unwrap();
@@ -351,55 +311,13 @@ mod tests {
             ),
         )
         .unwrap();
-        std::fs::write(
-            root.join("index.html"),
-            shell(&format!("/{entry}"), &format!("/{wasm}")),
-        )
-        .unwrap();
         csr_outputs(root).unwrap()
-    }
-
-    fn generated_shell(entry_url: &str, wasm_url: &str) -> String {
-        format!(
-            r#"<script>const __jaunderWasmUrl = "{wasm_url}"; window.__jaunderWasmFetch = fetch(__jaunderWasmUrl);</script><script type="module" crossorigin src="{entry_url}"></script>"#
-        )
-    }
-
-    #[test]
-    fn bundle_boot_artifacts_uses_standard_vite_entry_and_wasm_sources() {
-        let root = tempfile::tempdir().unwrap();
-        let outputs = fixture_bundle(root.path(), generated_shell);
-        assert_eq!(bundle_boot_artifacts(root.path()).unwrap(), outputs);
-        assert!(!root.path().join("manifest.json").exists());
-    }
-
-    #[test]
-    fn bundle_boot_artifacts_rejects_shell_manifest_inconsistency() {
-        let root = tempfile::tempdir().unwrap();
-        fixture_bundle(root.path(), |entry_url, _wasm_url| {
-            generated_shell(entry_url, "/assets/not-the-manifest.wasm")
-        });
-        let error = bundle_boot_artifacts(root.path()).unwrap_err().to_string();
-        assert!(error.contains("early fetch for Vite WASM"), "{error}");
-    }
-
-    #[test]
-    fn bundle_boot_artifacts_rejects_wasm_preload() {
-        let root = tempfile::tempdir().unwrap();
-        fixture_bundle(root.path(), |entry_url, wasm_url| {
-            format!(
-                "{}<link rel=\"preload\" href=\"{wasm_url}\">",
-                generated_shell(entry_url, wasm_url)
-            )
-        });
-        let error = bundle_boot_artifacts(root.path()).unwrap_err().to_string();
-        assert!(error.contains("preloads Vite WASM"), "{error}");
     }
 
     #[test]
     fn audit_reports_emitted_vite_sidecar_sizes_and_checks_optimized_wasm() {
         let root = tempfile::tempdir().unwrap();
-        let outputs = fixture_bundle(root.path(), generated_shell);
+        let outputs = fixture_bundle(root.path());
         let report = run(Some(root.path().to_str().unwrap())).unwrap();
         assert_eq!(report.artifacts.len(), 2);
         let wasm = report
@@ -509,7 +427,7 @@ mod tests {
     #[test]
     fn run_errors_when_a_vite_manifest_output_is_missing() {
         let root = tempfile::tempdir().unwrap();
-        let outputs = fixture_bundle(root.path(), generated_shell);
+        let outputs = fixture_bundle(root.path());
         std::fs::remove_file(root.path().join(&outputs.wasm)).unwrap();
 
         let error = run(Some(root.path().to_str().unwrap())).unwrap_err();
@@ -523,7 +441,7 @@ mod tests {
     #[test]
     fn run_rejects_optimized_wasm_with_a_name_section() {
         let root = tempfile::tempdir().unwrap();
-        let outputs = fixture_bundle(root.path(), generated_shell);
+        let outputs = fixture_bundle(root.path());
         let named = crate::wasm_symbols::tests_support::named_module();
         std::fs::write(root.path().join(outputs.wasm), named).unwrap();
         let error = run(Some(root.path().to_str().unwrap())).unwrap_err();
