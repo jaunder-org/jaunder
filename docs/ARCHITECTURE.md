@@ -4304,11 +4304,11 @@ and execution/consumer adapters. The shared `CommandResult` signatures are
 retained compatibility inside that boundary, not workflow reporting or proof of
 algorithmic necessity. Workspace/auxiliary doctest execution and Elisp artifact
 lifting remain residual choreography around real reconciliation/consumer logic;
-small policy extraction has no automatically assigned owner. `server-fn-flow` is
-a separate temporary output-resolution bridge to authoritative trace/snapshot
-verification, with #1890 as its actual E2E migration boundary. The verifier must
-survive bridge retirement. These bounded deletions do not extract the remaining
-checks from the omnibus host executable.
+small policy extraction has no automatically assigned owner. The E2E workflow
+now owns authoritative output selection and trace/snapshot verification; its
+temporary `server-fn-flow` bridge is retired. The independent static coverage
+leaf and artifact verifier remain. These bounded deletions do not extract the
+remaining checks from the omnibus host executable.
 
 The explicit local workflows are:
 

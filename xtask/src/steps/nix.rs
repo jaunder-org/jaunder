@@ -787,10 +787,6 @@ fn finish_build_with(
 /// partial or unavailable diagnostic paths are omitted.
 /// --accept-flake-config honors the jaunder-org cachix substituter for the
 /// untrusted local user; --out-link makes the closure a GC root.
-fn build_check(step_name: &str, check: &str) -> StepResult {
-    build_check_with_flags(step_name, check, &[])
-}
-
 fn build_check_with_flags(step_name: &str, check: &str, flags: &[&str]) -> StepResult {
     let step = build_installable_with_flags(
         step_name,
@@ -1127,17 +1123,15 @@ mod tests {
     use std::path::Path;
     use std::rc::Rc;
     use std::sync::Arc;
-    use std::time::Duration;
 
     use processkit::{Command, Outcome, StdioMode};
     use tokio::io::AsyncWriteExt;
     use tokio::runtime::Builder;
 
     use super::{
-        BuildCaptureOutcome, BuildCompletion, BuildStderrTee, CommandResult,
-        FailedBuildDiagnostics, Process, StepResult, failed_build_after_diagnostics_with,
-        finish_build_with, lift_elisp_coverage_artifacts, prepare_build_dirs_with,
-        report_build_diagnostic_failure,
+        BuildCaptureOutcome, BuildCompletion, BuildStderrTee, FailedBuildDiagnostics, Process,
+        StepResult, failed_build_after_diagnostics_with, finish_build_with,
+        lift_elisp_coverage_artifacts, prepare_build_dirs_with, report_build_diagnostic_failure,
     };
     use crate::result::{NixRealization, NixReport, PhaseOutcome};
 

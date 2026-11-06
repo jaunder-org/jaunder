@@ -72,8 +72,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Validate host lane (via Just)
-        run:
-          nix develop .#ci --accept-flake-config -c just ci-validate-host
+        run: nix develop .#ci --accept-flake-config -c just ci-validate-host
       - name: Upload host validation diagnostics
         if: always()
         uses: actions/upload-artifact@v7.0.1
@@ -94,8 +93,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Validate hermetic lane (via Just)
-        run:
-          nix develop .#ci --accept-flake-config -c just ci-validate-hermetic
+        run: nix develop .#ci --accept-flake-config -c just ci-validate-hermetic
       - name: Upload hermetic validation diagnostics
         if: always()
         uses: actions/upload-artifact@v7.0.1
@@ -173,8 +171,7 @@ jobs:
             fi
           done
       - name: Validate Rust coverage lane (via Just)
-        run:
-          nix develop .#ci --accept-flake-config -c just ci-validate-coverage
+        run: nix develop .#ci --accept-flake-config -c just ci-validate-coverage
       - name: Capture coverage storage final snapshot
         if: always()
         continue-on-error: true
