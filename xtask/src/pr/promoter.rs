@@ -346,65 +346,58 @@ impl GhPromoterPr {
             .get("number")
             .and_then(Value::as_u64)
             .ok_or_else(|| anyhow!("promoter PR response has no number"))?;
-        let text = |key: &str| {
+        let text = |pointer: &str| {
             value
-                .get(key)
+                .pointer(pointer)
                 .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
                 .map(str::to_string)
-                .ok_or_else(|| anyhow!("promoter PR response has no {key}"))
+                .ok_or_else(|| anyhow!("promoter PR response has no {pointer}"))
         };
         Ok(PromoterPullRequest {
             number: PrNumber(number),
-            head_owner: value
-                .get("headRepositoryOwner")
-                .and_then(|owner| owner.get("login"))
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            author: value
-                .get("author")
-                .and_then(|author| author.get("login"))
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            head_ref: text("headRefName")?,
-            head_sha: text("headRefOid")?,
-            base_ref: text("baseRefName")?,
+            // REST exposes the App's exact bot login; GraphQL's author alias
+            // is not identity authority for the promoter.
+            head_owner: text("/head/repo/owner/login")?,
+            author: text("/user/login")?,
+            head_ref: text("/head/ref")?,
+            head_sha: text("/head/sha")?,
+            base_ref: text("/base/ref")?,
             body: value
                 .get("body")
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
-            is_open: value.get("state").and_then(Value::as_str) == Some("OPEN"),
+            is_open: match text("/state")?.as_str() {
+                "open" => true,
+                "closed" => false,
+                state => bail!("promoter PR response has unknown state {state}"),
+            },
             auto_merge_armed: value
-                .get("autoMergeRequest")
+                .get("auto_merge")
                 .is_some_and(|request| !request.is_null()),
             in_merge_queue: false,
         })
-    }
-
-    fn pr_fields() -> &'static str {
-        "number,state,author,headRepositoryOwner,headRefName,headRefOid,baseRefName,body,autoMergeRequest"
     }
 
     fn promoter_pull_request_with(
         &self,
         run: impl FnOnce(&[&str]) -> std::result::Result<Value, gh::ApiError>,
     ) -> Result<Option<PromoterPullRequest>> {
-        let slug = self.slug();
+        let path = format!("/repos/{}/pulls", self.slug());
+        let head = format!("head={}:{BRANCH}", self.owner);
+        let base = format!("base={BASE_BRANCH}");
         let value = run(&[
-            "pr",
-            "list",
-            "--repo",
-            &slug,
-            "--state",
-            "open",
-            "--head",
-            BRANCH,
-            "--base",
-            BASE_BRANCH,
-            "--json",
-            Self::pr_fields(),
+            "api",
+            "--method",
+            "GET",
+            &path,
+            "-f",
+            "state=open",
+            "-f",
+            &head,
+            "-f",
+            &base,
         ])
         .map_err(github_error)?;
         let pulls = value
@@ -428,17 +421,8 @@ impl GhPromoterPr {
         number: PrNumber,
         run: impl FnOnce(&[&str]) -> std::result::Result<Value, gh::ApiError>,
     ) -> Result<Option<PromoterPullRequest>> {
-        let slug = self.slug();
-        let number = number.to_string();
-        match run(&[
-            "pr",
-            "view",
-            &number,
-            "--repo",
-            &slug,
-            "--json",
-            Self::pr_fields(),
-        ]) {
+        let path = format!("/repos/{}/pulls/{number}", self.slug());
+        match run(&["api", &path]) {
             Ok(value) => self.parse_pull_request(&value).map(Some),
             Err(gh::ApiError::NotFound) => Ok(None),
             Err(error) => Err(github_error(error)),
@@ -1383,48 +1367,238 @@ mod tests {
         .unwrap();
     }
 
+    fn rest_pull_request() -> Value {
+        json!({
+            "number": 742,
+            "state": "open",
+            "user": {"login": "jaunder-adr-promoter[bot]"},
+            "head": {
+                "repo": {"owner": {"login": "jaunder-org"}},
+                "ref": "automation/adr-promoter",
+                "sha": "queued-head"
+            },
+            "base": {"ref": "main"},
+            "body": "Automated ADR promotion.\n\n<!-- jaunder-adr-promoter -->",
+            "auto_merge": null
+        })
+    }
+
     #[test]
-    fn open_pr_lookup_passes_branch_only_and_parses_owner() {
+    fn rest_discovery_and_numbered_lookup_recognize_the_exact_bot() {
         let github = GhPromoterPr {
             owner: "jaunder-org".into(),
             repo: "jaunder".into(),
         };
 
-        let pull = github
+        let discovered = github
             .promoter_pull_request_with(|args| {
                 assert_eq!(
                     args,
                     [
-                        "pr",
-                        "list",
-                        "--repo",
-                        "jaunder-org/jaunder",
-                        "--state",
-                        "open",
-                        "--head",
-                        BRANCH,
-                        "--base",
-                        BASE_BRANCH,
-                        "--json",
-                        GhPromoterPr::pr_fields(),
+                        "api",
+                        "--method",
+                        "GET",
+                        "/repos/jaunder-org/jaunder/pulls",
+                        "-f",
+                        "state=open",
+                        "-f",
+                        "head=jaunder-org:automation/adr-promoter",
+                        "-f",
+                        "base=main",
                     ]
                 );
-                assert!(!GhPromoterPr::pr_fields().contains("isInMergeQueue"));
-                Ok(json!([{
-                    "number": 742,
-                    "state": "OPEN",
-                    "headRepositoryOwner": {"login": "jaunder-org"},
-                    "author": {"login": BOT_LOGIN},
-                    "headRefName": BRANCH,
-                    "headRefOid": "queued-head",
-                    "baseRefName": BASE_BRANCH,
-                    "body": MARKER,
-                    "autoMergeRequest": null
-                }]))
+                Ok(json!([rest_pull_request()]))
             })
+            .unwrap()
+            .unwrap();
+        let numbered = github
+            .pull_request_rest_with(PrNumber(742), |args| {
+                assert_eq!(args, ["api", "/repos/jaunder-org/jaunder/pulls/742"]);
+                Ok(rest_pull_request())
+            })
+            .unwrap()
             .unwrap();
 
-        assert_eq!(pull.unwrap().head_owner, "jaunder-org");
+        assert_eq!(discovered, numbered);
+        assert_eq!(numbered, promoter_pr("queued-head"));
+        assert!(is_promoter_identity(&numbered, "jaunder-org"));
+    }
+
+    fn rest_reads(value: &Value) -> [Result<Option<PromoterPullRequest>>; 2] {
+        let github = GhPromoterPr {
+            owner: "jaunder-org".into(),
+            repo: "jaunder".into(),
+        };
+        [
+            github.promoter_pull_request_with(|_| Ok(json!([value]))),
+            github.pull_request_rest_with(PrNumber(742), |_| Ok(value.clone())),
+        ]
+    }
+
+    #[test]
+    fn rest_identity_and_marker_fail_closed_before_generation_mutates() {
+        for (pointer, wrong) in [
+            ("/user/login", json!("collaborator")),
+            ("/user/login", json!("app/jaunder-adr-promoter")),
+            ("/user/login", json!("Jaunder-adr-promoter[bot]")),
+            ("/user/login", json!("jaunder-adr-promoter")),
+            ("/body", json!("no promoter marker")),
+            ("/body", Value::Null),
+        ] {
+            let mut value = rest_pull_request();
+            *value.pointer_mut(pointer).unwrap() = wrong;
+            for read in rest_reads(&value) {
+                // A foreign author/marker is an occupant, never absence. Feed
+                // that real parsed record through Generate's singleton guard.
+                let pr = read.unwrap().expect("foreign occupant must remain visible");
+                assert!(!is_promoter_identity(&pr, "jaunder-org"));
+                let github = FakeGithub::empty();
+                github.pulls.borrow_mut().push(pr);
+                let git = FakeGit::connected(true, &github);
+                let error = run_with(PromoterEvent::Generate, &git, &github, &github).unwrap_err();
+                assert!(error.to_string().contains("different identity"));
+                assert!(git.calls.borrow().is_empty());
+                assert!(github.writes.borrow().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn rest_discovery_excludes_other_owners_branches_bases_and_closed_prs() {
+        for (pointer, wrong) in [
+            ("/head/repo/owner/login", "other-owner"),
+            ("/head/ref", "automation/other"),
+            ("/base/ref", "release"),
+            ("/state", "closed"),
+        ] {
+            let mut value = rest_pull_request();
+            *value.pointer_mut(pointer).unwrap() = json!(wrong);
+            let [discovered, numbered] = rest_reads(&value);
+            assert!(discovered.unwrap().is_none(), "{pointer}");
+            assert!(!is_promoter_identity(
+                &numbered.unwrap().unwrap(),
+                "jaunder-org"
+            ));
+        }
+    }
+
+    #[test]
+    fn rest_reads_reject_unknown_states_instead_of_treating_them_as_absent() {
+        let mut value = rest_pull_request();
+        value["state"] = json!("unknown");
+        let [discovered, numbered] = rest_reads(&value);
+        assert!(
+            discovered.is_err(),
+            "unknown state must not mean no occupant"
+        );
+        assert!(numbered.is_err(), "unknown state must not mean closed");
+    }
+
+    #[test]
+    fn rest_reads_reject_missing_or_malformed_required_metadata() {
+        for pointer in [
+            "/number",
+            "/user",
+            "/user/login",
+            "/head/repo",
+            "/head/repo/owner/login",
+            "/head/ref",
+            "/head/sha",
+            "/base/ref",
+            "/state",
+        ] {
+            for malformed in [Value::Null, json!({}), json!(false), json!("")] {
+                let mut value = rest_pull_request();
+                *value.pointer_mut(pointer).unwrap() = malformed;
+                for read in rest_reads(&value) {
+                    assert!(read.is_err(), "{pointer}: {value}");
+                }
+            }
+            let mut value = rest_pull_request();
+            let (parent, key) = pointer.rsplit_once('/').unwrap();
+            value
+                .pointer_mut(parent)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove(key);
+            for read in rest_reads(&value) {
+                assert!(read.is_err(), "missing {pointer}");
+            }
+        }
+    }
+
+    #[test]
+    fn rest_discovery_rejects_multiple_occupants_even_with_a_foreign_author() {
+        let github = GhPromoterPr {
+            owner: "jaunder-org".into(),
+            repo: "jaunder".into(),
+        };
+        let mut foreign = rest_pull_request();
+        foreign["number"] = json!(743);
+        foreign["user"]["login"] = json!("collaborator");
+        let error = github
+            .promoter_pull_request_with(|_| Ok(json!([rest_pull_request(), foreign])))
+            .unwrap_err();
+        assert!(error.to_string().contains("multiple open pull requests"));
+        assert!(
+            github
+                .promoter_pull_request_with(|_| Ok(json!([])))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            github
+                .promoter_pull_request_with(|_| Ok(json!({})))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn rest_auto_merge_is_nullable_and_does_not_supply_queue_membership() {
+        for auto_merge in [Value::Null, json!({"merge_method": "merge"})] {
+            let mut value = rest_pull_request();
+            value["auto_merge"] = auto_merge.clone();
+            // Unrelated GraphQL-shaped fields cannot override REST authority.
+            value["author"] = json!({"login": "app/jaunder-adr-promoter"});
+            value["autoMergeRequest"] = if auto_merge.is_null() {
+                json!({})
+            } else {
+                Value::Null
+            };
+            value["isInMergeQueue"] = json!(true);
+            for read in rest_reads(&value) {
+                let pr = read.unwrap().unwrap();
+                assert!(is_promoter_identity(&pr, "jaunder-org"));
+                assert_eq!(pr.auto_merge_armed, !auto_merge.is_null());
+                assert!(!pr.in_merge_queue);
+            }
+        }
+    }
+
+    #[test]
+    fn rest_numbered_lookup_distinguishes_absence_from_api_failure() {
+        let github = GhPromoterPr {
+            owner: "jaunder-org".into(),
+            repo: "jaunder".into(),
+        };
+        assert!(
+            github
+                .pull_request_rest_with(PrNumber(742), |_| { Err(gh::ApiError::NotFound) })
+                .unwrap()
+                .is_none()
+        );
+        for error in [
+            gh::ApiError::Unauthenticated,
+            gh::ApiError::Transport("offline".into()),
+        ] {
+            assert!(
+                github
+                    .pull_request_rest_with(PrNumber(742), |_| Err(error.clone()))
+                    .is_err()
+            );
+            assert!(github.promoter_pull_request_with(|_| Err(error)).is_err());
+        }
     }
 
     #[test]
