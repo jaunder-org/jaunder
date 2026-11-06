@@ -1,6 +1,6 @@
-# ADR-DRAFT: Own Collection evidence within Emacs reconciliation operations
+# ADR-0218: Own Collection evidence within Emacs reconciliation operations
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-09
 - Issue: [#1716](https://github.com/jaunder-org/jaunder/issues/1716)
 
@@ -13,10 +13,10 @@ traversal for links. Network work therefore grows with both Collection size and
 selection length. The same responsibilities also appear in single-row actions
 and interactive merge preparation/completion.
 
-[ADR-0200](../0200-revalidated-matched-post-pull.md) and
-[ADR-0211](../0211-emacs-reconciliation-conflict-resolution.md) require fresh
+[ADR-0200](0200-revalidated-matched-post-pull.md) and
+[ADR-0211](0211-emacs-reconciliation-conflict-resolution.md) require fresh
 selected-Post replacement/conflict evidence, not indefinite authorization from a
-report preview. [ADR-0201](../0201-emacs-local-post-link-round-trip.md) requires
+report preview. [ADR-0201](0201-emacs-local-post-link-round-trip.md) requires
 unique remote/local target proof and server-owned canonical URLs. Discovery,
 authorization and outcomes are distinct responsibilities; a cache binding that
 only bypasses repeated fetches leaves their ordering distributed across callers.
@@ -26,7 +26,7 @@ create two Posts sharing an ID. A Collection response may nevertheless contain
 malformed duplicate Entries, which the client rejects. Repeating that global
 fault check differs from checking a selected Member's identity and strong ETag.
 Pagination is not an atomic snapshot under
-[ADR-0209](../0209-atompub-collection-member-etags.md).
+[ADR-0209](0209-atompub-collection-member-etags.md).
 
 ## Decision
 
@@ -34,9 +34,9 @@ Use one deep operation-level module for confirmed reconciliation push, pull,
 keep-local, keep-remote and delete. A single selected Post is batch size one.
 The module owns root/active-origin/User scope, discovery lifetime, fresh local
 proof and remote evidence invalidation. Dependencies remain exact under
-[ADR-0016](../0016-dependency-injection-and-appstate.md), not a heterogeneous
+[ADR-0016](0016-dependency-injection-and-appstate.md), not a heterogeneous
 service bundle. Blog selection continues using
-[ADR-0047](../0047-emacs-publish-orchestration.md)'s directory resolution.
+[ADR-0047](0047-emacs-publish-orchestration.md)'s directory resolution.
 
 Acquire at most one complete Collection traversal when operation discovery is
 needed, independently of the reviewed preview. Preserve pagination validation
@@ -61,7 +61,7 @@ restore usable discovery; another per-row Collection walk may not. Never invent
 an unknown created Post ID, guess a permalink, automatically retry an uncertain
 update/delete, or hide a remote commit behind a local failure. Durable keyed
 create recovery continues under
-[ADR-0199](../0199-durable-atompub-create-intent.md).
+[ADR-0199](0199-durable-atompub-create-intent.md).
 
 Observation belongs to the actual send and response, not the eventual row
 result. Per-send ownership prevents older rejected or confirmed responses from

@@ -1,19 +1,19 @@
-# ADR-DRAFT: Retain SQLx query diagnostics in native logs
+# ADR-0233: Retain SQLx query diagnostics in native logs
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-27
 - Issue: [#1815](https://github.com/jaunder-org/jaunder/issues/1815)
 
 ## Context
 
-The [native OTLP process logs decision](../drafts/native-otlp-process-logs.md)
-keeps the stock tracing-to-OpenTelemetry log bridge and qualifies retained
-fields by producer at the shared Collector. Before this exception, the
-external-producer `keep_keys` rule in `nix/otel-processors.yaml` stripped SQLx
-query diagnostics. The stock bridge maps tracing's `message` field to the native
-log body; it does not invent a body from other attributes. Normal SQLx query
-events have no message, so retaining only producer/location metadata left
-operators without either a useful message or the query execution diagnostics.
+The [native OTLP process logs decision](0224-native-otlp-process-logs.md) keeps
+the stock tracing-to-OpenTelemetry log bridge and qualifies retained fields by
+producer at the shared Collector. Before this exception, the external-producer
+`keep_keys` rule in `nix/otel-processors.yaml` stripped SQLx query diagnostics.
+The stock bridge maps tracing's `message` field to the native log body; it does
+not invent a body from other attributes. Normal SQLx query events have no
+message, so retaining only producer/location metadata left operators without
+either a useful message or the query execution diagnostics.
 
 SQLx 0.9.0's `sqlx-core/src/logger.rs` (`QueryLogger::finish`) emits at target
 `sqlx::query`: a short SQL `summary`, `db.statement`, row counts, and elapsed

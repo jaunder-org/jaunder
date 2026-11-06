@@ -1247,7 +1247,7 @@ baseline.
   URL for this invocation, without changing its failed verdict; delayed fresh
   visibility uses the normal deadline, and a distinct fresh failure terminates.
   Existing head, check, queue and fail-closed guards remain in force. See
-  [explicit one-shot recovery](docs/adr/drafts/explicit-one-shot-pr-reenqueue.md).
+  [explicit one-shot recovery](docs/adr/0220-explicit-one-shot-pr-reenqueue.md).
 
   **Post-merge ownership:** after `pr land` reports verified `merged`, choose
   the preservation or cleanup path by actual assignment ownership. Missing or

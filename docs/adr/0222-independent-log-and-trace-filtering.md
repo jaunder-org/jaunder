@@ -1,6 +1,6 @@
-# ADR-DRAFT: Local log filtering and Collector-owned OTLP retention
+# ADR-0222: Local log filtering and Collector-owned OTLP retention
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-12
 - Issue: [#1742](https://github.com/jaunder-org/jaunder/issues/1742)
 
@@ -28,7 +28,7 @@ established ordinary/`--verbose` defaults, including the storage INFO exception.
 Those controls govern local output only. `TelemetryConfig::local_log_filter()`
 is the local-only accessor for subscriber reuse, resolved as immutable
 process-periphery input under
-[ADR-0158](../0158-peripheral-process-configuration.md).
+[ADR-0158](0158-peripheral-process-configuration.md).
 
 When an endpoint is configured, the OTLP trace layer admits generated spans and
 span events without application-level severity, target or context filters. There
@@ -69,11 +69,11 @@ first, then #1743 rebase and combined-signal proof.
 
 Unfiltered output does not broaden permitted data classes. Privacy, redaction
 and sink-specific field admission remain governed by
-[ADR-0011](../0011-unified-observability.md),
-[ADR-0147](../0147-decision-path-observability.md), and
-[ADR-0156](../0156-sink-specific-telemetry-interfaces.md). Independent local
-SDK, exporter, configuration, formatter, parent and shutdown diagnostics stay
-outside failing/native export paths to avoid recursion.
+[ADR-0011](0011-unified-observability.md),
+[ADR-0147](0147-decision-path-observability.md), and
+[ADR-0156](0156-sink-specific-telemetry-interfaces.md). Independent local SDK,
+exporter, configuration, formatter, parent and shutdown diagnostics stay outside
+failing/native export paths to avoid recursion.
 
 ### #1743 qualified Collector amendment
 
@@ -81,7 +81,7 @@ The qualified human approval JAU-1743-COLLECTOR-AMENDMENT-001, acknowledged by
 Lead against technical contract SHA256
 `c5ee2ad723645acbff1cda627e3154282f95e468ff04991ae8a28cec879580f6` and the
 latest decision card, selects the
-[native OTLP Collector privacy revision](../drafts/native-otlp-process-logs.md).
+[native OTLP Collector privacy revision](0224-native-otlp-process-logs.md).
 Local-only filtering, AlwaysOn IDs, independent local fields/capture and
 process-owned bounded draining remain requirements. Application privacy
 visitors, Debug parsing, classifiers and proposed trace decorators are removed

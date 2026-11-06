@@ -1,6 +1,6 @@
-# ADR-DRAFT: Supported Nix Platform and Browser Boundaries
+# ADR-0234: Supported Nix Platform and Browser Boundaries
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-05
 - Issue: [#1684](https://github.com/jaunder-org/jaunder/issues/1684)
 
@@ -11,7 +11,7 @@ Advertising flake-utils' default systems therefore includes an output family
 that cannot evaluate. Linux's packaged Playwright browser and canonical Chromium
 thumbnail environment are not available equivalently on Darwin.
 
-[ADR-0191](../0191-emacs-protocol-client-flake-package-output.md) established an
+[ADR-0191](0191-emacs-protocol-client-flake-package-output.md) established an
 independent Emacs Protocol Client output for every default flake system. Its
 package role and dependencies remain valid, but system enumeration must reflect
 the pinned package set rather than promising unsupported outputs.

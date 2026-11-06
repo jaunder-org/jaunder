@@ -1,13 +1,13 @@
-# ADR-DRAFT: Runtime observability credentials with private refreshable copies
+# ADR-0232: Runtime observability credentials with private refreshable copies
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-13
 - Issue: [#1744](https://github.com/jaunder-org/jaunder/issues/1744)
 
 ## Context
 
-[ADR-0196](../0196-single-host-nixos-deployment-stack.md) provides a separate
-HTTPS operator hostname, hostname-wide Basic Auth and credential-free loopback
+[ADR-0196](0196-single-host-nixos-deployment-stack.md) provides a separate HTTPS
+operator hostname, hostname-wide Basic Auth and credential-free loopback
 Victoria ingestion. Its inline username/hash interface embeds the evaluated hash
 in generated Caddy configuration and the Nix store. This allows offline password
 guessing by unrelated store readers, even though plaintext is not disclosed.
@@ -84,5 +84,5 @@ retain inline mode rather than receive an unsafe silent fallback.
 Existing distinct hostname rules, native prefixes, loopback bindings, trusted
 application proxy and credential-free collector traffic remain unchanged.
 Procedures and exact format belong in
-[the deployment runbook](../../DESIGN.md#optional-https-observability-host-and-basic-auth);
-current architecture is projected in [ARCHITECTURE](../../ARCHITECTURE.md).
+[the deployment runbook](../DESIGN.md#optional-https-observability-host-and-basic-auth);
+current architecture is projected in [ARCHITECTURE](../ARCHITECTURE.md).

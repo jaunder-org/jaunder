@@ -148,7 +148,7 @@ Jaunder's Nix package metadata agree. The GNU license text and third-party or
 separately licensed data notices remain unchanged. Dependency policy retains
 `GPL-3.0-only` and additionally allows `GPL-3.0-or-later`; it does not waive
 source or advisory checks
-([project licensing decision](adr/drafts/project-license-or-later.md)). This
+([project licensing decision](adr/0230-project-license-or-later.md)). This
 software license is unrelated to a User's publication Content License.
 
 Across every one of those trees, a `mod.rs` states its module's surface and
@@ -198,13 +198,13 @@ same-directory server's `runtime.lock`, while an ordinary CLI open without
 pending work remains allowed. Offline queue transactions alone may perform
 unbounded rendering inside SQLite's write lock; request-time work still follows
 ADR-0092's bounded occupancy rule
-([Offline code migrations](adr/drafts/offline-code-migration-queue.md)). The
+([Offline code migrations](adr/0226-offline-code-migration-queue.md)). The
 `0047` enqueues `rebuild_rendered_posts` again for the new syntax rules; `0048`
 re-enqueues it for Org footnotes, including databases that already drained
 `0047`; `0049` only enqueues it again for catalog-wide token quality even after
 both earlier requests completed, without resetting the separate bounded refresh
 checkpoint
-([catalog-wide code token quality and repeatable projection refresh](adr/drafts/catalog-code-token-quality-and-refresh.md)).
+([catalog-wide code token quality and repeatable projection refresh](adr/0216-catalog-code-token-quality-and-refresh.md)).
 `0050` re-enqueues the same operation for Org verse line boundaries and inline
 formatting, including databases that completed all prior requests. On SQLite,
 `0048` also initializes the short-write Post ID allocator shared by all Post
@@ -361,7 +361,7 @@ client-validation mapping
   checkpoint in one transaction. Per-Post parse limits and commits between
   batches bound its lock hold; no request path or recurring worker inherits this
   exception
-  ([host code-block highlighting and projection refresh](adr/drafts/host-code-block-highlighting-and-projection-refresh.md)).
+  ([host code-block highlighting and projection refresh](adr/0221-host-code-block-highlighting-and-projection-refresh.md)).
 - **Slug-ordered tag locks.** A transaction that will touch several `tags` rows
   sorts them by slug before acquiring any lock, so every transaction takes the
   row locks in one global order and concurrent `set_post_tags` reconciles cannot
@@ -448,7 +448,7 @@ in `server/src/commands/backup.rs`) — there is no force-overwrite mode. The
 server's backup command holds `database.lock` through its snapshot. Restore
 refuses a live same-directory server and holds that lock continuously from the
 emptiness check through database, Theme, and Media placement and validation
-([Offline code migrations](adr/drafts/offline-code-migration-queue.md))
+([Offline code migrations](adr/0226-offline-code-migration-queue.md))
 ([ADR-0064](adr/0064-backup-target-auto-derivation.md)). Failure is
 backend-uniform: a constraint-violating restore returns
 `BackupError::ConstraintViolation` and leaves the target unmodified on both
@@ -617,7 +617,7 @@ traverses the original Orgize document directly; there is no host-owned verse
 syntax-tree adapter. Literal code/verbatim, link destinations, native source,
 and document-owned footnote identity remain intact. Exported HTML still crosses
 the existing host sanitization boundary
-([Org export fork](adr/drafts/orgize-v010-special-string-export-fork.md)).
+([Org export fork](adr/0228-orgize-v010-special-string-export-fork.md)).
 
 **Content rights follow the User's current publication-wide setting.** Every
 User has one closed Content License: All Rights Reserved by default, CC0, or one
@@ -722,8 +722,8 @@ existing `language-*` code classes; CSS scopes token colors to Post-body
 `pre code`, since the attribute filter cannot inspect ancestry. The 64 KiB
 block, 16-attempt and 128 KiB per-Post limits bound parsing. Unexpected
 highlighter failures propagate as typed render errors
-([host code-block highlighting and projection refresh](adr/drafts/host-code-block-highlighting-and-projection-refresh.md);
-[catalog-wide code token quality and repeatable projection refresh](adr/drafts/catalog-code-token-quality-and-refresh.md)).
+([host code-block highlighting and projection refresh](adr/0221-host-code-block-highlighting-and-projection-refresh.md);
+[catalog-wide code token quality and repeatable projection refresh](adr/0216-catalog-code-token-quality-and-refresh.md)).
 
 `RenderedHtml`'s field is crate-private: ordinary application crates have no
 direct raw constructor, conversion, blanket `Deserialize`, or trusted-string
@@ -737,7 +737,7 @@ and persisted HTML on SQLite and PostgreSQL. Exact fixtures are available
 through `common::test_support` under `cfg(test)` or `test-support`; production
 feature confinement depends on declarations and review, not a dedicated compiler
 or feature-graph gate
-([RenderedHtml proof policy](adr/drafts/rendered-html-proof-without-standalone-compiler-gate.md)).
+([RenderedHtml proof policy](adr/0231-rendered-html-proof-without-standalone-compiler-gate.md)).
 The type guards accidental misuse, not trusted input provenance: public DTO
 deserialization and SQLx decoding reconstruct bytes without sanitizing them.
 SQLx decoding's **wrong-column blessing risk is real and accepted**: a reviewer
@@ -842,7 +842,7 @@ gamma and named intent representations. EXIF/XMP removal remains selective. This
 is not image re-encoding or a forensic cleanup policy. Successful removal with
 rendering and encoded-content preservation remains required for every covered
 format; a native capability gap is not an accepted format exclusion. See the
-[private preparation decision](adr/drafts/native-image-upload-preparation.md).
+[private preparation decision](adr/0223-native-image-upload-preparation.md).
 
 A same-executable worker owns two immediate shared slots (503 when busy), one
 30-second processing deadline and a 128 KiB status bound. Its owner retains
@@ -978,8 +978,8 @@ Post Revision; Deleted and HTML-format Posts are skipped by the bounded pass but
 may have changed current derivatives rebuilt by the offline operation. Any
 unfinished version-1 pass resumes before the new server accepts traffic, and
 old-version writers must be drained first
-([host code-block highlighting and projection refresh](adr/drafts/host-code-block-highlighting-and-projection-refresh.md);
-[catalog-wide code token quality and repeatable projection refresh](adr/drafts/catalog-code-token-quality-and-refresh.md)).
+([host code-block highlighting and projection refresh](adr/0221-host-code-block-highlighting-and-projection-refresh.md);
+[catalog-wide code token quality and repeatable projection refresh](adr/0216-catalog-code-token-quality-and-refresh.md)).
 Media referenced by an owner's retained current Post or revision participates in
 the ordinary reference guard, including Deleted Posts; web force is the explicit
 override and may knowingly delete the final Media Record, breaking retained
@@ -1498,7 +1498,7 @@ nonzero high-water mark; bounded PII-free telemetry records the anomaly.
   ([ADR-0014](adr/0014-atompub-authentication.md)).
 
 The
-[Browser Session lifecycle decision](adr/drafts/persistent-browser-session-lifecycle.md)
+[Browser Session lifecycle decision](adr/0229-persistent-browser-session-lifecycle.md)
 qualifies the Session exclusion in
 [bounded transient-data retention](adr/0167-bounded-transient-data-retention.md).
 Machine and Unknown Sessions and App Passwords remain outside cleanup. Expired
@@ -1789,7 +1789,7 @@ The custom-theme architecture is governed by the accepted
 #### Bundled Theme Packages and protected application styling
 
 The
-[unified styling assets decision](adr/drafts/unified-theme-and-application-assets.md)
+[unified styling assets decision](adr/0235-unified-theme-and-application-assets.md)
 is implemented through the same package validation, compilation, revision, and
 presentation pipeline for system-managed bundled Studio, Terminal, and Reader.
 Existing named selections follow the installed release. Bundled packages are
@@ -1823,8 +1823,8 @@ incidental wrappers are not. Fifteen scoped `j-syn-*` token hooks and matching
 `--j-syn-*` CSS variables add code colors to Style Contract v1 without changing
 old Theme Packages; the five additive hooks distinguish calls, added/removed
 diff lines, headings and quotes. Home uses its own Jaunder styling
-([host code-block highlighting and projection refresh](adr/drafts/host-code-block-highlighting-and-projection-refresh.md);
-[catalog-wide code token quality and repeatable projection refresh](adr/drafts/catalog-code-token-quality-and-refresh.md)).
+([host code-block highlighting and projection refresh](adr/0221-host-code-block-highlighting-and-projection-refresh.md);
+[catalog-wide code token quality and repeatable projection refresh](adr/0216-catalog-code-token-quality-and-refresh.md)).
 Custom CSS is scoped inside an unthemeable paint-containment/low-stacking
 boundary. The root then places the dedicated `#j-trusted-post-actions` sibling
 after that theme surface and before the warning-only `#j-trusted-chrome`
@@ -2286,7 +2286,7 @@ operator, rather than Jaunder, owns long-term telemetry retention.
 ### Local logging and Collector-owned OTLP retention
 
 The
-[Collector-owned retention decision](adr/drafts/independent-log-and-trace-filtering.md)
+[Collector-owned retention decision](adr/0222-independent-log-and-trace-filtering.md)
 for #1742 governs the implemented host telemetry policy. Local output retains
 `JAUNDER_LOG_FILTER` / `RUST_LOG` precedence and ordinary/verbose defaults,
 exposed through a local-only `TelemetryConfig::local_log_filter()` accessor.
@@ -2497,7 +2497,7 @@ persistence, browser presentation or delivery.
 
 #### Shared Collector privacy policy
 
-The [native OTLP decision](adr/drafts/native-otlp-process-logs.md) records the
+The [native OTLP decision](adr/0224-native-otlp-process-logs.md) records the
 qualified human amendment JAU-1743-COLLECTOR-AMENDMENT-001, acknowledged by Lead
 against contract SHA256
 `c5ee2ad723645acbff1cda627e3154282f95e468ff04991ae8a28cec879580f6` and the
@@ -2556,7 +2556,7 @@ actual stored query fields and the confidence limits.
 
 **SQLx query-log diagnostics.** The operator approved retaining literal SQL
 despite its sensitive-text exposure (decision:
-`docs/adr/drafts/sqlx-query-log-diagnostics.md`). The stock native log bridge
+`docs/adr/0233-sqlx-query-log-diagnostics.md`). The stock native log bridge
 remains unchanged; the shared Collector implements this narrow
 log-retention/body rule before batching and durable export. For exactly producer
 `sqlx::query`, resolved by the existing scope/facade convention, it retains
@@ -2582,7 +2582,7 @@ Stock appender 0.32.0 owns native message/severity/field conversion without
 experimental metadata/span copying. There is no application field visitor,
 Debug/Option parser, target admission or request-path enrichment.
 
-The [native OTLP process logs proposal](adr/drafts/native-otlp-process-logs.md)
+The [native OTLP process logs proposal](adr/0224-native-otlp-process-logs.md)
 records implemented routing of ordinary application logs through the same
 configured Collector as traces and metrics; the Collector owns routing to
 VictoriaLogs. Without OTLP they remain on stdout in the configured format.
@@ -2696,7 +2696,7 @@ formatters render that span context
 [ADR-0017](adr/0017-error-handling-and-the-public-boundary.md)). The native OTLP
 log sink uses available trace/span correlation rather than raw-stack rendering
 and excludes `error.span_trace`
-([native OTLP process logs proposal](adr/drafts/native-otlp-process-logs.md)).
+([native OTLP process logs proposal](adr/0224-native-otlp-process-logs.md)).
 
 An unexpected native failure that deliberately preserves the primary result goes
 through one `host::error` reporting interface, which couples the fixed warning,
@@ -3000,7 +3000,7 @@ writable versioned cache, without downloads on shell entry. NixOS VM checks, ELF
 patching, diagnostic coverage producers, canonical screenshot updates, and theme
 thumbnails remain Linux-only. Actual Safari investigation is separate from
 Playwright WebKit and from mobile-device proof
-([supported Nix platform and browser boundaries](adr/drafts/supported-nix-platform-and-browser-boundaries.md)).
+([supported Nix platform and browser boundaries](adr/0234-supported-nix-platform-and-browser-boundaries.md)).
 `packages.jaunder` remains the deployable server-binary output. `packages.site`
 is **no longer a deployment artifact** — the binary embeds the bundle — and is
 retained only so `cargo xtask audit-wasm` can build `.#site` and inspect the
@@ -3033,7 +3033,7 @@ on loopback; Jaunder exports native OTLP metrics, logs and traces, and the
 collector routes them into persistent single-node VictoriaMetrics, VictoriaLogs,
 and VictoriaTraces stores. Jaunder application log ingress to the Collector
 remains OTLP-only, without Jaunder journal collection or JSON parsing
-([native OTLP process logs proposal](adr/drafts/native-otlp-process-logs.md)).
+([native OTLP process logs proposal](adr/0224-native-otlp-process-logs.md)).
 Caddy is a separate source: its service stdout/stderr and exactly one native
 JSON stdout access logger per enabled managed vhost go to
 `LogNamespace=jaunder`, with the NixOS per-vhost file logger disabled. The
@@ -3047,8 +3047,8 @@ Cookie, Set-Cookie, Authorization and Proxy-Authorization remains enabled.
 Receiver-interruption recovery may replay already-uploaded records; steady-state
 logging has no duplicate logger, but exactly-once delivery and universal
 losslessness are not promised
-([Caddy native journald upload](adr/drafts/caddy-native-journald-upload.md)).
-Each store and its built-in web UI remains loopback-only. The stack sets
+([Caddy native journald upload](adr/0215-caddy-native-journald-upload.md)). Each
+store and its built-in web UI remains loopback-only. The stack sets
 `trustedProxies = [ "127.0.0.1/32" ]` for its immediate Caddy Transport Peer;
 its application route removes caller-supplied `Forwarded` while Caddy owns the
 trusted `X-Forwarded-For` chain. CDN ranges and vendor-header normalization stay
@@ -3063,7 +3063,7 @@ same-host Caddy definitions collide and could authenticate or replace the
 application route. Its Basic Auth requires exactly one complete source: the
 compatible inline `username`/`passwordHash` pair or an absolute runtime filename
 string `credentialsFile` with both inline fields empty
-([runtime observability credentials](adr/drafts/runtime-observability-credentials.md)).
+([runtime observability credentials](adr/0232-runtime-observability-credentials.md)).
 Inline usernames match `[A-Za-z0-9._-]+`; complete `$2a$`/`$2b$` bcrypt and
 `$argon2id$` hashes select their algorithm, while plaintext/unrecognized hashes
 fail evaluation. The literal inline hash enters generated Caddy configuration
@@ -3499,7 +3499,7 @@ and rename retain exact owned filesystem lineage rather than adopting unrelated
 replacements or changed User context. Reuse accepts less repeated detection of
 newly faulty global duplicate Collection Entries, never permission to overwrite
 changed selected Posts or local bytes
-([operation-scoped Collection evidence](adr/drafts/emacs-operation-scoped-collection-evidence.md)).
+([operation-scoped Collection evidence](adr/0218-emacs-operation-scoped-collection-evidence.md)).
 
 A selected matched `server-ahead` Post may be pulled only after revalidating its
 report-snapshotted local path/SHA-256 and remote strong ETag
@@ -3602,7 +3602,7 @@ initial remote staging; links thereafter are ordinary authored merge content
 under existing publish checks, without automatic completed-result rewrites.
 Unexpected I/O errors remain failures. Server-only pull and Markdown/HTML keep
 their ordinary localization policy
-([verified original Media reuse](adr/drafts/emacs-verified-original-media-reuse.md)).
+([verified original Media reuse](adr/0219-emacs-verified-original-media-reuse.md)).
 
 ## Domain types and invariants
 
@@ -4325,8 +4325,8 @@ catalog. `host` owns the verify-only host/static gate and auxiliary host tests;
 tests, doctests, and Elisp coverage; and `coverage` owns Rust coverage plus its
 gate. Producer/consumer pairs never cross jobs. Source-invalidation probes
 remain manually callable diagnostics, not automatic CI steps
-([on-demand source probes](adr/drafts/on-demand-source-invalidation-probes.md)).
-A result-only `Validate (no e2e)` job requires all four lanes, preserving the
+([on-demand source probes](adr/0227-on-demand-source-invalidation-probes.md)). A
+result-only `Validate (no e2e)` job requires all four lanes, preserving the
 stable branch-protection context. Local `validate --no-e2e` selects the same
 catalog serially
 ([split non-e2e validation lanes](adr/0192-split-ci-non-e2e-validation-lanes.md);
@@ -4930,12 +4930,12 @@ virtual manifests would otherwise default to resolver 1
 ([ADR-0104](adr/0104-edition-2024-unsafe-env-and-precise-capturing.md)).
 
 **Independent host-tool packaging.** The
-[Nix-cached tooling decision](adr/drafts/nix-cached-host-tooling.md)
-distinguishes building a host executable from executing its orchestrator inside
-a derivation. `packages.xtask` compiles its standalone closure independently;
-application coverage/E2E dependencies and explicit host-unit-test authorities
-remain separate. Both development shells supply a thin `cargo-xtask` transport
-that discovers the active checkout and executes its selected Nix output.
+[Nix-cached tooling decision](adr/0225-nix-cached-host-tooling.md) distinguishes
+building a host executable from executing its orchestrator inside a derivation.
+`packages.xtask` compiles its standalone closure independently; application
+coverage/E2E dependencies and explicit host-unit-test authorities remain
+separate. Both development shells supply a thin `cargo-xtask` transport that
+discovers the active checkout and executes its selected Nix output.
 
 `packages.qualification-harness` joins the existing tool, browser, test-support,
 Node and VM input owners. Ordinary and styling qualification admit the actual
@@ -4981,8 +4981,8 @@ correction itself (`:76-83`, #412).
 **Dependency patching.** The workspace carries temporary exact-revision git
 `[patch.crates-io]` entries for lettre
 ([ADR-0119](adr/0119-lettre-fork-pinned-by-rev.md)), Org export's `orgize`
-([Org export fork](adr/drafts/orgize-v010-special-string-export-fork.md)), and
-the Passkey `webauthn-rs`/`webauthn-rs-core` pair
+([Org export fork](adr/0228-orgize-v010-special-string-export-fork.md)), and the
+Passkey `webauthn-rs`/`webauthn-rs-core` pair
 ([Passkeys are additive cookie-Session credentials](adr/0194-passkeys-are-additive-cookie-session-credentials.md)).
 The latter pins `jaunder-org/webauthn-rs` branch `feature/passkey-policy-apis`
 at `6d0acc73fbf4436b1ed853fa5c8a219dac304a8e`, preserving upstream defaults
@@ -5086,7 +5086,7 @@ visibility uses the normal observation deadline; a distinct fresh failure is
 terminal. Uncertainty never falls back to ordinary rearming, and existing queue
 and check outcomes remain intact. This narrowly refines ADR-0087 decision 4;
 `watch` gains no mutation capability (decision:
-`docs/adr/drafts/explicit-one-shot-pr-reenqueue.md`).
+`docs/adr/0220-explicit-one-shot-pr-reenqueue.md`).
 
 **Post-land checkout cleanup.** After a confirmed merge,
 `cargo xtask pr cleanup [N]` is the explicit local-only cleanup command
@@ -5141,7 +5141,7 @@ as amended by
   rationale. Execution reports remain in ignored run/session storage or
   explicitly retained external artifacts, not the source tree. Gates check
   current invariants rather than completed-work ledgers
-  ([development artifact lifecycle](adr/drafts/development-artifact-lifecycle.md)).
+  ([development artifact lifecycle](adr/0217-development-artifact-lifecycle.md)).
 
 New ADRs are tracked, numberless `docs/adr/drafts/<slug>.md` files. A draft
 carries `# ADR-DRAFT: <title>`, remains `proposed`, and is cited only by its

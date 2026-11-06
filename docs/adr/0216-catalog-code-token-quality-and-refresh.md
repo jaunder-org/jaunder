@@ -1,13 +1,13 @@
-# ADR-DRAFT: Catalog-wide code token quality and repeatable projection refresh
+# ADR-0216: Catalog-wide code token quality and repeatable projection refresh
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-04
 - Issue: [#1678](https://github.com/jaunder-org/jaunder/issues/1678)
 
 ## Context
 
 The
-[host highlighting decision](../drafts/host-code-block-highlighting-and-projection-refresh.md)
+[host highlighting decision](0221-host-code-block-highlighting-and-projection-refresh.md)
 introduced a pinned 42-grammar catalog, ten closed semantic hooks and a
 versioned presentation-only refresh. At the original report, a Haskell Post had
 an unterminated opening pragma that its grammar parses as one whole-block

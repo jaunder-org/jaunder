@@ -150,7 +150,7 @@ The qualified #1743 Collector amendment is implemented with stock appender
 parsing or classifiers/decorators. The canonical `nix/otel-processors.yaml`
 fragment supplies `transform/jaunder_privacy` before batch and every durable
 log/trace exporter in production and local/VM tests; metrics remain batch-only.
-The [decision](adr/drafts/native-otlp-process-logs.md) defines exact
+The [decision](adr/0224-native-otlp-process-logs.md) defines exact
 producer-qualified retention: ordinary scope name, or facade `log.target` only
 within scope `log`, never a global union allowlist. All events at the three
 exact reviewed parser targets survive at every severity/context with fixed
@@ -204,7 +204,7 @@ Authorization, and Proxy-Authorization remains enabled, and records are not
 parsed or projected before storage. A failed upload can replay previously stored
 records during recovery; steady-state ingestion uses one logger per vhost, but
 exactly-once or universal lossless delivery is not promised. See the
-[Caddy journald upload decision](adr/drafts/caddy-native-journald-upload.md).
+[Caddy journald upload decision](adr/0215-caddy-native-journald-upload.md).
 
 For message verification, open the VictoriaLogs UI using loopback/SSH access or
 the authenticated observability host below. Select an explicit time window
@@ -249,7 +249,7 @@ emitted: it can contain private literals, identifiers, or secrets. The operator
 explicitly accepts this durable **log-only** exposure; there is no sanitization,
 truncation, reconstruction, extra bind capture, trace-retention expansion, or
 broader producer admission. See the
-[SQLx query-log decision](adr/drafts/sqlx-query-log-diagnostics.md).
+[SQLx query-log decision](adr/0233-sqlx-query-log-diagnostics.md).
 
 If records are missing or malformed:
 

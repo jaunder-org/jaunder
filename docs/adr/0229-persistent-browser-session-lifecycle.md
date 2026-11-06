@@ -1,6 +1,6 @@
-# ADR-DRAFT: Persistent Browser Sessions with rolling inactivity expiry
+# ADR-0229: Persistent Browser Sessions with rolling inactivity expiry
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-28
 - Issue: [#1845](https://github.com/jaunder-org/jaunder/issues/1845)
 
@@ -18,7 +18,7 @@ New Sessions have durable Browser or Machine kind. Existing rows remain Unknown,
 non-expiring and revocable. Browser Sessions expire at
 `last_used_at <= now - 2_592_000 seconds`, with no separate absolute lifetime.
 Machine and Unknown Sessions never expire under this policy. This qualifies
-[ADR-0014](../0014-atompub-authentication.md) only for lifecycle classification;
+[ADR-0014](0014-atompub-authentication.md) only for lifecycle classification;
 tokens remain transport-interchangeable and authorization precedence is
 unchanged.
 
@@ -31,15 +31,14 @@ cutoff. Throttled requests and explicit Authorization never renew ambient
 cookies. HttpOnly, SameSite=Lax, Path=/, configured Secure and logout clearing
 remain intact.
 
-This partially supersedes
-[ADR-0167](../0167-bounded-transient-data-retention.md)'s Session exclusion:
-only expired typed Browser Sessions join its existing startup/daily pass. One
-explicit UTC instant governs the pass. Domain-owned statements delete at most
-500 rows each, drain the eligible backlog, and release locks between batches.
-There is no global transaction or new schedule. Failure is reported with a
-bounded, PII- and secret-free domain classification; other domains continue and
-a later pass retries remaining rows. All other ADR-0167 policies remain
-unchanged.
+This partially supersedes [ADR-0167](0167-bounded-transient-data-retention.md)'s
+Session exclusion: only expired typed Browser Sessions join its existing
+startup/daily pass. One explicit UTC instant governs the pass. Domain-owned
+statements delete at most 500 rows each, drain the eligible backlog, and release
+locks between batches. There is no global transaction or new schedule. Failure
+is reported with a bounded, PII- and secret-free domain classification; other
+domains continue and a later pass retries remaining rows. All other ADR-0167
+policies remain unchanged.
 
 ## Consequences
 

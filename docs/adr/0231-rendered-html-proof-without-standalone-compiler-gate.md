@@ -1,12 +1,12 @@
-# ADR-DRAFT: RenderedHtml proof without a standalone compiler gate
+# ADR-0231: RenderedHtml proof without a standalone compiler gate
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-08
 - Issue: [#1705](https://github.com/jaunder-org/jaunder/issues/1705)
 
 ## Context
 
-[ADR-0079](../0079-rendered-html-sanitization.md) chose an isolated downstream
+[ADR-0079](0079-rendered-html-sanitization.md) chose an isolated downstream
 compiler check for `RenderedHtml` constructor privacy and fixture-helper
 confinement. Its temporary crate, lockfile and patch-table preparation, cold
 Cargo home, and diagnostic matching add a separate dependency-resolution surface
@@ -58,4 +58,4 @@ absence proof is deliberately relinquished. Accidental production activation of
 Sanitizer policy, rendering output, trusted reconstruction, test fixture APIs,
 offline policy, pinned tooling and test budgets are unchanged. In particular,
 wrong-column SQLx decoding and trusted DTO input provenance still require review
-([ADR-0123](../0123-rendered-html-storage-decode.md)).
+([ADR-0123](0123-rendered-html-storage-decode.md)).

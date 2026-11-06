@@ -1,19 +1,19 @@
-# ADR-DRAFT: Keep development history out of the current source tree
+# ADR-0217: Keep development history out of the current source tree
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-10-09
 - Issue: [#1712](https://github.com/jaunder-org/jaunder/issues/1712)
 
 ## Context
 
-[ADR-0000](../0000-documentation-strategy.md) calls for deleting completed
+[ADR-0000](0000-documentation-strategy.md) calls for deleting completed
 transient documents while preserving history. The shipping workflow instead
 accumulated archived plans, research reports and qualification results. A gate
 also checked the delivery ledger of a completed error-handling audit rather than
 current source behavior. These records burden discovery without preventing
 regressions.
 
-[ADR-0185](../0185-reason-bearing-coverage-exceptions.md) already separates
+[ADR-0185](0185-reason-bearing-coverage-exceptions.md) already separates
 point-in-time audit evidence from source-local reasons and executable policy.
 The same distinction applies to development artifacts generally.
 
