@@ -4352,8 +4352,8 @@ auxiliary host tests; `hermetic` owns Nix static checks and the wasm budget;
 Rust coverage plus its gate. Producer/consumer pairs never cross jobs.
 Source-invalidation probes remain manually callable diagnostics, not automatic
 CI steps
-([on-demand source probes](adr/0227-on-demand-source-invalidation-probes.md)).
-A result-only `Validate (no e2e)` job requires all four lanes, preserving the
+([on-demand source probes](adr/0227-on-demand-source-invalidation-probes.md)). A
+result-only `Validate (no e2e)` job requires all four lanes, preserving the
 stable branch-protection context. Local `just validate-no-e2e` composes the same
 required surfaces in success-path order
 ([split non-e2e validation lanes](adr/0192-split-ci-non-e2e-validation-lanes.md);
