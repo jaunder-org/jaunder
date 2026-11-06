@@ -56,12 +56,14 @@ let
   # minicov builds compiler-rt C for wasm.  The unwrapped Clang avoids Nix's
   # host cc-wrapper injecting non-wasm sysroot and hardening flags.
   diagnosticClang = pkgs.llvmPackages_22.clang-unwrapped;
-  # This source is an input only of the diagnostic derivative. The production
-  # workspace lock, vendor source, `csrWasm`, and `csrWasmBundle` never name it.
+  # The diagnostic producer/runtime input is fetched separately from the
+  # production CSR pipeline; minicov may also occur in the root lock for tests.
+  # 0.3.9 bundles LLVM 23's incompatible profile record/header layout.
+  # 0.3.8 matches LLVM 22 (raw v10); a matching Clang major alone is insufficient.
   diagnosticMinicov = pkgs.fetchCrate {
     pname = "minicov";
-    version = "0.3.9";
-    hash = "sha256-CY9BG0ezG3t5uVmMelz2MGlOxln4j1EscN7lpGA9BIU=";
+    version = "0.3.8";
+    hash = "sha256-MAyEaF1M9mPr0rQRjG21XJaWgxwvOWZrObjCeFidgoA=";
   };
   # `llvm-tools-preview` installs profile tools below rustlib rather than the
   # cargo/rustc bin directory.  Keep this path explicit so every diagnostic
@@ -235,19 +237,59 @@ let
     "client"
     "common"
     "macros"
-    "tools/csr_bundle"
     "tools/performance"
   ];
   wasmTestCargoMembers = [
     "client"
     "common"
     "macros"
-    "tools/csr_bundle"
     "tools/performance"
   ];
   siteSourceFilter =
     path: type:
     cargoTargetSource siteCargoMembers path type || pkgs.lib.hasSuffix "csr/index.html" path;
+  # Minimal source closure for the Vite CSR producer. Cargo source remains a
+  # separate derivation input; Vite receives only the HTML/entry/config/pins.
+  csrViteSourceFilter =
+    path: type:
+    let
+      relative = pkgs.lib.removePrefix "${toString (craneLib.path ../.)}/" (toString path);
+    in
+    (
+      type == "directory"
+      && builtins.elem relative [
+        ""
+        "csr"
+        "scripts"
+      ]
+    )
+    || builtins.elem relative [
+      "package.json"
+      "package-lock.json"
+      "vite.config.js"
+      "csr/index.html"
+      "csr/entry.js"
+      "scripts/build-csr-assets.sh"
+    ];
+  csrViteSrc = pkgs.lib.cleanSourceWith {
+    src = craneLib.path ../.;
+    filter = csrViteSourceFilter;
+  };
+  # Diagnostic and baseline producers run in runCommand derivations, but consume
+  # the exact same locked Vite/compression tool graph as the production bundle.
+  csrViteNodeModules = pkgs.buildNpmPackage {
+    pname = "jaunder-csr-vite-node-modules";
+    version = "0.1.0";
+    src = csrViteSrc;
+    npmDepsHash = "sha256-iq1ioeuLXIqCugh1mDvDsdjZCvwoJx87Cfp+rDVdoPU=";
+    dontNpmBuild = true;
+    installPhase = ''
+      runHook preInstall
+      mkdir -p "$out/node_modules"
+      cp -a node_modules/. "$out/node_modules/"
+      runHook postInstall
+    '';
+  };
   siteSrc =
     withWorkspacePlaceholders "jaunder-site-cargo-source"
       (pkgs.lib.cleanSourceWith {
@@ -329,8 +371,16 @@ let
     else
       drv;
   xtaskBin = import ./xtask.nix {
-    inherit pkgs craneLib toolchain cargoPackageClosure cargoMemberSource workspaceMembers
-      withWorkspacePlaceholders vendorPinnedFork;
+    inherit
+      pkgs
+      craneLib
+      toolchain
+      cargoPackageClosure
+      cargoMemberSource
+      workspaceMembers
+      withWorkspacePlaceholders
+      vendorPinnedFork
+      ;
   };
   cargoVendorDir = craneLib.vendorCargoDeps {
     inherit src;
@@ -501,8 +551,10 @@ let
     in
     siteSourceFilter path type
     || toolsSourceFilter path type
+    || csrViteSourceFilter path type
     # Nix expressions and the lock select producer/toolchain/native dependencies,
     # even when they are not copied into either Cargo source tree.
+    || relative == "Justfile"
     || relative == "flake.nix"
     || relative == "flake.lock"
     || pkgs.lib.hasPrefix "nix/" relative;
@@ -527,7 +579,6 @@ let
         relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
         requiredToolRoots = [
           "tools/coverage"
-          "tools/csr_bundle"
           "tools/devtool"
           "tools/doctests"
         ];
@@ -679,10 +730,7 @@ let
         "${toolsArgs.cargoExtraArgs} -p devtool"
         + pkgs.lib.optionalString qualification " --features qualification";
       tooling =
-        if qualification then
-          mkToolingCargo (toolsArgs // { inherit cargoExtraArgs; })
-        else
-          toolsBuild;
+        if qualification then mkToolingCargo (toolsArgs // { inherit cargoExtraArgs; }) else toolsBuild;
     in
     tooling.buildPackage {
       inherit cargoExtraArgs pname;
@@ -832,15 +880,15 @@ let
     };
   });
 
-  # The CSR client's rendered shell, content-addressed `pkg/*` runtime assets,
-  # and public assets, assembled as a tree. The manifest remains build-only:
-  # server/build.rs receives the bundle root directly, while site exposes only
-  # the rendered shell and declared served assets.
+  # The CSR client's Vite-rendered HTML entry and emitted assets, assembled as
+  # a static tree. The build-only .vite manifest and private system inventory
+  # stay outside the public site output.
   site = pkgs.runCommand "jaunder-site" { } ''
-    mkdir -p $out/pkg
-    cp ${csrWasmBundle}/index.html $out/
-    cp -r ${csrWasmBundle}/pkg/. $out/pkg/
-    cp -r ${../public}/. $out/
+    mkdir -p $out
+    for path in ${csrWasmBundle}/*; do
+      case "$(basename "$path")" in system-artifacts) continue ;; esac
+      cp -a "$path" $out/
+    done
   '';
 
   # --- leptos-CSR client (#177/#180) --------------------------------------
@@ -848,7 +896,9 @@ let
   # `csrWasmBundle` runs wasm-bindgen over it; `site`
   # (above) bundles it with the public assets + rendered CSR shell.
   mkCsrWasm =
-    { debug ? false }:
+    {
+      debug ? false,
+    }:
     let
       # Leave Crane's existing release defaults untouched; debug dependencies
       # and the final module must use the same Cargo profile.
@@ -886,40 +936,51 @@ let
   # the normal e2e derivation hash; set for one #864 measurement arm, then
   # revert before committing.
   wasmExperimentArm = "";
-  wasmShapeSection = "";
-  wasmShapeSectionCount = 1;
 
   mkCsrWasmBundle =
     {
       devtool,
       fixture ? null,
       wasm ? csrWasm,
-      name ? "jaunder-csr-wasm-bundle",
+      name ? "jaunder-csr-vite-bundle",
     }:
-    pkgs.runCommand "${name}${pkgs.lib.optionalString (fixture != null) "-${fixture}"}"
-      {
-        passthru.sourceAdmits = csrSourceAdmits;
-        nativeBuildInputs = [
-          devtool
-          pkgs.binaryen
-          wasm-bindgen-cli
-        ];
-      }
-      ''
-        # Post-process the crane-built csr.wasm into a content-addressed CSR
-        # bundle via the shared `devtool csr-bundle` — the SAME implementation
-        # the host Just recipe runs, so host and Nix cannot
-        # drift (#236). The resulting root holds the build-only manifest,
-        # rendered shell, and served `pkg/` assets.
-        devtool csr-bundle --wasm ${wasm}/lib/csr.wasm --out $out${
-          pkgs.lib.optionalString (fixture != null) " --system-artifact-fixture ${fixture}"
-        }${
-          pkgs.lib.optionalString (wasmExperimentArm != "") " --wasm-experiment-arm ${wasmExperimentArm}"
-        }${
-          pkgs.lib.optionalString (wasmShapeSection != "")
-            " --wasm-shape-section ${wasmShapeSection} --wasm-shape-section-count ${toString wasmShapeSectionCount}"
+    pkgs.buildNpmPackage {
+      pname = "${name}${pkgs.lib.optionalString (fixture != null) "-${fixture}"}";
+      version = "0.1.0";
+      src = csrViteSrc;
+      npmDepsHash = "sha256-iq1ioeuLXIqCugh1mDvDsdjZCvwoJx87Cfp+rDVdoPU=";
+      dontNpmBuild = true;
+      passthru.sourceAdmits = csrSourceAdmits;
+      nativeBuildInputs = [
+        devtool
+        pkgs.binaryen
+        wasm-bindgen-cli
+      ];
+      CSR_WASM_INPUT = "${wasm}/lib/csr.wasm";
+      CSR_WASM_EXPERIMENT_ARM = wasmExperimentArm;
+      buildPhase = ''
+        runHook preBuild
+        work="$TMPDIR/csr-vite"
+        input="$work/input"
+        system_artifacts="$work/system-artifacts"
+        dist="$work/dist"
+        mkdir -p "$input" "$system_artifacts"
+        cp csr/index.html "$input/index.html"
+        cp csr/entry.js "$input/entry.js"
+        devtool system-artifacts --out "$system_artifacts"${
+          pkgs.lib.optionalString (fixture != null) " --fixture ${fixture}"
         }
+        CSR_VITE_PUBLIC_DIR="${../public}" bash scripts/build-csr-assets.sh \
+          "$CSR_WASM_INPUT" "$PWD" "$input" "$system_artifacts" "$dist"
+        runHook postBuild
       '';
+      installPhase = ''
+        runHook preInstall
+        mkdir -p "$out"
+        cp -a "$TMPDIR/csr-vite/dist/." "$out/"
+        runHook postInstall
+      '';
+    };
   csrWasmBundle = mkCsrWasmBundle { devtool = devtoolBin; };
   csrDebugBundle = mkCsrWasmBundle {
     devtool = devtoolBin;
@@ -968,6 +1029,7 @@ let
           # `cc`; the target-specific CC/CFLAGS below still force minicov's C
           # profiler runtime through unwrapped LLVM 22 Clang.
           pkgs.stdenv.cc
+          pkgs.nodejs
           diagnosticToolchain
           diagnosticClang
           devtoolBin
@@ -985,10 +1047,14 @@ let
         ${diagnosticLlvmTools}/llvm-profdata --version > $out/toolchain-llvm-profdata-version.txt
         ${diagnosticLlvmTools}/llvm-cov --version > $out/toolchain-llvm-cov-version.txt
         cat > $out/build-configuration.json <<'EOF'
-        {"version":5,"nightly":"${diagnosticNightlyName} (rustc 1.99.0-nightly 1ed2df61a; LLVM 22.1.8)","nightly_source_sha256":"${diagnosticNightlySha256}","instrumented_first_party_crates":["csr"],"omitted_first_party_crates":["client","common","macros","web"],"producer":"Cargo emits only CSR LLVM IR and an rlink without a final link; pinned rustc -Zlink-only recreates its complete Cargo/sysroot/minicov link graph.","rustflags":["-Cinstrument-coverage","-Zno-profiler-runtime","--emit=llvm-ir","-C link-arg=--no-gc-sections","-Zno-link"],"linker":"pinned rustc -Zlink-only","c_compiler":"llvmPackages_22.clang-unwrapped","diagnostic_runtime":{"wrapper_crate":"diagnostic-coverage-runtime","crate":"minicov","version":"0.3.9","source_sha256":"c3aa3aa12b448ac225b3102217d1ac5cc717908f02722926524b0599c933c7a0"}}
+        {"version":5,"nightly":"${diagnosticNightlyName} (rustc 1.99.0-nightly 1ed2df61a; LLVM 22.1.8)","nightly_source_sha256":"${diagnosticNightlySha256}","instrumented_first_party_crates":["csr"],"omitted_first_party_crates":["client","common","macros","web"],"producer":"Cargo emits only CSR LLVM IR and an rlink without a final link; pinned rustc -Zlink-only recreates its complete Cargo/sysroot/minicov link graph.","rustflags":["-Cinstrument-coverage","-Zno-profiler-runtime","--emit=llvm-ir","-C link-arg=--no-gc-sections","-Zno-link"],"linker":"pinned rustc -Zlink-only","c_compiler":"llvmPackages_22.clang-unwrapped","diagnostic_runtime":{"wrapper_crate":"diagnostic-coverage-runtime","crate":"minicov","version":"0.3.8","source_sha256":"4869b6a491569605d66d3952bcdf03df789e5b536e5f0cf7758a7f08a55ae24d"}}
         EOF
         work="$TMPDIR/wasm-coverage-csr"
-        mkdir -p "$work"
+        vite_project="$work/vite-project"
+        mkdir -p "$work" "$vite_project"
+        cp -a ${csrViteSrc}/. "$vite_project/"
+        chmod -R u+w "$vite_project"
+        ln -s ${csrViteNodeModules}/node_modules "$vite_project/node_modules"
         cp -r ${siteSrc}/. "$work/source"
         chmod -R u+w "$work/source"
         devtool diagnostic-build prepare-source \
@@ -1026,12 +1092,22 @@ let
             --target-release "$work/target/wasm32-unknown-unknown/release" \
             --manifest "$out/instrumented/ir-manifest.json" \
             --retained-wasm "$out/instrumented/csr.wasm"
-          devtool csr-bundle \
-            --wasm "$out/instrumented/csr.wasm" \
-            --out "$out/pkg" \
-            --diagnostic-coverage-metadata "$out/coverage-metadata.json" \
-            --diagnostic-toolchain-identity "$out/toolchain-identity.json" \
-            --diagnostic-minicov-version 0.3.9
+          input="$work/input"
+          system_artifacts="$work/system-artifacts"
+          dist="$work/dist"
+          mkdir -p "$input" "$system_artifacts"
+          devtool system-artifacts --out "$system_artifacts"
+          CSR_VITE_PUBLIC_DIR="${../public}" bash "$vite_project/scripts/build-csr-assets.sh" \
+            "$out/instrumented/csr.wasm" "$vite_project" "$input" "$system_artifacts" "$dist" "$work/wasm-bindgen.wasm"
+          mkdir -p "$out/pkg"
+          cp -a "$dist/." "$out/pkg/"
+          devtool diagnostic-build write-coverage-artifacts \
+            --metadata "$out/coverage-metadata.json" \
+            --toolchain-identity "$out/toolchain-identity.json" \
+            --minicov-version 0.3.8 \
+            --input-wasm "$out/instrumented/csr.wasm" \
+            --wasm-bindgen-wasm "$work/wasm-bindgen.wasm" \
+            --wasm-opt-wasm "$input/csr_bg.wasm"
           devtool diagnostic-build assert-coverage --metadata "$out/coverage-metadata.json"
         ) > "$out/pipeline.log" 2>&1
         pipeline_exit=$?
@@ -1051,6 +1127,7 @@ let
       {
         nativeBuildInputs = [
           pkgs.stdenv.cc
+          pkgs.nodejs
           diagnosticToolchain
           devtoolBin
           pkgs.binaryen
@@ -1060,67 +1137,40 @@ let
       ''
         export PATH=${diagnosticToolchain}/bin:$PATH
         work="$TMPDIR/wasm-coverage-baseline"
-        mkdir -p "$work"
+        vite_project="$work/vite-project"
+        mkdir -p "$work" "$vite_project"
+        cp -a ${csrViteSrc}/. "$vite_project/"
+        chmod -R u+w "$vite_project"
+        ln -s ${csrViteNodeModules}/node_modules "$vite_project/node_modules"
         cp -r ${siteSrc}/. "$work/source"
         chmod -R u+w "$work/source"
         cd "$work/source"
         export CARGO_HOME=${appOfflineCargoHome}
         export CARGO_TARGET_DIR="$work/target"
         cargo build -p csr --target wasm32-unknown-unknown --release
-        mkdir -p "$out"
-        devtool csr-bundle --wasm "$work/target/wasm32-unknown-unknown/release/csr.wasm" --out "$out/pkg"
+        input="$work/input"
+        system_artifacts="$work/system-artifacts"
+        dist="$work/dist"
+        mkdir -p "$input" "$system_artifacts"
+        devtool system-artifacts --out "$system_artifacts"
+        CSR_VITE_PUBLIC_DIR="${../public}" bash "$vite_project/scripts/build-csr-assets.sh" \
+          "$work/target/wasm32-unknown-unknown/release/csr.wasm" "$vite_project" "$input" "$system_artifacts" "$dist"
+        mkdir -p "$out/pkg"
+        cp -a "$dist/." "$out/pkg/"
         devtool diagnostic-build write-baseline-status --status "$out/status.json"
       '';
-  diagnosticBaselineJaunderBin = craneLib.buildPackage (
-    hostArgs
-    // {
-      inherit cargoArtifacts;
-      pname = "jaunder-diagnostic-wasm-coverage-baseline";
-      cargoExtraArgs = "-p jaunder";
-      JAUNDER_CSR_BUNDLE_DIR = "${diagnosticBaselineCsrWasmBundle}/pkg";
-      JAUNDER_PUBLIC_DIR = "${../public}";
-      doCheck = false;
-      nativeBuildInputs =
-        hostArgs.nativeBuildInputs ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
-      postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-        patchelf --add-rpath \
-          "${
-            pkgs.lib.makeLibraryPath [
-              pkgs.openssl
-              pkgs.dav1d
-            ]
-          }" \
-          "$out/bin/jaunder"
-      '';
-    }
-  );
+  diagnosticBaselineJaunderBin = mkJaunderBin {
+    pname = "jaunder-diagnostic-wasm-coverage-baseline";
+    csrBundle = "${diagnosticBaselineCsrWasmBundle}/pkg";
+  };
 
   # The diagnostic browser probe must serve the same instrumented bundle that
   # it later records.  Keep this derivative separate from the release binary:
   # only the probe VM selects it through an explicit service override.
-  diagnosticJaunderBin = craneLib.buildPackage (
-    hostArgs
-    // {
-      inherit cargoArtifacts;
-      pname = "jaunder-diagnostic-wasm-coverage";
-      cargoExtraArgs = "-p jaunder";
-      JAUNDER_CSR_BUNDLE_DIR = "${diagnosticCsrWasmBundle}/pkg";
-      JAUNDER_PUBLIC_DIR = "${../public}";
-      doCheck = false;
-      nativeBuildInputs =
-        hostArgs.nativeBuildInputs ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
-      postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-        patchelf --add-rpath \
-          "${
-            pkgs.lib.makeLibraryPath [
-              pkgs.openssl
-              pkgs.dav1d
-            ]
-          }" \
-          "$out/bin/jaunder"
-      '';
-    }
-  );
+  diagnosticJaunderBin = mkJaunderBin {
+    pname = "jaunder-diagnostic-wasm-coverage";
+    csrBundle = "${diagnosticCsrWasmBundle}/pkg";
+  };
 
   e2ePackage = pkgs.buildNpmPackage {
     name = "jaunder-e2e";
@@ -1195,6 +1245,7 @@ in
     # bundle, so the shipped file cannot be attributed to crates (#836).
     inherit csrWasm;
     csrBundle = csrWasmBundle;
+    csr-vite-node-modules = csrViteNodeModules;
     inherit csrDebugBundle;
     traced-run = tracedRunBin;
     devtool = devtoolBin;
@@ -1216,9 +1267,9 @@ in
       name = "jaunder-qualification-harness-legacy-1419";
       xtask = xtaskBin;
       # Keep the accepted fixture's complete historical dependency graph.
-      testSupport = (builtins.getFlake
-        "github:jaunder-org/jaunder/78d201e6969ed17b8a54b87d3de24be6afa1f5ee"
-      ).packages.${pkgs.stdenv.hostPlatform.system}.test-support;
+      testSupport =
+        (builtins.getFlake "github:jaunder-org/jaunder/78d201e6969ed17b8a54b87d3de24be6afa1f5ee")
+        .packages.${pkgs.stdenv.hostPlatform.system}.test-support;
       browser = e2ePackage;
     };
     theme-thumbnail-environment = themeThumbnailEnvironment;

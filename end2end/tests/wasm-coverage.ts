@@ -44,7 +44,7 @@ async function diagnosticBundleStatus(): Promise<{
   structural: Stage;
   identity: unknown | null;
   servedModule: { path: string; sha256: string } | null;
-  glueModule: string | null;
+  entryModule: string | null;
 }> {
   const root = process.env.JAUNDER_WASM_COVERAGE_CSR;
   if (!root) {
@@ -55,7 +55,7 @@ async function diagnosticBundleStatus(): Promise<{
       },
       identity: null,
       servedModule: null,
-      glueModule: null,
+      entryModule: null,
     };
   }
   try {
@@ -63,40 +63,42 @@ async function diagnosticBundleStatus(): Promise<{
       await readFile(join(root, "status.json"), "utf8"),
     ) as { outcome?: string };
     const manifest = JSON.parse(
-      await readFile(join(root, "pkg", "manifest.json"), "utf8"),
+      await readFile(join(root, "pkg", ".vite", "manifest.json"), "utf8"),
     ) as {
-      assets?: Array<{ role?: string; path?: string; sha256?: string }>;
+      "entry.js"?: { file?: string };
+      "csr_bg.wasm"?: { file?: string };
     };
-    const wasm = manifest.assets?.find((asset) => asset.role === "wasm");
-    const glue = manifest.assets?.find((asset) => asset.role === "glue");
+    const wasmPath = manifest["csr_bg.wasm"]?.file;
+    const entryPath = manifest["entry.js"]?.file;
+    const wasmBytes = wasmPath
+      ? await readFile(join(root, "pkg", wasmPath))
+      : null;
+    const wasmSha256 = wasmBytes ? digest(wasmBytes) : null;
     const identity = JSON.parse(
       await readFile(join(root, "toolchain-identity.json"), "utf8"),
     );
-    return status.outcome === "succeeded" &&
-      wasm?.path &&
-      wasm.sha256 &&
-      glue?.path
+    return status.outcome === "succeeded" && wasmPath && wasmSha256 && entryPath
       ? {
           structural: { outcome: "passed", blocker: null },
           identity,
-          servedModule: { path: wasm.path, sha256: wasm.sha256 },
-          glueModule: `/${glue.path}`,
+          servedModule: { path: wasmPath, sha256: wasmSha256 },
+          entryModule: `/${entryPath}`,
         }
       : {
           structural: {
             outcome: "failed",
-            blocker: `diagnostic CSR status or manifest is invalid: ${status.outcome}`,
+            blocker: `diagnostic CSR status or Vite manifest is invalid: ${status.outcome}`,
           },
           identity,
           servedModule: null,
-          glueModule: null,
+          entryModule: null,
         };
   } catch (error) {
     return {
       structural: { outcome: "failed", blocker: String(error) },
       identity: null,
       servedModule: null,
-      glueModule: null,
+      entryModule: null,
     };
   }
 }
@@ -111,7 +113,7 @@ export async function captureWasmCoverage(
 
   const diagnostics = join(root, "diagnostics");
   await mkdir(diagnostics, { recursive: true });
-  const { structural, identity, servedModule, glueModule } =
+  const { structural, identity, servedModule, entryModule } =
     await diagnosticBundleStatus();
   const actualBrowser =
     page.context().browser()?.browserType().name() ?? "unknown";
@@ -168,11 +170,20 @@ export async function captureWasmCoverage(
       throw new Error("injected export failure");
     }
     const capture = await page.evaluate(async (diagnosticModule) => {
-      // The manifest selects this diagnostic-only runtime URL, so a static import
+      // The Vite manifest selects this diagnostic runtime URL, so a static import
       // would incorrectly make host Playwright resolve an unavailable artifact.
       if (!diagnosticModule)
-        throw new Error("diagnostic glue module is unavailable");
+        throw new Error("diagnostic Vite entry module is unavailable");
       const wasm = await import(diagnosticModule);
+      for (const name of [
+        "initMeasured",
+        "jaunderCoverageModuleSignature",
+        "jaunderCoverageProfile",
+      ]) {
+        if (typeof wasm[name] !== "function") {
+          throw new Error(`emitted diagnostic entry is missing export ${name}`);
+        }
+      }
       const signature: unknown = wasm.jaunderCoverageModuleSignature();
       const profile: unknown = wasm.jaunderCoverageProfile();
       if (typeof signature !== "string") {
@@ -184,7 +195,7 @@ export async function captureWasmCoverage(
         throw new Error("diagnostic export returned a non-byte profile");
       }
       return { signature, profile: [...profile] };
-    }, glueModule);
+    }, entryModule);
     if (capture.profile.length === 0) {
       throw new Error("diagnostic export returned an empty profile");
     }

@@ -6,14 +6,15 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::Command,
 };
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const PATH_RELATIONSHIP: &str = "The retained module is linked from LLVM IR compiled below compiled_source_prefix; the content-addressed wasm selected by pkg/manifest.json is its wasm-bindgen/wasm-opt derivative.";
-const SERVED_RELATIONSHIP: &str = "input to wasm-bindgen and wasm-opt that produced the content-addressed module selected by pkg/manifest.json";
+const PATH_RELATIONSHIP: &str = "The retained module is linked from LLVM IR compiled below compiled_source_prefix; the content-sensitive wasm output selected by pkg/.vite/manifest.json is its wasm-bindgen/wasm-opt derivative.";
+const SERVED_RELATIONSHIP: &str = "input to wasm-bindgen and wasm-opt that produced the content-sensitive wasm output selected by pkg/.vite/manifest.json";
 
 #[derive(Serialize)]
 struct SourceIdentity<'a> {
@@ -61,15 +62,42 @@ struct CoverageInput {
     wasm_bindgen_metadata: bool,
 }
 
-#[derive(Deserialize)]
-struct BundleManifest {
-    assets: Vec<BundleAsset>,
+const COVERAGE_SECTIONS: [&str; 2] = ["__llvm_covfun", "__llvm_covmap"];
+
+#[derive(Serialize)]
+struct WasmBoundary {
+    artifact: &'static str,
+    coverage_sections: [bool; 2],
+    wasm_bindgen_metadata: bool,
+    exports: Vec<String>,
 }
 
-#[derive(Deserialize)]
-struct BundleAsset {
-    path: String,
-    role: Option<String>,
+#[derive(Serialize)]
+struct CoverageMetadataStatus {
+    version: u8,
+    required_sections: [SectionPresence; 2],
+    input: WasmBoundary,
+    after_wasm_bindgen: WasmBoundary,
+    after_wasm_opt: WasmBoundary,
+    result: &'static str,
+}
+
+#[derive(Serialize)]
+struct SectionPresence {
+    name: &'static str,
+    present: bool,
+}
+
+#[derive(Serialize)]
+struct ToolchainIdentity<'a> {
+    version: u8,
+    rustc: String,
+    clang: String,
+    llvm_profdata: String,
+    llvm_cov: String,
+    wasm_bindgen: String,
+    wasm_opt: String,
+    minicov: &'a str,
 }
 
 #[derive(Serialize)]
@@ -132,6 +160,13 @@ pub fn prepare_source(
 
     let client_manifest = source.join("client/Cargo.toml");
     let client = fs::read_to_string(&client_manifest).context("reading copied client manifest")?;
+    let wasm_test_dependency = "wasm-bindgen-test = \"=0.3.78\"\n";
+    if client.matches(wasm_test_dependency).count() != 1 {
+        bail!(
+            "copied client manifest must declare the pinned wasm-bindgen-test dev dependency exactly once"
+        );
+    }
+    let client = client.replace(wasm_test_dependency, "");
     fs::write(
         client_manifest,
         format!(
@@ -234,6 +269,35 @@ pub fn retain_linked_wasm(
     write_json(manifest_path, &manifest)
 }
 
+pub fn write_coverage_artifacts(
+    metadata_path: &Path,
+    toolchain_identity_path: &Path,
+    minicov_version: &str,
+    input_wasm: &Path,
+    after_wasm_bindgen: &Path,
+    after_wasm_opt: &Path,
+) -> Result<()> {
+    let metadata = coverage_metadata_status(
+        &fs::read(input_wasm).with_context(|| format!("reading {}", input_wasm.display()))?,
+        &fs::read(after_wasm_bindgen)
+            .with_context(|| format!("reading {}", after_wasm_bindgen.display()))?,
+        &fs::read(after_wasm_opt)
+            .with_context(|| format!("reading {}", after_wasm_opt.display()))?,
+    )?;
+    write_json(metadata_path, &metadata)?;
+    let identity = ToolchainIdentity {
+        version: 1,
+        rustc: command_version("rustc", &["-Vv"])?,
+        clang: command_version("clang", &["--version"])?,
+        llvm_profdata: command_version("llvm-profdata", &["--version"])?,
+        llvm_cov: command_version("llvm-cov", &["--version"])?,
+        wasm_bindgen: command_version("wasm-bindgen", &["--version"])?,
+        wasm_opt: command_version("wasm-opt", &["--version"])?,
+        minicov: minicov_version,
+    };
+    write_json(toolchain_identity_path, &identity)
+}
+
 pub fn assert_coverage(metadata_path: &Path) -> Result<()> {
     let metadata: CoverageMetadata = read_json(metadata_path)?;
     if metadata.result != "preserved" {
@@ -309,7 +373,13 @@ pub fn write_baseline_status(status_path: &Path) -> Result<()> {
 }
 
 fn select_one(target_release: &Path, extension: &str) -> Result<PathBuf> {
-    let mut candidates = [target_release.to_path_buf(), target_release.join("deps")]
+    // The pinned nightly's Cargo places root artifacts under build/<crate>/<hash>/out.
+    // Also accept the established release/deps layout, still requiring one root.
+    let mut directories = vec![target_release.to_path_buf(), target_release.join("deps")];
+    if let Ok(builds) = fs::read_dir(target_release.join("build/csr")) {
+        directories.extend(builds.flatten().map(|entry| entry.path().join("out")));
+    }
+    let mut candidates = directories
         .into_iter()
         .flat_map(|directory| fs::read_dir(directory).into_iter().flatten().flatten())
         .map(|entry| entry.path())
@@ -328,16 +398,190 @@ fn select_one(target_release: &Path, extension: &str) -> Result<PathBuf> {
     Ok(candidates.pop().expect("length checked"))
 }
 
+fn command_version(program: &str, args: &[&str]) -> Result<String> {
+    let output = Command::new(program)
+        .args(args)
+        .output()
+        .with_context(|| format!("spawning {program} for diagnostic identity"))?;
+    if !output.status.success() {
+        bail!("{program} identity command failed ({})", output.status);
+    }
+    String::from_utf8(output.stdout)
+        .with_context(|| format!("{program} identity command wrote non-UTF-8 stdout"))
+}
+
+fn read_u32_leb(bytes: &[u8], index: &mut usize, subject: &str) -> Result<u32> {
+    let mut value = 0_u32;
+    for shift in (0..35).step_by(7) {
+        let byte = *bytes
+            .get(*index)
+            .with_context(|| format!("truncated {subject}"))?;
+        *index += 1;
+        let bits = u32::from(byte & 0x7f);
+        if shift == 28 && bits > 0x0f {
+            bail!("{subject} overflows u32");
+        }
+        value |= bits << shift;
+        if byte & 0x80 == 0 {
+            return Ok(value);
+        }
+    }
+    bail!("{subject} is overlong")
+}
+
+struct WasmSection<'a> {
+    id: u8,
+    payload: &'a [u8],
+}
+
+fn wasm_sections(wasm: &[u8]) -> Result<Vec<WasmSection<'_>>> {
+    if !wasm.starts_with(b"\0asm\x01\0\0\0") {
+        bail!("not a wasm version-1 module");
+    }
+    let mut sections = Vec::new();
+    let mut index = 8;
+    while index < wasm.len() {
+        let id = *wasm.get(index).context("truncated wasm section id")?;
+        index += 1;
+        let length = read_u32_leb(wasm, &mut index, "wasm section length")? as usize;
+        let end = index
+            .checked_add(length)
+            .context("wasm section length overflows module")?;
+        let payload = wasm
+            .get(index..end)
+            .context("wasm section extends past module")?;
+        sections.push(WasmSection { id, payload });
+        index = end;
+    }
+    Ok(sections)
+}
+
+fn custom_section_name(section: &[u8]) -> Result<&[u8]> {
+    let mut index = 0;
+    let length = read_u32_leb(section, &mut index, "wasm custom-section name length")? as usize;
+    let end = index
+        .checked_add(length)
+        .context("custom-section name length overflows section")?;
+    section
+        .get(index..end)
+        .context("truncated wasm custom-section name")
+}
+
+fn coverage_section_presence(wasm: &[u8]) -> Result<[bool; 2]> {
+    let mut found = [false; 2];
+    for section in wasm_sections(wasm)? {
+        if section.id != 0 {
+            continue;
+        }
+        let name = custom_section_name(section.payload)?;
+        for (index, required) in COVERAGE_SECTIONS.iter().enumerate() {
+            found[index] |= name == required.as_bytes();
+        }
+    }
+    Ok(found)
+}
+
+fn wasm_custom_section_present(wasm: &[u8], wanted: &str) -> Result<bool> {
+    for section in wasm_sections(wasm)? {
+        if section.id == 0 && custom_section_name(section.payload)? == wanted.as_bytes() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn wasm_exports(wasm: &[u8]) -> Result<Vec<String>> {
+    let mut exports = Vec::new();
+    for section in wasm_sections(wasm)? {
+        if section.id != 7 {
+            continue;
+        }
+        let mut index = 0;
+        let count = read_u32_leb(section.payload, &mut index, "wasm export count")?;
+        for _ in 0..count {
+            let name_length =
+                read_u32_leb(section.payload, &mut index, "wasm export name length")? as usize;
+            let end = index
+                .checked_add(name_length)
+                .context("wasm export name length overflows section")?;
+            let name = std::str::from_utf8(
+                section
+                    .payload
+                    .get(index..end)
+                    .context("truncated wasm export name")?,
+            )
+            .context("wasm export name is not UTF-8")?;
+            exports.push(name.to_owned());
+            index = end;
+            index += 1; // export kind
+            let _ = read_u32_leb(section.payload, &mut index, "wasm export index")?;
+        }
+        ensure!(
+            index == section.payload.len(),
+            "trailing data in wasm export section"
+        );
+    }
+    Ok(exports)
+}
+
+fn wasm_boundary(artifact: &'static str, wasm: &[u8]) -> Result<WasmBoundary> {
+    Ok(WasmBoundary {
+        artifact,
+        coverage_sections: coverage_section_presence(wasm)?,
+        wasm_bindgen_metadata: wasm_custom_section_present(wasm, "__wasm_bindgen_unstable")?,
+        exports: wasm_exports(wasm)?,
+    })
+}
+
+fn coverage_metadata_status(
+    input: &[u8],
+    after_bindgen: &[u8],
+    after_opt: &[u8],
+) -> Result<CoverageMetadataStatus> {
+    let input = wasm_boundary("csr.wasm", input)?;
+    let after_wasm_bindgen = wasm_boundary("wasm-bindgen.wasm", after_bindgen)?;
+    let after_wasm_opt = wasm_boundary("wasm-opt.wasm", after_opt)?;
+    let result = if input.coverage_sections.iter().all(|present| *present) {
+        if after_wasm_bindgen
+            .coverage_sections
+            .iter()
+            .all(|present| *present)
+            && after_wasm_opt
+                .coverage_sections
+                .iter()
+                .all(|present| *present)
+        {
+            "preserved"
+        } else {
+            "lost-during-bundling"
+        }
+    } else {
+        "missing-before-bundling"
+    };
+    Ok(CoverageMetadataStatus {
+        version: 2,
+        required_sections: [
+            SectionPresence {
+                name: COVERAGE_SECTIONS[0],
+                present: after_wasm_opt.coverage_sections[0],
+            },
+            SectionPresence {
+                name: COVERAGE_SECTIONS[1],
+                present: after_wasm_opt.coverage_sections[1],
+            },
+        ],
+        input,
+        after_wasm_bindgen,
+        after_wasm_opt,
+        result,
+    })
+}
+
 fn served_module(root: &Path) -> Result<ServedModule> {
-    let manifest: BundleManifest = read_json(&root.join("pkg/manifest.json"))?;
-    let wasm = manifest
-        .assets
-        .into_iter()
-        .find(|asset| asset.role.as_deref() == Some("wasm"))
-        .ok_or_else(|| anyhow!("no wasm asset in CSR manifest"))?;
+    let wasm_path = crate::vite_manifest::wasm_output(&root.join("pkg"))?;
     Ok(ServedModule {
-        sha256: sha256(root.join("pkg").join(&wasm.path))?,
-        path: wasm.path,
+        sha256: sha256(root.join("pkg").join(&wasm_path))?,
+        path: wasm_path,
     })
 }
 
@@ -364,6 +608,54 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    fn encode_leb(mut value: u32, output: &mut Vec<u8>) {
+        loop {
+            let mut byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value != 0 {
+                byte |= 0x80;
+            }
+            output.push(byte);
+            if value == 0 {
+                break;
+            }
+        }
+    }
+
+    fn wasm_with_sections(names: &[&str]) -> Vec<u8> {
+        let mut wasm = b"\0asm\x01\0\0\0".to_vec();
+        for name in names {
+            let mut payload = Vec::new();
+            encode_leb(name.len() as u32, &mut payload);
+            payload.extend_from_slice(name.as_bytes());
+            payload.extend_from_slice(b"coverage");
+            wasm.push(0);
+            encode_leb(payload.len() as u32, &mut wasm);
+            wasm.extend(payload);
+        }
+        wasm
+    }
+
+    #[test]
+    fn diagnostic_coverage_metadata_preserves_sections_and_identifies_loss_boundary() {
+        let complete = wasm_with_sections(&COVERAGE_SECTIONS);
+        let status = coverage_metadata_status(&complete, &complete, &complete).unwrap();
+        assert_eq!(status.result, "preserved");
+        assert_eq!(status.input.coverage_sections, [true, true]);
+        let lost = wasm_with_sections(&[COVERAGE_SECTIONS[0]]);
+        let status = coverage_metadata_status(&complete, &complete, &lost).unwrap();
+        assert_eq!(status.result, "lost-during-bundling");
+        assert_eq!(status.after_wasm_opt.coverage_sections, [true, false]);
+    }
+
+    #[test]
+    fn diagnostic_wasm_metadata_parser_rejects_truncated_sections() {
+        let truncated = [b"\0asm\x01\0\0\0".as_slice(), &[0, 1]].concat();
+        assert!(coverage_section_presence(&truncated).is_err());
+        let truncated_export = [b"\0asm\x01\0\0\0".as_slice(), &[7, 1, 1]].concat();
+        assert!(wasm_exports(&truncated_export).is_err());
+    }
+
     #[test]
     fn rewrites_manifests_and_records_source_identity() {
         let temp = tempdir().unwrap();
@@ -372,7 +664,7 @@ mod tests {
         fs::write(source.join("Cargo.toml"), "[patch.crates-io]\nfoo = 'x'\n").unwrap();
         fs::write(
             source.join("client/Cargo.toml"),
-            "diagnostic-coverage = []\n",
+            "diagnostic-coverage = []\n[dev-dependencies]\nwasm-bindgen-test = \"=0.3.78\"\n",
         )
         .unwrap();
         let identity = temp.path().join("identity.json");
@@ -389,11 +681,12 @@ mod tests {
                 .unwrap()
                 .contains("minicov = { path = \"/minicov\" }")
         );
+        let client_manifest = fs::read_to_string(source.join("client/Cargo.toml")).unwrap();
         assert!(
-            fs::read_to_string(source.join("client/Cargo.toml"))
-                .unwrap()
+            client_manifest
                 .contains("diagnostic-coverage-runtime = { path = \"/runtime\", optional = true }")
         );
+        assert!(!client_manifest.contains("wasm-bindgen-test"));
         assert_eq!(
             read_json::<serde_json::Value>(&identity).unwrap()["source_identity"]["value"].as_str(),
             Some("/nix-source")
@@ -414,9 +707,9 @@ mod tests {
     fn discovers_and_prunes_to_the_single_linked_artifact() {
         let temp = tempdir().unwrap();
         let release = temp.path().join("release");
-        fs::create_dir_all(release.join("deps")).unwrap();
-        fs::write(release.join("csr.ll"), "ir").unwrap();
-        fs::write(release.join("deps/csr.rlink"), "rlink").unwrap();
+        fs::create_dir_all(release.join("build/csr/hash/out")).unwrap();
+        fs::write(release.join("build/csr/hash/out/csr.ll"), "ir").unwrap();
+        fs::write(release.join("build/csr/hash/out/csr.rlink"), "rlink").unwrap();
         let root_ir = temp.path().join("root-ir");
         let root_rlink = temp.path().join("root-rlink");
         let manifest = temp.path().join("manifest.json");
@@ -436,19 +729,25 @@ mod tests {
     fn writes_instrumented_success_and_failure_statuses() {
         let temp = tempdir().unwrap();
         let root = temp.path();
-        fs::create_dir_all(root.join("pkg")).unwrap();
+        fs::create_dir_all(root.join("pkg/.vite")).unwrap();
+        fs::create_dir_all(root.join("pkg/assets")).unwrap();
         fs::create_dir_all(root.join("instrumented")).unwrap();
-        fs::write(root.join("pkg/module.wasm"), "served").unwrap();
+        fs::write(root.join("pkg/assets/csr_bg-hash.wasm"), b"served").unwrap();
         fs::write(root.join("instrumented/csr.wasm"), "retained").unwrap();
         fs::write(
-            root.join("pkg/manifest.json"),
-            r#"{"assets":[{"path":"module.wasm","role":"wasm"}]}"#,
+            root.join("pkg/.vite/manifest.json"),
+            r#"{"index.html":{"file":"assets/index.js","src":"index.html","isEntry":true},"csr_bg.wasm":{"file":"assets/csr_bg-hash.wasm","src":"csr_bg.wasm"}}"#,
         )
         .unwrap();
         let status = root.join("status.json");
         write_instrumented_status(&status, 0).unwrap();
         let success: serde_json::Value = read_json(&status).unwrap();
         assert_eq!(success["outcome"], "succeeded");
+        assert_eq!(success["served_module"]["path"], "assets/csr_bg-hash.wasm");
+        assert_eq!(
+            success["served_module"]["sha256"],
+            crate::digest::lowercase_hex(Sha256::digest(b"served"))
+        );
         write_instrumented_status(&status, 7).unwrap();
         let failure: serde_json::Value = read_json(&status).unwrap();
         assert_eq!(failure["outcome"], "failed");

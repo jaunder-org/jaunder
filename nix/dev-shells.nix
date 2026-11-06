@@ -78,7 +78,7 @@ let
       # `RUSTC_WRAPPER=sccache`; xtask maintains the multi-checkout
       # `SCCACHE_BASEDIRS` registry at runtime.
       pkgs.sccache
-      # `wasm-opt`, run by `devtool csr-bundle` after `wasm-bindgen` (#836).
+      # `wasm-opt`, run by the shared locked Vite pipeline after `wasm-bindgen` (#836).
       pkgs.binaryen
       # The standalone and host-server CSR build callers share this recipe.
       pkgs.just

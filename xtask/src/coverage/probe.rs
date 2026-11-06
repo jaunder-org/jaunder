@@ -24,7 +24,6 @@ use std::process::Stdio;
 
 use anyhow::{Context, Result};
 
-use crate::coverage::FileCoverage;
 use crate::git;
 use crate::result::StepResult;
 use crate::steps::nix;
@@ -36,8 +35,6 @@ pub enum DriftError {
     DropsSource { base: String },
     DropsRequiredSource { path: &'static str, base: String },
     AdmitsXtaskSource { base: String, xtask_source: String },
-    CoverageDoesNotDependOnRequiredSource { path: &'static str, base: String },
-    BuildDependencyInReport { path: String, line: u32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,58 +42,34 @@ struct ProbeArm {
     path: &'static str,
     marker: &'static str,
     required: bool,
-    requires_coverage_derivation: bool,
 }
 
-const PROBE_ARMS: [ProbeArm; 8] = [
-    ProbeArm {
-        path: "tools/csr_bundle/Cargo.toml",
-        marker: "# coverage source-drift probe; never committed.",
-        required: true,
-        requires_coverage_derivation: true,
-    },
-    ProbeArm {
-        path: "tools/csr_bundle/build.rs",
-        marker: "// coverage source-drift probe; never committed.",
-        required: true,
-        requires_coverage_derivation: false,
-    },
-    ProbeArm {
-        path: "tools/csr_bundle/src/lib.rs",
-        marker: "// coverage source-drift probe; never committed.",
-        required: true,
-        requires_coverage_derivation: false,
-    },
+const PROBE_ARMS: [ProbeArm; 5] = [
     ProbeArm {
         path: "server/src/lib.rs",
         marker: "// coverage source-drift probe; never committed.",
         required: true,
-        requires_coverage_derivation: false,
     },
     ProbeArm {
         path: "server/tests/main.rs",
         marker: "// coverage source-drift probe; never committed.",
         required: true,
-        requires_coverage_derivation: false,
     },
     ProbeArm {
         path: "server/tests/misc/backup_corpus/index.json",
         // A space plus stage_probe_arm's trailing newline stays JSON whitespace.
         marker: " ",
         required: true,
-        requires_coverage_derivation: false,
     },
     ProbeArm {
         path: ".config/nextest.toml",
         marker: "# coverage source-drift probe; never committed.",
         required: true,
-        requires_coverage_derivation: false,
     },
     ProbeArm {
         path: "xtask/src/main.rs",
         marker: "// coverage source-drift probe; never committed.",
         required: false,
-        requires_coverage_derivation: false,
     },
 ];
 
@@ -110,8 +83,6 @@ struct ObservedProbeArm {
 struct SourceProbeMatrix {
     source_base: String,
     arms: Vec<ObservedProbeArm>,
-    coverage_drvpath_base: String,
-    coverage_drvpath_required_source: String,
 }
 
 impl fmt::Display for DriftError {
@@ -133,14 +104,6 @@ impl fmt::Display for DriftError {
             Self::AdmitsXtaskSource { base, xtask_source } => write!(
                 f,
                 "coverage source filter admits host-only xtask source ({base} -> {xtask_source})"
-            ),
-            Self::CoverageDoesNotDependOnRequiredSource { path, base } => write!(
-                f,
-                "coverage derivation does not depend on required {path} ({base})"
-            ),
-            Self::BuildDependencyInReport { path, line } => write!(
-                f,
-                "coverage producer reports executable build-dependency line {path}:{line}"
             ),
         }
     }
@@ -183,35 +146,6 @@ fn source_probe_verdict(matrix: &SourceProbeMatrix) -> Result<(), DriftError> {
             base: matrix.source_base.clone(),
             xtask_source: xtask.source_identity.clone(),
         });
-    }
-    let required = matrix
-        .arms
-        .iter()
-        .find(|observed| observed.arm.requires_coverage_derivation)
-        .expect("one end-to-end required probe arm");
-    if matrix.coverage_drvpath_required_source == matrix.coverage_drvpath_base {
-        return Err(DriftError::CoverageDoesNotDependOnRequiredSource {
-            path: required.arm.path,
-            base: matrix.coverage_drvpath_base.clone(),
-        });
-    }
-    Ok(())
-}
-
-fn realized_report_verdict(files: &[FileCoverage]) -> Result<(), DriftError> {
-    const EXTERNAL_PACKAGE: &str = "tools/csr_bundle";
-
-    for file in files {
-        if (file.path == EXTERNAL_PACKAGE
-            || file.path.starts_with("tools/csr_bundle/")
-            || file.path.contains("/tools/csr_bundle/"))
-            && let Some(line) = file.lines.first()
-        {
-            return Err(DriftError::BuildDependencyInReport {
-                path: file.path.clone(),
-                line: line.line,
-            });
-        }
     }
     Ok(())
 }
@@ -369,41 +303,23 @@ fn run_probe() -> Result<()> {
 
     dirty_probe_tree(&tmp)?;
     let source_base = nix::eval_coverage_source_probe_drvpath(&tmp)?;
-    let coverage_drvpath_base = nix::eval_coverage_drvpath(&tmp)?;
     let mut arms = Vec::with_capacity(PROBE_ARMS.len());
-    let mut coverage_drvpath_required_source = None;
 
     for arm in PROBE_ARMS {
         stage_probe_arm(&tmp, arm)?;
         let source_identity = nix::eval_coverage_source_probe_drvpath(&tmp)?;
-        if arm.requires_coverage_derivation {
-            coverage_drvpath_required_source = Some(nix::eval_coverage_drvpath(&tmp)?);
-        }
         arms.push(ObservedProbeArm {
             arm,
             source_identity,
         });
     }
 
-    let matrix = SourceProbeMatrix {
-        source_base,
-        arms,
-        coverage_drvpath_base,
-        coverage_drvpath_required_source: coverage_drvpath_required_source
-            .context("missing end-to-end required source probe")?,
-    };
+    let matrix = SourceProbeMatrix { source_base, arms };
     source_probe_verdict(&matrix)?;
 
     git_run(&tmp, &["reset", "--hard", "HEAD"])?;
     dirty_probe_tree(&tmp)?;
-    let out = nix::build_coverage_out_path(&tmp)?;
-    let report_path = Path::new(&out).join("coverage-report.txt");
-    let report = fs::read_to_string(&report_path)
-        .with_context(|| format!("reading realized coverage report {}", report_path.display()))?;
-    let repo_root = tmp.to_str().context("worktree path is not UTF-8")?;
-    let files = crate::coverage::report::parse_text_report(&report, repo_root)
-        .context("parsing realized coverage report")?;
-    realized_report_verdict(&files)?;
+    let _ = nix::build_coverage_out_path(&tmp)?;
     Ok(())
 }
 
@@ -570,8 +486,6 @@ mod tests {
                     },
                 })
                 .collect(),
-            coverage_drvpath_base: "coverage-base".into(),
-            coverage_drvpath_required_source: "coverage-manifest".into(),
         }
     }
 
@@ -589,7 +503,6 @@ mod tests {
 
         assert_eq!(fixture.marker, " ");
         assert!(fixture.required);
-        assert!(!fixture.requires_coverage_derivation);
         let matrix = complete_matrix();
         let observed = matrix
             .arms
@@ -656,60 +569,9 @@ mod tests {
         assert_eq!(
             source_probe_verdict(&matrix),
             Err(DriftError::DropsRequiredSource {
-                path: "tools/csr_bundle/Cargo.toml",
+                path: "server/src/lib.rs",
                 base: "source-base".into(),
             })
         );
-    }
-
-    #[test]
-    fn source_probe_rejects_coverage_drvpath_unchanged_for_csr_bundle_manifest() {
-        let mut matrix = complete_matrix();
-        matrix.coverage_drvpath_required_source = "coverage-base".into();
-        assert_eq!(
-            source_probe_verdict(&matrix),
-            Err(DriftError::CoverageDoesNotDependOnRequiredSource {
-                path: "tools/csr_bundle/Cargo.toml",
-                base: "coverage-base".into(),
-            })
-        );
-    }
-
-    #[test]
-    fn realized_report_rejects_every_csr_bundle_source_boundary() {
-        for path in [
-            "/repo/tools/csr_bundle/build.rs",
-            "/repo/tools/csr_bundle/src/other.rs",
-            "/repo/tools/csr_bundle/src/lib.rs",
-        ] {
-            let files = crate::coverage::report::parse_text_report(
-                &format!("{path}:\n    7|     1|pub fn build_only() {{}}"),
-                "/repo",
-            )
-            .unwrap();
-            assert_eq!(
-                realized_report_verdict(&files),
-                Err(DriftError::BuildDependencyInReport {
-                    path: path.strip_prefix("/repo/").unwrap().into(),
-                    line: 7,
-                })
-            );
-        }
-    }
-
-    #[test]
-    fn realized_report_accepts_root_workspace_and_near_name_lines() {
-        let files = crate::coverage::report::parse_text_report(
-            "\
-/repo/server/src/lib.rs:
-    1|     1|pub fn root() {}
-/repo/tools/csr_bundle_extra/src/lib.rs:
-    2|     1|pub fn unrelated() {}
-",
-            "/repo",
-        )
-        .unwrap();
-
-        assert_eq!(realized_report_verdict(&files), Ok(()));
     }
 }

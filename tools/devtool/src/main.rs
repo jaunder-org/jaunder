@@ -1,7 +1,7 @@
 //! Internal in-sandbox dev tool. Runs inside the Nix coverage/e2e build
 //! sandboxes where `xtask` (host-only) is unavailable. Subcommand tree is
-//! deliberately extensible: `coverage emit`, `wasm-coverage`, `csr-bundle`, and
-//! `seed-e2e` exist today; `pg`-migration of the remaining shell scripts is
+//! deliberately extensible: `coverage emit`, `wasm-coverage`, diagnostic build,
+//! and `seed-e2e` exist today; `pg`-migration of the remaining shell scripts is
 //! tracked separately.
 
 use std::path::PathBuf;
@@ -13,8 +13,6 @@ use clap::{Parser, Subcommand};
 
 mod check;
 mod coverage;
-#[cfg(feature = "system-artifacts")]
-mod csr_bundle;
 mod diagnostic_build;
 mod digest;
 mod doctests;
@@ -23,6 +21,9 @@ mod performance;
 mod pg;
 mod provision;
 mod seed_e2e;
+#[cfg(feature = "system-artifacts")]
+mod system_artifacts;
+mod vite_manifest;
 mod wasm_coverage;
 
 #[derive(Parser)]
@@ -51,11 +52,9 @@ enum Command {
     Pg(PgCmd),
     /// Run the migrated static checks (#188/#276): one by name, or `--all`.
     Check(CheckArgs),
-    /// Post-process a built `csr.wasm` into a verified CSR bundle root
-    /// (`manifest.json`, rendered `index.html`, and content-addressed `pkg/**`).
-    /// Shared by the host build and the Nix `csrWasmBundle` derivation (#236/#869).
+    /// Compile and stage the closed system-theme inventory independently of CSR output.
     #[cfg(feature = "system-artifacts")]
-    CsrBundle(CsrBundleArgs),
+    SystemArtifacts(SystemArtifactsArgs),
     /// Seed the canonical e2e fixtures (users + site-config + mail-reset) by
     /// shelling out to `test-support`. The single fixture list shared by the
     /// host loop and the flake VM `seed_db()` (#249).
@@ -90,37 +89,14 @@ struct CheckArgs {
 
 #[cfg(feature = "system-artifacts")]
 #[derive(clap::Args)]
-struct CsrBundleArgs {
-    /// Path to the built `csr.wasm` (crane output or `target/.../csr.wasm`).
-    #[arg(long)]
-    wasm: PathBuf,
-    /// Output directory for the bundle root (`manifest.json`, `index.html`, `pkg/**`).
+struct SystemArtifactsArgs {
+    /// Output directory for the staged inventory and packaged assets.
     #[arg(long)]
     out: PathBuf,
-    /// Optional experiment arm label embedded in the direct wasm-init trace detail.
-    #[arg(long)]
-    wasm_experiment_arm: Option<String>,
-    /// Optional tiny custom section embedded after optimisation to perturb module shape.
-    #[arg(long)]
-    wasm_shape_section: Option<String>,
-    /// Number of same-named shape custom sections to append.
-    #[arg(long, default_value_t = 1)]
-    wasm_shape_section_count: u32,
-    /// Internal qualification-only system styling fixture (`a`, `b-app`, or
-    /// `b-theme`). This argument is absent from ordinary devtool builds.
+    /// Internal qualification-only system styling fixture (`a`, `b-app`, or `b-theme`).
     #[cfg(feature = "qualification")]
     #[arg(long)]
-    system_artifact_fixture: Option<String>,
-    /// Write a truthful before/after LLVM coverage-section status for the
-    /// diagnostic bundle. Requires the companion identity output and minicov pin.
-    #[arg(long, requires_all = ["diagnostic_toolchain_identity", "diagnostic_minicov_version"])]
-    diagnostic_coverage_metadata: Option<PathBuf>,
-    /// Write exact compiler, LLVM, wasm-bindgen, wasm-opt, and minicov identities.
-    #[arg(long, requires_all = ["diagnostic_coverage_metadata", "diagnostic_minicov_version"])]
-    diagnostic_toolchain_identity: Option<PathBuf>,
-    /// Exact minicov crate version selected by the diagnostic Cargo feature.
-    #[arg(long, requires_all = ["diagnostic_coverage_metadata", "diagnostic_toolchain_identity"])]
-    diagnostic_minicov_version: Option<String>,
+    fixture: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -261,6 +237,21 @@ enum DiagnosticBuildCmd {
         #[arg(long)]
         retained_wasm: PathBuf,
     },
+    /// Record coverage metadata boundaries and exact diagnostic toolchain identity.
+    WriteCoverageArtifacts {
+        #[arg(long)]
+        metadata: PathBuf,
+        #[arg(long)]
+        toolchain_identity: PathBuf,
+        #[arg(long)]
+        minicov_version: String,
+        #[arg(long)]
+        input_wasm: PathBuf,
+        #[arg(long)]
+        wasm_bindgen_wasm: PathBuf,
+        #[arg(long)]
+        wasm_opt_wasm: PathBuf,
+    },
     /// Assert that wasm-bindgen retained coverage metadata after bundling.
     AssertCoverage {
         #[arg(long)]
@@ -385,6 +376,21 @@ fn main() -> Result<()> {
             manifest,
             retained_wasm,
         }) => diagnostic_build::retain_linked_wasm(&target_release, &manifest, &retained_wasm),
+        Command::DiagnosticBuild(DiagnosticBuildCmd::WriteCoverageArtifacts {
+            metadata,
+            toolchain_identity,
+            minicov_version,
+            input_wasm,
+            wasm_bindgen_wasm,
+            wasm_opt_wasm,
+        }) => diagnostic_build::write_coverage_artifacts(
+            &metadata,
+            &toolchain_identity,
+            &minicov_version,
+            &input_wasm,
+            &wasm_bindgen_wasm,
+            &wasm_opt_wasm,
+        ),
         Command::DiagnosticBuild(DiagnosticBuildCmd::AssertCoverage { metadata }) => {
             diagnostic_build::assert_coverage(&metadata)
         }
@@ -405,56 +411,12 @@ fn main() -> Result<()> {
             args.sandbox_cargo,
         ),
         #[cfg(feature = "system-artifacts")]
-        Command::CsrBundle(args) => {
-            let diagnostic_artifacts = match (
-                args.diagnostic_coverage_metadata.as_deref(),
-                args.diagnostic_toolchain_identity.as_deref(),
-                args.diagnostic_minicov_version.as_deref(),
-            ) {
-                (Some(metadata_status), Some(toolchain_identity), Some(minicov_version)) => {
-                    Some(csr_bundle::DiagnosticArtifacts {
-                        metadata_status,
-                        toolchain_identity,
-                        minicov_version,
-                    })
-                }
-                (None, None, None) => None,
-                _ => anyhow::bail!(
-                    "diagnostic CSR bundle arguments must select metadata, toolchain identity, and minicov together"
-                ),
-            };
+        Command::SystemArtifacts(args) => {
             #[cfg(feature = "qualification")]
-            if let Some(fixture) = args.system_artifact_fixture.as_deref() {
-                let fixture = host::system_theme::qualification::Fixture::parse(fixture)
-                    .map_err(anyhow::Error::msg)?;
-                csr_bundle::run_qualification(
-                    &args.wasm,
-                    &args.out,
-                    args.wasm_experiment_arm.as_deref(),
-                    args.wasm_shape_section.as_deref(),
-                    args.wasm_shape_section_count,
-                    diagnostic_artifacts.as_ref(),
-                    fixture,
-                )
-            } else {
-                csr_bundle::run(
-                    &args.wasm,
-                    &args.out,
-                    args.wasm_experiment_arm.as_deref(),
-                    args.wasm_shape_section.as_deref(),
-                    args.wasm_shape_section_count,
-                    diagnostic_artifacts.as_ref(),
-                )
-            }
+            let fixture = args.fixture.as_deref();
             #[cfg(not(feature = "qualification"))]
-            csr_bundle::run(
-                &args.wasm,
-                &args.out,
-                args.wasm_experiment_arm.as_deref(),
-                args.wasm_shape_section.as_deref(),
-                args.wasm_shape_section_count,
-                diagnostic_artifacts.as_ref(),
-            )
+            let fixture = None;
+            system_artifacts::run(&args.out, fixture)
         }
         Command::SeedE2e(args) => {
             // Preserve raw configured input: the seed children own telemetry
@@ -486,18 +448,14 @@ mod tests {
 
     use super::*;
 
-    #[cfg(feature = "system-artifacts")]
     #[test]
-    fn diagnostic_bundle_artifacts_are_an_all_or_nothing_contract() {
+    fn diagnostic_coverage_metadata_cli_requires_all_identity_inputs() {
         assert!(
             Cli::try_parse_from([
                 "devtool",
-                "csr-bundle",
-                "--wasm",
-                "csr.wasm",
-                "--out",
-                "pkg",
-                "--diagnostic-coverage-metadata",
+                "diagnostic-build",
+                "write-coverage-artifacts",
+                "--metadata",
                 "metadata.json",
             ])
             .is_err()
@@ -505,57 +463,23 @@ mod tests {
         assert!(
             Cli::try_parse_from([
                 "devtool",
-                "csr-bundle",
-                "--wasm",
-                "csr.wasm",
-                "--out",
-                "pkg",
-                "--diagnostic-coverage-metadata",
+                "diagnostic-build",
+                "write-coverage-artifacts",
+                "--metadata",
                 "metadata.json",
-                "--diagnostic-toolchain-identity",
+                "--toolchain-identity",
                 "toolchain.json",
-                "--diagnostic-minicov-version",
+                "--minicov-version",
                 "0.3.8",
+                "--input-wasm",
+                "input.wasm",
+                "--wasm-bindgen-wasm",
+                "bindgen.wasm",
+                "--wasm-opt-wasm",
+                "optimized.wasm",
             ])
             .is_ok()
         );
-    }
-
-    #[cfg(all(feature = "system-artifacts", not(feature = "qualification")))]
-    #[test]
-    fn ordinary_csr_production_has_no_qualification_fixture_selector() {
-        assert!(
-            Cli::try_parse_from([
-                "devtool",
-                "csr-bundle",
-                "--wasm",
-                "csr.wasm",
-                "--out",
-                "pkg",
-                "--system-artifact-fixture",
-                "b-app",
-            ])
-            .is_err()
-        );
-    }
-
-    #[cfg(feature = "qualification")]
-    #[test]
-    fn qualification_csr_production_accepts_only_closed_fixture_tokens() {
-        assert!(
-            Cli::try_parse_from([
-                "devtool",
-                "csr-bundle",
-                "--wasm",
-                "csr.wasm",
-                "--out",
-                "pkg",
-                "--system-artifact-fixture",
-                "b-app",
-            ])
-            .is_ok()
-        );
-        assert!(host::system_theme::qualification::Fixture::parse("not-a-fixture").is_err());
     }
 
     #[test]

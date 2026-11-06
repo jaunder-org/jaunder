@@ -11,7 +11,7 @@ use std::{
     process::Command,
 };
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use coverage::wasm::{Artifact, BrowserStatus, Outcome, ServedModule, Stage};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -21,18 +21,6 @@ const ROOT: &str = "/var/lib/jaunder/wasm-coverage";
 #[derive(Deserialize)]
 struct CsrStatus {
     outcome: String,
-}
-
-#[derive(Deserialize)]
-struct Manifest {
-    assets: Vec<ManifestAsset>,
-}
-
-#[derive(Deserialize)]
-struct ManifestAsset {
-    path: String,
-    sha256: String,
-    role: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -98,19 +86,16 @@ fn initialize_at(root: &Path, csr: &Path, browser: &str) -> Result<()> {
 
 fn prepare_module(root: &Path, csr: &Path) -> Result<(PathBuf, Option<ServedModule>, Stage)> {
     let csr_status: CsrStatus = read_json(&csr.join("status.json"))?;
-    let manifest: Manifest = read_json(&csr.join("pkg/manifest.json"))?;
-    let wasm = manifest
-        .assets
-        .into_iter()
-        .find(|asset| asset.role.as_deref() == Some("wasm"))
-        .ok_or_else(|| anyhow!("no wasm asset in CSR manifest"))?;
+    let package = csr.join("pkg");
+    let wasm_path = crate::vite_manifest::wasm_output(&package)?;
+    let source_module = package.join(&wasm_path);
     let served_module = ServedModule {
-        path: wasm.path.clone(),
-        sha256: wasm.sha256,
+        path: wasm_path.clone(),
+        sha256: crate::digest::lowercase_hex(Sha256::digest(fs::read(&source_module)?)),
     };
-    let module = root.join("module").join(&wasm.path);
-    fs::create_dir_all(module.parent().expect("module has parent"))?;
-    fs::copy(csr.join("pkg").join(&wasm.path), &module)?;
+    let module = root.join("module").join(&wasm_path);
+    fs::create_dir_all(module.parent().expect("Vite WASM output has parent"))?;
+    fs::copy(&source_module, &module)?;
     let structural = if csr_status.outcome == "succeeded"
         && artifact_at(root, &module)?.sha256 == served_module.sha256
     {
@@ -381,6 +366,34 @@ mod tests {
                 },
             )]),
         }
+    }
+
+    #[test]
+    fn prepare_module_uses_vite_wasm_path_and_actual_identity_digest() {
+        let temporary = TempDir::new().unwrap();
+        let root = temporary.path().join("coverage");
+        let csr = temporary.path().join("csr");
+        let package = csr.join("pkg");
+        fs::create_dir_all(package.join(".vite")).unwrap();
+        fs::create_dir_all(package.join("assets")).unwrap();
+        fs::write(csr.join("status.json"), r#"{"outcome":"succeeded"}"#).unwrap();
+        fs::write(package.join("assets/csr.js"), b"js").unwrap();
+        let wasm = b"\0asm\x01\0\0\0";
+        fs::write(package.join("assets/csr_bg-hash.wasm"), wasm).unwrap();
+        fs::write(
+            package.join(".vite/manifest.json"),
+            r#"{"index.html":{"file":"assets/csr.js","src":"index.html","isEntry":true,"assets":["assets/csr_bg-hash.wasm"]},"csr_bg.wasm":{"file":"assets/csr_bg-hash.wasm","src":"csr_bg.wasm"}}"#,
+        )
+        .unwrap();
+
+        let (module_path, served, structural) = prepare_module(&root, &csr).unwrap();
+        assert_eq!(served.as_ref().unwrap().path, "assets/csr_bg-hash.wasm");
+        assert_eq!(
+            served.as_ref().unwrap().sha256,
+            crate::digest::lowercase_hex(Sha256::digest(wasm))
+        );
+        assert_eq!(fs::read(module_path).unwrap(), wasm);
+        assert_eq!(structural, Stage::passed());
     }
 
     #[test]

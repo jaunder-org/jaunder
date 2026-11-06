@@ -22,11 +22,7 @@
 </head>
 
 <body>
- <script type="module">
-  import {initMeasured} from "{{GLUE_URL}}";
-  performance.mark("jaunder.module.before_init");
-  initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl);
- </script>
+ <script type="module" src="./entry.js"></script>
 </body>
 
 </html>

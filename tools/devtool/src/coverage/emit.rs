@@ -19,16 +19,7 @@ use serde_json::Value;
 use crate::pg;
 
 const JUNIT_PATH: &str = "/tmp/jaunder-coverage-junit.xml";
-const CSR_BUNDLE_FILENAME_REGEX: &str = r"(^|.*/)tools/csr_bundle/";
-const CSR_BUNDLE_PACKAGE_PATH: &str = "tools/csr_bundle";
 const LLVM_COV_ENVIRONMENT_SCRIPT: &str = r#"environment="$(cargo llvm-cov show-env --export-prefix)" || exit; eval "$environment" || exit; exec "$@""#;
-
-fn is_csr_bundle_package_path(path: &str) -> bool {
-    match path.strip_prefix(CSR_BUNDLE_PACKAGE_PATH) {
-        Some(remainder) => remainder.is_empty() || remainder.starts_with('/'),
-        None => false,
-    }
-}
 
 #[derive(Debug)]
 struct CommandSpec {
@@ -92,7 +83,7 @@ fn required_stage_commands() -> Vec<CommandSpec> {
     ]
 }
 
-fn coverage_report_arguments(format: &'static str) -> [&'static str; 9] {
+fn coverage_report_arguments(format: &'static str) -> [&'static str; 7] {
     [
         "-c",
         LLVM_COV_ENVIRONMENT_SCRIPT,
@@ -101,8 +92,6 @@ fn coverage_report_arguments(format: &'static str) -> [&'static str; 9] {
         "llvm-cov",
         "report",
         format,
-        "--ignore-filename-regex",
-        CSR_BUNDLE_FILENAME_REGEX,
     ]
 }
 
@@ -1713,7 +1702,7 @@ fn remap_lcov_source_root(raw: &str, from: &str, to: &str) -> String {
         + if raw.ends_with('\n') { "\n" } else { "" }
 }
 
-/// Strip the absolute sandbox prefix and external package entries from CRAP output.
+/// Strip the absolute sandbox prefix from CRAP output paths.
 fn normalize_crap_paths(raw: &str, abs_root: &str) -> Result<String> {
     let prefix = format!("{abs_root}/");
     let mut value: Value = serde_json::from_str(raw)?;
@@ -1728,11 +1717,8 @@ fn normalize_crap_paths(raw: &str, abs_root: &str) -> Result<String> {
             .and_then(Value::as_str)
             .context("missing CRAP entry file")?;
         let normalized_file = file.strip_prefix(&prefix).unwrap_or(file).to_owned();
-        let is_external_package = is_csr_bundle_package_path(&normalized_file);
         entry["file"] = Value::String(normalized_file);
-        if !is_external_package {
-            normalized_entries.push(entry);
-        }
+        normalized_entries.push(entry);
     }
     *entries = normalized_entries;
     Ok(format!("{}\n", serde_json::to_string_pretty(&value)?))
@@ -1793,7 +1779,7 @@ mod tests {
     }
 
     #[test]
-    fn report_commands_exclude_only_csr_bundle_with_the_same_regex() {
+    fn report_commands_use_normal_llvm_cov_population_without_exclusions() {
         let text = coverage_report_arguments("--text");
         let lcov = coverage_report_arguments("--lcov");
 
@@ -1807,8 +1793,6 @@ mod tests {
                 "llvm-cov",
                 "report",
                 "--text",
-                "--ignore-filename-regex",
-                CSR_BUNDLE_FILENAME_REGEX,
             ]
         );
         assert_eq!(
@@ -1821,11 +1805,10 @@ mod tests {
                 "llvm-cov",
                 "report",
                 "--lcov",
-                "--ignore-filename-regex",
-                CSR_BUNDLE_FILENAME_REGEX,
             ]
         );
-        assert_eq!(text[8], lcov[8]);
+        assert!(!text.contains(&"--ignore-filename-regex"));
+        assert!(!lcov.contains(&"--ignore-filename-regex"));
     }
     #[test]
     fn required_commands_use_root_workspace_coverage_profile_without_filters() {
@@ -1986,12 +1969,11 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_and_excludes_csr_bundle_crap_entries() {
+    fn normalizes_crap_paths_without_excluding_removed_build_dependency_sources() {
         let raw = r#"{
             "entries": [
-                {"file": "/build/source/tools/csr_bundle", "crap": 1.0},
-                {"file": "/build/source/tools/csr_bundle/src/lib.rs", "crap": 2.0},
-                {"file": "/build/source/tools/csr_bundle_extra/src/lib.rs", "crap": 3.0},
+                {"file": "/build/source/tools/devtool/src/wasm_coverage.rs", "crap": 1.0},
+                {"file": "/build/source/tools/devtool/src/diagnostic_build.rs", "crap": 2.0},
                 {"file": "/build/source/server/src/a.rs", "crap": 4.0}
             ]
         }"#;
@@ -2007,7 +1989,11 @@ mod tests {
 
         assert_eq!(
             files,
-            ["tools/csr_bundle_extra/src/lib.rs", "server/src/a.rs"]
+            [
+                "tools/devtool/src/wasm_coverage.rs",
+                "tools/devtool/src/diagnostic_build.rs",
+                "server/src/a.rs"
+            ]
         );
         assert!(normalize_crap_paths("{}", "/build/source").is_err());
     }

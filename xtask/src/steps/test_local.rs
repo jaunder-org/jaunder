@@ -253,7 +253,7 @@ printf 'consumer %s\n' "$1" >> "$CALLS"
 
         fs::write(&calls, "").unwrap();
         sh.set_var("FAIL_BUILD", "no");
-        fs::write(fixture.join("manifest.json"), "corrupt").unwrap();
+        fs::write(fixture.join(".vite/manifest.json"), "corrupt").unwrap();
         let mut corrupt = CommandResult::new("test-local");
         run(&sh, &mut corrupt, &[]);
         assert!(!corrupt.ok);
@@ -551,8 +551,8 @@ fi
         for explicit in [false, true] {
             let temp = tempfile::tempdir().unwrap();
             let input = temp.path().join(".xtask/csr-bundle");
-            fs::create_dir_all(&input).unwrap();
-            fs::write(input.join("manifest.json"), b"corrupt").unwrap();
+            fs::create_dir_all(input.join(".vite")).unwrap();
+            fs::write(input.join(".vite/manifest.json"), b"corrupt").unwrap();
             let cargo = temp.path().join("cargo");
             fs::write(&cargo, "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$CALLS\"\n").unwrap();
             fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
@@ -585,7 +585,7 @@ fi
                     .detail
                     .as_ref()
                     .unwrap()
-                    .contains("invalid manifest JSON")
+                    .contains("parsing Vite manifest")
             );
             if explicit {
                 assert!(

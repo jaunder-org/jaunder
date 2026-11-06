@@ -116,7 +116,6 @@ let
     assert (coverageAuxiliarySource "host/system_theme_sources/studio/style.css");
     assert (coverageAuxiliarySource "testdata/theme-repository/minimal/preview.png");
     assert !(coverageAuxiliarySource "testdata/unrelated.png");
-    assert builtins.elem "tools/csr_bundle" coverageMembers;
     assert !(builtins.elem "xtask" coverageMembers);
     assert !(builtins.elem "tools/devtool" coverageMembers);
     assert !(builtins.elem "tools/doctests" coverageMembers);

@@ -1981,13 +1981,6 @@ pub(crate) fn eval_out_path(check: &str) -> Result<String> {
     nix_eval_raw(None, &format!(".#checks.{SYSTEM}.{check}.outPath"))
 }
 
-pub fn eval_coverage_drvpath(flake_dir: &Path) -> Result<String> {
-    nix_eval_raw(
-        Some(flake_dir),
-        &format!(".#checks.{SYSTEM}.coverage.drvPath"),
-    )
-}
-
 /// Evaluate the probe-only identity of the filtered coverage source.
 pub(crate) fn eval_coverage_source_probe_drvpath(flake_dir: &Path) -> Result<String> {
     nix_eval_raw(

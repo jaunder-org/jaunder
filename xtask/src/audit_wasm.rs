@@ -4,10 +4,10 @@
 //! and sizes the manifest-selected identity artifacts. Pure size/format helpers
 //! are unit-tested; the `nix`/filesystem I/O lives in `run`/`resolve_site_path`.
 
-use std::{fs, io::Write, path::Path};
+use std::{fs, path::Path};
 
 use anyhow::{Context, Result};
-use csr_bundle::{Manifest, Role};
+use host::vite_manifest::{CsrViteOutputs, csr_outputs};
 use serde::Serialize;
 
 use crate::nix_build;
@@ -56,34 +56,8 @@ pub fn format_bytes(bytes: u64) -> String {
     format!("{value:.decimals$} {}", UNITS[unit])
 }
 
-/// gzip size at level 9 (`Z_BEST_COMPRESSION`), matching the script. Absolute
-/// byte counts may differ by a few bytes from Node's `zlib` backend (`flate2`
-/// uses `miniz_oxide`); the compression *parameters* — what governs the trend
-/// this tool tracks — are identical.
-pub fn gzip_size(bytes: &[u8]) -> u64 {
-    use flate2::{Compression, write::GzEncoder};
-    let mut enc = GzEncoder::new(Vec::new(), Compression::best());
-    enc.write_all(bytes)
-        .expect("gzip write to Vec is infallible");
-    enc.finish()
-        .expect("gzip finish to Vec is infallible")
-        .len() as u64
-}
-
-/// brotli size at quality 11, window 22 — the script set only quality 11 and
-/// left the window at brotli's default (22).
-pub fn brotli_size(bytes: &[u8]) -> u64 {
-    let mut out = Vec::new();
-    {
-        let mut w = brotli::CompressorWriter::new(&mut out, 4096, 11, 22);
-        w.write_all(bytes)
-            .expect("brotli write to Vec is infallible");
-    }
-    out.len() as u64
-}
-
 /// The human size table: a header, the bundle root, then one right-aligned
-/// raw/gzip/brotli row per manifest-selected identity artifact.
+/// raw/gzip/brotli row per selected Vite output.
 pub fn render_table(report: &AuditReport) -> String {
     let mut s = String::new();
     s.push_str("WASM bundle audit\n");
@@ -116,66 +90,30 @@ pub fn resolve_site_path(explicit: Option<&str>) -> Result<String> {
     }
 }
 
-/// Verify that the rendered shell selects exactly the runtime URLs declared by
-/// the manifest. The shell intentionally starts fetching WASM before importing
-/// the glue, but it must not preload WASM: #866 measured no boot benefit.
-fn verify_generated_shell(index_html: &str, glue_path: &str, wasm_path: &str) -> Result<()> {
-    let glue_url = format!("/{glue_path}");
-    let wasm_url = format!("/{wasm_path}");
-    anyhow::ensure!(
-        index_html.matches(&glue_url).count() == 1
-            && index_html.contains(&format!("import {{initMeasured}} from \"{glue_url}\";")),
-        "generated index.html does not select manifest glue URL {glue_url:?}"
-    );
-    anyhow::ensure!(
-        !index_html.contains(&format!("href=\"{wasm_url}\"")),
-        "generated index.html preloads manifest wasm URL {wasm_url:?}; #866 requires no WASM preload"
-    );
-    anyhow::ensure!(
-        index_html.matches(&wasm_url).count() == 1
-            && index_html.contains(&format!("const __jaunderWasmUrl = \"{wasm_url}\";"))
-            && index_html.contains("window.__jaunderWasmFetch = fetch(__jaunderWasmUrl);")
-            && index_html.contains("initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl);"),
-        "generated index.html does not select manifest wasm URL {wasm_url:?}"
-    );
-    Ok(())
+/// Resolve the native manifest outputs used for size reporting.
+fn bundle_outputs(root: &Path) -> Result<CsrViteOutputs> {
+    csr_outputs(root)
+        .with_context(|| format!("resolving Vite CSR outputs under {}", root.display()))
 }
 
-/// The manifest-selected identity artifacts the rendered CSR shell boots.
-///
-/// The manifest is the only parser, verifier, and name owner. Verifying its
-/// exact inventory before returning paths makes a missing or inconsistent
-/// selected artifact fail before any size measurement can hide the drift.
-fn bundle_boot_artifacts(root: &Path) -> Result<Vec<String>> {
-    let manifest_path = root.join("manifest.json");
-    let manifest = Manifest::from_json(
-        &fs::read(&manifest_path)
-            .with_context(|| format!("reading CSR bundle manifest {}", manifest_path.display()))?,
-    )
-    .with_context(|| format!("parsing CSR bundle manifest {}", manifest_path.display()))?;
-    manifest
-        .verify_bundle(root)
-        .with_context(|| format!("verifying CSR bundle {}", root.display()))?;
-
-    let glue_path = manifest.role(Role::Glue)?.path.clone();
-    let wasm_path = manifest.role(Role::Wasm)?.path.clone();
-    let index_path = root.join("index.html");
-    let index_html = fs::read_to_string(&index_path)
-        .with_context(|| format!("reading generated CSR shell {}", index_path.display()))?;
-    verify_generated_shell(&index_html, &glue_path, &wasm_path)?;
-    Ok(vec![wasm_path, glue_path])
-}
-
-/// Resolve the site path, verify its build-only manifest and generated shell,
-/// then measure the manifest-selected identity artifacts (raw, gzip, brotli).
+/// Resolve and measure the manifest-selected WASM and emitted JavaScript assets.
 pub fn run(site_path: Option<&str>) -> Result<AuditReport> {
     let site_path = resolve_site_path(site_path)?;
-    let names = bundle_boot_artifacts(Path::new(&site_path))?;
+    let root = Path::new(&site_path);
+    let outputs = bundle_outputs(root)?;
+    let mut runtime_outputs = vec![outputs.wasm.as_str()];
+    runtime_outputs.extend(
+        outputs
+            .files
+            .iter()
+            .map(String::as_str)
+            .filter(|path| Path::new(path).extension().is_some_and(|ext| ext == "js")),
+    );
     let mut artifacts = Vec::new();
-    for name in &names {
-        let path = Path::new(&site_path).join(name);
+    for name in runtime_outputs {
+        let path = root.join(name);
         let bytes = fs::read(&path)
-            .with_context(|| format!("reading manifest-selected artifact {}", path.display()))?;
+            .with_context(|| format!("reading Vite output artifact {}", path.display()))?;
         // Guard the strip (#836). `wasm-opt` drops the name section unless `-g` is
         // passed, so its reappearance means the optimisation pass was weakened or
         // lost — a 1.28 MiB regression that is otherwise invisible until someone
@@ -187,11 +125,19 @@ pub fn run(site_path: Option<&str>) -> Result<AuditReport> {
                 path.display()
             );
         }
+        let gzip_path = root.join(format!("{name}.gz"));
+        let brotli_path = root.join(format!("{name}.br"));
+        let gzip_bytes = fs::metadata(&gzip_path)
+            .with_context(|| format!("reading Vite gzip sidecar {}", gzip_path.display()))?
+            .len();
+        let brotli_bytes = fs::metadata(&brotli_path)
+            .with_context(|| format!("reading Vite Brotli sidecar {}", brotli_path.display()))?
+            .len();
         artifacts.push(ArtifactMetrics {
             path: path.to_string_lossy().into_owned(),
             raw_bytes: bytes.len() as u64,
-            gzip_bytes: gzip_size(&bytes),
-            brotli_bytes: brotli_size(&bytes),
+            gzip_bytes,
+            brotli_bytes,
         });
     }
     Ok(AuditReport {
@@ -316,17 +262,6 @@ mod tests {
     }
 
     #[test]
-    fn compression_shrinks_repetitive_input_and_is_deterministic() {
-        let bytes = vec![b'a'; 10_000];
-        let g = gzip_size(&bytes);
-        let b = brotli_size(&bytes);
-        assert!(g < bytes.len() as u64, "gzip should shrink: {g}");
-        assert!(b < bytes.len() as u64, "brotli should shrink: {b}");
-        assert_eq!(g, gzip_size(&bytes), "gzip deterministic");
-        assert_eq!(b, brotli_size(&bytes), "brotli deterministic");
-    }
-
-    #[test]
     fn render_table_has_header_bundle_root_and_relative_names() {
         let report = AuditReport {
             site_path: "/nix/store/x-jaunder-site".into(),
@@ -359,105 +294,40 @@ mod tests {
         assert!(table.contains("2.0 MiB"));
     }
 
-    fn fixture_asset(
-        root: &Path,
-        role: csr_bundle::Role,
-        extension: &str,
-        identity: &[u8],
-    ) -> csr_bundle::Asset {
-        let path = format!("pkg/{}.{}", csr_bundle::digest(identity), extension);
-        let gzip = format!("{extension}-gzip").into_bytes();
-        let brotli = format!("{extension}-brotli").into_bytes();
-        std::fs::create_dir_all(root.join("pkg")).unwrap();
-        std::fs::write(root.join(&path), identity).unwrap();
-        std::fs::write(root.join(format!("{path}.gz")), &gzip).unwrap();
-        std::fs::write(root.join(format!("{path}.br")), &brotli).unwrap();
-        csr_bundle::Asset {
-            role: Some(role),
-            path: path.clone(),
-            sha256: csr_bundle::digest(identity),
-            representations: std::collections::BTreeMap::from([
-                (
-                    "identity".into(),
-                    csr_bundle::Representation {
-                        path: path.clone(),
-                        sha256: csr_bundle::digest(identity),
-                    },
-                ),
-                (
-                    "gzip".into(),
-                    csr_bundle::Representation {
-                        path: format!("{path}.gz"),
-                        sha256: csr_bundle::digest(&gzip),
-                    },
-                ),
-                (
-                    "br".into(),
-                    csr_bundle::Representation {
-                        path: format!("{path}.br"),
-                        sha256: csr_bundle::digest(&brotli),
-                    },
-                ),
-            ]),
+    fn fixture_bundle(root: &Path) -> CsrViteOutputs {
+        let entry = "assets/index-a1b2c3d4.js";
+        let wasm = "assets/csr_bg-e5f6a7b8.wasm";
+        std::fs::create_dir_all(root.join(".vite")).unwrap();
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        for (name, bytes) in [(entry, b"export {}".as_slice()), (wasm, b"\0asm\x01\0\0\0")] {
+            std::fs::write(root.join(name), bytes).unwrap();
+            std::fs::write(root.join(format!("{name}.gz")), b"gzip-sidecar").unwrap();
+            std::fs::write(root.join(format!("{name}.br")), b"brotli-sidecar").unwrap();
         }
-    }
-
-    fn fixture_bundle(root: &Path, shell: impl FnOnce(&str, &str) -> String) -> (String, String) {
-        let wasm = fixture_asset(root, csr_bundle::Role::Wasm, "wasm", b"\0asm\x01\0\0\0");
-        let glue = fixture_asset(root, csr_bundle::Role::Glue, "js", b"export {}");
-        let manifest = csr_bundle::Manifest {
-            version: csr_bundle::VERSION,
-            assets: vec![glue.clone(), wasm.clone()],
-        };
-        std::fs::write(root.join("manifest.json"), manifest.to_json().unwrap()).unwrap();
         std::fs::write(
-            root.join("index.html"),
-            shell(&format!("/{}", glue.path), &format!("/{}", wasm.path)),
+            root.join(".vite/manifest.json"),
+            format!(
+                r#"{{"index.html":{{"file":"{entry}","src":"index.html","isEntry":true,"assets":["{wasm}"]}},"csr_bg.wasm":{{"file":"{wasm}","src":"csr_bg.wasm"}}}}"#
+            ),
         )
         .unwrap();
-        (wasm.path, glue.path)
-    }
-
-    fn generated_shell(glue_url: &str, wasm_url: &str) -> String {
-        format!(
-            "<script>const __jaunderWasmUrl = \"{wasm_url}\"; \
-             window.__jaunderWasmFetch = fetch(__jaunderWasmUrl);</script>\
-             <script type=\"module\">import {{initMeasured}} from \"{glue_url}\"; \
-             initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl);</script>"
-        )
+        csr_outputs(root).unwrap()
     }
 
     #[test]
-    fn bundle_boot_artifacts_selects_manifest_roles() {
+    fn audit_reports_emitted_vite_sidecar_sizes_and_checks_optimized_wasm() {
         let root = tempfile::tempdir().unwrap();
-        let (wasm, glue) = fixture_bundle(root.path(), generated_shell);
-        assert_eq!(
-            bundle_boot_artifacts(root.path()).unwrap(),
-            vec![wasm, glue]
-        );
-    }
-
-    #[test]
-    fn bundle_boot_artifacts_rejects_shell_manifest_inconsistency() {
-        let root = tempfile::tempdir().unwrap();
-        fixture_bundle(root.path(), |glue_url, _wasm_url| {
-            generated_shell(glue_url, "/pkg/not-the-manifest-wasm.wasm")
-        });
-        let error = bundle_boot_artifacts(root.path()).unwrap_err().to_string();
-        assert!(error.contains("manifest wasm URL"), "{error}");
-    }
-
-    #[test]
-    fn bundle_boot_artifacts_rejects_wasm_preload() {
-        let root = tempfile::tempdir().unwrap();
-        fixture_bundle(root.path(), |glue_url, wasm_url| {
-            format!(
-                "{}<link rel=\"preload\" href=\"{wasm_url}\">",
-                generated_shell(glue_url, wasm_url)
-            )
-        });
-        let error = bundle_boot_artifacts(root.path()).unwrap_err().to_string();
-        assert!(error.contains("preloads manifest wasm"), "{error}");
+        let outputs = fixture_bundle(root.path());
+        let report = run(Some(root.path().to_str().unwrap())).unwrap();
+        assert_eq!(report.artifacts.len(), 2);
+        let wasm = report
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.path.ends_with(&outputs.wasm))
+            .unwrap();
+        assert_eq!(wasm.raw_bytes, 8);
+        assert_eq!(wasm.gzip_bytes, b"gzip-sidecar".len() as u64);
+        assert_eq!(wasm.brotli_bytes, b"brotli-sidecar".len() as u64);
     }
 
     fn breakdown_fixture() -> BreakdownReport {
@@ -555,16 +425,26 @@ mod tests {
     }
 
     #[test]
-    fn run_errors_when_a_manifest_selected_artifact_is_missing() {
+    fn run_errors_when_a_vite_manifest_output_is_missing() {
         let root = tempfile::tempdir().unwrap();
-        let (wasm, _) = fixture_bundle(root.path(), generated_shell);
-        std::fs::remove_file(root.path().join(&wasm)).unwrap();
+        let outputs = fixture_bundle(root.path());
+        std::fs::remove_file(root.path().join(&outputs.wasm)).unwrap();
 
         let error = run(Some(root.path().to_str().unwrap())).unwrap_err();
         let chain = format!("{error:#}");
         assert!(
-            chain.contains(&wasm) && chain.contains("missing bundle file"),
-            "error names the manifest-selected artifact and cause: {chain}"
+            chain.contains(&outputs.wasm) && chain.contains("Vite output file is missing"),
+            "error names the Vite output and cause: {chain}"
         );
+    }
+
+    #[test]
+    fn run_rejects_optimized_wasm_with_a_name_section() {
+        let root = tempfile::tempdir().unwrap();
+        let outputs = fixture_bundle(root.path());
+        let named = crate::wasm_symbols::tests_support::named_module();
+        std::fs::write(root.path().join(outputs.wasm), named).unwrap();
+        let error = run(Some(root.path().to_str().unwrap())).unwrap_err();
+        assert!(error.to_string().contains("carries a wasm name section"));
     }
 }

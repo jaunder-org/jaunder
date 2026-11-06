@@ -3,34 +3,23 @@
 //! Integrity checks do not establish source provenance. Explicit inputs must be
 //! intentionally source-matched and kept stable by their owner through compilation.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
-use csr_bundle::{Manifest, Role, validate_rendered_shell};
+use anyhow::{Context, ensure};
 
 /// Resolve one absolute input and compose the existing build-contract validators.
 pub(crate) fn validate(root: &Path) -> anyhow::Result<PathBuf> {
     let root = root
         .canonicalize()
         .with_context(|| format!("resolving CSR bundle root {}", root.display()))?;
-    let manifest_path = root.join("manifest.json");
     let manifest_check = crate::invocation_trace::active()
         .then(|| crate::invocation_trace::phase("xtask.csr-manifest-check"));
-    let manifest_result = (|| {
-        let bytes = fs::read(&manifest_path)
-            .with_context(|| format!("reading {}", manifest_path.display()))?;
-        let manifest = Manifest::from_json(&bytes)
-            .with_context(|| format!("invalid {}", manifest_path.display()))?;
-        manifest
-            .verify_bundle(&root)
-            .with_context(|| format!("invalid bundle {}", root.display()))?;
-        Ok::<_, anyhow::Error>(manifest)
-    })();
+    let manifest_result = host::vite_manifest::csr_outputs(&root)
+        .with_context(|| format!("invalid Vite manifest or output under {}", root.display()));
     if let Some(phase) = manifest_check {
         phase.finish(manifest_result.is_ok());
     }
-    let manifest = manifest_result?;
+    manifest_result?;
     let inventory_check = crate::invocation_trace::active()
         .then(|| crate::invocation_trace::phase("xtask.csr-inventory-check"));
     let inventory_result = host::system_theme::load_system_artifact_inventory(
@@ -40,45 +29,21 @@ pub(crate) fn validate(root: &Path) -> anyhow::Result<PathBuf> {
     if let Some(phase) = inventory_check {
         phase.finish(inventory_result.is_ok());
     }
-    let inventory = inventory_result?;
-    let shell_check = crate::invocation_trace::active()
-        .then(|| crate::invocation_trace::phase("xtask.csr-shell-check"));
-    let shell_result = (|| {
-        let shell =
-            fs::read_to_string(root.join("index.html")).context("reading rendered index.html")?;
-        let glue = manifest
-            .role(Role::Glue)
-            .context("verified glue role missing")?;
-        let wasm = manifest
-            .role(Role::Wasm)
-            .context("verified WASM role missing")?;
-        validate_rendered_shell(
-            &shell,
-            &format!("/{}", glue.path),
-            &format!("/{}", wasm.path),
-            inventory
-                .application()
-                .content_digest()
-                .content_url()
-                .as_ref(),
-        )?;
-        Ok::<_, anyhow::Error>(())
-    })();
-    if let Some(phase) = shell_check {
-        phase.finish(shell_result.is_ok());
-    }
-    shell_result?;
+    inventory_result?;
+    ensure!(
+        root.join("index.html").is_file(),
+        "CSR bundle has no rendered index.html"
+    );
     Ok(root)
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::*;
-    use csr_bundle::{Asset, Representation};
-    use std::collections::BTreeMap;
+    use std::fs;
 
-    // Sanitized contract fixture; it is not runnable wasm or a startup proof.
-    pub(crate) fn write_bundle(root: &Path) -> Manifest {
+    use super::*;
+    // Sanitized Vite contract fixture; it is not runnable wasm or a startup proof.
+    pub(crate) fn write_bundle(root: &Path) -> host::vite_manifest::CsrViteOutputs {
         let inventory = host::system_theme::qualification::compile(
             host::system_theme::qualification::Fixture::A,
         )
@@ -88,52 +53,26 @@ pub(crate) mod tests {
             &root.join("system-artifacts"),
         )
         .unwrap();
-        let mut assets = Vec::new();
-        for (role, extension, bytes) in [
-            (Role::Glue, "js", b"glue".as_slice()),
-            (Role::Wasm, "wasm", b"wasm".as_slice()),
-        ] {
-            let digest = csr_bundle::digest(bytes);
-            let path = format!("pkg/{digest}.{extension}");
-            let mut representations = BTreeMap::new();
-            for (encoding, suffix, bytes) in [
-                ("identity", "", bytes),
-                ("gzip", ".gz", b"gzip".as_slice()),
-                ("br", ".br", b"brotli".as_slice()),
-            ] {
-                let representation_path = format!("{path}{suffix}");
-                fs::create_dir_all(root.join("pkg")).unwrap();
-                fs::write(root.join(&representation_path), bytes).unwrap();
-                representations.insert(
-                    encoding.into(),
-                    Representation {
-                        path: representation_path,
-                        sha256: csr_bundle::digest(bytes),
-                    },
-                );
-            }
-            assets.push(Asset {
-                role: Some(role),
-                path,
-                sha256: digest,
-                representations,
-            });
-        }
-        let manifest = Manifest {
-            version: csr_bundle::VERSION,
-            assets,
-        };
-        fs::write(root.join("manifest.json"), manifest.to_json().unwrap()).unwrap();
-        let glue = &manifest.role(Role::Glue).unwrap().path;
-        let wasm = &manifest.role(Role::Wasm).unwrap().path;
+        let entry = "assets/index-a1b2c3d4.js";
+        let wasm = "assets/csr_bg-e5f6a7b8.wasm";
+        fs::create_dir_all(root.join(".vite")).unwrap();
+        fs::create_dir_all(root.join("assets")).unwrap();
+        fs::write(root.join(entry), b"entry").unwrap();
+        fs::write(root.join(wasm), b"wasm").unwrap();
+        fs::write(
+            root.join(".vite/manifest.json"),
+            format!(
+                r#"{{"index.html":{{"file":"{entry}","src":"index.html","isEntry":true,"assets":["{wasm}"]}},"csr_bg.wasm":{{"file":"{wasm}","src":"csr_bg.wasm"}}}}"#
+            ),
+        )
+        .unwrap();
         let application = inventory.application().content_digest().content_url();
         fs::write(root.join("index.html"), format!(
-            r#"const __jaunderWasmUrl = "/{wasm}"; window.__jaunderWasmFetch = fetch(__jaunderWasmUrl);
+            r#"<script>const __jaunderWasmUrl = "/{wasm}"; window.__jaunderWasmFetch = fetch(__jaunderWasmUrl);</script>
 <link rel="stylesheet" href="{application}" data-jaunder-application-stylesheet />
-import {{initMeasured}} from "/{glue}"; performance.mark("before_init");
-initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl)"#,
+<script type="module" crossorigin src="/{entry}"></script>"#,
         )).unwrap();
-        manifest
+        host::vite_manifest::csr_outputs(root).unwrap()
     }
 
     #[test]
@@ -149,11 +88,7 @@ initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl)"#,
         });
         let trace = capture.finish().unwrap();
         let events: Vec<serde_json::Value> = serde_json::from_slice(&trace.bytes).unwrap();
-        let names = [
-            "xtask.csr-manifest-check",
-            "xtask.csr-inventory-check",
-            "xtask.csr-shell-check",
-        ];
+        let names = ["xtask.csr-manifest-check", "xtask.csr-inventory-check"];
         let begins: Vec<_> = events
             .iter()
             .filter(|event| {
@@ -171,9 +106,9 @@ initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl)"#,
                 _ => None,
             })
             .collect();
-        assert_eq!(stack, [names[0], "end", names[1], "end", names[2], "end"]);
+        assert_eq!(stack, [names[0], "end", names[1], "end"]);
 
-        fs::write(temp.path().join("manifest.json"), "corrupt").unwrap();
+        fs::write(temp.path().join(".vite/manifest.json"), "corrupt").unwrap();
         let capture = crate::invocation_trace::Capture::new();
         capture.with_default(|| {
             let command = crate::invocation_trace::phase("xtask.command");
@@ -188,11 +123,7 @@ initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl)"#,
                 && event["args"]["phase"] == names[0]
                 && event["args"]["outcome"] == "failure"
         }));
-        assert!(
-            !events
-                .iter()
-                .any(|event| { event["name"] == names[1] || event["name"] == names[2] })
-        );
+        assert!(!events.iter().any(|event| event["name"] == names[1]));
     }
 
     #[test]
@@ -206,7 +137,7 @@ initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl)"#,
     }
 
     #[test]
-    fn rejects_missing_and_corrupt_manifest_representation_shell_and_inventory() {
+    fn rejects_missing_and_corrupt_manifest_representation_and_inventory() {
         let temp = tempfile::tempdir().unwrap();
         assert!(
             validate(&temp.path().join("missing"))
@@ -215,27 +146,31 @@ initMeasured(window.__jaunderWasmFetch ?? __jaunderWasmUrl)"#,
                 .contains("resolving CSR bundle root")
         );
         assert!(
-            validate(temp.path())
-                .unwrap_err()
-                .to_string()
-                .contains("reading")
+            format!("{:#}", validate(temp.path()).unwrap_err()).contains("reading Vite manifest")
         );
-        for corruption in ["manifest", "representation", "shell", "inventory"] {
+        for corruption in ["manifest", "output", "inventory", "index"] {
             let temp = tempfile::tempdir().unwrap();
-            let manifest = write_bundle(temp.path());
+            let outputs = write_bundle(temp.path());
             let (path, expected) = match corruption {
-                "manifest" => (temp.path().join("manifest.json"), "invalid manifest JSON"),
-                "representation" => (
-                    temp.path().join(&manifest.assets[0].path),
-                    "digest mismatch",
+                "manifest" => (
+                    temp.path().join(".vite/manifest.json"),
+                    "parsing Vite manifest",
                 ),
-                "shell" => (temp.path().join("index.html"), "staged shell"),
-                _ => (
+                "output" => (
+                    temp.path().join(&outputs.wasm),
+                    "Vite output file is missing",
+                ),
+                "inventory" => (
                     temp.path().join("system-artifacts/inventory.txt"),
                     "invalid system artifacts",
                 ),
+                _ => (temp.path().join("index.html"), "no rendered index.html"),
             };
-            fs::write(path, b"corrupt").unwrap();
+            if corruption == "output" || corruption == "index" {
+                fs::remove_file(path).unwrap();
+            } else {
+                fs::write(path, b"corrupt").unwrap();
+            }
             let error = validate(temp.path()).unwrap_err();
             assert!(
                 format!("{error:#}").contains(expected),

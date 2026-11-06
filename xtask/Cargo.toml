@@ -28,11 +28,9 @@ regex = "1.12.3"
 jsonschema = { version = "0.40", default-features = false }
 flate2 = "1.1.10"
 tar = "0.4.46"
-brotli = "9.0.0"
 coverage = { path = "../tools/coverage" }
 host = { path = "../host" }
 common = { path = "../common" }
-csr_bundle = { path = "../tools/csr_bundle" }
 doctests = { path = "../tools/doctests" }
 tabled = "0.22.0"
 tracing = "0.1.44"
