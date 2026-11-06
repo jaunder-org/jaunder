@@ -9,7 +9,7 @@ import { withTimedAction } from "./actions";
  *
  * The agreement is enforced by the `xlang-literal` gate
  * (`xtask/src/steps/xlang_literal_check.rs`): renaming this constant's value
- * without renaming the Rust one fails `cargo xtask check` (#767).
+ * without renaming the Rust one fails `just check` (#767).
  */
 export const MOUNTED_ATTR = "data-mounted";
 

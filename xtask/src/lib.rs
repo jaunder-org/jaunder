@@ -15,7 +15,6 @@ pub mod e2e_ownership;
 mod e2e_provenance;
 pub mod elisp_coverage;
 mod files;
-mod gate;
 pub mod git;
 mod host_tooling;
 mod ids;
@@ -51,6 +50,7 @@ mod web_server_fns;
 mod steps {
     pub mod adr_check;
     pub mod boot_decomposition_coverage;
+    pub mod check_leaf;
     pub mod common_host_target_closure;
     pub mod csr_prerequisite;
     pub mod doc_links;
@@ -66,7 +66,6 @@ mod steps {
     pub mod flow_docs;
     pub mod host_server;
     mod host_signals;
-    pub mod host_tests;
     pub mod html_sink_check;
     pub mod ident_gate;
     pub mod lint_suppression_check;
@@ -83,7 +82,6 @@ mod steps {
     pub mod server_fn_wire_arg_error_check;
     pub mod sqlx_newtype_bind_check;
     pub mod sqlx_newtype_decode_check;
-    pub mod static_checks;
     pub mod target_arch_placement_check;
     pub mod test_local;
     pub mod test_pattern_check;
@@ -103,4 +101,20 @@ pub use cli::{
 pub use dispatch::run;
 pub use host_tooling::prepare_checkout;
 pub use lifecycle::ensure_hooks_installed;
-pub use result::{CommandResult, Mode, StepResult};
+pub use result::{CommandResult, StepResult};
+
+/// Run one check/safety adapter through the plain process-status boundary Just uses.
+pub fn run_check_leaf_process(name: &str) -> Result<StepResult, String> {
+    prepare_checkout().map_err(|error| format!("{error:#}"))?;
+    ensure_hooks_installed();
+    let start = std::time::Instant::now();
+    let step = steps::check_leaf::run(name).map_err(|error| format!("{error:#}"))?;
+    Ok(step.with_duration(start.elapsed()))
+}
+
+/// Run precommit's narrow Git/index safety wrapper without a result envelope.
+pub fn run_precommit_safety_process() -> Result<(), String> {
+    prepare_checkout().map_err(|error| format!("{error:#}"))?;
+    ensure_hooks_installed();
+    lifecycle::run_precommit_safety(std::path::Path::new("."))
+}

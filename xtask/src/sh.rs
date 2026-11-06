@@ -7,7 +7,8 @@ use crate::result::{PhaseName, PhaseOutcome, PhaseRecord, StepResult};
 /// Run a command as a named step. Non-zero exit becomes a failed StepResult
 /// rather than a panic, so one failing step does not abort the others.
 /// On failure, stderr (and stdout if non-empty) are captured into `detail`.
-pub fn step(sh: &Shell, name: &str, program: &str, args: &[&str]) -> StepResult {
+#[cfg(test)]
+fn step(sh: &Shell, name: &str, program: &str, args: &[&str]) -> StepResult {
     step_with_env(sh, name, program, args, &[])
 }
 

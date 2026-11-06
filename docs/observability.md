@@ -749,7 +749,7 @@ name in one module.
 **Two lanes, and neither is sufficient alone.** Traces exist only in the e2e
 lane; fast feedback only in the static one.
 
-- **Static** (`cargo xtask check`, `validate --no-e2e`): committed snapshot +
+- **Static** (`just check`, `just validate-no-e2e`): committed snapshot +
   allowlist + `syn` inventory. No capture, so a new `#[server]` fn with no flow
   reddens the build without an e2e run.
 - **E2e** (`cargo xtask e2e sqlite chromium`): regenerates from that run's
@@ -758,9 +758,9 @@ lane; fast feedback only in the static one.
 **Regeneration is per-combo only.** Every output is lane-qualified, so the
 aggregate has no filename collisions. The `sqlite`/`chromium` lane remains the
 single authoritative empirical source: `cargo xtask e2e sqlite chromium`
-verifies it directly, while local `cargo xtask validate` resolves that already
-realized lane after all eight builds. In CI the `sqlite`/`chromium` producer
-carries the drift check ([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)).
+verifies it directly, while local `just validate` resolves that already realized
+lane after all eight builds. In CI the `sqlite`/`chromium` producer carries the
+drift check ([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)).
 
 `sqlite × chromium` is authoritative because `chromium`'s `testIgnore` and
 `chromium-admin`'s `testMatch` are exact complements over all spec files and no
@@ -964,8 +964,8 @@ The CSR client emits `performance.mark`s at its boot boundaries via
   measured is not the binary being shipped, which quietly invalidates every
   number they produce.
 
-**Measure from `traces run`, never from `cargo xtask validate`.** `validate`
-builds the `e2e-checks` aggregate, so nix realizes the four combo derivations
+**Measure from `traces run`, never from `just validate`.** `validate` builds the
+`e2e-checks` aggregate, so nix realizes the four combo derivations
 **concurrently** — four VMs at two workers each on one host. `traces run` builds
 them one at a time (`traces/run.rs`'s nested loop). Measured 2026-08-05 on the
 same tree: sqlite-chromium reported **436 s** under `validate` against **191 s**

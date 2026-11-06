@@ -326,6 +326,7 @@ fn is_static_docs_input_bytes(path: &[u8]) -> bool {
         return false;
     }
     path.ends_with(b".md")
+        || path == b"recipes/prettier.just"
         || path == b".prettierrc.json"
         || path.ends_with(b"/.prettierrc.json")
         || path == b".prettierignore"
@@ -1009,6 +1010,7 @@ mod tests {
         assert!(is_static_docs_input_bytes(b"guide.md"));
         assert!(is_static_docs_input_bytes(b"docs/nested/.prettierrc.json"));
         assert!(is_static_docs_input_bytes(b".prettierignore"));
+        assert!(is_static_docs_input_bytes(b"recipes/prettier.just"));
         assert!(!is_static_docs_input_bytes(b"README.MD"));
         assert!(!is_static_docs_input_bytes(b"tools/src/main.rs"));
         assert!(!is_static_docs_input_bytes(b".claude/notes.md"));
@@ -1055,6 +1057,16 @@ mod tests {
         commit(&dir, "docs/nested/.prettierrc.json", "{}\r\n");
         write(&dir, "docs/nested/.prettierignore", "*.tmp\r\n");
         commit(&dir, "docs/nested/.prettierignore", "*.tmp\r\n");
+        assert!(output(&dir, &["status", "--porcelain"]).unwrap().is_empty());
+        assert!(shared_markdown_admission(&dir).is_err());
+        assert!(shared_static_docs_clean_admission(&dir).is_err());
+    }
+
+    #[test]
+    fn shared_markdown_admission_rejects_clean_recipe_conversion() {
+        let dir = temp_repo("shared-markdown-clean-recipe-eol");
+        commit(&dir, ".gitattributes", "*.just text eol=crlf\n");
+        commit(&dir, "recipes/prettier.just", "recipe:\r\n    true\r\n");
         assert!(output(&dir, &["status", "--porcelain"]).unwrap().is_empty());
         assert!(shared_markdown_admission(&dir).is_err());
         assert!(shared_static_docs_clean_admission(&dir).is_err());

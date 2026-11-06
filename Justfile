@@ -1,4 +1,23 @@
-# Public hermetic workflows refuse source/report drift before producer work.
+# Host Cargo compilation shares rustc artifacts across canonical worktree roots.
+# Git discovery failure retains the current root, as in xtask's cache policy.
+export RUSTC_WRAPPER := "sccache"
+export CARGO_INCREMENTAL := "0"
+export SCCACHE_BASEDIRS := ```
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_NAMESPACE
+    {
+      git worktree list --porcelain | while IFS= read -r line; do
+        case "$line" in
+          'worktree '*) root=${line#worktree }; [ ! -d "$root" ] || (cd "$root" && pwd -P) ;;
+        esac
+      done
+      pwd -P
+    } | LC_ALL=C sort -u | paste -sd ':'
+    ```
+
+devtool := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p devtool --bin devtool --"
+prettier := "just --justfile recipes/prettier.just --working-directory ."
+
+# Verify workflows refuse dirty or unavailable Git state before work.
 coverage: _clean-tree coverage-workflow
 
 doctests: _clean-tree doctests-workflow
@@ -7,13 +26,15 @@ doctests: _clean-tree doctests-workflow
 _clean-tree:
     #!/usr/bin/env bash
     set -euo pipefail
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_NAMESPACE
     status=$(git status --porcelain --untracked-files=all)
     if [[ -n "$status" ]]; then
-      printf 'coverage/doctests require a clean checkout\n%s\n' "$status" >&2
+      printf 'verify workflows require a clean checkout\n%s\n' "$status" >&2
       exit 1
     fi
 
-# Internal transition entrypoints also serve existing dirty-capable Rust callers.
+# Internal implementations; Fix-mode check also uses doctests-workflow without
+# imposing the public doctests clean-tree admission.
 [private]
 coverage-workflow:
     mkdir -p .xtask/gcroots
@@ -26,6 +47,140 @@ doctests-workflow:
     mkdir -p .xtask/gcroots
     nix build --no-update-lock-file --no-write-lock-file -L .#checks.x86_64-linux.doctests --out-link .xtask/gcroots/doctests
     nix build --no-update-lock-file --no-write-lock-file -L .#checks.x86_64-linux.doctests-gate --no-link
+
+# Local workflows fail fast. Producer commands own their evidence and cleanup.
+# Explicit variants avoid treating Just's own options as forwarded workflow flags.
+
+check-no-test: (_host "fix" "host") _host-tests
+
+check: check-no-test _product-tests _wasm-tests doctests-workflow
+
+precommit:
+    cargo xtask precommit-safety
+
+# Called only by the focused Git/index safety owner, never by public precommit.
+precommit-markdown-host: (_markdown "fix") _docs-shape
+
+precommit-broad-host: check-no-test
+
+prepush: _clean-tree (_host "verify" "prepush") _host-tests _product-tests _workspace-doctests
+
+validate-no-e2e: _clean-tree (_host "verify" "host") _platform _static _wasm-budget _host-tests _wasm-tests coverage doctests _elisp-coverage
+
+# Landed E2E entrypoints retain lane artifacts, Firefox reconciliation and the
+# authoritative SQLite/Chromium flow verdict. Replace these calls only after #1890 lands.
+validate: validate-no-e2e
+    cargo xtask e2e-lane sqlite-chromium-unsplit
+    cargo xtask e2e-lane postgres-chromium-unsplit
+    cargo xtask e2e sqlite firefox
+    cargo xtask e2e postgres firefox
+    cargo xtask check-leaf server-fn-flow
+
+ci-validate-host: _clean-tree (_host "verify" "host") _platform _host-tests
+
+ci-validate-hermetic: _clean-tree _static _wasm-budget
+
+ci-validate-test-checks: _clean-tree _wasm-tests doctests _elisp-coverage
+
+ci-validate-coverage: coverage
+
+[private]
+_markdown mode:
+    {{prettier}} prettier-markdown {{mode}}
+    {{prettier}} prettier-end2end {{mode}}
+
+[private]
+_docs-shape:
+    cargo xtask check-leaf sequence-check
+    cargo xtask check-leaf adr-format
+    cargo xtask check-leaf adr-readme-parity
+    cargo xtask check-leaf adr-view-parity
+    cargo xtask check-leaf doc-links
+    cargo xtask check-leaf flow-docs
+
+[private]
+_host mode docs:
+    {{devtool}} check fmt {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check leptosfmt {{if mode == "fix" { "--fix" } else { "" }}}
+    {{if docs + "-" + os() + "-" + arch() == "prepush-linux-x86_64" { "cargo xtask check-leaf prepush-docs" } else { prettier + " prettier-markdown " + mode }}}
+    {{prettier}} prettier-end2end {{mode}}
+    {{prettier}} prettier-css {{mode}}
+    {{devtool}} check elisp-fmt {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check tools-fmt {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check ast-grep-tests {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check no-full-reload {{if mode == "fix" { "--fix" } else { "" }}}
+    cargo fmt --manifest-path xtask/Cargo.toml {{if mode == "fix" { "" } else { "--check" }}}
+    just _docs-shape
+    cargo xtask check-leaf test-patterns
+    cargo xtask check-leaf server-fn-registrar
+    cargo xtask check-leaf server-fn-tracing
+    cargo xtask check-leaf server-fn-coverage
+    cargo xtask check-leaf server-fn-wire-arg-error
+    cargo xtask check-leaf traced-context
+    cargo xtask check-leaf e2e-telemetry-boundary
+    cargo xtask check-leaf e2e-collector-config
+    cargo xtask check-leaf proffered-secret
+    cargo xtask check-leaf e2e-goto-wrapper
+    cargo xtask check-leaf e2e-server-fn-endpoints
+    cargo xtask check-leaf target-arch-placement
+    cargo xtask check-leaf write-transaction-contract
+    cargo xtask check-leaf common-host-target-closure
+    cargo xtask check-leaf lint-suppression
+    cargo xtask check-leaf thin-components
+    cargo xtask check-leaf sqlx-newtype-bind
+    cargo xtask check-leaf sqlx-newtype-decode
+    cargo xtask check-leaf doctest-fences
+    cargo xtask check-leaf raw-html-door
+    cargo xtask check-leaf html-sink
+    cargo xtask check-leaf e2e-scaffold
+    cargo xtask check-leaf xlang-literal
+    {{devtool}} check byte-compile {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check tsc {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check cargo-deny {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check product-core-clippy {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check web-server-clippy {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check web-no-server-clippy {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check client-host-clippy {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check wasm-clippy {{if mode == "fix" { "--fix" } else { "" }}}
+    {{devtool}} check tools-clippy {{if mode == "fix" { "--fix" } else { "" }}}
+    cargo clippy --manifest-path xtask/Cargo.toml --all-targets -- -D warnings
+    {{devtool}} check ert {{if mode == "fix" { "--fix" } else { "" }}}
+
+[private]
+_host-tests:
+    cargo test --manifest-path xtask/Cargo.toml --lib --bins --tests
+    cargo test --manifest-path tools/Cargo.toml --lib --bins --tests
+
+[private]
+_product-tests:
+    cargo xtask test-local
+
+[private]
+_workspace-doctests:
+    cargo xtask check-leaf workspace-doctests
+
+[private]
+_platform:
+    nix eval --impure --expr 'import ./nix/platform-contract.nix { flake = builtins.getFlake (toString ./.); }'
+
+[private]
+_static: (_nix "static-docs") (_nix "static-typescript") (_nix "rust-format") (_nix "static-code") (_nix "static-elisp") (_nix "static-e2e-census") (_nix "static-ert") (_nix "xtask-format") (_nix "xtask-clippy")
+
+[private]
+_wasm-budget:
+    cargo xtask check-leaf wasm-budget
+
+[private]
+_wasm-tests: (_nix "wasm-tests")
+
+[private]
+_elisp-coverage: (_nix "elisp-coverage-producer")
+    cargo xtask check-leaf elisp-coverage-consume
+
+[private]
+_nix check:
+    mkdir -p .xtask/gcroots
+    nix build -L --accept-flake-config --out-link .xtask/gcroots/{{check}} .#checks.x86_64-linux.{{check}}
 
 # Build the checkout's CSR bundle with its locked wasm toolchain and Vite.
 [default]

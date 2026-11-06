@@ -6,12 +6,12 @@ use xshell::Shell;
 use crate::{
     adr, adr_readme, audit_wasm, cache_safety, census,
     cli::{
-        AdrCommand, CacheSafetyCommand, CiValidateLane, Cli, Command, CoverageCommand,
-        MutantsCommand, NixCommand, PrCommand, ProductionBaselineCommand, ServerFnCoverageCommand,
-        TracesCommand, WasmCoverageCommand,
+        AdrCommand, CacheSafetyCommand, Cli, Command, CoverageCommand, MutantsCommand, NixCommand,
+        PrCommand, ProductionBaselineCommand, ServerFnCoverageCommand, TracesCommand,
+        WasmCoverageCommand,
     },
-    coverage, gate, issue, lifecycle, nix_probe, performance, pr, production_baseline,
-    result::{CommandResult, Mode, StepResult},
+    coverage, issue, lifecycle, nix_probe, performance, pr, production_baseline,
+    result::{CommandResult, StepResult},
     server_fn_coverage, steps, traces, wasm_coverage,
 };
 
@@ -49,76 +49,10 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             | ProductionBaselineCommand::Accept { .. }
             | ProductionBaselineCommand::QualifyStyling),
         ) => production_baseline::run(command),
-        Command::Check { no_test } => {
-            let policy = gate::execution_policy(&Command::Check { no_test });
-            let sh = Shell::new()?;
-            let start = Instant::now();
-            let mut result = CommandResult::new("check");
-            gate::run_host_gate(&sh, Mode::Fix, policy, &mut result);
-            if !no_test {
-                steps::test_local::run(&sh, &mut result, &[]);
-            }
-            steps::nix::check_supporting_test_checks(&sh, &mut result, no_test);
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::Precommit => {
-            let policy = gate::execution_policy(&Command::Precommit);
-            let sh = Shell::new()?;
-            lifecycle::run_precommit_with_host_gate(Path::new("."), |class, result| {
-                gate::dispatch_precommit_host_gate(class, &sh, policy, result);
-            })
-        }
-        Command::Prepush => {
-            let policy = gate::execution_policy(&Command::Prepush);
-            let sh = Shell::new()?;
-            let start = Instant::now();
-            let mut result = CommandResult::new("prepush");
-            gate::run_prepush_with(
-                &sh,
-                policy,
-                &mut result,
-                || lifecycle::clean_tree_precheck(false),
-                gate::run_local_push_gate,
-            );
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::Validate {
-            no_e2e,
-            allow_dirty,
-            e2e_jobs,
-        } => {
-            let policy = gate::execution_policy(&Command::Validate {
-                no_e2e,
-                allow_dirty,
-                e2e_jobs,
-            });
-            let sh = Shell::new()?;
-            let start = Instant::now();
-            let mut result = CommandResult::new("validate");
-            if run_non_e2e_validation(&sh, policy, allow_dirty, None, &mut result) && !no_e2e {
-                // Each browser/backend combo is realized, lifted, and reconciled
-                // separately. The flow-coverage verifier resolves the already-realized
-                // authoritative combo's individual output because only that combo owns
-                // the empirical snapshot verdict.
-                let e2e = steps::nix::e2e(&mut result, e2e_jobs);
-                steps::server_fn_coverage_check::verify_after_validate(
-                    &mut result,
-                    e2e.combinations_ok,
-                );
-            }
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::CiValidate { lane } => {
-            let policy = gate::execution_policy(&Command::CiValidate { lane });
-            let sh = Shell::new()?;
-            let start = Instant::now();
-            let mut result = CommandResult::new(lane.command_name());
-            run_non_e2e_validation(&sh, policy, false, Some(lane), &mut result);
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
+        Command::CheckLeaf { .. } | Command::PrecommitSafety => {
+            anyhow::bail!(
+                "internal leaf and precommit safety commands use the plain process boundary"
+            )
         }
         Command::Census => {
             let start = Instant::now();
@@ -610,134 +544,6 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
     }
 }
 
-/// One ordered operation in the non-E2E validation contract. CI lanes partition
-/// this catalog; the serial local command executes every operation in this order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum NonE2eValidationSurface {
-    HostGateWithoutTests,
-    NixPlatformContract,
-    NixStaticChecks,
-    WasmBudget,
-    HostTests,
-    WasmTests,
-    RustCoverage,
-    Doctests,
-    ElispCoverage,
-}
-
-const NON_E2E_VALIDATION_SURFACES: [NonE2eValidationSurface; 9] = [
-    NonE2eValidationSurface::HostGateWithoutTests,
-    NonE2eValidationSurface::NixPlatformContract,
-    NonE2eValidationSurface::NixStaticChecks,
-    NonE2eValidationSurface::WasmBudget,
-    NonE2eValidationSurface::HostTests,
-    NonE2eValidationSurface::WasmTests,
-    NonE2eValidationSurface::RustCoverage,
-    NonE2eValidationSurface::Doctests,
-    NonE2eValidationSurface::ElispCoverage,
-];
-
-impl NonE2eValidationSurface {
-    const fn belongs_to_lane(self, lane: CiValidateLane) -> bool {
-        match lane {
-            CiValidateLane::Host => matches!(
-                self,
-                Self::HostGateWithoutTests | Self::NixPlatformContract | Self::HostTests
-            ),
-            CiValidateLane::Hermetic => matches!(self, Self::NixStaticChecks | Self::WasmBudget),
-            CiValidateLane::TestChecks => {
-                matches!(self, Self::WasmTests | Self::Doctests | Self::ElispCoverage)
-            }
-            CiValidateLane::Coverage => matches!(self, Self::RustCoverage),
-        }
-    }
-
-    #[cfg(test)]
-    const fn name(self) -> &'static str {
-        match self {
-            Self::HostGateWithoutTests => "host-gate-without-tests",
-            Self::NixPlatformContract => "nix-platform-contract",
-            Self::NixStaticChecks => "nix-static-checks",
-            Self::WasmBudget => "wasm-budget",
-            Self::HostTests => "host-tests",
-            Self::WasmTests => "wasm-tests",
-            Self::RustCoverage => "rust-coverage",
-            Self::Doctests => "doctests",
-            Self::ElispCoverage => "elisp-coverage",
-        }
-    }
-
-    fn run(self, sh: &Shell, policy: gate::ExecutionPolicy, result: &mut CommandResult) {
-        match self {
-            Self::HostGateWithoutTests => {
-                gate::run_host_gate_without_tests(sh, Mode::Check, policy, result);
-            }
-            Self::NixPlatformContract => result.push(crate::sh::step(
-                sh,
-                "nix-platform-contract",
-                "nix",
-                &[
-                    "eval",
-                    "--impure",
-                    "--expr",
-                    "import ./nix/platform-contract.nix { flake = builtins.getFlake (toString ./.); }",
-                ],
-            )),
-            Self::NixStaticChecks => steps::nix::static_checks(result),
-            // Deliberately in `validate` and not `check`: it costs a `nix build
-            // .#site`, which the pre-commit gate should not pay (#836).
-            Self::WasmBudget => steps::wasm_budget::run(result),
-            Self::HostTests => gate::HOST_TESTS_STEP.run(sh, Mode::Check, policy, result),
-            Self::WasmTests => steps::nix::TestCheck::Wasm.run(result),
-            Self::RustCoverage => result.push(crate::sh::step(
-                sh, "coverage", "just", &["coverage-workflow"],
-            )),
-            Self::Doctests => result.push(crate::sh::step(
-                sh, "doctests", "just", &["doctests-workflow"],
-            )),
-            Self::ElispCoverage => steps::nix::TestCheck::ElispCoverageProducer.run(result),
-        }
-    }
-}
-
-const fn selected_validation_surface(
-    lane: Option<CiValidateLane>,
-    surface: NonE2eValidationSurface,
-) -> bool {
-    match lane {
-        Some(lane) => surface.belongs_to_lane(lane),
-        None => true,
-    }
-}
-
-/// Run the shared precheck and selected non-E2E validation catalog. Returning
-/// `false` means the clean-tree precheck blocked all subsequent expensive work.
-fn run_non_e2e_validation(
-    sh: &Shell,
-    policy: gate::ExecutionPolicy,
-    allow_dirty: bool,
-    lane: Option<CiValidateLane>,
-    result: &mut CommandResult,
-) -> bool {
-    // Clean-tree backstop: refuse a dirty tree so what is measured equals the
-    // committed tip (== what CI sees). Fail fast before the expensive steps.
-    let precheck_start = Instant::now();
-    let precheck =
-        lifecycle::clean_tree_precheck(allow_dirty).with_duration(precheck_start.elapsed());
-    if precheck.is_blocking_failure() {
-        result.push(precheck);
-        return false;
-    }
-    result.push(precheck);
-
-    for surface in NON_E2E_VALIDATION_SURFACES {
-        if selected_validation_surface(lane, surface) {
-            surface.run(sh, policy, result);
-        }
-    }
-    true
-}
-
 fn trace_attribute_owner_result<T>(
     result: &mut CommandResult,
     step: &'static str,
@@ -765,69 +571,6 @@ fn trace_attribute_owner_result<T>(
 mod tests {
     use super::*;
     use std::path::PathBuf;
-
-    fn validation_surface_names(lane: Option<CiValidateLane>) -> Vec<&'static str> {
-        NON_E2E_VALIDATION_SURFACES
-            .into_iter()
-            .filter(|surface| selected_validation_surface(lane, *surface))
-            .map(NonE2eValidationSurface::name)
-            .collect()
-    }
-
-    #[test]
-    fn ci_validate_lanes_are_a_duplicate_free_exhaustive_partition() {
-        let full = validation_surface_names(None);
-        assert_eq!(
-            full,
-            [
-                "host-gate-without-tests",
-                "nix-platform-contract",
-                "nix-static-checks",
-                "wasm-budget",
-                "host-tests",
-                "wasm-tests",
-                "rust-coverage",
-                "doctests",
-                "elisp-coverage",
-            ]
-        );
-
-        let host = validation_surface_names(Some(CiValidateLane::Host));
-        assert_eq!(
-            host,
-            [
-                "host-gate-without-tests",
-                "nix-platform-contract",
-                "host-tests"
-            ]
-        );
-        assert_eq!(
-            validation_surface_names(Some(CiValidateLane::Hermetic)),
-            ["nix-static-checks", "wasm-budget"]
-        );
-        assert_eq!(
-            validation_surface_names(Some(CiValidateLane::TestChecks)),
-            ["wasm-tests", "doctests", "elisp-coverage"]
-        );
-        assert_eq!(
-            validation_surface_names(Some(CiValidateLane::Coverage)),
-            ["rust-coverage"]
-        );
-
-        let lane_union = host
-            .iter()
-            .chain(validation_surface_names(Some(CiValidateLane::Hermetic)).iter())
-            .chain(validation_surface_names(Some(CiValidateLane::TestChecks)).iter())
-            .chain(validation_surface_names(Some(CiValidateLane::Coverage)).iter())
-            .copied()
-            .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(lane_union.len(), full.len(), "lanes must not overlap");
-        assert_eq!(
-            lane_union,
-            full.into_iter().collect(),
-            "lanes must cover every non-E2E full-validation surface"
-        );
-    }
 
     #[test]
     fn firefox_e2e_command_uses_retained_split() {

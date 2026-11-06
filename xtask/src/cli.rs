@@ -80,26 +80,6 @@ impl E2eControlWorkers {
     }
 }
 
-/// One independently runnable non-E2E CI validation lane.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum CiValidateLane {
-    Host,
-    Hermetic,
-    TestChecks,
-    Coverage,
-}
-
-impl CiValidateLane {
-    pub(crate) const fn command_name(self) -> &'static str {
-        match self {
-            Self::Host => "ci-validate-host",
-            Self::Hermetic => "ci-validate-hermetic",
-            Self::TestChecks => "ci-validate-test-checks",
-            Self::Coverage => "ci-validate-coverage",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum E2eLocalBrowser {
     Chromium,
@@ -157,58 +137,15 @@ impl SandboxProfile {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Broad diagnostic/integration check (auto-fixes formatting).
-    ///
-    /// Use `test-local -- <nextest args>` or `e2e-local <spec-or-file:line>` first
-    /// while iterating; this is not routine per-helper proof. Run it to answer a
-    /// broad question, such as whether a shared change breaks host/static integration.
-    ///
-    /// Runs host static checks + clippy + xtask/tools unit suites, then the
-    /// host-native root-workspace nextest suite under ephemeral PostgreSQL and
-    /// Nix-only wasm/doctest checks. `--no-test` skips the root-workspace and
-    /// Nix-only test checks; static, clippy, xtask/tools unit tests and the
-    /// host-side `doctest-fences` step still run. Rust coverage/CRAP remains in
-    /// `validate` and CI; normal commit/push hooks remain the boundary gates.
-    Check {
-        /// Skip the root-workspace and Nix-only test checks — static + clippy +
-        /// host xtask/tools unit tests only.
-        #[arg(long)]
-        no_test: bool,
+    /// Invoke one existing check/safety adapter from Just; hidden from the workflow list.
+    #[command(hide = true)]
+    CheckLeaf {
+        #[arg(value_parser = nonempty)]
+        name: String,
     },
-    /// Fast commit-time gate. Runs the same host surface as `check --no-test`,
-    /// then re-stages only formatter/check mutations that are provably safe for the
-    /// paths the author had already staged.
-    Precommit,
-    /// Fast push-time gate. Refuses a dirty working tree, then runs the
-    /// verify-only host surface plus the host-native product Rust test lane. This
-    /// is the local hook path; hermetic Nix coverage, wasm, and doctest checks stay
-    /// in `validate --no-e2e` and CI.
-    Prepush,
-    /// Full hermetic gate (verify-only); CI is the authoritative integration proof.
-    ///
-    /// Run deliberately for local full-gate confidence, not routine iteration.
-    /// Includes host/static checks + clippy + xtask/tools tests, Nix static proof,
-    /// wasm budget/tests, doctests, Rust coverage/CRAP and Elisp coverage, plus
-    /// e2e VMs/reconciliation and authoritative server-function coverage verification.
-    /// `--no-e2e` retains the non-e2e hermetic surface. Refuses a dirty working
-    /// tree unless `--allow-dirty`.
-    Validate {
-        /// Skip e2e VMs and server-function coverage verification; retain all non-e2e checks.
-        #[arg(long)]
-        no_e2e: bool,
-        /// Run even when the working tree is dirty (skip the clean-tree precheck).
-        #[arg(long)]
-        allow_dirty: bool,
-        /// Bound concurrent E2E lane builds for this invocation (default: all enabled lanes).
-        #[arg(long, conflicts_with = "no_e2e")]
-        e2e_jobs: Option<std::num::NonZeroUsize>,
-    },
-    /// Run one independently schedulable non-E2E CI validation lane. This is
-    /// verify-only and always refuses a dirty working tree.
-    CiValidate {
-        #[arg(value_enum)]
-        lane: CiValidateLane,
-    },
+    /// Run Just's selected precommit host recipe inside the Git/index safety boundary.
+    #[command(hide = true)]
+    PrecommitSafety,
     /// Produce a host-side repository census for manual maintenance audits. The
     /// report is informational: candidates are neither findings nor gate failures.
     #[command(after_help = "EXAMPLES:\n  \
@@ -754,11 +691,8 @@ pub enum TracesCommand {
 impl Cli {
     pub fn command_name(&self) -> &'static str {
         match self.command {
-            Command::Check { .. } => "check",
-            Command::Precommit => "precommit",
-            Command::Prepush => "prepush",
-            Command::Validate { .. } => "validate",
-            Command::CiValidate { lane } => lane.command_name(),
+            Command::CheckLeaf { .. } => "check-leaf",
+            Command::PrecommitSafety => "precommit-safety",
             Command::Census => "census",
             Command::AuditWasm { .. } => "audit-wasm",
             Command::E2e { .. } => "e2e",
@@ -828,11 +762,13 @@ impl Command {
     pub fn produces_json_payload(&self) -> bool {
         !matches!(
             self,
-            Command::Traces(
-                TracesCommand::Analyze { .. }
-                    | TracesCommand::Run { .. }
-                    | TracesCommand::BootPhases { .. }
-            )
+            Command::CheckLeaf { .. }
+                | Command::PrecommitSafety
+                | Command::Traces(
+                    TracesCommand::Analyze { .. }
+                        | TracesCommand::Run { .. }
+                        | TracesCommand::BootPhases { .. }
+                )
         )
     }
 }
@@ -856,14 +792,7 @@ mod tests {
             let error = Cli::try_parse_from(["xtask", flag]).err().unwrap();
             assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
             let help = error.to_string();
-            for role in [
-                "Broad diagnostic",
-                "Focused Rust proof",
-                "Focused browser proof",
-                "commit-time gate",
-                "push-time gate",
-                "Full hermetic gate",
-            ] {
+            for role in ["Focused Rust proof", "Focused browser proof"] {
                 assert!(help.contains(role), "missing {role:?} in {flag}: {help}");
             }
             assert!(!help.contains("Inner loop"));
@@ -873,10 +802,6 @@ mod tests {
     #[test]
     fn feedback_command_help_redirects_iteration_without_replacing_gates() {
         for (command, required) in [
-            (
-                "check",
-                &["Broad diagnostic", "test-local", "e2e-local", "not routine"][..],
-            ),
             (
                 "test-local",
                 &["Focused Rust proof", "same focused command", "hooks", "CI"][..],
@@ -890,7 +815,6 @@ mod tests {
                     "parity",
                 ][..],
             ),
-            ("validate", &["Full hermetic gate", "CI", "coverage"][..]),
         ] {
             for flag in ["-h", "--help"] {
                 let error = Cli::try_parse_from(["xtask", command, flag]).err().unwrap();
@@ -909,13 +833,24 @@ mod tests {
     }
 
     #[test]
-    fn feedback_check_parsing_preserves_test_selection() {
-        for (args, expected) in [
-            (vec!["xtask", "check"], false),
-            (vec!["xtask", "check", "--no-test"], true),
+    fn retired_gate_commands_have_no_xtask_alias() {
+        for arguments in [
+            vec!["xtask", "check"],
+            vec!["xtask", "check", "--no-test"],
+            vec!["xtask", "precommit"],
+            vec!["xtask", "prepush"],
+            vec!["xtask", "validate"],
+            vec!["xtask", "validate", "--no-e2e"],
+            vec!["xtask", "--json", "validate", "--allow-dirty"],
+            vec!["xtask", "ci-validate", "host"],
+            vec!["xtask", "ci-validate", "hermetic"],
+            vec!["xtask", "ci-validate", "test-checks"],
+            vec!["xtask", "ci-validate", "coverage"],
         ] {
-            let cli = Cli::try_parse_from(args).unwrap();
-            assert!(matches!(cli.command, Command::Check { no_test } if no_test == expected));
+            assert!(
+                Cli::try_parse_from(&arguments).is_err(),
+                "{arguments:?} must use Just, not an xtask alias"
+            );
         }
     }
 
@@ -930,12 +865,19 @@ mod tests {
     }
 
     #[test]
-    fn precommit_parses_as_first_class_subcommand() {
-        let cli = Cli::try_parse_from(["xtask", "precommit"]).unwrap();
-        match cli.command {
-            Command::Precommit => {}
-            _ => panic!("expected precommit"),
-        }
+    fn just_leaf_and_precommit_safety_commands_are_hidden_process_boundaries() {
+        let leaf = Cli::try_parse_from(["xtask", "check-leaf", "doc-links"]).unwrap();
+        assert_eq!(leaf.command_name(), "check-leaf");
+        assert!(!leaf.command.produces_json_payload());
+        assert!(matches!(
+            leaf.command,
+            Command::CheckLeaf { name } if name == "doc-links"
+        ));
+
+        let safety = Cli::try_parse_from(["xtask", "precommit-safety"]).unwrap();
+        assert_eq!(safety.command_name(), "precommit-safety");
+        assert!(!safety.command.produces_json_payload());
+        assert!(matches!(safety.command, Command::PrecommitSafety));
     }
 
     #[test]
@@ -1013,16 +955,6 @@ mod tests {
     #[test]
     fn perf_count_overrides_reject_zero() {
         assert!(Cli::try_parse_from(["xtask", "perf", "small", "--posts", "0"]).is_err());
-    }
-
-    #[test]
-    fn prepush_parses_as_first_class_subcommand() {
-        let cli = Cli::try_parse_from(["xtask", "prepush"]).unwrap();
-        match cli.command {
-            Command::Prepush => {}
-            _ => panic!("expected prepush"),
-        }
-        assert_eq!(cli.command_name(), "prepush");
     }
 
     #[test]
@@ -1159,106 +1091,6 @@ mod tests {
         assert!(error.to_string().contains("--priority"));
     }
 
-    #[test]
-    fn precommit_does_not_replace_check_no_test_parse() {
-        let cli = Cli::try_parse_from(["xtask", "check", "--no-test"]).unwrap();
-        match cli.command {
-            Command::Check { no_test } => assert!(no_test),
-            _ => panic!("expected check"),
-        }
-    }
-
-    #[test]
-    fn validate_allow_dirty_parses() {
-        let cli = Cli::try_parse_from(["xtask", "validate", "--allow-dirty"]).unwrap();
-        match cli.command {
-            Command::Validate {
-                no_e2e,
-                allow_dirty,
-                ..
-            } => {
-                assert!(!no_e2e);
-                assert!(allow_dirty);
-            }
-            _ => panic!("expected validate"),
-        }
-    }
-
-    #[test]
-    fn validate_accepts_an_explicit_e2e_job_bound() {
-        for (arguments, expected) in [
-            (vec!["xtask", "validate"], None),
-            (vec!["xtask", "validate", "--e2e-jobs", "2"], Some(2)),
-            (vec!["xtask", "validate", "--e2e-jobs", "12"], Some(12)),
-        ] {
-            let cli = Cli::try_parse_from(arguments).unwrap();
-            match cli.command {
-                Command::Validate { e2e_jobs, .. } => {
-                    assert_eq!(e2e_jobs.map(std::num::NonZeroUsize::get), expected)
-                }
-                _ => panic!("expected validate"),
-            }
-        }
-    }
-
-    #[test]
-    fn validate_rejects_invalid_or_inapplicable_e2e_job_bounds() {
-        for value in [
-            "0",
-            "-1",
-            "one",
-            "1.5",
-            "99999999999999999999999999999999999999999",
-        ] {
-            assert!(
-                Cli::try_parse_from(["xtask", "validate", "--e2e-jobs", value]).is_err(),
-                "{value}"
-            );
-        }
-        for arguments in [
-            vec!["xtask", "validate", "--e2e-jobs"],
-            vec!["xtask", "validate", "--no-e2e", "--e2e-jobs", "2"],
-            vec!["xtask", "validate", "--e2e-jobs", "2", "--no-e2e"],
-            vec![
-                "xtask",
-                "e2e-lane",
-                "sqlite-chromium-unsplit",
-                "--e2e-jobs",
-                "2",
-            ],
-            vec!["xtask", "check", "--e2e-jobs", "2"],
-        ] {
-            assert!(Cli::try_parse_from(arguments).is_err());
-        }
-    }
-
-    #[test]
-    fn validate_defaults_reject_dirty() {
-        let cli = Cli::try_parse_from(["xtask", "validate"]).unwrap();
-        match cli.command {
-            Command::Validate { allow_dirty, .. } => assert!(!allow_dirty),
-            _ => panic!("expected validate"),
-        }
-    }
-
-    #[test]
-    fn ci_validate_parses_the_complete_lane_catalog() {
-        for (argument, lane, name) in [
-            ("host", CiValidateLane::Host, "ci-validate-host"),
-            ("hermetic", CiValidateLane::Hermetic, "ci-validate-hermetic"),
-            (
-                "test-checks",
-                CiValidateLane::TestChecks,
-                "ci-validate-test-checks",
-            ),
-            ("coverage", CiValidateLane::Coverage, "ci-validate-coverage"),
-        ] {
-            let cli = Cli::try_parse_from(["xtask", "ci-validate", argument]).unwrap();
-            assert_eq!(cli.command_name(), name);
-            assert!(matches!(cli.command, Command::CiValidate { lane: parsed } if parsed == lane));
-        }
-        assert!(Cli::try_parse_from(["xtask", "ci-validate", "unknown"]).is_err());
-    }
     #[test]
     fn e2e_combo_parses_backend_and_browser() {
         let cli = Cli::try_parse_from(["xtask", "e2e", "postgres", "firefox"]).unwrap();
@@ -1721,8 +1553,6 @@ mod tests {
         assert!(!analyze.command.produces_json_payload());
         let run = Cli::try_parse_from(["xtask", "traces", "run"]).unwrap();
         assert!(!run.command.produces_json_payload());
-        let check = Cli::try_parse_from(["xtask", "check"]).unwrap();
-        assert!(check.command.produces_json_payload());
         let audit = Cli::try_parse_from(["xtask", "audit-wasm"]).unwrap();
         assert!(audit.command.produces_json_payload());
     }

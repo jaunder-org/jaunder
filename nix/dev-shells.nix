@@ -25,7 +25,7 @@ let
     text = builtins.readFile ../scripts/cargo-xtask;
   };
 
-  # Everything `cargo xtask validate` needs on the host (toolchain + the
+  # Everything `just validate` needs on the host (toolchain + the
   # static-check tools) plus what the Nix checks pull anyway — so the CI
   # shell shares those store paths rather than adding cost.
   ciInputs =
@@ -99,7 +99,7 @@ let
     pkgs.dav1d
   ];
 
-  # Interactive-only tools that `cargo xtask validate` never invokes and no
+  # Interactive-only tools that `just validate` never invokes and no
   # Nix check pulls (the language servers are the bulk). Kept out of
   # `devShells.ci` so CI does not download/build them.
   devOnly = [
@@ -188,7 +188,7 @@ let
   };
 in
 {
-  # Lean shell used by CI (`nix develop .#ci -c cargo xtask validate`).
+  # Lean shell used by CI (`nix develop .#ci -c just ci-validate-host`).
   ci = pkgs.mkShell (shellEnv // { buildInputs = ciInputs; });
   # The scheduled mutation-testing job, and nothing else. `cargo-mutants`
   # stays out of `ciInputs` on purpose: every PR job enters `.#ci`, and

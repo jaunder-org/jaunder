@@ -142,7 +142,7 @@ mod marker_tests {
     }
 
     /// Trailing is the position the formatters relocate, so honoring it would let
-    /// someone write a marker that stops working on the next `cargo xtask check`.
+    /// someone write a marker that stops working on the next `just check`.
     /// It fails twice over: the site sees nothing above it, and the marker points
     /// at a line with no site.
     #[test]

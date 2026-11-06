@@ -24,7 +24,6 @@ let
     jaunderBin
     testSupportBin
     devtoolBin
-    docsDevtoolBin
     xtaskBin
     cargo-crap
     wasm-bindgen-cli
@@ -2820,7 +2819,7 @@ in
         }
       );
 # The e2e aggregate: a symlinkJoin of every browser/backend `e2e-*`
-# check, exposed as `checks.e2e` and built by `cargo xtask validate`.
+# check, exposed as `checks.e2e`; Just uses the individual lane producers.
 # Adding a new browser/backend combo automatically joins it here. Its
 # `jaunder-e2e*` name keeps it out of the cachix push, so building it
 # always realizes the underlying VM checks rather than substituting a
@@ -2911,7 +2910,7 @@ e2eGateChecks
     }
   );
 
-  # The browser/backend e2e gate `cargo xtask validate` builds.
+  # Optional browser/backend join; Just preserves individual producer verdicts.
   # `e2e-checks` aggregates every browser/backend `checks.e2e-*` combo
   # (now 4); they are independent derivations realized in parallel up
   # to the host `max-jobs` (CI's install-nix-action sets `max-jobs =
@@ -3263,8 +3262,7 @@ clippy-aggregate = nonSubstitutable (pkgs.runCommand "clippy-aggregate" { } ''
   test -e ${self.checks.${system}.tools-clippy}
   touch $out
 '');
-# The docs-only build preserves `devtool`'s single command catalog without
-# importing the performance producer's product-storage source closure.
+# Documentation formatting needs only the shared recipe and pinned tools.
 static-docs =
   let
     staticDocsSrc = pkgs.lib.cleanSourceWith {
@@ -3283,17 +3281,18 @@ static-docs =
           || pkgs.lib.hasSuffix ".md" path
           || pkgs.lib.hasSuffix "/.prettierrc.json" path
           || pkgs.lib.hasSuffix "/.prettierignore" path
+          || relative == "recipes/prettier.just"
         );
     };
   in
   pkgs.runCommand "static-docs"
     {
-      nativeBuildInputs = [ docsDevtoolBin pkgs.prettier ];
+      nativeBuildInputs = [ pkgs.just pkgs.prettier ];
     }
     ''
       cp --no-preserve=mode -r ${staticDocsSrc} src
       cd src
-      devtool check --group docs
+      just --justfile recipes/prettier.just --working-directory . prettier-markdown
       touch $out
     '';
 # Keep the compiler project explicit; dependencies still come from the existing
@@ -3586,6 +3585,7 @@ static-code =
                 "/.rustfmt.toml"
                 "/.prettierrc.json"
                 "/.prettierignore"
+                "/recipes/prettier.just"
                 "/sgconfig.yml"
               ]
               || builtins.any (directory: pkgs.lib.hasInfix "/${directory}/" path) [
@@ -3611,6 +3611,7 @@ static-code =
     staticCodeSrc = pkgs.lib.cleanSourceWith {
       src = craneLib.path ../.;
       filter =
+        assert staticCodeSourceFilter "/source/recipes/prettier.just" "regular";
         assert staticCodeSourceFilter "/source/xtask/theme.css" "regular";
         assert staticCodeSourceFilter "/source/nix/otel-processors.yaml" "regular";
         assert staticCodeSourceFilter "/source/xtask" "directory";
@@ -3634,6 +3635,7 @@ static-code =
         toolchain
         pkgs.cargo-deny
         pkgs.ast-grep
+        pkgs.just
         pkgs.prettier
         pkgs.nodejs
         pkgs.typescript
@@ -3651,8 +3653,8 @@ static-code =
       cd src
       # Residual Code verdicts; Rust-format and TypeScript have separate leaves,
       # while Clippy is requested once below through its own aggregate.
-      devtool check prettier-end2end --sandbox-cargo
-      devtool check prettier-css --sandbox-cargo
+      just --justfile recipes/prettier.just --working-directory . prettier-end2end
+      just --justfile recipes/prettier.just --working-directory . prettier-css
       devtool check ast-grep-tests --sandbox-cargo
       devtool check no-full-reload --sandbox-cargo
       devtool check cargo-deny --sandbox-cargo

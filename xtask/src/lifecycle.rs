@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{path::Path, process::Command};
 
 use crate::{
     git,
@@ -35,30 +35,89 @@ pub(crate) fn finalize(result: &mut CommandResult, start: std::time::Instant) {
         .unwrap_or(0);
 }
 
-/// The clean-tree precheck step for `validate`. With `--allow-dirty`, a skip.
-/// Otherwise: `ok` when the tree is clean; `fail` when dirty (detail = the porcelain
-/// status) or when git cannot be queried — the gate refuses to certify a tree it
-/// cannot prove clean. `check` deliberately has no such precheck (Fix-mode runs on a
-/// dirty tree by design).
-pub(crate) fn clean_tree_precheck(allow_dirty: bool) -> StepResult {
-    if allow_dirty {
-        return StepResult::skip("clean-tree").detail("--allow-dirty");
-    }
-    match git::working_tree_status(Path::new(".")) {
-        Ok(status) if git::porcelain_is_dirty(&status) => {
-            StepResult::fail("clean-tree").detail(format!(
-                "working tree is dirty — commit/stash or pass --allow-dirty:\n{}",
-                status.trim()
-            ))
-        }
-        Ok(_) => StepResult::ok("clean-tree"),
-        Err(e) => {
-            StepResult::fail("clean-tree").detail(format!("could not determine cleanliness: {e:#}"))
-        }
+/// Run Just's selected precommit host recipe inside the Git/index safety
+/// boundary. Just owns the check population and ordering; this adapter owns only
+/// admission, one reconciliation attempt, and the conditional docs verdict.
+pub(crate) fn run_precommit_safety(dir: &Path) -> Result<(), String> {
+    run_precommit_safety_with(
+        dir,
+        cfg!(all(target_os = "linux", target_arch = "x86_64")),
+        |class| {
+            let recipe = match class {
+                git::PrecommitChangeClass::StagedMarkdownOnly => "precommit-markdown-host",
+                git::PrecommitChangeClass::Broad(_) => "precommit-broad-host",
+            };
+            let status = Command::new("just")
+                .arg(recipe)
+                .current_dir(dir)
+                .status()
+                .map_err(|error| format!("could not run `just {recipe}`: {error}"))?;
+            if status.success() {
+                Ok(())
+            } else {
+                Err(format!("`just {recipe}` exited {status}"))
+            }
+        },
+        |_| crate::steps::nix::shared_static_docs_check(),
+    )
+}
+
+fn run_precommit_safety_with(
+    dir: &Path,
+    shared_docs_enabled: bool,
+    run_host: impl FnOnce(git::PrecommitChangeClass) -> Result<(), String>,
+    request: impl FnOnce(&Path) -> StepResult,
+) -> Result<(), String> {
+    run_precommit_safety_with_snapshot(
+        dir,
+        shared_docs_enabled,
+        git::status_snapshot,
+        run_host,
+        request,
+    )
+}
+
+fn run_precommit_safety_with_snapshot(
+    dir: &Path,
+    shared_docs_enabled: bool,
+    snapshot: impl FnMut(&Path) -> anyhow::Result<git::GitStatusSnapshot>,
+    run_host: impl FnOnce(git::PrecommitChangeClass) -> Result<(), String>,
+    request: impl FnOnce(&Path) -> StepResult,
+) -> Result<(), String> {
+    let result = run_precommit_with_shared_verdict_for_platform_and_snapshot(
+        dir,
+        shared_docs_enabled,
+        snapshot,
+        |class, result| {
+            result.push(match run_host(class) {
+                Ok(()) => StepResult::ok("precommit-host"),
+                Err(error) => StepResult::fail("precommit-host").detail(error),
+            });
+        },
+        request,
+    )
+    .map_err(|error| format!("Git/index safety operation failed: {error:#}"))?;
+
+    // This process boundary returns only success or failure text. It does not
+    // serialize CommandResult, write last-result.json, or append a CI summary.
+    let failures = result
+        .steps
+        .iter()
+        .filter(|step| StepResult::is_blocking_failure(step))
+        .map(|step| match step.detail.as_deref() {
+            Some(detail) => format!("{}: {detail}", step.name),
+            None => step.name.clone(),
+        })
+        .collect::<Vec<_>>();
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("\n"))
     }
 }
 
-pub(crate) fn run_precommit_with_host_gate(
+#[cfg(test)]
+fn run_precommit_with_host_gate(
     dir: &Path,
     run_gate: impl FnOnce(git::PrecommitChangeClass, &mut CommandResult),
 ) -> anyhow::Result<CommandResult> {
@@ -74,6 +133,7 @@ pub(crate) fn run_precommit_with_host_gate(
     })
 }
 
+#[cfg(test)]
 fn run_precommit_with_shared_verdict(
     dir: &Path,
     run_gate: impl FnOnce(git::PrecommitChangeClass, &mut CommandResult),
@@ -87,19 +147,43 @@ fn run_precommit_with_shared_verdict(
     )
 }
 
+#[cfg(test)]
 fn run_precommit_with_shared_verdict_for_platform(
     dir: &Path,
     shared_docs_enabled: bool,
     run_gate: impl FnOnce(git::PrecommitChangeClass, &mut CommandResult),
     request: impl FnOnce(&Path) -> StepResult,
 ) -> anyhow::Result<CommandResult> {
-    let start = std::time::Instant::now();
-    let before = git::status_snapshot(dir)?;
+    run_precommit_with_shared_verdict_for_platform_and_snapshot(
+        dir,
+        shared_docs_enabled,
+        git::status_snapshot,
+        run_gate,
+        request,
+    )
+}
+
+fn run_precommit_with_shared_verdict_for_platform_and_snapshot(
+    dir: &Path,
+    shared_docs_enabled: bool,
+    mut snapshot: impl FnMut(&Path) -> anyhow::Result<git::GitStatusSnapshot>,
+    run_gate: impl FnOnce(git::PrecommitChangeClass, &mut CommandResult),
+    request: impl FnOnce(&Path) -> StepResult,
+) -> anyhow::Result<CommandResult> {
+    let before = snapshot(dir)?;
     let class = git::classify_precommit_change(&before);
     let mut result = CommandResult::new("precommit");
     result.push(StepResult::ok("precommit-routing").detail(class.detail()));
     run_gate(class, &mut result);
-    let after = git::status_snapshot(dir)?;
+    let after = match snapshot(dir) {
+        Ok(after) => after,
+        Err(error) => {
+            result.push(StepResult::fail("precommit-staging").detail(format!(
+                "after-snapshot failed; refusing staging: {error:#}"
+            )));
+            return Ok(result);
+        }
+    };
     let plan = git::precommit_stage_plan(&before, &after);
     result.push(git::apply_precommit_stage_plan(dir, &plan));
     let host_and_stage_succeeded = !result.steps.iter().any(StepResult::is_blocking_failure);
@@ -109,7 +193,6 @@ fn run_precommit_with_shared_verdict_for_platform(
     {
         run_shared_static_docs_request(dir, false, || request(dir), &mut result);
     }
-    finalize(&mut result, start);
     Ok(result)
 }
 
@@ -149,7 +232,138 @@ pub(crate) fn run_shared_static_docs_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{cli::Command, gate, result::Mode, steps};
+
+    #[test]
+    fn precommit_safety_preserves_host_failure_and_skips_docs_request() {
+        let dir = crate::test_support::temp_repo("precommit-safety", "host-failure");
+        crate::test_support::commit(&dir, "guide.md", "# Guide\n");
+        crate::test_support::write(&dir, "guide.md", "# Guide\nChanged\n");
+        crate::test_support::git_ok(&dir, &["add", "guide.md"]);
+        let host_calls = std::cell::Cell::new(0);
+        let request_calls = std::cell::Cell::new(0);
+
+        let result = run_precommit_safety_with(
+            &dir,
+            true,
+            |class| {
+                host_calls.set(host_calls.get() + 1);
+                assert_eq!(class, git::PrecommitChangeClass::StagedMarkdownOnly);
+                Err("original host leaf failure".to_owned())
+            },
+            |_| {
+                request_calls.set(request_calls.get() + 1);
+                StepResult::ok("unexpected-static-docs")
+            },
+        )
+        .expect_err("host failure must remain the process failure");
+
+        assert_eq!(host_calls.get(), 1);
+        assert_eq!(request_calls.get(), 0);
+        assert!(result.contains("original host leaf failure"));
+        assert_eq!(
+            git::output(&dir, &["diff", "--cached", "--name-only"]).unwrap(),
+            "guide.md"
+        );
+    }
+
+    #[test]
+    fn precommit_safety_retains_host_failure_when_after_snapshot_fails() {
+        let dir = crate::test_support::temp_repo("precommit-safety", "after-snapshot-failure");
+        crate::test_support::commit(&dir, "guide.md", "# Guide\n");
+        crate::test_support::write(&dir, "guide.md", "# Guide\nChanged\n");
+        crate::test_support::git_ok(&dir, &["add", "guide.md"]);
+        let snapshot_calls = std::cell::Cell::new(0);
+        let request_calls = std::cell::Cell::new(0);
+
+        let error = run_precommit_safety_with_snapshot(
+            &dir,
+            true,
+            |dir| {
+                let call = snapshot_calls.get();
+                snapshot_calls.set(call + 1);
+                if call == 0 {
+                    git::status_snapshot(dir)
+                } else {
+                    Err(anyhow::anyhow!("injected after-snapshot failure"))
+                }
+            },
+            |_| Err("original host failure".to_owned()),
+            |_| {
+                request_calls.set(request_calls.get() + 1);
+                StepResult::ok("unexpected-static-docs")
+            },
+        )
+        .expect_err("snapshot uncertainty must fail closed");
+
+        assert_eq!(snapshot_calls.get(), 2, "one before and one after snapshot");
+        assert_eq!(request_calls.get(), 0);
+        assert!(error.contains("original host failure"));
+        assert!(error.contains("injected after-snapshot failure"));
+    }
+
+    #[test]
+    fn precommit_safety_routes_unsupported_existing_state_broad_without_admission() {
+        let dir = crate::test_support::temp_repo("precommit-safety", "broad-preserves-state");
+        crate::test_support::commit(&dir, "tracked.md", "tracked\n");
+        crate::test_support::commit(&dir, "delete.md", "delete\n");
+        std::fs::remove_file(dir.join("delete.md")).expect("remove fixture file");
+        crate::test_support::git_ok(&dir, &["add", "-u", "delete.md"]);
+        crate::test_support::write(&dir, "note.txt", "pre-existing untracked\n");
+        let request_calls = std::cell::Cell::new(0);
+
+        run_precommit_safety_with(
+            &dir,
+            true,
+            |class| {
+                assert!(matches!(class, git::PrecommitChangeClass::Broad(_)));
+                Ok(())
+            },
+            |_| {
+                request_calls.set(request_calls.get() + 1);
+                StepResult::ok("unexpected-static-docs")
+            },
+        )
+        .expect("safe pre-existing state is tolerated");
+        assert_eq!(request_calls.get(), 0);
+        assert_eq!(
+            git::output(&dir, &["diff", "--cached", "--name-only"]).unwrap(),
+            "delete.md"
+        );
+        assert_eq!(
+            git::output(&dir, &["status", "--porcelain"]).unwrap(),
+            "D  delete.md\n?? note.txt"
+        );
+    }
+
+    #[test]
+    fn precommit_safety_checks_after_failed_docs_request_and_keeps_primary_failure() {
+        let dir = crate::test_support::temp_repo("precommit-safety", "docs-postcheck");
+        crate::test_support::commit(&dir, "guide.md", "# Guide\n");
+        crate::test_support::commit(&dir, "README.md", "# Readme\n");
+        crate::test_support::write(&dir, "guide.md", "# Guide\nChanged\n");
+        crate::test_support::git_ok(&dir, &["add", "guide.md"]);
+        let request_calls = std::cell::Cell::new(0);
+
+        let result = run_precommit_safety_with(
+            &dir,
+            true,
+            |class| {
+                assert_eq!(class, git::PrecommitChangeClass::StagedMarkdownOnly);
+                Ok(())
+            },
+            |dir| {
+                request_calls.set(request_calls.get() + 1);
+                crate::test_support::write(dir, "README.md", "mutated during request\n");
+                StepResult::fail("nix-static-docs").detail("original Nix failure")
+            },
+        )
+        .expect_err("failed request remains the process failure");
+
+        assert_eq!(request_calls.get(), 1);
+        let detail = result.as_str();
+        assert!(detail.contains("original Nix failure"));
+        assert!(detail.contains("shared-static-docs-state"));
+    }
 
     #[test]
     fn precommit_reconciles_once_after_an_early_static_failure() {
@@ -157,39 +371,15 @@ mod tests {
         crate::test_support::commit(&dir, "a.rs", "fn a(){}\n");
         crate::test_support::write(&dir, "a.rs", "fn a() { }\n");
         crate::test_support::git_ok(&dir, &["add", "a.rs"]);
-        let sh = xshell::Shell::new().expect("create shell");
-        let first_static_spec = steps::static_checks::specs_for_phase(
-            steps::static_checks::Phase::SourceConsistency,
-            Mode::Fix,
-        )
-        .first()
-        .expect("source-consistency phase has a spec")
-        .name;
+        let first_static_spec = "fake-host";
         let mut invoked = Vec::new();
 
         let result = run_precommit_with_host_gate(&dir, |_, result| {
-            gate::run_host_steps_with(
-                &sh,
-                Mode::Fix,
-                gate::execution_policy(&Command::Precommit),
-                result,
-                gate::HOST_GATE_NON_TEST_STEPS,
-                |step, sh, mode, policy, result| match step {
-                    gate::HostGateStep::StaticChecks(phase) => {
-                        gate::run_static_phase_with(sh, mode, *phase, policy, result, |_, spec| {
-                            invoked.push(spec.name);
-                            crate::test_support::write(&dir, "a.rs", "fn a() { }\n// formatted\n");
-                            StepResult::fail(spec.name)
-                                .detail("static diagnostic survives reconciliation")
-                        });
-                    }
-                    gate::HostGateStep::ResultOnly { name, .. } => {
-                        panic!("later host step {name} ran after static failure")
-                    }
-                    gate::HostGateStep::HostTests { .. } => {
-                        panic!("host tests ran after static failure")
-                    }
-                },
+            invoked.push(first_static_spec);
+            crate::test_support::write(&dir, "a.rs", "fn a() { }\n// formatted\n");
+            result.push(
+                StepResult::fail(first_static_spec)
+                    .detail("static diagnostic survives reconciliation"),
             );
         })
         .expect("precommit orchestration");
@@ -227,15 +417,9 @@ mod tests {
 
         crate::test_support::write(&dir, "b.rs", "fn b() { }\n");
         let result = run_precommit_with_host_gate(&dir, |class, result| {
-            gate::dispatch_precommit_host_gate_with(
-                class,
-                result,
-                |_| panic!("non-Markdown or mixed state must not dispatch to the narrow graph"),
-                |result| {
-                    crate::test_support::write(&dir, "a.rs", "fn a() { }\n// formatted\n");
-                    result.push(StepResult::ok("fake-complete-fix-host-gate"));
-                },
-            );
+            assert!(matches!(class, git::PrecommitChangeClass::Broad(_)));
+            crate::test_support::write(&dir, "a.rs", "fn a() { }\n// formatted\n");
+            result.push(StepResult::ok("fake-complete-fix-host-gate"));
         })
         .unwrap();
 
@@ -259,15 +443,9 @@ mod tests {
         crate::test_support::git_ok(&dir, &["add", "guide.md"]);
 
         let result = run_precommit_with_host_gate(&dir, |class, result| {
-            gate::dispatch_precommit_host_gate_with(
-                class,
-                result,
-                |result| {
-                    crate::test_support::write(&dir, "guide.md", "# Guide\nChanged\nFormatted\n");
-                    result.push(StepResult::ok("fake-markdown-host-gate"));
-                },
-                |_| panic!("staged Markdown must not dispatch to the broad host graph"),
-            );
+            assert_eq!(class, git::PrecommitChangeClass::StagedMarkdownOnly);
+            crate::test_support::write(&dir, "guide.md", "# Guide\nChanged\nFormatted\n");
+            result.push(StepResult::ok("fake-markdown-host-gate"));
         })
         .expect("precommit orchestration");
 
@@ -311,14 +489,8 @@ mod tests {
         crate::test_support::git_ok(&dir, &["add", "guide.md"]);
 
         let result = run_precommit_with_host_gate(&dir, |class, result| {
-            gate::dispatch_precommit_host_gate_with(
-                class,
-                result,
-                |result| {
-                    result.push(StepResult::fail("prettier-markdown").detail("synthetic failure"));
-                },
-                |_| panic!("staged Markdown must not dispatch to the broad host graph"),
-            );
+            assert_eq!(class, git::PrecommitChangeClass::StagedMarkdownOnly);
+            result.push(StepResult::fail("prettier-markdown").detail("synthetic failure"));
         })
         .expect("precommit orchestration");
 

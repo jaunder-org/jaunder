@@ -484,17 +484,7 @@ mod tests {
 
     #[test]
     fn check_groups_are_closed_and_mutually_exclusive_selectors() {
-        let docs = Cli::try_parse_from(["devtool", "check", "--group", "docs"])
-            .expect("docs group parses");
-        assert!(matches!(
-            docs.command,
-            Command::Check(CheckArgs {
-                name: None,
-                group: Some(CheckGroup::Docs),
-                all: false,
-                ..
-            })
-        ));
+        assert!(Cli::try_parse_from(["devtool", "check", "--group", "docs"]).is_err());
         let code = Cli::try_parse_from(["devtool", "check", "--group", "code"])
             .expect("code group parses");
         assert!(matches!(
@@ -505,7 +495,7 @@ mod tests {
             })
         ));
         assert!(Cli::try_parse_from(["devtool", "check", "fmt", "--group", "code"]).is_err());
-        assert!(Cli::try_parse_from(["devtool", "check", "--group", "docs", "--all"]).is_err());
+        assert!(Cli::try_parse_from(["devtool", "check", "--group", "code", "--all"]).is_err());
         assert!(Cli::try_parse_from(["devtool", "check", "--group", "unknown"]).is_err());
     }
 

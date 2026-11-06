@@ -5,7 +5,7 @@
 /// The prefix itself is the one thing that *is* spelled twice — the harness
 /// declares its own copy in `end2end/tests/capture-trace.ts`, since no import
 /// crosses into Node. The `xlang-literal` gate
-/// (`xtask/src/steps/xlang_literal_check.rs`) fails `cargo xtask check` when the
+/// (`xtask/src/steps/xlang_literal_check.rs`) fails `just check` when the
 /// two copies disagree (#767).
 pub const MARK_PREFIX: &str = "jaunder.";
 /// The wasm is running — its own first observable instant. Everything before it

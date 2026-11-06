@@ -6,12 +6,6 @@ use serde::{Deserialize, Serialize};
 
 const SLOW_STEP_MS: u128 = 1_000;
 
-#[derive(Clone, Copy)]
-pub enum Mode {
-    Fix,
-    Check,
-}
-
 /// Classification Nix exposes directly for a phase. `Realized` is deliberately
 /// absent: a local-store transition proves neither substitution nor a local build.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -288,35 +282,6 @@ impl StepResult {
     }
 }
 
-/// Invocation-local producer admission, not an observation of Nix or host load.
-#[derive(Clone, Copy, Debug, Serialize)]
-pub struct E2eConcurrency {
-    pub requested: Option<usize>,
-    pub enabled: usize,
-    pub effective: usize,
-}
-
-impl E2eConcurrency {
-    pub fn new(requested: Option<std::num::NonZeroUsize>, enabled: usize) -> Self {
-        let requested = requested.map(std::num::NonZeroUsize::get);
-        Self {
-            requested,
-            enabled,
-            effective: requested.unwrap_or(enabled).min(enabled),
-        }
-    }
-
-    pub fn render(self) -> String {
-        let requested = self
-            .requested
-            .map_or_else(|| "default".into(), |value| value.to_string());
-        format!(
-            "E2E lane builds: requested={requested} enabled={} effective={}",
-            self.enabled, self.effective
-        )
-    }
-}
-
 #[derive(Serialize)]
 pub struct CommandResult {
     pub command: String,
@@ -324,8 +289,6 @@ pub struct CommandResult {
     pub duration_ms: u128,
     pub finished_at_unix: u64,
     pub steps: Vec<StepResult>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub e2e_concurrency: Option<E2eConcurrency>,
     /// The complete stable phase vocabulary. Entries begin unavailable and are
     /// replaced only by evidence collected during this command.
     pub phases: Vec<PhaseRecord>,
@@ -504,7 +467,6 @@ impl CommandResult {
             duration_ms: 0,
             finished_at_unix: 0,
             steps: Vec::new(),
-            e2e_concurrency: None,
             exit_override: None,
             audit: None,
             breakdown: None,
@@ -604,9 +566,6 @@ impl CommandResult {
         for step in &self.steps {
             println!("{}", step.human_line());
         }
-        if let Some(concurrency) = self.e2e_concurrency {
-            println!("{}", concurrency.render());
-        }
         // Informational payload: the audit subcommand's whole point is this table,
         // not the pass/fail line, so render it inline when present.
         if let Some(audit) = &self.audit {
@@ -642,28 +601,6 @@ impl CommandResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn e2e_concurrency_readback_preserves_request_and_effective_bound() {
-        for (requested, effective, label) in
-            [(None, 8, "default"), (Some(2), 2, "2"), (Some(12), 8, "12")]
-        {
-            let mut result = CommandResult::new("validate");
-            let readback = E2eConcurrency::new(requested.and_then(std::num::NonZeroUsize::new), 8);
-            assert_eq!(
-                readback.render(),
-                format!("E2E lane builds: requested={label} enabled=8 effective={effective}")
-            );
-            result.e2e_concurrency = Some(readback);
-            let encoded = serde_json::to_value(result).unwrap();
-            assert_eq!(
-                encoded["e2e_concurrency"]["requested"],
-                serde_json::json!(requested)
-            );
-            assert_eq!(encoded["e2e_concurrency"]["enabled"], 8);
-            assert_eq!(encoded["e2e_concurrency"]["effective"], effective);
-        }
-    }
 
     #[test]
     fn result_ok_reflects_steps_and_serializes_flat() {
