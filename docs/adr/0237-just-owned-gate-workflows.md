@@ -1,6 +1,6 @@
-# ADR-DRAFT: Just Owns Developer Gate Workflows
+# ADR-0237: Just Owns Developer Gate Workflows
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-05
 - Issue: [#1889](https://github.com/jaunder-org/jaunder/issues/1889)
 
