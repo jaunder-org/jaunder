@@ -34,6 +34,9 @@ impl Signals {
             received: 0,
         })
     }
+    pub fn status(&self) -> Option<i32> {
+        self.initiating
+    }
     pub async fn next(&mut self) -> i32 {
         let code = tokio::select! {
             _ = self.interrupt.recv() => 130,
@@ -55,9 +58,27 @@ struct OwnedProcess {
 }
 
 pub async fn run(
+    command: Command,
+    runtime: Option<&Path>,
+    signals: &mut Signals,
+) -> anyhow::Result<i32> {
+    run_owned(command, runtime, signals, None).await
+}
+
+pub async fn named_server(
+    command: Command,
+    runtime: &Path,
+    signals: &mut Signals,
+    server: &mut crate::workspace::Server,
+) -> anyhow::Result<i32> {
+    run_owned(command, Some(runtime), signals, Some(server)).await
+}
+
+async fn run_owned(
     mut command: Command,
     runtime: Option<&Path>,
     signals: &mut Signals,
+    mut server: Option<&mut crate::workspace::Server>,
 ) -> anyhow::Result<i32> {
     if let Some(code) = signals.initiating {
         return Ok(code);
@@ -75,7 +96,19 @@ pub async fn run(
         #[cfg(test)]
         failure: None,
     };
-    let observed = process.observe(runtime, signals).await;
+    let mut observed = process
+        .observe(runtime, signals, server.as_deref_mut())
+        .await;
+    // Admission closes before the owned child begins drain, even on unexpected exit.
+    if let Some(server) = server
+        && let Err(error) = server.stopping()
+    {
+        if observed.is_ok() {
+            observed = Err(error);
+        } else {
+            eprintln!("sandbox stopping publication also failed: {error:#}");
+        }
+    }
     process.finish(observed, signals).await
 }
 
@@ -92,6 +125,7 @@ impl OwnedProcess {
         &mut self,
         runtime: Option<&Path>,
         signals: &mut Signals,
+        mut server: Option<&mut crate::workspace::Server>,
     ) -> anyhow::Result<i32> {
         let pid = self.child.id().context("spawned child has no pid")?;
         let readiness = async {
@@ -108,7 +142,9 @@ impl OwnedProcess {
                 code = signals.next() => return Ok(code),
                 status = self.wait() => return Ok(exit_code(status?)),
                 result = &mut readiness, if !reported => {
-                    println!("Sandbox URL: http://{}", result?);
+                    let address = result?;
+                    if let Some(server) = server.as_deref_mut() { server.ready()?; }
+                    println!("Sandbox URL: http://{address}");
                     reported = true;
                 }
             }
@@ -282,6 +318,26 @@ async fn ready(path: &Path, pid: u32) -> anyhow::Result<SocketAddr> {
     })
     .await
     .context("runtime identity/HTTP readiness exceeded 30 seconds")?
+}
+
+/// A live command validates legacy runtime-info against the actual writer before storage access.
+pub async fn live_ready(path: &Path) -> anyhow::Result<()> {
+    let info: RuntimeInfo = serde_json::from_slice(
+        &tokio::fs::read(path)
+            .await
+            .with_context(|| format!("reading live runtime-info {}", path.display()))?,
+    )?;
+    anyhow::ensure!(
+        info.ip.is_loopback() && info.port != 0 && start_time(info.pid)? == info.start_time,
+        "live sandbox runtime identity/address mismatch"
+    );
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        http_ready(SocketAddr::new(info.ip, info.port)),
+    )
+    .await
+    .context("live sandbox HTTP readiness timed out")??;
+    Ok(())
 }
 
 // processkit returns Linux clock ticks and macOS proc_pidinfo tokens, matching Jaunder's schema.

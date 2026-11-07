@@ -43,7 +43,7 @@ contracts, and D2 overall-simplicity acceptance.
     certification gate before further work. Confirm helper bootstrap
     output/build-script effects do not mutate protected outputs.
 
-- [ ] **Task 2: Named lifecycle, reset/recovery, and command admission preserve
+- [x] **Task 2: Named lifecycle, reset/recovery, and command admission preserve
       storage contracts**
   - Add named empty/standard/demo profiles, creation init, resume without
     init/reseed, retained `test-support seed-sandbox-profile` subprocess, reset
@@ -71,7 +71,7 @@ contracts, and D2 overall-simplicity acceptance.
     exact argv/status and child-lifetime locks. Verify lock order and no
     self-deadlock; no partial publication or premature cleanup.
 
-- [ ] **Task 3: Command-mode builds and contention integrate with existing e2e
+- [x] **Task 3: Command-mode builds and contention integrate with existing e2e
       ownership**
   - Extend protected preparation to command mode: while holding
     `.xtask/host-artifacts.lock`, build/select debug Jaunder only (no

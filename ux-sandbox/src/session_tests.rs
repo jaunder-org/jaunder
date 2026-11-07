@@ -127,7 +127,7 @@ async fn operation_errors_finalize_real_tree_before_return_and_lock_release() {
         let mut signals = Signals::new().unwrap();
         let result = match operation {
             Operation::Wait => {
-                let observed = process.observe(None, &mut signals).await;
+                let observed = process.observe(None, &mut signals, None).await;
                 process.finish(observed, &mut signals).await
             }
             Operation::Members => {
