@@ -85,7 +85,7 @@ The approved spec is the scope contract.
     rejection, and prove a valid canonical trusted run atomically replaces it.
     No live import or credentials are needed.
 
-- [ ] Task 4: Migrate actual workflow callers and retire obsolete performance
+- [x] Task 4: Migrate actual workflow callers and retire obsolete performance
       scheduling paths.
   - Contract: `.github/workflows/performance.yml` uses the same Just run/compare
     commands, compares only after successful production when a baseline exists,

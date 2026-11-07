@@ -9,7 +9,7 @@ use crate::{
         AdrCommand, CacheSafetyCommand, Cli, Command, CoverageCommand, MutantsCommand, NixCommand,
         TracesCommand, WasmCoverageCommand,
     },
-    coverage, lifecycle, nix_probe, performance, pr,
+    coverage, lifecycle, nix_probe, pr,
     result::{CommandResult, StepResult},
     steps, traces, wasm_coverage,
 };
@@ -69,7 +69,6 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
-        Command::Performance(command) => performance::run(command),
         Command::QualificationLeaf { .. }
         | Command::CheckLeaf { .. }
         | Command::PrecommitSafety => {

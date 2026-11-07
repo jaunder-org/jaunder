@@ -78,13 +78,15 @@ Two sibling trees are outside the root workspace, each its own cargo workspace:
 `exclude = ["xtask"]`) and `tools/` (members `devtool`, `coverage`,
 `diagnostic-coverage-runtime`, `doctests`, and `performance`). `performance` is
 the pure versioned dataset, producer-artifact, statistics, and comparison
-contract shared by sandbox producers and host analysis under
-[ADR-0028](adr/0028-devtool-vs-xtask-boundary.md). The diagnostic coverage
-runtime is a target-only auxiliary member that is also copied into the
-diagnostic Nix source closure; its manifest therefore keeps direct package
-metadata so that the copied crate remains independently parseable. Those
-boundaries are execution/ownership boundaries, not a claim that every `tools/`
-crate is absent from every Nix derivation
+library shared by sandbox producers and host analysis under
+[ADR-0028](adr/0028-devtool-vs-xtask-boundary.md). The same auxiliary package
+provides the host-only `perf-data` CLI for evidence policy; sandbox producers
+consume the library, never invoke that host CLI. The diagnostic coverage runtime
+is a target-only auxiliary member that is also copied into the diagnostic Nix
+source closure; its manifest therefore keeps direct package metadata so that the
+copied crate remains independently parseable. Those boundaries are
+execution/ownership boundaries, not a claim that every `tools/` crate is absent
+from every Nix derivation
 ([Cargo workspace execution boundaries](adr/0141-cargo-workspace-execution-boundaries.md)).
 `elisp/` (the Emacs client,
 [ADR-0031](adr/0031-elisp-separately-tested-subproject.md)) and `end2end/`
@@ -104,39 +106,51 @@ and CI catalog are retired. Fix-mode `just check` uses the existing internal
 `doctests-workflow` to retain dirty-tree operation and the same producer and
 hard-gate population. Independent CI job results remain authoritative.
 
-**Performance evidence.** `cargo xtask perf <small|medium|large>` is a
-host-owned orchestration boundary. It gives every measurement a fresh nonce in
-the Nix derivation identity, invokes sandbox producers serially, validates their
-versioned fragments, and atomically retains the combined
-`.xtask/performance/<nonce>/performance-result-v1.json` with producer
-diagnostics. `--posts`, `--authors`, and `--revisions` are positive optional
-`u64` exploration overrides: accepted plans require posts divisible by authors,
-revisions at least posts, and more than 50 owner-history rows per author, then
-distribute revisions deterministically. Any override makes a result
+**Performance evidence.**
+`just perf [profile] [backends] [browsers] [workload] [posts] [authors] [revisions]`
+is the native workflow in this source tree, with `medium`, `sqlite,postgres`,
+omitted browsers, `all`, and unset counts as defaults. Nix selects pinned
+producers from these parameters and one fresh nonce in every producer derivation
+identity. Just alone builds them serially and retains each complete
+`performance/` tree under `.xtask/performance/<nonce>/producers/<name>/` before
+status validation and before the next producer starts. A later build or status
+failure leaves earlier evidence intact. The host-only `perf-data` CLI in
+`tools/performance` validates status, fragments, compatibility, confined
+diagnostic references and invocation metadata, then atomically publishes each
+nonce result and stable upload copy. It never selects producers, consumes
+installables for scheduling, or invokes Nix. Positive optional `u64` exploration
+counts use native Just parameters: accepted plans require posts divisible by
+authors, revisions at least posts, and more than 50 owner-history rows per
+author, then distribute revisions deterministically. Any override makes a result
 noncanonical, including a value equal to its profile default, and baseline
-import rejects it. The default matrix is storage plus Chromium browser work over
-SQLite and PostgreSQL; `medium` is the release-mode canonical comparison
-profile, while `small` is smoke-only and `large` is intentional stress. Raw
-samples, statistics, compatibility identities, and CI provenance remain
-machine-readable. The `Performance` workflow is manual, weekly, and
-performance-labeled-PR only; it runs one canonical benchmark job at a time,
-uploads the complete evidence tree, and never caches measurement output or
-changes the baseline. A producer writes `producer-status-v1.json` and retains
-available evidence before xtask reports a measured-workload or validation
-failure. A committed baseline is imported only from a verified successful `main`
-schedule/manual artifact with the exact workflow/job identity; PR evidence can
-be compared but cannot seed it. Timing deltas, including 20-percent median/p95
-warnings, are advisory; invalid artifacts and producer failures are not.
+import rejects it. Canonicality follows normalized selectors; explicit
+default-equivalent selections remain canonical. The default matrix is storage
+plus Chromium browser work over SQLite and PostgreSQL; `medium` is the
+release-mode canonical comparison profile, while `small` is smoke-only and
+`large` is intentional stress. Raw samples, statistics, compatibility
+identities, and CI provenance remain machine-readable. The `Performance`
+workflow is manual, weekly, and performance-labeled-PR only; it runs one
+canonical benchmark job at a time, uploads the complete evidence tree, and never
+caches measurement output or changes the baseline. Comparison runs only after
+successful production when a committed baseline exists; `if: always()` uploads
+the entire invocation evidence tree even on failure.
+`just perf-compare <result-path>` prints absolute median/p95/spread and advisory
+20-percent timing warnings; invalid artifacts and producer failures are not
+advisory. `just perf-import-baseline <positive-run-id>` is the only baseline
+mutation and admits only a verified successful `main` schedule/manual artifact
+with the exact repository/workflow/job/run-attempt, head, artifact and
+provenance identities, canonical complete medium evidence, and baseline
+compatibility. PR/local/noncanonical evidence cannot seed it. Atomic publication
+is per file; stable-copy failure leaves the complete nonce result and reports
+failure.
 
-**Proposed performance workflow ownership (issue #1894; not yet implemented).**
-The proposed design gives Just native workflow parameters and a small serial
-build-and-retain sequence; Nix selects the pinned producer set. A host-only Rust
-performance command in `tools/performance` owns typed evidence validation,
-assembly, advisory comparison, trusted baseline import, and atomic publication,
-not producer scheduling. This is a proposed clarification of
-[Just and Nix performance workflow ownership](adr/drafts/performance-workflow-ownership.md),
-not a description of current runtime behavior: until approval and
-implementation, `cargo xtask perf` remains the active workflow.
+**Performance workflow decision status (issue #1894).** The implementation above
+is present in this source tree. Its
+[Just and Nix performance workflow ownership](adr/drafts/performance-workflow-ownership.md)
+ADR remains proposed under the normal promotion process, as a narrow
+performance-specific clarification of ADR-0028; ADR-0141 workspace ownership and
+auxiliary host tests remain unchanged. Implementation in this tree is not a
+claim that this branch has shipped on `main`.
 
 **Package-metadata ownership is deliberately partial.** The root
 `[workspace.package]` owns the version, edition, and license inherited by its

@@ -37,6 +37,7 @@ let
     || relative == ".clippy.toml"
     || relative == "clippy.toml"
     || relative == ".github/workflows/ci.yml"
+    || relative == ".github/workflows/performance.yml"
     || relative == "tools/Cargo.toml"
     || relative == "tools/Cargo.lock"
     || builtins.any (member: relative == "${member}/Cargo.toml") manifestMembers
@@ -62,6 +63,7 @@ let
     assert sourceAdmits ".cargo/config.toml" "regular";
     assert sourceAdmits ".gitignore" "regular";
     assert sourceAdmits ".github/workflows/ci.yml" "regular";
+    assert sourceAdmits ".github/workflows/performance.yml" "regular";
     assert sourceAdmits "nix/otel-processors.yaml" "regular";
     assert sourceAdmits "end2end/otel-collector.yaml" "regular";
     assert sourceAdmits "end2end/e2e-lanes.json" "regular";

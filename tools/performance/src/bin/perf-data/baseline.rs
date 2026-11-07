@@ -147,7 +147,7 @@ fn github_json(path: &str) -> Result<Value> {
     Ok(body)
 }
 
-// These predicates preserve the existing xtask performance import policy.
+// Admit only the trusted run/job/artifact tuple before examining downloaded evidence.
 fn verify_actions_metadata(
     run_id: u64,
     metadata: &Value,
