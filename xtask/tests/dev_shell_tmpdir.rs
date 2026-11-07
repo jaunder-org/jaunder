@@ -56,7 +56,7 @@ fn repository(parent: &Path, name: &str) -> PathBuf {
 
 fn enter(hook: &str, cwd: &Path, parent: &Path, record: &Path, body: &str) -> Output {
     let script = format!(
-        "devtool() {{ printf '%s\\n' \"$TMPDIR\" > \"$JAUNDER_TEST_PROVISION_RECORD\"; }}\n\
+        "setup-e2e-node-modules() {{ printf '%s\\n' \"$TMPDIR\" > \"$JAUNDER_TEST_PROVISION_RECORD\"; }}\n\
          eval \"$JAUNDER_TEST_SHELL_HOOK\"\n{body}"
     );
     let mut command = Command::new("bash");

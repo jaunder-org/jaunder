@@ -400,13 +400,6 @@ where
         .collect()
 }
 
-/// Whether a check needs `end2end/node_modules` provisioned before it runs. Only `tsc`
-/// type-checks against that closure. Kept as a pure predicate so the rule is testable
-/// without executing tsc (#229).
-pub fn needs_provisioning(name: &str) -> bool {
-    name == "tsc"
-}
-
 /// Resolve exactly one public check selector without executing commands.
 fn selected_names(name: Option<&str>, group: Option<CheckGroup>, all: bool) -> Result<Vec<&str>> {
     match (name, group, all) {
@@ -417,9 +410,8 @@ fn selected_names(name: Option<&str>, group: Option<CheckGroup>, all: bool) -> R
     }
 }
 
-/// Run one check by name, a group, or all checks. `tsc` provisions
-/// `end2end/node_modules` (the type-dep closure) first, by calling
-/// [`crate::provision::run`] in-process.
+/// Run one check by name, a group, or all checks.
+/// Callers own dependency setup; command definitions stay shared here.
 pub fn run(
     name: Option<&str>,
     group: Option<CheckGroup>,
@@ -436,11 +428,6 @@ pub fn run(
     let commands = build_selected_commands_with_env(&names, fix, cargo_mode, std::env::var_os)?;
 
     for (n, cmd) in names.iter().zip(commands) {
-        if needs_provisioning(n) {
-            let paths = crate::provision::StorePaths::resolve(None, None)?;
-            crate::provision::run(std::path::Path::new("."), &paths)
-                .context("provisioning end2end/node_modules for tsc")?;
-        }
         let mut command = Command::new(cmd.program);
         command.args(&cmd.args).envs(cmd.env);
         run_check(n, &mut command, &mut std::io::stderr().lock())?;
@@ -500,17 +487,6 @@ mod tests {
         spec(name, fix)
             .and_then(|spec| spec.build_with_env(CargoMode::Host, |_| None))
             .unwrap_or_else(|err| panic!("building host check {name}: {err}"))
-    }
-
-    #[test]
-    fn only_tsc_needs_provisioning() {
-        assert!(needs_provisioning("tsc"));
-        for name in all_names().iter().filter(|n| **n != "tsc") {
-            assert!(
-                !needs_provisioning(name),
-                "{name} must not provision end2end/node_modules"
-            );
-        }
     }
 
     #[test]

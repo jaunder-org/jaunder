@@ -19,7 +19,6 @@ mod doctests;
 #[cfg(feature = "performance")]
 mod performance;
 mod pg;
-mod provision;
 mod seed_e2e;
 #[cfg(feature = "system-artifacts")]
 mod system_artifacts;
@@ -59,10 +58,6 @@ enum Command {
     /// shelling out to `test-support`. The single fixture list shared by the
     /// host loop and the flake VM `seed_db()` (#249).
     SeedE2e(SeedE2eArgs),
-    /// Symlink the tsc type-dep closure + the nix-matched Playwright into
-    /// `<root>/end2end/node_modules` (gitignored, so absent in fresh checkouts and
-    /// worktrees). Run by the devShell shellHook and by `check tsc` (#229).
-    ProvisionNodeModules(ProvisionNodeModulesArgs),
     #[cfg(feature = "performance")]
     /// Versioned performance fragment producers and validators.
     #[command(subcommand)]
@@ -113,21 +108,6 @@ struct SeedE2eArgs {
     /// `target/debug/jaunder` on the host. Must be a non-cheap-kdf build.
     #[arg(long)]
     jaunder_bin: PathBuf,
-}
-
-#[derive(clap::Args)]
-struct ProvisionNodeModulesArgs {
-    /// The tsc type-dep closure to symlink. Defaults to $E2E_TYPES_NODE_MODULES,
-    /// exported by the Nix devShell.
-    #[arg(long)]
-    types_node_modules: Option<PathBuf>,
-    /// The nix-matched @playwright/test to pin. Defaults to $E2E_PLAYWRIGHT_TEST,
-    /// exported by the Nix devShell.
-    #[arg(long)]
-    playwright_test: Option<PathBuf>,
-    /// Repo or worktree root; provisions <root>/end2end/node_modules.
-    #[arg(long, default_value = ".")]
-    root: PathBuf,
 }
 
 #[derive(Subcommand)]
@@ -432,11 +412,6 @@ fn main() -> Result<()> {
         }
         #[cfg(feature = "performance")]
         Command::Performance(command) => performance::run(*command),
-        Command::ProvisionNodeModules(args) => {
-            let paths =
-                provision::StorePaths::resolve(args.types_node_modules, args.playwright_test)?;
-            provision::run(&args.root, &paths)
-        }
     }
 }
 
