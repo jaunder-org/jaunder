@@ -5248,6 +5248,21 @@ allocation.
 
 ### Committed direction
 
+Issue #1896 has approved a replacement ownership design, recorded in the
+proposed
+[Just frontdoors with a host-only PR observer decision](adr/drafts/just-frontdoors-host-pr-observer.md).
+Once implemented, root Just recipes will be the ordinary issue/PR frontdoors,
+using `gh`/`git` for operations and a purpose-specific read-only
+`tools/pr-observer/` host binary for polling and evidence classification. Its
+approval-bearing land and caller-owned unmanaged cleanup frontdoors preserve the
+`ADR-0135`, `ADR-0171`, `ADR-0195`, `ADR-0198`, `ADR-0220`, and `ADR-0077`
+safeguards above; Just does not claim to attest prior human approval or infer
+assignment ownership. This approved committed direction supersedes ADR-0087's
+xtask observer ownership and amends ADR-0028's tool-placement boundary when its
+proposed draft is accepted. Current implemented workflows remain as described in
+the preceding section until their approved migration lands. The privileged ADR
+promoter remains unchanged.
+
 ADR-0152's compact recovery model treats a promoter head and generated diff as
 immutable while allowing the serialized Generate controller to clean up
 incomplete controller-owned state and regenerate from fresh `main`. Generate
