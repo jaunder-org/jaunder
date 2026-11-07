@@ -4,7 +4,6 @@
 //! `pr-observer` package; this module keeps the existing `cargo xtask pr` callers
 //! working until their Task 4 migration. The privileged promoter remains here.
 
-pub mod cleanup;
 pub mod gh;
 pub mod land;
 pub mod promoter;

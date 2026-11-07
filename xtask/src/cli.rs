@@ -411,26 +411,6 @@ pub enum PrCommand {
         #[arg(long, value_name = "MINUTES", default_value_t = 90, value_parser = clap::value_parser!(u64).range(1..))]
         timeout: u64,
     },
-    /// Clean an unmanaged checkout after a PR has merged.
-    ///
-    /// Manager-assigned work: leave the semantic branch checked out and the checkout
-    /// intact; skip this command and equivalent detach/delete operations while the
-    /// assignment is active. Lead accepts merge, validation, and preservation evidence
-    /// for Manager handoff; Manager retains required branch selectors and owns
-    /// authorized retirement through supported runtime routes.
-    ///
-    /// Unmanaged cleanup is local-only: it proves the exact merged head, main target,
-    /// clean tree, and ancestry before detaching, safely deleting the branch, and
-    /// running `cargo clean`. It does not authorize checkout removal, which separately
-    /// requires an explicit removal request and interactive runtime confirmation.
-    #[command(after_help = "UNMANAGED EXAMPLES:\n  \
-        cargo xtask pr cleanup\n  \
-        cargo xtask pr cleanup 1155")]
-    Cleanup {
-        /// Merged PR number. Omitted: exhaustively find the merged PR for this exact
-        /// checked-out branch and HEAD.
-        number: Option<u64>,
-    },
 }
 
 /// `server-fn-coverage` subcommands (#681).
@@ -655,7 +635,6 @@ impl Cli {
             Command::Sandbox { .. } => "sandbox",
             Command::Mutants(MutantsCommand::VerifyEvidence { .. }) => "mutants-verify-evidence",
             Command::Pr(PrCommand::Watch { .. }) => "pr-watch",
-            Command::Pr(PrCommand::Cleanup { .. }) => "pr-cleanup",
             Command::Pr(PrCommand::Land { .. }) => "pr-land",
         }
     }
@@ -1133,41 +1112,8 @@ mod tests {
     }
 
     #[test]
-    fn pr_cleanup_help_distinguishes_assignment_ownership() {
-        for args in [
-            vec!["xtask", "pr", "--help"],
-            vec!["xtask", "pr", "cleanup", "--help"],
-        ] {
-            let cleanup_help = args.len() == 4;
-            let help = Cli::try_parse_from(args).err().expect("help is displayed");
-            assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
-            let text = help.to_string();
-            assert!(text.contains("unmanaged"), "{text}");
-            if cleanup_help {
-                let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-                assert!(text.contains("Manager-assigned work"), "{text}");
-                assert!(text.contains("semantic branch checked out"), "{text}");
-                assert!(text.contains("checkout intact"), "{text}");
-                assert!(text.contains("skip this command"), "{text}");
-            }
-        }
-    }
-
-    #[test]
-    fn pr_cleanup_parses_optional_number_and_names_itself() {
-        let cli = Cli::try_parse_from(["xtask", "pr", "cleanup"]).unwrap();
-        assert_eq!(cli.command_name(), "pr-cleanup");
-        assert!(matches!(
-            cli.command,
-            Command::Pr(PrCommand::Cleanup { number: None })
-        ));
-        assert!(matches!(
-            Cli::try_parse_from(["xtask", "pr", "cleanup", "1155"])
-                .unwrap()
-                .command,
-            Command::Pr(PrCommand::Cleanup { number: Some(1155) })
-        ));
-        assert!(Cli::try_parse_from(["xtask", "pr", "cleanup", "not-a-number"]).is_err());
+    fn ordinary_cleanup_is_not_an_xtask_entrypoint() {
+        assert!(Cli::try_parse_from(["xtask", "pr", "cleanup", "731"]).is_err());
     }
 
     #[test]

@@ -1237,13 +1237,13 @@ baseline.
 
   - **Manager-assigned work:** implementors and assigned Leads leave the
     semantic branch checked out and the checkout intact while the assignment is
-    active. Skip `cargo xtask pr cleanup` and equivalent detach/delete
-    operations. Lead inspects and accepts merge, validation, and preservation
-    evidence, then hands it to Manager: exact branch/HEAD and commits,
-    dirty/staged/untracked inventory (including empty results), proof and
-    artifact references, unresolved work, and the next owner/action. Delivered
-    work can be complete while Manager-owned lifecycle cleanup remains pending;
-    receipt alone is not acceptance or assignment release.
+    active. Skip `just pr-cleanup` and equivalent detach/delete operations. Lead
+    inspects and accepts merge, validation, and preservation evidence, then
+    hands it to Manager: exact branch/HEAD and commits, dirty/staged/untracked
+    inventory (including empty results), proof and artifact references,
+    unresolved work, and the next owner/action. Delivered work can be complete
+    while Manager-owned lifecycle cleanup remains pending; receipt alone is not
+    acceptance or assignment release.
 
     Manager retains required branch selectors, reconciles exact current
     assignment/runtime identity, and owns authorized retirement through
@@ -1253,18 +1253,26 @@ baseline.
     a dependency on a hypothetical runtime fix or a reason to withhold
     delivered-work evidence.
 
-  - **Unmanaged work:** with no unresolved required work, competing writer, or
-    owned operation to strand, run `cargo xtask pr cleanup [N]` from that PR's
-    checkout. It is explicit and local-only: it verifies the merged PR targets
-    `main`, the checked-out branch and HEAD exactly match the PR's head ref and
-    SHA, and the tree is clean before fetching, proving the captured head is an
-    ancestor of `origin/main`, detaching there, safely deleting the local
-    branch, and running `cargo clean`. Prefer explicit `N`; omission
-    exhaustively resolves exactly one matching merged PR. Cleanup exits 0 only
-    when complete; a refusal or operation failure exits 1. Preserve failure
-    evidence rather than bypassing safeguards. Cleanup does not alter the
-    `pr land` merge outcome or project Status, and does not authorize checkout
-    deletion.
+  - **Unmanaged work:** first positively establish that no unresolved required
+    work, competing writer, or owned operation will be stranded. From that PR's
+    checkout run `just pr-cleanup <PR> <exact-head-SHA> unmanaged`. Both
+    identity arguments are required; the ownership argument records the caller's
+    positive assertion, not runtime discovery or proof of assignment ownership.
+    Managed, unknown, or conflicting ownership means do not invoke it; those
+    argument values are refused as an additional guard.
+
+    Cleanup is explicit and local-only. It independently verifies complete
+    merged PR evidence, target `main`, exact checked-out non-`main` branch/head
+    matching the supplied PR/head, and a clean tree before fetching. It then
+    proves the captured head is an ancestor of `origin/main`, detaches there,
+    safely deletes only the captured branch with `git branch -d --`, and runs
+    root `cargo clean`. Ordered stderr boundaries identify the first failure; no
+    later step runs. Exit 0 and direct JSON `outcome: cleaned` establish
+    completed cleanup and retain the captured head/merge commit/time. A refusal
+    or failure is nonzero, never successful no-op. Preserve evidence, without
+    force/reset/stash or bypass. Cleanup does not change the merge outcome,
+    project Status, remote branches or local `main`, and does not authorize
+    checkout deletion.
 
   Physical checkout removal is separate: it requires an explicit removal request
   and the runtime's interactive confirmation. Use the supported runtime route,

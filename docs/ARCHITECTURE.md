@@ -5181,16 +5181,23 @@ and check outcomes remain intact. This narrowly refines ADR-0087 decision 4;
 `watch` gains no mutation capability (decision:
 `docs/adr/0220-explicit-one-shot-pr-reenqueue.md`).
 
-**Post-land checkout cleanup.** After a confirmed merge,
-`cargo xtask pr cleanup [N]` is the explicit local-only cleanup command
-([docs/adr/0171-explicit-post-land-cleanup-command.md](adr/0171-explicit-post-land-cleanup-command.md)).
-It independently proves that the PR is merged into exactly `main`, the current
-branch and HEAD exactly match its head ref and SHA, and the tree is clean; an
-omitted number cursor-paginates merged candidates and accepts exactly one match.
-It then fails closed through fetch, `origin/main` ancestry verification, detach,
-safe local-branch deletion, and root cargo cleanup. This capability neither
-approves nor changes the already reported `pr land` merge, and it does not
-mutate a tracker or remote branch.
+**Post-land checkout cleanup.** Root
+`just pr-cleanup <PR> <exact-head-SHA> unmanaged` is the explicit local-only
+replacement frontdoor under the
+[approved ownership direction](adr/drafts/just-frontdoors-host-pr-observer.md),
+preserving [ADR-0171](adr/0171-explicit-post-land-cleanup-command.md)'s guards.
+The caller must positively establish unmanaged ownership; the argument is an
+assertion, not runtime discovery or proof. Managed or uncertain ownership means
+preserve the branch/checkout and do not invoke cleanup. The frontdoor requires
+explicit PR/head identity, independently verifies complete merged-into-`main`
+evidence, exact non-`main` local branch/head and clean tree, then fails closed
+through fetch, `origin/main` ancestry verification, detach, safe deletion of
+only the captured branch, and root cargo cleanup. Each ordered boundary stops on
+failure; a successful direct JSON result retains captured head/merge evidence.
+Cleanup neither approves nor revises the merge and never mutates tracker state,
+remote branches or local `main`. The ordinary xtask cleanup helper/dispatch is
+retired; other PR compatibility remains until its replacement frontdoors are
+complete.
 
 ## Documentation & decision process
 

@@ -310,6 +310,10 @@ issue-edit number title issue_type milestone priority labels body_file *blockers
     jq -e --argjson expected "$number" '.number == $expected' "$work/mutated.json" > /dev/null
     finish_issue "$@"
 
+# Caller must positively verify unmanaged ownership; never invoke in managed work.
+pr-cleanup number expected_head ownership:
+    bash scripts/pr-cleanup.sh {{quote(number)}} {{quote(expected_head)}} {{quote(ownership)}}
+
 # Read-only caller-actionable PR observation; only this focused tool polls GitHub.
 pr-watch *args:
     cargo run --locked --quiet --manifest-path tools/Cargo.toml -p pr-observer -- watch {{args}}

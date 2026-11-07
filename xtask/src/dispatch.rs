@@ -401,12 +401,6 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
-        Command::Pr(PrCommand::Cleanup { number }) => {
-            let start = Instant::now();
-            let mut result = pr::cleanup::execute(number);
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
         Command::Pr(sub) => {
             let start = Instant::now();
             let (operation, number, cfg, reenqueue) = match sub {
@@ -445,7 +439,6 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                     },
                     reenqueue,
                 ),
-                PrCommand::Cleanup { .. } => unreachable!("cleanup dispatches separately"),
             };
             // An `Err` here means the subject could not be established at all (exit
             // 2, no report). Every other failure — including `gh` being broken — is
