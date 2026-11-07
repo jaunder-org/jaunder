@@ -266,6 +266,7 @@ convention). See the Status column below for each ADR's current status.
 | [0235](adr/0235-unified-theme-and-application-assets.md)                 | Unify bundled themes and application styling asset delivery                                                  | accepted   |
 | [0236](adr/0236-csr-vite-content-addressed-assets.md)                    | Vite owns CSR asset output and build inventory                                                               | accepted   |
 | [0237](adr/0237-just-owned-gate-workflows.md)                            | Just Owns Developer Gate Workflows                                                                           | accepted   |
+| [0238](adr/0238-just-e2e-workflow-ownership.md)                          | Just owns the E2E workflow entrypoint                                                                        | accepted   |
 
 <!-- adr-table:end -->
 

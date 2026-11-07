@@ -4123,7 +4123,7 @@ No new receipt/schema or hidden-omission guarantee is introduced: authority is
 bounded by the existing producer-observed archive and tested population checks.
 Focused workflow/failure proofs do not establish a full VM/browser matrix pass.
 See the
-[Just E2E workflow ownership draft](adr/drafts/just-e2e-workflow-ownership.md).
+[Just E2E workflow ownership draft](adr/0238-just-e2e-workflow-ownership.md).
 
 `end2end/playwright.config.ts` is the one config, loaded verbatim by both the VM
 and the host loop ([ADR-0051](adr/0051-single-playwright-config.md)). Chromium's
