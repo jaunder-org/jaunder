@@ -4222,6 +4222,20 @@ metadata pins the executable generation: a live command must match the server's
 content fingerprint, while mismatch or an unmanaged runtime-lock holder rejects
 before the command opens and potentially migrates the database.
 
+#### Committed direction — standalone UX sandbox owner
+
+A proposed design would replace the `cargo xtask sandbox` entrypoint with
+`just sandbox`, invoking one focused root-workspace `ux-sandbox` binary with its
+own Tokio runtime and direct processkit ownership. This proposal removes the
+sandbox's xtask command/report and synchronous process-runtime coupling; it does
+not remove lifecycle behavior or the shared e2e host-server integration. It
+keeps test-support seeding as a subprocess. The design is pending human approval
+of the spec and this ADR, followed by approval and commit of the required
+planning outline before implementation. Until approved and implemented,
+`cargo xtask sandbox` above remains the current workflow. See the
+[standalone UX sandbox lifecycle proposal](adr/drafts/standalone-ux-sandbox-lifecycle.md),
+recorded by the draft path `docs/adr/drafts/standalone-ux-sandbox-lifecycle.md`.
+
 Ordinary specs are parallel-safe by construction, via per-test identity fixtures
 in `end2end/tests/provisioning.ts`, composed only by `end2end/tests/fixtures.ts`
 ([ADR-0039](adr/0039-e2e-parallelism-via-per-test-identity-fixtures.md)): `user`
