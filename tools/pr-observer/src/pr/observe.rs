@@ -172,7 +172,254 @@ pub fn enrich_shared_failure<S: SharedFailureEvidenceSource>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pr::test_support::{FakeSource, cfg, clock, green, open, queue_rules};
+    use crate::pr::shared_failure::{
+        CandidateJob, CandidateRun, SelectedRun, SharedFailureEvidence, SharedFailureSource,
+    };
+    use crate::pr::snapshot::{CheckState, PrSnapshot};
+    use crate::pr::test_support::{
+        FakeSource, actions_check, cfg, check, clock, green, merged_snapshot, open, open_pending,
+        queue_rules, subject,
+    };
+    use crate::pr::{EventKind, SubjectFailure};
+
+    fn failed_actions_snapshot() -> PrSnapshot {
+        open(vec![
+            actions_check(
+                "Validate (no e2e)",
+                9,
+                CheckState::Failure,
+                "2026-09-15T12:00:00Z",
+            ),
+            check("e2e gate", CheckState::Pending, ""),
+        ])
+    }
+
+    fn matching_evidence() -> SharedFailureEvidence {
+        SharedFailureEvidence {
+            subject_log: "error: shared".into(),
+            selected_runs: vec![SelectedRun {
+                run: CandidateRun {
+                    id: 88,
+                    url: "https://github.com/jaunder-org/jaunder/actions/runs/88".into(),
+                    head_sha: "other-head".into(),
+                    created_at: "2026-09-15T11:00:00Z".into(),
+                    conclusion: Some("failure".into()),
+                },
+                source: SharedFailureSource::PullRequest {
+                    number: 732,
+                    url: "https://github.com/jaunder-org/jaunder/pull/732".into(),
+                },
+            }],
+            jobs: vec![(
+                88,
+                vec![CandidateJob {
+                    id: 90,
+                    name: "Validate (no e2e)".into(),
+                    url: "https://github.com/jaunder-org/jaunder/actions/jobs/90".into(),
+                    log: "error: shared".into(),
+                }],
+            )],
+        }
+    }
+
+    #[test]
+    fn shared_failure_annotation_preserves_the_terminal_report_and_events() {
+        // Exercise observe's command-level wiring, not just signature policy:
+        // evidence can add context but cannot revise the failed check verdict.
+        let annotated_source = FakeSource::new(vec![Ok(failed_actions_snapshot())], queue_rules())
+            .with_shared_failure_evidence(matching_evidence());
+        let bare_source = FakeSource::new(vec![Ok(failed_actions_snapshot())], queue_rules())
+            .with_shared_failure_evidence_script(vec![]);
+        let mut annotated_events = Vec::new();
+        let annotated = observe(
+            &annotated_source,
+            &clock(),
+            Some(731),
+            cfg(),
+            continuation(None, None),
+            &mut |e| annotated_events.push(e.clone()),
+        )
+        .unwrap();
+        let mut bare_events = Vec::new();
+        let bare = observe(
+            &bare_source,
+            &clock(),
+            Some(731),
+            cfg(),
+            continuation(None, None),
+            &mut |e| bare_events.push(e.clone()),
+        )
+        .unwrap();
+        assert_eq!(annotated_source.shared_failure_evidence_requests(), 1);
+        assert_eq!(
+            annotated_source.shared_failure_subject_failures(),
+            vec![SubjectFailure {
+                workflow_run_id: 1,
+                check_run_id: 9,
+                name: "Validate (no e2e)".into(),
+            }]
+        );
+        assert_eq!(bare_source.shared_failure_evidence_requests(), 1);
+        assert_eq!(annotated.outcome, Outcome::ChecksFailed);
+        assert_eq!(annotated_events, bare_events, "enrichment emits no events");
+        let mut expected = bare.clone();
+        expected.shared_failure = annotated.shared_failure.clone();
+        assert_eq!(annotated, expected, "only the annotation may change");
+        assert_eq!(
+            serde_json::to_value(&annotated).unwrap()["shared_failure"],
+            serde_json::json!({
+                "version": 1,
+                "algorithm": "github-actions-error-block-v1",
+                "digest_sha256": "d44f789533a2260f997226e225848d0c7904b037e50e523f469c9b1dc4ce5547",
+                "excerpt": "error: shared",
+                "matches": [{
+                    "source": {"kind": "pull-request", "number": 732, "url": "https://github.com/jaunder-org/jaunder/pull/732"},
+                    "head_sha": "other-head",
+                    "run": {"id": 88, "url": "https://github.com/jaunder-org/jaunder/actions/runs/88"},
+                    "job": {"id": 90, "name": "Validate (no e2e)", "url": "https://github.com/jaunder-org/jaunder/actions/jobs/90"},
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn shared_failure_evidence_errors_and_nonmatches_preserve_the_failed_report() {
+        let no_anchor = SharedFailureEvidence {
+            subject_log: "ordinary output".into(),
+            ..matching_evidence()
+        };
+        let no_match = SharedFailureEvidence {
+            jobs: vec![(
+                88,
+                vec![CandidateJob {
+                    log: "error: different".into(),
+                    ..matching_evidence().jobs[0].1[0].clone()
+                }],
+            )],
+            ..matching_evidence()
+        };
+        for (case, evidence) in [
+            ("no anchor", Ok(no_anchor)),
+            ("unique failure", Ok(no_match)),
+            ("query", Err(ApiError::GraphQlErrors("query failed".into()))),
+            ("log", Err(ApiError::Malformed("non-UTF-8 log".into()))),
+            (
+                "parse",
+                Err(ApiError::Malformed("response was malformed".into())),
+            ),
+            (
+                "timeout",
+                Err(ApiError::Transport("deadline elapsed".into())),
+            ),
+        ] {
+            let source = FakeSource::new(vec![Ok(failed_actions_snapshot())], queue_rules())
+                .with_shared_failure_evidence_script(vec![evidence]);
+            let bare_source = FakeSource::new(vec![Ok(failed_actions_snapshot())], queue_rules())
+                .with_shared_failure_evidence_script(vec![]);
+            let report = observe(
+                &source,
+                &clock(),
+                Some(731),
+                cfg(),
+                continuation(None, None),
+                &mut |_| {},
+            )
+            .unwrap();
+            let bare = observe(
+                &bare_source,
+                &clock(),
+                Some(731),
+                cfg(),
+                continuation(None, None),
+                &mut |_| {},
+            )
+            .unwrap();
+            assert_eq!(report, bare, "{case} must not alter the terminal report");
+            assert_eq!(report.outcome, Outcome::ChecksFailed, "{case}");
+            assert!(report.shared_failure.is_none(), "{case}");
+            assert_eq!(report.events.len(), 1, "{case}");
+            assert_eq!(report.events[0].kind, EventKind::Terminal, "{case}");
+            assert_eq!(source.shared_failure_evidence_requests(), 1, "{case}");
+        }
+    }
+
+    #[test]
+    fn shared_failure_deadline_expiry_leaves_the_report_unchanged() {
+        use std::time::Duration;
+        let source = FakeSource::new(vec![Ok(failed_actions_snapshot())], queue_rules())
+            .with_shared_failure_evidence_script(vec![]);
+        let original = observe(
+            &source,
+            &clock(),
+            Some(731),
+            cfg(),
+            continuation(None, None),
+            &mut |_| {},
+        )
+        .unwrap();
+        let expired_source = FakeSource::new(vec![], queue_rules())
+            .with_shared_failure_evidence(matching_evidence());
+        let mut report = original.clone();
+        enrich_shared_failure(
+            &expired_source,
+            &subject(),
+            &mut report,
+            Deadline::after(Duration::ZERO),
+        );
+        assert_eq!(report, original);
+        assert_eq!(expired_source.shared_failure_evidence_requests(), 0);
+
+        // Evidence returned after its budget expires must not become annotation
+        // during policy work. Keep the former delayed-source behavioral seam.
+        let delayed_source = FakeSource::new(vec![], queue_rules())
+            .with_shared_failure_evidence(matching_evidence())
+            .with_shared_failure_evidence_delay(Duration::from_millis(150));
+        enrich_shared_failure(
+            &delayed_source,
+            &subject(),
+            &mut report,
+            Deadline::after(Duration::from_millis(100)),
+        );
+        assert_eq!(report, original);
+        assert_eq!(delayed_source.shared_failure_evidence_requests(), 1);
+    }
+
+    #[test]
+    fn shared_failure_enrichment_does_not_interact_with_unrelated_outcomes() {
+        let status_failure = open(vec![
+            check(
+                "Validate (no e2e)",
+                CheckState::Failure,
+                "2026-09-15T12:00:00Z",
+            ),
+            check("e2e gate", CheckState::Pending, ""),
+        ]);
+        for (snapshot, expected) in [
+            (status_failure, Outcome::ChecksFailed),
+            (merged_snapshot(), Outcome::Merged),
+            (open_pending(), Outcome::Pending),
+            (open(green()), Outcome::ReadyToLand),
+        ] {
+            let source = FakeSource::new(vec![Ok(snapshot)], queue_rules())
+                .with_shared_failure_evidence(matching_evidence());
+            let report = observe(
+                &source,
+                &clock(),
+                Some(731),
+                WatchConfig {
+                    once: true,
+                    ..cfg()
+                },
+                continuation(None, None),
+                &mut |_| {},
+            )
+            .unwrap();
+            assert_eq!(report.outcome, expected);
+            assert!(report.shared_failure.is_none());
+            assert_eq!(source.shared_failure_evidence_requests(), 0, "{expected:?}");
+            assert!(source.shared_failure_subject_failures().is_empty());
+        }
+    }
 
     fn continuation<'a>(
         expected_head: Option<&'a str>,
