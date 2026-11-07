@@ -21,7 +21,7 @@ The approved spec is the scope contract.
 
 ## Task outline
 
-- [ ] Task 1: Introduce the production assembly path and prove Nix selection,
+- [x] Task 1: Introduce the production assembly path and prove Nix selection,
       serial Just retention, and typed assembly with one producer.
   - Contract: Nix selects producer descriptions from the native Just
     profile/backend/browser/workload/count parameters and one fresh invocation

@@ -64,6 +64,7 @@
         apps = nixosLayer.appsForSystem { inherit system pkgs; };
         checks = checkLayer.checks;
         performanceLib.mkPerformanceProducer = checkLayer.internals.mkPerformanceProducer;
+        performanceLib.selectPerformanceProducers = checkLayer.internals.selectPerformanceProducers;
         inherit devShells;
       }
     );

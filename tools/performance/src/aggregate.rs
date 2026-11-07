@@ -64,7 +64,7 @@ pub fn assemble_run(
     evidence: RunEvidence,
     fragments: &[FragmentEnvelope],
 ) -> Result<RunEnvelope, AggregateError> {
-    if !valid_selection(&selection) {
+    if !is_valid_selection(&selection) {
         return Err(AggregateError::InvalidSelection);
     }
     if !valid_provenance(&provenance) {
@@ -216,7 +216,7 @@ pub fn validate_run(run: &RunEnvelope) -> Result<(), AggregateError> {
         return Err(AggregateError::InvalidSelection);
     }
     crate::validate_manifest(&run.manifest).map_err(AggregateError::InvalidManifest)?;
-    if !valid_selection(&run.selection)
+    if !is_valid_selection(&run.selection)
         || !selection_matches_plan(&run.selection, &run.manifest.plan)
     {
         return Err(AggregateError::InvalidSelection);
@@ -278,7 +278,9 @@ pub fn validate_run(run: &RunEnvelope) -> Result<(), AggregateError> {
     Ok(())
 }
 
-fn valid_selection(selection: &RunSelection) -> bool {
+/// Returns whether a normalized producer selection is structurally valid.
+#[must_use]
+pub fn is_valid_selection(selection: &RunSelection) -> bool {
     let unique_backends =
         selection.backends.iter().collect::<BTreeSet<_>>().len() == selection.backends.len();
     let unique_browsers =
@@ -801,6 +803,37 @@ mod tests {
             storage: true,
             browser: false,
         }
+    }
+
+    #[test]
+    fn validates_normalized_selection_shape() {
+        let default = RunSelection {
+            backends: vec![Backend::Sqlite, Backend::Postgres],
+            count_overrides: CountOverrides::default(),
+            browsers: vec![Browser::Chromium],
+            storage: true,
+            browser: true,
+        };
+        assert!(is_valid_selection(&default));
+        assert!(!is_valid_selection(&RunSelection {
+            backends: vec![Backend::Sqlite, Backend::Sqlite],
+            ..default.clone()
+        }));
+        assert!(!is_valid_selection(&RunSelection {
+            backends: vec![],
+            ..default
+        }));
+    }
+
+    #[test]
+    fn normalized_default_matrix_is_canonical() {
+        assert!(is_canonical_selection(&RunSelection {
+            backends: vec![Backend::Sqlite, Backend::Postgres],
+            count_overrides: CountOverrides::default(),
+            browsers: vec![Browser::Chromium],
+            storage: true,
+            browser: true,
+        }));
     }
 
     #[test]
