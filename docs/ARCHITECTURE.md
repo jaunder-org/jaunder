@@ -5425,6 +5425,58 @@ repo-root identity `docs/adr/drafts/<slug>.md`. Promotion rewrites those path
 forms to the numbered destination; a bare draft token or a different path form
 would survive pointing at nothing.
 
+### Proposed host-side ADR promoter extraction — not current behavior
+
+In the current checkout, `.github/workflows/adr-promoter.yml` invokes
+`cargo xtask adr promoter`; xtask owns the serialized controller, while
+`adr promote` and `adr sync-readme` own deterministic mutation. Issue #1897's
+approved design moves the controller and both mutation operations into a Python
+package under `tools/adr-promoter/`, not a Cargo member. The numberless ADR
+remains proposed; architecture here describes prospective design, not shipped
+behavior. See the
+[Python ADR promoter draft](adr/drafts/adr-promoter-host-tool-extraction.md).
+
+If approved and delivered, one `just adr-promoter` recipe executes the package
+selected from the active checkout:
+
+```just
+adr-promoter:
+    nix run --accept-flake-config --no-update-lock-file --no-write-lock-file .#adr-promoter -- controller
+```
+
+The package uses the locked Python 3.14.7 / Marko 2.2.4 / pytest 9.1.1 set and
+supplies `gh` 2.100.0, Git 2.55.0 and Prettier 3.9.6. Marko's GFM AST supplies
+link/image destination spans, including table cells; a tested
+character-to-original-byte map permits patching original bytes without Markdown
+serialization. GitHub calls use the App-token `gh` GraphQL path; expected-OID
+leases use Git CLI. The workflow retains its existing CI-shell entry and calls
+`just adr-promoter`, not an ambient PATH executable.
+
+Rust keeps the read-only `adr-format`, README/view parity, `doc-links`, and
+sequence/collision gates. `cargo xtask adr promote` and `sync-readme` remain
+fixed-operation delegates to the selected Python package. The old
+`cargo xtask adr promoter` spelling delegates only during PR 1 and is removed in
+PR 2 after `CONTRIBUTING.md`'s controller-rerun guidance moves to Just and
+trusted-main execution is observed. The manual-promotion prohibition and
+`sync-readme` recovery command remain. Rust owns no mutation or second
+controller. Rust `gh` transport remains for its PR watch/land consumers; the
+Python CLI adapter is narrow and does not add a general SDK or RPC protocol.
+
+The existing authority, successful safe-refusal outcomes, generation coalescing,
+immutable head/diff, exact recovery/check correlation, deterministic mutation
+and promotion-as-acceptance remain. PR 1 adds the selected package, switches the
+workflow and replaces Rust mutation bodies with delegates; PR 2 removes the
+obsolete Rust controller and temporary controller frontdoor after trusted-main
+execution is observed. Approval-visible parser differences include malformed
+orphan `](...)` text, links in indented code blocks, and links inside multiline
+code spans: Marko recognizes no inline link there, while the existing Rust
+scanner may rewrite the substring. The probe found no span/target differences in
+295 tracked Markdown files, but that corpus result is not universal parser
+equivalence. Human approved these Marko parser-eligibility differences via
+`cd55b65a-4f7d-426d-991a-04cc256ec206` / `issue-1897-python-design-v2` at
+baseline `82bd37273dd533026fbf07f0121865fe254583a8`. This remains prospective
+architecture, not shipped behavior or implementation/privilege/merge approval.
+
 This document is itself a gated artifact. The `adr-view-parity` step requires
 every `accepted` ADR to be cited here, and fails the ladder by name and title
 when one is not
