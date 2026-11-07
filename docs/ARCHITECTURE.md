@@ -3115,25 +3115,67 @@ remain outside the stack contract. VictoriaTraces supports fresh deployment and
 same-version restart, not compatible on-disk upgrades or stable third-party
 query APIs.
 
-**Production baseline qualification.** The opt-in host-only
-`cargo xtask production-baseline` boundary resolves immutable upstream
-revisions, owns Nix builds, VM lifecycle, the stable local HTTPS proxy, workflow
-ordering, and dated sanitized evidence. `productionBaselineVm` supplies its
-immutable package while it constructs its qualification VM through an internal
-module seam; this is not a `services.jaunder` option or other supported operator
-interface. It adds no lifecycle output to `checks`; Nix never invokes xtask.
-Discovery and non-release acceptance execute the shared Chromium Playwright
-behavior flow over fresh SQLite and PostgreSQL deployments, including restart,
-reboot, and all four exact-schema restore directions. Completed evidence is
-JSON-authoritative, Markdown-derived, and atomically retained only as an exact
-summary pair under ignored `.xtask/production-baseline-reports/`; raw state and
-generated secrets remain in the restricted gitignored workspace. The operator
-contract and its explicit non-claims live in
-[the production baseline runbook](production-baseline.md). This is an opt-in
-qualification surface, not a public CA/DNS, performance, or release claim
+**Production baseline qualification.** Four root Just workflows are the opt-in
+public catalog: `production-baseline-discover <revision>`,
+`production-baseline-accept <source> <target>`,
+`production-baseline-qualify-styling`, and `production-baseline-smoke`.
+Discover/accept require a clean checkout; Just captures full harness `HEAD`,
+resolves product expressions to commit IDs, rejects equal acceptance commits or
+an empty target, checks canonical origin, then issues one
+`git fetch --quiet --no-write-fetch-head --refetch origin <commits>` over the
+distinct harness/source/target set. Refetch bypasses Git's locally-complete fast
+path, proving origin serves the requested objects rather than named-branch
+reachability; larger transfers and normal Git maintenance are accepted costs.
+The host binds expected harness SHA to its clean `SourcePin` before Nix
+admission or lifecycle mutation, without repeating Git resolution or
+origin/fetch checks. Styling similarly binds clean expected `HEAD` but admits a
+local immutable `git+file:` source, with no origin/upstream Git-network
+prerequisite. Smoke uses the mutable current-checkout `path:` flake, without
+qualification source admission or evidence publication.
+
+Nix supplies the selected immutable executable, helper, browser, harness and VM
+identities. The narrow host-only leaf retains source/drift checks, Nix output
+admission and GC roots, secure shared lease, restricted workspaces, VM/proxy/
+browser/backend lifecycle, fixture/protocol comparisons, canaries, cleanup,
+evidence validation/publication and failure attribution. These workflows return
+plain status and diagnostics, bypassing generic `CommandResult`/`StepResult`,
+invocation reporting, last-result sidecar and sentinel. Unrelated xtask
+reporting and Nix routes remain. xtask stays outside the product workspace and
+derivations. `productionBaselineVm` supplies immutable packages through an
+internal qualification VM module seam, not a supported `services.jaunder`
+option. It adds no lifecycle output to `checks`; Nix never invokes xtask.
+
+Discovery and non-release acceptance use shared Chromium Playwright behavior on
+fresh SQLite and PostgreSQL deployments, including restart, reboot and all four
+exact-schema restore directions. Ordinary evidence is JSON-authoritative,
+schema-validated and Markdown-derived/parity-checked, with an exact summary
+pair, canary/forbidden-content and prohibited-file/symlink scans, collision
+refusal and atomic publication under ignored
+`.xtask/production-baseline-reports/`. A valid sanitized failed product/protocol
+outcome may be published and still exits nonzero.
+Collection/rendering/schema/parity/sanitization, required cleanup or
+source-recheck failures publish nothing. Styling retains separate identity/
+phase/context validation, independent canary scans of JSON and Markdown, private
+staging, cleanup and source recheck before rename; it publishes only passing
+runs under `.xtask/review/evidence/styling-qualification/`, with no ordinary
+schema/parity or failed-report contract. Smoke publishes neither form. Raw state
+and generated secrets remain restricted and ignored.
+
+The
+[Just qualification workflow ownership decision](adr/drafts/qualification-workflow-ownership.md)
+records this implemented split; the numberless ADR remains **proposed** pending
+normal serialized post-merge promotion, not manual numbering or index edits.
+Actual qualification still requires executed Nix-selected harness/VM evidence;
+source migration and native host tests are not qualification results. Procedures
+and explicit non-claims live in
+[the production baseline runbook](production-baseline.md) and
+[the styling qualification guide](application-assets.md#qualification-and-limits).
+This is not a public CA/DNS, performance or release claim
 ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md),
-[ADR-0142](adr/0142-declarative-nixos-deployment-package-outputs.md), and
-[ADR-0174](adr/0174-backup-format-and-schema-compatibility.md)).
+[ADR-0141](adr/0141-cargo-workspace-execution-boundaries.md),
+[ADR-0142](adr/0142-declarative-nixos-deployment-package-outputs.md),
+[ADR-0174](adr/0174-backup-format-and-schema-compatibility.md), and
+[ADR-0225](adr/0225-nix-cached-host-tooling.md)).
 
 ## Emacs Protocol Client
 
@@ -4877,13 +4919,17 @@ placed by a single litmus test — _where must this code execute?_
   `nix build` and consumes/analyzes exfiltrated build artifacts (coverage gate,
   CRAP gate, reports). Retained public producer/diagnostic commands use
   `result::CommandResult::report` and its `.xtask/last-result.json` sidecar.
-  Plain check leaves and precommit safety bypass that reporting boundary. Each
-  `result::StepResult` records its name, outcome, duration, and optional
-  `result::NixReport` for a successful producer-owned Nix build (`installable`,
-  optional evaluated `derivation`, and conservative `realization`). It also
-  prints an `xtask-done: command=… ok=… exit=… duration_ms=…` sentinel on stderr
-  from every exit path (`main::main`), so a truncated log can still prove the
-  process finished ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)).
+  Plain check leaves, precommit safety, artifact verdicts and the Just-owned
+  qualification leaf bypass that reporting boundary. Each `result::StepResult`
+  records its name, outcome, duration, and optional `result::NixReport` for a
+  successful producer-owned Nix build (`installable`, optional evaluated
+  `derivation`, and conservative `realization`). It also prints an
+  `xtask-done: command=… ok=… exit=… duration_ms=…` sentinel on stderr for
+  generic result exits (and an error-form sentinel on generic failures), so a
+  truncated log can still prove the process finished. Plain-status paths and
+  early CLI refusals do not emit that sentinel (`main::main`;
+  [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md), with the
+  [qualification carveout](adr/drafts/qualification-workflow-ownership.md)).
 - **`tools/devtool`** — the tool that must also run inside Nix build sandboxes,
   where `nix` and `xtask` are unavailable; `devtool coverage emit` produces
   coverage artifacts into `$out` for exfiltration

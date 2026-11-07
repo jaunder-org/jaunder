@@ -57,6 +57,13 @@ if [ "$name" = git ]; then
     if [ -f dirty-status ]; then
         printf ' M tracked.rs\n'
     fi
+    case "$*" in
+      'rev-parse --verify HEAD^{commit}'|'rev-parse --verify --end-of-options HEAD^{commit}') printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' ;;
+      'rev-parse --verify --end-of-options source^{commit}') printf 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n' ;;
+      'rev-parse --verify --end-of-options target^{commit}') printf 'cccccccccccccccccccccccccccccccccccccccc\n' ;;
+      'remote get-url origin')
+        if [ -f wrong-origin ]; then printf 'https://example.invalid/foreign\n'; else printf 'https://github.com/jaunder-org/jaunder.git\n'; fi ;;
+    esac
 fi
 if [ "$name $*" = "cargo xtask test-local" ]; then
     touch producer-resource
@@ -113,6 +120,238 @@ if [ "$name $*" = "${FAIL_COMMAND:-}" ]; then exit 17; fi
             String::from_utf8_lossy(&output.stderr).into_owned(),
         )
     }
+}
+
+#[test]
+fn qualification_just_preflight_fetches_complete_distinct_set_once() {
+    let workflow = Workflow::new();
+    let (ok, actual, stderr) =
+        workflow.run(&["production-baseline-accept", "source", "target"], "");
+    assert!(ok, "{stderr}");
+    assert_eq!(
+        actual,
+        commands(&[
+            "git status --porcelain --untracked-files=all",
+            "git rev-parse --verify HEAD^{commit}",
+            "git rev-parse --verify --end-of-options source^{commit}",
+            "git rev-parse --verify --end-of-options target^{commit}",
+            "git remote get-url origin",
+            "git fetch --quiet --no-write-fetch-head --refetch origin aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb cccccccccccccccccccccccccccccccccccccccc",
+            "cargo xtask qualification-leaf --expected-harness aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --source bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --target cccccccccccccccccccccccccccccccccccccccc",
+        ])
+    );
+}
+
+#[test]
+fn acceptance_refuses_empty_target_before_fetch_or_host_invocation() {
+    let workflow = Workflow::new();
+    let (ok, actual, stderr) = workflow.run(&["production-baseline-accept", "HEAD", ""], "");
+    assert!(!ok, "empty acceptance target must refuse: {stderr}");
+    assert_eq!(
+        stderr.lines().next(),
+        Some(
+            "error: call to function `error` failed: production-baseline accept requires a nonempty target"
+        ),
+        "{stderr}"
+    );
+    assert!(!actual.iter().any(|command| command[0] == "cargo"));
+    assert!(
+        !actual
+            .iter()
+            .any(|command| command.get(1).is_some_and(|arg| arg == "fetch"))
+    );
+}
+
+#[test]
+fn qualification_preflight_refuses_before_host_invocation() {
+    for marker in ["dirty-status", "wrong-origin"] {
+        let workflow = Workflow::new();
+        fs::write(workflow.root.path().join(marker), "refuse").unwrap();
+        let (ok, actual, stderr) = workflow.run(&["production-baseline-discover", "source"], "");
+        assert!(!ok, "{marker}: {stderr}");
+        assert!(!actual.iter().any(|command| command[0] == "cargo"));
+        assert!(
+            !actual
+                .iter()
+                .any(|command| command.get(1).is_some_and(|arg| arg == "fetch"))
+        );
+    }
+    let workflow = Workflow::new();
+    let (ok, actual, stderr) =
+        workflow.run(&["production-baseline-accept", "source", "source"], "");
+    assert!(!ok, "{stderr}");
+    assert!(stderr.contains("distinct resolved"), "{stderr}");
+    assert!(!actual.iter().any(|command| command[0] == "cargo"));
+    let (ok, actual, stderr) = workflow.run(&["production-baseline-discover", "source"], "git fetch --quiet --no-write-fetch-head --refetch origin aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    assert!(!ok, "{stderr}");
+    assert!(!actual.iter().any(|command| command[0] == "cargo"));
+}
+
+#[test]
+fn discovery_deduplicates_harness_and_styling_and_smoke_stay_local() {
+    let workflow = Workflow::new();
+    let (ok, actual, stderr) = workflow.run(&["production-baseline-discover", "HEAD"], "");
+    assert!(ok, "{stderr}");
+    let fetches: Vec<_> = actual
+        .iter()
+        .filter(|command| command.get(1).is_some_and(|arg| arg == "fetch"))
+        .collect();
+    assert_eq!(fetches, commands(&["git fetch --quiet --no-write-fetch-head --refetch origin aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]).iter().collect::<Vec<_>>());
+    let (ok, actual, stderr) = workflow.run(&["production-baseline-qualify-styling"], "");
+    assert!(ok, "{stderr}");
+    assert_eq!(
+        actual,
+        commands(&[
+            "git status --porcelain --untracked-files=all",
+            "git rev-parse --verify HEAD^{commit}",
+            "cargo xtask qualification-leaf --expected-harness aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ])
+    );
+    let (ok, actual, stderr) = workflow.run(&["production-baseline-smoke"], "");
+    assert!(ok, "{stderr}");
+    assert_eq!(actual, commands(&["cargo xtask qualification-leaf"]));
+}
+
+#[test]
+fn real_git_refuses_unpushed_harness_and_resolves_product_aliases() {
+    let root = tempfile::tempdir().unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    let upstream = tools.path().join("upstream.git");
+    let git = |args: &[&str]| {
+        let output = xtask::git::at(root.path()).args(args).output().unwrap();
+        assert!(output.status.success(), "{args:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    git(&["init", "--quiet"]);
+    git(&["config", "user.name", "Fixture"]);
+    git(&["config", "user.email", "fixture@example.invalid"]);
+    fs::copy(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../Justfile"),
+        root.path().join("Justfile"),
+    )
+    .unwrap();
+    git(&["add", "Justfile"]);
+    git(&["commit", "--quiet", "-m", "source"]);
+    let source = git(&["rev-parse", "HEAD"]);
+    git(&["tag", "source-alias"]);
+    git(&["commit", "--quiet", "--allow-empty", "-m", "target"]);
+    let target = git(&["rev-parse", "HEAD"]);
+    git(&["tag", "target-alias"]);
+    git(&["init", "--quiet", "--bare", upstream.to_str().unwrap()]);
+    git(&["push", upstream.to_str().unwrap(), "HEAD:refs/heads/main"]);
+    git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/jaunder-org/jaunder.git",
+    ]);
+    git(&["commit", "--quiet", "--allow-empty", "-m", "harness"]);
+    let harness = git(&["rev-parse", "HEAD"]);
+    let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|path| path.join("git"))
+        .find(|path| path.is_file())
+        .unwrap();
+    for (name, text) in [
+        (
+            "git",
+            "#!/usr/bin/env bash\nargs=(\"$@\")\nif [[ ${args[0]} == fetch ]]; then\n  for i in \"${!args[@]}\"; do\n    [[ ${args[$i]} != origin ]] || args[$i]=$UPSTREAM\n  done\nfi\nexec \"$REAL_GIT\" \"${args[@]}\"\n",
+        ),
+        ("cargo", "#!/bin/sh\nprintf '%s\\n' \"$@\"\n"),
+    ] {
+        let path = tools.path().join(name);
+        fs::write(&path, text).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let run = |args: &[&str]| {
+        let mut command = Command::new("just");
+        command
+            .args(args)
+            .current_dir(root.path())
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    tools.path().display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            )
+            .env("REAL_GIT", &real_git)
+            .env("UPSTREAM", &upstream);
+        for variable in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_COMMON_DIR",
+            "GIT_NAMESPACE",
+        ] {
+            command.env_remove(variable);
+        }
+        command.output().unwrap()
+    };
+    let args = ["production-baseline-accept", "source-alias", "target-alias"];
+    for protocol in ["0", "2"] {
+        git(&["config", "protocol.version", protocol]);
+        let refused = run(&args);
+        assert!(
+            !refused.status.success(),
+            "protocol={protocol}: {refused:?}"
+        );
+        assert!(!String::from_utf8_lossy(&refused.stdout).contains("qualification-leaf"));
+    }
+    git(&["push", upstream.to_str().unwrap(), "HEAD:refs/heads/main"]);
+    fs::write(root.path().join(".git/FETCH_HEAD"), "preserve fetch head\n").unwrap();
+    let admitted = run(&args);
+    assert!(admitted.status.success(), "{admitted:?}");
+    assert_eq!(
+        String::from_utf8(admitted.stdout).unwrap(),
+        format!(
+            "xtask\nqualification-leaf\n--expected-harness\n{harness}\n--source\n{source}\n--target\n{target}\n"
+        )
+    );
+    assert_eq!(
+        fs::read_to_string(root.path().join(".git/FETCH_HEAD")).unwrap(),
+        "preserve fetch head\n"
+    );
+    assert!(
+        !run(&["production-baseline-accept", "source-alias", &source])
+            .status
+            .success()
+    );
+    assert!(
+        !run(&["production-baseline-discover", "not-a-revision"])
+            .status
+            .success()
+    );
+    git(&[
+        "commit",
+        "--quiet",
+        "--allow-empty",
+        "-m",
+        "local-only product",
+    ]);
+    let local_product = git(&["rev-parse", "HEAD"]);
+    git(&["update-ref", "HEAD", &harness]);
+    for protocol in ["0", "2"] {
+        git(&["config", "protocol.version", protocol]);
+        for products in [
+            [local_product.as_str(), target.as_str()],
+            [source.as_str(), local_product.as_str()],
+        ] {
+            let refused = run(&["production-baseline-accept", products[0], products[1]]);
+            assert!(
+                !refused.status.success(),
+                "protocol={protocol}: {refused:?}"
+            );
+            assert!(!String::from_utf8_lossy(&refused.stdout).contains("qualification-leaf"));
+        }
+    }
+    git(&["remote", "remove", "origin"]);
+    assert!(
+        run(&["production-baseline-qualify-styling"])
+            .status
+            .success()
+    );
 }
 
 fn broad(mode: &str, shared_docs: bool) -> Vec<Vec<String>> {

@@ -16,6 +16,15 @@ pub(crate) struct SourcePin {
     locked_ref: String,
 }
 impl SourcePin {
+    /// Bind the Just preflight to the exact clean source used for Nix admission.
+    pub(crate) fn admit_expected(root: &Path, expected: &str) -> Result<Self> {
+        valid_hex(expected, 40, "expected harness")?;
+        let source = Self::admit_current(root)?;
+        if source.commit() != expected {
+            bail!("expected harness does not match admitted clean SourcePin");
+        }
+        Ok(source)
+    }
     pub(crate) fn admit_current(root: &Path) -> Result<Self> {
         let root = fs::canonicalize(root).context("canonicalizing qualification source root")?;
         let top = git_output(&root, &["rev-parse", "--show-toplevel"])?;
