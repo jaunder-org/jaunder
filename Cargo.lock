@@ -6889,6 +6889,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ux-sandbox"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "processkit",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -81,6 +81,7 @@ let
     "server"
     "storage"
     "test-support"
+    "ux-sandbox"
     "web"
   ];
   sqlxSqlitePatchRoot = "vendor/sqlx-sqlite-0.9.0";
@@ -247,6 +248,8 @@ let
         "src/main.rs"
         "tests/main.rs"
       ]
+    else if member == "ux-sandbox" then
+      [ "src/main.rs" ]
     else if member == "test-support" then
       [
         "src/lib.rs"
@@ -362,12 +365,7 @@ let
         src = craneLib.path ../.;
         filter = siteSourceFilter;
       })
-      [
-        "host"
-        "server"
-        "storage"
-        "test-support"
-      ];
+      (builtins.filter (member: !(builtins.elem member siteCargoMembers)) workspaceMembers);
   wasmTestSrc =
     withWorkspacePlaceholders "jaunder-wasm-test-cargo-source"
       (pkgs.lib.cleanSourceWith {
@@ -379,14 +377,7 @@ let
           in
           cargoTargetSource wasmTestCargoMembers path type || pkgs.lib.hasPrefix "client/tests/" relative;
       })
-      [
-        "csr"
-        "host"
-        "server"
-        "storage"
-        "test-support"
-        "web"
-      ];
+      (builtins.filter (member: !(builtins.elem member wasmTestCargoMembers)) workspaceMembers);
 
   productSourceFilter =
     path: type:

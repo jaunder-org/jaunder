@@ -22,6 +22,7 @@ pub const WORKSPACE: &[&str] = &[
     "server",
     "storage",
     "test-support",
+    "ux-sandbox",
     "web",
 ];
 
@@ -47,6 +48,7 @@ pub const ALL: &[&str] = &[
     "server",
     "storage",
     "test-support",
+    "ux-sandbox",
     "web",
     "xtask",
     "tools",

@@ -22,7 +22,7 @@ contracts, and D2 overall-simplicity acceptance.
 
 ## Task outline
 
-- [ ] **Task 1: Public disposable-server tracer works from a normal checkout**
+- [x] **Task 1: Public disposable-server tracer works from a normal checkout**
   - Add the root-workspace `ux-sandbox` binary and one public `just sandbox`
     recipe with positional arguments and exact argv forwarding. Bootstrap the
     helper to distinct `target/debug/ux-sandbox`; under
