@@ -27,9 +27,12 @@ derivation, and the census derivation (both against their own writable copied
 source under `$TMPDIR`, never the user's checkout). This keeps one setup
 implementation instead of parallel shell and derivation scripts; retain the
 `devtool check tsc` check definition but remove its provisioning pre-step. The
-fresh-worktree TSC proof must use a worktree whose ignored destination is
-absent, establish that absence before invoking the Just TSC workflow, and prove
-the workflow provisions it.
+clarified TSC proof uses the assigned checkout in the existing shell:
+temporarily preserve any ignored destination, establish its absence before
+invoking the Just TSC workflow, prove the workflow provisions it, and restore
+the preserved contents without data loss. This bounded validation substitution
+is not a literal separate fresh-worktree proof and authorizes no permanent
+move-aside setup behavior.
 
 Before creating/populating `end2end/node_modules`, the setup executable must
 inspect the destination itself without following it and unlink a destination
@@ -75,10 +78,13 @@ contract is not reopened by this provisioning change.
 - A focused setup test exercises absent destination, existing directory with
   preserved unrelated sentinel, repeat invocation, and a stale destination
   symlink to an external sentinel tree; it confirms the stale link is unlinked
-  and the referent is unchanged. A fresh-worktree TSC invocation starts with
-  absent `end2end/node_modules` and proves the Just workflow provisions it; the
-  `static-e2e-census` derivation proves the copied-source consumer. Census
-  population and verdict behavior remain unchanged.
+  and the referent is unchanged. An assigned-checkout TSC invocation in the
+  existing shell starts with absent `end2end/node_modules`, proves the Just
+  workflow provisions it, and restores temporarily preserved ignored contents
+  without data loss. This substitutes for, but does not establish, literal
+  separate fresh-worktree execution. The `static-e2e-census` derivation proves
+  the copied-source consumer. Census population and verdict behavior remain
+  unchanged.
 - A repository-wide search finds no obsolete provisioning interface/caller. The
   maintained implementation/test/doc surface is simpler overall, with no new
   framework or duplicate census implementation.

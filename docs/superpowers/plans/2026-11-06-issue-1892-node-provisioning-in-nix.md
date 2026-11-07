@@ -27,7 +27,7 @@ spec's package, symlink and census contracts.
     implementation reduces total maintained complexity without duplicate
     caller-specific provisioning. If not, return the mechanism choice to spec
     approval before wiring callers.
-- [ ] Task 2: Route the host and census consumers through the shared setup
+- [x] Task 2: Route the host and census consumers through the shared setup
   - Contract: devShell supports IDE use; Just TSC works after moving into a
     fresh worktree in the already-running shell; census setup mutates only its
     writable copied source. Each of the devShell, Just TSC workflow,
@@ -37,9 +37,12 @@ spec's package, symlink and census contracts.
     `devtool check tsc` retains check-definition ownership; census
     population/verdict stay unchanged.
   - Verification: inspect all four call sites for the same two Nix-provided
-    paths and no caller-specific fallback. First confirm the fresh worktree's
-    ignored `end2end/node_modules` is absent; invoke the Just TSC workflow, then
-    confirm setup created the expected links and TSC completed. Run the actual
+    paths and no caller-specific fallback. In the assigned checkout and existing
+    shell, temporarily preserve ignored contents, establish absent
+    `end2end/node_modules`, invoke the Just TSC workflow, then confirm the exact
+    pinned links and TSC completion. Restore the preserved contents without data
+    loss. This clarified validation substitution is not literal separate
+    fresh-worktree proof or permanent move-aside setup behavior. Run the actual
     `static-e2e-census` and `static-typescript` derivations. Repository-wide
     search covers the Rust CLI name, module/test references, and all former call
     sites.
