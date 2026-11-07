@@ -763,7 +763,7 @@ workflows. It passes the selected successful output and capture explicitly;
 verification neither builds a VM nor guesses an output from an old root or a
 lifted diagnostics directory. Nix retains the existing finalization, archive
 hash/size and retention checks, and host population/trace checks remain required
-([Just E2E workflow ownership](adr/drafts/just-e2e-workflow-ownership.md)).
+([Just E2E workflow ownership](adr/0238-just-e2e-workflow-ownership.md)).
 
 `sqlite × chromium` is authoritative because `chromium`'s `testIgnore` and
 `chromium-admin`'s `testMatch` are exact complements over all spec files and no

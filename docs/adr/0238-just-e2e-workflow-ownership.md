@@ -1,6 +1,6 @@
-# ADR-DRAFT: Just owns the E2E workflow entrypoint
+# ADR-0238: Just owns the E2E workflow entrypoint
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-05
 - Issue: [#1890](https://github.com/jaunder-org/jaunder/issues/1890)
 
