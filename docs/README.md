@@ -267,6 +267,7 @@ convention). See the Status column below for each ADR's current status.
 | [0236](adr/0236-csr-vite-content-addressed-assets.md)                    | Vite owns CSR asset output and build inventory                                                               | accepted   |
 | [0237](adr/0237-just-owned-gate-workflows.md)                            | Just Owns Developer Gate Workflows                                                                           | accepted   |
 | [0238](adr/0238-just-e2e-workflow-ownership.md)                          | Just owns the E2E workflow entrypoint                                                                        | accepted   |
+| [0239](adr/0239-qualification-workflow-ownership.md)                     | Just Owns Qualification Workflow Entry Points; Nix Owns Provenance                                           | accepted   |
 
 <!-- adr-table:end -->
 

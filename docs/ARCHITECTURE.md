@@ -3162,7 +3162,7 @@ schema/parity or failed-report contract. Smoke publishes neither form. Raw state
 and generated secrets remain restricted and ignored.
 
 The
-[Just qualification workflow ownership decision](adr/drafts/qualification-workflow-ownership.md)
+[Just qualification workflow ownership decision](adr/0239-qualification-workflow-ownership.md)
 records this implemented split; the numberless ADR remains **proposed** pending
 normal serialized post-merge promotion, not manual numbering or index edits.
 Actual qualification still requires executed Nix-selected harness/VM evidence;
@@ -4937,7 +4937,7 @@ placed by a single litmus test — _where must this code execute?_
   truncated log can still prove the process finished. Plain-status paths and
   early CLI refusals do not emit that sentinel (`main::main`;
   [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md), with the
-  [qualification carveout](adr/drafts/qualification-workflow-ownership.md)).
+  [qualification carveout](adr/0239-qualification-workflow-ownership.md)).
 - **`tools/devtool`** — the tool that must also run inside Nix build sandboxes,
   where `nix` and `xtask` are unavailable; `devtool coverage emit` produces
   coverage artifacts into `$out` for exfiltration

@@ -1,6 +1,6 @@
-# ADR-DRAFT: Just Owns Qualification Workflow Entry Points; Nix Owns Provenance
+# ADR-0239: Just Owns Qualification Workflow Entry Points; Nix Owns Provenance
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-06
 - Issue: [#1895](https://github.com/jaunder-org/jaunder/issues/1895)
 
