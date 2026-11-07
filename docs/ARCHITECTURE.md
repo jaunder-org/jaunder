@@ -3135,6 +3135,20 @@ qualification surface, not a public CA/DNS, performance, or release claim
 [ADR-0142](adr/0142-declarative-nixos-deployment-package-outputs.md), and
 [ADR-0174](adr/0174-backup-format-and-schema-compatibility.md)).
 
+**Proposed qualification-workflow ownership (issue #1895; pending approval and
+implementation).** The
+[proposed Just qualification workflow ownership decision](adr/drafts/qualification-workflow-ownership.md)
+would move public discover/accept setup (commit resolution, canonical-origin
+verification and combined harness/source/target upstream admission) to Just/Git,
+while styling keeps its local immutable source admission without a network
+prerequisite and smoke remains a mutable local no-evidence check. Nix would
+continue to supply immutable tool, harness and VM identities; xtask would remain
+host-only for source-bound lifecycle and evidence work, outside derivations and
+the product workspace. The draft proposes removing generic xtask report plumbing
+for these workflows only. This is not a statement of accepted or implemented
+behavior; the current workflow remains as described above until design approval
+and implementation.
+
 ## Emacs Protocol Client
 
 The Emacs Protocol Client is the reference authoring client: it publishes
