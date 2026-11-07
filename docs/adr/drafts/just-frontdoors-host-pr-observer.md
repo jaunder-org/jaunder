@@ -126,7 +126,8 @@ reaches `main`.
 - ADR-0135, ADR-0171, ADR-0195, ADR-0198, ADR-0220, and ADR-0077 safeguards
   remain in force. Any future change to their guarantees requires its own
   explicit approval.
-- The accepted spec is
-  `docs/superpowers/specs/2026-11-06-issue-1896-ordinary-issue-pr-workflows.md`.
+- The accepted
+  [specification](https://github.com/jaunder-org/jaunder/blob/c5270d850e843186ae4f7467fae8e16e7e86cc27/docs/superpowers/specs/2026-11-06-issue-1896-ordinary-issue-pr-workflows.md)
+  remains available in branch history after working-document retirement.
   Promotion assigns this draft a number after merge; do not edit
   `docs/README.md` or invoke promoter tooling from the feature branch.
