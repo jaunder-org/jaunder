@@ -106,6 +106,18 @@ struct ProducerStatus {
 struct SelectionDocument {
     profile: DatasetProfile,
     selection: RunSelection,
+    #[serde(default)]
+    producers: Vec<SelectedProducer>,
+}
+
+// Only identity metadata is consumed here; Nix installables belong to Just.
+#[derive(Deserialize)]
+struct SelectedProducer {
+    name: String,
+    identity: String,
+    producer: Producer,
+    backend: Backend,
+    browser: Option<Browser>,
 }
 
 #[derive(Deserialize)]
@@ -190,12 +202,21 @@ fn validate_producer_root(
         (Producer::Browser, Some(browser)) => browser_fragment_filename(backend, browser),
         _ => bail!("producer identity is inconsistent"),
     };
-    let fragments_root = performance_root.join("fragments");
-    let fragment: FragmentEnvelope = read_json(&fragments_root.join(filename))?;
+    let performance_root =
+        fs::canonicalize(performance_root).context("resolving retained producer")?;
+    let fragments_root = fs::canonicalize(performance_root.join("fragments"))
+        .context("resolving producer fragments")?;
+    let fragment_path =
+        fs::canonicalize(fragments_root.join(filename)).context("resolving producer fragment")?;
+    ensure!(
+        fragments_root.starts_with(&performance_root) && fragment_path.starts_with(&fragments_root),
+        "producer fragment is outside retained performance evidence"
+    );
+    let fragment: FragmentEnvelope = read_json(&fragment_path)?;
     validate_fragment(&fragment).context("producer fragment violates the shared contract")?;
-    let (actual_producer, setup, diagnostics) = match &fragment.fragment {
-        Fragment::Storage(value) => (Producer::Storage, &value.setup, None),
-        Fragment::Browser(value) => (Producer::Browser, &value.setup, Some(&value.diagnostics)),
+    let (actual_producer, setup) = match &fragment.fragment {
+        Fragment::Storage(value) => (Producer::Storage, &value.setup),
+        Fragment::Browser(value) => (Producer::Browser, &value.setup),
     };
     ensure!(
         actual_producer == producer,
@@ -205,12 +226,15 @@ fn validate_producer_root(
         setup.backend == backend,
         "producer fragment backend does not match selection"
     );
-    if let Some(diagnostics) = diagnostics {
+    if let Fragment::Browser(value) = &fragment.fragment {
         ensure!(
-            browser.is_some(),
-            "browser diagnostic fragment has no browser selection"
+            value
+                .workloads
+                .iter()
+                .all(|item| item.key.browser == browser),
+            "producer fragment browser does not match selection"
         );
-        validate_diagnostic_artifacts(&fragments_root, diagnostics)?;
+        validate_diagnostic_artifacts(&fragments_root, &value.diagnostics)?;
     }
     Ok(fragment)
 }
@@ -259,36 +283,36 @@ fn assemble(invocation_path: &Path) -> Result<()> {
         .parent()
         .context("invocation path has no parent")?;
 
+    ensure!(
+        run_root.file_name().and_then(|name| name.to_str()) == Some(&invocation.freshness_nonce),
+        "invocation nonce does not match its retained directory"
+    );
+    let selection: SelectionDocument = read_json(&run_root.join("selection.json"))?;
+    ensure!(
+        selection.profile == invocation.profile && selection.selection == invocation.selection,
+        "invocation selection differs from Nix selection"
+    );
+    ensure!(
+        selection.producers.len() == invocation.producers.len(),
+        "retained producer set differs from Nix selection"
+    );
+    let canonical_run_root =
+        fs::canonicalize(run_root).context("resolving invocation directory")?;
     let mut fragments = Vec::with_capacity(invocation.producers.len());
     let mut identities = Vec::with_capacity(invocation.producers.len());
     let mut names = BTreeSet::new();
     for producer in &invocation.producers {
         ensure!(
-            !producer.name.trim().is_empty()
-                && Path::new(&producer.name)
-                    .components()
-                    .all(|component| matches!(component, Component::Normal(_))),
-            "producer name is invalid"
-        );
-        ensure!(
             names.insert(&producer.name),
             "duplicate producer name {}",
             producer.name
         );
-        ensure!(
-            producer.identity.starts_with("/nix/store/"),
-            "producer identity is not a Nix store path: {}",
-            producer.identity
-        );
-        let expected_root = run_root
-            .join("producers")
-            .join(&producer.name)
-            .join("performance");
-        ensure!(
-            producer.retained_root == expected_root,
-            "retained producer root does not belong to this invocation: {}",
-            producer.name
-        );
+        validate_retained_identity(
+            producer,
+            &selection.producers,
+            run_root,
+            &canonical_run_root,
+        )?;
         let fragment = validate_producer_root(
             &producer.retained_root,
             producer.producer,
@@ -330,6 +354,55 @@ fn assemble(invocation_path: &Path) -> Result<()> {
         } else {
             "noncanonical selection"
         }
+    );
+    Ok(())
+}
+
+// Bind caller-supplied retention metadata to this invocation's Nix-selected identities.
+fn validate_retained_identity(
+    producer: &RetainedProducer,
+    selected: &[SelectedProducer],
+    run_root: &Path,
+    canonical_run_root: &Path,
+) -> Result<()> {
+    ensure!(
+        !producer.name.trim().is_empty()
+            && Path::new(&producer.name).components().count() == 1
+            && Path::new(&producer.name)
+                .components()
+                .all(|part| matches!(part, Component::Normal(_))),
+        "producer name is invalid"
+    );
+    ensure!(
+        producer.identity.starts_with("/nix/store/"),
+        "producer identity is not a Nix store path: {}",
+        producer.identity
+    );
+    let selected = selected
+        .iter()
+        .find(|selected| selected.name == producer.name)
+        .context("retained producer identity is absent from Nix selection")?;
+    ensure!(
+        selected.identity == producer.identity
+            && selected.producer == producer.producer
+            && selected.backend == producer.backend
+            && selected.browser == producer.browser,
+        "retained producer identity differs from Nix selection"
+    );
+    let expected_root = run_root
+        .join("producers")
+        .join(&producer.name)
+        .join("performance");
+    ensure!(
+        producer.retained_root == expected_root,
+        "retained producer root does not belong to this invocation: {}",
+        producer.name
+    );
+    ensure!(
+        fs::canonicalize(&producer.retained_root)
+            .context("resolving retained producer root")?
+            .starts_with(canonical_run_root),
+        "retained producer root is outside invocation"
     );
     Ok(())
 }
@@ -401,14 +474,13 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
 fn write_json_atomic(path: &Path, value: &impl serde::Serialize) -> Result<()> {
     let parent = path.parent().context("result path has no parent")?;
     fs::create_dir_all(parent)?;
-    let temporary = path.with_extension("tmp");
-    {
-        let mut file = fs::File::create(&temporary)?;
-        serde_json::to_writer_pretty(&mut file, value)?;
-        file.write_all(b"\n")?;
-        file.sync_all()?;
-    }
-    fs::rename(temporary, path)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    serde_json::to_writer_pretty(&mut temporary, value)?;
+    temporary.write_all(b"\n")?;
+    temporary.as_file().sync_all()?;
+    temporary
+        .persist(path)
+        .with_context(|| format!("publishing {}", path.display()))?;
     Ok(())
 }
 
@@ -512,7 +584,7 @@ mod tests {
         let error =
             validate_producer_root(directory.path(), Producer::Storage, Backend::Sqlite, None)
                 .expect_err("missing fragment is rejected");
-        assert!(format!("{error:#}").contains("storage-sqlite-v1.json"));
+        assert!(format!("{error:#}").contains("resolving producer fragments"));
     }
 
     #[test]
@@ -534,5 +606,43 @@ mod tests {
             otel_trace_artifact: "trace.json".into(),
         };
         assert!(validate_diagnostic_artifacts(&fragments_root, &escaped).is_err());
+    }
+
+    struct FailingSerialization;
+
+    impl serde::Serialize for FailingSerialization {
+        fn serialize<S: serde::Serializer>(
+            &self,
+            serializer: S,
+        ) -> std::result::Result<S::Ok, S::Error> {
+            use serde::ser::SerializeMap;
+            let mut map = serializer.serialize_map(Some(2))?;
+            map.serialize_entry("written_before_failure", &true)?;
+            Err(serde::ser::Error::custom("injected serialization failure"))
+        }
+    }
+
+    #[test]
+    fn atomic_publication_preserves_old_bytes_on_failure_and_cleans_temporary_files() -> Result<()>
+    {
+        let directory = tempfile::tempdir()?;
+        let result = directory.path().join(RESULT_FILENAME);
+        fs::write(&result, "old result")?;
+        assert!(write_json_atomic(&result, &FailingSerialization).is_err());
+        assert_eq!(fs::read_to_string(&result)?, "old result");
+        assert_eq!(fs::read_dir(directory.path())?.count(), 1);
+        // A failed rename must not leave a staged partial file for the next invocation.
+        let blocked = directory.path().join("blocked");
+        fs::create_dir(&blocked)?;
+        assert!(write_json_atomic(&blocked, &serde_json::json!({"complete": true})).is_err());
+        assert!(blocked.is_dir());
+        assert_eq!(fs::read_dir(directory.path())?.count(), 2);
+        write_json_atomic(&result, &serde_json::json!({"complete": true}))?;
+        assert_eq!(
+            read_json::<serde_json::Value>(&result)?,
+            serde_json::json!({"complete": true})
+        );
+        assert_eq!(fs::read_dir(directory.path())?.count(), 2);
+        Ok(())
     }
 }

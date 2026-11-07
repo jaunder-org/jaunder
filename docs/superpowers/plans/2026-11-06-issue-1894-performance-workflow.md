@@ -52,7 +52,7 @@ The approved spec is the scope contract.
     status/fragment/diagnostic files and host assembly. This is the first tracer
     bullet and one producer only, not the full matrix.
 
-- [ ] Task 2: Extend the same production assembly path with complete evidence
+- [x] Task 2: Extend the same production assembly path with complete evidence
       validation and publication checks.
   - Contract: extend Task 1's host-only CLI path; do not create a throwaway or
     duplicate assembler. It consumes normalized selection, profile, nonce,
