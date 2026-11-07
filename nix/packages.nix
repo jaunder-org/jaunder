@@ -1096,6 +1096,8 @@ let
     csrBundle = "${diagnosticCsrWasmBundle}/pkg";
   };
 
+  nodeModulesSetup = import ./node-modules-setup.nix { inherit pkgs; };
+
   e2ePackage = pkgs.buildNpmPackage {
     name = "jaunder-e2e";
     src = ../end2end;
@@ -1173,6 +1175,7 @@ in
     inherit csrDebugBundle;
     traced-run = tracedRunBin;
     devtool = devtoolBin;
+    node-modules-setup = nodeModulesSetup;
     xtask = xtaskBin;
     # The out-of-process e2e seed helper (ADR-0046). Exposed so it is
     # directly buildable/verifiable; it is placed only on the e2e VM PATH,
@@ -1246,6 +1249,7 @@ in
       leptosfmt
       csrWasmBundle
       e2ePackage
+      nodeModulesSetup
       emacsSrc
       emacsForCi
       ;

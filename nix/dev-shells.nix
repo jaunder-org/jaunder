@@ -15,6 +15,7 @@ let
     leptosfmt
     wasm-bindgen-cli
     e2ePackage
+    nodeModulesSetup
     appOfflineCargoHome
     ;
 
@@ -48,6 +49,7 @@ let
       # independent in-sandbox commands.
       devtoolBin
       tracedRunBin
+      nodeModulesSetup
       emacsForCi
       pkgs.jq
       # Just producers invoke Nix directly, not through the xtask launcher.
@@ -151,10 +153,8 @@ let
     # Host checks that spawn Cargo for the product workspace use the same
     # reviewed, offline dependency closure as the sandboxed static checks.
     JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
-    # Store paths for `devtool provision-node-modules`. Exported as env
-    # vars (rather than baked into the shellHook) so they survive `cd`
-    # into a worktree — that is what lets `devtool check tsc` re-run the
-    # provisioning there, where the shellHook never fired.
+    # Just's TSC workflow retains both pins after cd into another worktree,
+    # where the IDE setup hook has not run.
     E2E_TYPES_NODE_MODULES = "${e2ePackage}/node_modules";
     E2E_PLAYWRIGHT_TEST = "${pkgs.playwright-test}/lib/node_modules/@playwright/test";
     shellHook = ''
@@ -185,12 +185,8 @@ let
         export PLAYWRIGHT_BROWSERS_PATH="''${XDG_CACHE_HOME:-$HOME/Library/Caches}/ms-playwright-jaunder/${pkgs.playwright-test.version}"
       ''}
 
-      # Provision end2end/node_modules (the tsc type-dep closure) so the
-      # devShell `tsc` and IDEs can type-check end2end/ offline in this
-      # checkout. The same subcommand runs in-process from `devtool check
-      # tsc`, so worktrees self-heal there; see
-      # tools/devtool/src/provision.rs for the full rationale.
-      devtool provision-node-modules
+      # IDEs need the same pinned links as the explicit TSC workflow.
+      setup-e2e-node-modules "$E2E_TYPES_NODE_MODULES" "$E2E_PLAYWRIGHT_TEST"
     '';
   };
 in

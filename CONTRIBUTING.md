@@ -219,6 +219,14 @@ formatter-config input population; afterward it verifies Git state stayed
 unchanged. Other checks retain their order, and other platforms keep host
 Markdown Verify. Bypass with `SKIP_PRE_PUSH=1 git push` for WIP.
 
+Run `just tsc` for the single-command TypeScript workflow, including after `cd`
+to another worktree in an existing devShell. Nix's shared setup executable links
+the pinned dependencies before the unchanged `devtool check tsc` definition;
+direct `devtool check tsc` assumes dependencies are already available. Shell
+entry uses the same setup for IDEs. Setup refreshes current visible packages and
+the browser-matched Playwright override, preserves unrelated directory entries,
+and unlinks a stale destination symlink without touching its referent.
+
 Host Just recipes launch static `devtool` checks from the current checkout with
 `cargo run --locked --quiet --manifest-path tools/Cargo.toml -p devtool --bin devtool --`,
 not the shell's prebuilt `devtool`. Source edits therefore take effect without
@@ -1725,22 +1733,24 @@ devtool definitions. TypeScript formatting remains in Code. The census leaf
 retains the existing Playwright listing configuration, test/helper/fixture
 files, including module-load assets, and package manifests/lock inputs. Its
 direct source filter excludes unrelated repository sources; its actual closure
-still includes the existing whole- `end2end` `e2ePackage` and compiled
-`devtoolBin`, so package provisioning and tooling changes can invalidate it
-transitively. This is documented coupling, not a claim of full source isolation.
-The TypeScript split changes neither the independently landed Rust formatting
-boundary nor distinct feature/target/tools Clippy commands, and makes no
-equivalence, permanent deferral or closure claim. The independent `xtask-format`
-leaf verifies xtask Rust formatting with pinned Cargo/rustfmt; it is not part of
-a devtool group. The existing source drift probe covers its original boundaries
-plus `static-elisp` and `static-e2e-census`, not `static-typescript`,
-`rust-format`, `static-ert`, or `xtask-format`. The CSR/site source closure
-contains workspace manifests, the resolved `csr` target closure, its required
-shell inputs, and deterministic workspace placeholders. The client wasm-test
-closure analogously contains workspace manifests, the resolved `client`
-wasm-test target closure, and its required inputs/placeholders. `common` and
-`macros` remain wherever a resolved target reaches them; unrelated `server`,
-`storage`, and host-only sources are absent from both closures.
+still includes the existing whole-`end2end` `e2ePackage`, the shared Nix setup
+executable, and pinned Node/Playwright packages. Changes to those inputs can
+invalidate it transitively; compiled `devtoolBin` and its Rust tooling closure
+are no longer census inputs. This is documented coupling, not a claim of full
+source isolation. The TypeScript split changes neither the independently landed
+Rust formatting boundary nor distinct feature/target/tools Clippy commands, and
+makes no equivalence, permanent deferral or closure claim. The independent
+`xtask-format` leaf verifies xtask Rust formatting with pinned Cargo/rustfmt; it
+is not part of a devtool group. The existing source drift probe covers its
+original boundaries plus `static-elisp` and `static-e2e-census`, not
+`static-typescript`, `rust-format`, `static-ert`, or `xtask-format`. The
+CSR/site source closure contains workspace manifests, the resolved `csr` target
+closure, its required shell inputs, and deterministic workspace placeholders.
+The client wasm-test closure analogously contains workspace manifests, the
+resolved `client` wasm-test target closure, and its required
+inputs/placeholders. `common` and `macros` remain wherever a resolved target
+reaches them; unrelated `server`, `storage`, and host-only sources are absent
+from both closures.
 
 `cargo xtask nix probe-source` creates isolated tracked marker perturbations and
 **evaluates** the flake `.drv` identities without realizing outputs. It fails
@@ -1756,11 +1766,11 @@ without invalidating `static-docs`. For the census boundary, source-filter
 assertions establish membership of the census script, Playwright configuration,
 helper/fixture/font and package manifest/lock inputs, plus exclusion of Markdown
 and unrelated server source. Runtime identity perturbations cover the lane
-catalog and transitive devtool/tooling changes, with unrelated server-source
-stability; they do not separately perturb every census input category or prove
-that each has independent invalidation. It also protects `devtool` and its
-compiled tooling dependency boundary: devtool implementation edits invalidate
-the real tool, `static-code`, `static-elisp`, and site (through
+catalog invalidation and stability under Rust tooling, manifest, embedded-input,
+and unrelated server-source changes. They do not separately perturb every census
+input category or prove that each has independent invalidation. It also protects
+`devtool` and its compiled tooling dependency boundary: devtool implementation
+edits invalidate the real tool, `static-code`, `static-elisp`, and site (through
 `csrWasmBundle`'s `devtoolBin` build input), but preserve `wasm-tests`, `xtask`,
 and the compiled tooling dependency identity. `static-docs` now consumes the
 shared Prettier recipe directly, without a compiled Rust docs tool. The
@@ -1845,16 +1855,15 @@ server-function coverage verification to `just validate-no-e2e`.
   input, despite exclusion from its direct source filter. Devtool/tool-lock
   changes may invalidate this leaf through `devtoolBin`. The verdict is
   non-substitutable, but valid local output reuse remains possible.
-- `checks.x86_64-linux.static-e2e-census` — `devtool provision-node-modules`
+- `checks.x86_64-linux.static-e2e-census` — Nix's `setup-e2e-node-modules`
   followed by `node end2end/e2eCensusContract.ts`, preserving the existing
   census population independently of `tsc`. Its direct sources are the
   non-Markdown `end2end` tree (Playwright config/projects, tests, fixtures,
   helpers, and module-load assets) plus the census script. The existing
-  `e2ePackage` and compiled `devtoolBin` supply transitive pinned npm/tooling
-  closures, which are broader than the direct census filter and may invalidate
-  the leaf. It is non-substitutable, may reuse a valid local output, and is
-  requested once by hermetic static validation; host `devtool check --all`
-  remains unchanged.
+  `e2ePackage` supplies the transitive pinned npm closure, which is broader than
+  the direct census filter and may invalidate the leaf. It is non-substitutable,
+  may reuse a valid local output, and is requested once by hermetic static
+  validation; host `devtool check --all` remains unchanged.
 - `checks.x86_64-linux.static-ert` — `devtool check --group ert`, the standalone
   pure runner over the complete non-Markdown Elisp tree, in a writable copy,
   with existing `emacsForCi`, Git and timezone inputs. The separate combined

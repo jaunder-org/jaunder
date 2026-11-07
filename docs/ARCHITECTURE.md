@@ -4550,22 +4550,30 @@ boundary drifts from the host definitions
 ([hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md);
 [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
 
-The TypeScript leaf provisions the pinned type dependencies before the unchanged
-named `devtool check tsc`. Its direct filter admits TypeScript sources,
+Nix's `setup-e2e-node-modules` executable owns the ignored dependency links,
+shared by devShell entry for IDEs, `just tsc` for the current checkout, and the
+copied-source TypeScript and census leaves. Each caller supplies the same pinned
+`e2ePackage/node_modules` and Nix `@playwright/test` paths. Setup unlinks a
+stale destination symlink without touching its referent, refreshes visible
+current packages while preserving unrelated entries, skips dot entries, and
+overrides Playwright with the browser-matched pin. `devtool` retains the
+unchanged TSC command definition, not dependency setup.
+
+The TypeScript leaf sets up those dependencies before the unchanged named
+`devtool check tsc`. Its direct filter admits TypeScript sources,
 `tsconfig.json`, and dependency manifests, but the existing `e2ePackage` still
 makes all `end2end/` changes transitive inputs. It is non-substitutable, without
 forcing valid local outputs to rerun. `static-code` retains TypeScript
 formatting, but no longer owns the census command. `static-e2e-census` runs the
-existing `devtool provision-node-modules` followed by
-`node end2end/e2eCensusContract.ts`, with a direct non-Markdown `end2end` source
-filter that includes Playwright configuration, selected tests, helpers,
-fixtures, and module-load assets. It is independently requested by hermetic
-validation; its existing `e2ePackage` and compiled `devtoolBin` dependencies
-remain broader transitive inputs, so their source/dependency changes may also
-invalidate the census leaf. The existing whole-end2end `e2ePackage` also remains
-a transitive input to TypeScript; no TypeScript input-isolation claim follows.
-The TypeScript and census leaves refine the historical partition without
-changing `devtool` command ownership
+same setup executable followed by `node end2end/e2eCensusContract.ts`, with a
+direct non-Markdown `end2end` source filter that includes Playwright
+configuration, selected tests, helpers, fixtures, and module-load assets. It is
+independently requested by hermetic validation; its existing `e2ePackage`
+dependency remains a broader transitive input, so its source/dependency changes
+may also invalidate the census leaf. The existing whole-end2end `e2ePackage`
+also remains a transitive input to TypeScript; no TypeScript input-isolation
+claim follows. The TypeScript and census leaves refine the historical partition
+without changing `devtool` command ownership
 ([ADR-0178](adr/0178-split-hermetic-static-check-boundaries.md)). The
 independently landed Rust-format and xtask-format boundaries remain intact; the
 splits do not equate distinct formatter or Clippy populations, permanently defer

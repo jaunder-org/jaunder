@@ -7,14 +7,14 @@
 ## Execution summary
 
 First prove that one Nix-provided setup executable can be consumed by devShell
-startup, the Just TSC workflow and the census derivation without adding more
-maintained complexity than the removed Rust provisioner. Then connect those
-callers and remove the Rust interface. Preserve the approved spec's package,
-symlink and census contracts.
+startup, the Just TSC workflow, `static-typescript` and the census derivation
+without adding more maintained complexity than the removed Rust provisioner.
+Then connect those callers and remove the Rust interface. Preserve the approved
+spec's package, symlink and census contracts.
 
 ## Task outline
 
-- [ ] Task 1: Provide and prove one shared Nix setup executable
+- [x] Task 1: Provide and prove one shared Nix setup executable
   - Contract: Nix supplies `${e2ePackage}/node_modules` and
     `${pkgs.playwright-test}/lib/node_modules/@playwright/test`; setup acts only
     on the caller's current `end2end/node_modules` destination and safely
@@ -30,18 +30,20 @@ symlink and census contracts.
 - [ ] Task 2: Route the host and census consumers through the shared setup
   - Contract: devShell supports IDE use; Just TSC works after moving into a
     fresh worktree in the already-running shell; census setup mutates only its
-    writable copied source. Each of the devShell, Just TSC workflow and
-    `static-e2e-census` receives both `${e2ePackage}/node_modules` and
+    writable copied source. Each of the devShell, Just TSC workflow,
+    `static-typescript` and `static-e2e-census` receives both
+    `${e2ePackage}/node_modules` and
     `${pkgs.playwright-test}/lib/node_modules/@playwright/test` directly.
     `devtool check tsc` retains check-definition ownership; census
     population/verdict stay unchanged.
-  - Verification: inspect all three call sites for the same two Nix-provided
+  - Verification: inspect all four call sites for the same two Nix-provided
     paths and no caller-specific fallback. First confirm the fresh worktree's
     ignored `end2end/node_modules` is absent; invoke the Just TSC workflow, then
     confirm setup created the expected links and TSC completed. Run the actual
-    `static-e2e-census` derivation. Repository-wide search covers the Rust CLI
-    name, module/test references, and all former call sites.
-- [ ] Task 3: Retire the Rust provisioner surface and confirm net simplification
+    `static-e2e-census` and `static-typescript` derivations. Repository-wide
+    search covers the Rust CLI name, module/test references, and all former call
+    sites.
+- [x] Task 3: Retire the Rust provisioner surface and confirm net simplification
   - Contract: remove `tools/devtool/src/provision.rs`, its unit tests,
     `tools/devtool/tests/provision_cli.rs`, provision CLI arguments/dispatch,
     and obsolete Just/Nix/shell call sites; retain unrelated devtool checks and

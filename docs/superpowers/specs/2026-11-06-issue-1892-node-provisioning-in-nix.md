@@ -22,13 +22,14 @@ Rust, Just, script, Nix, test and documentation surface for net simplification.
 Use one small Nix-provided setup executable, with the pinned package paths
 supplied by Nix, from all applicable entrypoints: devShell entry (for IDE use in
 the starting checkout), the Just TSC workflow (so TSC also works after `cd` to a
-fresh worktree in the already-running shell), and the census derivation (against
-its own writable copied source under `$TMPDIR`, never the user's checkout). This
-keeps one setup implementation instead of parallel shell and derivation scripts;
-retain the `devtool check tsc` check definition but remove its provisioning
-pre-step. The fresh-worktree TSC proof must use a worktree whose ignored
-destination is absent, establish that absence before invoking the Just TSC
-workflow, and prove the workflow provisions it.
+fresh worktree in the already-running shell), the `static-typescript`
+derivation, and the census derivation (both against their own writable copied
+source under `$TMPDIR`, never the user's checkout). This keeps one setup
+implementation instead of parallel shell and derivation scripts; retain the
+`devtool check tsc` check definition but remove its provisioning pre-step. The
+fresh-worktree TSC proof must use a worktree whose ignored destination is
+absent, establish that absence before invoking the Just TSC workflow, and prove
+the workflow provisions it.
 
 Before creating/populating `end2end/node_modules`, the setup executable must
 inspect the destination itself without following it and unlink a destination
@@ -41,7 +42,7 @@ safe. A focused setup regression must exercise absent destination, ordinary
 directory with an unrelated sentinel, repeat invocation, and a stale destination
 symlink to an external sentinel tree; verify expected current package links and
 that the sentinels/referents remain unchanged. If the chosen Nix packaging
-cannot expose the same setup executable to all three entrypoints without
+cannot expose the same setup executable to all four entrypoints without
 introducing greater maintained complexity, return that mechanism choice to spec
 approval rather than duplicating provisioning logic.
 
@@ -65,8 +66,9 @@ contract is not reopened by this provisioning change.
   arguments/dispatch, and `tools/devtool/tests/provision_cli.rs` are removed,
   with no remaining provision-specific symbols or call sites.
 - The same Nix-provided setup executable is used by shell entry, the Just TSC
-  workflow, and `static-e2e-census`; each receives `${e2ePackage}/node_modules`
-  and `${pkgs.playwright-test}/lib/node_modules/@playwright/test` directly. The
+  workflow, `static-typescript`, and `static-e2e-census`; each receives
+  `${e2ePackage}/node_modules` and
+  `${pkgs.playwright-test}/lib/node_modules/@playwright/test` directly. The
   helper is not duplicated in caller-specific shell snippets. The devtool TSC
   check remains the command-definition owner but no longer provisions
   dependencies.
@@ -87,9 +89,10 @@ contract is not reopened by this provisioning change.
 
 ## Boundaries
 
-This issue changes only common pinned Node dependency provisioning and the three
+This issue changes only common pinned Node dependency provisioning and the four
 identified call paths: the devShell hook, the E2E census derivation, and the TSC
-check path. It does not redesign census membership, expected/executed verdicts,
-E2E execution, package versions, Playwright/browser pinning, or the devtool's
-unrelated in-sandbox responsibilities. It does not authorize broader xtask/Just
-migration or implementation beyond this issue's accepted scope.
+check path (Just and `static-typescript`). It does not redesign census
+membership, expected/executed verdicts, E2E execution, package versions,
+Playwright/browser pinning, or the devtool's unrelated in-sandbox
+responsibilities. It does not authorize broader xtask/Just migration or
+implementation beyond this issue's accepted scope.
