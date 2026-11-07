@@ -44,6 +44,8 @@ alongside their replacement callers. The observer remains read-only; direct
     A real focused invocation confirms Just can launch the host tool and watch
     cannot mutate GitHub.
 - [ ] Task 3: Move ordinary issue workflows to explicit Just/gh frontdoors
+  - Repository slice implemented; focused proof and Lead acceptance are separate
+    from the pending Manager-owned external skill source/deployment cutover.
   - Contract: Provide one documented Just entrypoint per issue discovery, create
     and edit operation. Keep type, labels, milestone, Priority, Backlog
     metadata, explicit dependencies and body readback/mangling checks; do not

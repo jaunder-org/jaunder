@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::issue;
 const VERSION: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     " (",
@@ -265,10 +264,6 @@ pub enum Command {
     /// Host-only manual command; needs `gh`.
     #[command(subcommand)]
     Pr(PrCommand),
-    /// Gather or apply Jaunder issue tracker metadata (#1090/#1091).
-    /// Host-only manual command; needs `gh`.
-    #[command(subcommand)]
-    Issue(issue::IssueCommand),
     /// Run fresh release-mode performance producers, compare a retained run, or
     /// import the verified canonical GitHub Actions baseline.
     #[command(name = "perf", subcommand)]
@@ -662,8 +657,6 @@ impl Cli {
             Command::Pr(PrCommand::Watch { .. }) => "pr-watch",
             Command::Pr(PrCommand::Cleanup { .. }) => "pr-cleanup",
             Command::Pr(PrCommand::Land { .. }) => "pr-land",
-            Command::Issue(issue::IssueCommand::Candidates { .. }) => "issue-candidates",
-            Command::Issue(issue::IssueCommand::Create { .. }) => "issue-create",
         }
     }
 }
@@ -860,137 +853,10 @@ mod tests {
     }
 
     #[test]
-    fn issue_candidates_parses_milestone_and_command_name() {
-        let cli = Cli::try_parse_from([
-            "xtask",
-            "issue",
-            "candidates",
-            "--milestone",
-            "Developer tooling & DX",
-        ])
-        .unwrap();
-        assert_eq!(cli.command_name(), "issue-candidates");
-        match cli.command {
-            Command::Issue(issue::IssueCommand::Candidates { milestone }) => {
-                assert_eq!(milestone, "Developer tooling & DX");
-            }
-            _ => panic!("expected issue candidates"),
+    fn ordinary_issue_commands_are_not_xtask_entrypoints() {
+        for operation in ["candidates", "create", "edit"] {
+            assert!(Cli::try_parse_from(["xtask", "issue", operation]).is_err());
         }
-    }
-
-    #[test]
-    fn issue_create_parses_complete_help_example() {
-        let cli = Cli::try_parse_from([
-            "xtask",
-            "--json",
-            "issue",
-            "create",
-            "--title",
-            "feat(xtask): add helper",
-            "--type",
-            "Task",
-            "--milestone",
-            "Developer tooling & DX",
-            "--priority",
-            "P2",
-            "--label",
-            "tooling",
-            "--label",
-            "dx",
-            "--body-file",
-            "/tmp/issue.md",
-        ])
-        .unwrap();
-        assert!(cli.json);
-        assert_eq!(cli.command_name(), "issue-create");
-        match cli.command {
-            Command::Issue(issue::IssueCommand::Create {
-                title,
-                issue_type,
-                milestone,
-                priority,
-                labels,
-                body_file,
-            }) => {
-                assert_eq!(title, "feat(xtask): add helper");
-                assert_eq!(issue_type, "Task");
-                assert_eq!(milestone, "Developer tooling & DX");
-                assert_eq!(priority, issue::Priority::P2);
-                assert_eq!(labels, ["tooling", "dx"]);
-                assert_eq!(body_file, PathBuf::from("/tmp/issue.md"));
-            }
-            _ => panic!("expected issue create"),
-        }
-    }
-
-    fn issue_create_args() -> Vec<&'static str> {
-        vec![
-            "xtask",
-            "issue",
-            "create",
-            "--title",
-            "feat(xtask): add helper",
-            "--type",
-            "Task",
-            "--milestone",
-            "Developer tooling & DX",
-            "--label",
-            "tooling",
-            "--body-file",
-            "/tmp/issue.md",
-        ]
-    }
-
-    #[test]
-    fn issue_create_accepts_uppercase_and_lowercase_priorities() {
-        for (spelling, expected) in [
-            ("P1", issue::Priority::P1),
-            ("p1", issue::Priority::P1),
-            ("P2", issue::Priority::P2),
-            ("p2", issue::Priority::P2),
-            ("P3", issue::Priority::P3),
-            ("p3", issue::Priority::P3),
-            ("P4", issue::Priority::P4),
-            ("p4", issue::Priority::P4),
-        ] {
-            let mut args = issue_create_args();
-            args.extend(["--priority", spelling]);
-            let cli = Cli::try_parse_from(args).unwrap();
-            match cli.command {
-                Command::Issue(issue::IssueCommand::Create { priority, .. }) => {
-                    assert_eq!(priority, expected, "{spelling}");
-                }
-                _ => panic!("expected issue create"),
-            }
-        }
-    }
-
-    #[test]
-    fn issue_create_rejects_invalid_priority_during_parsing() {
-        for spelling in ["P0", "P5", "urgent"] {
-            let mut args = issue_create_args();
-            args.extend(["--priority", spelling]);
-            let Err(error) = Cli::try_parse_from(args) else {
-                panic!("accepted invalid Priority {spelling}");
-            };
-            assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
-            let diagnostic = error.to_string();
-            assert!(diagnostic.contains("invalid value"));
-            assert!(diagnostic.contains(spelling));
-            assert!(diagnostic.contains("P1, P2, P3, P4"));
-        }
-    }
-
-    #[test]
-    fn issue_create_requires_explicit_priority() {
-        let Err(error) = Cli::try_parse_from(issue_create_args()) else {
-            panic!("accepted missing Priority");
-        };
-        assert_eq!(
-            error.kind(),
-            clap::error::ErrorKind::MissingRequiredArgument
-        );
-        assert!(error.to_string().contains("--priority"));
     }
 
     #[test]

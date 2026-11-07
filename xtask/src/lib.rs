@@ -19,7 +19,6 @@ pub mod git;
 mod host_tooling;
 mod ids;
 pub mod invocation_trace;
-pub mod issue;
 mod lifecycle;
 pub mod markers;
 mod mutants;

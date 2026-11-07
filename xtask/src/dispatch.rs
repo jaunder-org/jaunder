@@ -9,7 +9,7 @@ use crate::{
         AdrCommand, CacheSafetyCommand, Cli, Command, CoverageCommand, MutantsCommand, NixCommand,
         PrCommand, TracesCommand, WasmCoverageCommand,
     },
-    coverage, issue, lifecycle, nix_probe, performance, pr,
+    coverage, lifecycle, nix_probe, performance, pr,
     result::{CommandResult, StepResult},
     steps, traces, wasm_coverage,
 };
@@ -401,7 +401,6 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
-        Command::Issue(sub) => issue::execute(sub),
         Command::Pr(PrCommand::Cleanup { number }) => {
             let start = Instant::now();
             let mut result = pr::cleanup::execute(number);

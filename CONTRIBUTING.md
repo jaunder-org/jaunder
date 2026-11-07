@@ -1279,11 +1279,11 @@ baseline.
 
 ### Discovering milestone issue candidates
 
-`cargo xtask --json issue candidates --milestone <number-or-exact-title>`
-gathers open issues, Jaunder Backlog claim status, open native prerequisites,
-and local resume artifacts. Discovery is read-only: it does not claim issues,
-acquire runtime ownership, or dispatch work. An open milestone must match
-exactly and unambiguously by number or title.
+`just issue-discover <number-or-exact-title>` gathers open issues, Jaunder
+Backlog claim status, open native prerequisites, and local resume artifacts.
+Discovery is read-only: it does not claim issues, acquire runtime ownership, or
+dispatch work. An open milestone must match exactly and unambiguously by number
+or title.
 
 Success means the observed REST inventory was traversed through its last page,
 including prerequisite pages before closed prerequisites are filtered out.
@@ -1292,14 +1292,47 @@ requests. This is not an atomic snapshot: GitHub state may change during or
 following discovery. Repeated issue identities across pages are refused rather
 than silently deduplicated.
 
-GraphQL metadata reads are bounded to 100 open milestones, 100 labels, 100 issue
-types, and 10 project items per issue. Every required connection must explicitly
-report `hasNextPage=false`; overflow or missing/malformed completeness evidence
-fails with a nonzero incomplete-inventory error, not a false absence. Shared
-metadata refusal also protects issue-creation preflight before any mutation. Any
-API, parsing, or later-page failure prevents a successful candidate report;
-there is no partial-success mode. Do not interpret a failed read as an empty or
-exhausted milestone.
+`gh api --paginate --slurp` owns REST traversal. The per-issue GraphQL project
+read is bounded to 100 items and must explicitly report `hasNextPage=false`;
+overflow or missing/malformed completeness evidence fails nonzero, not as false
+absence. Any API, parsing, or later-page failure prevents a successful candidate
+report; there is no partial-success mode. Do not interpret a failed read as an
+empty or exhausted milestone. Stdout is the candidate/skipped JSON inventory,
+not an xtask report envelope.
+
+### Creating and editing issues
+
+Use one explicit frontdoor per operation, from the devShell:
+
+```sh
+just issue-create 'fix(tooling): preserve metadata' Task 3 P2 tooling,dx /path/body.md
+just issue-edit 731 'fix(tooling): preserve metadata' Task 3 P2 tooling,dx /path/body.md 42
+```
+
+Arguments are title, GitHub type (`Task`, `Bug`, or `Feature`), exact open
+milestone title/number, Priority (`P1`–`P4`), comma-separated topic labels, and
+a UTF-8 body file. Edit takes the issue number first. All metadata is explicit;
+edit replaces the supplied title/type/milestone/labels/body, rather than
+inferring missing decisions. Files preserve body bytes, including trailing
+newlines and angle placeholders. An empty body/label or readback mismatch fails.
+
+Optional trailing numbers are explicitly chosen open `blocked-by` prerequisites
+(42 in the edit example). The frontdoors use native dependency endpoints with
+resolved integer database IDs and verify readback. Dependencies are additive;
+editing does not erase pre-existing links. Do not supply closed prerequisites or
+substitute prose for native links.
+
+Both operations add/retain the issue in Jaunder Backlog (#1), set its explicit
+Priority, and verify exact issue metadata/body and Backlog/Priority readback.
+They do not change claim Status. Stdout contains the verified issue JSON plus
+its Backlog item; progress/failures go to stderr. Native `gh`/GitHub owns
+mutation semantics. A nonzero result can follow partial application: inspect the
+printed issue URL before retrying; no rollback or automatic duplicate issue
+creation is attempted. Invalid/partial/API responses cannot produce success.
+
+The three Just frontdoors replace ordinary xtask issue dispatch/report helpers.
+Their small shell helpers compose native `gh`/`git` and `jq`; they do not add a
+general command runner or polling loop.
 
 ### Targeted Rust tests
 
