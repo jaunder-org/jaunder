@@ -45,7 +45,7 @@ approved spec for full scope and acceptance.
     prove the three old `ProductionBaselineCommand` routes and smoke subcommand
     are retired, the other `Command::Nix` subcommands remain, the internal leaf
     returns ordinary status, and unrelated commands retain generic reporting.
-- [ ] Task 3: Migrate callers and certify workflow-specific outcome/evidence
+- [x] Task 3: Migrate callers and certify workflow-specific outcome/evidence
       contracts.
   - Contract: update Just recipes, production-baseline/styling runbooks, and the
     projected architecture; browser tests remain consumers. Ordinary

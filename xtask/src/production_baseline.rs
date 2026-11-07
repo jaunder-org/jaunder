@@ -1767,11 +1767,22 @@ pub fn run_leaf(
             )
         }
     };
-    let destination = evidence_destination(&root, &raw)?;
+    publish_ordinary_outcome(&root, &raw, canaries, retained_workspace.as_deref())
+}
+
+/// Keep publication and the ordinary process verdict together: valid failed
+/// observations are durable evidence, never a successful qualification.
+fn publish_ordinary_outcome(
+    root: &Path,
+    raw: &Evidence,
+    canaries: Result<EvidenceCanaries>,
+    retained_workspace: Option<&Path>,
+) -> Result<String> {
+    let destination = evidence_destination(root, raw)?;
     let detail = format!(
         "destination={} runtime-identities={} upgrades={} backups={} checks={}",
         destination
-            .strip_prefix(&root)
+            .strip_prefix(root)
             .unwrap_or(&destination)
             .display(),
         raw.runtime.len(),
@@ -1780,20 +1791,19 @@ pub fn run_leaf(
         raw.checks.len()
     );
     let publication = raw.validate().and_then(|()| {
-        let current = crate::qualification::SourcePin::admit_current(&root)?;
+        let current = crate::qualification::SourcePin::admit_current(root)?;
         if current.commit() != raw.harness.commit {
             bail!("baseline harness source drifted before evidence publication");
         }
-        let workspace = publication_workspace(&root)?;
+        let workspace = publication_workspace(root)?;
         let canaries = canaries?;
-        publish_with_workspace_cleanup(&workspace, &destination, &raw, &canaries, |workspace| {
+        publish_with_workspace_cleanup(&workspace, &destination, raw, &canaries, |workspace| {
             fs::remove_dir_all(workspace).map_err(Into::into)
         })
     });
     if let Err(error) = publication {
         let unpublished_detail = retained_workspace
-            .as_deref()
-            .and_then(|workspace| workspace.strip_prefix(&root).ok())
+            .and_then(|workspace| workspace.strip_prefix(root).ok())
             .map(|workspace| {
                 format!(
                     "evidence was not published; restricted-workspace={}",
@@ -2295,6 +2305,48 @@ mod tests {
         assert_eq!(evidence.lifecycle[0].id, "deploy");
         assert_eq!(evidence.lifecycle[0].outcome, TimedOutcomeStatus::Failed);
         evidence.validate().unwrap();
+    }
+
+    #[test]
+    fn valid_failed_ordinary_outcome_is_published_before_nonpassing_verdict() {
+        for operation in ["discover", "accept"] {
+            let repo = repo();
+            let source = crate::qualification::SourcePin::admit_current(repo.path()).unwrap();
+            let mut failed = evidence();
+            failed.operation = operation.into();
+            failed.harness.commit = source.commit().to_owned();
+            failed.failure_classes = vec![FailureClass::Product];
+            failed.checks[0].outcome = TimedOutcomeStatus::Failed;
+            failed.target = (operation == "accept").then(|| ResolvedRevision {
+                commit: "e".repeat(40),
+                flake_ref: format!("github:jaunder-org/jaunder/{}", "e".repeat(40)),
+            });
+            let canaries = EvidenceCanaries::new(
+                vec!["unpublished-credential".into()],
+                vec!["unpublished-session".into()],
+                vec!["unpublished-private-material".into()],
+            )
+            .unwrap();
+            let destination = evidence_destination(repo.path(), &failed).unwrap();
+
+            // This is the leaf's verdict consumed by main's ordinary nonzero exit.
+            let verdict = publish_ordinary_outcome(repo.path(), &failed, Ok(canaries), None);
+            let error = verdict.expect_err("published failed observations must remain non-passing");
+            assert!(error.to_string().contains("baseline qualification failed"));
+            assert!(error.to_string().contains("failure-classes=[Product]"));
+            assert!(!error.to_string().contains("evidence was not published"));
+            validate_allowlist(&destination).unwrap();
+            let json = fs::read_to_string(destination.join("summary.json")).unwrap();
+            validate_serialized_evidence(&json).unwrap();
+            let published: Evidence = serde_json::from_str(&json).unwrap();
+            assert_eq!(published.operation, operation);
+            assert_eq!(published.outcome, Outcome::Failed);
+            assert_eq!(published.failure_classes, vec![FailureClass::Product]);
+            assert_eq!(
+                fs::read_to_string(destination.join("summary.md")).unwrap(),
+                render_markdown(&published).unwrap()
+            );
+        }
     }
 
     #[test]
