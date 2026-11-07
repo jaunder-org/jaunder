@@ -31,6 +31,7 @@ let
     leptosfmt
     csrWasmBundle
     e2ePackage
+    nodeModulesSetup
     diagnosticJaunderBin
     diagnosticBaselineJaunderBin
     diagnosticCsrWasmBundle
@@ -3295,6 +3296,15 @@ static-docs =
       just --justfile recipes/prettier.just --working-directory . prettier-markdown
       touch $out
     '';
+# Exercise link safety with fixtures and both real dependency pins.
+node-modules-setup = nonSubstitutable (pkgs.runCommand "node-modules-setup-test"
+  { nativeBuildInputs = [ pkgs.bash pkgs.coreutils pkgs.diffutils ]; }
+  ''
+    bash ${./tests/node-modules-setup.sh} ${nodeModulesSetup}/bin/setup-e2e-node-modules \
+      ${e2ePackage}/node_modules \
+      ${pkgs.playwright-test}/lib/node_modules/@playwright/test
+    touch $out
+  '');
 # Keep the compiler project explicit; dependencies still come from the existing
 # whole-end2end e2ePackage, whose broader invalidation coupling is intentional.
 static-typescript =
@@ -3346,6 +3356,7 @@ static-typescript =
         # Provisioning owns ignored node_modules, not the checkout source filter.
         cp --no-preserve=mode -r ${staticTypeScriptSrc} src
         cd src
+        ${nodeModulesSetup}/bin/setup-e2e-node-modules "$E2E_TYPES_NODE_MODULES" "$E2E_PLAYWRIGHT_TEST"
         devtool check tsc
         touch $out
       ''
@@ -3543,7 +3554,7 @@ static-e2e-census =
   in
   nonSubstitutable (pkgs.runCommand "static-e2e-census"
     {
-      nativeBuildInputs = [ devtoolBin pkgs.nodejs pkgs.playwright-test ];
+      nativeBuildInputs = [ pkgs.nodejs pkgs.playwright-test ];
       E2E_TYPES_NODE_MODULES = "${e2ePackage}/node_modules";
       E2E_PLAYWRIGHT_TEST = "${pkgs.playwright-test}/lib/node_modules/@playwright/test";
       JAUNDER_E2E_PLAYWRIGHT_CLI = "${pkgs.playwright-test}/lib/node_modules/@playwright/test/cli.js";
@@ -3551,7 +3562,7 @@ static-e2e-census =
     ''
       cp --no-preserve=mode -r ${censusSrc} src
       cd src
-      devtool provision-node-modules
+      ${nodeModulesSetup}/bin/setup-e2e-node-modules "$E2E_TYPES_NODE_MODULES" "$E2E_PLAYWRIGHT_TEST"
       node end2end/e2eCensusContract.ts
       touch $out
     '');

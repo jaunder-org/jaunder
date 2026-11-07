@@ -225,6 +225,7 @@ impl Arm {
                 Boundary::Devtool,
             ],
             Self::UnrelatedNote => &[Boundary::StaticElisp, Boundary::CsrDebugBundle],
+            // Census must stay stable: its Nix setup has no Rust tooling inputs.
             Self::RootManifest
             | Self::ToolsManifest
             | Self::DevtoolManifest
@@ -235,6 +236,7 @@ impl Arm {
             | Self::Migration => &[
                 Boundary::StaticCode,
                 Boundary::StaticElisp,
+                Boundary::StaticE2eCensus,
                 Boundary::Devtool,
                 Boundary::ToolingDependencies,
                 Boundary::CsrDebugBundle,
@@ -321,7 +323,7 @@ impl Arm {
                         | Self::BuildConfig
                         | Self::DevtoolSource
                         | Self::ToolsLock,
-                    Boundary::Devtool | Boundary::StaticElisp | Boundary::StaticE2eCensus
+                    Boundary::Devtool | Boundary::StaticElisp
                 )
                 // Static docs uses pinned Just/Prettier directly, not devtool.
                 | (
@@ -345,11 +347,10 @@ impl Arm {
                         | Boundary::StaticElisp
                         | Boundary::Devtool
                         | Boundary::ToolingDependencies
-                        | Boundary::StaticE2eCensus
                 )
                 | (
                     Self::CsrShell | Self::ThemeManifest | Self::Migration,
-                    Boundary::StaticCode | Boundary::StaticElisp | Boundary::Devtool | Boundary::StaticE2eCensus
+                    Boundary::StaticCode | Boundary::StaticElisp | Boundary::Devtool
                 )
                 | (Self::ServerBuildScript, Boundary::StaticCode)
                 // The final bundle includes both the WASM target closure and
@@ -692,7 +693,6 @@ mod tests {
                 changed.xtask = "xtask-2".to_owned();
                 changed.devtool = "devtool-2".to_owned();
                 changed.static_elisp = "elisp-2".to_owned();
-                changed.static_e2e_census = "census-2".to_owned();
             }
             assert_eq!(compare_arm(&base, arm, &changed), Ok(()));
         }
@@ -780,7 +780,6 @@ mod tests {
             ) {
                 changed.devtool = "devtool-2".to_owned();
                 changed.static_elisp = "elisp-2".to_owned();
-                changed.static_e2e_census = "census-2".to_owned();
                 changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
             }
             if matches!(arm, Arm::BuildConfig) {
@@ -798,13 +797,29 @@ mod tests {
     }
 
     #[test]
+    fn lane_catalog_still_requires_census_invalidation() {
+        let base = paths("docs", "code", "site", "wasm");
+        let mut changed = base.clone();
+        changed.static_code = "code-2".to_owned();
+        changed.xtask = "xtask-2".to_owned();
+        assert!(matches!(
+            compare_arm(&base, Arm::LaneCatalog, &changed),
+            Err(ProbeError::MissingChange {
+                boundary: "static-e2e-census",
+                ..
+            })
+        ));
+        changed.static_e2e_census = "census-2".to_owned();
+        assert_eq!(compare_arm(&base, Arm::LaneCatalog, &changed), Ok(()));
+    }
+
+    #[test]
     fn devtool_source_changes_preserve_compiled_dependency_identity() {
         let base = paths("docs", "code", "site", "wasm");
         let mut changed = base.clone();
         changed.static_code = "code-2".to_owned();
         changed.static_elisp = "elisp-2".to_owned();
         changed.devtool = "devtool-2".to_owned();
-        changed.static_e2e_census = "census-2".to_owned();
         changed.site = "site-2".to_owned();
         changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
         assert_eq!(compare_arm(&base, Arm::DevtoolSource, &changed), Ok(()));
@@ -846,13 +861,6 @@ mod tests {
                     ..changed.clone()
                 },
             ),
-            (
-                "static-e2e-census",
-                DrvPaths {
-                    static_e2e_census: base.static_e2e_census.clone(),
-                    ..changed.clone()
-                },
-            ),
         ] {
             assert!(matches!(
                 compare_arm(&base, Arm::DevtoolSource, &stale),
@@ -864,6 +872,13 @@ mod tests {
             Err(ProbeError::MissingChange { .. })
         ));
         for (boundary, unrelated) in [
+            (
+                "static-e2e-census",
+                DrvPaths {
+                    static_e2e_census: "census-2".to_owned(),
+                    ..changed.clone()
+                },
+            ),
             (
                 "wasm-tests",
                 DrvPaths {
@@ -900,7 +915,6 @@ mod tests {
         changed.static_elisp = "elisp-2".to_owned();
         changed.xtask = "xtask-2".to_owned();
         changed.devtool = "devtool-2".to_owned();
-        changed.static_e2e_census = "census-2".to_owned();
         changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
         assert!(matches!(
             compare_arm(&base, Arm::ToolsLock, &changed),
@@ -1001,7 +1015,6 @@ mod tests {
             if arm != Arm::ServerBuildScript {
                 changed.devtool = "devtool-2".to_owned();
                 changed.static_elisp = "elisp-2".to_owned();
-                changed.static_e2e_census = "census-2".to_owned();
                 changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
             }
             if matches!(
@@ -1014,6 +1027,15 @@ mod tests {
             assert!(matches!(
                 compare_arm(&base, arm, &base),
                 Err(ProbeError::MissingChange { .. })
+            ));
+            let mut changed_census = changed.clone();
+            changed_census.static_e2e_census = "census-2".to_owned();
+            assert!(matches!(
+                compare_arm(&base, arm, &changed_census),
+                Err(ProbeError::UnexpectedChange {
+                    boundary: "static-e2e-census",
+                    ..
+                })
             ));
             changed.tooling_dependencies = "wrong-deps".to_owned();
             if !arm.expects_change(Boundary::ToolingDependencies) {
@@ -1103,7 +1125,6 @@ mod tests {
         let mut changed = paths("docs", "code-2", "site-2", "wasm");
         changed.static_elisp = "elisp-2".to_owned();
         changed.devtool = "devtool-2".to_owned();
-        changed.static_e2e_census = "census-2".to_owned();
         assert_eq!(
             compare_arm(&base, Arm::DevtoolSource, &changed),
             Err(ProbeError::MissingChange {

@@ -17,6 +17,11 @@ export SCCACHE_BASEDIRS := ```
 devtool := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p devtool --bin devtool --"
 prettier := "just --justfile recipes/prettier.just --working-directory ."
 
+# Setup follows the current checkout even after cd in an existing devShell.
+tsc mode="verify":
+    setup-e2e-node-modules "$E2E_TYPES_NODE_MODULES" "$E2E_PLAYWRIGHT_TEST"
+    {{devtool}} check tsc {{if mode == "fix" { "--fix" } else { "" }}}
+
 # Verify workflows refuse dirty or unavailable Git state before work.
 coverage: _clean-tree coverage-workflow
 
@@ -181,7 +186,7 @@ _host mode docs:
     cargo xtask check-leaf e2e-scaffold
     cargo xtask check-leaf xlang-literal
     {{devtool}} check byte-compile {{if mode == "fix" { "--fix" } else { "" }}}
-    {{devtool}} check tsc {{if mode == "fix" { "--fix" } else { "" }}}
+    just tsc {{mode}}
     {{devtool}} check cargo-deny {{if mode == "fix" { "--fix" } else { "" }}}
     {{devtool}} check product-core-clippy {{if mode == "fix" { "--fix" } else { "" }}}
     {{devtool}} check web-server-clippy {{if mode == "fix" { "--fix" } else { "" }}}
