@@ -128,6 +128,16 @@ schedule/manual artifact with the exact workflow/job identity; PR evidence can
 be compared but cannot seed it. Timing deltas, including 20-percent median/p95
 warnings, are advisory; invalid artifacts and producer failures are not.
 
+**Proposed performance workflow ownership (issue #1894; not yet implemented).**
+The proposed design gives Just native workflow parameters and a small serial
+build-and-retain sequence; Nix selects the pinned producer set. A host-only Rust
+performance command in `tools/performance` owns typed evidence validation,
+assembly, advisory comparison, trusted baseline import, and atomic publication,
+not producer scheduling. This is a proposed clarification of
+[Just and Nix performance workflow ownership](adr/drafts/performance-workflow-ownership.md),
+not a description of current runtime behavior: until approval and
+implementation, `cargo xtask perf` remains the active workflow.
+
 **Package-metadata ownership is deliberately partial.** The root
 `[workspace.package]` owns the version, edition, and license inherited by its
 nine members (`client`, `common`, `csr`, `host`, `macros`, `server`, `storage`,
