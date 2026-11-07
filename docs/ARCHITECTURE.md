@@ -4296,7 +4296,7 @@ Unrelated xtask commands retain their own result contracts.
 `recipes/prettier.just` owns the three shared Markdown, `end2end`, and CSS
 command definitions; the exclusive docsDevtoolBin pipeline is gone. Other
 devtool checks remain devtool-owned. See the
-[Just-owned gate workflow decision](adr/drafts/just-owned-gate-workflows.md).
+[Just-owned gate workflow decision](adr/0237-just-owned-gate-workflows.md).
 
 The remaining callable boundary mixes substantive parsers/censuses (including
 Rust and TypeScript AST analysis), small textual/ADR policies, Git/index safety,
