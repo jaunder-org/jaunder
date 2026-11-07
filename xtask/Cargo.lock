@@ -3110,6 +3110,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "pr-observer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "clap",
+ "processkit",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.11.0",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "precomputed-hash"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5535,6 +5551,7 @@ dependencies = [
  "oxc_span",
  "oxc_syntax",
  "performance",
+ "pr-observer",
  "proc-macro2",
  "processkit",
  "quote",

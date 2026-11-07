@@ -860,7 +860,7 @@ mod tests {
             .map(|path| {
                 (
                     path.to_owned(),
-                    std::fs::read_to_string(format!("{}/../{path}", env!("CARGO_MANIFEST_DIR")))
+                    std::fs::read_to_string(format!("{}/../../{path}", env!("CARGO_MANIFEST_DIR")))
                         .unwrap(),
                 )
             })
@@ -870,7 +870,7 @@ mod tests {
     #[test]
     fn catalog_matrices_require_exact_references_and_immutable_source_evidence() {
         let source = std::fs::read_to_string(format!(
-            "{}/../.github/workflows/ci.yml",
+            "{}/../../.github/workflows/ci.yml",
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap();
@@ -937,7 +937,7 @@ mod tests {
     #[test]
     fn production_ci_e2e_matrix_explicitly_keeps_fail_fast_disabled() {
         let source = std::fs::read_to_string(format!(
-            "{}/../.github/workflows/ci.yml",
+            "{}/../../.github/workflows/ci.yml",
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap_or_else(|error| panic!("production CI workflow: {error}"));

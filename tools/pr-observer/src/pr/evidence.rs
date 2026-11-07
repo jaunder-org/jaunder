@@ -619,7 +619,7 @@ mod tests {
         ];
         for file in files {
             let source =
-                std::fs::read_to_string(format!("{}/../{file}", env!("CARGO_MANIFEST_DIR")))
+                std::fs::read_to_string(format!("{}/../../{file}", env!("CARGO_MANIFEST_DIR")))
                     .unwrap();
             replies.push(serde_json::json!({"encoding":"base64","content":base64::engine::general_purpose::STANDARD.encode(source)}));
         }

@@ -61,6 +61,7 @@ sha2 = "0.11.0"
 # command runner; a background worker keeps process I/O pumps live between calls.
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "signal", "time"] }
 performance = { path = "../tools/performance" }
+pr-observer = { path = "../tools/pr-observer" }
 serde_yaml = "0.9.34"
 base64 = "0.22.1"
 # The standalone host adapter inherits version requirements, but not the root
@@ -77,6 +78,7 @@ webauthn-rs-core = { git = "https://github.com/jaunder-org/webauthn-rs", rev = "
 rustix = { version = "1.1.4", features = ["fs", "process", "time"] }
 
 [dev-dependencies]
+pr-observer = { path = "../tools/pr-observer", features = ["test-support"] }
 # Closed synthetic releases are used only by canonical adapter unit fixtures.
 host = { path = "../host", features = ["qualification"] }
 # Synthesizes the fixture modules the attribution tests parse, so no binary wasm

@@ -1,7 +1,5 @@
 use anyhow::{Result, anyhow};
 
-use super::decide::Progress;
-use super::gh::ApiError;
 use super::invocation::{GitFacts, Invocation};
 use super::snapshot::{PrSource, SharedFailureEvidenceSource};
 use super::{Event, Outcome, PrNumber, PrReport, land, snapshot, watch};
@@ -141,18 +139,7 @@ pub fn execute_with<
     // Rate limits are retried too, not just `is_transient` errors: `watch`'s loop
     // rides them out, so `land` bailing on the same condition would make the two
     // commands disagree about what a 403 means.
-    let mut established = source.snapshot(&subject);
-    for _ in 1..3 {
-        let wait = match &established {
-            Err(ApiError::RateLimited { reset_unix }) => reset_unix
-                .map(|r| r.saturating_sub(clock.now_unix()).min(60))
-                .unwrap_or(5),
-            Err(e) if e.is_transient() => 2,
-            _ => break,
-        };
-        clock.sleep_secs(wait.max(1));
-        established = source.snapshot(&subject);
-    }
+    let established = super::observe::establish_snapshot(source, clock, &subject);
     if let Err(e) = &established
         && matches!(
             snapshot::resolution_failure(e),
@@ -213,50 +200,14 @@ pub fn execute_with<
             sink,
         ));
     }
-    let progress = established
-        .as_ref()
-        .map_or_else(|_| Progress::default(), Progress::from_snapshot);
-    let mut report = watch::watch_with_progress(source, clock, &subject, cfg, progress, sink);
-    if report.outcome == Outcome::ChecksFailed && report.subject_failure.is_some() {
-        enrich_shared_failure(
-            source,
-            &subject,
-            &mut report,
-            super::gh::Deadline::ten_seconds(),
-        );
-    }
-    Ok(report)
-}
-fn enrich_shared_failure<S: SharedFailureEvidenceSource>(
-    source: &S,
-    subject: &super::Subject,
-    report: &mut PrReport,
-    deadline: super::gh::Deadline,
-) {
-    if deadline.check().is_err() {
-        return;
-    }
-    let Some(failure) = report.subject_failure.as_ref() else {
-        return;
-    };
-    let Ok(evidence) = source.shared_failure_evidence(subject, failure, &deadline) else {
-        return;
-    };
-    let mut check = || {
-        deadline
-            .check()
-            .map_err(|_| super::shared_failure::PolicyError::Cancelled)
-    };
-    let annotation = super::shared_failure::shared_failure_with_check(
-        &evidence.subject_log,
-        evidence.selected_runs,
-        evidence.jobs,
-        &mut check,
-    )
-    .map_err(|_| super::gh::ApiError::Transport("shared-failure enrichment timed out".into()));
-    if let Ok(annotation) = annotation {
-        report.shared_failure = annotation;
-    }
+    Ok(super::observe::observe_established(
+        source,
+        clock,
+        &subject,
+        established,
+        cfg,
+        sink,
+    ))
 }
 
 /// Wrap a report in the command envelope.
@@ -305,7 +256,7 @@ mod tests {
     }
 
     impl PrArmer for SpyArmer {
-        fn arm_auto_merge(&self, _: &Subject, _: &str) -> std::result::Result<(), ApiError> {
+        fn arm_auto_merge(&self, _: &Subject, _: &str) -> std::result::Result<(), E> {
             self.calls.set(self.calls.get() + 1);
             Ok(())
         }
@@ -712,7 +663,7 @@ mod tests {
         let evidence_source = FakeSource::new(vec![], queue_rules())
             .with_shared_failure_evidence(matching_evidence())
             .with_shared_failure_evidence_delay(std::time::Duration::from_millis(20));
-        enrich_shared_failure(
+        super::super::observe::enrich_shared_failure(
             &evidence_source,
             &crate::pr::test_support::subject(),
             &mut report,

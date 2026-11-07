@@ -278,3 +278,7 @@ e2e-regenerate-coverage:
 
 e2e-reconcile backend artifacts=".xtask/diagnostics":
     cargo xtask e2e-reconcile {{quote(backend)}} --catalog end2end/e2e-lanes.json --diagnostics-root {{quote(artifacts)}}
+
+# Read-only caller-actionable PR observation; only this focused tool polls GitHub.
+pr-watch *args:
+    cargo run --locked --quiet --manifest-path tools/Cargo.toml -p pr-observer -- watch {{args}}

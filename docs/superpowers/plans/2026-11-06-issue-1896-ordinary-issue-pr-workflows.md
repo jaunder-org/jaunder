@@ -17,7 +17,7 @@ alongside their replacement callers. The observer remains read-only; direct
 
 ## Task outline
 
-- [ ] Task 1: Record the approved observer/tool ownership decisions
+- [x] Task 1: Record the approved observer/tool ownership decisions
   - Contract: Add numberless successor/amendment ADR draft(s) in
     `docs/adr/drafts/` for ADR-0087 observer ownership and ADR-0028 host-tool
     placement. Cite the exact accepted spec and approval identity
@@ -29,7 +29,7 @@ alongside their replacement callers. The observer remains read-only; direct
     architecture-projection checks; Lead review confirms draft citations and
     prose reflect only the approved ADR-0087/0028 changes and leave numbered
     ADRs immutable. Add no new validation mechanism.
-- [ ] Task 2: Run the focused observer outside xtask
+- [x] Task 2: Run the focused observer outside xtask
   - Contract: Add the host-only `tools/pr-observer/` package to the `tools/`
     workspace with a read-only watch command. Reuse only the necessary
     poller/evidence classifier; no land, cleanup, generic command dispatch, or

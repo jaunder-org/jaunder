@@ -54,12 +54,6 @@ fn merge_args<'a>(number: &'a str, repo: &'a str, expected_head: &'a str) -> [&'
     ]
 }
 
-pub(super) fn head_drift_detail(expected: &str, observed: &str) -> String {
-    format!(
-        "refusing to land: expected PR head {expected}, observed {observed}; a fresh qualified landing invocation is required"
-    )
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub enum GuardVerdict {
     Proceed,
@@ -239,7 +233,7 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
             subject,
             expected_head.into(),
             Outcome::Stale,
-            Some(head_drift_detail(expected_head, &snap.head_sha)),
+            Some(decide::head_drift_detail(expected_head, &snap.head_sha)),
             None,
             events,
         );
@@ -471,7 +465,7 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
                 subject,
                 head_sha,
                 Outcome::Stale,
-                Some(head_drift_detail(expected_head, &after.head_sha)),
+                Some(decide::head_drift_detail(expected_head, &after.head_sha)),
                 None,
                 events,
             );

@@ -156,7 +156,8 @@ struct Polled {
     classification: SnapshotClassification,
 }
 
-pub(super) enum SnapshotClassification {
+/// Shared classification consumed by xtask's temporary pre-arm guard.
+pub enum SnapshotClassification {
     Complete {
         step: Step,
         optional_failures: Vec<OptionalFailure>,
@@ -187,7 +188,8 @@ impl Emitter<'_> {
 /// Classify one snapshot without turning uncertain Actions ancestry into an optional
 /// failure. Kept at the watch boundary because evidence acquisition is fallible while
 /// `decide` remains pure.
-pub(super) fn classify_snapshot<S: PrSource>(
+/// Classify read-only evidence, also used by the temporary xtask land caller.
+pub fn classify_snapshot<S: PrSource>(
     source: &S,
     subject: &Subject,
     snap: &PrSnapshot,
@@ -414,7 +416,8 @@ pub(super) fn watch_with_progress<S: PrSource, C: Clock>(
     )
 }
 
-pub(super) struct WatchContinuation<'a> {
+/// Resume observation after the compatibility caller's separately owned action.
+pub struct WatchContinuation<'a> {
     pub progress: Progress,
     pub emitted_optional_failure_ids: BTreeSet<String>,
     pub expected_head: Option<&'a str>,
@@ -422,7 +425,8 @@ pub(super) struct WatchContinuation<'a> {
     pub acknowledged_ejection: Option<&'a str>,
 }
 
-pub(super) fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
+/// Continue the same observer loop without granting it an arming capability.
+pub fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
     source: &S,
     clock: &C,
     subject: &Subject,
@@ -508,10 +512,7 @@ pub(super) fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
                         classification: SnapshotClassification::Complete {
                             step: Step::Terminal {
                                 outcome: Outcome::Stale,
-                                detail: Some(super::land::head_drift_detail(
-                                    expected,
-                                    &snap.head_sha,
-                                )),
+                                detail: Some(decide::head_drift_detail(expected, &snap.head_sha)),
                                 pointer: None,
                                 subject_failure: None,
                             },
