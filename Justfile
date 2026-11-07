@@ -328,6 +328,13 @@ perf profile="medium" backends="sqlite,postgres" browsers="" workload="all" post
       > "$run_root/invocation.json"
     cargo run --locked --quiet --manifest-path tools/Cargo.toml -p performance --bin perf-data -- assemble --invocation "$run_root/invocation.json"
 
+# Comparison is advisory; only explicit authenticated import may replace the baseline.
+perf-compare result:
+    cargo run --locked --quiet --manifest-path tools/Cargo.toml -p performance --bin perf-data -- compare --result {{quote(result)}}
+
+perf-import-baseline run_id:
+    cargo run --locked --quiet --manifest-path tools/Cargo.toml -p performance --bin perf-data -- import-baseline {{quote(run_id)}}
+
 # Full hermetic E2E workflow: continue all producers, then reconcile both backends.
 e2e jobs="":
     bash scripts/e2e-workflow all {{quote(jobs)}}

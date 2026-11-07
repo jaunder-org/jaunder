@@ -1,7 +1,8 @@
 #![cfg(unix)]
 
 use anyhow::{Context, Result};
-use performance::{DatasetProfile, RESULT_FILENAME, RawSample, canonical_plan, summarize};
+use performance::{Backend, Browser, DatasetProfile, RESULT_FILENAME, canonical_plan};
+mod support;
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -199,33 +200,11 @@ fn mutate(path: &Path, change: impl FnOnce(&mut Value)) -> Result<()> {
 
 // Minimal complete input data; the production planner/statistics/validator own its contract.
 fn browser_fragment() -> Result<Value> {
-    let plan = canonical_plan(DatasetProfile::Small);
-    let cursors = ["public_timeline", "authenticated_timeline", "owner_history", "post_history"].map(|workload| json!({
-        "workload": workload, "target_percent": 80, "matching_result_count": 100, "resolved_rank": 80,
-        "cursor": if workload.ends_with("timeline") { json!({"kind": "timeline", "value": {"created_at_us": 1, "post_id": 1}}) }
-            else { json!({"kind": "history", "value": {"revision_id": 1}}) }
-    }));
-    let samples = (1..=20)
-        .map(|duration_us| RawSample { duration_us })
-        .collect::<Vec<_>>();
-    let summary = summarize(&samples)?;
-    let workloads = [("home", "initial"), ("app", "initial"), ("global_history", "initial"), ("global_history", "deep"), ("browser_post_history", "initial"), ("browser_revision_detail", "point")].map(|(workload, position)| json!({
-        "key": {"result_schema_version": 1, "generator": plan.generator, "profile": "small", "workload": workload,
-            "backend": "sqlite", "browser": "chromium", "build_mode": "release", "measurement_frame": "cold",
-            "measurement_position": position, "sample_count": 20, "page_size": if position == "point" { None } else { Some(50) },
-            "cursor_target_percent": null, "cursor_resolved_rank": null, "nix_system": "x86_64-linux",
-            "stable_derivation_identities": [{"name": "producer", "identity": "stable"}], "runner_image": "image",
-            "runner_architecture": "x86_64", "cpu_model": "cpu", "database_version": "database", "browser_version": "browser"},
-        "samples": samples, "summary": summary, "rows_returned": 50
-    }));
-    Ok(
-        json!({"schema_version": 1, "manifest": {"schema_version": 1, "plan": plan,
-        "subjects": {"username": "user", "history_post_id": 1, "revision_id": 1,
-            "browser_initial_rows": {"home": 100, "app": 100, "global_history": 100, "post_history": 100}}, "cursors": cursors},
-        "fragment": {"producer": "browser", "result": {"setup": {"producer": "browser", "backend": "sqlite", "provisioning_us": 1, "seeding_us": 1},
-            "workloads": workloads, "diagnostics": {"navigation_artifacts": (0..120).map(|i| format!("navigation-{i}.json")).collect::<Vec<_>>(),
-                "trace_artifacts": (0..120).map(|i| format!("trace-{i}.zip")).collect::<Vec<_>>(), "otel_trace_artifact": "otel-traces.jsonl"}}}}),
-    )
+    Ok(serde_json::to_value(support::fragment(
+        DatasetProfile::Small,
+        Backend::Sqlite,
+        Some(Browser::Chromium),
+    )?)?)
 }
 
 #[test]

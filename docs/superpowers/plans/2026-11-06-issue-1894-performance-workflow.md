@@ -69,7 +69,7 @@ The approved spec is the scope contract.
     atomic result publication. Use existing `tools/performance`
     contract/statistics tests rather than duplicating their internals.
 
-- [ ] Task 3: Migrate comparison and trusted baseline import to host domain
+- [x] Task 3: Migrate comparison and trusted baseline import to host domain
       commands behind native Just parameters.
   - Contract: `just perf-compare <result-path>` stays advisory against the
     committed baseline. `just perf-import-baseline <positive-run-id>` remains

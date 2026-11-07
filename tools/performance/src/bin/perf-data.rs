@@ -1,3 +1,6 @@
+#[path = "perf-data/baseline.rs"]
+mod baseline;
+
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand, ValueEnum};
 use performance::{
@@ -25,6 +28,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum CommandLine {
+    /// Compare a completed result with the committed baseline; timing deltas are advisory.
+    Compare {
+        #[arg(long)]
+        result: PathBuf,
+    },
+    /// Import a canonical baseline from an explicitly authenticated Actions run.
+    ImportBaseline {
+        #[arg(value_parser = clap::value_parser!(u64).range(1..))]
+        run_id: u64,
+    },
     /// Produce a fresh invocation identifier for the Nix derivations.
     Nonce,
     /// Validate selection and count relationships before Just starts producer builds.
@@ -140,6 +153,8 @@ struct RetainedProducer {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
+        CommandLine::Compare { result } => baseline::compare(&result)?,
+        CommandLine::ImportBaseline { run_id } => baseline::import(run_id)?,
         CommandLine::Nonce => println!("{}", freshness_nonce()?),
         CommandLine::ValidateSelection { selection } => validate_selection(&selection)?,
         CommandLine::ValidateProducer {
