@@ -60,6 +60,139 @@ fn checkout() -> TempDir {
     dir
 }
 
+#[test]
+fn qualification_leaf_rejects_json_before_admission_without_report_artifacts() {
+    let harness = "1111111111111111111111111111111111111111";
+    let source = "2222222222222222222222222222222222222222";
+    let target = "3333333333333333333333333333333333333333";
+    for inputs in [
+        vec![],
+        vec!["--expected-harness", harness],
+        vec!["--expected-harness", harness, "--source", source],
+        vec![
+            "--expected-harness",
+            harness,
+            "--source",
+            source,
+            "--target",
+            target,
+        ],
+    ] {
+        // No checkout is needed: JSON refusal must precede source admission.
+        let dir = tempfile::tempdir().unwrap();
+        let summary = dir.path().join("github-summary.md");
+        let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+            .args(["--json", "qualification-leaf"])
+            .args(inputs)
+            .current_dir(dir.path())
+            .env("GITHUB_STEP_SUMMARY", &summary)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(stderr, "--json is not supported for `qualification-leaf`\n");
+        assert!(!dir.path().join(".xtask").exists());
+        assert!(!summary.exists());
+    }
+}
+
+#[test]
+fn qualification_leaf_binds_expected_clean_head_before_nix_without_reports() {
+    for product in [false, true] {
+        let dir = checkout();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
+        for variable in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_COMMON_DIR",
+            "GIT_NAMESPACE",
+        ] {
+            command.env_remove(variable);
+        }
+        command.args([
+            "qualification-leaf",
+            "--expected-harness",
+            "1111111111111111111111111111111111111111",
+        ]);
+        if product {
+            command.args(["--source", "2222222222222222222222222222222222222222"]);
+        }
+        let output = command.current_dir(dir.path()).output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("expected harness"), "{stderr}");
+        assert!(!stderr.contains("xtask-done:"), "{stderr}");
+        assert!(!dir.path().join(".xtask/last-result.json").exists());
+        assert!(!dir.path().join(".xtask/gcroots").exists());
+    }
+}
+
+#[test]
+fn qualification_leaf_rejects_expressions_and_admits_local_pin_without_upstream() {
+    let dir = checkout();
+    let expected = String::from_utf8(git(dir.path(), &["rev-parse", "HEAD"]).stdout).unwrap();
+    for product in [
+        Some("HEAD"),
+        Some("2222222222222222222222222222222222222222"),
+        None,
+    ] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
+        command.current_dir(dir.path()).args([
+            "qualification-leaf",
+            "--expected-harness",
+            expected.trim(),
+        ]);
+        if let Some(product) = product {
+            command.args(["--source", product]);
+        }
+        for variable in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_COMMON_DIR",
+            "GIT_NAMESPACE",
+        ] {
+            command.env_remove(variable);
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if product == Some("HEAD") {
+            assert!(stderr.contains("normalized product revision"), "{stderr}");
+        } else {
+            assert!(stderr.contains("Nix-built tooling provenance"), "{stderr}");
+        }
+        assert!(!stderr.contains("origin"), "{stderr}");
+        assert!(!stderr.contains("xtask-done:"), "{stderr}");
+        assert!(!dir.path().join(".xtask/last-result.json").exists());
+    }
+}
+
+#[test]
+fn old_qualification_routes_are_retired_but_other_nix_routes_remain() {
+    for args in [
+        vec!["production-baseline", "discover"],
+        vec!["production-baseline", "accept"],
+        vec!["production-baseline", "qualify-styling"],
+        vec!["nix", "production-baseline-smoke"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["nix", "probe-source", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+}
+
 fn run_leaf(dir: &Path, leaf: &str, summary: &Path) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
     command

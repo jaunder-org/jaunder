@@ -1,14 +1,37 @@
 # Production baseline harness
 
-`cargo xtask production-baseline` is an opt-in, host-side qualification harness.
-It deploys immutable `packages.jaunder` revisions through the supported NixOS
-module; it is not part of `just check`, pre-push, CI, or `nix flake check`.
+Four root Just commands expose the opt-in, host-side production baseline and
+styling workflows: `production-baseline-discover <revision>`,
+`production-baseline-accept <source> <target>`,
+`production-baseline-qualify-styling`, and `production-baseline-smoke`.
+Qualification deploys immutable `packages.jaunder` revisions through the
+supported NixOS module; smoke instead uses the mutable current checkout. These
+commands are not part of `just check`, pre-push, CI, or `nix flake check`.
 
 ## Prerequisites
 
-Run `cargo xtask` from the repository's Nix development environment and a clean
-checkout whose `origin` is `jaunder-org/jaunder`. Ordinary discovery/acceptance
-also require the harness and product commits to be available upstream.
+Run Just from the repository's Nix development environment. Ordinary
+discovery/acceptance require a clean checkout whose canonical `origin` is
+`jaunder-org/jaunder`, with the current harness `HEAD` and requested product
+commits available upstream. Just captures the full harness `HEAD`, resolves
+product revision expressions with Git, and rejects equal resolved acceptance
+commits and an empty acceptance target. It checks origin and performs one
+`git fetch --quiet --no-write-fetch-head --refetch origin <commits>` over the
+distinct harness/source/target set. `--refetch` prevents Git's locally-complete
+fast path from accepting a SHA without asking the server for it. This proves
+origin serves the objects, not named-branch reachability, at the cost of larger
+transfers and normal Git maintenance. A locally committed but unpushed harness
+`HEAD` must refuse before lifecycle work.
+
+The host binds Just's expected harness SHA to its independently admitted clean
+`SourcePin` before Nix harness admission or lifecycle mutation; it does not
+repeat product expression resolution, origin validation or upstream fetch.
+Styling also requires a clean checkout and expected-HEAD binding, but uses its
+local immutable Git source with no origin, upstream or Git-network requirement.
+Smoke has no clean-source qualification admission. Nix realization may still
+need ordinary dependency downloads; local-only styling is not a promise that
+cold dependencies are already cached.
+
 Qualification selects its fixture-owned harness graph from the admitted source:
 the actual executing xtask must match its Nix output, and browser inputs, Node,
 test-support and VM construction are bound through the same graph. Identical
@@ -23,13 +46,14 @@ alongside another baseline command: the command holds one host lease.
 Run discovery against the source revision selected for the qualification:
 
 ```bash
-cargo xtask production-baseline discover --revision <source-commit>
+traced-run -- just production-baseline-discover <revision>
 ```
 
-Run acceptance only with distinct, resolved full commits available upstream:
+Run acceptance with source and target expressions resolving to distinct commits
+available upstream (full SHAs are also accepted):
 
 ```bash
-cargo xtask production-baseline accept --source <source-commit> --target <target-commit>
+traced-run -- just production-baseline-accept <source> <target>
 ```
 
 Acceptance qualification is explicitly **non-release** evidence. Issue #1419
@@ -70,27 +94,45 @@ target; those require separately executed proofs before positive qualification.
 
 ## Separate styling qualification
 
-`cargo xtask production-baseline qualify-styling` is the source-pinned,
-current-format styling release-transition proof. It uses three canonical fixture
-packages, retained Chromium contexts and same-backend fresh-target restores on
-SQLite and PostgreSQL. See [application assets](application-assets.md) for its
-protocol, completed evidence and browser limits.
+Run the source-pinned, current-format styling release-transition proof with:
+
+```bash
+traced-run -- just production-baseline-qualify-styling
+```
+
+This local-only qualification uses three canonical fixture packages, retained
+Chromium contexts and same-backend fresh-target restores on SQLite and
+PostgreSQL. See [application assets](application-assets.md) for its protocol,
+completed evidence and browser limits.
 
 That operation does not change ordinary discovery/acceptance's exact format-1
 admission or four-direction restore matrix. It is not actual Safari/iPhone,
 production, #1419 release-candidate or milestone acceptance.
 
+## Mutable local smoke
+
+```bash
+traced-run -- just production-baseline-smoke
+```
+
+Smoke runs the SQLite/PostgreSQL VM lifecycle against the mutable current
+checkout's `path:` flake, under the shared lease. It performs no qualification
+source pin or upstream admission and publishes neither ordinary nor styling
+evidence. A successful smoke is a lifecycle diagnostic, not qualification.
+
 ## Topology and immutable identity
 
-The host xtask resolves commits to immutable flake references and alone invokes
-Nix and manages lifecycle. Nix compiles the host tool but never invokes its
-orchestrator. Qualification admits and roots the selected graph before lifecycle
-effects. Standard Nix GC roots protect that graph throughout execution and any
-retained lifecycle workspace; there is no checkout-local executable cache.
-Playwright runs from a private writable copy of the selected browser package,
-using that copy's CLI and imports with pinned Node/browser binaries; the seed
-bridge's interpreter is the selected store Node. Source cleanliness and revision
-are rechecked around execution and publication. Each operation initializes fresh
+Just/Git owns public workflow selection, ordinary input normalization and
+ordered fail-fast preflight. A focused host xtask leaf receives full immutable
+product IDs and the expected harness SHA, invokes Nix and manages the domain
+lifecycle. Nix compiles the host tool but never invokes its orchestrator.
+Qualification admits and roots the selected graph before lifecycle effects.
+Standard Nix GC roots protect that graph throughout execution and any retained
+lifecycle workspace; there is no checkout-local executable cache. Playwright
+runs from a private writable copy of the selected browser package, using that
+copy's CLI and imports with pinned Node/browser binaries; the seed bridge's
+interpreter is the selected store Node. Source cleanliness and revision are
+rechecked around execution and publication. Each operation initializes fresh
 persistent SQLite and PostgreSQL source VMs. The harness supplies each VM's
 immutable package through the qualification-only internal `productionBaselineVm`
 construction seam; ADR-0142's supported module options remain unchanged. Source
@@ -132,11 +174,15 @@ The identity-derived dated name is collision-safe: an existing destination is
 never overwritten. A retained destination contains exactly `summary.json` and
 generated `summary.md`. JSON validates against `production-baseline.schema.json`
 and is authoritative; Markdown is mechanically derived and checked for parity.
-Command output reports only the safe destination and identity/check counts.
-These are ignored run artifacts, not source deliverables. Link the tested
-revisions, result and sanitized reports from the issue/PR when review needs
-them. Explicit release evidence belongs in a designated external artifact store
-with an owner and retention period.
+The workflows return ordinary process status and focused diagnostics, including
+the safe destination and identity/check counts. They do not support `--json` or
+produce the generic xtask report envelope, `.xtask/last-result.json`, or
+`xtask-done:` sentinel. Unrelated xtask commands retain their own reporting
+contracts. `traced-run` capture is separate from workflow evidence. These are
+ignored run artifacts, not source deliverables. Link the tested revisions,
+result and sanitized reports from the issue/PR when review needs them. Explicit
+release evidence belongs in a designated external artifact store with an owner
+and retention period.
 
 Schema-v2 reports record the harness source commit, selected Nix harness
 `derivation`, `output_path` and `nar_hash`, manifest identities, source/target,
@@ -149,8 +195,14 @@ Every generated browser/session value, App Password, fixed password, sensitive
 seed value, and Caddy private-key bytes is a run canary. Both passing and failed
 durable outcomes undergo schema validation, forbidden-field and canary scans,
 prohibited-file-type/symlink rejection, and the exact two-file allowlist. If
-evidence collection, rendering, sanitization, or a scan fails, nothing is
-published.
+evidence collection, rendering, schema/Markdown parity, sanitization, a scan,
+required cleanup, or source recheck fails, nothing is published. An otherwise
+valid, sanitized product/protocol-failed outcome may be published with its
+failed outcome and failure classes; the command still exits nonzero. This
+reportable failure is distinct from publication-inadmissibility. Styling instead
+publishes only after its own validation, canary scans, cleanup and source
+recheck succeed; it has no ordinary schema/parity or failed-report contract.
+Smoke publishes neither form.
 
 Failures are classified as **product**, **harness**, or **infrastructure**. An
 interrupted or incomplete graph is non-passing and cannot become passing

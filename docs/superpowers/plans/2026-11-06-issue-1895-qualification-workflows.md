@@ -16,7 +16,7 @@ approved spec for full scope and acceptance.
 
 ## Task outline
 
-- [ ] Task 1: Establish Just/Git admission and the normalized host input
+- [x] Task 1: Establish Just/Git admission and the normalized host input
       contract.
   - Contract: discover/accept pass full resolved product SHAs plus expected
     current harness HEAD; one canonical-origin upstream check covers that
@@ -29,7 +29,7 @@ approved spec for full scope and acceptance.
     SHA handling, upstream refusal, baseline source-pin mismatch refusal, no
     duplicated fetch, and styling expected-HEAD/`SourcePin` mismatch refusal
     before Nix or lifecycle work, without an origin/network dependency.
-- [ ] Task 2: Replace both public xtask routes and the workflow-specific report
+- [x] Task 2: Replace both public xtask routes and the workflow-specific report
       path with a focused internal host execution leaf.
   - Contract: Just owns the four public entrypoints and ordinary ordered
     invocation. Retire the discover/accept/styling `ProductionBaselineCommand` /

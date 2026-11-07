@@ -273,10 +273,17 @@ pub enum Command {
     /// import the verified canonical GitHub Actions baseline.
     #[command(name = "perf", subcommand)]
     Performance(PerformanceCommand),
-    /// Run the opt-in production deployment baseline harness. It validates the
-    /// immutable product and clean harness identities before any lifecycle work.
-    #[command(subcommand)]
-    ProductionBaseline(ProductionBaselineCommand),
+    /// Internal Just adapter: no inputs means mutable smoke; harness alone
+    /// selects local styling; product inputs select discovery or acceptance.
+    #[command(hide = true)]
+    QualificationLeaf {
+        #[arg(long)]
+        expected_harness: Option<String>,
+        #[arg(long, requires = "expected_harness")]
+        source: Option<String>,
+        #[arg(long, requires = "source")]
+        target: Option<String>,
+    },
     /// Start an interactive disposable or named UX sandbox, or run an admitted
     /// operational Jaunder command against a named sandbox after `--`.
     Sandbox {
@@ -305,29 +312,6 @@ pub enum MutantsCommand {
         output: PathBuf,
         #[arg(long, allow_hyphen_values = true)]
         producer_status: i32,
-    },
-}
-
-/// `production-baseline` runs an opt-in immutable deployment qualification and
-/// atomically publishes only sanitized dated evidence.
-#[derive(Subcommand)]
-pub enum ProductionBaselineCommand {
-    /// Qualify closed styling releases from the clean current local commit.
-    QualifyStyling,
-    /// Discover same-revision deployment, recovery, and continuity evidence.
-    Discover {
-        /// Git revision that resolves to a commit reachable from the upstream repository.
-        #[arg(long, value_parser = nonempty)]
-        revision: String,
-    },
-    /// Qualify a distinct source-to-target upgrade; this is non-release evidence.
-    Accept {
-        /// Source Git revision.
-        #[arg(long, value_parser = nonempty)]
-        source: String,
-        /// Target Git revision.
-        #[arg(long, value_parser = nonempty)]
-        target: String,
     },
 }
 
@@ -557,10 +541,6 @@ pub enum NixCommand {
     /// runs in CI and on request, not in per-commit `check`/`validate`.
     #[command(after_help = "EXAMPLES:\n  cargo xtask nix probe-source")]
     ProbeSource,
-    /// Run the opt-in isolated SQLite/PostgreSQL production VM lifecycle smoke
-    /// against the current checkout as a `path:` flake. It publishes no evidence.
-    #[command(after_help = "EXAMPLES:\n  traced-run -- cargo xtask nix production-baseline-smoke")]
-    ProductionBaselineSmoke,
 }
 
 /// `traces` subcommands.
@@ -663,7 +643,6 @@ impl Cli {
             Command::Traces(TracesCommand::Analyze { .. }) => "traces-analyze",
             Command::Traces(TracesCommand::Run { .. }) => "traces-run",
             Command::Traces(TracesCommand::BootPhases { .. }) => "traces-boot-phases",
-            Command::Nix(NixCommand::ProductionBaselineSmoke) => "nix-production-baseline-smoke",
             Command::CoveragePolicy { .. } => "coverage-policy",
             Command::Coverage(CoverageCommand::ProbeSource) => "coverage-probe-source",
             Command::Coverage(CoverageCommand::BenchmarkLocal { .. }) => "coverage-benchmark-local",
@@ -677,15 +656,7 @@ impl Cli {
             Command::ServerFnCoverage(ServerFnCoverageCommand::Verify(_)) => {
                 "server-fn-coverage-verify"
             }
-            Command::ProductionBaseline(ProductionBaselineCommand::Discover { .. }) => {
-                "production-baseline-discover"
-            }
-            Command::ProductionBaseline(ProductionBaselineCommand::Accept { .. }) => {
-                "production-baseline-accept"
-            }
-            Command::ProductionBaseline(ProductionBaselineCommand::QualifyStyling) => {
-                "production-baseline-qualify-styling"
-            }
+            Command::QualificationLeaf { .. } => "qualification-leaf",
             Command::Sandbox { .. } => "sandbox",
             Command::Mutants(MutantsCommand::VerifyEvidence { .. }) => "mutants-verify-evidence",
             Command::Pr(PrCommand::Watch { .. }) => "pr-watch",
@@ -706,7 +677,8 @@ impl Command {
     pub fn produces_json_payload(&self) -> bool {
         !matches!(
             self,
-            Command::CheckLeaf { .. }
+            Command::QualificationLeaf { .. }
+                | Command::CheckLeaf { .. }
                 | Command::PrecommitSafety
                 | Command::Traces(
                     TracesCommand::Analyze { .. }
@@ -836,35 +808,10 @@ mod tests {
     }
 
     #[test]
-    fn production_baseline_operations_parse_with_stable_names() {
-        let discover = Cli::try_parse_from([
-            "xtask",
-            "production-baseline",
-            "discover",
-            "--revision",
-            "abc",
-        ])
-        .unwrap();
-        assert_eq!(discover.command_name(), "production-baseline-discover");
-        assert!(matches!(
-            discover.command,
-            Command::ProductionBaseline(ProductionBaselineCommand::Discover { revision }) if revision == "abc"
-        ));
-        let accept = Cli::try_parse_from([
-            "xtask",
-            "production-baseline",
-            "accept",
-            "--source",
-            "a",
-            "--target",
-            "b",
-        ])
-        .unwrap();
-        assert_eq!(accept.command_name(), "production-baseline-accept");
-        assert!(matches!(
-            accept.command,
-            Command::ProductionBaseline(ProductionBaselineCommand::Accept { source, target }) if source == "a" && target == "b"
-        ));
+    fn qualification_leaf_requires_explicit_harness_for_product_inputs() {
+        assert!(Cli::try_parse_from(["xtask", "qualification-leaf", "--source", "HEAD"]).is_err());
+        assert!(Cli::try_parse_from(["xtask", "qualification-leaf", "--target", "HEAD"]).is_err());
+        assert!(Cli::try_parse_from(["xtask", "qualification-leaf"]).is_ok());
     }
 
     #[test]

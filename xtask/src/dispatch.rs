@@ -7,9 +7,9 @@ use crate::{
     adr, adr_readme, audit_wasm, cache_safety, census,
     cli::{
         AdrCommand, CacheSafetyCommand, Cli, Command, CoverageCommand, MutantsCommand, NixCommand,
-        PrCommand, ProductionBaselineCommand, TracesCommand, WasmCoverageCommand,
+        PrCommand, TracesCommand, WasmCoverageCommand,
     },
-    coverage, issue, lifecycle, nix_probe, performance, pr, production_baseline,
+    coverage, issue, lifecycle, nix_probe, performance, pr,
     result::{CommandResult, StepResult},
     steps, traces, wasm_coverage,
 };
@@ -70,12 +70,9 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             Ok(result)
         }
         Command::Performance(command) => performance::run(command),
-        Command::ProductionBaseline(
-            command @ (ProductionBaselineCommand::Discover { .. }
-            | ProductionBaselineCommand::Accept { .. }
-            | ProductionBaselineCommand::QualifyStyling),
-        ) => production_baseline::run(command),
-        Command::CheckLeaf { .. } | Command::PrecommitSafety => {
+        Command::QualificationLeaf { .. }
+        | Command::CheckLeaf { .. }
+        | Command::PrecommitSafety => {
             anyhow::bail!(
                 "internal leaf and precommit safety commands use the plain process boundary"
             )
@@ -167,9 +164,6 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             result.push(nix_probe::probe_source().with_duration(step_start.elapsed()));
             lifecycle::finalize(&mut result, start);
             Ok(result)
-        }
-        Command::Nix(NixCommand::ProductionBaselineSmoke) => {
-            production_baseline::run_current_checkout_smoke()
         }
         Command::CoveragePolicy { out } => {
             let start = Instant::now();

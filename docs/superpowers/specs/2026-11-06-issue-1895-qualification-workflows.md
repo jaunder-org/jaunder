@@ -22,12 +22,16 @@ discover and accept, Just requires a clean checkout and records its current full
 `HEAD` as the expected harness commit; it resolves the requested product
 source/target expressions with `git rev-parse --verify`, rejects equal resolved
 commits, validates canonical `origin`, and performs one
-`git fetch --quiet --no-write-fetch-head origin <commits>` for the distinct set
-of expected harness HEAD plus source and optional target. Thus all three commits
-remain upstream-verified even when the harness differs from product revisions.
-The host re-admits the clean source with `SourcePin` and requires its pinned SHA
-to equal the Just-supplied expected harness SHA before Nix admission or
-lifecycle mutation. This binds the fetch to the admitted source without
+`git fetch --quiet --no-write-fetch-head --refetch origin <commits>` for the
+distinct set of expected harness HEAD plus source and optional target. Ordinary
+fetch can accept locally complete objects without asking the server for them;
+`--refetch` requests the selected objects afresh. This accepts larger transfers
+and normal Git maintenance to establish that origin serves every requested
+object, not that it is reachable from a particular named branch. All three
+commits remain upstream-verified even when the harness differs from product
+revisions. The host re-admits the clean source with `SourcePin` and requires its
+pinned SHA to equal the Just-supplied expected harness SHA before Nix admission
+or lifecycle mutation. This binds the fetch to the admitted source without
 repeating origin verification or upstream fetch. The host receives canonical
 commit IDs, not product revision expressions, and retains later safety rechecks.
 
@@ -135,12 +139,14 @@ preflight and generic-report retirement explicit.
   `production-baseline-qualify-styling`, and `production-baseline-smoke`.
   Discover/accept preflight resolves product commit IDs, records expected clean
   harness `HEAD`, verifies canonical origin, and fetches harness/source/target
-  SHAs together without updating FETCH_HEAD. The host compares expected harness
-  SHA with its admitted clean `SourcePin` before lifecycle mutation; it does not
-  duplicate the upstream check. Styling captures clean expected `HEAD` and binds
-  it to `SourcePin`, but uses its existing local immutable Nix source and adds
-  no origin/network requirement. Smoke uses the current path checkout and
-  publishes no evidence.
+  SHAs together with
+  `git fetch --quiet --no-write-fetch-head --refetch origin <commits>`, without
+  updating FETCH_HEAD. The host compares expected harness SHA with its admitted
+  clean `SourcePin` before lifecycle mutation; it does not duplicate the
+  upstream check. Styling captures clean expected `HEAD` and binds it to
+  `SourcePin`, but uses its existing local immutable Nix source and adds no
+  origin/network requirement. Smoke uses the current path checkout and publishes
+  no evidence.
 - The host leaf is limited to source/drift safety checks, source-specific Nix
   harness/output admission and provenance, lease, restricted workspace/GC roots,
   VM/proxy/browser/backend lifecycle, fixture/protocol work, canary handling,

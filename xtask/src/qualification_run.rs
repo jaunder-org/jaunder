@@ -4,7 +4,7 @@ use std::{
     collections::BTreeMap,
     fs,
     path::Path,
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, bail};
@@ -20,7 +20,6 @@ use crate::{
         SurfaceExpectation,
     },
     qualification_inventory::{InventoryContent, compare_qualification_inventories},
-    result::{CommandResult, StepResult},
 };
 
 const QUALIFICATION_EVIDENCE_DIRECTORY: &str = ".xtask/review/evidence/styling-qualification";
@@ -479,24 +478,22 @@ impl Evidence {
     }
 }
 
-pub(crate) fn run(root: &Path) -> Result<CommandResult> {
-    let started = Instant::now();
-    let source = SourcePin::admit_current(root)?;
+pub(crate) fn run(root: &Path, source: &SourcePin) -> Result<String> {
     let tooling_roots = tempfile::tempdir().context("allocating private tooling admission root")?;
     let harness = crate::production_baseline::verify_styling_tool_source(
-        &source,
+        source,
         &tooling_roots.path().join("harness"),
     )?;
     source.verify_current(root)?;
     let _lease = RunLease::acquire(root)?;
     let mut lifecycle =
-        BaselineLifecycle::create_qualification(root, &source, Path::new(&harness.output_path))?;
+        BaselineLifecycle::create_qualification(root, source, Path::new(&harness.output_path))?;
     let canary_path = lifecycle.private_path("styling-canaries.jsonl")?;
     fs::File::create(&canary_path)?;
     let workflow = (|| -> Result<Evidence> {
         let packages = [Fixture::A, Fixture::BApplication, Fixture::BTheme]
             .into_iter()
-            .map(|fixture| lifecycle.realize_qualification_package(&source, fixture))
+            .map(|fixture| lifecycle.realize_qualification_package(source, fixture))
             .collect::<Result<Vec<_>>>()?;
         let ordinary = crate::qualification_inventory::map_inventory(
             &host::system_theme::compile_system_artifact_inventory()?,
@@ -540,7 +537,7 @@ pub(crate) fn run(root: &Path) -> Result<CommandResult> {
             .map(|storage| {
                 backend(
                     root,
-                    &source,
+                    source,
                     &mut lifecycle,
                     &packages,
                     storage,
@@ -614,13 +611,7 @@ pub(crate) fn run(root: &Path) -> Result<CommandResult> {
             staging.display(),
         )
     })?;
-    let mut result = CommandResult::new("production-baseline-qualify-styling");
-    result.push(
-        StepResult::ok("styling-qualification")
-            .detail(format!("evidence={}", destination.display())),
-    );
-    crate::lifecycle::finalize(&mut result, started);
-    Ok(result)
+    Ok(format!("evidence={}", destination.display()))
 }
 
 fn retain_failure(lifecycle: BaselineLifecycle, primary: anyhow::Error) -> anyhow::Error {
@@ -636,7 +627,6 @@ fn retain_failure(lifecycle: BaselineLifecycle, primary: anyhow::Error) -> anyho
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::Parser;
 
     #[test]
     fn qualification_records_are_temporary_review_artifacts() {
@@ -644,29 +634,6 @@ mod tests {
         let destination = root.path().join(QUALIFICATION_EVIDENCE_DIRECTORY);
         assert!(destination.starts_with(root.path().join(".xtask/review/evidence")));
         assert!(!destination.starts_with(root.path().join("docs")));
-    }
-
-    #[test]
-    fn qualification_cli_admits_only_the_fixed_mode() {
-        let cli =
-            crate::cli::Cli::try_parse_from(["xtask", "production-baseline", "qualify-styling"])
-                .unwrap();
-        assert!(matches!(
-            cli.command,
-            crate::cli::Command::ProductionBaseline(
-                crate::cli::ProductionBaselineCommand::QualifyStyling
-            )
-        ));
-        assert!(
-            crate::cli::Cli::try_parse_from([
-                "xtask",
-                "production-baseline",
-                "qualify-styling",
-                "--fixture",
-                "b-app",
-            ])
-            .is_err()
-        );
     }
 
     #[test]
@@ -680,7 +647,9 @@ mod tests {
                 .success()
         );
         fs::write(root.path().join("uncommitted"), "unit fixture").unwrap();
-        let error = run(root.path()).err().expect("dirty source must refuse");
+        let error =
+            SourcePin::admit_expected(root.path(), "1111111111111111111111111111111111111111")
+                .expect_err("dirty source must refuse");
         assert!(error.to_string().contains("clean committed checkout"));
         assert!(!root.path().join(".xtask").exists());
     }

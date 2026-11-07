@@ -20,10 +20,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    cli::ProductionBaselineCommand,
     git,
     qualification::{QualificationRequest, QualificationResult},
-    result::{CommandResult, StepResult},
 };
 
 mod platform;
@@ -31,13 +29,6 @@ use platform::{
     global_lease_path, open_lease, process_start_ticks, restrict_evidence_workspace,
     restrict_workflow_error, validate_lease_file,
 };
-
-const UPSTREAM_URLS: [&str; 4] = [
-    "https://github.com/jaunder-org/jaunder.git",
-    "https://github.com/jaunder-org/jaunder",
-    "git@github.com:jaunder-org/jaunder.git",
-    "ssh://git@github.com/jaunder-org/jaunder.git",
-];
 
 /// An immutable product source accepted by the baseline harness.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -726,36 +717,6 @@ fn validate_digest(value: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
-/// The actual-origin boundary is injected so fixture repositories remain networkless.
-trait Origin {
-    fn verify_commits(&self, root: &Path, commits: &[&str]) -> Result<()>;
-}
-
-struct GitOrigin;
-
-impl Origin for GitOrigin {
-    fn verify_commits(&self, root: &Path, commits: &[&str]) -> Result<()> {
-        let remote = git::at(root)
-            .args(["remote", "get-url", "origin"])
-            .output()
-            .context("reading production-baseline origin")?;
-        if !remote.status.success()
-            || !UPSTREAM_URLS.contains(&String::from_utf8_lossy(&remote.stdout).trim())
-        {
-            bail!("production-baseline requires origin to be jaunder-org/jaunder");
-        }
-        let status = git::at(root)
-            .args(["fetch", "--quiet", "--no-write-fetch-head", "origin"])
-            .args(commits)
-            .status()
-            .context("proving production-baseline commits at origin")?;
-        if !status.success() {
-            bail!("one or more production-baseline commits are absent from origin");
-        }
-        Ok(())
-    }
-}
-
 /// Nix is the external executable-admission authority; fixture repositories can
 /// exercise source/publication rules without realizing the full host graph.
 trait BinaryProvenance {
@@ -790,64 +751,30 @@ pub(crate) fn verify_styling_tool_source(
     )
 }
 
-/// An injected Git boundary. Tests use fixture repositories without network access.
-trait Repository {
-    fn output(&self, args: &[&str]) -> Result<String>;
-    fn root(&self) -> &Path;
-}
-
+#[cfg(test)]
 struct GitRepository {
     root: PathBuf,
 }
+#[cfg(test)]
 impl GitRepository {
     fn new(root: PathBuf) -> Self {
         Self { root }
     }
 }
-impl Repository for GitRepository {
-    fn output(&self, args: &[&str]) -> Result<String> {
-        let output = git::at(&self.root)
-            .args(args)
-            .output()
-            .context("running git for production baseline")?;
-        if !output.status.success() {
-            bail!(
-                "git {args:?} failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+fn normalized_revision(commit: &str) -> Result<ResolvedRevision> {
+    validate_commit(commit, "normalized product revision")?;
+    if commit.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        bail!("normalized product revision must be lowercase");
     }
-    fn root(&self) -> &Path {
-        &self.root
-    }
-}
-
-fn resolve_revision(repo: &impl Repository, input: &str) -> Result<ResolvedRevision> {
-    let commit = repo.output(&["rev-parse", "--verify", &format!("{input}^{{commit}}")])?;
-    validate_commit(&commit, "resolved revision")?;
     Ok(ResolvedRevision {
         flake_ref: format!("github:jaunder-org/jaunder/{commit}"),
-        commit,
+        commit: commit.to_owned(),
     })
-}
-
-fn resolve_pair(
-    repo: &impl Repository,
-    source: &str,
-    target: &str,
-) -> Result<(ResolvedRevision, ResolvedRevision)> {
-    let source = resolve_revision(repo, source)?;
-    let target = resolve_revision(repo, target)?;
-    if source.commit == target.commit {
-        bail!("production-baseline accept requires distinct resolved source and target commits");
-    }
-    Ok((source, target))
 }
 
 #[cfg(test)]
 fn validate_harness(
-    repo: &impl Repository,
+    repo: &GitRepository,
     binaries: &impl BinaryProvenance,
 ) -> Result<HarnessIdentity> {
     validate_selected_harness(
@@ -857,20 +784,25 @@ fn validate_harness(
     )
 }
 
+#[cfg(test)]
 fn validate_selected_harness(
-    repo: &impl Repository,
+    repo: &GitRepository,
     binaries: &impl BinaryProvenance,
     fixture: crate::qualification_tooling::OrdinaryFixture,
 ) -> Result<HarnessIdentity> {
-    let dirty = repo.output(&["status", "--porcelain"])?;
-    if !dirty.is_empty() {
-        bail!("production-baseline requires a clean harness checkout");
-    }
-    let commit = repo.output(&["rev-parse", "HEAD"])?;
-    validate_commit(&commit, "harness commit")?;
-    let source = crate::qualification::SourcePin::admit_current(repo.root())?;
-    let tooling = binaries.admit(&source, fixture)?;
-    source.verify_current(repo.root())?;
+    let source = crate::qualification::SourcePin::admit_current(&repo.root)?;
+    admit_selected_harness(&repo.root, &source, binaries, fixture)
+}
+
+fn admit_selected_harness(
+    root: &Path,
+    source: &crate::qualification::SourcePin,
+    binaries: &impl BinaryProvenance,
+    fixture: crate::qualification_tooling::OrdinaryFixture,
+) -> Result<HarnessIdentity> {
+    let commit = source.commit().to_owned();
+    let tooling = binaries.admit(source, fixture)?;
+    source.verify_current(root)?;
     let output = Path::new(&tooling.output_path);
     let seeded_manifest = manifest_identity(
         output.join("seed-manifest-source"),
@@ -1779,37 +1711,42 @@ impl Drop for BehaviorSession {
     }
 }
 
-pub fn run(command: ProductionBaselineCommand) -> Result<CommandResult> {
+/// Just supplies immutable IDs after its Git preflight. No inputs deliberately
+/// selects mutable smoke; a harness without product inputs selects local styling.
+pub fn run_leaf(
+    expected_harness: Option<&str>,
+    source: Option<&str>,
+    target: Option<&str>,
+) -> Result<String> {
     let root = PathBuf::from(git::toplevel(Path::new("."))?);
-    let repo = GitRepository::new(root.clone());
-    let origin = GitOrigin;
+    let Some(expected) = expected_harness else {
+        if source.is_some() || target.is_some() {
+            bail!("product inputs require expected harness");
+        }
+        return run_current_checkout_smoke();
+    };
+    let pin = crate::qualification::SourcePin::admit_expected(&root, expected)?;
+    let Some(source) = source else {
+        if target.is_some() {
+            bail!("target requires source");
+        }
+        return crate::qualification_run::run(&root, &pin);
+    };
+    let source = normalized_revision(source)?;
+    let target = target.map(normalized_revision).transpose()?;
+    if target
+        .as_ref()
+        .is_some_and(|target| target.commit == source.commit)
+    {
+        bail!("production-baseline accept requires distinct resolved source and target commits");
+    }
     let tooling_roots = tempfile::tempdir().context("allocating private tooling admission root")?;
     let binaries = ExecutingBinaries {
         gc_root: tooling_roots.path().join("harness"),
     };
-    let start = Instant::now();
-    let (name, preflight) = match command {
-        ProductionBaselineCommand::QualifyStyling => return crate::qualification_run::run(&root),
-        ProductionBaselineCommand::Discover { revision } => (
-            "production-baseline-discover",
-            resolve_revision(&repo, &revision).map(|source| (source, None)),
-        ),
-        ProductionBaselineCommand::Accept { source, target } => (
-            "production-baseline-accept",
-            resolve_pair(&repo, &source, &target).map(|(source, target)| (source, Some(target))),
-        ),
-    };
-    let (source, target) = preflight?;
     let fixture = crate::qualification_tooling::OrdinaryFixture::for_source(&source.commit);
-    let harness = validate_selected_harness(&repo, &binaries, fixture)?;
-    let mut commits = vec![harness.commit.as_str(), source.commit.as_str()];
-    if let Some(target) = &target {
-        commits.push(target.commit.as_str());
-    }
-    origin.verify_commits(&root, &commits)?;
-    let mut result = CommandResult::new(name);
+    let harness = admit_selected_harness(&root, &pin, &binaries, fixture)?;
     let _lease = RunLease::acquire(&root)?;
-    result.push(StepResult::ok("production-baseline-preflight").with_duration(start.elapsed()));
     let (raw, canaries, retained_workspace) = match target {
         Some(target) => {
             let (raw, canaries, retained_workspace) =
@@ -1853,18 +1790,7 @@ pub fn run(command: ProductionBaselineCommand) -> Result<CommandResult> {
             fs::remove_dir_all(workspace).map_err(Into::into)
         })
     });
-    let step = if raw.operation == "accept" {
-        "production-baseline-accept"
-    } else {
-        "production-baseline-discovery"
-    };
-    if matches!(raw.outcome, Outcome::Passed) && publication.is_ok() {
-        result.push(
-            StepResult::ok(step)
-                .detail(detail)
-                .with_duration(start.elapsed()),
-        );
-    } else {
+    if let Err(error) = publication {
         let unpublished_detail = retained_workspace
             .as_deref()
             .and_then(|workspace| workspace.strip_prefix(&root).ok())
@@ -1875,24 +1801,21 @@ pub fn run(command: ProductionBaselineCommand) -> Result<CommandResult> {
                 )
             })
             .unwrap_or_else(|| "evidence was not published".into());
-        result.push(
-            StepResult::fail(step)
-                .detail(if publication.is_ok() {
-                    detail
-                } else {
-                    unpublished_detail
-                })
-                .with_duration(start.elapsed()),
+        return Err(error.context(unpublished_detail));
+    }
+    if !matches!(raw.outcome, Outcome::Passed) {
+        bail!(
+            "baseline qualification failed; {detail}; failure-classes={:?}",
+            raw.failure_classes
         );
     }
-    Ok(result)
+    Ok(detail)
 }
 
 /// Opt-in Task 3 smoke against the caller's checkout. This intentionally has no
 /// clean-harness or upstream qualification boundary and publishes no evidence.
-pub fn run_current_checkout_smoke() -> Result<CommandResult> {
+fn run_current_checkout_smoke() -> Result<String> {
     let root = PathBuf::from(git::toplevel(Path::new("."))?);
-    let start = Instant::now();
     let _lease = RunLease::acquire(&root)?;
     let commit = String::from_utf8(git::at(&root).args(["rev-parse", "HEAD"]).output()?.stdout)?
         .trim()
@@ -1902,33 +1825,12 @@ pub fn run_current_checkout_smoke() -> Result<CommandResult> {
         flake_ref: format!("path:{}", root.display()),
     };
     let runtime = crate::production_baseline_lifecycle::BaselineLifecycle::smoke(&root, revision)?;
-    let mut result = CommandResult::new("nix-production-baseline-smoke");
-    result.push(
-        StepResult::ok("production-baseline-lifecycle-smoke")
-            .detail(format!("runtime-identities={}", runtime.len()))
-            .with_duration(start.elapsed()),
-    );
-    crate::lifecycle::finalize(&mut result, start);
-    Ok(result)
+    Ok(format!("runtime-identities={}", runtime.len()))
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
-
-    struct FixtureOrigin {
-        upstream: BTreeSet<String>,
-    }
-
-    impl Origin for FixtureOrigin {
-        fn verify_commits(&self, _: &Path, commits: &[&str]) -> Result<()> {
-            if commits.iter().all(|commit| self.upstream.contains(*commit)) {
-                Ok(())
-            } else {
-                bail!("fixture origin does not contain every commit")
-            }
-        }
-    }
 
     struct FixtureBinaries {
         output: tempfile::TempDir,
@@ -1985,7 +1887,6 @@ mod tests {
         git(root, &["init", "-b", "main"]);
         git(root, &["config", "user.email", "test@example.test"]);
         git(root, &["config", "user.name", "Test"]);
-        git(root, &["remote", "add", "origin", UPSTREAM_URLS[0]]);
         for relative in [
             "xtask/src/main.rs",
             "test-support/src/lib.rs",
@@ -2015,32 +1916,10 @@ mod tests {
         temp
     }
     #[test]
-    fn upstream_verification_rejects_a_local_only_resolved_commit() {
-        let repo = repo();
-        let repository = GitRepository::new(repo.path().to_path_buf());
-        let upstream = resolve_revision(&repository, "HEAD").unwrap();
-        let origin = FixtureOrigin {
-            upstream: BTreeSet::from([upstream.commit.clone()]),
-        };
-        origin
-            .verify_commits(repo.path(), &[upstream.commit.as_str()])
-            .unwrap();
-        git(repo.path(), &["commit", "--allow-empty", "-m", "local"]);
-        let local = resolve_revision(&repository, "HEAD").unwrap();
-        assert!(
-            origin
-                .verify_commits(
-                    repo.path(),
-                    &[upstream.commit.as_str(), local.commit.as_str()]
-                )
-                .is_err()
-        );
-    }
-    #[test]
-    fn rejects_equal_resolved_pair() {
-        let repo = repo();
-        let r = GitRepository::new(repo.path().to_path_buf());
-        assert!(resolve_pair(&r, "HEAD", "HEAD").is_err());
+    fn rejects_product_expressions_at_normalized_host_boundary() {
+        assert!(normalized_revision("HEAD").is_err());
+        assert!(normalized_revision("ABCDEF0123456789012345678901234567890123").is_err());
+        assert!(normalized_revision("abcdef0123456789012345678901234567890123").is_ok());
     }
     #[test]
     fn rejects_dirty_harness() {

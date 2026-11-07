@@ -85,27 +85,38 @@ stable origin.
 From a clean checkout in the repository devShell:
 
 ```sh
-traced-run -- cargo xtask production-baseline qualify-styling
+traced-run -- just production-baseline-qualify-styling
 ```
 
-This opt-in host command is not a production operation or an automatic CI job.
-It binds the executing tools, three canonical fixture products/CSR bundles and
-six VM profiles to one clean source pin, retaining anonymous/authenticated
-Chromium contexts behind one Caddy origin per backend. On each SQLite and
-PostgreSQL backend it proves Create → A warm → B application → A rollback → B
-public theme → A rollback → same-backend restored A. It checks actual cache
-events, exact running identities, computed presentation, retained-byte 200 and
-empty 304 responses, retired-route 404s, Home protection and restored
-readability. Restore uses the canonical current backup-format constant and
-compares actual schema before browser admission.
+This opt-in Just workflow is not a production operation or an automatic CI job.
+Just captures clean local `HEAD`; the host binds that expected SHA to its clean
+`SourcePin` before Nix harness admission or lifecycle mutation. The immutable
+`git+file:…?rev=<commit>` source requires no canonical origin, upstream
+availability or Git-network preflight. Nix may still need ordinary dependency
+downloads. It binds the executing tools, three canonical fixture products/CSR
+bundles and six VM profiles to one clean source pin, retaining
+anonymous/authenticated Chromium contexts behind one Caddy origin per backend.
+On each SQLite and PostgreSQL backend it proves Create → A warm → B application
+→ A rollback → B public theme → A rollback → same-backend restored A. It checks
+actual cache events, exact running identities, computed presentation,
+retained-byte 200 and empty 304 responses, retired-route 404s, Home protection
+and restored readability. Restore uses the canonical current backup-format
+constant and compares actual schema before browser admission.
 
-Sanitized JSON/Markdown is retained atomically under
-`.xtask/review/evidence/styling-qualification/` for temporary PR review or CI
-artifacts, not committed as repository documentation. Raw credentials, traces,
-backups, disks and logs stay private. Each result binds its observations to the
-exact source and product identities tested; rerun the harness when fresh proof
-is needed. Qualification complements, rather than replaces, comparable visual
-pairs and focused interaction/accessibility tests.
+Only a fully validated, cleaned run publishes sanitized JSON/Markdown atomically
+under `.xtask/review/evidence/styling-qualification/` for temporary PR review or
+CI artifacts, not committed as repository documentation. Styling validates its
+own evidence identity/phase/context and canary-scans JSON and separately
+generated Markdown; it does not use the ordinary baseline schema/Markdown parity
+validator or publish failed-outcome reports. Both files are staged privately,
+lifecycle cleanup and source recheck precede the final rename, and a workflow
+error exits nonzero without durable evidence. Output is plain process status and
+focused diagnostics, not a generic xtask JSON report, last-result sidecar or
+sentinel. Raw credentials, traces, backups, disks and logs stay private. Each
+result binds its observations to the exact source and product identities tested;
+rerun the harness when fresh proof is needed. Qualification complements, rather
+than replaces, comparable visual pairs and focused interaction/accessibility
+tests.
 
 Chromium (or automated WebKit elsewhere) is **not actual Safari or iPhone
 qualification**. Desktop Safari and iPhone remain unqualified until separately

@@ -94,8 +94,8 @@ mod steps {
 pub use cli::{
     AdrCommand, CacheSafetyCommand, Cli, Command, CoverageCommand, E2eBackend, E2eBrowser,
     MutantsCommand, NixCommand, PerformanceBackend, PerformanceBrowser, PerformanceCommand,
-    PerformanceProfile, PerformanceRunArgs, PrCommand, PrWatchUntil, ProductionBaselineCommand,
-    SandboxProfile, ServerFnCoverageCommand, TracesCommand, WasmCoverageCommand,
+    PerformanceProfile, PerformanceRunArgs, PrCommand, PrWatchUntil, SandboxProfile,
+    ServerFnCoverageCommand, TracesCommand, WasmCoverageCommand,
 };
 pub use dispatch::run;
 pub use host_tooling::prepare_checkout;

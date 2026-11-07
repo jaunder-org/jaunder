@@ -6,14 +6,14 @@
 
 ## Context
 
-The opt-in production-baseline workflows currently enter through a host-only
-xtask command catalog. In discover/accept, `production_baseline::run` combines
-revision resolution, origin validation/fetch, source-specific harness admission,
-lease acquisition, VM workflow execution, evidence publication, and
-`CommandResult` creation. Styling has a distinct flow in
-`qualification_run::run`; local smoke intentionally uses a mutable
-current-checkout path and publishes no evidence. These are not interchangeable
-evidence contracts.
+Before this migration, the opt-in production-baseline workflows entered through
+a host-only xtask command catalog. In discover/accept,
+`production_baseline::run` combined revision resolution, origin
+validation/fetch, source-specific harness admission, lease acquisition, VM
+workflow execution, evidence publication, and `CommandResult` creation. Styling
+has a distinct flow in `qualification_run::run`; local smoke intentionally uses
+a mutable current-checkout path and publishes no evidence. These are not
+interchangeable evidence contracts.
 
 The root Justfile and development shells already provide pinned Just, Nix and
 host tooling. Just runs dependencies before dependent recipes and stops on a
@@ -42,10 +42,14 @@ owns the ordinary Git preflight for discover/accept only: require a clean
 checkout, record full `HEAD` as expected harness SHA, resolve product inputs
 with `git rev-parse --verify`, require the canonical Jaunder `origin`, and fetch
 expected harness HEAD plus source and optional target in one
-`git fetch --quiet --no-write-fetch-head origin <commits>`. Reject identical
-resolved source/target commits. The host leaf receives these full IDs, re-admits
-its clean source pin, and requires its pinned SHA to equal the expected harness
-SHA before Nix admission or lifecycle mutation. This binds the upstream-verified
+`git fetch --quiet --no-write-fetch-head --refetch origin <commits>` over the
+distinct commit set. Ordinary fetch can skip locally complete objects without
+asking the server for them; `--refetch` requests the objects afresh. Accept the
+larger transfers and normal Git maintenance to prove origin serves each object,
+not reachability from a particular named branch. Reject identical resolved
+source/target commits. The host leaf receives these full IDs, re-admits its
+clean source pin, and requires its pinned SHA to equal the expected harness SHA
+before Nix admission or lifecycle mutation. This binds the upstream-verified
 harness identity to the actual source without a second origin check/fetch; the
 leaf does not repeat product expression resolution or upstream verification.
 

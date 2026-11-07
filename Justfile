@@ -33,6 +33,56 @@ _clean-tree:
       exit 1
     fi
 
+# Qualification's public catalog owns ordinary Git preflight; the host leaf
+# binds this HEAD to its clean SourcePin before selecting any Nix harness.
+production-baseline-discover revision: (_production-baseline revision "")
+
+# Only discovery may use the shared helper's empty-target sentinel.
+production-baseline-accept source target: (_production-baseline (source) (if target == "" { error("production-baseline accept requires a nonempty target") } else { target }))
+
+production-baseline-qualify-styling: _clean-tree
+    #!/usr/bin/env bash
+    set -euo pipefail
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_NAMESPACE
+    harness=$(git rev-parse --verify 'HEAD^{commit}')
+    cargo xtask qualification-leaf --expected-harness "$harness"
+
+# Mutable local lifecycle diagnostic; deliberately no qualification/evidence.
+production-baseline-smoke:
+    cargo xtask qualification-leaf
+
+[private]
+_production-baseline source target: _clean-tree
+    #!/usr/bin/env bash
+    set -euo pipefail
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_NAMESPACE
+    harness=$(git rev-parse --verify 'HEAD^{commit}')
+    source=$(git rev-parse --verify --end-of-options {{quote(source + "^{commit}")}})
+    target=""
+    if [[ -n {{quote(target)}} ]]; then
+      target=$(git rev-parse --verify --end-of-options {{quote(target + "^{commit}")}})
+      if [[ "$source" == "$target" ]]; then
+        printf 'production-baseline accept requires distinct resolved source and target commits\n' >&2
+        exit 1
+      fi
+    fi
+    origin=$(git remote get-url origin)
+    case "$origin" in
+      https://github.com/jaunder-org/jaunder.git|https://github.com/jaunder-org/jaunder|git@github.com:jaunder-org/jaunder.git|ssh://git@github.com/jaunder-org/jaunder.git) ;;
+      *) printf 'production-baseline requires origin to be jaunder-org/jaunder\n' >&2; exit 1 ;;
+    esac
+    commits=("$harness")
+    [[ "$source" == "$harness" ]] || commits+=("$source")
+    if [[ -n "$target" && "$target" != "$harness" && "$target" != "$source" ]]; then
+      commits+=("$target")
+    fi
+    # Re-request every SHA: ordinary fetch can accept locally complete objects
+    # without asking the server whether it has them.
+    git fetch --quiet --no-write-fetch-head --refetch origin "${commits[@]}"
+    args=(--expected-harness "$harness" --source "$source")
+    [[ -z "$target" ]] || args+=(--target "$target")
+    cargo xtask qualification-leaf "${args[@]}"
+
 # Internal implementations; Fix-mode check also uses doctests-workflow without
 # imposing the public doctests clean-tree admission.
 [private]
