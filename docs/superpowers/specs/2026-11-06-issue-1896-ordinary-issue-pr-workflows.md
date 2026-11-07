@@ -57,6 +57,33 @@ Manager-assigned or uncertain ownership means do not invoke cleanup, preserve
 the branch/checkout, and hand off to Manager. No stash/reset/force or tracker
 mutation.
 
+### Approved read-only continuation refinement
+
+Human approval `issue-1896-observer-continuation-v1`, request
+`4fc22750-206c-49bd-9056-c7b3e07543a5` ("Approve narrow observer extension"),
+permits observer `--expected-head <SHA>` and `--acknowledged-ejection <URL>`
+inputs backed by existing `WatchContinuation`. This narrowly refines ADR-0220's
+no-operator-head/run-arguments assumption, not its safeguards. Just captures the
+historical URL from live ejection preflight, then requires a one-snapshot
+`ready-to-land` verdict from the SAME classifier with only that run acknowledged
+and the same expected head before ONE separately approved native head-bound
+merge call. It observes that same head afterward. Only the historical run is
+acknowledged; its failed verdict is unchanged, fresh failure is terminal, and
+delayed visibility uses the existing deadline. No second classifier/poller,
+mutation retry, extra armer or observer mutation is permitted. Ordinary land
+also stops on silent no-op or uncertain readback rather than rearming.
+Implementation approval is not per-PR/head merge or recovery approval.
+
+Human approval `issue-1896-observer-queue-continuation-v1`, request
+`df5154f8-1d48-4725-9550-72460d456d8b` ("Approve queue-history input"),
+authorizes read-only `--observed-queued-head <SHA>`, requiring and equaling
+`--expected-head`. Just supplies it ONLY from positive live same-head queued
+post-action readback. The observer seeds existing `Progress` so queue membership
+lost before its establishment snapshot still yields the existing confirmed
+`dequeued` classification. Default observation is unchanged. This transfers
+observed history, not approval, a trust registry or mutation authority; no
+second classifier/poller or bypass is permitted.
+
 Implementation includes new, approved, numberless ADR draft documentation that
 supersedes ADR-0087's xtask observer-ownership decision and amends ADR-0028's
 host-tool placement boundary to permit this narrowly scoped host-only tool; it

@@ -117,7 +117,7 @@ let
     pkgs.cargo-generate
     pkgs.cargo-mutants
     pkgs.sqlx-cli
-    # `cargo xtask pr watch`/`pr land` shell out to `gh` (#729). Host-only
+    # Just issue/PR frontdoors and the read-only observer use `gh`. Host-only
     # manual commands — no Nix check or CI job runs them — so this stays
     # out of `ciInputs`, like the other interactive tooling here.
     pkgs.gh

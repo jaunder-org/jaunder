@@ -60,10 +60,39 @@ not observer subcommands. Land requires a separately obtained and recorded human
 approval for the exact PR/head. The caller supplies that SHA; the recipe checks
 it against the live PR head and invokes GitHub's native queue using
 `gh pr merge --auto --match-head-commit <sha>`. Just does not attest that human
-approval exists. A queued-PR re-enqueue, if explicitly authorized after an
-observed ejection, remains a separate one-shot action under
-[ADR-0220](../0220-explicit-one-shot-pr-reenqueue.md); observation never
-authorizes it.
+approval exists. `just pr-land <PR> <approved-head-SHA> [--reenqueue]` makes at
+most one native call after shared-observer readiness; silent no-op or uncertain
+action/readback never permits another call. It verifies actual arm, queue or
+complete merged readback, then observes the same approved head to merge;
+arming/queueing is not merge success.
+
+Explicit recovery preserves
+[ADR-0220](../0220-explicit-one-shot-pr-reenqueue.md)'s one-shot semantics.
+Human approval `issue-1896-observer-continuation-v1`, request
+`4fc22750-206c-49bd-9056-c7b3e07543a5` ("Approve narrow observer extension"),
+authorizes read-only `--expected-head <SHA>` and `--acknowledged-ejection <URL>`
+backed by existing `WatchContinuation`. This narrowly supersedes ADR-0220's
+assumption that no operator-supplied head/run inputs are needed, without
+changing its failed-verdict or recovery guarantees. Just captures a historical
+URL from live `ejected` preflight, refuses queued or armed PRs, then uses the
+SAME observer for a one-snapshot readiness proof with only that run acknowledged
+before ONE separately approved head-bound native call. Post-action observation
+uses that same head/acknowledgment. No second classifier/poller, retries, extra
+armer or observer mutation is introduced. Only the historical run is disregarded
+as an ejection discriminator; its failed verdict remains failed, delayed
+visibility uses the normal deadline, and a fresh distinct failure is terminal.
+Observation and implementation approval never authorize per-PR/head merge or
+recovery.
+
+Approval `issue-1896-observer-queue-continuation-v1`, request
+`df5154f8-1d48-4725-9550-72460d456d8b` ("Approve queue-history input"), adds
+only read-only `--observed-queued-head <SHA>`, requiring equality with
+`--expected-head`. Just supplies it ONLY after positive live same-head queued
+post-action readback. Existing `Progress`/poller retains that queue history even
+if the entry vanishes before observer establishment, preserving ADR-0135/0220's
+confirmed same-head dequeue outcome. Default observation is unchanged. This is
+observed evidence, not a trust registry, approval bypass or mutation capability;
+no second classifier/poller is introduced.
 
 Unmanaged cleanup preserves
 [ADR-0171](../0171-explicit-post-land-cleanup-command.md)'s guards: merged PR

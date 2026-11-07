@@ -32,8 +32,8 @@ args=$(jq -cn --args '$ARGS.positional' -- "$@")
 jq -cn --arg tool "$tool" --argjson args "$args" '{tool:$tool,args:$args}' >> "$FIXTURE/calls"
 n=$(<"$FIXTURE/index"); printf '%s' "$((n+1))" > "$FIXTURE/index"
 reply=$(jq -ce --argjson n "$n" --arg tool "$tool" --argjson args "$args" '.[$n] | if .tool==$tool and .args==$args then . else error("unexpected native call") end' "$FIXTURE/responses")
-if [[ $(jq -r '.exit // 0' <<< "$reply") != 0 ]]; then echo 'simulated native failure' >&2; exit 1; fi
 if [[ "$tool" == gh ]]; then jq -c '.body' <<< "$reply"; else jq -rj '.text // ""' <<< "$reply"; fi
+if [[ $(jq -r '.exit // 0' <<< "$reply") != 0 ]]; then echo 'simulated native failure' >&2; exit 1; fi
 "#).unwrap();
             std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
@@ -58,6 +58,30 @@ if [[ "$tool" == gh ]]; then jq -c '.body' <<< "$reply"; else jq -rj '.text // "
             .output()
             .unwrap()
     }
+    fn land(&self, recovery: bool) -> Output {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        Command::new("just")
+            .current_dir(root)
+            .args([
+                "pr-land",
+                "731",
+                HEAD,
+                if recovery { "--reenqueue" } else { "ordinary" },
+            ])
+            .env("FIXTURE", self.dir.path())
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    self.dir.path().display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            )
+            .env("GIT_DIR", "foreign")
+            .env("GIT_INDEX_FILE", "foreign-index")
+            .output()
+            .unwrap()
+    }
     fn count(&self) -> usize {
         std::fs::read_to_string(self.dir.path().join("index"))
             .unwrap()
@@ -65,6 +89,294 @@ if [[ "$tool" == gh ]]; then jq -c '.body' <<< "$reply"; else jq -rj '.text // "
             .unwrap()
     }
 }
+const HISTORICAL: &str = "https://github.com/jaunder-org/jaunder/actions/runs/42";
+const LIVE_QUERY: &str = "query($number:Int!){repository(owner:\"jaunder-org\",name:\"jaunder\"){pullRequest(number:$number){number state baseRefName headRefName headRefOid isInMergeQueue autoMergeRequest{enabledAt} mergedAt mergeCommit{oid}}}}";
+
+fn live(armed: bool) -> Value {
+    json!({"tool":"gh","args":["api","graphql","-f",format!("query={LIVE_QUERY}"),"-F","number=731"],
+        "body":{"data":{"repository":{"pullRequest":{"number":731,"state":"OPEN","baseRefName":"main","headRefName":"issue-731-example","headRefOid":HEAD,"isInMergeQueue":false,"autoMergeRequest":if armed { json!({"enabledAt":"now"}) } else { Value::Null }}}}}})
+}
+fn observation(outcome: &str, recovery: bool, once: bool) -> Value {
+    let mut args = vec![
+        "run",
+        "--locked",
+        "--quiet",
+        "--manifest-path",
+        "tools/Cargo.toml",
+        "-p",
+        "pr-observer",
+        "--",
+        "watch",
+        "731",
+    ];
+    if once {
+        args.push("--once");
+    } else {
+        args.extend(["--until", "merged"]);
+    }
+    args.extend(["--expected-head", HEAD]);
+    if recovery {
+        args.extend(["--acknowledged-ejection", HISTORICAL]);
+    }
+    json!({"tool":"cargo","args":args,"exit":if matches!(outcome,"merged"|"ready-to-land") {0} else {1},
+        "text":json!({"outcome":outcome,"pr":731,"head_sha":HEAD,"pointer":if outcome=="ejected" {HISTORICAL} else {MERGE},"detail":"2026-11-08T00:00:00Z","events":[]}).to_string()})
+}
+fn land_calls(recovery: bool) -> Vec<Value> {
+    let mut calls = vec![
+        json!({"tool":"git","args":["remote","get-url","origin"],"text":"https://github.com/jaunder-org/jaunder.git\n"}),
+        live(false),
+        json!({"tool":"git","args":["branch","--show-current"],"text":"issue-731-example\n"}),
+        json!({"tool":"git","args":["rev-parse","--verify","HEAD"],"text":HEAD}),
+        observation(
+            if recovery { "ejected" } else { "ready-to-land" },
+            false,
+            true,
+        ),
+    ];
+    if recovery {
+        calls.push(observation("ready-to-land", true, true));
+    }
+    calls.extend([
+        live(false),
+        json!({"tool":"gh","args":["pr","merge","731","--repo","jaunder-org/jaunder","--auto","--merge","--match-head-commit",HEAD]}),
+        live(true),
+        observation("merged", recovery, false),
+    ]);
+    calls
+}
+#[test]
+fn approved_land_and_explicit_recovery_make_one_head_bound_action_then_observe() {
+    for recovery in [false, true] {
+        let calls = land_calls(recovery);
+        let fixture = Fixture::new(json!(calls));
+        let output = fixture.land(recovery);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(fixture.count(), calls.len());
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["outcome"], "merged");
+        assert_eq!(report["head_sha"], HEAD);
+    }
+}
+#[test]
+fn land_refuses_adverse_incomplete_and_changed_head_before_mutation() {
+    for recovery in [false, true] {
+        for outcome in [
+            "pending",
+            "blocked",
+            "conflicted",
+            "checks-failed",
+            "ejected",
+            "watcher-error",
+            "stale",
+            "merged",
+        ] {
+            let mut calls = land_calls(recovery);
+            let index = if recovery { 5 } else { 4 };
+            calls[index] = observation(outcome, recovery, true);
+            let fixture = Fixture::new(json!(calls));
+            let output = fixture.land(recovery);
+            assert!(!output.status.success(), "{outcome}");
+            assert_eq!(fixture.count(), index + 1, "no action after {outcome}");
+        }
+        for index in [1, if recovery { 6 } else { 5 }] {
+            let mut calls = land_calls(recovery);
+            calls[index]["body"]["data"]["repository"]["pullRequest"]["headRefOid"] = json!(MERGE);
+            let fixture = Fixture::new(json!(calls));
+            assert!(!fixture.land(recovery).status.success());
+            assert_eq!(fixture.count(), index + 1);
+        }
+    }
+}
+#[test]
+fn recovery_requires_live_ejection_and_refuses_armed_or_queued_preflight() {
+    for outcome in ["ready-to-land", "pending", "checks-failed", "watcher-error"] {
+        let mut calls = land_calls(true);
+        calls[4] = observation(outcome, false, true);
+        let fixture = Fixture::new(json!(calls));
+        assert!(!fixture.land(true).status.success());
+        assert_eq!(fixture.count(), 5);
+    }
+    for field in ["isInMergeQueue", "autoMergeRequest"] {
+        let mut calls = land_calls(true);
+        calls[1]["body"]["data"]["repository"]["pullRequest"][field] = if field == "isInMergeQueue"
+        {
+            json!(true)
+        } else {
+            json!({"enabledAt":"now"})
+        };
+        let fixture = Fixture::new(json!(calls));
+        assert!(!fixture.land(true).status.success());
+        assert_eq!(fixture.count(), 5);
+    }
+}
+#[test]
+fn land_rejects_wrong_repository_local_divergence_base_and_malformed_arm_evidence() {
+    for recovery in [false, true] {
+        for failure in [
+            "origin",
+            "local",
+            "base",
+            "head",
+            "missing-arm",
+            "malformed-arm",
+            "api-errors",
+        ] {
+            let mut calls = land_calls(recovery);
+            let expected_count = match failure {
+                "origin" => {
+                    calls[0]["text"] = json!("https://github.com/other/repo.git");
+                    1
+                }
+                "local" => {
+                    calls[3]["text"] = json!(MERGE);
+                    4
+                }
+                "base" => {
+                    calls[1]["body"]["data"]["repository"]["pullRequest"]["baseRefName"] =
+                        json!("release");
+                    2
+                }
+                "head" => {
+                    let mut report: Value =
+                        serde_json::from_str(calls[4]["text"].as_str().unwrap()).unwrap();
+                    report["head_sha"] = json!(MERGE);
+                    calls[4]["text"] = json!(report.to_string());
+                    5
+                }
+                "missing-arm" => {
+                    calls[1]["body"]["data"]["repository"]["pullRequest"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("autoMergeRequest");
+                    2
+                }
+                "malformed-arm" => {
+                    calls[1]["body"]["data"]["repository"]["pullRequest"]["autoMergeRequest"] =
+                        json!("armed");
+                    2
+                }
+                _ => {
+                    calls[1]["body"]["errors"] = json!([{"message":"unavailable"}]);
+                    2
+                }
+            };
+            let fixture = Fixture::new(json!(calls));
+            assert!(!fixture.land(recovery).status.success(), "{failure}");
+            assert_eq!(fixture.count(), expected_count);
+        }
+    }
+}
+
+#[test]
+fn inconsistent_success_report_status_is_not_mutation_permission() {
+    for recovery in [false, true] {
+        let mut calls = land_calls(recovery);
+        let index = if recovery { 5 } else { 4 };
+        calls[index]["exit"] = json!(1);
+        let fixture = Fixture::new(json!(calls));
+        assert!(!fixture.land(recovery).status.success());
+        assert_eq!(fixture.count(), index + 1);
+    }
+}
+
+#[test]
+fn immediate_queue_or_complete_merged_readback_is_not_a_silent_no_op() {
+    for recovery in [false, true] {
+        for state in ["queued", "merged"] {
+            let mut calls = land_calls(recovery);
+            let readback = if recovery { 8 } else { 7 };
+            let pr = &mut calls[readback]["body"]["data"]["repository"]["pullRequest"];
+            pr["autoMergeRequest"] = Value::Null;
+            if state == "queued" {
+                pr["isInMergeQueue"] = json!(true);
+                // Only a positive same-head queue readback gets the history input.
+                // All ordinary arm-only fixtures continue to require its absence.
+                calls[readback + 1]["args"]
+                    .as_array_mut()
+                    .unwrap()
+                    .extend([json!("--observed-queued-head"), json!(HEAD)]);
+            } else {
+                pr["state"] = json!("MERGED");
+                pr["mergedAt"] = json!("2026-11-08T00:00:00Z");
+                pr["mergeCommit"] = json!({"oid":MERGE});
+            }
+            let fixture = Fixture::new(json!(calls));
+            let output = fixture.land(recovery);
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(fixture.count(), readback + 2);
+        }
+    }
+}
+
+#[test]
+fn no_op_action_error_or_post_action_uncertainty_never_rearms() {
+    for recovery in [false, true] {
+        let action = if recovery { 7 } else { 6 };
+        for failure in [
+            "action",
+            "no-op",
+            "readback",
+            "fresh-ejection",
+            "failed",
+            "drift",
+            "incomplete-merge",
+        ] {
+            let mut calls = land_calls(recovery);
+            let expected_count = match failure {
+                "action" => {
+                    calls[action]["exit"] = json!(1);
+                    action + 1
+                }
+                "no-op" => {
+                    calls[action + 1] = live(false);
+                    action + 2
+                }
+                "readback" => {
+                    calls[action + 1]["exit"] = json!(1);
+                    action + 2
+                }
+                "fresh-ejection" | "failed" => {
+                    calls[action + 2] = observation(
+                        if failure == "failed" {
+                            "checks-failed"
+                        } else {
+                            "ejected"
+                        },
+                        recovery,
+                        false,
+                    );
+                    action + 3
+                }
+                "drift" => {
+                    let mut report: Value =
+                        serde_json::from_str(calls[action + 2]["text"].as_str().unwrap()).unwrap();
+                    report["head_sha"] = json!(MERGE);
+                    calls[action + 2]["text"] = json!(report.to_string());
+                    action + 3
+                }
+                _ => {
+                    let mut report: Value =
+                        serde_json::from_str(calls[action + 2]["text"].as_str().unwrap()).unwrap();
+                    report["pointer"] = Value::Null;
+                    calls[action + 2]["text"] = json!(report.to_string());
+                    action + 3
+                }
+            };
+            let fixture = Fixture::new(json!(calls));
+            assert!(!fixture.land(recovery).status.success(), "{failure}");
+            assert_eq!(fixture.count(), expected_count, "no retry for {failure}");
+        }
+    }
+}
+
 fn snapshot() -> Value {
     json!({"number":731,"state":"MERGED","baseRefName":"main","headRefName":"issue-731-example","headRefOid":HEAD,
         "mergedAt":"2026-11-08T00:00:00Z","mergeCommit":{"oid":MERGE}})

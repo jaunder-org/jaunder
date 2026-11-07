@@ -309,10 +309,6 @@ pub struct CommandResult {
     /// and never Some on a `--json` run).
     #[serde(skip)]
     pub traces: Option<String>,
-    /// The `pr watch` / `pr land` verdict (#729). Carries the outcome an agent
-    /// branches on because command-specific success cannot encode every verdict.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pr: Option<crate::pr::PrReport>,
     /// The manual repository-census payload. It remains informational unless a
     /// collector itself failed, in which case its completed cells are retained.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -344,31 +340,6 @@ fn render_phase_table(phases: &[PhaseRecord]) -> String {
     }
     out
 }
-fn render_pr_summary(pr: &crate::pr::PrReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut out = String::new();
-    match pr.head_sha.as_str() {
-        "" => writeln!(out, "PR #{} — {}", pr.pr, pr.outcome).unwrap(),
-        sha => writeln!(out, "PR #{} @ {sha} — {}", pr.pr, pr.outcome).unwrap(),
-    }
-    if let Some(phase) = &pr.phase {
-        writeln!(out, "  phase: {phase}").unwrap();
-    }
-    if let Some(detail) = &pr.detail {
-        writeln!(out, "  {detail}").unwrap();
-    }
-    if let Some(pointer) = &pr.pointer {
-        let label = if pr.outcome.is_merged() {
-            "merge commit"
-        } else {
-            "see"
-        };
-        writeln!(out, "  {label}: {pointer}").unwrap();
-    }
-    out
-}
-
 fn merge_nix_evidence(current: &mut Option<NixPhaseEvidence>, candidate: Option<NixPhaseEvidence>) {
     let Some(mut candidate) = candidate else {
         return;
@@ -463,7 +434,6 @@ impl CommandResult {
             audit: None,
             breakdown: None,
             traces: None,
-            pr: None,
             census: None,
             wasm_coverage: None,
             phases: PhaseName::ALL
@@ -571,9 +541,6 @@ impl CommandResult {
             print!("{traces}");
         }
         // The event log already streamed to stderr; this is the stable summary seam.
-        if let Some(pr) = &self.pr {
-            print!("{}", render_pr_summary(pr));
-        }
         if let Some(census) = &self.census {
             print!("{}", crate::census::render_human(census));
         }
@@ -744,42 +711,6 @@ mod tests {
             step.human_line(),
             format!("[ ok ] clippy ({} ms) — 0 warnings", SLOW_STEP_MS)
         );
-    }
-    #[test]
-    fn pr_summary_renders_outcome_head_detail_and_pointer_labels() {
-        let report = |outcome, detail: Option<&str>, pointer: Option<&str>| crate::pr::PrReport {
-            outcome,
-            pr: 1044,
-            head_sha: "abc123".into(),
-            phase: None,
-            detail: detail.map(str::to_string),
-            pointer: pointer.map(str::to_string),
-            events: Vec::new(),
-            shared_failure: None,
-            subject_failure: None,
-        };
-
-        let ready = render_pr_summary(&report(
-            crate::pr::Outcome::ReadyToLand,
-            Some("obtain approval, then run `pr land`"),
-            None,
-        ));
-        assert!(ready.contains("PR #1044 @ abc123 — ready-to-land"));
-        assert!(ready.contains("obtain approval"));
-
-        let merged = render_pr_summary(&report(crate::pr::Outcome::Merged, None, Some("deadbeef")));
-        assert!(merged.contains("merged"));
-        assert!(merged.contains("merge commit: deadbeef"));
-
-        for outcome in [
-            crate::pr::Outcome::Dequeued,
-            crate::pr::Outcome::WatcherError,
-        ] {
-            let rendered = render_pr_summary(&report(outcome, Some("action required"), None));
-            assert!(rendered.contains(outcome.as_str()));
-            assert!(rendered.contains("abc123"));
-            assert!(rendered.contains("action required"));
-        }
     }
     #[test]
     fn phase_vocabulary_is_complete_and_unavailable_without_observation() {

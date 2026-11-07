@@ -93,7 +93,7 @@ mod steps {
 pub use cli::{
     AdrCommand, CacheSafetyCommand, Cli, Command, CoverageCommand, E2eBackend, E2eBrowser,
     MutantsCommand, NixCommand, PerformanceBackend, PerformanceBrowser, PerformanceCommand,
-    PerformanceProfile, PerformanceRunArgs, PrCommand, PrWatchUntil, SandboxProfile,
+    PerformanceProfile, PerformanceRunArgs, SandboxProfile,
     ServerFnCoverageCommand, TracesCommand, WasmCoverageCommand,
 };
 pub use dispatch::run;

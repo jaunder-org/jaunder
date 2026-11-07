@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 
 const VERSION: &str = concat!(
     env!("CARGO_PKG_VERSION"),
@@ -260,10 +260,6 @@ pub enum Command {
     /// Validate completed mutation producer evidence without running mutations.
     #[command(subcommand)]
     Mutants(MutantsCommand),
-    /// Observe a pull request until the next caller-actionable outcome (#729).
-    /// Host-only manual command; needs `gh`.
-    #[command(subcommand)]
-    Pr(PrCommand),
     /// Run fresh release-mode performance producers, compare a retained run, or
     /// import the verified canonical GitHub Actions baseline.
     #[command(name = "perf", subcommand)]
@@ -343,74 +339,6 @@ pub struct PerformanceRunArgs {
     pub authors: Option<u64>,
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
     pub revisions: Option<u64>,
-}
-
-/// An explicit passive-observation target for `pr watch`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum PrWatchUntil {
-    Merged,
-}
-
-/// `pr` subcommands (#729).
-///
-/// The split is the point: `watch` cannot merge anything, so running `land` **is**
-/// the per-PR human merge approval. Routine technical diagnosis belongs to the
-/// assigned Lead; recovery after ejection requires explicit authorization from
-/// the authority assigned by owner policy. `land --reenqueue` remains explicit.
-#[derive(Subcommand)]
-pub enum PrCommand {
-    /// Observe a PR until the next caller-actionable outcome. Never merges,
-    /// re-runs a job, pushes, or re-enqueues. A green, landable PR reports
-    /// `ready-to-land`; an already armed or queued PR continues to its outcome.
-    ///
-    /// Exit is 0 for `ready-to-land` or `merged`. Distinguish every outcome through
-    /// `pr.outcome` in `--json` or `.xtask/last-result.json`.
-    #[command(after_help = "EXAMPLES:\n  \
-        cargo xtask pr watch\n  \
-        cargo xtask pr watch 731\n  \
-        cargo xtask --json pr watch 731 --once\n  \
-        cargo xtask pr watch 731 --until merged\n  \
-        cargo xtask pr watch 731 --interval 60 --timeout 30")]
-    Watch {
-        /// PR number. Omitted: the open PR whose head is the current branch.
-        number: Option<u64>,
-        /// Seconds between polls.
-        #[arg(long, value_name = "SECONDS", default_value_t = 30, value_parser = clap::value_parser!(u64).range(5..))]
-        interval: u64,
-        /// Minutes to watch before reporting `timed-out`.
-        #[arg(long, value_name = "MINUTES", default_value_t = 90, value_parser = clap::value_parser!(u64).range(1..))]
-        timeout: u64,
-        /// Take one snapshot and report, instead of looping. Can report `pending`.
-        #[arg(long)]
-        once: bool,
-        /// Continue across `ready-to-land` while another actor may arm the merge.
-        #[arg(long, value_name = "OUTCOME", conflicts_with = "once")]
-        until: Option<PrWatchUntil>,
-    },
-    /// Arm auto-merge, verify the arm actually took, then watch it to `merged`.
-    ///
-    /// Running this command is the per-PR human merge approval. Recovery after an
-    /// ejection requires separate explicit authorization from the authority assigned
-    /// by owner policy; diagnosis alone does not authorize it. It refuses when invoked
-    /// from the PR's own branch with unpushed local commits. An ejected PR is refused
-    /// unless --reenqueue explicitly permits one new enqueue; it never retries that arm.
-    #[command(after_help = "EXAMPLES:\n  \
-        cargo xtask pr land\n  \
-        cargo xtask pr land 731\n  \
-        cargo xtask pr land 731 --reenqueue")]
-    Land {
-        /// Permit one enqueue after an observed ejection. Refuses queued or armed PRs.
-        #[arg(long)]
-        reenqueue: bool,
-        /// PR number. Omitted: the open PR whose head is the current branch.
-        number: Option<u64>,
-        /// Seconds between polls.
-        #[arg(long, value_name = "SECONDS", default_value_t = 30, value_parser = clap::value_parser!(u64).range(5..))]
-        interval: u64,
-        /// Minutes to watch before reporting `timed-out`.
-        #[arg(long, value_name = "MINUTES", default_value_t = 90, value_parser = clap::value_parser!(u64).range(1..))]
-        timeout: u64,
-    },
 }
 
 /// `server-fn-coverage` subcommands (#681).
@@ -634,8 +562,6 @@ impl Cli {
             Command::QualificationLeaf { .. } => "qualification-leaf",
             Command::Sandbox { .. } => "sandbox",
             Command::Mutants(MutantsCommand::VerifyEvidence { .. }) => "mutants-verify-evidence",
-            Command::Pr(PrCommand::Watch { .. }) => "pr-watch",
-            Command::Pr(PrCommand::Land { .. }) => "pr-land",
         }
     }
 }
@@ -1090,136 +1016,10 @@ mod tests {
     }
 
     #[test]
-    fn pr_watch_parses_with_defaults_and_optional_number() {
-        let cli = Cli::try_parse_from(["xtask", "pr", "watch"]).unwrap();
-        assert_eq!(cli.command_name(), "pr-watch");
-        match cli.command {
-            Command::Pr(PrCommand::Watch {
-                number,
-                interval,
-                timeout,
-                once,
-                until,
-            }) => {
-                assert_eq!(number, None);
-                assert_eq!(interval, 30);
-                assert_eq!(timeout, 90);
-                assert!(!once);
-                assert_eq!(until, None);
-            }
-            _ => panic!("expected pr watch"),
+    fn ordinary_pr_commands_are_not_xtask_entrypoints() {
+        for command in ["watch", "land", "cleanup"] {
+            assert!(Cli::try_parse_from(["xtask", "pr", command, "731"]).is_err());
         }
-    }
-
-    #[test]
-    fn ordinary_cleanup_is_not_an_xtask_entrypoint() {
-        assert!(Cli::try_parse_from(["xtask", "pr", "cleanup", "731"]).is_err());
-    }
-
-    #[test]
-    fn pr_watch_parses_explicit_number_and_flags() {
-        let cli = Cli::try_parse_from([
-            "xtask",
-            "pr",
-            "watch",
-            "731",
-            "--interval",
-            "60",
-            "--timeout",
-            "10",
-            "--once",
-        ])
-        .unwrap();
-        match cli.command {
-            Command::Pr(PrCommand::Watch {
-                number,
-                interval,
-                timeout,
-                once,
-                until,
-            }) => {
-                assert_eq!(number, Some(731));
-                assert_eq!(interval, 60);
-                assert_eq!(timeout, 10);
-                assert!(once);
-                assert_eq!(until, None);
-            }
-            _ => panic!("expected pr watch"),
-        }
-    }
-
-    #[test]
-    fn pr_watch_parses_until_merged() {
-        let cli =
-            Cli::try_parse_from(["xtask", "pr", "watch", "731", "--until", "merged"]).unwrap();
-        match cli.command {
-            Command::Pr(PrCommand::Watch { number, until, .. }) => {
-                assert_eq!(number, Some(731));
-                assert_eq!(until, Some(PrWatchUntil::Merged));
-            }
-            _ => panic!("expected pr watch"),
-        }
-    }
-
-    #[test]
-    fn pr_watch_rejects_once_with_until_merged() {
-        assert!(
-            Cli::try_parse_from(["xtask", "pr", "watch", "--once", "--until", "merged"]).is_err()
-        );
-    }
-
-    #[test]
-    fn pr_watch_rejects_unknown_until_value() {
-        assert!(Cli::try_parse_from(["xtask", "pr", "watch", "--until", "ready"]).is_err());
-    }
-
-    #[test]
-    fn pr_land_accepts_explicit_reenqueue_only_for_land() {
-        let explicit = Cli::try_parse_from(["xtask", "pr", "land", "731", "--reenqueue"]).unwrap();
-        assert!(matches!(
-            explicit.command,
-            Command::Pr(PrCommand::Land {
-                number: Some(731),
-                reenqueue: true,
-                ..
-            })
-        ));
-        let default = Cli::try_parse_from(["xtask", "pr", "land", "731"]).unwrap();
-        assert!(matches!(
-            default.command,
-            Command::Pr(PrCommand::Land {
-                reenqueue: false,
-                ..
-            })
-        ));
-        assert!(Cli::try_parse_from(["xtask", "pr", "watch", "731", "--reenqueue"]).is_err());
-    }
-
-    #[test]
-    fn pr_land_rejects_once() {
-        // Arming a merge and then immediately not watching it is never intended, and
-        // leaving it legal means someone walks away believing they watched it.
-        assert!(Cli::try_parse_from(["xtask", "pr", "land", "--once"]).is_err());
-    }
-
-    #[test]
-    fn pr_interval_below_the_floor_is_rejected() {
-        assert!(Cli::try_parse_from(["xtask", "pr", "watch", "--interval", "1"]).is_err());
-    }
-
-    #[test]
-    fn pr_land_names_itself() {
-        assert_eq!(
-            Cli::try_parse_from(["xtask", "pr", "land"])
-                .unwrap()
-                .command_name(),
-            "pr-land"
-        );
-    }
-
-    #[test]
-    fn pr_requires_a_subcommand() {
-        assert!(Cli::try_parse_from(["xtask", "pr"]).is_err());
     }
 
     #[test]

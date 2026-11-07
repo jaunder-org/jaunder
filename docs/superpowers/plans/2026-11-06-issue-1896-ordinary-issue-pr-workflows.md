@@ -66,6 +66,28 @@ alongside their replacement callers. The observer remains read-only; direct
     head, clean-tree and captured-head ancestry checks. Retire ordinary xtask
     land/cleanup command dispatch and report forwarding with the final
     consumers. Keep the ADR promoter untouched.
+  - Approved continuation refinement: Human approved
+    `issue-1896-observer-continuation-v1` via request
+    `4fc22750-206c-49bd-9056-c7b3e07543a5` ("Approve narrow observer
+    extension"). Read-only `--expected-head <SHA>` and
+    `--acknowledged-ejection <URL>` use existing `WatchContinuation`. For
+    explicit recovery, capture the historical URL from live ejected preflight,
+    require another SAME-classifier one-snapshot ready verdict with only that
+    run acknowledged, make ONE separately approved native head-bound call, then
+    observe the same head. This sequencing is a technical clarification, not a
+    second classifier/poller. Failed verdicts remain unchanged; fresh failure is
+    terminal; no retries/extra armer or observer mutation. Ordinary
+    no-op/uncertainty also stops without rearming.
+  - Approved queue-history correction: Human approved
+    `issue-1896-observer-queue-continuation-v1`, request
+    `df5154f8-1d48-4725-9550-72460d456d8b` ("Approve queue-history input").
+    Read-only `--observed-queued-head <SHA>` must equal required
+    `--expected-head`; Just supplies it ONLY from positive live same-head queued
+    action readback. Seed existing `Progress`/poller, preserving dequeue
+    detection if membership vanishes before establishment. No default change,
+    classifier/poller, mutation, trust registry or approval bypass. Prove
+    boundary disappearance, mismatched-head refusal and conditional
+    native-to-observer forwarding.
   - Verification: Tests/fixtures cover approval-scoped exact-head drift/refusal,
     wrong base, dirty tree, non-ancestor, managed/uncertain caller refusal, and
     successful safe cleanup sequencing; a repository-wide caller search confirms

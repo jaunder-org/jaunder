@@ -35,6 +35,32 @@ subject exit 2. The report includes the exact head and available log pointers.
 The tool reads required contexts from the live main ruleset, never a local job
 allowlist. Empty/incomplete evidence cannot establish success.
 
-During migration, xtask's existing PR frontdoor uses this package's same polling
-and evidence classifiers. The observer accepts no arming or cleanup capability;
-mutation-only transport helpers and the privileged ADR promoter remain in xtask.
+Read-only continuation accepts `--expected-head <full-lowercase-40-hex-SHA>` and
+`--acknowledged-ejection <GitHub-Actions-run-URL>`. Acknowledgment requires an
+expected head. Every verdict, even merged, stays bound to that head; drift is
+`stale`. Only the exact acknowledged historical URL is disregarded as an
+ejection discriminator, never as a failed verdict; a fresh failure is terminal.
+These inputs neither authorize nor perform mutation.
+
+`--observed-queued-head <SHA>` carries positive live same-head queued readback
+from the separate native action. It requires and must equal `--expected-head`;
+missing/mismatched expected head refuses before observation. Just supplies this
+input ONLY after positive queued readback, never from an arm alone or guesswork.
+Existing `Progress` preserves a dequeue before observer establishment. No
+default behavior, classifier/poller or mutation capability changes.
+
+After recorded exact PR/head human approval, the separate frontdoor is
+`just pr-land <PR> <approved-head-SHA> [--reenqueue]`. Recovery additionally
+requires explicit one-shot authorization. Just captures the historical URL from
+live ejection preflight, asks this SAME classifier for one-snapshot readiness
+with only that run acknowledged, makes ONE head-bound native call, verifies
+arm/queue/merged readback, then observes the same head. No retries or second
+poller/classifier exist. Land exit 0 requires complete same-head merged
+evidence; arming/queueing is not merging. Native/preflight refusal may have no
+JSON.
+
+The ordinary xtask PR frontdoor/report envelope is retired. Only the privileged
+ADR promoter and its required mutation transport/predicate helpers remain there.
+Unmanaged cleanup is separate:
+`just pr-cleanup <PR> <exact-head-SHA> unmanaged`; never invoke for
+managed/uncertain ownership. See CONTRIBUTING for full guards.

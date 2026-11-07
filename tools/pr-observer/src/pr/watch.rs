@@ -156,7 +156,7 @@ struct Polled {
     classification: SnapshotClassification,
 }
 
-/// Shared classification consumed by xtask's temporary pre-arm guard.
+/// Classification at the read-only evidence boundary.
 pub enum SnapshotClassification {
     Complete {
         step: Step,
@@ -188,7 +188,6 @@ impl Emitter<'_> {
 /// Classify one snapshot without turning uncertain Actions ancestry into an optional
 /// failure. Kept at the watch boundary because evidence acquisition is fallible while
 /// `decide` remains pure.
-/// Classify read-only evidence, also used by the temporary xtask land caller.
 pub fn classify_snapshot<S: PrSource>(
     source: &S,
     subject: &Subject,
@@ -416,7 +415,7 @@ pub(super) fn watch_with_progress<S: PrSource, C: Clock>(
     )
 }
 
-/// Resume observation after the compatibility caller's separately owned action.
+/// Head-bound read-only continuation after a separately owned native action.
 pub struct WatchContinuation<'a> {
     pub progress: Progress,
     pub emitted_optional_failure_ids: BTreeSet<String>,
@@ -803,7 +802,7 @@ pub fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
                     Terminal {
                         outcome: Outcome::ReadyToLand,
                         detail: Some(
-                            "all required checks passed; obtain approval, then run `pr land`"
+                            "all required checks passed; obtain approval for this exact PR/head, then run `just pr-land`"
                                 .into(),
                         ),
                         pointer: None,

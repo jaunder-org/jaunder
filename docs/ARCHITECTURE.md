@@ -5133,17 +5133,25 @@ gone while the semantic-conflict guarantee is kept.
 required checks run in that context.
 
 Because green checks are only phase one under a queue — and an ejected PR leaves
-the queue silently — xtask owns PR observation. By default,
-`cargo xtask pr watch [N]` follows checks until the next caller-actionable
-outcome: a green, unarmed PR returns `ready-to-land`, while an already armed or
-queued PR continues through the queue. `--until merged` explicitly requests
-passive waiting across the ready handoff
+the queue silently — the focused host-only `tools/pr-observer` owns ordinary PR
+observation through root `just pr-watch [N]`. By default it follows checks until
+the next caller-actionable outcome: a green, unarmed PR returns `ready-to-land`,
+while an already armed or queued PR continues through the queue.
+`--until merged` explicitly requests passive waiting across the ready handoff
 ([the actionable-handoff decision](adr/0135-pr-watch-actionable-handoff.md)).
-`cargo xtask pr land [N]` remains the approval-bearing command: it alone arms
-the merge and watches it home
-([ADR-0087](adr/0087-xtask-github-pr-observation.md)). The transport is the `gh`
-CLI as a subprocess (`xtask/src/pr/gh.rs`), with `snapshot` turning its JSON
-into typed values and `decide` holding the pure verdict logic (`xtask/src/pr/`).
+`just pr-land <PR> <approved-head-SHA> [--reenqueue]` requires previously
+obtained and recorded exact PR/head human approval. Its thin native `gh`/`git`
+sequence validates repository/base/head/local divergence and shared-observer
+readiness before one `gh pr merge --auto --merge --match-head-commit` call. It
+verifies actual arm/queue/complete merged readback and observes the same head
+until merged. No-op or uncertain evidence never permits retry/rearming. Just
+cannot attest that human approval exists. This replaces ordinary xtask ownership
+under the
+[approved successor draft](adr/drafts/just-frontdoors-host-pr-observer.md),
+preserving [ADR-0087](adr/0087-xtask-github-pr-observation.md)'s capability
+split. The observer's transport is `gh` (`tools/pr-observer/src/pr/gh.rs`), with
+`snapshot` turning JSON into typed values and `decide` holding pure verdict
+logic in that package. There is no second polling/classification implementation.
 The ruleset supplies directly required contexts and the positive readiness
 verdict. For early failure, the observer joins a stable Actions check-run ID to
 its job, workflow run and attempt, then reads the immutable workflow source at
@@ -5166,20 +5174,41 @@ failure is reported without becoming merge-blocking
 This classification contains no maintained job-name or matrix-value allowlist.
 Distinguishing outcomes — including `ready-to-land`, `ejected`, `dequeued`,
 `timed-out` ("GitHub never finished"), and `watcher-error` ("we could not tell")
-— live in `pr.outcome` in the result envelope; success is command-specific
-rather than a global synonym for merged.
+— live in root `.outcome` in direct observer JSON, with `.pr` (number),
+`.head_sha`, `.events`, and available phase/detail/log pointers. No ordinary PR
+xtask CLI/dispatch/result-envelope/sidecar consumer remains. Observer exit 0
+means ready OR merged, while land requires complete same-head merged evidence;
+arm/queue readback alone is not success. Setup/native failure may produce no
+report; honor process status.
 
-Default `land` refuses ejection. Explicit `land <PR> --reenqueue` permits at
-most one existing armer call after an observed ejection, refusing queued or
-auto-merge-armed PRs. Current required checks, merge readiness, local and remote
-head guards, mutation-head matching and GitHub queue rules remain authoritative.
-After arming, only the acknowledged historical run URL is disregarded as an
-ejection discriminator, without changing its failed verdict. Delayed fresh
-visibility uses the normal observation deadline; a distinct fresh failure is
-terminal. Uncertainty never falls back to ordinary rearming, and existing queue
-and check outcomes remain intact. This narrowly refines ADR-0087 decision 4;
-`watch` gains no mutation capability (decision:
-`docs/adr/0220-explicit-one-shot-pr-reenqueue.md`).
+Positive live same-head queued action readback is carried ONLY as read-only
+`--observed-queued-head <SHA>`, requiring equality with `--expected-head`. It
+seeds existing observer `Progress` so disappearance before establishment retains
+the confirmed same-head `dequeued` outcome; default behavior is unchanged.
+Approval `issue-1896-observer-queue-continuation-v1`, request
+`df5154f8-1d48-4725-9550-72460d456d8b` ("Approve queue-history input"),
+authorizes this narrow history transfer, not a second classifier/poller,
+mutation, trust registry or approval bypass.
+
+Default land refuses ejection. Explicit
+`just pr-land <PR> <approved-head-SHA> --reenqueue` permits ONE native call
+after separately authorized recovery, refusing queued or auto-merge-armed PRs.
+Just captures the historical URL from live ejection preflight and requires a
+second one-snapshot ready verdict from the SAME observer with only that run
+acknowledged before action. Public read-only `--expected-head <SHA>` and
+`--acknowledged-ejection <URL>` inputs use existing `WatchContinuation`;
+acknowledgment requires an expected head. Human approval
+`issue-1896-observer-continuation-v1` / request
+`4fc22750-206c-49bd-9056-c7b3e07543a5` narrowly refines ADR-0220's original
+no-operator-head/run-inputs assumption, not its guarantees. Current required
+checks, merge readiness, local and remote head guards, native mutation-head
+matching and GitHub queue rules remain authoritative. After arming, only the
+acknowledged historical run URL is disregarded as an ejection discriminator,
+without changing its failed verdict. Delayed fresh visibility uses the normal
+observation deadline; a distinct fresh failure is terminal. Uncertainty never
+falls back to ordinary rearming, and existing queue and check outcomes remain
+intact. This narrowly refines ADR-0087 decision 4; `watch` gains no mutation
+capability (decision: `docs/adr/0220-explicit-one-shot-pr-reenqueue.md`).
 
 **Post-land checkout cleanup.** Root
 `just pr-cleanup <PR> <exact-head-SHA> unmanaged` is the explicit local-only
@@ -5196,8 +5225,9 @@ only the captured branch, and root cargo cleanup. Each ordered boundary stops on
 failure; a successful direct JSON result retains captured head/merge evidence.
 Cleanup neither approves nor revises the merge and never mutates tracker state,
 remote branches or local `main`. The ordinary xtask cleanup helper/dispatch is
-retired; other PR compatibility remains until its replacement frontdoors are
-complete.
+retired along with ordinary watch/land CLI, dispatch and report consumers. The
+privileged ADR promoter and its required transport/arming predicates remain in
+xtask unchanged; shared evidence types/classification stay reusable.
 
 ## Documentation & decision process
 

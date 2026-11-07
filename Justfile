@@ -310,6 +310,11 @@ issue-edit number title issue_type milestone priority labels body_file *blockers
     jq -e --argjson expected "$number" '.number == $expected' "$work/mutated.json" > /dev/null
     finish_issue "$@"
 
+# Prior recorded exact PR/head human approval is mandatory, not inferred here.
+# --reenqueue additionally requires explicit one-shot recovery authorization.
+pr-land number expected_head mode="ordinary":
+    bash scripts/pr-land.sh {{quote(number)}} {{quote(expected_head)}} {{quote(mode)}}
+
 # Caller must positively verify unmanaged ownership; never invoke in managed work.
 pr-cleanup number expected_head ownership:
     bash scripts/pr-cleanup.sh {{quote(number)}} {{quote(expected_head)}} {{quote(ownership)}}
