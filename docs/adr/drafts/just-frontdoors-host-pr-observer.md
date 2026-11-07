@@ -127,7 +127,7 @@ reaches `main`.
   remain in force. Any future change to their guarantees requires its own
   explicit approval.
 - The accepted
-  [specification](https://github.com/jaunder-org/jaunder/blob/c5270d850e843186ae4f7467fae8e16e7e86cc27/docs/superpowers/specs/2026-11-06-issue-1896-ordinary-issue-pr-workflows.md)
+  [specification](https://github.com/jaunder-org/jaunder/blob/6fcec003899c5178ea9b4b380b1ce4952a264447/docs/superpowers/specs/2026-11-06-issue-1896-ordinary-issue-pr-workflows.md)
   remains available in branch history after working-document retirement.
   Promotion assigns this draft a number after merge; do not edit
   `docs/README.md` or invoke promoter tooling from the feature branch.
