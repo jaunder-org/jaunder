@@ -1023,14 +1023,37 @@ fn graphql_snapshot_page(subject: &Subject, after: Option<&str>) -> Result<Value
 }
 
 fn rollup_page_info(value: &Value) -> Result<(bool, Option<String>), ApiError> {
-    let page_info = value
-        .pointer("/data/repository/pullRequest/statusCheckRollup/contexts/pageInfo")
+    let pr = value
+        .pointer("/data/repository/pullRequest")
+        .ok_or_else(|| ApiError::Malformed("response omitted pull request".into()))?;
+    let rollup = pr
+        .get("statusCheckRollup")
+        .ok_or_else(|| ApiError::Malformed("status-check response omitted rollup".into()))?;
+    if rollup.is_null() {
+        return Ok((false, None));
+    }
+
+    let page_info = rollup
+        .pointer("/contexts/pageInfo")
         .ok_or_else(|| ApiError::Malformed("status-check response omitted pageInfo".into()))?;
     let has_next_page = page_info
         .get("hasNextPage")
         .and_then(Value::as_bool)
         .ok_or_else(|| ApiError::Malformed("status-check pageInfo omitted hasNextPage".into()))?;
     Ok((has_next_page, owned(page_info, &["endCursor"])))
+}
+
+fn next_page_cursor(
+    has_next_page: bool,
+    end_cursor: Option<String>,
+) -> Result<Option<String>, ApiError> {
+    if has_next_page {
+        end_cursor.map(Some).ok_or_else(|| {
+            ApiError::Malformed("status-check page hasNextPage without endCursor".into())
+        })
+    } else {
+        Ok(None)
+    }
 }
 
 impl PrSource for GhSource {
@@ -1071,9 +1094,7 @@ impl PrSource for GhSource {
             if !has_next_page {
                 return snapshot.ok_or_else(|| ApiError::Malformed("empty PR snapshot".into()));
             }
-            after = Some(end_cursor.ok_or_else(|| {
-                ApiError::Malformed("status-check page hasNextPage without endCursor".into())
-            })?);
+            after = next_page_cursor(has_next_page, end_cursor)?;
         }
     }
 
@@ -1273,6 +1294,76 @@ mod tests {
         let rc = parse_required_checks(&fixture!("rules-strict.json")).unwrap();
         assert!(rc.strict);
         assert!(!rc.queue_present);
+    }
+
+    #[test]
+    fn explicit_null_status_rollup_is_an_empty_terminal_page() {
+        let mut value = fixture!("pr-open-green.json");
+        value["data"]["repository"]["pullRequest"]["statusCheckRollup"] = Value::Null;
+
+        let snapshot = parse_snapshot(&value).unwrap();
+        assert!(snapshot.checks.is_empty());
+        assert_eq!(rollup_page_info(&value).unwrap(), (false, None));
+    }
+
+    #[test]
+    fn omitted_status_rollup_is_malformed() {
+        let mut value = fixture!("pr-open-green.json");
+        value["data"]["repository"]["pullRequest"]
+            .as_object_mut()
+            .unwrap()
+            .remove("statusCheckRollup");
+
+        assert!(matches!(
+            rollup_page_info(&value),
+            Err(ApiError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn malformed_status_rollup_pagination_is_rejected() {
+        let mut value = fixture!("pr-open-green.json");
+        let pr = value.pointer_mut("/data/repository/pullRequest").unwrap();
+        pr["statusCheckRollup"]["contexts"]
+            .as_object_mut()
+            .unwrap()
+            .remove("pageInfo");
+        assert!(matches!(
+            rollup_page_info(&value),
+            Err(ApiError::Malformed(_))
+        ));
+
+        for page_info in [
+            serde_json::json!({}),
+            serde_json::json!({"hasNextPage": null}),
+            serde_json::json!({"hasNextPage": "false"}),
+        ] {
+            value["data"]["repository"]["pullRequest"]["statusCheckRollup"]["contexts"]["pageInfo"] =
+                page_info;
+            assert!(matches!(
+                rollup_page_info(&value),
+                Err(ApiError::Malformed(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn next_status_page_requires_a_usable_cursor() {
+        let mut value = fixture!("pr-open-green.json");
+        for end_cursor in [Value::Null, serde_json::json!(42)] {
+            value["data"]["repository"]["pullRequest"]["statusCheckRollup"]["contexts"]["pageInfo"] =
+                serde_json::json!({"hasNextPage": true, "endCursor": end_cursor});
+            let (has_next_page, cursor) = rollup_page_info(&value).unwrap();
+            assert!(matches!(
+                next_page_cursor(has_next_page, cursor),
+                Err(ApiError::Malformed(message)) if message == "status-check page hasNextPage without endCursor"
+            ));
+        }
+        assert_eq!(next_page_cursor(false, None).unwrap(), None);
+        assert_eq!(
+            next_page_cursor(true, Some("cursor".into())).unwrap(),
+            Some("cursor".into())
+        );
     }
 
     #[test]
