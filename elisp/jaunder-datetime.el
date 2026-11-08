@@ -23,6 +23,7 @@
 ;;; Code:
 
 (require 'org)
+(require 'seq)
 (require 'jaunder-config)
 (require 'jaunder-warn)
 
@@ -69,6 +70,78 @@ resolution: a server UTC carrying non-zero seconds is truncated to the minute
   (format-time-string "[%Y-%m-%d %a %H:%M]"
                       (date-to-time utc)
                       (jaunder--resolve-zone tz)))
+
+(defun jaunder--strict-local-date->utc (date zone)
+  "Interpret local Org DATE in validated ZONE, rejecting gaps.
+Choose the earlier fold instant, as at the strict Org seam in ADR-0182.
+Unlike `jaunder--org-date->utc', this is local preparation only."
+  (let* ((decoded (ignore-errors (org-parse-time-string date)))
+         (civil (and decoded (seq-subseq decoded 1 6)))
+         (resolved (jaunder--resolve-zone zone))
+         candidates)
+    (unless (and civil (seq-every-p #'integerp civil))
+      (user-error "jaunder: invalid DATE; supply an Org date and time"))
+    ;; encode-time can normalize gaps and pick either fold.  Only candidates
+    ;; that render back to the authored civil fields are eligible.
+    (dolist (dst '(nil t))
+      (let ((parts (copy-sequence decoded)))
+        (setf (nth 0 parts) 0 (nth 7 parts) dst (nth 8 parts) resolved)
+        (let ((instant (encode-time parts)))
+          (when (equal civil (seq-subseq (decode-time instant resolved) 1 6))
+            (push instant candidates)))))
+    (unless candidates
+      (user-error "jaunder: DATE is nonexistent or invalid in %s; choose another local time" zone))
+    (format-time-string "%Y-%m-%dT%H:%M:%SZ"
+                        (car (sort candidates #'time-less-p)) t)))
+
+(defun jaunder--local-baseline-zone-p (zone)
+  "Return non-nil for a recognized named ZONE or valid legacy numeric offset.
+Use the same TZDIR zoneinfo database as Emacs conversion (the standard
+system directory when unset), not a second list of timezone names."
+  (and (stringp zone)
+       (or (string-match-p "\\`[+-]\\(?:[01][0-9]\\|2[0-3]\\):?[0-5][0-9]\\'" zone)
+           (and (not (equal zone "Etc/Unknown"))
+                (string-match-p
+                 "\\`[A-Za-z0-9_+-]+\\(?:/[A-Za-z0-9_+-]+\\)*\\'" zone)
+                (let ((file (expand-file-name
+                             zone (or (getenv "TZDIR") "/usr/share/zoneinfo"))))
+                  ;; A TZif file, not a typo that libc silently treats as UTC.
+                  (and (file-regular-p file)
+                       (ignore-errors
+                         (with-temp-buffer
+                           (insert-file-contents-literally file nil 0 4)
+                           (equal (buffer-string) "TZif")))))))))
+
+(defun jaunder--prepare-local-date (date old-zone saved-utc latest-zone existing)
+  "Prepare local DATE for LATEST-ZONE without changing any buffer or file.
+OLD-ZONE and SAVED-UTC are the paired local baseline.  EXISTING is non-nil
+for an existing published or scheduled Post, never for a new Post or draft.
+Return a plist with :utc, :date and :zone for eventual confirmed write-back.
+The caller supplies the validated effective LATEST-ZONE; capture and network
+write-back belong to the publish workflow, not this pure preparation step."
+  ;; A missing baseline must never turn a routine edit into a new instant.
+  (when existing
+    (unless (and (stringp saved-utc)
+                 (string-match-p
+                  "\\`[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}T[0-9]\\{2\\}:[0-9]\\{2\\}:[0-9]\\{2\\}\\(?:\\.[0-9]\\{1,9\\}\\)?Z\\'"
+                  saved-utc)
+                 (ignore-errors
+                   (equal (format-time-string "%Y-%m-%dT%H:%M:%SZ"
+                                              (date-to-time saved-utc) t)
+                          (replace-regexp-in-string "\\.[0-9]+Z\\'" "Z" saved-utc))))
+      (user-error "jaunder: missing/invalid JAUNDER_DATE_UTC; pull/reconcile before publishing")))
+  (when (and existing (not (jaunder--local-baseline-zone-p old-zone)))
+    (user-error "jaunder: missing/invalid JAUNDER_DATE_TZ baseline; pull/reconcile before publishing"))
+  (let* ((unchanged
+          (and existing saved-utc
+               (equal (seq-subseq (org-parse-time-string date) 1 6)
+                      (seq-subseq
+                       (org-parse-time-string
+                        (jaunder--utc->org-date saved-utc old-zone)) 1 6))))
+         (utc (if unchanged saved-utc
+                (jaunder--strict-local-date->utc date latest-zone))))
+    (list :utc utc :date (jaunder--utc->org-date utc latest-zone)
+          :zone latest-zone)))
 
 (defun jaunder--current-zone-name ()
   "Return the machine's current IANA zone name, else a numeric offset string.

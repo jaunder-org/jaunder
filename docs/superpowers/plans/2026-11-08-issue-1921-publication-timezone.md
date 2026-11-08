@@ -19,7 +19,7 @@ the end-to-end round trip is proven; no intermediate slice is feature-complete.
 
 ## Task outline
 
-- [ ] **1. Prove and implement local DATE/zone instant preservation.**
+- [x] **1. Prove and implement local DATE/zone instant preservation.**
   - Contract: first add a narrow regression at the existing ERT date-conversion
     seam. Compare civil DATE fields against the saved instant rendered in the
     recorded old zone; when unchanged, retain the exact marker, fractional

@@ -134,4 +134,118 @@ Lets the warning tests assert on emitted warnings without touching the real
       (should-not (jaunder-test--capturing-warnings
                    (jaunder--warn-zone-mismatch "America/New_York"))))))
 
+;;; Local publication preparation
+
+(ert-deftest jaunder-date-prepare-preserves-exact-instant-across-zone-change ()
+  "An unchanged minute DATE carries the original sub-minute instant."
+  (should
+   (equal (jaunder--prepare-local-date
+           "[2026-07-01 Wed 09:00]" "America/New_York"
+           "2026-07-01T13:00:42.123456789Z" "Europe/London" t)
+          '(:utc "2026-07-01T13:00:42.123456789Z"
+                 :date "[2026-07-01 Wed 14:00]" :zone "Europe/London"))))
+
+(ert-deftest jaunder-date-prepare-preserves-later-fold-for-scheduled-post ()
+  "A scheduled Post's unchanged DATE must not select the earlier fold."
+  (should
+   (equal (jaunder--prepare-local-date
+           "[2030-11-03 Sun 01:30]" "America/New_York"
+           "2030-11-03T06:30:17.987654321Z" "Europe/London" t)
+          '(:utc "2030-11-03T06:30:17.987654321Z"
+                 :date "[2030-11-03 Sun 06:30]" :zone "Europe/London"))))
+
+(ert-deftest jaunder-date-prepare-changed-date-uses-latest-zone ()
+  (should
+   (equal (jaunder--prepare-local-date
+           "[2026-07-01 Wed 10:15]" "America/New_York"
+           "2026-07-01T13:00:42.123456789Z" "Europe/London" t)
+          '(:utc "2026-07-01T09:15:00Z"
+                 :date "[2026-07-01 Wed 10:15]" :zone "Europe/London"))))
+
+(ert-deftest jaunder-date-prepare-requires-existing-publication-baseline ()
+  "Missing or invalid markers stop even when the authored DATE changed."
+  (dolist (marker '(nil "" "not-a-time" "2026-02-30T13:00:00Z"
+                        "2026-07-01T13:00:00"))
+    (let ((err (should-error
+                (jaunder--prepare-local-date
+                 "[2026-07-01 Wed 10:15]" "America/New_York"
+                 marker "Europe/London" t)
+                :type 'user-error)))
+      (should (string-match-p "pull/reconcile" (error-message-string err)))
+      (should (string-match-p "JAUNDER_DATE_UTC" (error-message-string err)))))
+  (let ((err (should-error
+              (jaunder--prepare-local-date
+               "[2026-07-01 Wed 09:00]" nil "2026-07-01T13:00:00Z"
+               "Europe/London" t)
+              :type 'user-error)))
+    (should (string-match-p "pull/reconcile" (error-message-string err)))))
+
+(ert-deftest jaunder-date-prepare-new-post-needs-no-marker ()
+  (should
+   (equal (jaunder--prepare-local-date
+           "[2030-07-01 Mon 09:00]" nil nil "America/New_York" nil)
+          '(:utc "2030-07-01T13:00:00Z"
+                 :date "[2030-07-01 Mon 09:00]" :zone "America/New_York"))))
+
+(ert-deftest jaunder-date-prepare-authored-fold-chooses-earlier-instant ()
+  "Both new and changed DATE use the strict Org fold policy."
+  (dolist (existing '(nil t))
+    (should
+     (equal (jaunder--prepare-local-date
+             "[2030-11-03 Sun 01:30]" "Europe/London"
+             (and existing "2030-11-02T12:00:00Z")
+             "America/New_York" existing)
+            '(:utc "2030-11-03T05:30:00Z"
+                   :date "[2030-11-03 Sun 01:30]" :zone "America/New_York")))))
+
+(ert-deftest jaunder-date-prepare-authored-gap-rejects-without-local-mutation ()
+  "Preparing a new or changed DATE never normalizes a gap or writes headers."
+  (dolist (existing '(nil t))
+    (with-temp-buffer
+      (insert "#+DATE: [2030-03-10 Sun 02:30]\n"
+              "#+PROPERTY: JAUNDER_DATE_TZ Europe/London\n"
+              "#+PROPERTY: JAUNDER_DATE_UTC 2030-03-09T12:00:00Z\n")
+      (let ((before (buffer-string)))
+        (should-error
+         (jaunder--prepare-local-date
+          "[2030-03-10 Sun 02:30]" "Europe/London"
+          (and existing "2030-03-09T12:00:00Z") "America/New_York" existing)
+         :type 'user-error)
+        (should (equal before (buffer-string)))))))
+
+(ert-deftest jaunder-date-prepare-legacy-baseline-is-read-only ()
+  "Legacy numeric zones can describe the old DATE, never the new saved zone."
+  (with-temp-buffer
+    (insert "#+DATE: [2026-07-01 Wed 09:00]\n"
+            "#+PROPERTY: JAUNDER_DATE_TZ -0400\n"
+            "#+PROPERTY: JAUNDER_DATE_UTC 2026-07-01T13:00:42.123Z\n")
+    (let ((before (buffer-string)))
+      (should
+       (equal (jaunder--prepare-local-date
+               "[2026-07-01 Wed 09:00]" "-0400"
+               "2026-07-01T13:00:42.123Z" "Europe/London" t)
+              '(:utc "2026-07-01T13:00:42.123Z"
+                     :date "[2026-07-01 Wed 14:00]" :zone "Europe/London")))
+      (should (equal before (buffer-string))))))
+
+(ert-deftest jaunder-date-prepare-rejects-invalid-recorded-zone ()
+  "Neither an unchanged-looking nor edited DATE can repair an invalid baseline."
+  (dolist (zone '("America/New_Yrok" "Etc/Unknown" "+2460" "+05:99" "" "  "))
+    (dolist (date '("[2026-07-01 Wed 09:00]" "[2026-07-01 Wed 10:15]"))
+      (let ((err (should-error
+                  (jaunder--prepare-local-date
+                   date zone "2026-07-01T13:00:42.123Z" "Europe/London" t)
+                  :type 'user-error)))
+        (should (string-match-p "JAUNDER_DATE_TZ" (error-message-string err)))
+        (should (string-match-p "pull/reconcile" (error-message-string err)))))))
+
+(ert-deftest jaunder-date-prepare-preserves-positive-legacy-offset-baseline ()
+  (dolist (zone '("+0530" "+05:30"))
+    (should
+     (equal (jaunder--prepare-local-date
+             "[2026-07-01 Wed 18:30]" zone "2026-07-01T13:00:42.123Z"
+             "Europe/London" t)
+            '(:utc "2026-07-01T13:00:42.123Z"
+                   :date "[2026-07-01 Wed 14:00]" :zone "Europe/London")))))
+
 ;;; jaunder-datetime-test.el ends here
