@@ -194,6 +194,7 @@ mod tests {
 
         let authored = authored_post(
             PostRecord {
+                timezone: common::time::PublicationTimezone::utc(),
                 author_display_name: Some(parse_display_name("Ada Lovelace")),
                 post_id: PostId::from(1),
                 user_id: UserId::from(2),
@@ -246,6 +247,7 @@ mod tests {
 
         let time: UtcInstant = "2026-04-16T10:11:12Z".parse().unwrap();
         let summary = effective_summary(&PostRecord {
+            timezone: common::time::PublicationTimezone::utc(),
             author_display_name: None,
             post_id: PostId::from(1),
             user_id: UserId::from(2),
@@ -293,6 +295,7 @@ mod tests {
 
         let authored = authored_post(
             PostRecord {
+                timezone: common::time::PublicationTimezone::utc(),
                 author_display_name: None,
                 post_id: PostId::from(1),
                 user_id: UserId::from(2),
@@ -349,6 +352,7 @@ mod tests {
 
         let built = rendered_post(
             public_post(PostRecord {
+                timezone: common::time::PublicationTimezone::utc(),
                 author_display_name: None,
                 post_id: PostId::from(1),
                 user_id: UserId::from(2),
@@ -389,6 +393,7 @@ mod tests {
         let time: UtcInstant = "2026-04-16T10:11:12Z".parse().unwrap();
         let timeline_post = rendered_post(
             public_post(PostRecord {
+                timezone: common::time::PublicationTimezone::utc(),
                 author_display_name: None,
                 post_id: PostId::from(1),
                 user_id: UserId::from(2),

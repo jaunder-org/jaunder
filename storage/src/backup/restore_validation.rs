@@ -367,6 +367,7 @@ impl FromStr for PersistedRenderedPostTitle {
 }
 
 typed_restore_row!(PostRevisionsRestoreRow, "post_revisions" {
+    timezone: common::time::PublicationTimezone => ("timezone", "publication timezone"),
     title: PostTitle => ("title", "post title"),
     slug: Slug => ("slug", "slug"),
     body: PostBody => ("body", "post body"),
@@ -389,6 +390,7 @@ typed_restore_row!(PostTagsRestoreRow, "post_tags" {
 });
 
 typed_restore_row!(PostsRestoreRow, "posts" {
+    timezone: common::time::PublicationTimezone => ("timezone", "publication timezone"),
     title: PostTitle => ("title", "post title"),
     slug: Slug => ("slug", "slug"),
     body: PostBody => ("body", "post body"),
@@ -592,6 +594,12 @@ pub(crate) const RESTORE_COLUMN_COVERAGE: &[RestoreColumnCoverage] = &[
         RestoreBadValue::Text("private"),
     ),
     covered("post_tags", "tag_display", RestoreBadValue::Text("")),
+    covered("posts", "timezone", RestoreBadValue::Text("Etc/Unknown")),
+    covered(
+        "post_revisions",
+        "timezone",
+        RestoreBadValue::Text("+05:00"),
+    ),
     covered("posts", "title", RestoreBadValue::Text("")),
     covered("posts", "slug", RestoreBadValue::Text("!")),
     covered("posts", "body", RestoreBadValue::Text("   ")),
@@ -719,6 +727,7 @@ const BACKED_UP_DOMAIN_COLUMNS: &[(&str, &str)] = &[
     ("post_media", "source"),
     ("post_media", "reference_kind"),
     ("post_media", "reference_form"),
+    ("post_revisions", "timezone"),
     ("post_revisions", "body"),
     ("post_revisions", "format"),
     ("post_revisions", "rendered_html"),
@@ -729,6 +738,7 @@ const BACKED_UP_DOMAIN_COLUMNS: &[(&str, &str)] = &[
     ("post_revision_tags", "tag_slug"),
     ("post_revision_audiences", "target_kind"),
     ("post_tags", "tag_display"),
+    ("posts", "timezone"),
     ("posts", "body"),
     ("posts", "format"),
     ("posts", "rendered_html"),

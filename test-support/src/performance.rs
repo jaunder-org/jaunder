@@ -685,6 +685,7 @@ async fn apply_post_revisions(
             existing.format,
         )?; // cov:ignore: seeded canonical bodies render; forcing a highlighter failure here requires test-only fault injection unavailable to this support crate
         let input = storage::UpdatePostInput {
+            timezone: None,
             slug: existing.slug.clone(),
             rendered,
             publish,

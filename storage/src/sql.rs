@@ -61,7 +61,7 @@ use common::session_label::SessionLabel;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::tagged_url::MediaSourceUrl;
-use common::time::UtcInstant;
+use common::time::{PublicationTimezone, UtcInstant};
 use common::token::TokenHash;
 use common::username::Username;
 use common::visibility::SubscriberRef;
@@ -245,6 +245,7 @@ approve_storage_binds!(
     RenderedHtml,
     RenderedPostTitle,
     UtcInstant,
+    PublicationTimezone,
     UserId,
     Username,
     FeedEventClaimLimit,

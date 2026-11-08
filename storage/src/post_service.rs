@@ -440,6 +440,7 @@ fn render_post_input_with_identity(
         host::render::render_post(title, body, format)?
     };
     Ok(CreatePostInput {
+        timezone: common::time::PublicationTimezone::utc(),
         user_id,
         reserved_post_id,
         slug,
@@ -643,6 +644,7 @@ pub async fn perform_post_update(
     let rendered = host::render::render_post_scoped(post_id, title, body, format)
         .map_err(PerformUpdateError::Render)?;
     let input = UpdatePostInput {
+        timezone: None,
         slug,
         rendered,
         publish,
@@ -733,6 +735,7 @@ pub async fn perform_post_update_with_media_ownership(
         .await
         .map_err(PerformUpdateError::Storage)?;
     let input = UpdatePostInput {
+        timezone: None,
         slug,
         rendered,
         publish,

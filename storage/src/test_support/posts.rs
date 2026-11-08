@@ -212,6 +212,7 @@ static RAW_POST_SEQ: AtomicU64 = AtomicU64::new(0);
 /// adopting site supplies an idempotency key or rendered HTML — the builder derives both
 /// rendered fields from the authored source with the production renderer.
 pub struct SeedRawPost {
+    timezone: common::time::PublicationTimezone,
     user_id: UserId,
     slug: Option<Slug>,
     title: Option<PostTitle>,
@@ -232,6 +233,7 @@ impl SeedRawPost {
             user_id,
             slug: None,
             title: None,
+            timezone: common::time::PublicationTimezone::utc(),
             body: parse_post_body("seed body"),
             format: PostFormat::Markdown,
             published_at: Some(UtcInstant::now()),
@@ -239,6 +241,13 @@ impl SeedRawPost {
             audiences: vec![AudienceTarget::Public],
             tags: Vec::new(),
         }
+    }
+
+    /// Select the exact supported zone spelling exercised by a persistence test.
+    #[must_use]
+    pub fn timezone(mut self, timezone: common::time::PublicationTimezone) -> Self {
+        self.timezone = timezone;
+        self
     }
 
     /// Force a specific slug — for conflict *sameness* (`.slug(other.slug.as_ref())`) or a
@@ -342,6 +351,7 @@ impl SeedRawPost {
         }
         .expect("fixture Post rendering must succeed");
         CreatePostInput {
+            timezone: self.timezone,
             user_id: self.user_id,
             reserved_post_id,
             slug,
@@ -577,6 +587,7 @@ impl UpdateRawPost {
         }
         .expect("fixture Post rendering must succeed");
         UpdatePostInput {
+            timezone: None,
             slug: self.slug,
             rendered,
             publish: self.publish,

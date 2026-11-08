@@ -105,6 +105,22 @@ retain their historical row-decode coverage. The separate Session codec test
 retains absent-kind to Unknown decoding; exact-schema admission still precedes
 row loading. No fixture is upgraded in place.
 
+## Schema-53 format-3 evidence
+
+`format-3-schema-53.zip` retains the independent schema-52 examples and table
+inventory, adding explicit `Europe/London` on Post 71 and exact alias
+`US/Eastern` on its prior revision 73. Its new manifest pins schema 53 and
+publication-timezone provenance sentinels. Only these three payload members
+differ; all historical ZIP payloads and digests remain unchanged. Schema 52 is
+now historical-schema rejection evidence, not a current-schema input.
+
+The current writer oracle pins schema 53, the unchanged wire/path inventory, and
+distinct current/prior timezone strings with equal publication instants. The
+public reader matrix verifies the named zone and exact alias through both
+storage record types on both backends, from directory and archive inputs.
+Formats 1 and 2 retain their legacy omitted-field/default-UTC coverage. No
+production cross-schema restore conversion or format bump is introduced.
+
 ## Retirement
 
 Keep every historical fixture, including one for a retired format. After schema

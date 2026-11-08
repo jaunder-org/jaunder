@@ -211,7 +211,7 @@ where
     let mut revisions = Vec::with_capacity(ids.len());
     for ids in ids.chunks(SET_OPERATION_BIND_BATCH) {
         let mut query = QueryBuilder::<DB>::new(
-            "INSERT INTO post_revisions (post_id, user_id, title, rendered_title, slug, body, format, rendered_html, summary, created_at, updated_at, published_at, deleted_at, captured_at) SELECT post_id, user_id, title, rendered_title, slug, body, format, rendered_html, summary, created_at, updated_at, published_at, deleted_at, ",
+            "INSERT INTO post_revisions (post_id, user_id, title, rendered_title, slug, body, format, rendered_html, summary, created_at, updated_at, published_at, deleted_at, timezone, captured_at) SELECT post_id, user_id, title, rendered_title, slug, body, format, rendered_html, summary, created_at, updated_at, published_at, deleted_at, timezone, ",
         );
         query
             .push_storage_bind(now)

@@ -218,6 +218,7 @@ mod tests {
 
     fn unpublished_post() -> PostRecord {
         PostRecord {
+            timezone: common::time::PublicationTimezone::utc(),
             author_display_name: None,
             post_id: PostId::from(1),
             user_id: UserId::from(1),

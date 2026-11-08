@@ -27,7 +27,7 @@ use common::post_title::PostTitle;
 use common::render::PostFormat;
 use common::slug::Slug;
 use common::tag::TagLabel;
-use common::time::UtcInstant;
+use common::time::{PublicationTimezone, UtcInstant};
 use host::etag;
 
 /// Persistence operation for a post's publication/deletion lifecycle.
@@ -165,15 +165,16 @@ pub(crate) fn idempotency_advisory_lock_key(
 /// Bind order: `captured_at, post_id`.
 pub(crate) const INSERT_COMPLETE_POST_REVISION: &str = "INSERT INTO post_revisions
      (post_id, user_id, title, rendered_title, slug, body, format, rendered_html, summary,
-      created_at, updated_at, published_at, deleted_at, captured_at)
+      created_at, updated_at, published_at, deleted_at, timezone, captured_at)
      SELECT post_id, user_id, title, rendered_title, slug, body, format, rendered_html, summary,
-            created_at, updated_at, published_at, deleted_at, $1
+            created_at, updated_at, published_at, deleted_at, timezone, $1
      FROM posts WHERE post_id = $2
      RETURNING revision_id";
 
 /// The locked pre-write columns needed for final-state and content expectations.
 #[derive(sqlx::FromRow)]
 pub(crate) struct PostBookkeepingRow {
+    pub timezone: PublicationTimezone,
     pub user_id: UserId,
     pub deleted_at: Option<UtcInstant>,
     pub title: Option<PostTitle>,
@@ -195,6 +196,7 @@ impl PostBookkeepingRow {
 /// This is decoded explicitly rather than through a positional `SQLx` tuple so
 /// persisted values always cross the storage boundary as domain types.
 pub(crate) struct RevisionDetailRow {
+    pub(crate) timezone: PublicationTimezone,
     pub(crate) revision_id: RevisionId,
     pub(crate) post_id: PostId,
     pub(crate) user_id: UserId,
@@ -231,6 +233,7 @@ pub(crate) trait DecodeRawRow<DB: Database>: Sized {
 
 impl<DB> DecodeRawRow<DB> for RevisionDetailRow
 where
+    for<'r> PublicationTimezone: Decode<'r, DB> + Type<DB>,
     DB: Database,
     for<'r> RevisionId: Decode<'r, DB> + Type<DB>,
     for<'r> PostId: Decode<'r, DB> + Type<DB>,
@@ -253,6 +256,7 @@ where
         Ok(Self {
             revision_id: row.try_get::<RevisionId, _>("revision_id")?,
             post_id: row.try_get::<PostId, _>("post_id")?,
+            timezone: row.try_get::<PublicationTimezone, _>("timezone")?,
             user_id: row.try_get::<UserId, _>("user_id")?,
             title,
             slug: row.try_get::<Slug, _>("slug")?,
@@ -423,7 +427,11 @@ pub(crate) fn update_scalar_is_noop(
         PublishUpdate::Publish { at: Some(at) } => Some(at),
         PublishUpdate::Publish { at: None } => existing.published_at.or(Some(input.request_clock)),
     };
-    existing.title == input.rendered.title().cloned()
+    input
+        .timezone
+        .as_ref()
+        .is_none_or(|zone| zone == &existing.timezone)
+        && existing.title == input.rendered.title().cloned()
         && (existing.published_at.is_some() || existing.slug == input.slug)
         && existing.body == *input.rendered.body()
         && existing.format == input.rendered.format()
@@ -504,6 +512,7 @@ pub(crate) async fn write_post_in_tx<DB>(
 ) -> Result<PostId, CreatePostError>
 where
     DB: PostDialect,
+    for<'q> &'q PublicationTimezone: Encode<'q, DB> + Type<DB>,
     for<'q> i64: Decode<'q, DB> + Encode<'q, DB> + Type<DB>,
     for<'q> Option<AudienceId>: Encode<'q, DB> + Type<DB>,
     for<'q> &'q str: Encode<'q, DB> + Type<DB>,
@@ -548,8 +557,8 @@ where
         }
     };
     let post_id = sqlx::query_scalar::<_, PostId>(
-        "INSERT INTO posts (post_id, user_id, title, rendered_title, slug, search_text, body, format, rendered_html, created_at, updated_at, published_at, summary)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        "INSERT INTO posts (post_id, user_id, title, rendered_title, slug, search_text, body, format, rendered_html, created_at, updated_at, published_at, summary, timezone)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
          RETURNING post_id",
     )
         .bind_storage(identity)
@@ -570,6 +579,7 @@ where
         // ADR-0071 sqlx bridge, not an `AsRef<str>` strip); the `sqlx-newtype-bind`
         // gate forbids stripping to `&str` here.
         .bind_storage(input.summary.as_ref())
+        .bind_storage(&input.timezone)
         .fetch_one(&mut *conn)
         .await
         .map_err(|error| match error {

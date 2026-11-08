@@ -176,6 +176,7 @@ mod tests {
 
         let at = parse_utc_instant("2026-09-19T12:00:00Z");
         let record = PostRecord {
+            timezone: common::time::PublicationTimezone::utc(),
             post_id: PostId::from(1),
             user_id: UserId::from(2),
             author_username: parse_username("alice"),

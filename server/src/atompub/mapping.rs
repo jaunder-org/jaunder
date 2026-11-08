@@ -791,6 +791,7 @@ mod tests {
             .collect();
 
         PostRecord {
+            timezone: common::time::PublicationTimezone::utc(),
             author_display_name: None,
             post_id,
             user_id: UserId::from(1),

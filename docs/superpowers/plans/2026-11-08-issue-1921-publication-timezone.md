@@ -31,7 +31,7 @@ the end-to-end round trip is proven; no intermediate slice is feature-complete.
     Resolve this risky invariant before database, protocol, or browser
     expansion.
 
-- [ ] **2. Persist and validate timezone state with prior-state revisions.**
+- [x] **2. Persist and validate timezone state with prior-state revisions.**
   - Contract: store a required supported named IANA `timezone` on Posts and
     immutable revision snapshots. Accept aliases with a named `iana_name`,
     reject numeric offsets and `Etc/Unknown`, and retain exact accepted

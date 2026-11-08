@@ -228,6 +228,7 @@ mod tests {
     fn post(post_id: i64) -> PublicPresentationPostRecord {
         let now = UtcInstant::now();
         let post = PostRecord {
+            timezone: common::time::PublicationTimezone::utc(),
             author_display_name: None,
             post_id: PostId::from(post_id),
             user_id: UserId::from(1),

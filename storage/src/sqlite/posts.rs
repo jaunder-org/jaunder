@@ -44,7 +44,7 @@ async fn fetch_post(
     sqlx::query_as::<_, PostRecord>(
         "SELECT p.post_id, p.user_id, u.username, u.display_name, p.title, p.rendered_title, p.slug, p.body, p.format,
                 p.rendered_html, p.created_at, p.updated_at, p.published_at, p.deleted_at,
-                p.summary,
+                p.summary, p.timezone,
                 COALESCE((
                     SELECT json_group_array(json_object(
                         'tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display
@@ -92,13 +92,13 @@ async fn apply_post_update(
         "UPDATE posts SET title = $1, slug = CASE WHEN published_at IS NULL THEN $2 ELSE slug END,
          body = $4, format = $5, rendered_html = $6, rendered_title = $3,
          published_at = CASE WHEN $7 THEN NULL WHEN $8 IS NOT NULL THEN $9 ELSE COALESCE(published_at, $10) END,
-         updated_at = $11, summary = $12, search_text = $13,
+         updated_at = $11, summary = $12, search_text = $13, timezone = COALESCE($15, timezone),
          mutation_version = mutation_version + 1 WHERE post_id = $14",
     )
     .bind_storage(input.rendered.title()).bind_storage(&input.slug).bind_storage(input.rendered.rendered_title()).bind_storage(input.rendered.body()).bind_storage(input.rendered.format())
     .bind_storage(input.rendered.rendered_html()).bind_storage(publication_clear).bind_storage(explicit_published_at)
     .bind_storage(explicit_published_at).bind_storage(now).bind_storage(now).bind_storage(input.summary.as_ref())
-    .bind_storage(search_text).bind_storage(post_id)
+    .bind_storage(search_text).bind_storage(post_id).bind_storage(input.timezone.as_ref())
     .execute(&mut *conn)
     .await
     .map_err(|error| match error {
@@ -214,7 +214,7 @@ impl PostDialect for Sqlite {
     ) -> Result<PostMutation, UpdatePostError> {
         let conn = sqlite_connection(transaction)?;
         let existing = sqlx::query_as::<_, PostBookkeepingRow>(
-            "SELECT user_id, deleted_at, title, slug, body, format, rendered_html, rendered_title, summary, published_at
+            "SELECT user_id, deleted_at, title, slug, body, format, rendered_html, rendered_title, summary, published_at, timezone
              FROM posts WHERE post_id = $1",
         )
         .bind_storage(post_id)

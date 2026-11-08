@@ -1277,6 +1277,7 @@ mod tests {
 
         let time: UtcInstant = "2026-04-16T10:11:12Z".parse().unwrap();
         let record = |rendered_html: &str, slug: &str| PostRecord {
+            timezone: common::time::PublicationTimezone::utc(),
             author_display_name: None,
             post_id: PostId::from(1),
             user_id: UserId::from(2),
@@ -1672,6 +1673,7 @@ mod tests {
         let summary = rendered_post(
             storage::PublicPresentationPostRecord {
                 post: PostRecord {
+                    timezone: common::time::PublicationTimezone::utc(),
                     author_display_name: None,
                     post_id: PostId::from(1),
                     user_id: UserId::from(2),
@@ -1719,6 +1721,7 @@ mod tests {
 
         let draft = authored_post(
             PostRecord {
+                timezone: common::time::PublicationTimezone::utc(),
                 author_display_name: None,
                 post_id: PostId::from(1),
                 user_id: UserId::from(2),
@@ -1744,6 +1747,7 @@ mod tests {
 
         let published = authored_post(
             PostRecord {
+                timezone: common::time::PublicationTimezone::utc(),
                 author_display_name: None,
                 post_id: PostId::from(2),
                 user_id: UserId::from(2),
@@ -1805,6 +1809,7 @@ mod server_tests {
     fn owned_post(user_id: UserId) -> PostRecord {
         let now = UtcInstant::now();
         PostRecord {
+            timezone: common::time::PublicationTimezone::utc(),
             author_display_name: None,
             post_id: PostId::from(1),
             user_id,
@@ -1922,6 +1927,7 @@ mod server_tests {
 
         assert_eq!(
             super::current_post_history(CurrentPostRevisionSummary {
+                timezone: common::time::PublicationTimezone::utc(),
                 post_id: PostId::from(7),
                 title: None,
                 slug: "current".parse().expect("valid slug"),
@@ -1961,6 +1967,7 @@ mod server_tests {
         .expect("valid media URL");
         let detail = super::revision_detail(PostRevisionDetail {
             revision: PostRevisionRecord {
+                timezone: common::time::PublicationTimezone::utc(),
                 revision_id: common::ids::RevisionId::from(8),
                 post_id: PostId::from(7),
                 user_id: UserId::from(1),
@@ -2271,6 +2278,7 @@ mod server_tests {
             .expect_get_current_revision_summary()
             .returning(move |user_id, post_id, _| {
                 let summary = CurrentPostRevisionSummary {
+                    timezone: common::time::PublicationTimezone::utc(),
                     post_id,
                     title: None,
                     slug: common::test_support::parse_slug("history"),
@@ -2338,6 +2346,7 @@ mod server_tests {
             .expect_get_current_revision_summary()
             .returning(move |_, post_id, _| {
                 Ok(Some(CurrentPostRevisionSummary {
+                    timezone: common::time::PublicationTimezone::utc(),
                     post_id,
                     title: None,
                     slug: "history".parse().expect("valid slug"),
