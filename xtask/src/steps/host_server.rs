@@ -20,65 +20,15 @@ const HTTP_READINESS_ATTEMPTS: usize = 30;
 const HTTP_READINESS_INTERVAL: Duration = Duration::from_millis(500);
 const PROCESS_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// The optimization level of a host artifact.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum HostBuildProfile {
-    Debug,
-    Release,
-}
-
-/// The artifact variants a host caller needs for one session.
+/// The CSR producer selected by the retained e2e-local consumer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HostArtifactConfig {
-    pub csr_profile: HostBuildProfile,
-    pub server_profile: HostBuildProfile,
-    pub include_csr: bool,
-    pub include_test_support: bool,
-    pub server_label: &'static str,
-    pub test_support_label: &'static str,
-    nix_debug_bundle: bool,
+    release_csr: bool,
 }
 
 impl HostArtifactConfig {
     pub const fn e2e_local(release_csr: bool) -> Self {
-        Self {
-            csr_profile: if release_csr {
-                HostBuildProfile::Release
-            } else {
-                HostBuildProfile::Debug
-            },
-            // Preserve e2e-local's historical debug server build.
-            server_profile: HostBuildProfile::Debug,
-            include_csr: true,
-            include_test_support: true,
-            server_label: "e2e-local-build-server",
-            test_support_label: "e2e-local-build-support",
-            nix_debug_bundle: !release_csr,
-        }
-    }
-
-    pub const fn sandbox_server() -> Self {
-        Self {
-            csr_profile: HostBuildProfile::Debug,
-            server_profile: HostBuildProfile::Debug,
-            include_csr: true,
-            include_test_support: true,
-            server_label: "sandbox-build-server",
-            test_support_label: "sandbox-build-support",
-            nix_debug_bundle: false,
-        }
-    }
-
-    pub const fn sandbox_command() -> Self {
-        Self {
-            csr_profile: HostBuildProfile::Debug,
-            server_profile: HostBuildProfile::Debug,
-            include_csr: false,
-            include_test_support: false,
-            server_label: "sandbox-build-jaunder",
-            test_support_label: "sandbox-build-support",
-            nix_debug_bundle: false,
-        }
+        Self { release_csr }
     }
 }
 
@@ -93,21 +43,6 @@ pub struct HostArtifacts {
 }
 
 impl HostArtifacts {
-    /// Build the selected CSR bundle and the binaries used by host sessions.
-    ///
-    /// Step names deliberately remain those established by `e2e-local`.
-    pub fn prepare(
-        sh: &Shell,
-        result: &mut CommandResult,
-        config: HostArtifactConfig,
-    ) -> Option<Self> {
-        // Interactive sandboxes allow operational commands while a managed
-        // server is live; preserve their preparation-only lock scope.
-        let mut artifacts = Self::prepare_interruptible(sh, result, config, || None)?;
-        artifacts._build_lock.take();
-        Some(artifacts)
-    }
-
     pub(super) fn prepare_interruptible(
         sh: &Shell,
         result: &mut CommandResult,
@@ -117,7 +52,7 @@ impl HostArtifacts {
         let build_lock = match host_artifact_build_lock_at(&sh.current_dir()) {
             Ok(lock) => lock,
             Err(error) => {
-                result.push(StepResult::fail(config.server_label).detail(format!(
+                result.push(StepResult::fail("e2e-local-build-server").detail(format!(
                     "cannot acquire host artifact build lock: {error:#}"
                 )));
                 return None;
@@ -127,7 +62,7 @@ impl HostArtifacts {
             result.exit_override = Some(code);
             return None;
         }
-        let bundle = if config.nix_debug_bundle {
+        let bundle = if !config.release_csr {
             let started = Instant::now();
             match e2e_debug_bundle(sh) {
                 Ok(root) => {
@@ -148,36 +83,30 @@ impl HostArtifacts {
                 }
             }
         } else {
-            if config.include_csr {
-                let root = match git::toplevel(&sh.current_dir()) {
-                    Ok(root) => PathBuf::from(root),
-                    Err(error) => {
-                        result.push(
-                            StepResult::fail(config.server_label)
-                                .detail(format!("cannot locate repo root: {error}")),
-                        );
-                        return None;
-                    }
-                };
-                sh.change_dir(&root);
-                let profile = match config.csr_profile {
-                    HostBuildProfile::Debug => "debug",
-                    HostBuildProfile::Release => "release",
-                };
-                let started = Instant::now();
-                if cmd!(sh, "just --justfile {root}/Justfile build-csr {profile}")
-                    .run()
-                    .is_err()
-                {
+            let root = match git::toplevel(&sh.current_dir()) {
+                Ok(root) => PathBuf::from(root),
+                Err(error) => {
                     result.push(
-                        StepResult::fail(config.server_label)
-                            .detail("just build-csr failed")
-                            .with_duration(started.elapsed()),
+                        StepResult::fail("e2e-local-build-server")
+                            .detail(format!("cannot locate repo root: {error}")),
                     );
                     return None;
                 }
-                result.push(StepResult::ok("host-csr-bundle").with_duration(started.elapsed()));
+            };
+            sh.change_dir(&root);
+            let started = Instant::now();
+            if cmd!(sh, "just --justfile {root}/Justfile build-csr release")
+                .run()
+                .is_err()
+            {
+                result.push(
+                    StepResult::fail("e2e-local-build-server")
+                        .detail("just build-csr failed")
+                        .with_duration(started.elapsed()),
+                );
+                return None;
             }
+            result.push(StepResult::ok("host-csr-bundle").with_duration(started.elapsed()));
             None
         };
 
@@ -194,20 +123,17 @@ impl HostArtifacts {
             }
         };
 
-        let mut binaries = vec![("jaunder", config.server_label)];
-        if config.include_test_support {
-            binaries.push(("test-support", config.test_support_label));
-        }
-        for (pkg, label) in binaries {
+        // e2e-local always consumes both debug binaries, even with release CSR.
+        for (pkg, label) in [
+            ("jaunder", "e2e-local-build-server"),
+            ("test-support", "e2e-local-build-support"),
+        ] {
             if let Some(code) = interrupted() {
                 result.exit_override = Some(code);
                 return None;
             }
             let build_start = std::time::Instant::now();
             let mut command = cmd!(sh, "cargo build -p {pkg}");
-            if config.server_profile == HostBuildProfile::Release {
-                command = command.arg("--release");
-            }
             if let Some(root) = &bundle {
                 command = command.env("JAUNDER_CSR_BUNDLE_DIR", root);
             }
@@ -222,15 +148,9 @@ impl HostArtifacts {
             result.push(StepResult::ok(label).with_duration(build_start.elapsed()));
         }
 
-        let profile = match config.server_profile {
-            HostBuildProfile::Debug => "debug",
-            HostBuildProfile::Release => "release",
-        };
         Some(Self {
-            jaunder: root.join(format!("target/{profile}/jaunder")),
-            test_support: config
-                .include_test_support
-                .then(|| root.join(format!("target/{profile}/test-support"))),
+            jaunder: root.join("target/debug/jaunder"),
+            test_support: Some(root.join("target/debug/test-support")),
             root,
             _build_lock: Some(build_lock),
         })
@@ -427,11 +347,6 @@ impl HostServerSession {
         })
     }
 
-    /// Request immediate process-tree cleanup when a caller has already escalated.
-    pub fn force_stop(&mut self) -> anyhow::Result<()> {
-        self.process.shutdown(Duration::ZERO).map(|_| ())
-    }
-
     /// Gracefully stop unless the caller observes a second shutdown signal.
     pub fn stop_interruptible<F>(&mut self, escalation: F) -> anyhow::Result<()>
     where
@@ -586,11 +501,19 @@ mod tests {
         let Some((temp, shell)) = preparation_fixture() else {
             return;
         };
-        let mut config = HostArtifactConfig::sandbox_server();
-        config.csr_profile = HostBuildProfile::Release;
-        let mut result = CommandResult::new("sandbox");
-        let prepared = HostArtifacts::prepare_interruptible(&shell, &mut result, config, || None)
-            .expect("successful Just and host builds prepare artifacts");
+        let mut result = CommandResult::new("e2e-local");
+        let prepared = HostArtifacts::prepare_interruptible(
+            &shell,
+            &mut result,
+            HostArtifactConfig::e2e_local(true),
+            || None,
+        )
+        .expect("successful Just and host builds prepare artifacts");
+        assert_eq!(prepared.jaunder, temp.path().join("target/debug/jaunder"));
+        assert_eq!(
+            prepared.test_support,
+            Some(temp.path().join("target/debug/test-support"))
+        );
         let call = fs::read_to_string(temp.path().join("just-call")).unwrap();
         assert_eq!(
             call.trim(),
@@ -651,11 +574,14 @@ mod tests {
         fs::create_dir(&nested).unwrap();
         shell.change_dir(&nested);
         let lock_path = nested.join(".xtask/host-artifacts.lock");
-        let mut config = HostArtifactConfig::sandbox_server();
-        config.csr_profile = HostBuildProfile::Release;
-        let mut result = CommandResult::new("sandbox");
-        let prepared = HostArtifacts::prepare_interruptible(&shell, &mut result, config, || None)
-            .expect("Just sees the checkout root while artifact ownership remains held");
+        let mut result = CommandResult::new("e2e-local");
+        let prepared = HostArtifacts::prepare_interruptible(
+            &shell,
+            &mut result,
+            HostArtifactConfig::e2e_local(true),
+            || None,
+        )
+        .expect("Just sees the checkout root while artifact ownership remains held");
         assert_child_cannot_lock(&lock_path);
         assert_eq!(
             fs::read_to_string(temp.path().join("just-call")).unwrap(),
@@ -677,12 +603,12 @@ mod tests {
             return;
         };
         shell.set_var("JUST_EXIT", "19");
-        let mut result = CommandResult::new("sandbox");
+        let mut result = CommandResult::new("e2e-local");
         assert!(
             HostArtifacts::prepare_interruptible(
                 &shell,
                 &mut result,
-                HostArtifactConfig::sandbox_server(),
+                HostArtifactConfig::e2e_local(true),
                 || None
             )
             .is_none()
@@ -902,7 +828,9 @@ mod tests {
         assert_eq!(failure.phase(), ServerStartPhase::Interrupted);
         let mut session = failure.into_session().expect("retain spawned session");
         assert!(!session.is_stopped());
-        session.force_stop().expect("clean up sleeping server");
+        session
+            .stop_interruptible(async {})
+            .expect("clean up sleeping server");
     }
 
     #[test]

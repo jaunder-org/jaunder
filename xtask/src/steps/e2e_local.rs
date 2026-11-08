@@ -1009,7 +1009,7 @@ fn run_consumer(
     }
     let mut process = Process::start(owned)?;
     match signals.wait_until_stopped(|| process.is_stopped()) {
-        ServerExit::Unexpected(_) => match process.wait()? {
+        ServerExit::Unexpected => match process.wait()? {
             processkit::Outcome::Exited(0) => Ok(()),
             outcome => anyhow::bail!("E2E consumer failed: {outcome:?}"),
         },

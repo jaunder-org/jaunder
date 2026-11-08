@@ -4203,38 +4203,63 @@ their preparation-only host-artifact lock duration so commands can operate
 against an already running named sandbox; their separate workspace/server leases
 remain authoritative for that lifetime.
 
-The same host process-control seam also serves interactive UX sandboxes
-([host UX sandbox lifecycle](adr/0180-host-ux-sandbox-lifecycle.md)).
-`cargo xtask sandbox [NAME]` builds current host artifacts, starts on an
-ephemeral loopback port, prints the discovered URL, and owns foreground signal
-handling. Omitted names use disposable storage; named workspaces persist
-database, configuration, Media, and profile metadata under
-`.xtask/sandboxes/NAME`. A stable parent-directory workspace lock is exclusive
-for recovery/create/reset and server-generation transitions, then shared by a
-ready server or one-shot operational command for its full active lifetime; a
-separate server lease rejects a second sandbox server. The server retains its
-distinct storage-local runtime lock. Reset publishes a fully seeded sibling
-through a recoverable two-rename protocol; resume runs migrations but never
-reapplies profile fixtures. Passing arguments after `--` runs an allowlisted
-Jaunder operational command against an existing named workspace without exposing
-lifecycle or storage selectors. Atomically published ready/stopping lease
-metadata pins the executable generation: a live command must match the server's
-content fingerprint, while mismatch or an unmanaged runtime-lock holder rejects
-before the command opens and potentially migrates the database.
+#### Standalone UX sandbox owner
 
-#### Committed direction — standalone UX sandbox owner
+`just sandbox [NAME]` is the single public front door for interactive UX
+sandboxes. It builds the focused root-workspace `ux-sandbox` binary and forwards
+exact argv. One Tokio runtime directly owns async processkit children/groups;
+the helper has COTS-only dependencies, with no xtask, host or test-support Rust
+dependency and no shared-runtime crate. The xtask sandbox CLI, dispatch and
+result/report path are retired. The retained xtask `host_server`,
+`host_signals`, and `process` modules still serve `e2e-local`; they are not a
+shared sandbox runtime.
 
-A proposed design would replace the `cargo xtask sandbox` entrypoint with
-`just sandbox`, invoking one focused root-workspace `ux-sandbox` binary with its
-own Tokio runtime and direct processkit ownership. This proposal removes the
-sandbox's xtask command/report and synchronous process-runtime coupling; it does
-not remove lifecycle behavior or the shared e2e host-server integration. It
-keeps test-support seeding as a subprocess. The design is pending human approval
-of the spec and this ADR, followed by approval and commit of the required
-planning outline before implementation. Until approved and implemented,
-`cargo xtask sandbox` above remains the current workflow. See the
-[standalone UX sandbox lifecycle proposal](adr/drafts/standalone-ux-sandbox-lifecycle.md),
-recorded by the draft path `docs/adr/drafts/standalone-ux-sandbox-lifecycle.md`.
+The helper builds current debug host artifacts, starts on an ephemeral loopback
+port, prints the discovered URL, and owns foreground signal handling. Omitted
+names use disposable storage; named workspaces persist database, configuration,
+Media, and profile metadata under `.xtask/sandboxes/NAME`. A stable
+parent-directory workspace lock is exclusive for recovery/create/reset and
+server-generation transitions, then shared by a ready server or one-shot
+operational command for its full active lifetime; a separate server lease
+rejects a second sandbox server. The server retains its distinct storage-local
+runtime lock. Reset publishes a fully seeded sibling through a recoverable
+two-rename protocol; resume runs migrations but never reapplies profile
+fixtures. Passing arguments after `--` runs an allowlisted Jaunder operational
+command against an existing named workspace without exposing lifecycle or
+storage selectors. Atomically published ready/stopping lease metadata pins the
+executable generation: a live command must match the server's content
+fingerprint, while mismatch or an unmanaged runtime-lock holder rejects before
+the command opens and potentially migrates the database.
+
+Bootstrap publishes distinct `target/debug/ux-sandbox` before protected
+preparation. Under `.xtask/host-artifacts.lock`, server mode runs
+`just build-csr debug` and builds/selects debug Jaunder and test-support;
+command mode builds/selects debug Jaunder only. Artifact selection and SHA-256
+fingerprinting finish before lock release. Seeding stays an out-of-process
+`test-support seed-sandbox-profile` operation under ADR-0046. The helper owns
+its narrow runtime-info identity/address parser and HTTP readiness probe rather
+than exposing xtask's private session adapters.
+
+First SIGINT/SIGTERM initiates drain; automatic escalation is exactly 10
+seconds. Further SIGINT may force earlier; repeated SIGTERM does not escalate.
+The initiating status remains 130/143, otherwise child status is preserved.
+Unexpected child-parent exit still requires descendant containment/reap before
+metadata, locks or disposable storage cleanup. This is supported-platform
+process ownership, not a universal OS guarantee. The separate
+`jaunder shut-down` 30-second wait/no-escalation contract remains ADR-0181.
+
+The human-approved, implemented design is recorded in the
+[standalone UX sandbox lifecycle decision](adr/drafts/standalone-ux-sandbox-lifecycle.md),
+by draft path `docs/adr/drafts/standalone-ux-sandbox-lifecycle.md`. Its
+serialized post-merge numbering/promotion is pending, so its status remains
+`proposed`; implementation approval is not pending. It is a narrow ADR-0028
+placement exception and partially supersedes
+[host UX sandbox lifecycle](adr/0180-host-ux-sandbox-lifecycle.md) only for the
+sandbox owner and literal signal-escalation clause. The remaining persistence,
+profile, reset/recovery, admission and lock contracts remain current. ADR-0058's
+host-floor boundary is unchanged. Overall D2 simplification still requires
+independent whole-branch acceptance; moved lifecycle responsibility and the
+retained e2e modules do not count as eliminated complexity.
 
 Ordinary specs are parallel-safe by construction, via per-test identity fixtures
 in `end2end/tests/provisioning.ts`, composed only by `end2end/tests/fixtures.ts`

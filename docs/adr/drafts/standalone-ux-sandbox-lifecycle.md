@@ -6,7 +6,7 @@
 
 ## Context
 
-`cargo xtask sandbox` currently enters through xtask's CLI, dispatch,
+Before #1893, `cargo xtask sandbox` entered through xtask's CLI, dispatch,
 result/report protocol and synchronous process adapters. The sandbox lifecycle
 is application-specific; xtask is a broad host-tool package and its
 processkit/Tokio bridge uses synchronous wrappers/runtime machinery. The
@@ -21,7 +21,7 @@ overall-simplification criterion remains binding. A standalone bin inside xtask
 retains coupling; separate host-runtime plus sandbox crates add an unnecessary
 shared layer.
 
-## Decision proposed
+## Decision
 
 Use one small root-workspace binary package, `ux-sandbox`, as the focused
 application owner, invoked only through `just sandbox ...`. The helper depends
@@ -85,10 +85,10 @@ subprocess. Do not add registry, quarantine, control socket or arbitrary
 kernel-safety guarantee.
 
 SIGINT/SIGTERM begin graceful drain. Further SIGINT may force earlier; repeated
-SIGTERM joins the drain without escalation per ADR-0181. Separately propose
-automatic escalation after 10 seconds, without requiring a second signal; D1
-accepted bounded automatic escalation direction, but the exact 10-second grace
-remains unapproved. Preserve initiating status. Do not change
+SIGTERM joins the drain without escalation per ADR-0181. Automatic escalation
+occurs after exactly 10 seconds without requiring a second signal, as approved
+in the human S1 design decision. Preserve initiating status (130/143), or the
+child's exact status when no signal initiated shutdown. Do not change
 `jaunder shut-down`'s separate 30-second wait/no-escalation contract. Unexpected
 parent exit does not permit cleanup until process-tree containment/reap finishes
 on supported platforms; this is a proof obligation, not a universal kernel
@@ -103,22 +103,27 @@ relocation or total system is not simpler.
 
 ## Approval and proof
 
-This is proposed, not accepted, and grants no implementation authority.
-ADR-0028's exception and ADR-0180's owner/signal-clause supersession require
-explicit spec/ADR approval. ADR-0046 and ADR-0058 remain unchanged. Ten-second
-grace requires approval before implementation.
+Human S1 approved the design, including the exact 10-second grace, ADR-0028
+placement exception and partial ADR-0180 owner/signal-clause supersession. Human
+O1 approved the required implementation outline and implementation (request
+`0a5e9118-864e-47ab-9247-ebaecf0aaa74`, decision `1893-o1`); the planning
+contract was committed before implementation. ADR-0046 and ADR-0058 remain
+unchanged.
 
-The new package/ownership boundary and concurrency/storage contracts trigger a
-required planning outline after spec approval. No outline is created here;
-implementation waits for outline approval and the approved planning contract to
-be committed.
+The design is implemented: the public Just helper owns all modes and the old
+xtask sandbox route is retired. This draft deliberately remains `proposed` for
+serialized post-merge numbering and acceptance; that automation state does not
+mean human implementation approval is pending. Historical accepted ADR Decision
+text is preserved, with a dated partial-supersession clarification on ADR-0180.
 
-Feasibility evidence available before implementation is limited to source/API
-inspection and an isolated argv probe. After approvals and implementation, prove
-actual artifact output/lock integration, all lifecycle/profile/reset/command
-behavior, Jaunder runtime-info readiness, signal distinctions, automatic
-escalation and process-group descendant containment/reap on supported platforms.
-Apply CONTRIBUTING's cadence: production validation on x86_64 Linux and periodic
+Focused proof covers artifact output/lock integration, lifecycle/profile/reset/
+command behavior, actual Jaunder runtime-info readiness, signal distinctions,
+the automatic deadline and actual descendant containment/reap on this Linux
+host. Earlier real standard/demo Media and legacy-workspace compatibility proofs
+remain applicable to the unchanged helper. Independent whole-branch review and
+D2 overall-simplification acceptance remain required; focused success does not
+substitute for final repository gates or foreign-native proof. Apply
+CONTRIBUTING's cadence: production validation on x86_64 Linux and periodic
 development-environment checks on committed changes for Apple Silicon macOS; no
 ARM Linux native-delivery gate. Do not require an invented matrix or claim
 untested guarantees.

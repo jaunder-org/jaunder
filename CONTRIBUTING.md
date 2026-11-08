@@ -433,18 +433,18 @@ mutate.
 
 ### Evaluating the web UX interactively
 
-Use `cargo xtask sandbox` for a host-native browser session without the
-Playwright runner or telemetry collector:
+Use `just sandbox` for a host-native browser session without the Playwright
+runner or telemetry collector:
 
 ```bash
 # Disposable empty instance; removed when the command exits.
-cargo xtask sandbox
+just sandbox
 
 # Persistent named instance with ordinary and operator accounts.
-cargo xtask sandbox writing-flow --profile standard
+just sandbox writing-flow --profile standard
 
 # Persistent instance with four accounts, local images, and rich Markdown/Org Posts.
-cargo xtask sandbox timeline --profile demo
+just sandbox timeline --profile demo
 ```
 
 The `standard` profile creates `user` and `operator`; `demo` also creates
@@ -453,23 +453,26 @@ The `standard` profile creates `user` and `operator`; `demo` also creates
 without a profile:
 
 ```bash
-cargo xtask sandbox writing-flow
-cargo xtask sandbox writing-flow --reset
-cargo xtask sandbox writing-flow --reset --profile demo
+just sandbox writing-flow
+just sandbox writing-flow --reset
+just sandbox writing-flow --reset --profile demo
 ```
 
 `--profile` applies only when creating or resetting a named workspace. `--reset`
 requires an existing name; without an explicit profile it reuses the recorded
-profile. Stop the foreground supervisor with Ctrl-C. A second Ctrl-C forces
-immediate process-tree cleanup.
+profile. Stop the foreground supervisor with Ctrl-C or SIGTERM. The first signal
+starts graceful drain with automatic force after exactly 10 seconds; a further
+Ctrl-C may force earlier, while repeated SIGTERM does not escalate. The
+initiating signal returns 130/143. This does not change `jaunder shut-down`'s
+independent 30-second wait and refusal to escalate.
 
 Run one admitted operational Jaunder command against a named workspace after
 `--`:
 
 ```bash
-cargo xtask sandbox writing-flow -- user-create --username reviewer
-cargo xtask sandbox writing-flow -- site-config set site.title "Writing review"
-cargo xtask sandbox writing-flow -- backup
+just sandbox writing-flow -- user-create --username reviewer
+just sandbox writing-flow -- site-config set site.title "Writing review"
+just sandbox writing-flow -- backup
 ```
 
 Command mode pins the same workspace generation for the complete child lifetime
@@ -477,6 +480,15 @@ and returns the child's exact exit status. It accepts only `site-config`,
 `user-create`, `app-password-create`, `user-invite`, `smtp-test`, `backup`, and
 `websub`; storage selectors and lifecycle commands remain owned by the sandbox
 supervisor.
+
+The one public Just front door builds the focused root-workspace `ux-sandbox`
+helper with exact argv forwarding. Under `.xtask/host-artifacts.lock`, server
+mode builds debug CSR, Jaunder and test-support; command mode builds only debug
+Jaunder. Preparation releases this artifact lock before child execution (unlike
+`e2e-local`, which retains it through teardown). The helper directly owns async
+processkit children in one Tokio runtime. Profile seeding remains a
+`test-support seed-sandbox-profile` subprocess; no production seed API is added.
+The old xtask sandbox command is retired.
 
 Each named workspace stores its database, configuration, Media, and versioned
 profile metadata together. Stable control locks and current-server metadata live

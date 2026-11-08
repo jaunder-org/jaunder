@@ -68,7 +68,6 @@ mod steps {
     mod process;
     pub mod proffered_secret_check;
     pub mod raw_html_door_check;
-    pub mod sandbox;
     pub mod scan;
     pub mod sequence_check;
     pub mod server_fn_coverage_check;
@@ -89,7 +88,7 @@ mod steps {
 
 pub use cli::{
     CacheSafetyCommand, Cli, Command, CoverageCommand, E2eBackend, E2eBrowser, MutantsCommand,
-    NixCommand, SandboxProfile, ServerFnCoverageCommand, TracesCommand, WasmCoverageCommand,
+    NixCommand, ServerFnCoverageCommand, TracesCommand, WasmCoverageCommand,
 };
 pub use dispatch::run;
 pub use host_tooling::prepare_checkout;

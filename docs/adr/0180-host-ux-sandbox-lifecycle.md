@@ -105,6 +105,26 @@ The initial command-mode allowlist is `site-config`, `user-create`,
 `serve`, `init`, `create-pg-db`, `restore`, `--storage-path`, and `--db` remain
 outside the wrapper because they would bypass or replace the lifecycle it owns.
 
+## Clarification — 2026-11-08 (#1893): partial supersession
+
+The human-approved standalone sandbox design was implemented with one public
+`just sandbox` front door and the focused `ux-sandbox` owner. The change was
+recorded in the
+[standalone UX sandbox lifecycle decision](drafts/standalone-ux-sandbox-lifecycle.md),
+which was left proposed only for serialized post-merge promotion. It superseded
+this ADR's xtask sandbox owner/entrypoint and literal second-signal escalation
+clause: first SIGINT/SIGTERM initiated drain, automatic force followed after
+exactly 10 seconds, further SIGINT could force earlier, and repeated SIGTERM did
+not escalate (ADR-0181). The independent `jaunder shut-down` wait was preserved
+unchanged.
+
+The change preserved the persistence, profiles, seed subprocess, reset/recovery,
+command admission, generation and lock contracts. The xtask host session/process
+modules retained e2e-local ownership rather than forming a shared sandbox
+runtime. This was partial supersession, not retirement of this whole ADR; its
+accepted status and original Decision text were preserved. For current
+implementation, see [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 ## Consequences
 
 - Human UX inspection gains disposable and repeatable persistent states without

@@ -4,8 +4,10 @@
 > public-command, and lifecycle storage/concurrency boundary. Scope is the
 > approved spec
 > `docs/superpowers/specs/2026-11-07-issue-1893-ux-sandbox-orchestration.md`.
-> This outline awaits the Lead’s independent-review recheck and separate human
-> approval; it grants no implementation authority.
+> Human O1 approved this outline and implementation (`1893-o1`, request
+> `0a5e9118-864e-47ab-9247-ebaecf0aaa74`) after the approved S1 design; the
+> planning contract was committed before implementation. Whole-branch review, D2
+> acceptance and final delivery gates remain Lead-owned.
 
 ## Execution summary
 
@@ -88,7 +90,7 @@ contracts, and D2 overall-simplicity acceptance.
     e2e-local retains its existing lock lifetime. Include the cold helper build
     in command-mode cost and the integrated D2 simplicity assessment.
 
-- [ ] **Task 4: Signal/failure semantics, parity cutover, and accepted-design
+- [x] **Task 4: Signal/failure semantics, parity cutover, and accepted-design
       maintenance**
   - Complete graceful drain and failure cleanup under the direct async owner.
     First SIGINT/SIGTERM begins drain; additional SIGINT may force earlier;
@@ -112,6 +114,12 @@ contracts, and D2 overall-simplicity acceptance.
     independent integrated review finding lower total package/runtime complexity
     rather than relocation. Follow normal focused proof and repository gates
     without duplicating their procedures here.
+  - **Implementation handoff:** Retirement, current-doc projection and focused
+    native/public proof are complete. This checkbox records the bounded worker
+    implementation, not D2 acceptance or project completion. Lead still owns
+    independent whole-branch conformance/D2 review, corrections and final
+    repository/delivery gates; the working spec and outline remain for that
+    review.
 
 ## Acceptance and governing constraints
 
@@ -129,12 +137,12 @@ The approved spec has **four acceptance clusters**:
 4. Independent proof of lower total package/runtime complexity, not relocation —
    Task 4.
 
-Separately, implementation remains gated on approval of this outline and its
-planning contract being committed before implementation. Platform compatibility
-follows `CONTRIBUTING.md`: production validation on x86_64 Linux, periodic
-committed Apple Silicon macOS development checks, and no ARM Linux
-native-delivery gate. Task 1’s focused native fixtures are feasibility evidence,
-not an extra platform certification gate.
+The outline/implementation approval and prior planning-contract commit gates
+were satisfied before implementation. Platform compatibility follows
+`CONTRIBUTING.md`: production validation on x86_64 Linux, periodic committed
+Apple Silicon macOS development checks, and no ARM Linux native-delivery gate.
+Task 1’s focused native fixtures are feasibility evidence, not an extra platform
+certification gate.
 
 ## Self-review
 
