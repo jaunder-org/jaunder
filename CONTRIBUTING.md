@@ -1845,28 +1845,28 @@ through an existing transitive input, despite exclusion from its direct Elisp
 source filter; and `common`, `macros`, and the shared performance contract
 affect `static-code`, `static-elisp`, site, and wasm-test boundaries without
 invalidating `static-docs`. `common` and `macros` also affect xtask; performance
-source is outside xtask's dependency closure. For the census boundary, source-filter
-assertions establish membership of the census script, Playwright configuration,
-helper/fixture/font and package manifest/lock inputs, plus exclusion of Markdown
-and unrelated server source. Runtime identity perturbations cover the lane
-catalog invalidation and stability under Rust tooling, manifest, embedded-input,
-and unrelated server-source changes. They do not separately perturb every census
-input category or prove that each has independent invalidation. It also protects
-`devtool` and its compiled tooling dependency boundary: devtool implementation
-edits invalidate the real tool, `static-code`, `static-elisp`, and site (through
-`csrWasmBundle`'s `devtoolBin` build input), but preserve `wasm-tests`, `xtask`,
-and the compiled tooling dependency identity. `static-docs` now consumes the
-shared Prettier recipe directly, without a compiled Rust docs tool. The
-documentation and site source filters remain narrow; derivation identity
-includes transitive executable inputs as well as admitted sources.
-`tools/Cargo.lock` invalidates ordinary devtool, its dependency preparation,
-`static-code`, `static-elisp`, `xtask`, and site through `csrWasmBundle`;
-`wasm-tests` remains stable. `xtask/Cargo.lock` affects only `xtask` among these
-boundaries. Root Cargo build configuration affects `static-code`,
-`static-elisp`, site, `wasm-tests`, `xtask`, devtool and tooling dependencies.
-The four manifest arms (root, tools workspace, devtool and shared common
-manifest) and four embedded-input arms (server build script, CSR shell, Theme
-Package manifest and migration) assert the appropriate `static-code`,
+source is outside xtask's dependency closure. For the census boundary,
+source-filter assertions establish membership of the census script, Playwright
+configuration, helper/fixture/font and package manifest/lock inputs, plus
+exclusion of Markdown and unrelated server source. Runtime identity
+perturbations cover the lane catalog invalidation and stability under Rust
+tooling, manifest, embedded-input, and unrelated server-source changes. They do
+not separately perturb every census input category or prove that each has
+independent invalidation. It also protects `devtool` and its compiled tooling
+dependency boundary: devtool implementation edits invalidate the real tool,
+`static-code`, `static-elisp`, and site (through `csrWasmBundle`'s `devtoolBin`
+build input), but preserve `wasm-tests`, `xtask`, and the compiled tooling
+dependency identity. `static-docs` now consumes the shared Prettier recipe
+directly, without a compiled Rust docs tool. The documentation and site source
+filters remain narrow; derivation identity includes transitive executable inputs
+as well as admitted sources. `tools/Cargo.lock` invalidates ordinary devtool,
+its dependency preparation, `static-code`, `static-elisp`, `xtask`, and site
+through `csrWasmBundle`; `wasm-tests` remains stable. `xtask/Cargo.lock` affects
+only `xtask` among these boundaries. Root Cargo build configuration affects
+`static-code`, `static-elisp`, site, `wasm-tests`, `xtask`, devtool and tooling
+dependencies. The four manifest arms (root, tools workspace, devtool and shared
+common manifest) and four embedded-input arms (server build script, CSR shell,
+Theme Package manifest and migration) assert the appropriate `static-code`,
 `static-elisp`, `devtool`, tooling-dependency and CSR-bundle fan-out for each
 input; unrelated boundaries remain stable. Tooling preparation uses generated
 dummy sources and a file-scoped lockfile, with repository-root target alignment
