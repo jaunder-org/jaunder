@@ -133,9 +133,15 @@ impl WorkflowFixture {
             .env("JAUNDER_TEST_SELECTION", &self.selection)
             .env("JAUNDER_TEST_PARAMETERS", &self.parameters)
             .env("JAUNDER_TEST_MODE", mode);
-        command
+        let output = command
             .output()
-            .context("run native Just workflow against fake external commands")
+            .context("run native Just workflow against fake external commands")?;
+        anyhow::ensure!(
+            self.run_root().is_dir(),
+            "Just must start the production perf recipe: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(output)
     }
 
     fn run_root(&self) -> PathBuf {
@@ -167,6 +173,14 @@ fn repo_root() -> Result<PathBuf> {
 }
 
 fn write_executable(path: &Path, contents: &str) -> Result<()> {
+    // Generated scripts are not visited by Nix's patchShebangs hook. Resolve
+    // the supplied Bash instead of assuming /usr/bin/env exists in the sandbox.
+    let bash = env::split_paths(&env::var_os("PATH").context("test PATH")?)
+        .map(|directory| directory.join("bash"))
+        .find(|path| path.is_file())
+        .context("fixture requires Bash on PATH")?;
+    let bash = fs::canonicalize(bash)?;
+    let contents = contents.replacen("#!/usr/bin/env bash", &format!("#!{}", bash.display()), 1);
     fs::write(path, contents).context("write fake command")?;
     let mut permissions = fs::metadata(path)
         .context("read fake command mode")?

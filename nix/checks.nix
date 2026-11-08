@@ -87,6 +87,8 @@ let
   coverageAuxiliarySource =
     relative:
     relative == ".config/nextest.toml"
+    # Performance integration tests exercise the production Just recipes.
+    || relative == "Justfile"
     || relative == "csr/index.html"
     || pkgs.lib.hasPrefix "server/assets/" relative
     || pkgs.lib.hasPrefix "storage/migrations/" relative
@@ -112,6 +114,7 @@ let
     assert (coverageAuxiliarySource "storage/migrations/sqlite/0001_create_site_config.sql");
     assert (coverageAuxiliarySource "server/assets/jaunder.css");
     assert (coverageAuxiliarySource "csr/index.html");
+    assert (coverageAuxiliarySource "Justfile");
     assert (coverageAuxiliarySource "host/system_theme_sources/studio/theme.json");
     assert (coverageAuxiliarySource "host/system_theme_sources/studio/style.css");
     assert (coverageAuxiliarySource "testdata/theme-repository/minimal/preview.png");
@@ -2676,6 +2679,12 @@ mkWasmCoverageMeasurementProducer =
         src = coverageSrc;
         inherit cargoArtifacts;
         pname = "jaunder-coverage";
+        # Just's embedded recipe shebangs are not at the start of a shell file,
+        # so patchShebangs cannot make these production recipes sandbox-safe.
+        postPatch = ''
+          substituteInPlace Justfile \
+            --replace-fail '#!/usr/bin/env bash' '#!${pkgs.bash}/bin/bash'
+        '';
         # Source-based coverage uses LLVM's embedded coverage map
         # (-Cinstrument-coverage), not DWARF, so dropping debuginfo
         # shrinks the instrumented test binaries dramatically with no
@@ -2699,6 +2708,11 @@ mkWasmCoverageMeasurementProducer =
           pkgs.cargo-llvm-cov
           pkgs.cargo-nextest
           pkgs.exiftool
+          # Performance CLI fixtures create Git provenance and exercise real Just
+          # recipes (including their jq selection/retention operations).
+          pkgs.git
+          pkgs.just
+          pkgs.jq
           # devtool runs the whole test suite under an ephemeral
           # PostgreSQL (via devtool pg) so
           # storage/src/postgres/* gets instrumented coverage. The

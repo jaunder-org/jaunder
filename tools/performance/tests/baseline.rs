@@ -15,6 +15,22 @@ use std::{
 };
 use tempfile::TempDir;
 
+fn write_executable(path: &Path, contents: &str) -> Result<()> {
+    // Generated scripts are not visited by Nix's patchShebangs hook. Resolve
+    // the supplied Bash instead of assuming /usr/bin/env exists in the sandbox.
+    let bash = env::split_paths(&env::var_os("PATH").context("test PATH")?)
+        .map(|directory| directory.join("bash"))
+        .find(|path| path.is_file())
+        .context("fixture requires Bash on PATH")?;
+    let bash = fs::canonicalize(bash)?;
+    let contents = contents.replacen("#!/usr/bin/env bash", &format!("#!{}", bash.display()), 1);
+    fs::write(path, contents)?;
+    let mut permissions = fs::metadata(path)?.permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions)?;
+    Ok(())
+}
+
 fn canonical_run() -> Result<RunEnvelope> {
     run_for_profile(DatasetProfile::Medium)
 }
@@ -99,7 +115,7 @@ impl Fixture {
             "workflow_run": {"id": 42, "head_branch": "main", "head_sha": "abc123"}}]}),
         )?;
         let gh = fake_bin.join("gh");
-        fs::write(
+        write_executable(
             &gh,
             r#"#!/usr/bin/env bash
 set -euo pipefail
@@ -121,17 +137,11 @@ fi
 cp "$PERF_FIXTURE/result.json" "${!#}/performance-result-v1.json"
 "#,
         )?;
-        let mut permissions = fs::metadata(&gh)?.permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(gh, permissions)?;
         let cargo = fake_bin.join("cargo");
-        fs::write(
+        write_executable(
             &cargo,
             "#!/usr/bin/env bash\nset -euo pipefail\nwhile (($#)); do\n  if [[ $1 == -- ]]; then shift; exec \"$PERF_DATA_BIN\" \"$@\"; fi\n  shift\ndone\nexit 93\n",
         )?;
-        let mut permissions = fs::metadata(&cargo)?.permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(cargo, permissions)?;
         Ok(Self {
             directory,
             baseline,
