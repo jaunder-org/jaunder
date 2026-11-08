@@ -210,16 +210,20 @@ blocking.
 
 ## ADR promoter queue boundary
 
-The tracked-draft lifecycle uses `.github/workflows/adr-promoter.yml` and
-`cargo xtask adr promoter` after a feature merge; feature shipping never runs
-the local promotion mutation. Pushes to `main` and manual dispatches share a
-generation concurrency group that does not cancel an active run. Dequeue
-recovery uses a separate per-PR operation group, so a generation event cannot
-replace the event authorized to re-arm that head. The single job still derives
-from fresh `main` and owns the stable `automation/adr-promoter` branch and at
-most one open promoter PR. If that PR already exists or is queued, its head SHA
-and generated diff remain immutable; drafts merged later wait for the next pass
-after it lands.
+This branch changes `.github/workflows/adr-promoter.yml` to invoke
+`just adr-promoter` through its existing CI shell after a feature merge. Just
+selects the locked Python controller; `cargo xtask adr promoter` is a temporary
+PR 1 fixed-action compatibility delegate to the same package, not a second
+controller. This is implementation wiring, not a claim of merged or observed
+trusted-main operation. PR 2 removal remains blocked on that observation and its
+own human merge gate. Feature shipping never runs the local promotion mutation.
+Pushes to `main` and manual dispatches share a generation concurrency group that
+does not cancel an active run. Dequeue recovery uses a separate per-PR operation
+group, so a generation event cannot replace the event authorized to re-arm that
+head. The single job still derives from fresh `main` and owns the stable
+`automation/adr-promoter` branch and at most one open promoter PR. If that PR
+already exists or is queued, its head SHA and generated diff remain immutable;
+drafts merged later wait for the next pass after it lands.
 
 The workflow mints an installation token with
 `actions/create-github-app-token@v3` from repository variable

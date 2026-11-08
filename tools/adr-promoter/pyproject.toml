@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "adr-promoter"
+version = "0.1.0"
+description = "Source-preserving ADR promotion host tooling"
+requires-python = ">=3.14"
+dependencies = ["marko==2.2.4"]
+
+[project.scripts]
+adr-promoter = "adr_promoter.__main__:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

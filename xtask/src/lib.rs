@@ -1,4 +1,5 @@
 mod adr;
+pub use adr::mutation_status as adr_mutation_status;
 mod adr_readme;
 mod audit_wasm;
 mod cache_safety;

@@ -522,6 +522,50 @@ let
     }
   );
 
+  # Keep the Python host package independent of Cargo and application sources.
+  # Tests are admitted with runtime sources so build-time pytest is fully offline.
+  adrPromoterSourceAdmits = import ./adr-promoter-source.nix;
+  adrPromoterSrc = pkgs.lib.cleanSourceWith {
+    src = ../tools/adr-promoter;
+    filter =
+      path: type:
+      let
+        relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
+      in
+      adrPromoterSourceAdmits relative type;
+  };
+  adrPromoterPython = pkgs.python3Packages.buildPythonApplication {
+    pname = "adr-promoter";
+    version = "0.1.0";
+    pyproject = true;
+    src = adrPromoterSrc;
+    build-system = [ pkgs.python3Packages.setuptools ];
+    dependencies = [ pkgs.python3Packages.marko ];
+    nativeCheckInputs = [
+      pkgs.python3Packages.pytestCheckHook
+      pkgs.git
+    ];
+    doCheck = true;
+    pythonImportsCheck = [ "adr_promoter" ];
+  };
+  adrPromoter = pkgs.writeShellApplication {
+    name = "adr-promoter";
+    runtimeInputs = [
+      pkgs.gh
+      pkgs.git
+      pkgs.prettier
+    ];
+    text = ''
+      exec ${adrPromoterPython}/bin/adr-promoter "$@"
+    '';
+    derivationArgs.passthru = {
+      pythonPackage = adrPromoterPython;
+      source = adrPromoterSrc;
+      sourceAdmits = adrPromoterSourceAdmits;
+    };
+    meta.mainProgram = "adr-promoter";
+  };
+
   # The auxiliary tools workspace is separate from the product workspace
   # (ADR-0141): its lockfile and cargo artifacts stay independent, while the
   # performance producer links the selected typed product-storage closure.
@@ -1177,6 +1221,7 @@ in
     devtool = devtoolBin;
     node-modules-setup = nodeModulesSetup;
     xtask = xtaskBin;
+    adr-promoter = adrPromoter;
     # The out-of-process e2e seed helper (ADR-0046). Exposed so it is
     # directly buildable/verifiable; it is placed only on the e2e VM PATH,
     # never in the prod artifact or the NixOS module.

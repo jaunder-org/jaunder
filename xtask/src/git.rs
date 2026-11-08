@@ -890,6 +890,7 @@ pub(crate) fn run(dir: &Path, args: &[&str]) -> Result<()> {
 
 /// Compare-and-delete a remote branch.  This is the only forceful promoter
 /// operation: it has an expected old object and cannot update a changed ref.
+#[cfg(test)]
 pub(crate) fn delete_remote_with_lease(
     dir: &Path,
     remote: &str,
@@ -904,6 +905,7 @@ pub(crate) fn delete_remote_with_lease(
 /// Whether an exact three-way merge of the supplied objects has content
 /// conflicts. Exit 1 is Git's documented conflict result; all other failures
 /// remain errors rather than becoming conflict authorization.
+#[cfg(test)]
 pub(crate) fn merge_tree_conflicts(dir: &Path, main: &str, head: &str) -> Result<bool> {
     let status = at(dir)
         .args(["merge-tree", "--write-tree", main, head])
@@ -937,35 +939,10 @@ fn output_or(dir: &Path, args: &[&str], tolerated: i32) -> Result<Option<String>
     }
 }
 
-/// `git grep -l --fixed-strings <pattern>` — files containing `pattern`.
-/// Grep's exit 1 = no match → `Ok(vec![])`; exit 128 (or any other non-zero) =
-/// real error → `Err` (see [`output_or`]).
-pub(crate) fn grep_files(dir: &Path, pattern: &str) -> Result<Vec<String>> {
-    let matched = output_or(dir, &["grep", "-l", "--fixed-strings", pattern], 1)?;
-    Ok(match matched {
-        Some(out) => out
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(str::to_string)
-            .collect(),
-        None => Vec::new(),
-    })
-}
-
 /// `git ls-files -- *.md` — tracked Markdown, repo-relative. The pathspec glob
 /// matches at any depth, so filtering happens in git rather than in Rust.
 pub(crate) fn ls_files_md(dir: &Path) -> Result<Vec<String>> {
     lines(dir, &["ls-files", "--", "*.md"])
-}
-
-/// `git mv <from> <to>`.
-pub(crate) fn mv(dir: &Path, from: &str, to: &str) -> Result<()> {
-    run(dir, &["mv", from, to])
-}
-
-/// `git add <path>`.
-pub(crate) fn add(dir: &Path, path: &str) -> Result<()> {
-    run(dir, &["add", path])
 }
 
 /// `git rev-parse --show-toplevel` — the working tree's root.
@@ -1098,24 +1075,6 @@ mod tests {
         commit(&dir, "a.txt", "x\n");
         assert!(run(&dir, &["status", "--porcelain"]).is_ok());
         assert!(run(&dir, &["mv", "nope", "nowhere"]).is_err());
-    }
-
-    #[test]
-    fn grep_files_match_no_match_and_error() {
-        let dir = temp_repo("grep");
-        commit(&dir, "hay.txt", "a needle here\n");
-        commit(&dir, "other.txt", "nothing\n");
-        assert_eq!(
-            grep_files(&dir, "needle").unwrap(),
-            vec!["hay.txt".to_string()]
-        );
-        assert!(grep_files(&dir, "absent-token").unwrap().is_empty()); // exit 1
-        // A nonexistent dir → git can't chdir → exit 128 → Err (NOT an empty
-        // match). Deterministic regardless of whether $TMPDIR sits under a repo.
-        let missing =
-            std::env::temp_dir().join(format!("jaunder-git-missing-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&missing);
-        assert!(grep_files(&missing, "x").is_err());
     }
 
     #[test]

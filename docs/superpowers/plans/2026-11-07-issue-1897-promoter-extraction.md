@@ -25,7 +25,7 @@ Nix-selected path blocks PR 2 until repaired or reverted.
 
 ## Task outline
 
-- [ ] Task 1: Select the pinned package from the active checkout and prove
+- [x] Task 1: Select the pinned package from the active checkout and prove
       Marko's source fidelity.
   - Contract: exact locked Python/Marko/pytest/GitHub/Git/Prettier choices;
     Marko GFM `Link`/`Image` spans patched into original bytes through a tested
@@ -35,7 +35,7 @@ Nix-selected path blocks PR 2 until repaired or reverted.
     exact current-checkout package; source-span fixtures for tables, images,
     Unicode, normalized line endings/form-feed/NUL, code, reference links and
     all three eligibility differences.
-- [ ] Task 2: Make Python the single mutation owner and prove complete promotion
+- [x] Task 2: Make Python the single mutation owner and prove complete promotion
       and README synchronization.
   - Contract: Python implements both mutations; legacy `promote` and
     `sync-readme` are fixed delegates; stage/admission order and existing byte
@@ -45,7 +45,7 @@ Nix-selected path blocks PR 2 until repaired or reverted.
     paths, heading/status/citations, link edits, README markers/curated titles
     and warnings; exercise `sync-readme`; run existing Rust ADR format/parity/
     link gates on resulting output. The existing probes are not this proof.
-- [ ] Task 3: Port controller transitions and preserve operational safeguards.
+- [x] Task 3: Port controller transitions and preserve operational safeguards.
   - Contract: approved fake `gh`/Git adapters; preserve authority, coalescing vs
     dequeue recovery, immutable head/diff, exact identity/check correlation,
     safe refusal vs error, lease verification, visible failures and exit

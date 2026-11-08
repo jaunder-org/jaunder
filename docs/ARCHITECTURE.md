@@ -5425,19 +5425,32 @@ repo-root identity `docs/adr/drafts/<slug>.md`. Promotion rewrites those path
 forms to the numbered destination; a bare draft token or a different path form
 would survive pointing at nothing.
 
-### Proposed host-side ADR promoter extraction — not current behavior
+### Host-side ADR promoter extraction — partial implementation
 
-In the current checkout, `.github/workflows/adr-promoter.yml` invokes
-`cargo xtask adr promoter`; xtask owns the serialized controller, while
-`adr promote` and `adr sync-readme` own deterministic mutation. Issue #1897's
-approved design moves the controller and both mutation operations into a Python
-package under `tools/adr-promoter/`, not a Cargo member. The numberless ADR
-remains proposed; architecture here describes prospective design, not shipped
-behavior. See the
+In this branch, `.github/workflows/adr-promoter.yml` invokes `just adr-promoter`
+through its unchanged CI-shell entry. This implementation has not yet been
+delivered to or observed on trusted `main`. The Nix-selected Python package
+under `tools/adr-promoter/` owns controller policy, promotion and README
+synchronization; `cargo xtask adr promote`, `adr sync-readme`, and the temporary
+PR 1 `adr promoter` spelling are fixed delegates to that package. Disposable
+tracked-repository tests cover complete promotion bytes, staging, curated README
+titles, and the existing read-only Rust gates. Both delegate and direct package
+actions reject nonignored untracked tooling inputs through the package's actual
+Nix source predicate; tracked dirt and unrelated inputs do not require a clean
+tree. Generation separately retains its existing clean-worktree and fresh-main
+guard. The numberless ADR remains proposed; this is a verified implementation
+boundary, not a claim of shipped workflow migration or trusted-main delivery.
+See the
 [Python ADR promoter draft](adr/drafts/adr-promoter-host-tool-extraction.md).
 
-If approved and delivered, one `just adr-promoter` recipe executes the package
-selected from the active checkout:
+The `just adr-promoter` recipe now selects an implemented Python controller.
+Offline fake Git/`gh` tests cover generation, immutable-attempt recovery,
+exact-head dequeue re-arm, expected-OID leases and verified postconditions,
+including commands that fail after completing their intended state change. The
+controller calls the same Python mutations; staged Markdown formatting,
+restaging, commit and publication order are exercised with fake children, not
+live credentials or refs. The branch workflow selects this recipe, but no
+trusted-main Python controller operation has been observed:
 
 ```just
 adr-promoter:
@@ -5448,19 +5461,21 @@ The package uses the locked Python 3.14.7 / Marko 2.2.4 / pytest 9.1.1 set and
 supplies `gh` 2.100.0, Git 2.55.0 and Prettier 3.9.6. Marko's GFM AST supplies
 link/image destination spans, including table cells; a tested
 character-to-original-byte map permits patching original bytes without Markdown
-serialization. GitHub calls use the App-token `gh` GraphQL path; expected-OID
-leases use Git CLI. The workflow retains its existing CI-shell entry and calls
-`just adr-promoter`, not an ambient PATH executable.
+serialization. The Python controller uses the App-token `gh` GraphQL path and
+expected-OID Git CLI leases. The branch workflow retains the existing CI-shell
+entry and calls `just adr-promoter`, not an ambient PATH executable.
 
 Rust keeps the read-only `adr-format`, README/view parity, `doc-links`, and
 sequence/collision gates. `cargo xtask adr promote` and `sync-readme` remain
 fixed-operation delegates to the selected Python package. The old
-`cargo xtask adr promoter` spelling delegates only during PR 1 and is removed in
-PR 2 after `CONTRIBUTING.md`'s controller-rerun guidance moves to Just and
-trusted-main execution is observed. The manual-promotion prohibition and
-`sync-readme` recovery command remain. Rust owns no mutation or second
-controller. Rust `gh` transport remains for its PR watch/land consumers; the
-Python CLI adapter is narrow and does not add a general SDK or RPC protocol.
+`cargo xtask adr promoter` spelling temporarily delegates during PR 1;
+`CONTRIBUTING.md`'s authorized controller-rerun guidance now uses Just. PR 2
+removes the temporary spelling only after trusted-main execution is observed.
+The manual-promotion prohibition and `sync-readme` recovery command remain. Rust
+owns no mutation; its historical controller policy and controller-only Git
+helpers are dormant under `cfg(test)`, retaining tests until PR 2 retirement.
+Rust `gh` transport remains for its PR watch/land consumers; the Python CLI
+adapter is narrow and does not add a general SDK or RPC protocol.
 
 The existing authority, successful safe-refusal outcomes, generation coalescing,
 immutable head/diff, exact recovery/check correlation, deterministic mutation
@@ -5474,8 +5489,10 @@ scanner may rewrite the substring. The probe found no span/target differences in
 295 tracked Markdown files, but that corpus result is not universal parser
 equivalence. Human approved these Marko parser-eligibility differences via
 `cd55b65a-4f7d-426d-991a-04cc256ec206` / `issue-1897-python-design-v2` at
-baseline `82bd37273dd533026fbf07f0121865fe254583a8`. This remains prospective
-architecture, not shipped behavior or implementation/privilege/merge approval.
+baseline `82bd37273dd533026fbf07f0121865fe254583a8`. PR 1 delivery, trusted-main
+observation and legacy controller retirement remain prospective, not shipped
+behavior or privilege/merge approval. Both PRs retain independent exact-head
+human merge gates.
 
 This document is itself a gated artifact. The `adr-view-parity` step requires
 every `accepted` ADR to be cited here, and fails the ladder by name and title

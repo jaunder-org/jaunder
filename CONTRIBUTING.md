@@ -335,7 +335,10 @@ create, check, or merge is failed-automation lag and requires diagnosis; it is
 not a reason to promote from the feature branch.
 
 When promoter automation fails, diagnose the visible PR, ref, check, or workflow
-state and rerun the authorized controller. The controller cleans up incomplete
+state and rerun the authorized controller with `just adr-promoter` in the
+trusted workflow context (not from a feature-author checkout). This branch wires
+that entry point to the Nix-selected Python package; trusted-main delivery and
+observation remain separately gated. The controller cleans up incomplete
 controller-owned state only with an exact-SHA lease and regenerates it from
 fresh `main`; failed required checks remain visible. Never manually close,
 delete, rebase, force-update, promote, or otherwise alter a promoter attempt.

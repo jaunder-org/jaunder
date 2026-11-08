@@ -140,14 +140,15 @@ controller delegate. The Rust mutation bodies are removed in that same change,
 so there is one writer. Observe a trusted-main workflow operation and its PR,
 ref, and check result. PR 1 does not complete #1897.
 
-PR 2 has a separate review and human merge gate. It updates `CONTRIBUTING.md`'s
-generic controller-rerun guidance and the workflow caller to Just, then removes
-the obsolete Rust controller, state machine, GitHub/Git adapters and controller
-tests plus the temporary `adr promoter` CLI/help/dispatch/delegate. The fixed
-`promote` and `sync-readme` delegates remain as existing mutation/recovery
-command spellings; they contain no Rust policy or mutation. #1897 completes only
-after PR 2 merges and acceptance passes; a failed Nix-selected path blocks PR 2
-until repaired or reverted.
+The PR 1 caller migration includes `CONTRIBUTING.md`'s generic controller-rerun
+guidance and the workflow caller moving to Just. PR 2 has a separate review and
+human merge gate: after confirming those callers and trusted-main observation,
+it removes the obsolete Rust controller, state machine, GitHub/Git adapters and
+controller tests plus the temporary `adr promoter` CLI/help/dispatch/delegate.
+The fixed `promote` and `sync-readme` delegates remain as existing
+mutation/recovery command spellings; they contain no Rust policy or mutation.
+#1897 completes only after PR 2 merges and acceptance passes; a failed
+Nix-selected path blocks PR 2 until repaired or reverted.
 
 ## Consequences
 

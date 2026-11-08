@@ -306,7 +306,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let start = Instant::now();
             let mut result = CommandResult::new("adr-promoter");
             let step_start = Instant::now();
-            result.push(pr::promoter::execute().with_duration(step_start.elapsed()));
+            result.push(adr::controller().with_duration(step_start.elapsed()));
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }

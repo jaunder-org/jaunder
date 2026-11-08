@@ -1,10 +1,12 @@
 //! ADR promotion commands.
 //!
-//! `promote` owns the tracked-draft graduation workflow. `rewrite` owns
-//! deterministic content transformations used by that workflow.
+//! Fixed Nix-selected compatibility delegates; Python owns mutations and policy.
 
+mod delegate;
 mod promote;
-mod rewrite;
 
+pub use delegate::mutation_status;
+pub(crate) use delegate::{controller, sync_readme};
 pub use promote::promote;
+#[cfg(test)]
 pub(crate) use promote::run_promote;

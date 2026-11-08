@@ -319,13 +319,14 @@ pub enum AdrCommand {
     /// rewrite path citations and proposed status, and regenerate the index.
     /// Feature authors and shipping flows do not invoke this directly.
     #[command(
-        after_help = "AUTOMATION PRIMITIVE: invoked by `cargo xtask adr promoter` after feature merge.\n\nEXAMPLES:\n  cargo xtask adr promote"
+        after_help = "AUTOMATION PRIMITIVE: invoked by the Nix-selected Python controller after feature merge.\n\nEXAMPLES:\n  cargo xtask adr promote"
     )]
     Promote,
-    /// Run the serialized ADR promoter for a GitHub Actions event. Generates from
-    /// fresh `main`, owns the stable promoter PR, and fail-closed re-arms an exact
-    /// dequeued promoter only after both required context sets are green.
-    #[command(after_help = "EXAMPLES:\n  cargo xtask adr promoter")]
+    /// Temporary compatibility delegate to the Nix-selected Python controller.
+    /// Prefer `just adr-promoter` in the authorized trusted-main workflow context.
+    #[command(
+        after_help = "AUTOMATION CONTEXT ONLY: fixed controller delegate retained during PR 1.\n\nPREFERRED ENTRY:\n  just adr-promoter"
+    )]
     Promoter,
 }
 

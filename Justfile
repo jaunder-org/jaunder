@@ -22,6 +22,11 @@ tsc mode="verify":
     setup-e2e-node-modules "$E2E_TYPES_NODE_MODULES" "$E2E_PLAYWRIGHT_TEST"
     {{devtool}} check tsc {{if mode == "fix" { "--fix" } else { "" }}}
 
+# Select this checkout's pinned host package, never an ambient executable.
+# Controller operations require the trusted workflow context; tests use fake adapters.
+adr-promoter:
+    nix run --accept-flake-config --no-update-lock-file --no-write-lock-file .#adr-promoter -- controller
+
 # Verify workflows refuse dirty or unavailable Git state before work.
 coverage: _clean-tree coverage-workflow
 
