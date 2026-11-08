@@ -5497,6 +5497,28 @@ observation and legacy controller retirement remain prospective, not shipped
 behavior or privilege/merge approval. Both PRs retain independent exact-head
 human merge gates.
 
+### Proposed final simplification — approved design, not shipped
+
+The
+[revised #1897 promoter proposal](superpowers/specs/2026-11-08-issue-1897-promoter-simplification.md)
+would replace the custom GitHub transport/schema layer with locked PyGithub,
+keep queue correlation and authorization policy custom, use one Python admission
+path over the authoritative Nix membership predicate, and invoke the selected
+Python package directly (without the CI devShell/Just hop). It would retire the
+public Rust `cargo xtask adr promote` and `sync-readme` commands, moving
+recovery to the package's `sync-readme` action. These are approved design
+choices, including a public command change, under human response via
+`9c324a59-7b2c-4519-925a-927c9c89816f` / `issue-1897-simplification-design-v2`:
+“Approve with this boundary.” This resolves qualification `ace338e3` for this
+exact design boundary only. It does not describe this branch's current
+implementation: the preceding subsection remains the current branch state and
+explicitly distinguishes it from prospective trusted-main delivery. The
+unchanged controller/promotion contract and exact proposal limits are recorded
+in the linked spec. Tests target promoter behavior and integration, not
+SDK/library internals. The revised outline requires independent review and
+separate human approval before implementation. Both PR merge gates and
+trusted-main observation remain unchanged.
+
 This document is itself a gated artifact. The `adr-view-parity` step requires
 every `accepted` ADR to be cited here, and fails the ladder by name and title
 when one is not

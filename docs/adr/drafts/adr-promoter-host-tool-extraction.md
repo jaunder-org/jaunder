@@ -6,163 +6,82 @@
 
 ## Context
 
-[ADR-0152](../0152-adr-numbering-happens-after-merge.md) assigns ADR promotion
-to a trusted GitHub Actions workflow and xtask's serialized controller. The
-controller includes recovery, GitHub identity/check correlation and a
-tracked-draft mutation. Python is the selected language direction and the human
-explicitly requires maintained libraries where they simplify the work; a
-stdlib-only port or hand-built Markdown scanner is not the design goal.
+[ADR-0152](../0152-adr-numbering-happens-after-merge.md) assigns promotion to a
+trusted GitHub Actions workflow and serialized controller. This proposal changes
+implementation ownership, not its authority, acceptance event or recovery
+guarantees. The revised design boundary was approved by the human via
+`9c324a59-7b2c-4519-925a-927c9c89816f` / `issue-1897-simplification-design-v2`:
+“Approve with this boundary.” This resolves qualification `ace338e3` for the
+revised design only. The architecture is not shipped; revised-outline and
+implementation approval, and the separate PR gates, remain outstanding.
 
-The host execution boundary is established by
-[ADR-0028](../0028-devtool-vs-xtask-boundary.md); `gh` transport and Rust PR
-observation by [ADR-0087](../0087-xtask-github-pr-observation.md); Nix-selected
-host-tool provenance by [ADR-0225](../0225-nix-cached-host-tooling.md); the
-append-only log/materialized view by
-[ADR-0127](../0127-architecture-view-materialized-from-adrs.md). This proposal
-changes the promoter implementation owner, not ADR-0152's authority, acceptance
-event or recovery guarantees.
+## Revised proposal — approved design, proposed and not shipped
 
-## Decision
+Keep Python as the sole mutation owner. Replace custom GitHub transport,
+response parsing and unused fields with locked PyGithub 2.8.1 (`Auth.Token`,
+`retry=None`); `enable_automerge(expected_head_oid=...)` sends
+`expectedHeadOid`. Limit the merge-group acquisition to the first 100 runs,
+explicitly consumed without automatic iteration; handle GraphQL connections
+separately with explicit bounded pagination. SDK object loading must not broaden
+evidence or mask operational, network, authentication, rate-limit, GraphQL or
+malformed-evidence failures. Preserve narrow `NOT_FOUND` absence only at current
+PR-lookup sites and the rate-limit-reset diagnostic. SDK supplies mechanics, not
+queue correlation or policy; retain only consumed evidence and custom exact
+identity/check/parent correlation and authorization.
 
-**Proposed:** package the controller and its one promotion mutation in
-`tools/adr-promoter/`, independent of Cargo. Keep five focused Python modules:
-`__main__.py` for its fixed commands/exit mapping, `controller.py` for records
-and policy, `github.py` for `gh` process/JSON/error handling, `git.py` for argv
-Git/leases, and `promotion.py` for admission, Markdown edits, staging and README
-sync. Tests live under `tests/`. Use Marko 2.2.4 with its GFM extension: its AST
-exposes source spans for links and images, including table cells. Read/write
-source as bytes, decode only for parsing, patch destination spans in the
-original buffer, and never reserialize an AST. Marko positions are character
-offsets in normalized text, so a small tested boundary map converts them to
-original UTF-8 byte offsets. The locked nixpkgs set currently provides Python
-3.14.7, Marko 2.2.4 and pytest 9.1.1. The proposed runtime closes over `gh`
-2.100.0, Git 2.55.0 and Prettier 3.9.6.
+Keep Nix `buildPythonApplication`, one Python admission path consuming the
+single authoritative Nix source-membership predicate, and direct selected-
+package invocation without the CI devShell/Just hop or extra outer wrapper. This
+does not resolve cold source-realization limitations. Retire the Rust controller
+and public `cargo xtask adr promote` / `cargo xtask adr sync-readme` commands at
+the approved staged retirement boundary; document package `sync-readme` as
+recovery. Outline and implementation approval, plus the separate PR2 gate,
+remain required. Preserve independent Rust read-only format, README/view parity,
+link and collision gates. At retirement, retain shared mechanisms only if actual
+integrated callers remain; do not assume or modify cross-project consumers.
 
-Tree-sitter 0.25.2 with tree-sitter-markdown 0.5.1 was rejected after an offline
-GFM-table fixture found no destination spans and a tracked-document comparison
-found four differences. `markdown-it-py` 4.2.0 exposes line maps, not inline
-spans. Marko's documented GFM extension and source-span API were confirmed
-against a locked Nix build and fake table/link/code/fence inputs; a 295-file
-comparison matched the existing link spans exactly. Its character indices and
-newline normalization require the explicit tested byte-boundary map.
+Testing concerns our behavior, not library internals: focused checks cover
+bounded evidence selection, consumed policy distinctions, correlation,
+refusals/postconditions/outcomes, load-bearing SDK arguments, byte edits,
+resulting documents/staging, admission/runtime wiring, and our Git
+lease/conflict command interpretation. One package smoke proves integration
+only. Trust published PyGithub/Marko/Git behavior; do not test HTTP, SDK
+internals, retry or pagination engines, provider matrices, or unconsumed
+field/error permutations. This explicitly supersedes only the older spec's
+excessive testing obligations; all system guarantees remain. The prior qualified
+response `ace338e3-c664-4cda-aa82-8f61cc298c53` /
+`issue-1897-simplification-design-v1` was resolved by the exact revised-design
+approval recorded above. That approval covers these design and testing choices,
+not implementation or the separately required outline approval. Preserve all
+three approved Marko eligibility exclusions; no fallback scanner, duplicate
+parser, framework or FFI bridge. Keep both PR gates and trusted-main observation
+unchanged.
 
-Use existing `gh api` / `gh api graphql` with the App's `GH_TOKEN` and argv-only
-Git CLI for lease-sensitive operations. PyGithub would add another auth/client
-path while not supplying the custom merge-queue GraphQL model. The merge-group
-run query retains its existing one-page limit (`per_page=100`) and parent
-verification; do not add pagination that changes candidate selection. Parse
-nonzero HTTP response bodies and GraphQL `errors[]` even on exit zero; map
-`NOT_FOUND` only at current PR-lookup sites. Preserve the existing
-rate-limit-reset lookup/warning and treat other malformed/API/process failures
-as errors, not `NotRearmed`. GitPython offers no advantage over explicit
-`--force-with-lease=<ref>:<observed-oid>` and verification.
+This numberless ADR remains proposed; it does not alter any accepted ADR
+Decision or index. The approved design boundary does not ship the architecture.
+Revised-outline and implementation approval, and separate PR merge gates, remain
+outstanding. See the
+[revised spec](../../superpowers/specs/2026-11-08-issue-1897-promoter-simplification.md)
+for the bounded design and approval provenance. The
+[architecture projection](../../ARCHITECTURE.md#proposed-final-simplification--approved-design-not-shipped)
+remains explicitly prospective and does not change the current-branch
+description.
 
-Existing Rust command consumers are handled explicitly. Python owns `promote`
-and `sync-readme`; remove Rust `run_promote` and `sync_readme_at` in PR 1. Keep
-`cargo xtask adr promote` and `cargo xtask adr sync-readme` as fixed-command
-delegates to the same Nix-selected executable. `sync-readme` is documented
-recovery and `promote` remains the automation primitive; these delegates are not
-generic RPC. During PR 1 only, `cargo xtask adr promoter` delegates to the
-Python `controller` while the workflow/guidance migrate to Just. Preserve the
-feature-author prohibition on direct promotion in `CONTRIBUTING.md` and
-`docs/adr/drafts/README.md`; retain the documented `sync-readme` recovery
-command. Update `CONTRIBUTING.md`'s generic controller rerun instruction to
-`just adr-promoter`. PR 2 removes the controller CLI/help/dispatch/delegate
-after trusted-main execution is observed. Rust `adr-format`,
-`adr-readme-parity`, `adr-view-parity`, `doc-links`, and sequence/collision
-checks remain read-only Rust consumers and keep their parsers/reporting.
-Python-generated output must pass these gates. No Rust mutation or controller
-remains after PR 2; no `host-tools` crate is added.
+## Locked source evidence
 
-**ADR-0087 clarification:** Ordinary PR observation now belongs to
-`tools/pr-observer`, with landing exposed through `just pr-land`.
-`xtask/src/pr/gh.rs` re-exports the current shared observation transport and
-classification seam and retains a small native mutation wrapper for the
-test-only promoter armer. The Python promoter has its own narrow adapter over
-the same pinned `gh` executable because it cannot call that Rust library. It
-does not introduce a Python GitHub SDK, general shared API layer, duplicate
-controller policy, or new workflow/permission path. This proposed
-language-specific adapter is an explicit exception to ADR-0087's
-single-Rust-wrapper ownership, not a silent claim that the same Rust file serves
-Python.
+`flake.lock` pins nixpkgs revision `d6524aaca2ff07876657ae2b323f24be4874944b`;
+its PyGithub package is 2.8.1 with source hash
+`sha256-36taxa95WrpQw0UUlmnWX4XFslAAuuoousxNh5O5uDA=`. That release's
+`PullRequest.py` passes `expected_head_oid` as `expectedHeadOid`; its
+`MainClass.py` documents `retry=None` as disabling retries.
 
-The controller preserves ADR-0152's trusted-main/App authority, distinct
-coalescing and per-PR recovery, no active cancellation, immutable head/diff, two
-resumable orphan states, changed-ref refusal, GitHub conflict plus exact
-local-merge proof, exact-OID lease and verified absence, exact event/PR/head/
-ref/group/check correlation, verified arm, and visible failure records. After
-mutation, it retains the existing staged-Markdown Prettier pass and restages
-those files before commit; formatter failure is a visible error. Every
-successful outcome (`IgnoredEvent`, `NotRearmed`, `Existing`, `NoChanges`,
-`Created`, `Replaced`, `Rearmed`) exits zero. Only actual errors or failed
-postconditions exit nonzero. Promotion remains acceptance; the merge queue alone
-writes `main`.
+## Historical approval
 
-**Approved parser-eligibility differences:** the Rust line scanner rewrites an
-orphan textual `](../x.md)`, links inside indented code blocks, and links inside
-multiline code spans; Marko does not expose those as inline `Link`/`Image`
-destination spans. Human approval explicitly accepts Marko's syntax eligibility,
-including all three differences. Offline checks found no span differences in 295
-tracked Markdown files or the two tracked promotable drafts, but the probe did
-not include the indented/multiline-code cases and corpus equality is not
-universal equivalence. Full acceptance fixtures must explicitly exercise all
-three differences. No fallback scanner is proposed.
-
-README stays an explicit projection: preserve existing curated titles by ADR
-number, seed new titles from headings, sort rows, and apply the current marker
-splice/render rules. Status and heading edits keep the exact existing textual
-rules; parser adoption adds no new rejection or newline-format guarantee.
-
-## Nix execution and staged delivery
-
-Export `packages.adr-promoter` from `nix/packages.nix` using the flake-locked
-`python3Packages.buildPythonApplication` and `python3Packages.marko` 2.2.4;
-pytest 9.1.1 is the offline `nativeCheckInputs` with package checks enabled.
-Wrap its executable with runtime `gh`, Git and Prettier. A package-specific
-source filter admits its Python sources/tests because the existing
-`toolsSourceFilter` admits Cargo files only. No PyPI, `pip`, or mutable install
-is used. Select the current checkout's package directly:
-
-```just
-adr-promoter:
-    nix run --accept-flake-config --no-update-lock-file --no-write-lock-file .#adr-promoter -- controller
-```
-
-The workflow retains its existing single CI-shell entry, trusted-main checkout,
-App-token setup, permissions and concurrency; it changes the final command to
-`just adr-promoter`. `nix run .#adr-promoter` is selected from the active flake,
-not a bare command on PATH, and does not enter another devShell. The legacy
-xtask subcommands use the same Nix output with their fixed action. New package
-source must be staged or intent-to-added before selection under ADR-0225's
-source admission rule.
-
-PR 1, with its own human review and merge gate, adds the Python package/Nix
-output, tests and Just recipe; switches the workflow; changes `promote` and
-`sync-readme` to Python delegates; and temporarily changes `promoter` to a
-controller delegate. The Rust mutation bodies are removed in that same change,
-so there is one writer. Observe a trusted-main workflow operation and its PR,
-ref, and check result. PR 1 does not complete #1897.
-
-The PR 1 caller migration includes `CONTRIBUTING.md`'s generic controller-rerun
-guidance and the workflow caller moving to Just. PR 2 has a separate review and
-human merge gate: after confirming those callers and trusted-main observation,
-it removes the obsolete Rust controller, state machine, GitHub/Git adapters and
-controller tests plus the temporary `adr promoter` CLI/help/dispatch/delegate.
-The fixed `promote` and `sync-readme` delegates remain as existing
-mutation/recovery command spellings; they contain no Rust policy or mutation.
-#1897 completes only after PR 2 merges and acceptance passes; a failed
-Nix-selected path blocks PR 2 until repaired or reverted.
-
-## Consequences
-
-Human approved this Python/library design and the Marko parser-eligibility
-differences via `cd55b65a-4f7d-426d-991a-04cc256ec206` /
-`issue-1897-python-design-v2`, against baseline
-`82bd37273dd533026fbf07f0121865fe254583a8`. This numberless ADR remains
-`proposed`: approval is not implementation, privilege, live-proof-as-unit-test,
-merge, or cleanup authorization. Marko removes a custom Markdown link/code/fence
-scanner; the offline experiment verifies byte-span mapping on targeted cases and
-the current tracked corpus, not full-pipeline output. No accepted ADR Decision
-text is edited; this draft records proposed clarifications to ADR-0028, -0087,
--0152 and -0225. ADR-0141's workspace/test boundaries remain unchanged. Future
-edits to accepted ADRs remain subject to ADR-0127 and separate review.
+The earlier design selected a custom `gh` adapter, retained Rust mutation
+delegates and specified a temporary controller command. Approval was recorded as
+`cd55b65a-4f7d-426d-991a-04cc256ec206` / `issue-1897-python-design-v2`, against
+baseline `82bd37273dd533026fbf07f0121865fe254583a8`. That approval did not
+itself authorize the revised proposal; the separate revised-design approval is
+recorded in Context. This numberless draft remains proposed; no accepted
+Decision text or generated index is changed here. The outline, implementation,
+and PR2 gates remain separate.
