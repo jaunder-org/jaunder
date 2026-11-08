@@ -1,6 +1,6 @@
-# ADR-DRAFT: Just and Nix Own Performance Workflow Orchestration
+# ADR-0241: Just and Nix Own Performance Workflow Orchestration
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-06
 - Issue: [#1894](https://github.com/jaunder-org/jaunder/issues/1894)
 
@@ -11,7 +11,7 @@ retention and evidence policy. Issue #1894 chose native Just parameters for the
 user-facing workflow and a narrow ownership split: Nix selects producers, a
 small serial Just sequence builds and retains them, and a host-only Rust command
 owns the performance-domain decisions. This is a performance-specific
-clarification of [ADR-0028](../0028-devtool-vs-xtask-boundary.md), not a general
+clarification of [ADR-0028](0028-devtool-vs-xtask-boundary.md), not a general
 relocation of host analysis.
 
 ## Decision
@@ -25,7 +25,7 @@ validation, compatibility and diagnostic checks, run assembly, advisory
 comparison, trusted baseline-import admission, and atomic publication; it never
 selects or schedules producers. Nix derivations never invoke xtask or this host
 command. This decision leaves the separate workspaces and auxiliary test
-requirements in [ADR-0141](../0141-cargo-workspace-execution-boundaries.md)
+requirements in [ADR-0141](0141-cargo-workspace-execution-boundaries.md)
 unchanged.
 
 ## Consequences
