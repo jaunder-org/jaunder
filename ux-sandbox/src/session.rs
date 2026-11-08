@@ -1,6 +1,7 @@
-//! Direct async ownership: every observed exit/error is finalized before returning.
+//! Application policy around `ProcessKit` group stop and direct-child reaping.
+use crate::cli::Profile;
 use anyhow::{Context, bail};
-use processkit::{ProcessGroup, Signal};
+use processkit::ProcessGroup;
 use serde::Deserialize;
 use std::{
     io,
@@ -12,9 +13,9 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    process::{Child, Command},
+    process::Command,
     signal::unix::{SignalKind, signal},
-    time::{Instant, sleep},
+    time::sleep,
 };
 
 const GRACE: Duration = Duration::from_secs(10);
@@ -23,7 +24,6 @@ pub struct Signals {
     interrupt: tokio::signal::unix::Signal,
     terminate: tokio::signal::unix::Signal,
     initiating: Option<i32>,
-    received: usize,
 }
 impl Signals {
     pub fn new() -> anyhow::Result<Self> {
@@ -31,7 +31,6 @@ impl Signals {
             interrupt: signal(SignalKind::interrupt())?,
             terminate: signal(SignalKind::terminate())?,
             initiating: None,
-            received: 0,
         })
     }
     pub fn status(&self) -> Option<i32> {
@@ -43,94 +42,72 @@ impl Signals {
             _ = self.terminate.recv() => 143,
         };
         self.initiating.get_or_insert(code);
-        self.received = self.received.saturating_add(1);
         code
     }
 }
 
-/// Custody stays in this stack frame even when an observation or teardown operation fails.
-struct OwnedProcess {
-    group: ProcessGroup,
-    child: Child,
-    reaped: bool,
-    #[cfg(test)]
-    failure: Option<tests::Operation>,
-}
-
 pub async fn run(
     command: Command,
-    runtime: Option<&Path>,
+    runtime: Option<(&Path, Profile)>,
     signals: &mut Signals,
 ) -> anyhow::Result<i32> {
-    run_owned(command, runtime, signals, None).await
+    run_owned(
+        command,
+        runtime,
+        signals,
+        None,
+        std::process::Stdio::inherit(),
+    )
+    .await
+}
+
+/// Keep machine-readable selection output off the operational command's stdout.
+/// A file avoids pipe backpressure while the existing owner waits and drains.
+pub async fn output(command: Command, signals: &mut Signals) -> anyhow::Result<(i32, Vec<u8>)> {
+    let output = tempfile::NamedTempFile::new()?;
+    let stdout = std::process::Stdio::from(output.reopen()?);
+    let code = run_owned(command, None, signals, None, stdout).await?;
+    Ok((code, std::fs::read(output.path())?))
 }
 
 pub async fn named_server(
     command: Command,
     runtime: &Path,
+    profile: Profile,
     signals: &mut Signals,
     server: &mut crate::workspace::Server,
 ) -> anyhow::Result<i32> {
-    run_owned(command, Some(runtime), signals, Some(server)).await
+    run_owned(
+        command,
+        Some((runtime, profile)),
+        signals,
+        Some(server),
+        std::process::Stdio::inherit(),
+    )
+    .await
 }
 
 async fn run_owned(
     mut command: Command,
-    runtime: Option<&Path>,
+    runtime: Option<(&Path, Profile)>,
     signals: &mut Signals,
     mut server: Option<&mut crate::workspace::Server>,
+    stdout: std::process::Stdio,
 ) -> anyhow::Result<i32> {
     if let Some(code) = signals.initiating {
         return Ok(code);
     }
     command
         .stdin(std::process::Stdio::inherit())
-        .stdout(std::process::Stdio::inherit())
+        .stdout(stdout)
         .stderr(std::process::Stdio::inherit());
     let group = ProcessGroup::new()?;
-    let child = group.spawn(command)?;
-    let mut process = OwnedProcess {
-        group,
-        child,
-        reaped: false,
-        #[cfg(test)]
-        failure: None,
-    };
-    let mut observed = process
-        .observe(runtime, signals, server.as_deref_mut())
-        .await;
-    // Admission closes before the owned child begins drain, even on unexpected exit.
-    if let Some(server) = server
-        && let Err(error) = server.stopping()
-    {
-        if observed.is_ok() {
-            observed = Err(error);
-        } else {
-            eprintln!("sandbox stopping publication also failed: {error:#}");
-        }
-    }
-    process.finish(observed, signals).await
-}
-
-impl OwnedProcess {
-    async fn wait(&mut self) -> anyhow::Result<ExitStatus> {
-        #[cfg(test)]
-        self.fail_once(tests::Operation::Wait)?;
-        let status = self.child.wait().await.context("waiting for owned child")?;
-        self.reaped = true;
-        Ok(status)
-    }
-
-    async fn observe(
-        &mut self,
-        runtime: Option<&Path>,
-        signals: &mut Signals,
-        mut server: Option<&mut crate::workspace::Server>,
-    ) -> anyhow::Result<i32> {
-        let pid = self.child.id().context("spawned child has no pid")?;
+    let mut child = group.spawn(command)?;
+    let mut observed = async {
+        let pid = child.id().context("spawned child has no pid")?;
         let readiness = async {
             match runtime {
-                Some(path) => ready(path, pid).await,
+                Some((path, _)) => ready(path, pid).await,
                 None => std::future::pending().await,
             }
         };
@@ -140,134 +117,92 @@ impl OwnedProcess {
             tokio::select! {
                 biased;
                 code = signals.next() => return Ok(code),
-                status = self.wait() => return Ok(exit_code(status?)),
+                status = child.wait() => return Ok(exit_code(status.context("waiting for owned child")?)),
                 result = &mut readiness, if !reported => {
                     let address = result?;
                     if let Some(server) = server.as_deref_mut() { server.ready()?; }
                     println!("Sandbox URL: http://{address}");
+                    if runtime.is_some_and(|(_, profile)| profile != Profile::Empty) {
+                        println!("Sandbox credentials: user / jaunder-dev; operator / jaunder-dev");
+                    }
                     reported = true;
                 }
             }
         }
-    }
-
-    async fn finish(
-        &mut self,
-        observed: anyhow::Result<i32>,
-        signals: &mut Signals,
-    ) -> anyhow::Result<i32> {
-        // Errors are data until custody is discharged, never an early-return shortcut.
-        let mut result = observed;
-        if let Err(error) = &result {
-            eprintln!("sandbox operation failed; finalizing owned processes: {error:#}");
-            self.force_and_confirm().await;
-            return result;
-        }
-        if let Err(error) = self.drain(signals).await {
-            eprintln!("sandbox drain failed; finalizing owned processes: {error:#}");
-            result = Err(error);
-            self.force_and_confirm().await;
-        }
-        result.map(|code| signals.initiating.unwrap_or(code))
-    }
-
-    async fn drain(&mut self, signals: &mut Signals) -> anyhow::Result<()> {
-        #[cfg(test)]
-        self.fail_once(tests::Operation::Signal)?;
-        self.group
-            .signal(Signal::Term)
-            .context("signaling owned group")?;
-        let deadline = sleep(GRACE);
-        tokio::pin!(deadline);
-        let mut forced = false;
-        let mut confirmation_deadline = Instant::now() + GRACE + Duration::from_secs(5);
-        loop {
-            #[cfg(test)]
-            if self.failure == Some(tests::Operation::Confirmation) {
-                self.failure = None;
-                confirmation_deadline = Instant::now();
-            }
-            if self.reaped {
-                #[cfg(test)]
-                self.fail_once(tests::Operation::Members)?;
-                if self
-                    .group
-                    .members()
-                    .context("reading owned group membership")?
-                    .is_empty()
-                {
-                    return Ok(());
-                }
-            }
-            if Instant::now() >= confirmation_deadline {
-                bail!("owned group terminal confirmation timed out")
-            }
-            tokio::select! {
-                biased;
-                code = signals.next() => {
-                    if code == 130 && signals.received > 1 && !forced {
-                        self.kill()?;
-                        forced = true;
-                        confirmation_deadline = Instant::now() + Duration::from_secs(5);
-                    }
-                }
-                () = &mut deadline, if !forced => {
-                    self.kill()?;
-                    forced = true;
-                    confirmation_deadline = Instant::now() + Duration::from_secs(5);
-                }
-                status = self.wait(), if !self.reaped => { status?; }
-                () = sleep(Duration::from_millis(25)) => {}
-            }
+    }.await;
+    // Close admission before drain; a secondary publication failure must not
+    // replace the application error that already initiated cleanup.
+    if let Some(server) = server
+        && let Err(error) = server.stopping()
+    {
+        if observed.is_ok() {
+            observed = Err(error);
+        } else {
+            eprintln!("sandbox stopping publication also failed: {error:#}");
         }
     }
-
-    fn kill(&mut self) -> anyhow::Result<()> {
-        #[cfg(test)]
-        self.fail_once(tests::Operation::Kill)?;
-        self.group.kill_all().context("forcing owned group")
+    let grace = if observed.is_ok() {
+        GRACE
+    } else {
+        Duration::ZERO
+    };
+    if let Err(error) = &observed {
+        eprintln!("sandbox operation failed; finalizing owned processes: {error:#}");
     }
-
-    async fn force_and_confirm(&mut self) {
-        // stop's report is observational: neither a failed read nor a surviving member is zero.
-        // Persistent OS refusal cannot be solved here. Fail closed with custody/locks retained,
-        // report the unresolved operation, and retry without spinning; never turn a timeout into release.
-        let mut reported = false;
-        loop {
-            let stopped = self.stop().await;
-            let waited = if self.reaped {
-                Ok(())
-            } else {
-                match tokio::time::timeout(Duration::from_millis(500), self.wait()).await {
-                    Ok(result) => result.map(|_| ()),
-                    Err(error) => Err(error).context("owned child reap remains pending"),
+    let stopped = async {
+        tokio::select! {
+            biased;
+            () = async {
+                loop {
+                    // A first signal arriving after natural child exit joins
+                    // the drain. Only a subsequent INT requests early force.
+                    let initiated = signals.status().is_some();
+                    if signals.next().await == 130 && initiated { break; }
                 }
-            };
-            match (stopped, waited) {
-                (Ok(report), Ok(())) if report.members_after() == Some(0) => return,
-                (stop, wait) => {
-                    if !reported {
-                        eprintln!(
-                            "sandbox teardown unresolved; retaining owned processes and exclusion: stop={stop:?}; wait={wait:?}"
-                        );
-                        reported = true;
-                    }
-                }
-            }
-            sleep(Duration::from_millis(100)).await;
+            } => group.stop(Duration::ZERO, true).await,
+            report = group.stop(grace, true) => report,
         }
+    };
+    // ProcessKit owns group signaling/grace/escalation. Wait concurrently:
+    // an unreaped direct child can otherwise keep the group looking alive.
+    let (mut stopped, waited) = tokio::join!(stopped, child.wait());
+    // A forced stop can snapshot membership before concurrent reaping finishes.
+    // Give the library one bounded drain observation after force/reap, not a
+    // second instantaneous snapshot or a restarted graceful allowance.
+    if waited.is_ok()
+        && stopped
+            .as_ref()
+            .is_ok_and(|report| report.members_after() != Some(0))
+    {
+        stopped = observe_forced_drain(&group, signals).await;
     }
+    if !stopped
+        .as_ref()
+        .is_ok_and(|report| report.members_after() == Some(0))
+        || waited.is_err()
+    {
+        eprintln!(
+            "sandbox teardown unconfirmed; retaining group and workspace exclusion: stop={stopped:?}; wait={waited:?}"
+        );
+        // An unconfirmed outcome is not permission to release app
+        // guards. Keep custody without rebuilding a polling/retry supervisor.
+        std::future::pending::<()>().await;
+    }
+    observed.map(|code| signals.initiating.unwrap_or(code))
+}
 
-    async fn stop(&mut self) -> anyhow::Result<processkit::ShutdownReport> {
-        #[cfg(test)]
-        if self.failure == Some(tests::Operation::Stop) {
-            self.failure = None;
-            return Err(io::Error::other("one-shot stop failure").into());
+async fn observe_forced_drain(
+    group: &ProcessGroup,
+    signals: &mut Signals,
+) -> processkit::Result<processkit::ShutdownReport> {
+    let observation = group.stop(Duration::from_secs(5), false);
+    tokio::pin!(observation);
+    loop {
+        tokio::select! {
+            biased;
+            _ = signals.next() => {},
+            report = &mut observation => return report,
         }
-        self.group
-            .stop(Duration::ZERO, true)
-            .await
-            .context("confirming forced owned group stop")
     }
 }
 

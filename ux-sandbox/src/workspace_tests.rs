@@ -41,6 +41,62 @@ fn lock_operation_errors_preserve_source_and_close_the_owned_descriptor() {
 }
 
 #[test]
+fn invalid_profile_json_retains_decode_error_and_workspace_bytes() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join(".sandbox.json");
+    let sentinel = root.path().join("sentinel");
+    fs::write(&sentinel, b"untouched").unwrap();
+    for (bytes, category) in [
+        (b"{".as_slice(), serde_json::error::Category::Eof),
+        (b"{}".as_slice(), serde_json::error::Category::Data),
+        (
+            br#"{"version":"one","profile":"empty"}"#.as_slice(),
+            serde_json::error::Category::Data,
+        ),
+    ] {
+        fs::write(&path, bytes).unwrap();
+        let error = read_profile(root.path()).unwrap_err();
+        assert_eq!(
+            error
+                .downcast_ref::<serde_json::Error>()
+                .unwrap()
+                .classify(),
+            category
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(fs::read(&sentinel).unwrap(), b"untouched");
+    }
+}
+
+#[test]
+fn invalid_server_json_retains_decode_error_and_control_bytes() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("server.json");
+    let sentinel = root.path().join("sentinel");
+    fs::write(&sentinel, b"untouched").unwrap();
+    for (bytes, category) in [
+        (b"{".as_slice(), serde_json::error::Category::Eof),
+        (b"{}".as_slice(), serde_json::error::Category::Data),
+        (
+            br#"{"version":"one","state":"ready","executable_digest":"abc"}"#.as_slice(),
+            serde_json::error::Category::Data,
+        ),
+    ] {
+        fs::write(&path, bytes).unwrap();
+        let error = read_server(&path).err().unwrap();
+        assert_eq!(
+            error
+                .downcast_ref::<serde_json::Error>()
+                .unwrap()
+                .classify(),
+            category
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(fs::read(&sentinel).unwrap(), b"untouched");
+    }
+}
+
+#[test]
 fn filesystem_inspection_and_metadata_errors_retain_the_failing_path() {
     let root = tempfile::tempdir().unwrap();
     let file = root.path().join("file");

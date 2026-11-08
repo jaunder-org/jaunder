@@ -26,13 +26,13 @@ pub async fn run(cli: Cli, signals: &mut Signals) -> anyhow::Result<i32> {
         let lease =
             Lock::try_exclusive(&paths.lease)?.context("sandbox already has a managed server")?;
         let exclusive = Lock::exclusive(&paths.ownership, signals).await?;
-        paths.recover()?;
-        paths.remove_metadata()?;
-        let profile = paths.profile(cli.profile, cli.reset)?;
         let artifacts = match preparation::prepare(true, signals).await? {
             Prepared::Ready(artifacts) => artifacts,
             Prepared::Exited(code) => return Ok(code),
         };
+        paths.recover()?;
+        paths.remove_metadata()?;
+        let profile = paths.profile(cli.profile, cli.reset)?;
         let code = prepare_named(&mut paths, &artifacts, profile, cli.reset, signals).await?;
         if code != 0 {
             return Ok(code);
@@ -41,7 +41,7 @@ pub async fn run(cli: Cli, signals: &mut Signals) -> anyhow::Result<i32> {
         let mut command = app_command(&artifacts.jaunder, &paths.current);
         command.arg("serve");
         let mut server = Server::new(paths, lease, exclusive, artifacts.digest);
-        let result = session::named_server(command, &runtime, signals, &mut server).await;
+        let result = session::named_server(command, &runtime, profile, signals, &mut server).await;
         let cleanup = server.cleanup().await;
         completed(result, cleanup)
     } else {
@@ -68,7 +68,15 @@ pub async fn run(cli: Cli, signals: &mut Signals) -> anyhow::Result<i32> {
             }
             let mut command = app_command(&artifacts.jaunder, &storage);
             command.arg("serve");
-            session::run(command, Some(&storage.join("runtime.json")), signals).await
+            session::run(
+                command,
+                Some((
+                    &storage.join("runtime.json"),
+                    cli.profile.unwrap_or_default(),
+                )),
+                signals,
+            )
+            .await
         }
         .await;
         // Session errors return only after explicit terminal confirmation.
@@ -148,7 +156,7 @@ async fn initialize(
             .args(["--profile", profile.as_str(), "--storage-path"])
             .arg(storage)
             .env("JAUNDER_TEST_EXECUTABLE", &artifacts.jaunder);
-        code = session::run(seed, None, signals).await?;
+        (code, _) = session::output(seed, signals).await?;
     }
     if code == 0 {
         workspace::write_profile(storage, profile)?;
@@ -250,6 +258,7 @@ mod tests {
             jaunder: root.path().join("missing-executable"),
             support: None,
             digest: "abc".into(),
+            _root: tempfile::tempdir().unwrap(),
         };
         let mut signals = Signals::new().unwrap();
         let error = prepare_named(&mut paths, &artifacts, Profile::Empty, true, &mut signals)

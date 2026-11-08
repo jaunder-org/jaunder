@@ -61,7 +61,13 @@ pub(crate) fn admit_untracked_inputs(root: &Path, source_admits: &str) -> Result
         return Ok(());
     }
     let output = Command::new("nix")
-        .args(["eval", "--impure", "--json"])
+        .args([
+            "eval",
+            "--impure",
+            "--json",
+            "--no-update-lock-file",
+            "--no-write-lock-file",
+        ])
         // Match the launcher without interpolating paths into installable syntax.
         .arg(source_admits)
         .current_dir(root)
@@ -175,6 +181,56 @@ mod tests {
         assert_eq!(selected_text(), "dirty source");
         std::fs::write(root.join("flake.nix"), "invalid Nix").unwrap();
         assert!(admit_untracked_inputs(root, ".#csrBundle.sourceAdmits").is_err());
+    }
+
+    #[test]
+    fn executable_selections_admit_host_seed_public_and_csr_inputs() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let relevant = [
+            "server/src/new.rs",
+            "test-support/src/new.rs",
+            "public/new.svg",
+            "csr/src/new.rs",
+            ".cargo/config.toml",
+        ];
+        let candidates = relevant
+            .iter()
+            .chain(["notes.md"].iter())
+            .map(|path| Candidate {
+                path: (*path).into(),
+                kind: "regular",
+            })
+            .collect::<Vec<_>>();
+        for attr in [
+            ".#sandboxArtifacts.sourceAdmits",
+            ".#sandboxArtifactsReleaseCsr.sourceAdmits",
+        ] {
+            let output = Command::new("nix")
+                .args([
+                    "eval",
+                    "--impure",
+                    "--json",
+                    "--no-update-lock-file",
+                    "--no-write-lock-file",
+                    attr,
+                    "--apply",
+                    ADMIT_INPUTS,
+                ])
+                .current_dir(root)
+                .env(
+                    "JAUNDER_XTASK_UNTRACKED_INPUTS",
+                    serde_json::to_string(&candidates).unwrap(),
+                )
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let admitted: Vec<String> = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(admitted, relevant);
+        }
     }
 
     #[test]

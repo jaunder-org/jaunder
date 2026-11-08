@@ -1,30 +1,6 @@
-//! Local one-shot operation failures retain real COTS children, groups and exclusion.
+//! Application readiness, status and publication-error ordering with real children.
 use super::*;
 use std::{fs, process::Stdio};
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum Operation {
-    Wait,
-    Signal,
-    Members,
-    Kill,
-    Confirmation,
-    Stop,
-}
-
-impl OwnedProcess {
-    pub(super) fn fail_once(&mut self, operation: Operation) -> anyhow::Result<()> {
-        if self.failure == Some(operation) {
-            self.failure = None;
-            return Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                format!("one-shot {operation:?}"),
-            )
-            .into());
-        }
-        Ok(())
-    }
-}
 
 #[test]
 fn native_tree() {
@@ -34,7 +10,7 @@ fn native_tree() {
     let root = std::path::PathBuf::from(root);
     let descendant = std::env::var_os("UX_SESSION_DESCENDANT").is_some();
     tokio::runtime::Runtime::new().unwrap().block_on(async {
-        let _term = signal(SignalKind::terminate()).unwrap();
+        let mut term = signal(SignalKind::terminate()).unwrap();
         let _int = signal(SignalKind::interrupt()).unwrap();
         if !descendant {
             let mut child = std::process::Command::new(std::env::current_exe().unwrap())
@@ -51,187 +27,130 @@ fn native_tree() {
             std::process::id().to_string(),
         )
         .unwrap();
-        publish_runtime_error(&root, descendant).await;
+        if !descendant && let Some(path) = std::env::var_os("UX_SESSION_RUNTIME_ERROR") {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !root.join("descendant").exists() {
+                    sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            fs::create_dir(path).unwrap();
+        }
+        if descendant && std::env::var_os("UX_SESSION_OBSERVE").is_some() {
+            let resource = fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(root.join("descendant-resource"))
+                .unwrap();
+            resource.lock().unwrap();
+            let mut release = signal(SignalKind::user_defined1()).unwrap();
+            fs::write(root.join("resource-held"), "").unwrap();
+            loop {
+                tokio::select! {
+                    _ = term.recv() => { fs::write(root.join("drain-observed"), "").unwrap(); },
+                    _ = release.recv() => return,
+                }
+            }
+        }
         std::future::pending::<()>().await;
     });
 }
 
-async fn publish_runtime_error(root: &Path, descendant: bool) {
-    if descendant {
+#[tokio::test]
+async fn bounded_observation_confirms_descendant_exit_under_guard_and_consumes_signals() {
+    if std::env::var_os("UX_OBSERVATION_TEST").is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "session::tests::bounded_observation_confirms_descendant_exit_under_guard_and_consumes_signals", "--nocapture"])
+            .env("UX_OBSERVATION_TEST", "1").output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
         return;
     }
-    if let Some(path) = std::env::var_os("UX_SESSION_RUNTIME_ERROR") {
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while !root.join("descendant").exists() {
-                sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .unwrap();
-        fs::create_dir(path).unwrap();
-    }
-}
-
-#[test]
-fn lock_probe() {
-    let Some(path) = std::env::var_os("UX_SESSION_LOCK") else {
-        return;
-    };
-    let lock = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)
-        .unwrap();
-    assert!(matches!(lock.try_lock(), Err(fs::TryLockError::WouldBlock)));
-}
-
-fn assert_lock_held(path: &Path) {
-    assert!(
-        std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "session::tests::lock_probe"])
-            .env("UX_SESSION_LOCK", path)
-            .status()
-            .unwrap()
-            .success()
-    );
-}
-
-async fn tree(root: &Path, operation: Operation) -> OwnedProcess {
+    let root = tempfile::tempdir().unwrap();
+    let guard_path = root.path().join("workspace.lock");
+    let guard = fs::File::create(&guard_path).unwrap();
+    guard.lock().unwrap();
     let group = ProcessGroup::new().unwrap();
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
         .args(["--exact", "session::tests::native_tree", "--nocapture"])
-        .env("UX_SESSION_TREE", root)
+        .env("UX_SESSION_TREE", root.path())
+        .env("UX_SESSION_OBSERVE", "1")
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let child = group.spawn(command).unwrap();
+    let mut child = group.spawn(command).unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
-        while !root.join("parent").exists() || !root.join("descendant").exists() {
+        while !root.path().join("resource-held").exists() {
             sleep(Duration::from_millis(10)).await;
         }
     })
     .await
     .unwrap();
-    OwnedProcess {
-        group,
-        child,
-        reaped: false,
-        failure: Some(operation),
-    }
-}
-
-#[tokio::test]
-async fn wait_error_finalizes_real_tree_before_lock_release() {
-    exercise_operation_failure(Operation::Wait).await;
-}
-#[tokio::test]
-async fn signal_error_finalizes_real_tree_before_lock_release() {
-    exercise_operation_failure(Operation::Signal).await;
-}
-#[tokio::test]
-async fn membership_error_finalizes_real_tree_before_lock_release() {
-    exercise_operation_failure(Operation::Members).await;
-}
-#[tokio::test]
-async fn kill_error_finalizes_real_tree_before_lock_release() {
-    exercise_operation_failure(Operation::Kill).await;
-}
-#[tokio::test]
-async fn confirmation_error_finalizes_real_tree_before_lock_release() {
-    exercise_operation_failure(Operation::Confirmation).await;
-}
-#[tokio::test]
-async fn stop_error_finalizes_real_tree_before_lock_release() {
-    exercise_operation_failure(Operation::Stop).await;
-}
-
-async fn observe_failure(
-    process: &mut OwnedProcess,
-    operation: Operation,
-    signals: &mut Signals,
-) -> anyhow::Result<i32> {
-    match operation {
-        Operation::Wait => process.observe(None, signals, None).await,
-        Operation::Members => {
-            process.child.start_kill().unwrap();
-            process.child.wait().await.unwrap();
-            process.reaped = true;
-            Ok(23)
-        }
-        Operation::Stop => {
-            Err(io::Error::new(io::ErrorKind::BrokenPipe, "initiating read failure").into())
-        }
-        _ => Ok(23),
-    }
-}
-
-fn assert_operation_error(error: &anyhow::Error, operation: Operation) {
-    if operation == Operation::Confirmation {
-        assert!(
-            error
-                .to_string()
-                .contains("terminal confirmation timed out")
-        );
-    } else {
-        assert_eq!(
-            error.downcast_ref::<io::Error>().unwrap().kind(),
-            io::ErrorKind::BrokenPipe
-        );
-    }
-}
-
-async fn assert_terminal(process: &mut OwnedProcess) {
-    let reaped = process.reaped;
-    let empty = process.group.members().unwrap().is_empty();
-    if !reaped || !empty {
-        // Even a red regression must clean up its native fixture tree.
-        process.failure = None;
-        process.force_and_confirm().await;
-    }
-    assert!(reaped, "returned before child reap");
-    assert!(empty, "returned before owned terminal confirmation");
-}
-
-fn assert_tree_gone(root: &Path) {
-    for role in ["parent", "descendant"] {
-        let pid = fs::read_to_string(root.join(role))
-            .unwrap()
-            .parse()
-            .unwrap();
-        assert!(
-            processkit::process_info(pid).unwrap().is_none(),
-            "{role} remains"
-        );
-    }
-}
-
-async fn exercise_operation_failure(operation: Operation) {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("host-artifacts.lock");
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&path)
+    // Keep a real descendant until explicitly released: exercise our observation
+    // deterministically, without depending on how quickly SIGKILL is scheduled.
+    child.start_kill().unwrap();
+    child.wait().await.unwrap();
+    let snapshot = group.stop(Duration::ZERO, false).await.unwrap();
+    assert!(snapshot.members_after().is_some_and(|n| n > 0));
+    let descendant: u32 = fs::read_to_string(root.path().join("descendant"))
+        .unwrap()
+        .parse()
         .unwrap();
-    lock.lock().unwrap();
-    let mut process = tree(root.path(), operation).await;
     let mut signals = Signals::new().unwrap();
-    let observed = observe_failure(&mut process, operation, &mut signals).await;
-    let result = process.finish(observed, &mut signals).await;
-    assert_operation_error(&result.unwrap_err(), operation);
-    assert_lock_held(&path);
-    assert_terminal(&mut process).await;
-    assert_tree_gone(root.path());
-    lock.unlock().unwrap();
-    let next = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&path)
-        .unwrap();
-    next.try_lock()
-        .expect("caller releases its artifact lock only after terminal confirmation");
+    let control = async {
+        let send = |kind: &str, pid: u32| {
+            assert!(
+                std::process::Command::new("kill")
+                    .args([kind, &pid.to_string()])
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        send("-INT", std::process::id());
+        sleep(Duration::from_millis(20)).await;
+        send("-TERM", std::process::id());
+        sleep(Duration::from_millis(20)).await;
+        send("-INT", std::process::id());
+        sleep(Duration::from_millis(20)).await;
+        let resource = fs::File::open(root.path().join("descendant-resource")).unwrap();
+        assert!(
+            matches!(resource.try_lock(), Err(fs::TryLockError::WouldBlock)),
+            "signals must not force the observation's descendant"
+        );
+        let probe = fs::File::open(&guard_path).unwrap();
+        assert!(
+            matches!(probe.try_lock(), Err(fs::TryLockError::WouldBlock)),
+            "workspace guard released before confirmation"
+        );
+        send("-USR1", descendant);
+    };
+    let (report, ()) = tokio::join!(observe_forced_drain(&group, &mut signals), control);
+    assert_eq!(report.unwrap().members_after(), Some(0));
+    assert_eq!(
+        signals.status(),
+        Some(130),
+        "first post-child-exit signal survives"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(1), signals.next())
+            .await
+            .is_err(),
+        "post-force observation left signals unconsumed"
+    );
+    let probe = fs::File::open(&guard_path).unwrap();
+    assert!(matches!(
+        probe.try_lock(),
+        Err(fs::TryLockError::WouldBlock)
+    ));
+    drop(guard);
+    probe.try_lock().unwrap();
 }
 
 #[tokio::test]
@@ -279,9 +198,19 @@ async fn stopping_publication_failure_replaces_success_only_after_child_reap() {
         .args(["-c", "echo $$ > child-pid; exit 23"])
         .current_dir(root.path());
     let mut signals = Signals::new().unwrap();
-    let error = run_owned(command, None, &mut signals, Some(&mut server))
-        .await
-        .unwrap_err();
+    let error = tokio::time::timeout(
+        Duration::from_secs(5),
+        run_owned(
+            command,
+            None,
+            &mut signals,
+            Some(&mut server),
+            std::process::Stdio::inherit(),
+        ),
+    )
+    .await
+    .expect("application cleanup did not finish")
+    .unwrap_err();
     assert!(error.to_string().contains("sandbox root disappeared"));
     let pid = fs::read_to_string(root.path().join("child-pid"))
         .unwrap()
@@ -302,12 +231,29 @@ async fn stopping_publication_failure_preserves_original_read_error_after_tree_r
         .env("UX_SESSION_TREE", root.path())
         .env("UX_SESSION_RUNTIME_ERROR", &runtime);
     let mut signals = Signals::new().unwrap();
-    let error = run_owned(command, Some(&runtime), &mut signals, Some(&mut server))
-        .await
-        .unwrap_err();
+    let error = tokio::time::timeout(
+        Duration::from_secs(5),
+        run_owned(
+            command,
+            Some((&runtime, Profile::Empty)),
+            &mut signals,
+            Some(&mut server),
+            std::process::Stdio::inherit(),
+        ),
+    )
+    .await
+    .expect("application cleanup did not finish")
+    .unwrap_err();
     assert!(error.to_string().contains("reading runtime-info"));
     assert!(error.downcast_ref::<io::Error>().is_some());
-    assert_tree_gone(root.path());
+    // The helper owns/reaps its direct child. Descendant lifecycle/resource
+    // ordering is exercised through the public helper, not an instant PID sample.
+    let pid = fs::read_to_string(root.path().join("parent"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(processkit::process_info(pid).unwrap().is_none());
 }
 
 async fn readiness_server(

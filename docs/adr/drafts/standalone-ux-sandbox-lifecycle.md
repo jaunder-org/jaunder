@@ -50,22 +50,35 @@ and paths.
 ## Contract and consequences
 
 The single Just recipe uses the pinned Just per-recipe
-`[ positional-arguments ]` attribute and `sandbox *args`; it builds
-`cargo build --locked -p ux-sandbox`, then execs
-`./target/debug/ux-sandbox "$@"`. Caller argv is forwarded without string
-reconstruction. The helper preserves disposable and named workspaces,
-empty/standard/demo profiles, init for each newly prepared workspace, resume
-without reseeding, staged/reset recovery, allowlisted operational command mode
-and exact child status.
+`[ positional-arguments ]` attribute and `sandbox *args`; it still runs
+`cargo build --locked -p ux-sandbox` and then execs
+`./target/debug/ux-sandbox "$@"`. Cargo may reuse up-to-date local helper
+artifacts. Caller argv is forwarded without string reconstruction. A separate
+Nix package/Just helper-cache bootstrap is not part of this application-artifact
+decision.
 
-The standalone bootstrap publishes the distinct `target/debug/ux-sandbox`
-executable, not an e2e-consumed Jaunder/test-support output; no isolated target
-cache or artifact lock is needed for that output. The helper then acquires
-`.xtask/host-artifacts.lock` around protected mode-specific preparation: server
-builds CSR via `just build-csr debug`, Jaunder and test-support; command mode
-builds Jaunder only. It validates selected debug artifacts and releases the lock
-before long-lived child use. `e2e-local` keeps its existing consumer/teardown
-lock lifetime.
+For application preparation, the helper admits relevant untracked checkout
+inputs against the selected Nix source and refuses omitted inputs before
+selection. It invokes Nix interruptibly to select `.#sandboxArtifacts`, one
+immutable linkFarm containing debug-profile `jaunder` and `test-support`
+executables, with the selected debug CSR embedded in Jaunder by the existing
+`server/build.rs` path and `rust-embed/debug-embed` feature. Each invocation
+owns a fresh `.xtask/sandbox-artifacts-*` output link and retains it through
+preparation and the full server or command consumer lifetime. Nix/store owns
+application artifact build concurrency and reuse. Sandbox no longer publishes
+mutable checkout application artifacts or takes `.xtask/host-artifacts.lock` for
+preparation. Its distinct workspace, server-lease and application runtime locks
+remain unchanged.
+
+`e2e-local` selects the same source-consistent package set through a unique
+`.xtask/gcroots/e2e-local-*` output link retained through browser and
+server/collector teardown. Ordinary e2e selects `.#sandboxArtifacts` with debug
+CSR; `--update-visual-snapshots` selects `.#sandboxArtifactsReleaseCsr`, which
+embeds the existing release CSR while keeping server and seed debug-profile.
+There is no separate release-CSR flag. E2e also no longer takes the checkout
+artifact lock for these immutable outputs. `test-local` retains its separate
+`.xtask/host-artifacts.lock` and `.#csrBundle` input. Manual `just build-csr`
+and Cargo/Vite `target/site` behavior remain unchanged.
 
 Preserve name/path validation, workspace-local profile metadata, stable locks
 and ephemeral ready/stopping metadata under `.xtask/sandboxes/.locks/`, server
@@ -80,24 +93,55 @@ ownership, then release the server lease. Hold runtime and shared workspace
 ownership throughout the operational child. For a live managed server, use ready
 metadata/digest admission and shared workspace ownership without acquiring the
 lease or runtime lock. Seed remains `test-support seed-sandbox-profile` as a
-subprocess. Do not add registry, quarantine, control socket or arbitrary
-kernel-safety guarantee.
+subprocess. Its stdout is captured and withheld from operational command output
+while stderr and exact child status are preserved. The supervisor prints its URL
+after readiness and prints the seeded `user`/`operator` credentials only for a
+nonempty profile, including a named resume using its recorded profile. Empty
+profiles do not print credential hints. Do not add registry, quarantine, control
+socket or arbitrary kernel-safety guarantee.
+
+#### Qualified caller-selected CSR compatibility
+
+During discussion of the `e2e-local` CSR override, the human said exactly:
+
+> It sounds like it's probably a method to atttempt to achieve what using nix
+> already gets us---cached builds. By all means keep looking, but my inclination
+> is to say don't worry about replicating it.
+
+The Lead applied this direction narrowly to the immutable `e2e-local` path: if
+`JAUNDER_CSR_BUNDLE_DIR` is set, e2e refuses before artifact selection, server
+startup or seeding, with guidance to unset it. It neither silently ignores the
+supplied value nor falls back to Cargo/site output. This is a qualified Lead
+application of the human's inclination, not a separate literal “approved”
+response. The refusal is e2e-specific; the variable remains a Nix build-time
+input and remains available to `test-local` and manual Cargo/Vite workflows.
+Release CSR remains selected by the existing `--update-visual-snapshots` mode;
+no `--release-csr` option is added.
 
 SIGINT/SIGTERM begin graceful drain. Further SIGINT may force earlier; repeated
-SIGTERM joins the drain without escalation per ADR-0181. Automatic escalation
-occurs after exactly 10 seconds without requiring a second signal. Preserve
-initiating status (130/143), or the child's exact status when no signal
-initiated shutdown. Do not change `jaunder shut-down`'s separate 30-second
-wait/no-escalation contract. Unexpected parent exit does not permit cleanup
-until process-tree containment/reap finishes on supported platforms; this is a
-proof obligation, not a universal kernel guarantee.
+SIGTERM joins the drain without escalation per ADR-0181. ProcessKit owns the
+automatic group-stop escalation after exactly 10 seconds. The application waits
+for the direct child concurrently with group stop and preserves initiating
+status (130/143), or the child's exact status when no signal initiated shutdown.
+If a successful forced-stop report still lists group members after direct-child
+reap, the application makes one bounded follow-up ProcessKit stop/report with a
+five-second grace and escalation disabled, consuming further signals without
+restarting that operation. Cleanup requires direct-child reap and an explicit
+empty-group report. An unconfirmed stop/wait logs diagnostics and retains
+group/application guards rather than polling/retrying or releasing storage. This
+is the implemented fail-closed ordering, not a universal OS guarantee or a claim
+of protection after helper SIGKILL. Do not change `jaunder shut-down`'s separate
+30-second wait/no-escalation contract.
 
 Removing sandbox-specific xtask CLI/dispatch/reporting, broad package linkage
 and synchronous runtime bridges reduces ownership indirection and
-private-package coupling. The focused package/manifest, Just bootstrap, helper
-adapters, duplicate readiness probe, maintained tests and extra cold
-command-mode helper build are real costs. Lifecycle and storage responsibility
-remains in the helper, and e2e ownership remains in xtask; neither is counted as
+private-package coupling. Replacing mutable application artifact publication
+with Nix-built, per-invocation rooted package sets removes the sandbox/e2e
+checkout artifact-lock path while retaining `test-local`'s separate lock. The
+focused package/manifest, Cargo helper bootstrap, Nix artifact composition,
+helper adapters, duplicate readiness probe, maintained tests and required
+package builds are real costs. Lifecycle and storage responsibility remains in
+the helper, and e2e ownership remains in xtask; neither is counted as
 eliminated. The tradeoff is structural simplification, not a
 performance-improvement claim.
 
@@ -108,11 +152,14 @@ and promotion. It records the implemented Just-owned design; ADR-0046 and
 ADR-0058 remain unchanged. ADR-0180's dated clarification records only partial
 supersession, preserving its historical Decision and remaining contracts.
 
-Maintained public-command and native process tests cover exact argv, artifact
-preparation and lock contention, lifecycle/profile/reset/command behavior,
-runtime-info identity/readiness, signal distinctions, the automatic deadline,
-and descendant containment/reap before storage cleanup or guard release.
-CONTRIBUTING defines the verification cadence: production validation on x86_64
-Linux and periodic development-environment checks on committed changes for Apple
-Silicon macOS, with no ARM Linux native-delivery gate. Focused tests do not
-replace repository gates or establish untested foreign-native guarantees.
+Maintained public-command and native process tests cover exact argv, immutable
+artifact selection/source admission/root lifetime, lifecycle/profile/reset/
+command behavior, runtime-info identity/readiness, signal distinctions, the
+automatic deadline, and descendant containment/reap before storage cleanup or
+guard release. The focused process integration trusts ProcessKit's group-stop
+report rather than maintaining the removed membership polling/retry and
+six-operation wrapper fault matrix. CONTRIBUTING defines the verification
+cadence: production validation on x86_64 Linux and periodic
+development-environment checks on committed changes for Apple Silicon macOS,
+with no ARM Linux native-delivery gate. Focused tests do not replace repository
+gates or establish untested foreign-native guarantees.

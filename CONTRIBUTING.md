@@ -460,11 +460,19 @@ just sandbox writing-flow --reset --profile demo
 
 `--profile` applies only when creating or resetting a named workspace. `--reset`
 requires an existing name; without an explicit profile it reuses the recorded
-profile. Stop the foreground supervisor with Ctrl-C or SIGTERM. The first signal
-starts graceful drain with automatic force after exactly 10 seconds; a further
-Ctrl-C may force earlier, while repeated SIGTERM does not escalate. The
-initiating signal returns 130/143. This does not change `jaunder shut-down`'s
-independent 30-second wait and refusal to escalate.
+profile. After readiness, the supervisor prints the URL; for nonempty profiles
+it also prints the seeded `user` and `operator` development credentials. Stop
+the foreground supervisor with Ctrl-C or SIGTERM. The first signal starts
+graceful drain with automatic force after exactly 10 seconds; a further Ctrl-C
+may force earlier, while repeated SIGTERM does not escalate. The initiating
+signal returns 130/143. After force and direct-child reap, if ProcessKit reports
+remaining group members the helper makes one bounded follow-up ProcessKit
+stop/report with a five-second grace and escalation disabled, consuming signals
+without restarting that operation. Cleanup requires direct-child reap and an
+explicit empty-group report; an unconfirmed stop retains the group and
+application guards with diagnostics rather than polling/retrying. This is not a
+universal OS guarantee and does not change `jaunder shut-down`'s independent
+30-second wait and refusal to escalate.
 
 Run one admitted operational Jaunder command against a named workspace after
 `--`:
@@ -481,14 +489,24 @@ and returns the child's exact exit status. It accepts only `site-config`,
 `websub`; storage selectors and lifecycle commands remain owned by the sandbox
 supervisor.
 
-The one public Just front door builds the focused root-workspace `ux-sandbox`
-helper with exact argv forwarding. Under `.xtask/host-artifacts.lock`, server
-mode builds debug CSR, Jaunder and test-support; command mode builds only debug
-Jaunder. Preparation releases this artifact lock before child execution (unlike
-`e2e-local`, which retains it through teardown). The helper directly owns async
-processkit children in one Tokio runtime. Profile seeding remains a
-`test-support seed-sandbox-profile` subprocess; no production seed API is added.
-The old xtask sandbox command is retired.
+The public Just front door still builds the focused root-workspace `ux-sandbox`
+helper with `cargo build --locked -p ux-sandbox` and forwards exact argv. This
+helper bootstrap remains Cargo-based; Cargo may reuse up-to-date local helper
+artifacts. For application preparation, the helper checks relevant untracked
+checkout inputs against the selected Nix source admission and refuses omitted
+inputs rather than silently selecting an incomplete source snapshot. It then
+selects `.#sandboxArtifacts`, one immutable set containing debug-profile
+`jaunder` and `test-support`; the Nix-built Jaunder executable embeds the
+selected debug CSR bundle with `rust-embed/debug-embed`. The helper keeps its
+unique `.xtask/sandbox-artifacts-*` Nix output link alive through preparation
+and the server or command consumer lifetime. Nix/store owns this build
+concurrency; the sandbox no longer publishes `target` application artifacts or
+takes `.xtask/host-artifacts.lock` for them. Its named workspace, server-lease
+and application runtime locks remain unchanged. Seeding remains the
+`test-support seed-sandbox-profile` subprocess; its stdout is captured and
+withheld from operational output while stderr and exact child status are
+retained. No production seed API is added. The old xtask sandbox command is
+retired.
 
 Each named workspace stores its database, configuration, Media, and versioned
 profile metadata together. Stable control locks and current-server metadata live
@@ -523,30 +541,34 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
   `cargo xtask e2e-local post-image-fit.spec.ts --browser webkit`; this proves
   Playwright WebKit only, not actual Safari.
 
-  Ordinary runs realize the native `.#csrDebugBundle` through the existing Nix
-  producer and validate the complete immutable bundle before server compilation.
-  Cargo's dev profile retains browser debug assertions; the pinned toolchain and
-  declared Cargo configuration, not ambient host flags, determine its inputs.
-  Nix owns source/tool identity and warm artifact reuse, not test verdicts. A
-  first miss can be slower and retains an additional debug artifact.
+  Ordinary runs select `.#sandboxArtifacts`: one source-consistent immutable set
+  containing debug-profile host `jaunder` and `test-support`, with the debug CSR
+  bundle embedded in Jaunder. `--update-visual-snapshots` selects
+  `.#sandboxArtifactsReleaseCsr`, embedding the existing release CSR while
+  retaining debug host and seed executables; there is no separate release-CSR
+  flag. The helper's interruptible Nix invocation and each selected executable
+  path belong to one invocation. E2E uses the existing `host_tooling` source
+  admission: tracked dirty and intent-to-add inputs participate; relevant
+  nonignored untracked inputs are refused with instructions to use `git add -N`
+  or `git add`. It never silently falls back to older outputs or `target/site`.
 
-  Relevant nonignored untracked producer inputs are refused: use `git add -N` or
-  `git add` to include them in the Git flake snapshot. Tracked dirty and
-  intent-to-add inputs participate; unrelated notes do not. The
-  `.xtask/host-artifacts.lock` protects the checkout-local
-  `.xtask/csr-debug-bundle` GC root and host binaries through browser teardown.
-  Admission, realization or complete-bundle validation failure prevents consumer
-  compilation/startup, with no older-root, release or `target/site` fallback.
+  The selected output is rooted under `.xtask/gcroots/e2e-local-*` through all
+  browser lifecycles and server/collector teardown. Nix owns artifact identity,
+  store concurrency and reuse; `e2e-local` no longer uses
+  `.xtask/host-artifacts.lock` to protect mutable checkout application builds.
+  Cargo's dev profile and pinned toolchain still determine the embedded browser
+  assertions and package inputs; a first Nix miss may be slower and retains an
+  additional debug artifact.
 
-  An explicit `JAUNDER_CSR_BUNDLE_DIR` is validated caller-owned input instead
-  of automatic production. Its owner must supply source/profile-matched input
-  and keep it stable and retained through the run; validation proves integrity,
-  not provenance, and our checkout lock cannot protect a foreign artifact.
-  Handled SIGINT/SIGTERM stops owned foreground consumers before
-  server/collector teardown and lock release. Visual-update mode retains its
-  existing release producer and inherited server-build override behavior;
-  standalone `build-csr`, sandbox and `test-local` keep their existing
-  producer/profile selection.
+  `e2e-local` refuses a set `JAUNDER_CSR_BUNDLE_DIR` before artifact production,
+  server startup or seeding, with guidance to unset it; it does not silently
+  ignore the input or fall back to Cargo/site output. This refusal is specific
+  to e2e's immutable artifact contract. The variable remains a build-time input
+  for Nix package builds and an explicit validated input for `test-local` and
+  manual Cargo/Vite workflows. Handled SIGINT/SIGTERM stops owned foreground
+  consumers before server/collector teardown and releases their unique Nix root
+  afterward. The standalone manual `just build-csr debug|release` workflow and
+  its local `target/site` output remain unchanged.
 
 - **Focused browser-flow proof** — `cargo xtask e2e-local <spec-or-file:line>`
   scopes the local loop to one Playwright positional filter when that spec or
@@ -1535,9 +1557,10 @@ without fallback to an older root or `target/site`.
 This prerequisite is release-built, so browser debug assertions are omitted and
 a first cache miss can be expensive. Host tests and the actual image worker
 remain debug-built and execute freshly. `check` and `prepush` share this lane.
-Ordinary `e2e-local` uses the separate Nix debug bundle described under
-[Running e2e tests locally](#running-e2e-tests-locally); standalone `build-csr`
-and sandbox retain their host debug CSR production. Product-test work remains
+Ordinary `e2e-local` uses the source-consistent immutable Nix artifact set
+(described under [Running e2e tests locally](#running-e2e-tests-locally));
+sandbox uses its own per-invocation set. Standalone `build-csr` and `test-local`
+retain their existing CSR producer/lock paths. Product-test work remains
 host-native and invokes no Nix check derivations.
 
 The same lane builds the locked host `jaunder` executable and supplies its

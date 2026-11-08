@@ -1,5 +1,5 @@
 //! Host e2e loop driver (#249): `cargo xtask e2e-local` OWNS the whole loop —
-//! build the CSR bundle + server, start `jaunder serve` on an ephemeral port with
+//! select immutable server/seed artifacts, start `jaunder serve` on an ephemeral port with
 //! the VM's capture env, discover the port from the canonical
 //! `<storage>/runtime.json`, seed via the shared `devtool seed-e2e`, run
 //! Playwright against the discovered URL, and tear
@@ -16,7 +16,7 @@
 //! relies on systemd `WorkingDirectory=/var/lib/jaunder` + the `./data` default).
 //! Values differ per environment (host: a temp dir + ephemeral port; VM:
 //! `/var/lib/jaunder` + `:3000`). The DB + capture-dir vars are ALSO set on the
-//! Playwright process (with `target/debug` prepended to PATH) so
+//! Playwright process (with the retained bundle's bin directory on PATH) so
 //! `mail.ts`/`websub.ts` resolve the same capture paths (via `test-support
 //! capture-path`) the server writes, and `seed.ts`'s bare-`test-support`
 //! `seedPostsViaTool` resolves the same binary + DB — VM parity for the
@@ -40,7 +40,7 @@ use xshell::{Shell, cmd};
 use crate::cli::E2eLocalBrowser;
 use crate::result::{CommandResult, StepResult};
 use crate::steps::host_server::{
-    HostArtifactConfig, HostArtifacts, HostServerSession, ServerSessionConfig, ServerStartPhase,
+    HostArtifacts, HostServerSession, ServerSessionConfig, ServerStartPhase,
 };
 use crate::steps::host_signals::{ServerExit, ServerSignals};
 use crate::steps::process::Process;
@@ -211,7 +211,6 @@ fn normal_invocations(
 }
 
 fn resolve_e2e_env(
-    root: &Path,
     workers: Result<String, env::VarError>,
     path: Option<OsString>,
     stderr: &mut impl Write,
@@ -230,21 +229,16 @@ fn resolve_e2e_env(
     let inherited = path
         .ok_or(env::VarError::NotPresent)
         .map_err(|error| anyhow::Error::new(error).context("reading PATH for e2e-local"))?;
-    let mut paths = Vec::new();
-    paths.push(root.join("target/debug"));
-    paths.extend(env::split_paths(&inherited));
-    let path = env::join_paths(paths).context("prepending target/debug to e2e-local PATH")?;
-    Ok((workers, path))
+    Ok((workers, inherited))
 }
 
 fn resolve_e2e_env_for_run(
     result: &mut CommandResult,
-    root: &Path,
     workers: Result<String, env::VarError>,
     path: Option<OsString>,
     stderr: &mut impl Write,
 ) -> Option<(String, OsString)> {
-    match resolve_e2e_env(root, workers, path, stderr) {
+    match resolve_e2e_env(workers, path, stderr) {
         Ok(values) => Some(values),
         Err(error) => {
             result.push(StepResult::fail("e2e-local-env").detail(format!(
@@ -638,10 +632,7 @@ fn run_lifecycle(
     let server_log_step = step_name(browser, "server-log");
     let server_step = step_name(browser, "server");
     let seed_step = step_name(browser, "seed");
-    let test_support_path = artifacts
-        .test_support
-        .as_deref()
-        .expect("e2e-local requests the test-support artifact");
+    let test_support_path = artifacts.test_support.as_path();
     let test_support = test_support_path.display().to_string();
     let retained = match allocate_retained_capture(root, browser, test_support_path) {
         Ok(retained) => retained,
@@ -847,7 +838,7 @@ fn run_lifecycle(
     result.push(StepResult::ok(&seed_step).with_duration(seed_start.elapsed()));
 
     // Playwright uses the same DB, storage root, capture directory, and
-    // target/debug-prefixed PATH as the server and VM contract.
+    // selected immutable seed executable on PATH, matching the VM contract.
     sh.change_dir(root.join("end2end"));
     let playwright_start = std::time::Instant::now();
     let mut playwright_result = Ok(());
@@ -923,13 +914,12 @@ pub fn run(
         result.push(StepResult::fail("e2e-local-platform").detail(detail));
         return;
     }
-    // Resolve the whole Playwright environment before any subprocess. Missing
-    // PATH is a configuration failure, not a late empty command search.
+    // Validate workers and inherited PATH before any subprocess. Add the selected
+    // bundle's bin only after selection, never a mutable checkout target.
     let env_root = sh.current_dir();
     let mut provenance = crate::e2e_provenance::Request::start(&env_root, "host-local");
     let Some((workers, path)) = resolve_e2e_env_for_run(
         result,
-        &env_root,
         env::var("JAUNDER_E2E_WORKERS"),
         env::var_os("PATH"),
         &mut std::io::stderr(),
@@ -946,16 +936,25 @@ pub fn run(
             return;
         }
     };
-    let Some(artifacts) = HostArtifacts::prepare_interruptible(
-        sh,
-        result,
-        HostArtifactConfig::e2e_local(plan.release_csr),
-        || signals.take_pending(),
-    ) else {
+    let Some(artifacts) =
+        HostArtifacts::prepare_interruptible(sh, result, plan.release_csr, &mut signals)
+    else {
         provenance.completed(false);
         return;
     };
 
+    let bin = artifacts._root.path().join("selected/bin");
+    let path = match env::join_paths(std::iter::once(bin).chain(env::split_paths(&path))) {
+        Ok(path) => path,
+        Err(error) => {
+            result.push(
+                StepResult::fail("e2e-local-env")
+                    .detail(format!("prepending immutable bundle bin: {error}")),
+            );
+            provenance.completed(false);
+            return;
+        }
+    };
     for lifecycle in &plan.lifecycles {
         if interrupted(result, &mut signals) {
             break;
@@ -983,7 +982,7 @@ fn interrupted(result: &mut CommandResult, signals: &mut ServerSignals) -> bool 
     result.exit_override.is_some()
 }
 
-fn run_consumer(
+pub(super) fn run_consumer(
     command: xshell::Cmd<'_>,
     result: &mut CommandResult,
     signals: &mut ServerSignals,
@@ -1030,7 +1029,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn cancellation_stops_owned_consumer_before_artifact_guard_release() {
-        use std::fs::{self, OpenOptions};
+        use std::fs;
 
         const CHILD: &str = "JAUNDER_E2E_CANCEL_PROBE";
         let child_directory = std::env::var_os(CHILD);
@@ -1064,17 +1063,14 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let shell = Shell::new().unwrap();
         let mut signals = ServerSignals::install().unwrap();
+        let retained = tempfile::tempdir().unwrap();
+        let retained_path = retained.path().to_path_buf();
         let artifacts = HostArtifacts {
             root: temp.path().to_path_buf(),
             jaunder: temp.path().join("unused"),
-            test_support: None,
-            _build_lock: Some(crate::steps::host_server::host_artifact_build_lock().unwrap()),
+            test_support: temp.path().join("unused-support"),
+            _root: retained,
         };
-        let peer = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(".xtask/host-artifacts.lock")
-            .unwrap();
         // A retained startup session is still an owned server and must be
         // stopped after the cancelled foreground consumer, before unlocking.
         use std::os::unix::fs::PermissionsExt;
@@ -1121,23 +1117,22 @@ while :; do :; done"#;
             fs::metadata(stopped).unwrap().is_file(),
             "consumer teardown completed"
         );
-        assert!(matches!(
-            peer.try_lock(),
-            Err(std::fs::TryLockError::WouldBlock)
-        ));
+        assert!(
+            retained_path.exists(),
+            "root held through foreground teardown"
+        );
         server.stop_interruptible(signals.next_signal()).unwrap();
         assert!(
             server.is_stopped(),
             "server teardown completes under held ownership"
         );
-        assert!(matches!(
-            peer.try_lock(),
-            Err(std::fs::TryLockError::WouldBlock)
-        ));
+        assert!(retained_path.exists(), "root held through server teardown");
         drop(server);
         drop(artifacts);
-        peer.try_lock()
-            .expect("consumer teardown precedes ownership release");
+        assert!(
+            !retained_path.exists(),
+            "root released after both consumers"
+        );
     }
 
     #[test]

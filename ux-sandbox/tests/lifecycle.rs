@@ -18,22 +18,34 @@ mod tests {
 
     fn fixture_root() -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
-        fs::create_dir_all(root.path().join("target/debug")).unwrap();
+        fs::create_dir_all(root.path().join("artifacts/bin")).unwrap();
         fs::create_dir(root.path().join("bin")).unwrap();
         for name in ["cargo", "just"] {
             executable(
                 &root.path().join("bin").join(name),
-                &format!(
-                    "#!/bin/sh\nexport UX_BUILD_TOOL={name}\nprintf '%s\\n' '{name}' \"$*\" >> build-calls\nexec \"$UX_FIXTURE_EXE\" --exact tests::build_fixture --nocapture\n"
-                ),
+                "#!/bin/sh\nprintf '%s\\n' unexpected >> build-calls\nexit 97\n",
             );
         }
+        executable(&root.path().join("bin/git"), "#!/bin/sh\nexit 0\n");
         executable(
-            &root.path().join("target/debug/jaunder"),
+            &root.path().join("bin/nix"),
+            concat!(
+                "#!/bin/sh\n",
+                "if [ \"$1\" = eval ]; then printf '%s' \"${UX_OMITTED_INPUTS:-[]}\"; exit 0; fi\n",
+                "printf '%s\\0' \"$@\" > nix-argv\n",
+                "[ \"$1 $2 $3 $4\" = 'build --no-update-lock-file --no-write-lock-file --out-link' ] || exit 98\n",
+                "[ \"$6\" = '.#sandboxArtifacts' ] || exit 99\n",
+                "export UX_SELECTED_LINK=\"$5\"\n",
+                "printf '%s' \"$5\" > selected-root\n",
+                "exec \"$UX_FIXTURE_EXE\" --exact tests::build_fixture --nocapture\n",
+            ),
+        );
+        executable(
+            &root.path().join("artifacts/bin/jaunder"),
             "#!/bin/sh\nexport UX_FIXTURE_MODE=\"$1\"\nprintf '%s\\0' \"$@\" > \"$UX_FIXTURE_ROOT/last-argv\"\nexec \"$UX_FIXTURE_EXE\" --exact tests::app_fixture --nocapture\n",
         );
         executable(
-            &root.path().join("target/debug/test-support"),
+            &root.path().join("artifacts/bin/test-support"),
             "#!/bin/sh\nprintf '%s\\0' \"$@\" > \"$UX_FIXTURE_ROOT/seed-argv\"\nexec \"$UX_FIXTURE_EXE\" --exact tests::seed_fixture --nocapture\n",
         );
         root
@@ -44,19 +56,20 @@ mod tests {
         let Ok(root) = std::env::var("UX_FIXTURE_ROOT") else {
             return;
         };
-        let lock = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(Path::new(&root).join(".xtask/host-artifacts.lock"))
-            .unwrap();
-        assert!(matches!(lock.try_lock(), Err(fs::TryLockError::WouldBlock)));
-        if std::env::var("UX_BUILD_TOOL").unwrap() == "just" {
-            fs::create_dir_all(Path::new(&root).join("target/site/.vite")).unwrap();
-            fs::write(
-                Path::new(&root).join("target/site/.vite/manifest.json"),
-                "{}",
-            )
-            .unwrap();
+        let link = std::env::var("UX_SELECTED_LINK").unwrap();
+        std::os::unix::fs::symlink(Path::new(&root).join("artifacts"), &link).unwrap();
+        fs::write(Path::new(&root).join("selection-started"), "").unwrap();
+        if std::env::var_os("UX_SELECTION_HOLD").is_some() {
+            tokio::runtime::Runtime::new().unwrap().block_on(async {
+                let mut term =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                        .unwrap();
+                fs::write(Path::new(&root).join("selection-listening"), "").unwrap();
+                term.recv().await;
+            });
+        }
+        if let Ok(code) = std::env::var("UX_SELECTION_EXIT") {
+            std::process::exit(code.parse().unwrap());
         }
     }
 
@@ -73,14 +86,11 @@ mod tests {
         );
         assert_eq!(std::env::var("JAUNDER_ENV").unwrap(), "dev");
         assert!(std::env::var_os("JAUNDER_TRUSTED_PROXIES").is_none());
-        let lock = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(Path::new(&root).join(".xtask/host-artifacts.lock"))
-            .unwrap();
-        lock.try_lock()
-            .expect("artifact preparation releases before app execution");
-        lock.unlock().unwrap();
+        let selected = fs::read_to_string(Path::new(&root).join("selected-root")).unwrap();
+        assert!(
+            Path::new(&selected).exists(),
+            "root must survive app execution"
+        );
         if mode == "init" {
             // Match the real init contract: it exclusively creates new storage.
             fs::create_dir(&storage).unwrap();
@@ -214,10 +224,11 @@ mod tests {
         assert_eq!(args[6], storage);
         assert_eq!(
             std::env::var("JAUNDER_TEST_EXECUTABLE").unwrap(),
-            format!("{root}/target/debug/jaunder")
+            format!("{root}/artifacts/bin/jaunder")
         );
         assert!(Path::new(&storage).join("initialized").is_file());
         fs::write(Path::new(&storage).join("seeded"), &args[4]).unwrap();
+        println!(r#"{{"posts":[],"media":[]}}"#);
         if std::env::var_os("UX_SEED_DESCENDANT").is_some() {
             let mut child = Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", "tests::descendant_fixture", "--nocapture"])
@@ -231,6 +242,47 @@ mod tests {
         }
         if let Ok(code) = std::env::var("UX_SEED_EXIT") {
             std::process::exit(code.parse().unwrap());
+        }
+    }
+
+    #[test]
+    fn profile_output_is_concise_on_create_resume_and_empty_sessions() {
+        let root = fixture_root();
+        for (args, hint) in [
+            (vec!["standard", "--profile", "standard"], true),
+            (vec!["standard"], true),
+            (vec!["demo", "--profile", "demo"], true),
+            (vec!["demo"], true),
+            (vec!["empty"], false),
+        ] {
+            let mut child = named_child(root.path(), &args);
+            let stdout = child.stdout.take().unwrap();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let reader = std::thread::spawn(move || {
+                let mut text = String::new();
+                for line in BufReader::new(stdout).lines() {
+                    let line = line.unwrap();
+                    if line.starts_with("Sandbox URL:") {
+                        tx.send(()).unwrap();
+                    }
+                    text.push_str(&line);
+                    text.push('\n');
+                }
+                text
+            });
+            rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            send_signal(child.id(), "-TERM");
+            assert_eq!(wait_child(&mut child).code(), Some(143));
+            let text = reader.join().unwrap();
+            assert_eq!(
+                text.contains("Sandbox credentials: user / jaunder-dev; operator / jaunder-dev"),
+                hint,
+                "{text}"
+            );
+            assert!(
+                !text.contains(r#"{"posts":[],"media":[]}"#),
+                "seed manifest leaked: {text}"
+            );
         }
     }
 
@@ -307,24 +359,104 @@ mod tests {
         command
     }
 
-    fn assert_artifact_lock_released(root: &Path) {
-        let file = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(root.join(".xtask/host-artifacts.lock"))
+    #[test]
+    fn failed_selection_never_uses_existing_artifacts_or_initializes_storage() {
+        let root = fixture_root();
+        fs::create_dir(root.path().join(".xtask")).unwrap();
+        let previous = root.path().join(".xtask/previous-artifacts");
+        std::os::unix::fs::symlink(root.path().join("artifacts"), &previous).unwrap();
+        let old = root.path().join(".xtask/sandboxes/.writing.reset-old");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("sentinel"), b"unrecovered generation").unwrap();
+        let output = helper(root.path())
+            .arg("writing")
+            .env("UX_SELECTION_EXIT", "37")
+            .env("UX_INIT_EXIT", "93")
+            .output()
             .unwrap();
-        file.try_lock()
-            .expect("failed preparation must release artifact exclusion");
+        assert_eq!(output.status.code(), Some(37), "{output:?}");
+        assert!(!root.path().join(".xtask/sandboxes/writing").exists());
+        assert!(!root.path().join("last-argv").exists());
+        assert!(!root.path().join("build-calls").exists());
+        assert!(previous.exists(), "foreign retained root must be untouched");
+        assert_eq!(
+            fs::read(old.join("sentinel")).unwrap(),
+            b"unrecovered generation"
+        );
+        assert_selection_retired(root.path());
     }
 
     #[test]
-    fn failed_build_status_returns_unchanged_in_all_three_modes_and_releases_locks() {
+    fn real_git_nix_admission_refuses_omitted_source_as_data_before_selection() {
+        let root = fixture_root();
+        for program in ["git", "nix"] {
+            fs::remove_file(root.path().join("bin").join(program)).unwrap();
+        }
+        fs::write(
+            root.path().join("flake.nix"),
+            r#"{
+          outputs = { self }: { packages = builtins.listToAttrs (map (name: {
+            inherit name;
+            value.sandboxArtifacts.sourceAdmits = path: kind:
+              builtins.match "server/.*" path != null;
+          }) [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ]); };
+        }"#,
+        )
+        .unwrap();
+        let git = |args: &[&str]| {
+            let mut command = Command::new("git");
+            command.current_dir(root.path()).args(args);
+            for name in [
+                "GIT_DIR",
+                "GIT_WORK_TREE",
+                "GIT_INDEX_FILE",
+                "GIT_OBJECT_DIRECTORY",
+                "GIT_COMMON_DIR",
+                "GIT_NAMESPACE",
+            ] {
+                command.env_remove(name);
+            }
+            let output = command.output().unwrap();
+            assert!(output.status.success(), "{output:?}");
+            output.stdout
+        };
+        git(&["init", "--quiet"]);
+        git(&["add", "flake.nix"]);
+        let relative = "server/src/space \"quote\" ${not-code}.rs";
+        fs::create_dir_all(root.path().join("server/src")).unwrap();
+        fs::write(root.path().join(relative), "not silently omitted").unwrap();
+        let output = helper(root.path()).arg("writing").output().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(relative), "{stderr}");
+        assert!(stderr.contains("git add -N"), "{stderr}");
+        assert!(output.stdout.is_empty(), "admission JSON leaked to stdout");
+        assert_eq!(git(&["ls-files", relative]), b"");
+        assert!(!root.path().join("selected-root").exists());
+        assert!(!root.path().join("last-argv").exists());
+        assert!(!root.path().join(".xtask/sandboxes/writing").exists());
+    }
+
+    fn assert_selection_retired(root: &Path) {
+        let selected = fs::read_to_string(root.join("selected-root")).unwrap();
+        assert!(
+            !Path::new(&selected).parent().unwrap().exists(),
+            "root retained after teardown"
+        );
+        assert!(!root.join(".xtask/host-artifacts.lock").exists());
+    }
+
+    #[test]
+    fn failed_selection_status_returns_unchanged_in_all_three_modes_and_releases_locks() {
         for args in [vec![], vec!["writing"], vec!["writing", "--", "backup"]] {
             let root = fixture_root();
-            executable(&root.path().join("bin/cargo"), "#!/bin/sh\nexit 37\n");
-            let output = helper(root.path()).args(&args).output().unwrap();
+            let output = helper(root.path())
+                .args(&args)
+                .env("UX_SELECTION_EXIT", "37")
+                .output()
+                .unwrap();
             assert_eq!(output.status.code(), Some(37), "{args:?}: {output:?}");
-            assert_artifact_lock_released(root.path());
+            assert_selection_retired(root.path());
             let locks = root.path().join(".xtask/sandboxes/.locks");
             assert_control_locks_released(&locks);
             assert!(!root.path().join(".xtask/sandboxes/writing").exists());
@@ -348,53 +480,37 @@ mod tests {
     }
 
     #[test]
-    fn interrupting_artifact_wait_keeps_caller_lock_and_releases_workspace_locks() {
+    fn interrupted_selection_discards_even_a_published_link_before_storage_work() {
         let root = fixture_root();
-        fs::create_dir(root.path().join(".xtask")).unwrap();
-        let path = root.path().join(".xtask/host-artifacts.lock");
-        let caller = fs::File::create(&path).unwrap();
-        caller.lock().unwrap();
         let mut child = helper(root.path())
             .arg("writing")
-            .stderr(Stdio::piped())
+            .env("UX_SELECTION_HOLD", "1")
+            .stdout(Stdio::null())
             .spawn()
             .unwrap();
-        let stderr = child.stderr.take().unwrap();
-        let (tx, rx) = std::sync::mpsc::channel();
-        let reader = std::thread::spawn(move || {
-            let line = BufReader::new(stderr).lines().next().unwrap().unwrap();
-            tx.send(line).unwrap();
-        });
-        let waiting = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert!(
-            waiting.starts_with("Waiting for host artifacts:"),
-            "{waiting}"
-        );
+        wait_for(&root.path().join("selection-listening"));
+        let selected = fs::read_to_string(root.path().join("selected-root")).unwrap();
+        assert!(Path::new(&selected).exists());
         send_signal(child.id(), "-INT");
         assert_eq!(wait_child(&mut child).code(), Some(130));
-        reader.join().unwrap();
-        let probe = fs::File::open(&path).unwrap();
-        assert!(matches!(
-            probe.try_lock(),
-            Err(fs::TryLockError::WouldBlock)
-        ));
+        assert_selection_retired(root.path());
         assert_control_locks_released(&root.path().join(".xtask/sandboxes/.locks"));
         assert!(!root.path().join("build-calls").exists());
-        caller.unlock().unwrap();
-        assert_artifact_lock_released(root.path());
+        assert!(!root.path().join("last-argv").exists());
+        assert!(!root.path().join(".xtask/sandboxes/writing").exists());
     }
 
     #[test]
     fn selected_non_executable_is_rejected_before_initialization() {
         let root = fixture_root();
-        let path = root.path().join("target/debug/jaunder");
+        let path = root.path().join("artifacts/bin/jaunder");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
         let output = helper(root.path()).output().unwrap();
         assert_eq!(output.status.code(), Some(1));
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("not an executable"), "{stderr}");
         assert!(stderr.contains(&path.display().to_string()), "{stderr}");
-        assert_artifact_lock_released(root.path());
+        assert_selection_retired(root.path());
         assert!(!root.path().join("storage").exists());
     }
 
@@ -413,7 +529,7 @@ mod tests {
             .unwrap();
         assert!(!Path::new(storage).exists());
         assert!(!Path::new(storage).parent().unwrap().exists());
-        assert_artifact_lock_released(root.path());
+        assert_selection_retired(root.path());
         assert!(!root.path().join("app-pid").exists());
     }
 
@@ -554,10 +670,9 @@ mod tests {
         );
         let storage = fs::read_to_string(root.path().join("storage")).unwrap();
         assert!(Path::new(&storage).exists());
-        assert_eq!(
-            fs::read_to_string(root.path().join("build-calls")).unwrap(),
-            "just\nbuild-csr debug\ncargo\nbuild --locked -p jaunder\ncargo\nbuild --locked -p test-support\n"
-        );
+        let selected = fs::read_to_string(root.path().join("selected-root")).unwrap();
+        assert!(Path::new(&selected).exists());
+        assert!(!root.path().join("build-calls").exists());
         let started = Instant::now();
         if unexpected {
             fs::write(root.path().join("exit-parent"), "").unwrap();
@@ -582,6 +697,7 @@ mod tests {
         let status = wait_child(&mut child);
         reader.join().unwrap();
         assert_eq!(status.code(), Some(expected));
+        assert_selection_retired(root.path());
         if descendant {
             if scenario == Scenario::EarlyForce {
                 assert!(started.elapsed() < Duration::from_secs(5));
@@ -857,7 +973,7 @@ mod tests {
     }
 
     #[test]
-    fn command_preparation_waits_for_the_existing_e2e_artifact_exclusion() {
+    fn command_selection_does_not_wait_for_existing_e2e_artifact_exclusion() {
         let root = fixture_root();
         legacy_workspace(root.path(), "writing");
         let lock = fs::OpenOptions::new()
@@ -870,30 +986,17 @@ mod tests {
         lock.try_lock().unwrap();
         let mut child = named_command(root.path(), &["writing", "--", "backup"])
             .stdout(Stdio::null())
-            .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        let stderr = child.stderr.take().unwrap();
-        let (tx, rx) = std::sync::mpsc::channel();
-        let reader = std::thread::spawn(move || {
-            for line in BufReader::new(stderr).lines() {
-                let line = line.unwrap();
-                if line.starts_with("Waiting for host artifacts:") {
-                    let _ = tx.send(line);
-                }
-            }
-        });
-        let waiting = rx.recv_timeout(Duration::from_secs(5));
-        assert!(
-            waiting.is_ok(),
-            "contender never acknowledged held artifact ownership"
-        );
-        assert!(!root.path().join("build-calls").exists());
-        assert!(!root.path().join("operation-writing").exists());
-        lock.unlock().unwrap();
         assert!(wait_child(&mut child).success());
-        reader.join().unwrap();
         assert!(root.path().join("operation-writing").exists());
+        assert!(!root.path().join("build-calls").exists());
+        let probe = fs::File::open(root.path().join(".xtask/host-artifacts.lock")).unwrap();
+        assert!(matches!(
+            probe.try_lock(),
+            Err(fs::TryLockError::WouldBlock)
+        ));
+        lock.unlock().unwrap();
     }
 
     struct Running {
@@ -957,10 +1060,9 @@ mod tests {
     }
 
     #[test]
-    fn stopped_commands_only_build_jaunder_and_forward_exact_argv_status() {
+    fn stopped_commands_select_the_bundle_and_forward_exact_argv_status() {
         let root = fixture_root();
         legacy_workspace(root.path(), "writing");
-        fs::remove_file(root.path().join("target/debug/test-support")).unwrap();
         for mode in [
             "site-config",
             "user-create",
@@ -984,10 +1086,8 @@ mod tests {
                 .collect();
             assert_eq!(fs::read(root.path().join("last-argv")).unwrap(), expected);
         }
-        assert_eq!(
-            fs::read_to_string(root.path().join("build-calls")).unwrap(),
-            "cargo\nbuild --locked -p jaunder\n".repeat(7)
-        );
+        assert!(!root.path().join("build-calls").exists());
+        assert_selection_retired(root.path());
         assert!(!root.path().join("target/site").exists());
         assert!(!root.path().join("injected").exists());
     }

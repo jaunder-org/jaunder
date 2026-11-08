@@ -1,12 +1,13 @@
-//! Build/select compatible debug artifacts under the existing checkout artifact lock.
+//! Select one immutable executable set and retain its root through consumer teardown.
 use crate::{
     session::{self, Signals},
     workspace,
 };
 use anyhow::{Context, ensure};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::Read,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
@@ -17,115 +18,150 @@ pub struct Artifacts {
     pub jaunder: PathBuf,
     pub support: Option<PathBuf>,
     pub digest: String,
+    pub(crate) _root: tempfile::TempDir,
 }
 pub enum Prepared {
     Ready(Artifacts),
     Exited(i32),
 }
 
-struct ArtifactLock {
-    file: File,
-    #[cfg(test)]
-    fail_acquire: bool,
-}
-impl ArtifactLock {
-    fn try_lock(&mut self) -> Result<(), fs::TryLockError> {
-        #[cfg(test)]
-        if std::mem::take(&mut self.fail_acquire) {
-            return Err(fs::TryLockError::Error(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "one-shot artifact lock failure",
-            )));
-        }
-        self.file.try_lock()
-    }
-    async fn acquire(&mut self, path: &Path, signals: &mut Signals) -> anyhow::Result<Option<i32>> {
-        let mut waiting = false;
-        loop {
-            match self.try_lock() {
-                Ok(()) => return Ok(None),
-                Err(fs::TryLockError::WouldBlock) => {
-                    if !waiting {
-                        eprintln!("Waiting for host artifacts: {}", path.display());
-                        waiting = true;
-                    }
-                    tokio::select! {
-                        code = signals.next() => return Ok(Some(code)),
-                        () = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
-                    }
-                }
-                Err(fs::TryLockError::Error(error)) => return Err(error.into()),
-            }
-        }
-    }
-}
-
 pub async fn prepare(server: bool, signals: &mut Signals) -> anyhow::Result<Prepared> {
     let root = std::env::current_dir()?.canonicalize()?;
-    workspace::directory(&root.join(".xtask"))?;
-    let lock_path = root.join(".xtask/host-artifacts.lock");
-    workspace::regular(&lock_path)?;
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&lock_path)?;
-    let mut lock = ArtifactLock {
-        file,
-        #[cfg(test)]
-        fail_acquire: false,
-    };
-    if let Some(code) = lock.acquire(&lock_path, signals).await? {
+    if let Some(code) = admit_untracked(&root, signals).await? {
         return Ok(Prepared::Exited(code));
     }
-    let mut builds = Vec::new();
-    if server {
-        builds.push(vec!["just", "build-csr", "debug"]);
+    workspace::directory(&root.join(".xtask"))?;
+    let retained = tempfile::Builder::new()
+        .prefix("sandbox-artifacts-")
+        .tempdir_in(root.join(".xtask"))?;
+    let link = retained.path().join("selected");
+    let mut command = checkout_command("nix", &root);
+    command
+        .args(["build", "--no-update-lock-file", "--no-write-lock-file"])
+        .arg("--out-link")
+        .arg(&link)
+        .arg(".#sandboxArtifacts");
+    let code = session::run(command, None, signals).await?;
+    if code != 0 {
+        return Ok(Prepared::Exited(code));
     }
-    builds.push(vec!["cargo", "build", "--locked", "-p", "jaunder"]);
-    if server {
-        builds.push(vec!["cargo", "build", "--locked", "-p", "test-support"]);
-    }
-    for argv in builds {
-        let mut command = Command::new(argv[0]);
-        command
-            .args(&argv[1..])
-            .env("CARGO_TARGET_DIR", root.join("target"))
-            .env_remove("JAUNDER_CSR_BUNDLE_DIR")
-            .env_remove("JAUNDER_PUBLIC_DIR");
-        let code = session::run(command, None, signals).await?;
-        if code != 0 {
-            lock.file.unlock()?;
-            return Ok(Prepared::Exited(code));
-        }
-    }
-    let jaunder = root.join("target/debug/jaunder");
-    let support = server.then(|| root.join("target/debug/test-support"));
-    for path in std::iter::once(&jaunder).chain(support.iter()) {
-        let metadata =
-            fs::metadata(path).with_context(|| format!("selecting {}", path.display()))?;
-        ensure!(
-            metadata.is_file() && metadata.permissions().mode() & 0o111 != 0,
-            "not an executable: {}",
-            path.display()
-        );
-        eprintln!("Selected {}", path.display());
-    }
-    if server {
-        ensure!(
-            root.join("target/site/.vite/manifest.json").is_file(),
-            "CSR build did not publish its debug site"
-        );
-    }
-    // Fingerprint the selected generation while the producer still has exclusion.
+    // This invocation owns a fresh link: failure cannot select an older root.
+    // Nix's bin entries are legitimate immutable symlinks, not workspace paths.
+    let jaunder = executable(&link.join("bin/jaunder"))?;
+    let support = server
+        .then(|| executable(&link.join("bin/test-support")))
+        .transpose()?;
     let digest = fingerprint(&jaunder)?;
-    lock.file.unlock()?;
     Ok(Prepared::Ready(Artifacts {
         jaunder,
         support,
         digest,
+        _root: retained,
     }))
+}
+
+#[derive(Serialize)]
+struct Candidate {
+    path: String,
+    kind: &'static str,
+}
+
+async fn admit_untracked(root: &Path, signals: &mut Signals) -> anyhow::Result<Option<i32>> {
+    let mut git = checkout_command("git", root);
+    git.args(["ls-files", "--others", "--exclude-standard", "-z"]);
+    let (code, paths) = session::output(git, signals).await?;
+    if code != 0 {
+        return Ok(Some(code));
+    }
+    let mut candidates = Vec::new();
+    for bytes in paths
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+    {
+        let path = std::str::from_utf8(bytes).context("untracked input path is not UTF-8")?;
+        let metadata = fs::symlink_metadata(root.join(path))
+            .with_context(|| format!("reading untracked input {path}"))?;
+        let kind = if metadata.is_symlink() {
+            "symlink"
+        } else if metadata.is_dir() {
+            "directory"
+        } else {
+            ensure!(
+                metadata.is_file(),
+                "unsupported untracked input type: {path}"
+            );
+            "regular"
+        };
+        candidates.push(Candidate {
+            path: path.into(),
+            kind,
+        });
+    }
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    // Match the existing Git-flake admission policy. Paths are JSON data in an
+    // environment variable, never interpolated into Nix expressions or shell text.
+    let mut nix = checkout_command("nix", root);
+    nix.args([
+        "eval",
+        "--impure",
+        "--json",
+        "--no-update-lock-file",
+        "--no-write-lock-file",
+        ".#sandboxArtifacts.sourceAdmits",
+        "--apply",
+        r#"sourceAdmits:
+let candidates = builtins.fromJSON (builtins.getEnv "JAUNDER_SANDBOX_UNTRACKED_INPUTS");
+in map (candidate: candidate.path)
+  (builtins.filter (candidate: sourceAdmits candidate.path candidate.kind) candidates)"#,
+    ])
+    .env(
+        "JAUNDER_SANDBOX_UNTRACKED_INPUTS",
+        serde_json::to_string(&candidates)?,
+    );
+    let (code, stdout) = session::output(nix, signals).await?;
+    if code != 0 {
+        return Ok(Some(code));
+    }
+    let omitted: Vec<String> =
+        serde_json::from_slice(&stdout).context("decoding Nix artifact source admission")?;
+    ensure!(
+        omitted.is_empty(),
+        "Git flakes omit untracked declared inputs: {}. Track them with git add (or git add -N) before invoking sandbox",
+        omitted.join(", ")
+    );
+    Ok(None)
+}
+
+fn checkout_command(program: &str, root: &Path) -> Command {
+    let mut command = Command::new(program);
+    command.current_dir(root);
+    for name in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_COMMON_DIR",
+        "GIT_NAMESPACE",
+    ] {
+        command.env_remove(name);
+    }
+    command
+}
+
+fn executable(path: &Path) -> anyhow::Result<PathBuf> {
+    let path = path
+        .canonicalize()
+        .with_context(|| format!("selecting {}", path.display()))?;
+    let metadata = fs::metadata(&path)?;
+    ensure!(
+        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0,
+        "not an executable: {}",
+        path.display()
+    );
+    eprintln!("Selected {}", path.display());
+    Ok(path)
 }
 
 fn fingerprint(path: &Path) -> anyhow::Result<String> {
@@ -146,40 +182,4 @@ fn fingerprint(path: &Path) -> anyhow::Result<String> {
         write!(&mut hex, "{byte:02x}")?;
     }
     Ok(hex)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn artifact_lock_error_is_not_cancellation_and_releases_the_descriptor() {
-        let file = tempfile::NamedTempFile::new().unwrap();
-        let mut lock = ArtifactLock {
-            file: file.reopen().unwrap(),
-            fail_acquire: true,
-        };
-        let mut signals = Signals::new().unwrap();
-        let error = lock.acquire(file.path(), &mut signals).await.unwrap_err();
-        assert_eq!(
-            error.downcast_ref::<std::io::Error>().unwrap().kind(),
-            std::io::ErrorKind::PermissionDenied
-        );
-        assert!(signals.status().is_none());
-        drop(lock);
-        let mut retry = ArtifactLock {
-            file: file.reopen().unwrap(),
-            fail_acquire: false,
-        };
-        assert_eq!(
-            retry.acquire(file.path(), &mut signals).await.unwrap(),
-            None
-        );
-        assert!(matches!(
-            file.as_file().try_lock(),
-            Err(fs::TryLockError::WouldBlock)
-        ));
-        retry.file.unlock().unwrap();
-        file.as_file().try_lock().unwrap();
-    }
 }
