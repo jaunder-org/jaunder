@@ -165,6 +165,20 @@ def test_no_drafts_or_staged_diff_never_formats_commits_pushes_or_creates(world)
     assert world.trace == ["ref", "list", "prepare", "promote", "diff"]
 
 
+def test_sdk_write_failure_is_accepted_only_after_exact_arm_postcondition(world, monkeypatch):
+    from github import GithubException
+    arm = world.api.arm
+    def failed_response(number, head):
+        arm(number, head)
+        raise GithubException(502, {"message": "response lost"})
+    monkeypatch.setattr(world.api, "arm", failed_response)
+    assert run(world).kind == "Created"
+    world.api.snapshots[8] = replace(world.api.snapshots[8], armed=False)
+    world.api.suppress.add("arm")
+    with pytest.raises(RuntimeError, match="did not verify"):
+        run(world)
+
+
 def test_created_observes_format_commit_push_create_arm_order(world):
     result = run(world)
     assert (result.kind, result.detail) == ("Created", "created and armed promoter PR 8")

@@ -1,108 +1,18 @@
-"""Small gh argv/JSON adapter; GitHub's response, not exit zero, is evidence."""
+"""Pinned PyGithub mechanics; only consumed evidence and queue policy projections."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import os
-import subprocess
 import sys
 
-
-class ApiError(RuntimeError):
-    def __init__(self, kind, detail):
-        self.kind = kind
-        super().__init__(detail)
-
-
-def _brief(text):
-    text = text.strip()
-    return text[:300] + ("…" if len(text) > 300 else "")
-
-
-def _invalid_constant(value):
-    raise ValueError(f"invalid JSON constant {value}")
+from github import Auth, Github, RateLimitExceededException, UnknownObjectException
+from github.GithubObject import GithubObject
 
 
 def decode_json(source):
-    # Match JSON's grammar rather than Python's optional NaN/Infinity extension.
-    return json.loads(source, parse_constant=_invalid_constant)
-
-
-def classify(code, stdout, stderr):
-    if code == 127 or "command not found" in stderr:
-        raise ApiError("missing", "`gh` is not on PATH")
-    valid_json = True
-    try:
-        body = decode_json(stdout.strip())
-    except ValueError:
-        body, valid_json = None, False
-    errors = body.get("errors") if isinstance(body, dict) else None
-    if isinstance(errors, list) and errors:
-        if any(isinstance(error, dict) and error.get("type") == "NOT_FOUND" for error in errors):
-            raise ApiError("not-found", "not found")
-        raise ApiError("graphql", "graphql: " + json.dumps(errors))
-    if code == 0:
-        # JSON null is valid JSON; an empty/malformed stream is not.
-        if not valid_json:
-            raise ApiError("malformed", "malformed response: " + _brief(stdout))
-        return body
-    if isinstance(body, dict) and isinstance(body.get("status"), str):
-        status = body["status"]
-        message = body.get("message") if isinstance(body.get("message"), str) else ""
-        if status == "401":
-            raise ApiError("auth", "`gh` is not authenticated")
-        if status == "404":
-            raise ApiError("not-found", "not found")
-        if status == "403" and "rate limit" in message.lower():
-            raise ApiError("rate-limit", "rate limited")
-        raise ApiError("transport", f"transport: HTTP {status}: {message}")
-    if stderr.strip().startswith("gh: "):
-        raise ApiError("graphql", "graphql: " + stderr.strip()[4:])
-    raise ApiError("transport", "transport: " + _brief(stderr))
-
-
-def spawn(arguments):
-    try:
-        result = subprocess.run(["gh", *arguments], capture_output=True, check=False)
-    except FileNotFoundError as error:
-        raise ApiError("missing", "`gh` is not on PATH") from error
-    except OSError as error:
-        raise ApiError("transport", f"could not run gh: {error}") from error
-    return result.returncode, result.stdout.decode("utf-8", errors="replace"), result.stderr.decode("utf-8", errors="replace")
-
-
-def _with_reset(error):
-    if error.kind != "rate-limit":
-        return error
-    try:
-        value = classify(*spawn(["api", "rate_limit"]))
-        resources = value["resources"]
-        resources = resources if isinstance(resources, dict) else {}
-        resets = [bucket["reset"] for name in ("graphql", "core")
-                  if isinstance(bucket := resources.get(name), dict)
-                  and type(bucket.get("remaining")) is int and bucket["remaining"] == 0
-                  and type(bucket.get("reset")) is int and 0 <= bucket["reset"] <= 0xFFFFFFFFFFFFFFFF]
-        if resets:
-            return ApiError("rate-limit", f"rate limited until {max(resets)} (unix)")
-    except (ApiError, KeyError, TypeError, AttributeError):
-        # One best-effort lookup, never a retry of the failed privileged request.
-        print("xtask: warning: xtask.pr.rate_limit_reset: ignored failure while looking up rate-limit reset", file=sys.stderr)
-    return error
-
-
-def request(*arguments):
-    try:
-        return classify(*spawn(arguments))
-    except ApiError as error:
-        raise _with_reset(error)
-
-
-def write(*arguments):
-    code, stdout, stderr = spawn(arguments)
-    if code != 0:
-        try:
-            classify(code, stdout, stderr)
-        except ApiError as error:
-            raise _with_reset(error)
+    def invalid(value):
+        raise ValueError(f"invalid JSON constant {value}")
+    return json.loads(source, parse_constant=invalid)
 
 
 @dataclass(frozen=True)
@@ -167,9 +77,15 @@ def text(value, *keys):
 
 
 def unsigned(value, name):
-    if type(value) is not int or not 0 <= value <= 0xFFFFFFFFFFFFFFFF:
+    if type(value) is not int or value < 0:
         raise ValueError(f"GitHub response has no unsigned integer {name}")
     return value
+
+
+def response(obj):
+    # The base accessor reads the acquired response without CompletableGithubObject's
+    # implicit completion request. Missing consumed evidence must fail, not load more.
+    return GithubObject.raw_data.fget(obj)
 
 
 def parse_pr(value):
@@ -179,21 +95,17 @@ def parse_pr(value):
     return PullRequest(
         unsigned(at(value, "number"), "number"), text(value, "head", "repo", "owner", "login"),
         text(value, "user", "login"), text(value, "head", "ref"), text(value, "head", "sha"),
-        text(value, "base", "ref"), at(value, "body") if isinstance(at(value, "body"), str) else "",
-        state == "open",
+        text(value, "base", "ref"), at(value, "body") if isinstance(at(value, "body"), str) else "", state == "open",
     )
 
 
 def parse_checks(nodes):
     if not isinstance(nodes, list):
-        return ()
+        raise ValueError("missing check context nodes")
     checks = []
     for node in nodes:
         name = at(node, "name")
         if isinstance(name, str):
-            if at(node, "checkSuite", "app", "slug") == "github-actions":
-                unsigned(at(node, "databaseId"), "check databaseId")
-                unsigned(at(node, "checkSuite", "workflowRun", "databaseId"), "workflow run databaseId")
             state = "pending" if at(node, "status") != "COMPLETED" else (
                 "success" if at(node, "conclusion") in ("SUCCESS", "NEUTRAL", "SKIPPED") else "failure"
             )
@@ -203,83 +115,41 @@ def parse_checks(nodes):
             started = at(node, "createdAt")
             completed = started if state != "pending" else None
         else:
-            continue
-        checks.append(Check(name, state, started if isinstance(started, str) else None,
-                            completed if isinstance(completed, str) else None))
+            raise ValueError("check context has no identity")
+        checks.append(Check(name, state, started, completed))
     return tuple(checks)
 
 
-def parse_snapshot(value):
-    pr = at(value, "data", "repository", "pullRequest")
-    if not isinstance(pr, dict):
-        raise ValueError("no pullRequest node in response")
+def parse_snapshot(pr, checks):
     number = unsigned(at(pr, "number"), "PR number")
     state = at(pr, "state")
-    if number == 0 or state not in ("OPEN", "MERGED", "CLOSED") or type(at(pr, "isInMergeQueue")) is not bool:
+    if not number or state not in ("OPEN", "MERGED", "CLOSED") or type(at(pr, "isInMergeQueue")) is not bool:
         raise ValueError("pull request has invalid number, state or isInMergeQueue")
-    nodes = at(pr, "commits", "nodes")
-    if not isinstance(nodes, list) or not nodes:
-        raise ValueError("no head commit in response")
-    head = at(nodes[0], "commit")
-    text(head, "committedDate")
-    mergeable = at(pr, "mergeable")
-    merge_state = at(pr, "mergeStateStatus")
     return Snapshot(
-        number, state, at(pr, "headRefName") if isinstance(at(pr, "headRefName"), str) else "",
-        text(head, "oid"), text(pr, "baseRefOid"),
-        mergeable if mergeable in ("MERGEABLE", "CONFLICTING") else "UNKNOWN",
-        merge_state if merge_state in ("BEHIND", "BLOCKED", "CLEAN", "DIRTY", "DRAFT", "HAS_HOOKS", "UNSTABLE") else "UNKNOWN",
-        isinstance(at(pr, "autoMergeRequest", "enabledAt"), str), pr["isInMergeQueue"],
-        parse_checks(at(pr, "statusCheckRollup", "contexts", "nodes")),
+        number, state, text(pr, "headRefName"), text(pr, "headRefOid"), text(pr, "baseRefOid"),
+        at(pr, "mergeable") or "UNKNOWN", at(pr, "mergeStateStatus") or "UNKNOWN",
+        isinstance(at(pr, "autoMergeRequest", "enabledAt"), str), pr["isInMergeQueue"], checks,
     )
 
 
-def parse_rules(value):
-    if not isinstance(value, list):
-        raise ValueError("branch rules response is not an array")
-    status = next((rule for rule in value if at(rule, "type") == "required_status_checks"), {})
-    entries = at(status, "parameters", "required_status_checks")
-    contexts = tuple(entry["context"] for entry in entries if isinstance(at(entry, "context"), str)) if isinstance(entries, list) else ()
-    return Rules(contexts, any(at(rule, "type") == "merge_queue" for rule in value))
-
-
+CONTEXTS = '''statusCheckRollup { contexts(first:100, after:$after) {
+  nodes {
+    ... on CheckRun { name conclusion status startedAt completedAt }
+    ... on StatusContext { context state createdAt }
+  }
+  pageInfo { hasNextPage endCursor }
+} }'''
 PR_QUERY = '''query($owner:String!,$name:String!,$number:Int!,$after:String){
-  repository(owner:$owner,name:$name){
-    pullRequest(number:$number){
-      number state mergedAt mergeCommit { oid } mergeable mergeStateStatus
-      isInMergeQueue mergeQueueEntry { position } autoMergeRequest { enabledAt }
-      headRefName baseRefOid
-      commits(last:1){ nodes { commit { oid committedDate } } }
-      statusCheckRollup {
-        contexts(first:100, after:$after){
-          nodes {
-            __typename
-            ... on CheckRun { databaseId name conclusion status detailsUrl startedAt completedAt checkSuite { app { slug } workflowRun { databaseId } } }
-            ... on StatusContext { context state targetUrl createdAt }
-          }
-          pageInfo { hasNextPage endCursor }
-        }
-      }
-    }
-  }
+  repository(owner:$owner,name:$name){ pullRequest(number:$number){
+    number state mergeable mergeStateStatus isInMergeQueue autoMergeRequest { enabledAt }
+    headRefName headRefOid baseRefOid
+    ''' + CONTEXTS + '''
+  } }
 }'''
-
-COMMIT_CHECKS_QUERY = '''query($owner:String!,$name:String!,$oid:GitObjectID!){
-  repository(owner:$owner,name:$name){
-    object(oid:$oid){
-      ... on Commit {
-        oid statusCheckRollup {
-          contexts(first:100){
-            nodes {
-              __typename
-              ... on CheckRun { databaseId name conclusion status detailsUrl startedAt completedAt checkSuite { app { slug } workflowRun { databaseId } } }
-              ... on StatusContext { context state targetUrl createdAt }
-            }
-          }
-        }
-      }
-    }
-  }
+COMMIT_CHECKS_QUERY = '''query($owner:String!,$name:String!,$oid:GitObjectID!,$after:String){
+  repository(owner:$owner,name:$name){ object(oid:$oid){ ... on Commit {
+    oid ''' + CONTEXTS + '''
+  } } }
 }'''
 
 
@@ -287,87 +157,126 @@ COMMIT_CHECKS_QUERY = '''query($owner:String!,$name:String!,$oid:GitObjectID!){
 class Repository:
     owner: str
     name: str
+    client: object
+    repo: object
 
     @classmethod
     def from_environment(cls):
-        slug = os.environ.get("GITHUB_REPOSITORY")
-        if slug is None:
-            raise ValueError("GITHUB_REPOSITORY is not set")
-        parts = slug.split("/", 1)
+        slug = os.environ.get("GITHUB_REPOSITORY", "")
+        parts = slug.split("/")
         if len(parts) != 2 or not all(parts):
             raise ValueError("GITHUB_REPOSITORY must be owner/repository")
-        return cls(*parts)
+        token = os.environ.get("GH_TOKEN")
+        if not token:
+            raise ValueError("GH_TOKEN installation token is not set")
+        client = Github(auth=Auth.Token(token), retry=None, per_page=100)
+        return cls(*parts, client, client.get_repo(slug, lazy=True))
 
-    @property
-    def slug(self):
-        return f"{self.owner}/{self.name}"
-
-    def _lookup(self, parse, *arguments):
-        # Only typed NOT_FOUND is absence; a successful null body is malformed.
+    def _call(self, operation, *args, **kwargs):
         try:
-            value = request(*arguments)
-        except ApiError as error:
-            if error.kind == "not-found":
-                return None
+            return operation(*args, **kwargs)
+        except RateLimitExceededException as error:
+            try:
+                limits = self.client.get_rate_limit().resources
+                resets = [bucket.reset.timestamp() for bucket in (limits.core, limits.graphql) if bucket.remaining == 0]
+            except Exception:
+                print("xtask: warning: xtask.pr.rate_limit_reset: ignored failure while looking up rate-limit reset", file=sys.stderr)
+            else:
+                if resets:
+                    raise RuntimeError(f"rate limited until {int(max(resets))} (unix)") from error
             raise
-        return parse(value)
 
-    def _graphql(self, query, key, value):
-        return ("api", "graphql", "-f", f"query={query}", "-f", f"owner={self.owner}",
-                "-f", f"name={self.name}", "-F" if key == "number" else "-f", f"{key}={value}")
+    def _lookup(self, operation, *args):
+        # Absence is permitted only for PR/snapshot/ref lookup, never acquisition.
+        try:
+            return self._call(operation, *args)
+        except UnknownObjectException:
+            return None
 
     def open_prs(self, branch, base):
-        value = request("api", "--method", "GET", f"/repos/{self.slug}/pulls", "-f", "state=open",
-                        "-f", f"head={self.owner}:{branch}", "-f", f"base={base}")
-        if not isinstance(value, list):
-            raise ValueError("promoter PR list is not an array")
-        return [parse_pr(pr) for pr in value]
+        return self._call(lambda: [parse_pr(response(pr)) for pr in self.repo.get_pulls(
+            state="open", head=f"{self.owner}:{branch}", base=base).get_page(0)])
 
     def get_pr(self, number):
-        return self._lookup(parse_pr, "api", f"/repos/{self.slug}/pulls/{number}")
+        return self._lookup(lambda: parse_pr(response(self.repo.get_pull(number))))
+
+    def _evidence(self, query, key, value, node_name):
+        after, seen, checks, identity = None, set(), (), None
+        for _ in range(100):
+            _, data = self._call(self.client.requester.graphql_query, query,
+                                 {"owner": self.owner, "name": self.name, key: value, "after": after})
+            node = at(data, "data", "repository", node_name)
+            current = parse_snapshot(node, ()) if node_name == "pullRequest" else text(node, "oid")
+            if identity is not None and identity != current:
+                raise ValueError("GitHub evidence identity changed during pagination")
+            identity = current
+            rollup = at(node, "statusCheckRollup")
+            if rollup is None:
+                return identity, checks
+            connection = at(rollup, "contexts")
+            checks += parse_checks(at(connection, "nodes"))
+            page = at(connection, "pageInfo")
+            if type(at(page, "hasNextPage")) is not bool:
+                raise ValueError("missing GraphQL pagination evidence")
+            if not page["hasNextPage"]:
+                return identity, checks
+            after = text(page, "endCursor")
+            if after in seen:
+                raise ValueError("repeated GraphQL pagination cursor")
+            seen.add(after)
+        raise ValueError("GraphQL pagination bound exceeded")
 
     def snapshot(self, number):
-        result = self._lookup(parse_snapshot, *self._graphql(PR_QUERY, "number", number))
+        result = self._lookup(self._evidence, PR_QUERY, "number", number, "pullRequest")
         if result is None:
             return None
-        if result.number != number:
+        snapshot, checks = result
+        if snapshot.number != number:
             raise ValueError("pull request number does not match requested PR")
-        return result
+        return replace(snapshot, checks=checks)
 
     def ref_head(self, branch):
-        return self._lookup(lambda value: text(value, "object", "sha"),
-                            "api", f"/repos/{self.slug}/git/ref/heads/{branch}")
+        return self._lookup(lambda: text(response(self.repo.get_git_ref(f"heads/{branch}")), "object", "sha"))
 
     def rules(self, base):
-        return parse_rules(request("api", f"/repos/{self.slug}/rules/branches/{base}"))
+        # PyGithub has no effective-branch-rules method; use its authenticated requester.
+        _, rules = self._call(self.client.requester.requestJsonAndCheck, "GET",
+                              f"/repos/{self.owner}/{self.name}/rules/branches/{base}")
+        if not isinstance(rules, list):
+            raise ValueError("branch rules response is not an array")
+        status = next((rule for rule in rules if at(rule, "type") == "required_status_checks"), {})
+        entries = at(status, "parameters", "required_status_checks") or []
+        return Rules(tuple(text(entry, "context") for entry in entries),
+                     any(at(rule, "type") == "merge_queue" for rule in rules))
 
     def checks(self, sha):
-        value = request(*self._graphql(COMMIT_CHECKS_QUERY, "oid", sha))
-        commit = at(value, "data", "repository", "object")
-        return CommitChecks(text(commit, "oid"), parse_checks(at(commit, "statusCheckRollup", "contexts", "nodes")))
+        identity, checks = self._evidence(COMMIT_CHECKS_QUERY, "oid", sha, "object")
+        return CommitChecks(identity, checks)
 
     def merge_groups(self, base, number, head):
-        value = request("api", f"/repos/{self.slug}/actions/runs?event=merge_group&per_page=100")
-        runs = at(value, "workflow_runs")
-        prefix = f"gh-readonly-queue/{base}/pr-{number}-"
-        candidates = sorted({run["head_sha"] for run in runs if at(run, "event") == "merge_group"
-                             and isinstance(at(run, "head_branch"), str) and run["head_branch"].startswith(prefix)
-                             and isinstance(at(run, "head_sha"), str)}) if isinstance(runs, list) else []
-        correlated = []
-        # Branch suffixes identify a base, not the PR head: prove exact parents.
-        for candidate in candidates:
-            commit = request("api", f"/repos/{self.slug}/commits/{candidate}")
-            parents = at(commit, "parents")
-            if at(commit, "sha") == candidate and isinstance(parents, list) and any(at(parent, "sha") == head for parent in parents):
-                correlated.append(candidate)
-        return correlated
+        def acquire():
+            # Explicit first 100 only: iterating PaginatedList would broaden policy.
+            runs = self.repo.get_workflow_runs(event="merge_group").get_page(0)
+            prefix = f"gh-readonly-queue/{base}/pr-{number}-"
+            candidates = sorted({text(run, "head_sha") for obj in runs
+                                 if at(run := response(obj), "event") == "merge_group"
+                                 and text(run, "head_branch").startswith(prefix)})
+            correlated = []
+            for candidate in candidates:
+                commit = response(self.repo.get_commit(candidate))
+                parents = at(commit, "parents")
+                if not isinstance(parents, list):
+                    raise ValueError("merge-group commit has no parents")
+                if text(commit, "sha") == candidate and any(text(parent, "sha") == head for parent in parents):
+                    correlated.append(candidate)
+            return correlated
+        return self._call(acquire)
 
     def create(self, branch, base, title, marker):
-        write("pr", "create", "--repo", self.slug, "--head", branch, "--base", base,
-              "--title", title, "--body", marker)
+        self._call(self.repo.create_pull, head=branch, base=base, title=title, body=marker)
 
     def arm(self, number, head):
-        write("pr", "merge", str(number), "--repo", self.slug, "--auto", "--merge", "--match-head-commit", head)
+        self._call(lambda: self.repo.get_pull(number).enable_automerge(merge_method="MERGE", expected_head_oid=head))
 
     def close(self, number):
-        write("pr", "close", str(number), "--repo", self.slug)
+        self._call(lambda: self.repo.get_pull(number).edit(state="closed"))

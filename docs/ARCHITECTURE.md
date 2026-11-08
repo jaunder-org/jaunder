@@ -5383,10 +5383,9 @@ that replaces the heading token, `promote` rewrites a `- Status: proposed` line
 to `accepted`. Any other token a draft carries — `superseded`, `rejected`,
 `deprecated` — is a deliberate authorial claim and survives untouched. The
 rewrite alone would not hold the property, so `adr-format` enforces the other
-half by rejecting `proposed` on any numbered file; rewrite, gate, and table
-renderer share one status-line parse, so they cannot disagree about which line
-they are reading (`xtask/src/adr.rs:81`, `xtask/src/adr_readme/files.rs:125`,
-`xtask/src/adr_readme/files.rs:213`).
+half by rejecting `proposed` on any numbered file. Python's rewrite and table
+projection preserve the status rule; independent Rust format/parity gates remain
+the read-only check on the resulting documents.
 
 Identifier collisions remain loud
 ([ADR-0036](adr/0036-identifier-collision-policy.md)): the
@@ -5398,8 +5397,8 @@ ephemeral queue branch and runs the required checks
 ([ADR-0077](adr/0077-adopt-github-merge-queue.md)).
 
 The ADR index table in `docs/README.md` is a generated projection of the ADR
-files' headings and Status lines: `cargo xtask adr sync-readme`, invoked by
-promotion, regenerates the number, link, and status cells between
+files' headings and Status lines: the selected Python package's `sync-readme`,
+invoked by promotion, regenerates the number, link, and status cells between
 `<!-- adr-table:begin/end -->` markers; titles stay hand-curated, and the
 `adr-readme-parity` gate keeps table and directory in agreement, naming
 `sync-readme` as its recovery
@@ -5425,100 +5424,83 @@ repo-root identity `docs/adr/drafts/<slug>.md`. Promotion rewrites those path
 forms to the numbered destination; a bare draft token or a different path form
 would survive pointing at nothing.
 
-### Host-side ADR promoter extraction — partial implementation
+### Host-side ADR promoter extraction — branch implementation, not shipped
 
-In this branch, `.github/workflows/adr-promoter.yml` invokes `just adr-promoter`
-through its unchanged CI-shell entry. This implementation has not yet been
-delivered to or observed on trusted `main`. The Nix-selected Python package
-under `tools/adr-promoter/` owns controller policy, promotion and README
-synchronization; `cargo xtask adr promote`, `adr sync-readme`, and the temporary
-PR 1 `adr promoter` spelling are fixed delegates to that package. Disposable
-tracked-repository tests cover complete promotion bytes, staging, curated README
-titles, and the existing read-only Rust gates. Both delegate and direct package
-actions reject nonignored untracked tooling inputs through the package's actual
-Nix source predicate; tracked dirt and unrelated inputs do not require a clean
-tree. Generation separately retains its existing clean-worktree and fresh-main
-guard. The numberless ADR remains proposed; this is a verified implementation
-boundary, not a claim of shipped workflow migration or trusted-main delivery.
-See the
-[Python ADR promoter draft](adr/drafts/adr-promoter-host-tool-extraction.md).
+In this branch, `.github/workflows/adr-promoter.yml` selects the Python package
+directly, without a CI devShell or Just hop:
 
-The `just adr-promoter` recipe now selects an implemented Python controller.
-Offline fake Git/`gh` tests cover generation, immutable-attempt recovery,
-exact-head dequeue re-arm, expected-OID leases and verified postconditions,
-including commands that fail after completing their intended state change. The
-controller calls the same Python mutations; staged Markdown formatting,
-restaging, commit and publication order are exercised with fake children, not
-live credentials or refs. The branch workflow selects this recipe, but no
-trusted-main Python controller operation has been observed:
-
-```just
-adr-promoter:
-    nix run --accept-flake-config --no-update-lock-file --no-write-lock-file .#adr-promoter -- controller
+```text
+nix run --accept-flake-config --no-update-lock-file --no-write-lock-file .#adr-promoter -- controller
 ```
 
-The package uses the locked Python 3.14.7 / Marko 2.2.4 / pytest 9.1.1 set and
-supplies `gh` 2.100.0, Git 2.55.0 and Prettier 3.9.6. Marko's GFM AST supplies
-link/image destination spans, including table cells; a tested
-character-to-original-byte map permits patching original bytes without Markdown
-serialization. The Python controller uses the App-token `gh` GraphQL path and
-expected-OID Git CLI leases. The branch workflow retains the existing CI-shell
-entry and calls `just adr-promoter`, not an ambient PATH executable.
+The single standard `buildPythonApplication` under `tools/adr-promoter/` owns
+controller policy, promotion and README synchronization. It uses locked Python
+3.14.7, Marko 2.2.4 and PyGithub 2.8.1, with pinned Git/Prettier on its wrapped
+entry point's PATH. PyGithub supplies transport, App-token authentication and
+errors (`Auth.Token`, `retry=None`); auto-merge supplies `expected_head_oid`.
+Only consumed queue/check observations absent from SDK methods use GraphQL, with
+explicit bounded paging. Merge-group acquisition explicitly consumes the first
+page of 100 runs, never automatic SDK iteration or implicit object loads. Policy
+retains exact identity/parent/check correlation, pending-rerun precedence,
+narrow lookup absence, rate-limit diagnostics and verified write postconditions.
 
-Rust keeps the read-only `adr-format`, README/view parity, `doc-links`, and
-sequence/collision gates. `cargo xtask adr promote` and `sync-readme` remain
-fixed-operation delegates to the selected Python package. The old
-`cargo xtask adr promoter` spelling temporarily delegates during PR 1;
-`CONTRIBUTING.md`'s authorized controller-rerun guidance now uses Just. PR 2
-removes the temporary spelling only after trusted-main execution is observed.
-The manual-promotion prohibition and `sync-readme` recovery command remain. Rust
-owns no mutation; its historical controller policy and controller-only Git
-helpers are dormant under `cfg(test)`, retaining tests until PR 2 retirement.
-Ordinary PR observation belongs to `tools/pr-observer`, with landing exposed
-through `just pr-land`. xtask retains the shared `gh` transport seam for
-performance queries and a native compatibility wrapper used by its test-only
-promoter armer; the Python CLI adapter is narrow and does not add a general SDK
-or RPC protocol.
+One Python admission path consumes the authoritative Nix source predicate before
+mutation. Tracked dirt and unrelated inputs do not require a clean tree;
+generation separately retains clean-worktree and fresh-main guards. Marko GFM
+link/image destination spans, including table cells, map back to original bytes;
+there is no AST serialization or fallback scanner. The approved exclusions are
+orphan textual link substrings, indented code and multiline code spans.
+Promotion retains allocation, heading/admission-before-move ordering, complete
+staging, curated README titles, warnings and staged Prettier-before-commit
+ordering.
 
-The existing authority, successful safe-refusal outcomes, generation coalescing,
-immutable head/diff, exact recovery/check correlation, deterministic mutation
-and promotion-as-acceptance remain. PR 1 adds the selected package, switches the
-workflow and replaces Rust mutation bodies with delegates; PR 2 removes the
-obsolete Rust controller and temporary controller frontdoor after trusted-main
-execution is observed. Approval-visible parser differences include malformed
-orphan `](...)` text, links in indented code blocks, and links inside multiline
-code spans: Marko recognizes no inline link there, while the existing Rust
-scanner may rewrite the substring. The probe found no span/target differences in
-295 tracked Markdown files, but that corpus result is not universal parser
-equivalence. Human approved these Marko parser-eligibility differences via
-`cd55b65a-4f7d-426d-991a-04cc256ec206` / `issue-1897-python-design-v2` at
-baseline `82bd37273dd533026fbf07f0121865fe254583a8`. PR 1 delivery, trusted-main
-observation and legacy controller retirement remain prospective, not shipped
-behavior or privilege/merge approval. Both PRs retain independent exact-head
-human merge gates.
+Rust public `adr promote`, `adr sync-readme` and `adr promoter`, their
+delegates, and the dormant controller/armer and exclusive helpers are removed
+together. Recovery uses the selected package's `sync-readme` action:
+
+```text
+nix run --accept-flake-config --no-update-lock-file --no-write-lock-file .#adr-promoter -- sync-readme
+```
+
+Feature authors still must not promote. Rust keeps independent read-only
+`adr-format`, README/view parity, document-link and collision gates. Ordinary PR
+observation stays in `tools/pr-observer`; xtask retains the actual shared
+read-only GitHub transport consumer for performance evidence. No cross-project
+logic changes or dormant fallback are part of this extraction.
+
+Tests cover project-owned evidence selection, correlation, refusal/outcome and
+postcondition policy, expected-head/retry arguments, byte outputs, staging and
+admission. Real Git checks exercise our lease/conflict invocation and policy;
+one selected-package smoke covers runtime integration. Dependency mechanics are
+trusted, not reconstructed as provider/retry or fake route matrices.
+
+This branch is not delivered to or observed on trusted `main`; the numberless
+[Python ADR promoter draft](adr/drafts/adr-promoter-host-tool-extraction.md)
+remains proposed. One cohesive PR #1917 requires its separate exact-head human
+merge gate, then trusted-main observation as rollout acceptance. Trusted App
+scope, immutable attempts, distinct generation/per-PR coalescing, queue-only
+writes to `main` and promotion-as-acceptance remain unchanged.
 
 ### Proposed final simplification — approved design, not shipped
 
 The
 [revised #1897 promoter proposal](superpowers/specs/2026-11-08-issue-1897-promoter-simplification.md)
-would replace the custom GitHub transport/schema layer with locked PyGithub,
-keep queue correlation and authorization policy custom, use one Python admission
-path over the authoritative Nix membership predicate, and invoke the selected
-Python package directly (without the CI devShell/Just hop). It would retire the
-public Rust `cargo xtask adr promote` and `sync-readme` commands, moving
-recovery to the package's `sync-readme` action. These are approved design
-choices, including a public command change, under human response via
+defines the branch implementation above: locked PyGithub replaces the custom
+GitHub transport/schema layer; queue correlation and authorization remain
+custom. One Python admission path consumes the Nix predicate; the package is
+invoked directly. Rust public mutation commands are retired, moving recovery to
+the package's `sync-readme` action. These are approved design choices, including
+a public command change, under human response via
 `9c324a59-7b2c-4519-925a-927c9c89816f` / `issue-1897-simplification-design-v2`:
 “Approve with this boundary.” This resolves qualification `ace338e3` for this
 exact design boundary only. The human approved one cohesive PR via
 `2ee4041c-3fd5-4481-9748-b1beb36c8899` / `issue-1897-single-pr-v1`: “Use one
 cohesive PR.” This supersedes only the two-PR/observe-before-retirement
-ordering. It does not describe this branch's current implementation: the
-preceding subsection remains the current branch state and explicitly
-distinguishes it from prospective trusted-main delivery. The unchanged
-controller/promotion contract and exact proposal limits are recorded in the
-linked spec. Tests target promoter behavior and integration, not SDK/library
-internals. The human approved the revised outline and implementation via
+ordering. The preceding subsection describes the current branch implementation,
+not prospective trusted-main delivery. The unchanged controller/promotion
+contract and exact proposal limits are recorded in the linked spec. Tests target
+promoter behavior and integration, not SDK/library internals. The human approved
+the revised outline and implementation via
 `89ec8287-4f38-479c-bcbd-24cf540bfc7c` / `issue-1897-simplification-outline-v2`,
 for the exact reviewed outline and only its stated scope. The cohesive PR has
 one exact-head merge gate; observe trusted-main operation after merge as rollout

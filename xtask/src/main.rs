@@ -24,19 +24,6 @@ fn main() {
         eprintln!("--json is not supported for `{}`", cli.command_name());
         std::process::exit(2);
     }
-    if let Some(result) = xtask::adr_mutation_status(&cli.command) {
-        use std::os::unix::process::ExitStatusExt;
-        let code = match result {
-            Ok(status) => status
-                .code()
-                .unwrap_or_else(|| 128 + status.signal().unwrap_or(1)),
-            Err(error) => {
-                eprintln!("xtask: {error:#}");
-                1
-            }
-        };
-        std::process::exit(code);
-    }
     // Artifact verdicts are deliberately plain commands: no build hook, lifecycle
     // sidecar, StepResult, or presentation wrapper can select their evidence.
     let artifact = xtask::artifact_verdict(&cli.command);

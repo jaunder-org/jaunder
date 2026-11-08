@@ -158,19 +158,33 @@ scoped repair or revert; do not retain or revive a dormant fallback.
   before completion; diagnose failure with scoped repair or revert, never a
   dormant fallback. Preserve promotion-as-acceptance.
 
-Accounting: raw +4249/-1389; conservative dormant Rust removal 2326 lines. Not
-semantic totals or a promised LOC target: describe reduced responsibilities, not
-invented net counts.
+Historical extraction accounting, before simplification: raw +4249/-1389;
+conservative dormant Rust removal 2326 lines. These are not final PR totals,
+active-production savings or a promised LOC target. Describe reduced
+responsibilities; final accounting must compare the actual merge base with the
+final worktree.
 
 ## Boundaries
 
-The revised design and outline/implementation are approved only within the scope
-and provenance recorded above. This does not authorize work beyond the outline;
-the exact-head PR merge gate and post-merge trusted-main rollout observation
-remain separate requirements. The prior spec/outline remain historical contracts
-and are not deleted. Do not modify implementation/tests, packages,
-pins/lockfiles, workflow, staged repair/index or accepted ADR/index. No builds,
-tests, installs, pushes, watches, staging, unstaging or cleanup.
+Human response `89ec8287-4f38-479c-bcbd-24cf540bfc7c` /
+`issue-1897-simplification-outline-v2` approved the reviewed outline and
+implementation within its recorded scope. Scoped implementation/test, package,
+workflow and caller-migration changes, and their focused verification, are
+therefore authorized; this is not a new design or scope approval.
+
+The earlier prohibitions on implementation/test/package/workflow edits, builds,
+tests and index changes applied to design/outline preparation before that human
+approval. They are preparation-phase history, not current unconditional
+restrictions. The prior spec/outline remain historical contracts and are not
+deleted. The original three-path repair is separately superseded and preserved
+as historical evidence, not an implementation deliverable.
+
+The exact-head human PR merge gate, ordinary required checks, and post-merge
+trusted-main observation remain outstanding acceptance requirements. No
+privilege expansion, live privileged operation as unit proof, accepted ADR/index
+edit, manual promotion, or cleanup is authorized. Commit, push, watch and other
+lifecycle operations remain subject to the current assignment's narrower
+authority; implementation approval alone does not authorize them.
 
 ## Evidence and unresolved choices
 

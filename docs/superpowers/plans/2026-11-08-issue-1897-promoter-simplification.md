@@ -19,8 +19,11 @@ package/admission paths, migrate actual integrated callers, and retire the
 obsolete Rust mutation commands together while preserving application policy and
 safety. One exact-head human gate precedes merge; observe trusted-main operation
 after merge as rollout acceptance before completion. The approved contract is
-[the revised spec](../specs/2026-11-08-issue-1897-promoter-simplification.md);
-this outline does not authorize implementation.
+[the revised spec](../specs/2026-11-08-issue-1897-promoter-simplification.md).
+Preparation of this outline did not itself authorize implementation. The
+subsequent human approval `89ec8287-4f38-479c-bcbd-24cf540bfc7c` recorded above
+authorizes scoped implementation and focused verification; it does not authorize
+scope expansion or waive later lifecycle gates.
 
 ## Task outline
 
@@ -66,5 +69,10 @@ this outline does not authorize implementation.
   scoped repair or revert, never a dormant fallback.
 - No per-field, provider, or retry-engine matrices; no library probes or fake
   route framework; one package smoke proves our integration only.
-- No implementation, build/test/probe, push/watch, privilege, merge, or cleanup
-  is authorized before the separate outline approval and applicable later gates.
+- The implementation and build/test restrictions applied during preparation,
+  before the separately recorded human outline/implementation approval. Scoped
+  implementation and focused proof are now authorized. Current assignment limits
+  still govern commit/push/watch operations; no privilege expansion, live
+  privileged operation as unit proof, merge, or cleanup is authorized by that
+  approval. The exact-head merge gate and post-merge observation remain
+  required.

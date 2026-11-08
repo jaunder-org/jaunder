@@ -213,9 +213,6 @@ pub enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         nextest_args: Vec<String>,
     },
-    /// ADR maintenance.
-    #[command(subcommand)]
-    Adr(AdrCommand),
     /// OpenTelemetry trace analysis (host-side; ADR-0028).
     #[command(subcommand)]
     Traces(TracesCommand),
@@ -303,31 +300,6 @@ pub struct ProducerCapture {
     pub lane: String,
     #[arg(long)]
     pub catalog: PathBuf,
-}
-
-/// `adr` subcommands.
-#[derive(Subcommand)]
-pub enum AdrCommand {
-    /// Regenerate the ADR index table in `docs/README.md` from `docs/adr/`: the
-    /// number, link target, and status cells. Hand-curated titles are preserved
-    /// (a new row seeds its title from the ADR heading). Idempotent; touches only
-    /// the marked table block. The `adr-readme-parity` gate fails on drift.
-    #[command(after_help = "EXAMPLES:\n  cargo xtask adr sync-readme")]
-    SyncReadme,
-    /// Deterministic promotion mutation used by the serialized ADR promoter
-    /// after feature merge: number tracked drafts, stage each complete rename,
-    /// rewrite path citations and proposed status, and regenerate the index.
-    /// Feature authors and shipping flows do not invoke this directly.
-    #[command(
-        after_help = "AUTOMATION PRIMITIVE: invoked by the Nix-selected Python controller after feature merge.\n\nEXAMPLES:\n  cargo xtask adr promote"
-    )]
-    Promote,
-    /// Temporary compatibility delegate to the Nix-selected Python controller.
-    /// Prefer `just adr-promoter` in the authorized trusted-main workflow context.
-    #[command(
-        after_help = "AUTOMATION CONTEXT ONLY: fixed controller delegate retained during PR 1.\n\nPREFERRED ENTRY:\n  just adr-promoter"
-    )]
-    Promoter,
 }
 
 /// `coverage` subcommands.
@@ -474,9 +446,6 @@ impl Cli {
             Command::E2eReconcile { .. } => "e2e-reconcile",
             Command::E2eLocal { .. } => "e2e-local",
             Command::TestLocal { .. } => "test-local",
-            Command::Adr(AdrCommand::SyncReadme) => "adr-sync-readme",
-            Command::Adr(AdrCommand::Promote) => "adr-promote",
-            Command::Adr(AdrCommand::Promoter) => "adr-promoter",
             Command::Traces(TracesCommand::Analyze { .. }) => "traces-analyze",
             Command::Traces(TracesCommand::Run { .. }) => "traces-run",
             Command::Traces(TracesCommand::BootPhases { .. }) => "traces-boot-phases",
@@ -833,21 +802,10 @@ mod tests {
     }
 
     #[test]
-    fn adr_sync_readme_parses() {
-        let cli = Cli::try_parse_from(["xtask", "adr", "sync-readme"]).unwrap();
-        assert_eq!(cli.command_name(), "adr-sync-readme");
-    }
-
-    #[test]
-    fn adr_promote_parses() {
-        let cli = Cli::try_parse_from(["xtask", "adr", "promote"]).unwrap();
-        assert_eq!(cli.command_name(), "adr-promote");
-    }
-
-    #[test]
-    fn adr_promoter_parses() {
-        let cli = Cli::try_parse_from(["xtask", "adr", "promoter"]).unwrap();
-        assert_eq!(cli.command_name(), "adr-promoter");
+    fn python_owned_adr_commands_are_retired() {
+        for action in ["promote", "sync-readme", "promoter"] {
+            assert!(Cli::try_parse_from(["xtask", "adr", action]).is_err());
+        }
     }
 
     #[test]

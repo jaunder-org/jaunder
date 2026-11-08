@@ -534,35 +534,26 @@ let
       in
       adrPromoterSourceAdmits relative type;
   };
-  adrPromoterPython = pkgs.python3Packages.buildPythonApplication {
+  adrPromoter = pkgs.python3Packages.buildPythonApplication {
     pname = "adr-promoter";
     version = "0.1.0";
     pyproject = true;
     src = adrPromoterSrc;
     build-system = [ pkgs.python3Packages.setuptools ];
-    dependencies = [ pkgs.python3Packages.marko ];
+    dependencies = [
+      pkgs.python3Packages.marko
+      pkgs.python3Packages.pygithub
+    ];
+    makeWrapperArgs = [
+      "--prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.git pkgs.prettier ]}"
+    ];
     nativeCheckInputs = [
       pkgs.python3Packages.pytestCheckHook
       pkgs.git
     ];
     doCheck = true;
     pythonImportsCheck = [ "adr_promoter" ];
-  };
-  adrPromoter = pkgs.writeShellApplication {
-    name = "adr-promoter";
-    runtimeInputs = [
-      pkgs.gh
-      pkgs.git
-      pkgs.prettier
-    ];
-    text = ''
-      exec ${adrPromoterPython}/bin/adr-promoter "$@"
-    '';
-    derivationArgs.passthru = {
-      pythonPackage = adrPromoterPython;
-      source = adrPromoterSrc;
-      sourceAdmits = adrPromoterSourceAdmits;
-    };
+    passthru.sourceAdmits = adrPromoterSourceAdmits;
     meta.mainProgram = "adr-promoter";
   };
 

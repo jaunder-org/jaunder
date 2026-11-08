@@ -1,8 +1,11 @@
-"""Serialized promotion/recovery policy; Git and gh are the only side-effect seams."""
+"""Serialized promotion/recovery policy over explicit Git and GitHub evidence."""
 
 from dataclasses import dataclass
 import os
 from pathlib import Path
+
+from github import GithubException
+from requests import RequestException
 
 from . import git, github
 from .promotion import promote
@@ -88,7 +91,7 @@ def _singleton(api):
 def _attempt(operation, *arguments):
     try:
         operation(*arguments)
-    except (OSError, RuntimeError) as error:
+    except (OSError, RuntimeError, GithubException, RequestException) as error:
         return error
     return None
 
@@ -255,4 +258,6 @@ def execute(repo):
     if path is None:
         raise ValueError("GITHUB_EVENT_PATH is not set")
     event = parse_event(github.decode_json(Path(path).read_bytes()))
+    if event is not None and (event.action != "dequeued" or event.head_ref != BRANCH or event.base_ref != BASE):
+        return Outcome("IgnoredEvent", "event does not target the ADR promoter")
     return run(event, repo, github.Repository.from_environment())

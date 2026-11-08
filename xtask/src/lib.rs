@@ -1,5 +1,3 @@
-mod adr;
-pub use adr::mutation_status as adr_mutation_status;
 mod adr_readme;
 mod audit_wasm;
 mod cache_safety;
@@ -91,8 +89,8 @@ mod steps {
 }
 
 pub use cli::{
-    AdrCommand, CacheSafetyCommand, Cli, Command, CoverageCommand, E2eBackend, E2eBrowser,
-    MutantsCommand, NixCommand, SandboxProfile, ServerFnCoverageCommand, TracesCommand,
+    CacheSafetyCommand, Cli, Command, CoverageCommand, E2eBackend, E2eBrowser, MutantsCommand,
+    NixCommand, SandboxProfile, ServerFnCoverageCommand, TracesCommand,
     WasmCoverageCommand,
 };
 pub use dispatch::run;
