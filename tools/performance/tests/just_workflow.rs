@@ -288,20 +288,42 @@ fn later_nix_build_failure_preserves_completed_producer_and_stops_sequence() -> 
     Ok(())
 }
 
+fn set_fixture_mode(path: &Path, mode: u32) -> std::io::Result<u32> {
+    let ordinary = mode & !0o6000;
+    fs::set_permissions(path, fs::Permissions::from_mode(ordinary))?;
+    assert_eq!(fs::metadata(path)?.permissions().mode() & 0o7777, ordinary);
+    match fs::set_permissions(path, fs::Permissions::from_mode(mode)) {
+        Ok(()) => {
+            assert_eq!(fs::metadata(path)?.permissions().mode() & 0o7777, mode);
+            Ok(mode)
+        }
+        // Nix builders deny set-ID chmod with EPERM; ordinary modes must still work.
+        Err(error) if mode != ordinary && error.raw_os_error() == Some(1) => {
+            eprintln!(
+                "set-ID fixture denied with EPERM: {}; testing {ordinary:o}",
+                path.display()
+            );
+            assert_eq!(fs::metadata(path)?.permissions().mode() & 0o7777, ordinary);
+            Ok(ordinary)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 #[test]
 fn retained_performance_is_owner_writable_without_changing_sources_or_links() -> Result<()> {
     let fixture = WorkflowFixture::new(None)?;
     let source = fixture
         .outputs
         .join("performance-storage-sqlite/performance");
-    let files = [
+    let mut files = [
         ("fragments/placeholder.json", 0o444, b"{}".as_slice()),
         ("executable", 0o4551, b"executable evidence".as_slice()),
         ("hardlink-a", 0o440, b"linked evidence".as_slice()),
     ];
-    for (name, mode, bytes) in files {
-        fs::write(source.join(name), bytes)?;
-        fs::set_permissions(source.join(name), fs::Permissions::from_mode(mode))?;
+    for (name, mode, bytes) in &mut files {
+        fs::write(source.join(*name), *bytes)?;
+        *mode = set_fixture_mode(&source.join(*name), *mode)?;
     }
     fs::hard_link(source.join("hardlink-a"), source.join("hardlink-b"))?;
     let referent = fixture.directory.path().join("store-like");
@@ -311,9 +333,9 @@ fn retained_performance_is_owner_writable_without_changing_sources_or_links() ->
     symlink(referent.join("evidence"), source.join("file-link"))?;
     symlink(&referent, source.join("directory-link"))?;
     symlink("missing", source.join("dangling-link"))?;
-    let directories = [("", 0o1555), ("fragments", 0o2555)];
-    for (name, mode) in directories {
-        fs::set_permissions(source.join(name), fs::Permissions::from_mode(mode))?;
+    let mut directories = [("", 0o1555), ("fragments", 0o2555)];
+    for (name, mode) in &mut directories {
+        *mode = set_fixture_mode(&source.join(*name), *mode)?;
     }
 
     let output = fixture.run("build-failure", &["small"])?;

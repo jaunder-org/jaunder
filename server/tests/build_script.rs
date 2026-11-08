@@ -34,21 +34,46 @@ fn vite_output() -> TempDir {
 }
 
 #[cfg(unix)]
+fn set_fixture_mode(path: &std::path::Path, mode: u32) -> std::io::Result<u32> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let ordinary = mode & !0o6000;
+    fs::set_permissions(path, fs::Permissions::from_mode(ordinary))?;
+    assert_eq!(fs::metadata(path)?.permissions().mode() & 0o7777, ordinary);
+    match fs::set_permissions(path, fs::Permissions::from_mode(mode)) {
+        Ok(()) => {
+            assert_eq!(fs::metadata(path)?.permissions().mode() & 0o7777, mode);
+            Ok(mode)
+        }
+        // Nix builders deny set-ID chmod with EPERM; ordinary modes must still work.
+        Err(error) if mode != ordinary && error.raw_os_error() == Some(1) => {
+            eprintln!(
+                "set-ID fixture denied with EPERM: {}; testing {ordinary:o}",
+                path.display()
+            );
+            assert_eq!(fs::metadata(path)?.permissions().mode() & 0o7777, ordinary);
+            Ok(ordinary)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(unix)]
 #[test]
 fn csr_staging_adds_only_owner_write_to_independent_files() {
     use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 
     let vite = vite_output();
     let site = TempDir::new().expect("fresh staging root");
-    let files = [
+    let mut files = [
         ("index.html", 0o444),
         ("assets/app.js", 0o4451),
         ("assets/client-hash.wasm", 0o440),
         ("assets/client-hash.wasm.br", 0o404),
         ("assets/client-hash.wasm.gz", 0o444),
     ];
-    for (name, mode) in files {
-        fs::set_permissions(vite.path().join(name), fs::Permissions::from_mode(mode)).unwrap();
+    for (name, mode) in &mut files {
+        *mode = set_fixture_mode(&vite.path().join(*name), *mode).unwrap();
     }
     symlink("app.js", vite.path().join("assets/file-link.js")).unwrap();
     fs::set_permissions(
@@ -87,7 +112,7 @@ fn csr_staging_adds_only_owner_write_to_independent_files() {
     );
     assert_eq!(
         fs::metadata(&link).unwrap().permissions().mode() & 0o7777,
-        0o4651
+        files[1].1 | 0o200
     );
     assert_ne!(
         fs::metadata(&link).unwrap().ino(),
@@ -130,7 +155,7 @@ fn csr_staging_adds_only_owner_write_to_independent_files() {
             .permissions()
             .mode()
             & 0o7777,
-        0o4451
+        files[1].1
     );
     fs::set_permissions(
         vite.path().join("assets"),
