@@ -7,9 +7,9 @@ use crate::{
     adr, adr_readme, audit_wasm, cache_safety, census,
     cli::{
         AdrCommand, CacheSafetyCommand, Cli, Command, CoverageCommand, MutantsCommand, NixCommand,
-        PrCommand, TracesCommand, WasmCoverageCommand,
+        TracesCommand, WasmCoverageCommand,
     },
-    coverage, issue, lifecycle, nix_probe, performance, pr,
+    coverage, lifecycle, nix_probe, performance, pr,
     result::{CommandResult, StepResult},
     steps, traces, wasm_coverage,
 };
@@ -398,62 +398,6 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                     .detail(format!("{n} population(s)"))
                     .with_duration(start.elapsed()),
             );
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::Issue(sub) => issue::execute(sub),
-        Command::Pr(PrCommand::Cleanup { number }) => {
-            let start = Instant::now();
-            let mut result = pr::cleanup::execute(number);
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::Pr(sub) => {
-            let start = Instant::now();
-            let (operation, number, cfg, reenqueue) = match sub {
-                PrCommand::Watch {
-                    number,
-                    interval,
-                    timeout,
-                    once,
-                    until,
-                } => (
-                    pr::PrOperation::Watch,
-                    number,
-                    pr::watch::WatchConfig {
-                        interval_secs: interval,
-                        timeout_mins: timeout,
-                        once,
-                        stop_at_ready: until.is_none(),
-                        ..Default::default()
-                    },
-                    false,
-                ),
-                PrCommand::Land {
-                    reenqueue,
-                    number,
-                    interval,
-                    timeout,
-                } => (
-                    pr::PrOperation::Land,
-                    number,
-                    pr::watch::WatchConfig {
-                        interval_secs: interval,
-                        timeout_mins: timeout,
-                        once: false,
-                        stop_at_ready: false,
-                        ..Default::default()
-                    },
-                    reenqueue,
-                ),
-                PrCommand::Cleanup { .. } => unreachable!("cleanup dispatches separately"),
-            };
-            // An `Err` here means the subject could not be established at all (exit
-            // 2, no report). Every other failure — including `gh` being broken — is
-            // a `watcher-error` report, so the outcome that most needs to be legible
-            // always reaches the sidecar.
-            let report = pr::execute(number, cfg, operation.is_landing(), reenqueue)?;
-            let mut result = pr::into_result(operation, report, start.elapsed());
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }

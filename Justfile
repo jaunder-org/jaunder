@@ -278,3 +278,47 @@ e2e-regenerate-coverage:
 
 e2e-reconcile backend artifacts=".xtask/diagnostics":
     cargo xtask e2e-reconcile {{quote(backend)}} --catalog end2end/e2e-lanes.json --diagnostics-root {{quote(artifacts)}}
+
+# Exhaustive read-only milestone candidates; never claims or dispatches work.
+issue-discover milestone:
+    bash scripts/issue-discover.sh {{quote(milestone)}}
+
+# Explicit issue decisions; native gh owns mutations, shared glue verifies readback.
+[positional-arguments]
+issue-create title issue_type milestone priority labels body_file *blockers:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source scripts/issue-metadata.sh
+    prepare_issue "$1" "$2" "$3" "$4" "$5" "$6"
+    shift 6
+    validate_blockers "$@"
+    gh api --method POST "repos/$repo/issues" --input - < "$work/input.json" > "$work/mutated.json"
+    finish_issue "$@"
+
+[positional-arguments]
+issue-edit number title issue_type milestone priority labels body_file *blockers:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source scripts/issue-metadata.sh
+    number=$1
+    [[ "$number" =~ ^[1-9][0-9]*$ ]] || { echo 'Expected issue number' >&2; exit 1; }
+    shift
+    prepare_issue "$1" "$2" "$3" "$4" "$5" "$6"
+    shift 6
+    validate_blockers "$@"
+    gh api --method PATCH "repos/$repo/issues/$number" --input - < "$work/input.json" > "$work/mutated.json"
+    jq -e --argjson expected "$number" '.number == $expected' "$work/mutated.json" > /dev/null
+    finish_issue "$@"
+
+# Prior recorded exact PR/head human approval is mandatory, not inferred here.
+# --reenqueue additionally requires explicit one-shot recovery authorization.
+pr-land number expected_head mode="ordinary":
+    bash scripts/pr-land.sh {{quote(number)}} {{quote(expected_head)}} {{quote(mode)}}
+
+# Caller must positively verify unmanaged ownership; never invoke in managed work.
+pr-cleanup number expected_head ownership:
+    bash scripts/pr-cleanup.sh {{quote(number)}} {{quote(expected_head)}} {{quote(ownership)}}
+
+# Read-only caller-actionable PR observation; only this focused tool polls GitHub.
+pr-watch *args:
+    cargo run --locked --quiet --manifest-path tools/Cargo.toml -p pr-observer -- watch {{args}}

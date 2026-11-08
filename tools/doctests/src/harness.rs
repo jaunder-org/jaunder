@@ -7,7 +7,7 @@
 //! and the only honest way to establish that is to compile a real crate and look.
 //!
 //! Fixtures live in `testdata/` and are `include_str!`'d, following the
-//! `xtask/src/pr/testdata/` convention. They are dependency-free so this needs no
+//! `tools/pr-observer/src/pr/testdata/` convention. They are dependency-free so this needs no
 //! registry access.
 
 use std::process::Command;

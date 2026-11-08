@@ -100,6 +100,12 @@ impl Progress {
     }
 }
 
+pub fn head_drift_detail(expected: &str, observed: &str) -> String {
+    format!(
+        "refusing to land: expected PR head {expected}, observed {observed}; a fresh qualified landing invocation is required"
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
     Continue {

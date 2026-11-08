@@ -19,7 +19,6 @@ pub mod git;
 mod host_tooling;
 mod ids;
 pub mod invocation_trace;
-pub mod issue;
 mod lifecycle;
 pub mod markers;
 mod mutants;
@@ -94,8 +93,8 @@ mod steps {
 pub use cli::{
     AdrCommand, CacheSafetyCommand, Cli, Command, CoverageCommand, E2eBackend, E2eBrowser,
     MutantsCommand, NixCommand, PerformanceBackend, PerformanceBrowser, PerformanceCommand,
-    PerformanceProfile, PerformanceRunArgs, PrCommand, PrWatchUntil, SandboxProfile,
-    ServerFnCoverageCommand, TracesCommand, WasmCoverageCommand,
+    PerformanceProfile, PerformanceRunArgs, SandboxProfile, ServerFnCoverageCommand, TracesCommand,
+    WasmCoverageCommand,
 };
 pub use dispatch::run;
 pub use host_tooling::prepare_checkout;

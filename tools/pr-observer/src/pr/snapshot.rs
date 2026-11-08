@@ -400,29 +400,65 @@ pub fn parse_required_checks(v: &Value) -> Result<RequiredChecks, ApiError> {
     let rules = v
         .as_array()
         .ok_or_else(|| ApiError::Malformed("branch rules response is not an array".into()))?;
-    let status_rule = rules
-        .iter()
-        .find(|r| str_at(r, &["type"]) == Some("required_status_checks"));
-    let contexts = status_rule
-        .and_then(|r| r.get("parameters"))
-        .and_then(|p| p.get("required_status_checks"))
-        .and_then(Value::as_array)
-        .map(|cs| {
-            cs.iter()
-                .filter_map(|c| owned(c, &["context"]))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let mut contexts = Vec::new();
+    let mut strict = false;
+    let mut queue_present = false;
+    // The branch endpoint returns all applicable rules, including requirements
+    // from multiple rulesets. No malformed entry may silently shrink that union.
+    for (index, rule) in rules.iter().enumerate() {
+        let invalid = |field: &str| {
+            ApiError::Malformed(format!(
+                "branch rule {index} has missing or invalid {field}"
+            ))
+        };
+        let kind = rule
+            .get("type")
+            .and_then(Value::as_str)
+            .filter(|kind| !kind.is_empty())
+            .ok_or_else(|| invalid("type"))?;
+        queue_present |= kind == "merge_queue";
+        if kind != "required_status_checks" {
+            continue;
+        }
+        let parameters = rule
+            .get("parameters")
+            .and_then(Value::as_object)
+            .ok_or_else(|| invalid("parameters"))?;
+        let checks = parameters
+            .get("required_status_checks")
+            .and_then(Value::as_array)
+            .ok_or_else(|| invalid("required_status_checks"))?;
+        let rule_strict = parameters
+            .get("strict_required_status_checks_policy")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| invalid("strict_required_status_checks_policy"))?;
+        // This optional API policy only affects branch creation, not observation
+        // of an existing main branch. Its absence is valid; a bad value is not.
+        if let Some(policy) = parameters.get("do_not_enforce_on_create")
+            && !policy.is_boolean()
+        {
+            return Err(invalid("do_not_enforce_on_create"));
+        }
+        for (check_index, check) in checks.iter().enumerate() {
+            let context = check
+                .get("context")
+                .and_then(Value::as_str)
+                .filter(|context| !context.is_empty())
+                .ok_or_else(|| {
+                    invalid(&format!("required_status_checks[{check_index}].context"))
+                })?;
+            if !contexts.iter().any(|existing| existing == context) {
+                contexts.push(context.to_owned());
+            }
+        }
+        // GitHub specifies that strictness takes effect only with at least one
+        // check enabled. Applicable nonempty rules combine by the stricter policy.
+        strict |= rule_strict && !checks.is_empty();
+    }
     Ok(RequiredChecks {
         contexts,
-        strict: status_rule
-            .and_then(|r| r.get("parameters"))
-            .and_then(|p| p.get("strict_required_status_checks_policy"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        queue_present: rules
-            .iter()
-            .any(|r| str_at(r, &["type"]) == Some("merge_queue")),
+        strict,
+        queue_present,
     })
 }
 
@@ -960,7 +996,7 @@ fn required_git_fact(
     match fact {
         Ok(Some(value)) => Ok(value),
         Ok(None) => Err(ApiError::NotFound),
-        Err(source) => Err(ApiError::Git(crate::pr::gh::GitError {
+        Err(source) => Err(ApiError::Git(super::gh::GitError {
             operation,
             path: dir.to_path_buf(),
             source: std::sync::Arc::from(
@@ -1003,8 +1039,8 @@ impl PrSource for GhSource {
         Self::resolve_with(
             requested,
             dir,
-            || crate::git::remote_url(dir, "origin"),
-            || crate::git::current_branch(dir),
+            || super::git::remote_url(dir, "origin"),
+            || super::git::current_branch(dir),
             |owner, repo, branch| {
                 let slug = format!("{owner}/{repo}");
                 gh::run_gh(&[
@@ -1114,6 +1150,122 @@ mod tests {
         assert_eq!(rc.contexts, vec!["Validate (no e2e)", "e2e gate"]);
         assert!(!rc.strict, "live ruleset is non-strict");
         assert!(rc.queue_present, "live ruleset has a merge_queue rule");
+    }
+
+    #[test]
+    fn required_checks_collect_every_applicable_rule_and_strict_policy() {
+        let rules = serde_json::json!([
+            {"type":"required_status_checks","parameters":{
+                "required_status_checks":[{"context":"first"}],
+                "strict_required_status_checks_policy":false
+            }},
+            {"type":"merge_queue"},
+            {"type":"required_status_checks","parameters":{
+                "required_status_checks":[{"context":"second"},{"context":"first"}],
+                "strict_required_status_checks_policy":true
+            }}
+        ]);
+        let parsed = parse_required_checks(&rules).unwrap();
+        assert_eq!(parsed.contexts, ["first", "second"]);
+        assert!(
+            parsed.strict,
+            "any applicable strict requirement must be honored"
+        );
+        assert!(parsed.queue_present);
+    }
+
+    #[test]
+    fn required_checks_reject_partial_or_malformed_rule_evidence() {
+        let valid = serde_json::json!({"type":"required_status_checks","parameters":{
+            "required_status_checks":[{"context":"retained"}],
+            "strict_required_status_checks_policy":false
+        }});
+        // A retained green context must never hide a missing requirement or policy,
+        // whether the bad evidence is in that rule or a later applicable rule.
+        for malformed in [
+            serde_json::json!({"type":"required_status_checks"}),
+            serde_json::json!({"type":"required_status_checks","parameters":null}),
+            serde_json::json!({"type":"required_status_checks","parameters":{}}),
+            serde_json::json!({"type":"required_status_checks","parameters":{
+                "strict_required_status_checks_policy":false
+            }}),
+            serde_json::json!({"type":"required_status_checks","parameters":{
+                "required_status_checks":null,"strict_required_status_checks_policy":false
+            }}),
+            serde_json::json!({"type":"required_status_checks","parameters":{
+                "required_status_checks":{},"strict_required_status_checks_policy":false
+            }}),
+            serde_json::json!({"type":"required_status_checks","parameters":{
+                "required_status_checks":[{"context":"valid"},{}],
+                "strict_required_status_checks_policy":false
+            }}),
+            serde_json::json!({"type":"required_status_checks","parameters":{
+                "required_status_checks":[{"context":"valid"},{"context":7}],
+                "strict_required_status_checks_policy":false
+            }}),
+            serde_json::json!({"type":"required_status_checks","parameters":{
+                "required_status_checks":[{"context":"valid"},null],
+                "strict_required_status_checks_policy":false
+            }}),
+            serde_json::json!({"type":"required_status_checks","parameters":{
+                "required_status_checks":[{"context":"valid"},{"context":""}],
+                "strict_required_status_checks_policy":false
+            }}),
+            serde_json::json!({"type":"required_status_checks","parameters":{
+                "required_status_checks":[{"context":"valid"}]
+            }}),
+            serde_json::json!({"type":"required_status_checks","parameters":{
+                "required_status_checks":[{"context":"valid"}],
+                "strict_required_status_checks_policy":null
+            }}),
+            serde_json::json!({"type":"required_status_checks","parameters":{
+                "required_status_checks":[{"context":"valid"}],
+                "strict_required_status_checks_policy":"false"
+            }}),
+            serde_json::json!({"type":"required_status_checks","parameters":{
+                "required_status_checks":[{"context":"valid"}],
+                "strict_required_status_checks_policy":false,"do_not_enforce_on_create":null
+            }}),
+            serde_json::json!({"parameters":{}}),
+            serde_json::json!({"type":7}),
+        ] {
+            for rules in [
+                serde_json::json!([malformed.clone()]),
+                serde_json::json!([valid.clone(), malformed]),
+            ] {
+                assert!(
+                    matches!(parse_required_checks(&rules), Err(ApiError::Malformed(_))),
+                    "malformed evidence cannot shrink the gate: {rules}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn required_checks_allow_absent_optional_fields_and_empty_gate_evidence() {
+        let parsed = parse_required_checks(&serde_json::json!([
+            {"type":"required_status_checks","parameters":{
+                "required_status_checks":[{"context":"check","integration_id":123}],
+                "strict_required_status_checks_policy":false
+            }},
+            {"type":"required_status_checks","parameters":{
+                "required_status_checks":[],"strict_required_status_checks_policy":true,
+                "do_not_enforce_on_create":true
+            }}
+        ]))
+        .unwrap();
+        assert_eq!(parsed.contexts, ["check"]);
+        assert!(
+            !parsed.strict,
+            "GitHub strictness has no effect without checks in that rule"
+        );
+        let empty = parse_required_checks(&serde_json::json!([])).unwrap();
+        assert!(
+            empty.contexts.is_empty(),
+            "the observer refuses an empty gate"
+        );
+        assert!(!empty.strict);
+        assert!(!empty.queue_present);
     }
 
     #[test]

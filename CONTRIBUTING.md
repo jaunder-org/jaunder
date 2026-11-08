@@ -273,8 +273,9 @@ remain authoritative; local fail-fast behavior does not weaken their verdicts.
   recognizance — history is meant to be built up in focused, atomic steps, and
   the pre-commit hook already gates each one on the fast `just precommit`. What
   requires explicit user approval is **landing** the work: merging a PR
-  (`cargo xtask pr land` — running it _is_ the merge approval). Ask for review
-  before you merge, not before every commit.
+  (`just pr-land <PR> <approved-head-SHA>` requires previously obtained and
+  recorded human approval for that exact PR/head). Ask for review before you
+  merge, not before every commit.
 
 ### Artifact lifecycle
 
@@ -1163,12 +1164,18 @@ baseline.
   - Use `--browser chromium|firefox` to restrict the run to one browser
     (default: both).
 
-- **PR watching**: Use `cargo xtask pr watch [N]` to follow required checks
-  until the next caller-actionable outcome. A green, landable PR returns
+- **PR watching and approved land**: Use `just pr-watch [N]` to follow required
+  checks until the next caller-actionable outcome. A green, landable PR returns
   `ready-to-land`; an already armed or queued PR continues through queue
-  processing. Use `cargo xtask pr land [N]` only after approval — it arms the
-  merge and drives it home. Both need `gh` (in the devShell) and run on the host
-  only. Omit `N` to use the open PR for the current branch.
+  processing. Omit `N` to resolve the open PR for the current branch. The sole
+  observer is the host-only `tools/pr-observer` binary; it never mutates. After
+  obtaining and recording human approval for the exact PR/head/scope, use
+  `just pr-land <PR> <approved-head-SHA>`. Both identity arguments are required;
+  the SHA must be full lowercase 40-hex. Just cannot attest to human approval.
+  The thin native `gh`/`git` frontdoor requires origin `jaunder-org/jaunder`,
+  live base `main`, matching PR/head, no divergent local PR branch, and a
+  one-snapshot `ready-to-land` verdict from the same observer before one
+  `gh pr merge --auto --merge --match-head-commit` action.
 
   The branch ruleset remains authoritative for direct required contexts and
   readiness. For an early failure, `pr watch` follows the current workflow run's
@@ -1186,11 +1193,11 @@ baseline.
   workflow jobs.
 
   ```bash
-  cargo xtask pr watch                     # wait for the next action
-  cargo xtask --json pr watch 731 --once   # one snapshot
-  cargo xtask pr watch 731 --until merged  # passive external-approval watch
-  cargo xtask pr land 731                  # approve, arm, and watch it land
-  cargo xtask pr land 731 --reenqueue      # explicitly permit one enqueue after ejection
+  just pr-watch                             # wait for the next action
+  just pr-watch 731 --once                   # direct JSON, no --json flag
+  just pr-watch 731 --until merged           # passive external-approval watch
+  just pr-land 731 <approved-head-SHA>        # only after recorded human approval
+  just pr-land 731 <approved-head-SHA> --reenqueue # separately authorized recovery
   ```
 
   Outcomes are `ready-to-land`, `merged`, `checks-failed`, `ejected`,
@@ -1202,16 +1209,30 @@ baseline.
   GitHub never finished; `watcher-error` means the tooling could not establish a
   trustworthy verdict.
 
-  `pr watch` exits 0 for `ready-to-land` or `merged`; `pr land` exits 0 only for
-  `merged`. Exit 1 still covers several distinct actionable outcomes, so branch
-  on `pr.outcome` in `--json` (or `.xtask/last-result.json`). Progress streams
-  to stderr and is also serialized into `pr.events`.
+  `pr-watch` exits 0 for `ready-to-land` or `merged`; `pr-land` exits 0 only
+  after complete exact-head `merged` evidence. Observer stdout is direct JSON:
+  root `.outcome`, `.pr` (number), `.head_sha`, `.events`, and optional
+  `.phase`, `.detail`, `.pointer`, `.shared_failure`. There is no `--json`,
+  xtask envelope or last-result sidecar. Progress/diagnostics go to stderr.
+  Adverse/pending observer outcomes exit 1; invalid arguments/setup failure exit
+  2 and may have no report. Land refusal/native failure is nonzero and may have
+  no JSON; post-action observation retains its direct report/status. Honor exit
+  status, not partial output. An arm or queue readback is not a merge verdict.
 
   `watch` only observes — it never merges, re-runs a job, rebases, or
   re-enqueues. `--until merged` explicitly keeps observing across
   `ready-to-land` while another actor may approve and arm the PR; it may consume
-  the full timeout. **Running `land` is the merge approval**; invoked from the
-  PR's own branch it refuses whenever local HEAD differs from the PR head. See
+  the full timeout. **Land requires prior recorded exact PR/head human
+  approval**; an invocation is not proof that approval exists. Land checks live
+  head before action and verifies arm, queue or complete merged readback
+  afterward. A silent no-op, failed action or uncertain readback stops without
+  any retry/re-arm. Post-action observation binds all outcomes, even merged, to
+  the supplied head. Positive same-head queue membership from native action
+  readback is carried as read-only `--observed-queued-head <SHA>`, which must
+  equal required `--expected-head`. Only positive live queued readback supplies
+  this input; an arm alone or absent queue evidence does not. Existing observer
+  `Progress` preserves a dequeue that happens before establishment; no shell
+  classifier or new poller is added, and default observation is unchanged. See
   [ADR-0087](docs/adr/0087-xtask-github-pr-observation.md) for the
   observer/armer split and
   [the actionable-handoff decision](docs/adr/0135-pr-watch-actionable-handoff.md)
@@ -1221,14 +1242,22 @@ baseline.
   owned by the assigned Lead; recovery requires explicit authorization from the
   authority assigned by governing owner policy (the Manager where that policy
   reserves the decision, otherwise the Lead within approved scope). Diagnosis
-  alone does not authorize recovery. Use `land <PR> --reenqueue` only after that
-  authorization: it requires an observed prior ejection, current green required
-  checks and merge readiness, and refuses queued or auto-merge-armed PRs. It
-  makes at most one armer call, never ordinary rearming on uncertainty. Ordinary
-  `land` does not re-enqueue. Observation acknowledges only the old failed run's
-  URL for this invocation, without changing its failed verdict; delayed fresh
-  visibility uses the normal deadline, and a distinct fresh failure terminates.
-  Existing head, check, queue and fail-closed guards remain in force. See
+  alone does not authorize recovery. Use
+  `just pr-land <PR> <approved-head-SHA> --reenqueue` only after that
+  authorization and exact-head merge approval. It refuses queued/armed PRs,
+  captures the historical run URL from live `ejected` preflight, and requires
+  another one-snapshot `ready-to-land` verdict from the SAME observer with only
+  that run acknowledged before its ONE native action. Incomplete, adverse or
+  unavailable evidence refuses; there is no second classifier, poller or armer.
+  Post-action observation uses
+  `--expected-head <SHA> --acknowledged-ejection <URL>` backed by the same
+  `WatchContinuation`. These read-only inputs neither mutate nor authorize
+  recovery. Acknowledgment requires an expected head and a GitHub Actions run
+  URL; Just supplies the URL from preflight, not caller guesswork. The failed
+  verdict stays failed; delayed fresh visibility uses the normal deadline, and a
+  distinct fresh failure ends observation. Ordinary land refuses ejection;
+  neither mode retries a no-op. Existing head, check, queue and fail-closed
+  guards remain in force. See
   [explicit one-shot recovery](docs/adr/0220-explicit-one-shot-pr-reenqueue.md).
 
   **Post-merge ownership:** after `pr land` reports verified `merged`, choose
@@ -1237,13 +1266,13 @@ baseline.
 
   - **Manager-assigned work:** implementors and assigned Leads leave the
     semantic branch checked out and the checkout intact while the assignment is
-    active. Skip `cargo xtask pr cleanup` and equivalent detach/delete
-    operations. Lead inspects and accepts merge, validation, and preservation
-    evidence, then hands it to Manager: exact branch/HEAD and commits,
-    dirty/staged/untracked inventory (including empty results), proof and
-    artifact references, unresolved work, and the next owner/action. Delivered
-    work can be complete while Manager-owned lifecycle cleanup remains pending;
-    receipt alone is not acceptance or assignment release.
+    active. Skip `just pr-cleanup` and equivalent detach/delete operations. Lead
+    inspects and accepts merge, validation, and preservation evidence, then
+    hands it to Manager: exact branch/HEAD and commits, dirty/staged/untracked
+    inventory (including empty results), proof and artifact references,
+    unresolved work, and the next owner/action. Delivered work can be complete
+    while Manager-owned lifecycle cleanup remains pending; receipt alone is not
+    acceptance or assignment release.
 
     Manager retains required branch selectors, reconciles exact current
     assignment/runtime identity, and owns authorized retirement through
@@ -1253,18 +1282,26 @@ baseline.
     a dependency on a hypothetical runtime fix or a reason to withhold
     delivered-work evidence.
 
-  - **Unmanaged work:** with no unresolved required work, competing writer, or
-    owned operation to strand, run `cargo xtask pr cleanup [N]` from that PR's
-    checkout. It is explicit and local-only: it verifies the merged PR targets
-    `main`, the checked-out branch and HEAD exactly match the PR's head ref and
-    SHA, and the tree is clean before fetching, proving the captured head is an
-    ancestor of `origin/main`, detaching there, safely deleting the local
-    branch, and running `cargo clean`. Prefer explicit `N`; omission
-    exhaustively resolves exactly one matching merged PR. Cleanup exits 0 only
-    when complete; a refusal or operation failure exits 1. Preserve failure
-    evidence rather than bypassing safeguards. Cleanup does not alter the
-    `pr land` merge outcome or project Status, and does not authorize checkout
-    deletion.
+  - **Unmanaged work:** first positively establish that no unresolved required
+    work, competing writer, or owned operation will be stranded. From that PR's
+    checkout run `just pr-cleanup <PR> <exact-head-SHA> unmanaged`. Both
+    identity arguments are required; the ownership argument records the caller's
+    positive assertion, not runtime discovery or proof of assignment ownership.
+    Managed, unknown, or conflicting ownership means do not invoke it; those
+    argument values are refused as an additional guard.
+
+    Cleanup is explicit and local-only. It independently verifies complete
+    merged PR evidence, target `main`, exact checked-out non-`main` branch/head
+    matching the supplied PR/head, and a clean tree before fetching. It then
+    proves the captured head is an ancestor of `origin/main`, detaches there,
+    safely deletes only the captured branch with `git branch -d --`, and runs
+    root `cargo clean`. Ordered stderr boundaries identify the first failure; no
+    later step runs. Exit 0 and direct JSON `outcome: cleaned` establish
+    completed cleanup and retain the captured head/merge commit/time. A refusal
+    or failure is nonzero, never successful no-op. Preserve evidence, without
+    force/reset/stash or bypass. Cleanup does not change the merge outcome,
+    project Status, remote branches or local `main`, and does not authorize
+    checkout deletion.
 
   Physical checkout removal is separate: it requires an explicit removal request
   and the runtime's interactive confirmation. Use the supported runtime route,
@@ -1279,11 +1316,11 @@ baseline.
 
 ### Discovering milestone issue candidates
 
-`cargo xtask --json issue candidates --milestone <number-or-exact-title>`
-gathers open issues, Jaunder Backlog claim status, open native prerequisites,
-and local resume artifacts. Discovery is read-only: it does not claim issues,
-acquire runtime ownership, or dispatch work. An open milestone must match
-exactly and unambiguously by number or title.
+`just issue-discover <number-or-exact-title>` gathers open issues, Jaunder
+Backlog claim status, open native prerequisites, and local resume artifacts.
+Discovery is read-only: it does not claim issues, acquire runtime ownership, or
+dispatch work. An open milestone must match exactly and unambiguously by number
+or title.
 
 Success means the observed REST inventory was traversed through its last page,
 including prerequisite pages before closed prerequisites are filtered out.
@@ -1292,14 +1329,47 @@ requests. This is not an atomic snapshot: GitHub state may change during or
 following discovery. Repeated issue identities across pages are refused rather
 than silently deduplicated.
 
-GraphQL metadata reads are bounded to 100 open milestones, 100 labels, 100 issue
-types, and 10 project items per issue. Every required connection must explicitly
-report `hasNextPage=false`; overflow or missing/malformed completeness evidence
-fails with a nonzero incomplete-inventory error, not a false absence. Shared
-metadata refusal also protects issue-creation preflight before any mutation. Any
-API, parsing, or later-page failure prevents a successful candidate report;
-there is no partial-success mode. Do not interpret a failed read as an empty or
-exhausted milestone.
+`gh api --paginate --slurp` owns REST traversal. The per-issue GraphQL project
+read is bounded to 100 items and must explicitly report `hasNextPage=false`;
+overflow or missing/malformed completeness evidence fails nonzero, not as false
+absence. Any API, parsing, or later-page failure prevents a successful candidate
+report; there is no partial-success mode. Do not interpret a failed read as an
+empty or exhausted milestone. Stdout is the candidate/skipped JSON inventory,
+not an xtask report envelope.
+
+### Creating and editing issues
+
+Use one explicit frontdoor per operation, from the devShell:
+
+```sh
+just issue-create 'fix(tooling): preserve metadata' Task 3 P2 tooling,dx /path/body.md
+just issue-edit 731 'fix(tooling): preserve metadata' Task 3 P2 tooling,dx /path/body.md 42
+```
+
+Arguments are title, GitHub type (`Task`, `Bug`, or `Feature`), exact open
+milestone title/number, Priority (`P1`–`P4`), comma-separated topic labels, and
+a UTF-8 body file. Edit takes the issue number first. All metadata is explicit;
+edit replaces the supplied title/type/milestone/labels/body, rather than
+inferring missing decisions. Files preserve body bytes, including trailing
+newlines and angle placeholders. An empty body/label or readback mismatch fails.
+
+Optional trailing numbers are explicitly chosen open `blocked-by` prerequisites
+(42 in the edit example). The frontdoors use native dependency endpoints with
+resolved integer database IDs and verify readback. Dependencies are additive;
+editing does not erase pre-existing links. Do not supply closed prerequisites or
+substitute prose for native links.
+
+Both operations add/retain the issue in Jaunder Backlog (#1), set its explicit
+Priority, and verify exact issue metadata/body and Backlog/Priority readback.
+They do not change claim Status. Stdout contains the verified issue JSON plus
+its Backlog item; progress/failures go to stderr. Native `gh`/GitHub owns
+mutation semantics. A nonzero result can follow partial application: inspect the
+printed issue URL before retrying; no rollback or automatic duplicate issue
+creation is attempted. Invalid/partial/API responses cannot produce success.
+
+The three Just frontdoors replace ordinary xtask issue dispatch/report helpers.
+Their small shell helpers compose native `gh`/`git` and `jq`; they do not add a
+general command runner or polling loop.
 
 ### Targeted Rust tests
 
