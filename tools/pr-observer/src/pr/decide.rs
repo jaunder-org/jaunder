@@ -803,6 +803,17 @@ mod tests {
     }
 
     #[test]
+    fn absent_required_contexts_on_eligible_open_pr_await_checks() {
+        assert!(matches!(
+            classify(&open(vec![]), &queue_rules(), None, &Progress::default()),
+            Step::Continue {
+                phase: Phase::AwaitingChecks,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn green_and_unqueued_is_ready_to_land() {
         assert!(matches!(
             classify(&open(green()), &queue_rules(), None, &Progress::default()),
