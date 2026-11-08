@@ -146,7 +146,7 @@ failure.
 
 **Performance workflow decision status (issue #1894).** The implementation above
 is present in this source tree. Its
-[Just and Nix performance workflow ownership](adr/drafts/performance-workflow-ownership.md)
+[Just and Nix performance workflow ownership](adr/0241-performance-workflow-ownership.md)
 ADR remains proposed under the normal promotion process, as a narrow
 performance-specific clarification of ADR-0028; ADR-0141 workspace ownership and
 auxiliary host tests remain unchanged. Implementation in this tree is not a
