@@ -66,6 +66,56 @@ async fn get_revision_detail(
 
 #[apply(backends)]
 #[tokio::test]
+async fn publication_timezone_history_and_scheduled_wire_projections(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let session = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
+    let cookie = session.cookie();
+    let mut input = PostInputs::new(
+        common::test_support::parse_post_body("Publication projection"),
+        storage::PostFormat::Markdown,
+    );
+    input.publish = Some(true);
+    input.publish_at = Some("2024-07-01T02:30:00.123456Z".parse().unwrap());
+    input.timezone = Some("US/Eastern".parse().unwrap());
+    let (status, body) = create_post_json(app.clone(), input.clone(), Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let id = confirmed_created_post(&body).post_id;
+    let created: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(created["Confirmed"]["post"]["timezone"], "US/Eastern");
+    input.timezone = Some("Europe/London".parse().unwrap());
+    let (status, body) = update_post_json(app.clone(), id, input.clone(), Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let updated: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(updated["Confirmed"]["timezone"], "Europe/London");
+    let (status, body) = get_post_history(app.clone(), id, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let history: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(history["current"]["timezone"], "Europe/London");
+    assert_eq!(
+        history["current"]["published_at"],
+        "2024-07-01T02:30:00.123456Z"
+    );
+    let revision_id = history["revisions"]["revisions"][0]["revision_id"]
+        .as_i64()
+        .unwrap()
+        .into();
+    let (status, body) = get_revision_detail(app.clone(), id, revision_id, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let detail: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(detail["timezone"], "US/Eastern");
+    assert_eq!(detail["published_at"], "2024-07-01T02:30:00.123456Z");
+    input.publish_at = Some("2037-07-01T02:30:00Z".parse().unwrap());
+    let (status, body) = update_post_json(app.clone(), id, input, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = super::fixtures::list_scheduled(app, None, 20, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let scheduled: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(scheduled["posts"][0]["post"]["timezone"], "Europe/London");
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn revision_history_endpoints_hide_anonymous_access(#[case] backend: Backend) {
     let env = backend.setup().await;
     set_public_default_audience(env.site_config(), env.write_scope())

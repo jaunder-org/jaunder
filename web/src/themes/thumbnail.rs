@@ -57,6 +57,7 @@ pub fn thumbnail_document(
 
 fn fixture_post() -> anyhow::Result<RenderedPost> {
     Ok(RenderedPost {
+        timezone: common::time::PublicationTimezone::utc(),
         post_id: PostId::from(1),
         username: "jaunder"
             .parse()

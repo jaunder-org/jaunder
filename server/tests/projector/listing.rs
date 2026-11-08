@@ -706,7 +706,7 @@ async fn every_page_seed_variant_serializes_without_null_fallback(#[case] backen
             order: common::seed::TimelineOrder::Newest,
             page,
         },
-        PageSeed::Permalink(web::posts::public_authored_post(record, false)),
+        PageSeed::Permalink(Box::new(web::posts::public_authored_post(record, false))),
         PageSeed::FeedDiscovery(common::feed::FeedSurface::Site),
     ];
 

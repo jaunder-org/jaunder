@@ -43,10 +43,12 @@ pub fn draft_row_display(draft: &UnpublishedPost) -> DraftRowDisplay {
     // `list_drafts` only returns true drafts (`published_at` NULL) and scheduled
     // posts (`published_at` in the future), so a `Some` here is necessarily a
     // scheduled time — that is what makes the badge text correct.
-    let scheduled_badge = draft
-        .post
-        .published_at
-        .map(|when| format!("Scheduled for {when}"));
+    let scheduled_badge = draft.post.published_at.map(|when| {
+        format!(
+            "Scheduled for {}",
+            common::time::format_publication_time(when, &draft.post.timezone)
+        )
+    });
     DraftRowDisplay {
         label,
         scheduled_badge,
@@ -114,6 +116,7 @@ mod tests {
     fn draft(title: Option<&str>, scheduled: Option<&str>) -> UnpublishedPost {
         UnpublishedPost {
             post: SavedPost {
+                timezone: common::time::PublicationTimezone::utc(),
                 post_id: PostId::from(1),
                 slug: parse_slug("my-post"),
                 published_at: scheduled.map(parse_utc_instant),

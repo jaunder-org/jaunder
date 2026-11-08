@@ -67,7 +67,7 @@ the end-to-end round trip is proven; no intermediate slice is feature-complete.
     package, including server integration tests, alongside Task 2's storage
     package tests.
 
-- [ ] **4. Render all approved publication displays from the saved zone.**
+- [x] **4. Render all approved publication displays from the saved zone.**
   - Contract: propagate timezone through `PostRecord`, current/revision history
     DTOs and rendered projections. Format publication instants in-zone on public
     cards/permalinks, scheduled list, edit scheduled notice, current history and

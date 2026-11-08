@@ -34,6 +34,7 @@ pub struct RevisionHistoryAudience {
 /// tag/audience/media state for historical state.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RevisionHistoryDetail {
+    pub timezone: crate::time::PublicationTimezone,
     pub revision_id: RevisionId,
     pub post_id: PostId,
     pub title: Option<PostTitle>,

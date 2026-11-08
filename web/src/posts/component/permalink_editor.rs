@@ -93,16 +93,16 @@ fn permalink_unpublish_callback(refetch: RwSignal<u32>) -> Callback<SavedPost> {
 
 /// Server-classified publication notice for an author-visible Scheduled Post.
 #[component]
-fn ScheduledNotice(at: Option<UtcInstant>) -> impl IntoView {
+fn ScheduledNotice(
+    at: Option<UtcInstant>,
+    timezone: common::time::PublicationTimezone,
+) -> impl IntoView {
     view! {
         {move || {
             at.map(|at| {
                 view! {
                     <p class="success">
-                        {format!(
-                            "Scheduled for {} local time",
-                            time::local_datetime_from_utc(at).replace('T', " "),
-                        )}
+                        {format!("Scheduled for {}", time::format_publication_time(at, &timezone))}
                     </p>
                 }
             })
@@ -116,7 +116,7 @@ pub fn PostPage() -> impl IntoView {
     let theme = crate::app::public_theme();
     // The projector seed is a fallback only for its exact typed permalink route.
     let seed_post = match use_context::<Option<PageSeed>>().flatten() {
-        Some(PageSeed::Permalink(post)) => Some(post),
+        Some(PageSeed::Permalink(post)) => Some(*post),
         _ => None,
     };
 
@@ -191,7 +191,10 @@ pub fn PostPage() -> impl IntoView {
                                     </crate::app::ThemeHero>
                                     <div class="j-scroll">
                                         <div class="j-page">
-                                            <ScheduledNotice at=scheduled_at />
+                                            <ScheduledNotice
+                                                at=scheduled_at
+                                                timezone=fetched.post.post.timezone.clone()
+                                            />
                                             <PostCard
                                                 post=&fetched.post.post
                                                 banner=banner.as_deref()
@@ -293,6 +296,7 @@ pub fn EditPostPage() -> impl IntoView {
                             }
                         }
                         let post_id = fetched.post.post.post_id;
+                        let timezone = fetched.post.post.timezone.clone();
                         // The slug is not part of the bundle (the compact shape has
                         // none) — see `seed_from`. A confirmed Unpublish is
                         // authoritative for the new Draft branch, while the fields
@@ -306,6 +310,7 @@ pub fn EditPostPage() -> impl IntoView {
                                         state=state
                                         slug_field=slug_field
                                         post_id=post_id
+                                        timezone=timezone.clone()
                                         publication=current_publication
                                         delete_publication=loaded_publication
                                         action=update_post_action
@@ -334,6 +339,7 @@ fn EditPostForm(
     /// [`ComposeState::seed_from`].
     slug_field: Field<Slug>,
     post_id: PostId,
+    timezone: common::time::PublicationTimezone,
     /// Publication branch and branch-specific signals fixed when the response loaded.
     publication: EditPublicationState,
     /// The immutable server-snapshot classification that owns delete navigation.
@@ -375,7 +381,12 @@ fn EditPostForm(
                 }
             }),
         );
+    let scheduled_at = match publication.loaded() {
+        posts::LoadedPublication::Scheduled(at) => Some(at),
+        posts::LoadedPublication::Draft | posts::LoadedPublication::Live(_) => None,
+    };
     view! {
+        <ScheduledNotice at=scheduled_at timezone />
         <div class="j-compose-grid">
             <div class="j-compose-body">
                 <ComposerCore

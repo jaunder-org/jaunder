@@ -386,7 +386,7 @@ mod tests {
         assert!(profile.contains("rel=\"EditURI\""), "{profile}");
         // Permalink: none.
         assert_eq!(
-            render_discovery(&PageSeed::Permalink(sample_post())).as_str(),
+            render_discovery(&PageSeed::Permalink(Box::new(sample_post()))).as_str(),
             ""
         );
     }
@@ -457,7 +457,7 @@ mod tests {
     #[test]
     fn non_local_head_metadata_is_unmarked() {
         let head = render_head(
-            &PageSeed::Permalink(sample_post()),
+            &PageSeed::Permalink(Box::new(sample_post())),
             None,
             &application_url(),
         )
@@ -534,7 +534,12 @@ mod tests {
     fn permalink_head_sets_escaped_title_and_effective_description() {
         let mut post = sample_post();
         post.permalink_description = Some("Rendered & <description>".parse().unwrap());
-        let head = render_head(&PageSeed::Permalink(post), None, &application_url()).into_string();
+        let head = render_head(
+            &PageSeed::Permalink(Box::new(post)),
+            None,
+            &application_url(),
+        )
+        .into_string();
         assert!(
             head.contains("<title>Hello &amp; &lt;World&gt;</title>"),
             "{head}"
@@ -559,8 +564,12 @@ mod tests {
         authored.post.rendered_title = Some(common::test_support::rendered_post_title(
             "<em>Rendered presentation</em>",
         ));
-        let head =
-            render_head(&PageSeed::Permalink(authored), None, &application_url()).into_string();
+        let head = render_head(
+            &PageSeed::Permalink(Box::new(authored)),
+            None,
+            &application_url(),
+        )
+        .into_string();
         assert!(head.contains("<title>*Authored syntax*</title>"), "{head}");
         assert!(!head.contains("Rendered presentation"), "{head}");
     }
@@ -572,8 +581,12 @@ mod tests {
     fn permalink_head_falls_back_to_the_author_when_a_post_has_no_title() {
         let mut untitled = sample_post();
         untitled.title = None;
-        let head =
-            render_head(&PageSeed::Permalink(untitled), None, &application_url()).into_string();
+        let head = render_head(
+            &PageSeed::Permalink(Box::new(untitled)),
+            None,
+            &application_url(),
+        )
+        .into_string();
         assert!(head.contains("<title>Post by alice</title>"), "{head}");
     }
 
@@ -718,7 +731,7 @@ mod tests {
 
     #[test]
     fn page_seed_round_trips_through_json() {
-        let seed = PageSeed::Permalink(sample_post());
+        let seed = PageSeed::Permalink(Box::new(sample_post()));
         let json = serde_json::to_string(&seed).unwrap();
         let back: PageSeed = serde_json::from_str(&json).unwrap();
         assert_eq!(seed, back);

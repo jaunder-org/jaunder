@@ -48,6 +48,7 @@ fn rendered_post_from_record(
     content_license: Option<common::content_license::ContentLicense>,
 ) -> RenderedPost {
     let PostRecord {
+        timezone,
         post_id,
         author_username,
         author_display_name,
@@ -61,6 +62,7 @@ fn rendered_post_from_record(
         ..
     } = post;
     RenderedPost {
+        timezone,
         post_id,
         username: author_username,
         display_name: author_display_name,
@@ -171,6 +173,50 @@ mod tests {
         storage::PublicPresentationPostRecord {
             post,
             content_license: common::content_license::ContentLicense::AllRightsReserved,
+        }
+    }
+
+    #[test]
+    fn publication_timezone_projection_and_rendering_use_saved_zone_across_dst() {
+        use common::test_support::{parse_post_body, parse_username, rendered_html};
+        for (instant, expected) in [
+            ("2024-01-01T02:30:00Z", "2023-12-31 21:30 EST"),
+            ("2024-07-01T02:30:00.123456Z", "2024-06-30 22:30 EDT"),
+        ] {
+            let at = instant.parse().unwrap();
+            let record = storage::PostRecord {
+                timezone: "US/Eastern".parse().unwrap(),
+                post_id: 1.into(),
+                user_id: 2.into(),
+                author_username: parse_username("author"),
+                author_display_name: None,
+                title: None,
+                rendered_title: None,
+                slug: "publication".parse().unwrap(),
+                body: parse_post_body("body"),
+                format: storage::PostFormat::Markdown,
+                rendered_html: rendered_html("<p>body</p>"),
+                created_at: at,
+                updated_at: at,
+                published_at: Some(at),
+                deleted_at: None,
+                summary: None,
+                tags: vec![],
+            };
+            let authored = super::authored_post(record.clone(), false);
+            let listing = super::rendered_post(public_post(record), None).unwrap();
+            for projected in [&authored.post, &listing] {
+                let html = crate::posts::render::permalink_article(projected);
+                assert!(html.as_str().contains(expected), "{}", html.as_str());
+                assert_eq!(projected.published_at, Some(at));
+                assert!(projected.permalink.as_ref().unwrap().contains(
+                    if instant.starts_with("2024-01") {
+                        "/2024/01/01/"
+                    } else {
+                        "/2024/07/01/"
+                    }
+                ));
+            }
         }
     }
 

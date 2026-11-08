@@ -207,6 +207,7 @@ fn revision_history_cursor(cursor: storage::PostRevisionCursor) -> RevisionHisto
 #[cfg(feature = "server")]
 fn current_post_history(summary: CurrentPostRevisionSummary) -> CurrentPostHistory {
     CurrentPostHistory {
+        timezone: summary.timezone,
         post_id: summary.post_id,
         title: summary.title,
         slug: summary.slug,
@@ -223,6 +224,7 @@ fn current_post_history(summary: CurrentPostRevisionSummary) -> CurrentPostHisto
 fn revision_detail(detail: PostRevisionDetail) -> RevisionHistoryDetail {
     let revision = detail.revision;
     RevisionHistoryDetail {
+        timezone: revision.timezone,
         revision_id: revision.revision_id,
         post_id: revision.post_id,
         title: revision.title,
@@ -306,6 +308,7 @@ fn unpublished_post_from_record(post: PostRecord) -> UnpublishedPost {
     let permalink = post.permalink();
     UnpublishedPost {
         post: SavedPost {
+            timezone: post.timezone,
             post_id: post.post_id,
             slug: post.slug,
             published_at: post.published_at,
@@ -324,6 +327,7 @@ fn unpublished_post_from_record(post: PostRecord) -> UnpublishedPost {
 /// all of them.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SavedPost {
+    pub timezone: common::time::PublicationTimezone,
     pub post_id: PostId,
     pub slug: Slug,
     pub published_at: Option<UtcInstant>,
@@ -474,6 +478,7 @@ pub struct RevisionHistoryPage {
 /// The current (not revision) heading for a Post history view.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CurrentPostHistory {
+    pub timezone: common::time::PublicationTimezone,
     pub post_id: PostId,
     pub title: Option<PostTitle>,
     pub slug: Slug,
@@ -787,6 +792,7 @@ pub async fn create(post: PostInputs) -> WebResult<MutationOutcome<ClassifiedSav
 
     let outcome = outcome.map(|record| {
         let post = SavedPost {
+            timezone: record.timezone.clone(),
             post_id: record.post_id,
             slug: record.slug.clone(),
             published_at: record.published_at,
@@ -1075,6 +1081,7 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<MutationOutc
         error => error.into(),
     })?;
     let outcome = outcome.map(|record| SavedPost {
+        timezone: record.timezone.clone(),
         post_id,
         slug: record.slug.clone(),
         published_at: record.published_at,
@@ -1230,6 +1237,7 @@ pub async fn publish(post_id: PostId) -> WebResult<MutationOutcome<SavedPost>> {
         return Err(InternalError::not_found("Post"));
     }
     let outcome = outcome.map(|updated| SavedPost {
+        timezone: updated.timezone.clone(),
         post_id: updated.post_id,
         slug: updated.slug.clone(),
         published_at: updated.published_at,
@@ -1282,6 +1290,7 @@ pub async fn unpublish(post_id: PostId) -> WebResult<MutationOutcome<SavedPost>>
     .await
     .map_err(InternalError::from)?;
     Ok(outcome.map(|updated| SavedPost {
+        timezone: updated.timezone.clone(),
         post_id: updated.post_id,
         slug: updated.slug.clone(),
         published_at: updated.published_at,
@@ -1385,6 +1394,7 @@ mod tests {
             parse_display_name, parse_root_relative_url, parse_utc_instant,
         };
         let original = RenderedPost {
+            timezone: common::time::PublicationTimezone::utc(),
             post_id: PostId::from(1),
             username: parse_username("alice"),
             display_name: Some(parse_display_name("Ada Lovelace")),
@@ -1428,6 +1438,7 @@ mod tests {
         use common::test_support::{parse_root_relative_url, parse_utc_instant};
 
         let original = SavedPost {
+            timezone: common::time::PublicationTimezone::utc(),
             post_id: PostId::from(1),
             slug: "hello".parse::<Slug>().unwrap(),
             published_at: Some(parse_utc_instant("2026-01-01T00:00:00Z")),
@@ -1480,6 +1491,7 @@ mod tests {
         let page = Page {
             posts: vec![UnpublishedPost {
                 post: SavedPost {
+                    timezone: common::time::PublicationTimezone::utc(),
                     post_id: PostId::from(1),
                     slug: "hello".parse::<Slug>().unwrap(),
                     published_at: Some(parse_utc_instant("2099-01-01T00:00:00Z")),
@@ -1498,7 +1510,7 @@ mod tests {
         let json = serde_json::to_string(&page).unwrap();
         assert_eq!(
             json,
-            r#"{"posts":[{"post":{"post_id":1,"slug":"hello","published_at":"2099-01-01T00:00:00Z","permalink":"/~alice/2099/01/01/hello"},"title":null,"fallback_label":{"kind":"summary","value":"fallback label"},"edit_url":"/posts/1/edit"}],"next_cursor":{"created_at":"2026-01-01T00:00:00Z","post_id":1},"has_more":true}"#
+            r#"{"posts":[{"post":{"timezone":"UTC","post_id":1,"slug":"hello","published_at":"2099-01-01T00:00:00Z","permalink":"/~alice/2099/01/01/hello"},"title":null,"fallback_label":{"kind":"summary","value":"fallback label"},"edit_url":"/posts/1/edit"}],"next_cursor":{"created_at":"2026-01-01T00:00:00Z","post_id":1},"has_more":true}"#
         );
         assert_eq!(
             serde_json::from_str::<Page<UnpublishedPost>>(&json).unwrap(),
@@ -1977,6 +1989,7 @@ mod server_tests {
                 lifecycle: PostLifecycle::Deleted,
             }),
             super::CurrentPostHistory {
+                timezone: common::time::PublicationTimezone::utc(),
                 post_id: PostId::from(7),
                 title: None,
                 slug: "current".parse().expect("valid slug"),

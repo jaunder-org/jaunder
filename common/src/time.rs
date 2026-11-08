@@ -40,6 +40,20 @@ impl PublicationTimezone {
     }
 }
 
+/// Formats a publication instant in its saved editing zone, including the
+/// date-specific IANA abbreviation. Audit instants and input conversion are separate.
+#[must_use]
+pub fn format_publication_time(instant: UtcInstant, timezone: &PublicationTimezone) -> String {
+    let zone = TimeZone::get(timezone.as_ref()).unwrap_or_else(|_| {
+        unreachable!("PublicationTimezone already validated against the bundled named database")
+    });
+    instant
+        .value()
+        .to_zoned(zone)
+        .strftime("%Y-%m-%d %H:%M %Z")
+        .to_string()
+}
+
 #[cfg(test)]
 mod publication_timezone_tests {
     #[test]
