@@ -294,12 +294,16 @@ impl Arm {
                 | (Self::Server, Boundary::StaticCode)
                 | (Self::Web, Boundary::StaticCode | Boundary::Site)
                 | (
-                    Self::Common | Self::Macros | Self::Performance | Self::BuildConfig,
+                    Self::Common | Self::Macros | Self::BuildConfig,
                     Boundary::StaticCode
                         | Boundary::StaticElisp
                         | Boundary::Site
                         | Boundary::WasmTests
                         | Boundary::Xtask,
+                )
+                | (
+                    Self::Performance,
+                    Boundary::StaticCode | Boundary::StaticElisp | Boundary::Site | Boundary::WasmTests,
                 )
                 | (
                     Self::SharedHost | Self::ThemeCss | Self::ApplicationCss,
@@ -689,12 +693,33 @@ mod tests {
             if !matches!(arm, Arm::Docs | Arm::Server | Arm::UnrelatedNote) {
                 changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
             }
-            if matches!(arm, Arm::Common | Arm::Macros | Arm::Performance) {
+            if matches!(arm, Arm::Common | Arm::Macros) {
                 changed.xtask = "xtask-2".to_owned();
+            }
+            if matches!(arm, Arm::Common | Arm::Macros | Arm::Performance) {
                 changed.devtool = "devtool-2".to_owned();
                 changed.static_elisp = "elisp-2".to_owned();
             }
             assert_eq!(compare_arm(&base, arm, &changed), Ok(()));
+        }
+    }
+
+    #[test]
+    fn performance_source_preserves_other_fanout_without_xtask_dependency() {
+        let affected = [
+            Boundary::StaticCode,
+            Boundary::StaticElisp,
+            Boundary::Site,
+            Boundary::WasmTests,
+            Boundary::Devtool,
+            Boundary::CsrDebugBundle,
+        ];
+        for boundary in Boundary::ALL {
+            assert_eq!(
+                Arm::Performance.expects_change(boundary),
+                affected.contains(&boundary),
+                "{boundary:?}"
+            );
         }
     }
 

@@ -87,6 +87,8 @@ let
   coverageAuxiliarySource =
     relative:
     relative == ".config/nextest.toml"
+    # Performance integration tests exercise the production Just recipes.
+    || relative == "Justfile"
     || relative == "csr/index.html"
     || pkgs.lib.hasPrefix "server/assets/" relative
     || pkgs.lib.hasPrefix "storage/migrations/" relative
@@ -112,6 +114,7 @@ let
     assert (coverageAuxiliarySource "storage/migrations/sqlite/0001_create_site_config.sql");
     assert (coverageAuxiliarySource "server/assets/jaunder.css");
     assert (coverageAuxiliarySource "csr/index.html");
+    assert (coverageAuxiliarySource "Justfile");
     assert (coverageAuxiliarySource "host/system_theme_sources/studio/theme.json");
     assert (coverageAuxiliarySource "host/system_theme_sources/studio/style.css");
     assert (coverageAuxiliarySource "testdata/theme-repository/minimal/preview.png");
@@ -1278,6 +1281,95 @@ mkPerformanceProducer =
         machine.copy_from_machine("/var/lib/jaunder/performance", "")
       ''}
     '';
+  };
+
+# Nix owns selection and the producer installable descriptions. Just consumes
+# this ordered list one installable at a time so measurement VMs never overlap.
+selectPerformanceProducers =
+  {
+    freshnessNonce,
+    profile,
+    backends ? "",
+    browsers ? "",
+    workload ? "all",
+    posts ? "",
+    authors ? "",
+    revisions ? "",
+  }:
+  let
+    split = value: if value == "" then [ ] else pkgs.lib.splitString "," value;
+    requestedBackends = split backends;
+    requestedBrowsers = split browsers;
+    validBackends = [ "sqlite" "postgres" ];
+    validBrowsers = [ "chromium" "firefox" ];
+    selectedBackends =
+      if requestedBackends == [ ] then
+        validBackends
+      else
+        builtins.filter (value: builtins.elem value requestedBackends) validBackends;
+    storage = builtins.elem workload [ "all" "storage" ];
+    browser = builtins.elem workload [ "all" "browser" ];
+    selectedBrowsers =
+      if !browser then
+        [ ]
+      else if requestedBrowsers == [ ] then
+        [ "chromium" ]
+      else
+        builtins.filter (value: builtins.elem value requestedBrowsers) validBrowsers;
+    parseCount = value: if value == "" then null else builtins.fromJSON value;
+    countOverrides = {
+      posts = parseCount posts;
+      authors = parseCount authors;
+      revisions = parseCount revisions;
+    };
+    producer = kind: backend: selectedBrowser:
+      let
+        derivation = mkPerformanceProducer {
+          inherit freshnessNonce profile backend;
+          producerKind = kind;
+          browser = selectedBrowser;
+          inherit (countOverrides) posts authors revisions;
+        };
+        name =
+          "performance-${kind}-${backend}"
+          + pkgs.lib.optionalString (selectedBrowser != null) "-${selectedBrowser}";
+      in
+      {
+        inherit name backend;
+        inherit (countOverrides) posts authors revisions;
+        installable = "${derivation.drvPath}^out";
+        identity = derivation.outPath;
+        producer = kind;
+        browser = selectedBrowser;
+      };
+    producers = pkgs.lib.concatMap (
+      backend:
+      (pkgs.lib.optional storage (producer "storage" backend null))
+      ++ pkgs.lib.concatMap (
+        selectedBrowser: [ (producer "browser" backend selectedBrowser) ]
+      ) selectedBrowsers
+    ) selectedBackends;
+    selection = {
+      backends = selectedBackends;
+      browsers = selectedBrowsers;
+      inherit storage;
+      count_overrides = countOverrides;
+      browser = browser;
+    };
+  in
+  assert freshnessNonce != "";
+  assert builtins.elem profile [ "small" "medium" "large" ];
+  assert builtins.elem workload [ "all" "storage" "browser" ];
+  assert builtins.all (value: builtins.elem value validBackends) requestedBackends;
+  assert builtins.all (value: builtins.elem value validBrowsers) requestedBrowsers;
+  assert !(workload == "storage" && requestedBrowsers != [ ]);
+  assert builtins.all (
+    value: value == null || (builtins.isInt value && value > 0)
+  ) (builtins.attrValues countOverrides);
+  assert selectedBackends != [ ];
+  assert !browser || selectedBrowsers != [ ];
+  {
+    inherit profile selection producers;
   };
 
 # Each producer owns one browser and one SQLite VM.  They deliberately are
@@ -2587,6 +2679,12 @@ mkWasmCoverageMeasurementProducer =
         src = coverageSrc;
         inherit cargoArtifacts;
         pname = "jaunder-coverage";
+        # Just's embedded recipe shebangs are not at the start of a shell file,
+        # so patchShebangs cannot make these production recipes sandbox-safe.
+        postPatch = ''
+          substituteInPlace Justfile \
+            --replace-fail '#!/usr/bin/env bash' '#!${pkgs.bash}/bin/bash'
+        '';
         # Source-based coverage uses LLVM's embedded coverage map
         # (-Cinstrument-coverage), not DWARF, so dropping debuginfo
         # shrinks the instrumented test binaries dramatically with no
@@ -2610,6 +2708,11 @@ mkWasmCoverageMeasurementProducer =
           pkgs.cargo-llvm-cov
           pkgs.cargo-nextest
           pkgs.exiftool
+          # Performance CLI fixtures create Git provenance and exercise real Just
+          # recipes (including their jq selection/retention operations).
+          pkgs.git
+          pkgs.just
+          pkgs.jq
           # devtool runs the whole test suite under an ephemeral
           # PostgreSQL (via devtool pg) so
           # storage/src/postgres/* gets instrumented coverage. The
@@ -2803,7 +2906,7 @@ in
 {
 
   internals = {
-    inherit mkE2eCheck mkPerformanceProducer;
+    inherit mkE2eCheck mkPerformanceProducer selectPerformanceProducers;
   };
   packages = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
     e2eSupportPackages
@@ -3569,7 +3672,9 @@ static-e2e-census =
 static-code =
   # Force the optional performance surface in the existing static gate so
   # shared VM-wrapper changes cannot silently leave measurement producers stale.
-  assert import ./performance-contract.nix { inherit mkPerformanceProducer; };
+  assert import ./performance-contract.nix {
+    inherit mkPerformanceProducer selectPerformanceProducers;
+  };
   let
     staticCodeSourceFilter =
       path: type:

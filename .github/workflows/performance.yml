@@ -36,13 +36,13 @@ jobs:
             experimental-features = nix-command flakes
           github_access_token: ${{ github.token }}
       - name: Measure canonical medium matrix
-        run: nix develop .#ci --accept-flake-config -c cargo xtask perf medium
+        run: nix develop .#ci --accept-flake-config -c just perf medium
       - name: Compare committed baseline
         if: >-
           success() && hashFiles('tools/performance/baseline-v1.json') != ''
         run: >-
-          nix develop .#ci --accept-flake-config -c cargo xtask perf compare
-          --result .xtask/performance/performance-result-v1.json
+          nix develop .#ci --accept-flake-config -c just perf-compare
+          .xtask/performance/performance-result-v1.json
       - name: Upload performance result
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

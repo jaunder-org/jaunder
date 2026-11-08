@@ -264,6 +264,77 @@ build-csr $profile="debug":
     mkdir -p "$checkout/target/site"
     cp -a "$dist/." "$checkout/target/site/"
 
+# Nix selects the producer set; this ordered host loop retains each output before
+# the next measurement can run and validates status before continuing.
+perf profile="medium" backends="sqlite,postgres" browsers="" workload="all" posts="" authors="" revisions="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    nonce=$(cargo run --locked --quiet --manifest-path tools/Cargo.toml -p performance --bin perf-data -- nonce)
+    run_root=".xtask/performance/$nonce"
+    mkdir -p "$run_root/producers"
+    parameters=$(jq -cn \
+      --arg freshnessNonce "$nonce" \
+      --arg profile {{ quote(profile) }} \
+      --arg backends {{ quote(backends) }} \
+      --arg browsers {{ quote(browsers) }} \
+      --arg workload {{ quote(workload) }} \
+      --arg posts {{ quote(posts) }} \
+      --arg authors {{ quote(authors) }} \
+      --arg revisions {{ quote(revisions) }} \
+      '{freshnessNonce: $freshnessNonce, profile: $profile, backends: $backends, browsers: $browsers, workload: $workload, posts: $posts, authors: $authors, revisions: $revisions}')
+    JAUNDER_PERF_PARAMETERS="$parameters" nix eval --impure --json \
+      --expr 'let flake = builtins.getFlake (toString ./.); parameters = builtins.fromJSON (builtins.getEnv "JAUNDER_PERF_PARAMETERS"); in flake.performanceLib.${builtins.currentSystem}.selectPerformanceProducers parameters' \
+      > "$run_root/selection.json"
+    cargo run --locked --quiet --manifest-path tools/Cargo.toml -p performance --bin perf-data -- validate-selection --selection "$run_root/selection.json"
+    jq -c '.producers[]' "$run_root/selection.json" > "$run_root/selected.ndjson"
+
+    while IFS= read -r selected; do
+      name=$(jq -er '.name' <<<"$selected")
+      installable=$(jq -er '.installable' <<<"$selected")
+      selected_identity=$(jq -er '.identity' <<<"$selected")
+      kind=$(jq -er '.producer' <<<"$selected")
+      backend=$(jq -er '.backend' <<<"$selected")
+      browser=$(jq -r '.browser // empty' <<<"$selected")
+      output=$(nix build --no-link --print-out-paths "$installable")
+      [[ "$output" == "$selected_identity" ]] || { printf 'Nix output identity mismatches selection for %s: %s != %s\n' "$name" "$output" "$selected_identity" >&2; exit 1; }
+      [[ -d "$output/performance" ]] || { printf 'Nix output lacks performance evidence for %s: %s\n' "$name" "$output" >&2; exit 1; }
+
+      producer_root="$run_root/producers/$name"
+      mkdir -p "$producer_root"
+      cp -a -- "$output/performance" "$producer_root/performance"
+      validator=(validate-producer --producer "$kind" --backend "$backend")
+      if [[ -n "$browser" ]]; then
+        validator+=(--browser "$browser")
+      fi
+      validator+=(--performance-root "$producer_root/performance")
+      cargo run --locked --quiet --manifest-path tools/Cargo.toml -p performance --bin perf-data -- "${validator[@]}"
+      jq -cn \
+        --arg name "$name" \
+        --arg identity "$output" \
+        --arg producer "$kind" \
+        --arg backend "$backend" \
+        --arg browser "$browser" \
+        --arg retained_root "$producer_root/performance" \
+        '{name: $name, identity: $identity, producer: $producer, backend: $backend, browser: (if $browser == "" then null else $browser end), retained_root: $retained_root}' \
+        > "$producer_root/metadata.json"
+    done < "$run_root/selected.ndjson"
+
+    jq -n \
+      --arg profile {{ quote(profile) }} \
+      --arg nonce "$nonce" \
+      --argjson selection "$(jq -c '.selection' "$run_root/selection.json")" \
+      --argjson producers "$(jq -cs '[.[]]' "$run_root"/producers/*/metadata.json)" \
+      '{profile: $profile, freshness_nonce: $nonce, selection: $selection, producers: $producers}' \
+      > "$run_root/invocation.json"
+    cargo run --locked --quiet --manifest-path tools/Cargo.toml -p performance --bin perf-data -- assemble --invocation "$run_root/invocation.json"
+
+# Comparison is advisory; only explicit authenticated import may replace the baseline.
+perf-compare result:
+    cargo run --locked --quiet --manifest-path tools/Cargo.toml -p performance --bin perf-data -- compare --result {{quote(result)}}
+
+perf-import-baseline run_id:
+    cargo run --locked --quiet --manifest-path tools/Cargo.toml -p performance --bin perf-data -- import-baseline {{quote(run_id)}}
+
 # Full hermetic E2E workflow: continue all producers, then reconcile both backends.
 e2e jobs="":
     bash scripts/e2e-workflow all {{quote(jobs)}}

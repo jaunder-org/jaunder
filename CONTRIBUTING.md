@@ -987,14 +987,19 @@ Jaunder uses OpenTelemetry for deep performance analysis (see
 
 #### Repeatable performance harness
 
-`cargo xtask perf <profile>` produces fresh, versioned performance evidence. The
-default matrix for every profile is direct storage and browser work against
+`just perf [profile] [backends] [browsers] [workload] [posts] [authors] [revisions]`
+produces fresh, versioned performance evidence. Defaults are `medium`,
+`sqlite,postgres`, an empty browser list, `all`, and unset counts. Nix selects
+producer descriptions from these native parameters and one fresh nonce; Just
+builds and retains each producer serially, and the host-only `perf-data` command
+validates and assembles the retained evidence. Rust does not schedule producers.
+The default matrix for every profile is direct storage and browser work against
 SQLite and PostgreSQL, with Chromium for browser work; it uses release-mode
 application artifacts and runs the selected workloads in order. The canonical
 comparison run is therefore:
 
 ```bash
-cargo xtask perf medium
+just perf medium
 ```
 
 `small` (100 Posts, 10 authors, 500 revisions) is the fast smoke profile.
@@ -1004,36 +1009,42 @@ authors, 250,000 revisions) is an intentional stress run, not a routine
 comparison:
 
 ```bash
-cargo xtask perf small
-cargo xtask perf medium
-cargo xtask perf large
+just perf small
+just perf medium
+just perf large
 ```
 
 Count overrides support deterministic dataset-shape exploration without changing
 the canonical profiles:
 
 ```bash
-cargo xtask perf small --posts 1000 --authors 20 --revisions 2000
+just perf small sqlite,postgres "" all 1000 20 2000
 ```
 
-`--posts`, `--authors`, and `--revisions` each take a positive `u64`. A supplied
-plan must have posts divisible by authors, revisions at least posts, and more
-than 50 owner-history rows per author; accepted custom datasets distribute their
-revisions deterministically. Any count override marks the result noncanonical,
-even when its numeric value equals the selected profile default, so it can be
-compared but the baseline importer rejects it.
+`posts`, `authors`, and `revisions` each take a positive `u64`; an empty value
+leaves that count unset. A supplied plan must have posts divisible by authors,
+revisions at least posts, and more than 50 owner-history rows per author;
+accepted custom datasets distribute their revisions deterministically. Any count
+override marks the result noncanonical, even when its numeric value equals the
+selected profile default, so it can be compared but the baseline importer
+rejects it.
 
-Use selectors or count overrides only for focused investigation; their results
-are visibly noncanonical and cannot seed the baseline. Select one or more
-backends and browsers with `--backend sqlite`, `--backend postgres`,
-`--browser chromium`, and `--browser firefox`; restrict the producer class with
-`--storage-only` or `--browser-only`:
+Select backends and browsers with comma-separated native parameters; duplicates
+normalize to one selection. `workload` accepts `all`, `storage`, or `browser`.
+An omitted browser list normalizes to Chromium only for browser work; an
+explicit browser with storage-only work is rejected:
 
 ```bash
-cargo xtask perf small --backend sqlite --storage-only
-cargo xtask perf small --backend postgres --browser chromium --browser-only
-cargo xtask perf medium --browser firefox --browser-only
+just perf small sqlite "" storage
+just perf small postgres chromium browser
+just perf medium sqlite,postgres firefox browser
 ```
+
+Nondefault normalized selections and all count overrides are visibly
+noncanonical and cannot seed the baseline. Explicit default-equivalent selectors
+remain canonical; baseline eligibility separately requires `medium`. Use
+nondefault selectors and counts for focused investigation, not routine baseline
+measurement.
 
 Firefox remains supported for on-demand browser investigation, but it is not in
 the routine baseline matrix. Storage workloads retain one cold sample then 30
@@ -1049,21 +1060,22 @@ Each invocation creates a fresh nonce that is part of the producer derivation
 identity; it never restores or publishes measurement derivations or result
 outputs through a cache. Inspect the invocation-owned evidence under
 `.xtask/performance/<nonce>/`: `performance-result-v1.json` is the authoritative
-combined result, `fragments/` holds producer fragments, and the producer
-directories retain derivation evidence, per-sample navigation/Playwright traces,
-and the correlated server/storage `otel-traces.jsonl`. Before xtask reports a
-measured-workload or validation failure, its producer retains
-`producer-status-v1.json` plus the available evidence. The same validated result
-is atomically copied to `.xtask/performance/performance-result-v1.json` as the
-stable CI upload/import entry point. CI uploads that complete tree as the
-`performance-result` artifact, including whatever evidence exists after a
-producer failure.
+combined result. `selection.json` records Nix-selected identities and
+`invocation.json` records retained-root metadata; each
+`producers/<name>/performance/` tree retains `producer-status-v1.json`,
+fragments, per-sample navigation/Playwright traces, and the correlated
+server/storage `otel-traces.jsonl`. Just copies that complete tree before status
+validation and before starting the next producer. A later build or status
+failure stops later producers without deleting earlier evidence. The same
+validated result is atomically copied to
+`.xtask/performance/performance-result-v1.json` as the stable CI upload/import
+entry point. CI uploads that complete tree as the `performance-result` artifact,
+including whatever evidence exists after a producer failure.
 
 When `tools/performance/baseline-v1.json` exists, compare a completed result:
 
 ```bash
-cargo xtask perf compare --result \
-  .xtask/performance/<nonce>/performance-result-v1.json
+just perf-compare .xtask/performance/<nonce>/performance-result-v1.json
 ```
 
 Comparison prints absolute median/p95 values and each sample's
@@ -1077,7 +1089,7 @@ the first successful canonical `main` run. After a scheduled or manual
 **Performance** workflow run succeeds, a maintainer imports its run ID:
 
 ```bash
-cargo xtask perf import-baseline <run-id>
+just perf-import-baseline <positive-run-id>
 ```
 
 The importer fetches the `performance-result` artifact itself and accepts only a
@@ -1831,29 +1843,30 @@ closed unless docs changes affect only `static-docs`; server changes affect
 changes affect `static-elisp` and also change `static-code`'s observed identity
 through an existing transitive input, despite exclusion from its direct Elisp
 source filter; and `common`, `macros`, and the shared performance contract
-affect `static-code`, `static-elisp`, site, wasm-test, and xtask boundaries
-without invalidating `static-docs`. For the census boundary, source-filter
-assertions establish membership of the census script, Playwright configuration,
-helper/fixture/font and package manifest/lock inputs, plus exclusion of Markdown
-and unrelated server source. Runtime identity perturbations cover the lane
-catalog invalidation and stability under Rust tooling, manifest, embedded-input,
-and unrelated server-source changes. They do not separately perturb every census
-input category or prove that each has independent invalidation. It also protects
-`devtool` and its compiled tooling dependency boundary: devtool implementation
-edits invalidate the real tool, `static-code`, `static-elisp`, and site (through
-`csrWasmBundle`'s `devtoolBin` build input), but preserve `wasm-tests`, `xtask`,
-and the compiled tooling dependency identity. `static-docs` now consumes the
-shared Prettier recipe directly, without a compiled Rust docs tool. The
-documentation and site source filters remain narrow; derivation identity
-includes transitive executable inputs as well as admitted sources.
-`tools/Cargo.lock` invalidates ordinary devtool, its dependency preparation,
-`static-code`, `static-elisp`, `xtask`, and site through `csrWasmBundle`;
-`wasm-tests` remains stable. `xtask/Cargo.lock` affects only `xtask` among these
-boundaries. Root Cargo build configuration affects `static-code`,
-`static-elisp`, site, `wasm-tests`, `xtask`, devtool and tooling dependencies.
-The four manifest arms (root, tools workspace, devtool and shared common
-manifest) and four embedded-input arms (server build script, CSR shell, Theme
-Package manifest and migration) assert the appropriate `static-code`,
+affect `static-code`, `static-elisp`, site, and wasm-test boundaries without
+invalidating `static-docs`. `common` and `macros` also affect xtask; performance
+source is outside xtask's dependency closure. For the census boundary,
+source-filter assertions establish membership of the census script, Playwright
+configuration, helper/fixture/font and package manifest/lock inputs, plus
+exclusion of Markdown and unrelated server source. Runtime identity
+perturbations cover the lane catalog invalidation and stability under Rust
+tooling, manifest, embedded-input, and unrelated server-source changes. They do
+not separately perturb every census input category or prove that each has
+independent invalidation. It also protects `devtool` and its compiled tooling
+dependency boundary: devtool implementation edits invalidate the real tool,
+`static-code`, `static-elisp`, and site (through `csrWasmBundle`'s `devtoolBin`
+build input), but preserve `wasm-tests`, `xtask`, and the compiled tooling
+dependency identity. `static-docs` now consumes the shared Prettier recipe
+directly, without a compiled Rust docs tool. The documentation and site source
+filters remain narrow; derivation identity includes transitive executable inputs
+as well as admitted sources. `tools/Cargo.lock` invalidates ordinary devtool,
+its dependency preparation, `static-code`, `static-elisp`, `xtask`, and site
+through `csrWasmBundle`; `wasm-tests` remains stable. `xtask/Cargo.lock` affects
+only `xtask` among these boundaries. Root Cargo build configuration affects
+`static-code`, `static-elisp`, site, `wasm-tests`, `xtask`, devtool and tooling
+dependencies. The four manifest arms (root, tools workspace, devtool and shared
+common manifest) and four embedded-input arms (server build script, CSR shell,
+Theme Package manifest and migration) assert the appropriate `static-code`,
 `static-elisp`, `devtool`, tooling-dependency and CSR-bundle fan-out for each
 input; unrelated boundaries remain stable. Tooling preparation uses generated
 dummy sources and a file-scoped lockfile, with repository-root target alignment
