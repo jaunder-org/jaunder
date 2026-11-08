@@ -24,7 +24,6 @@ mod mutants;
 mod nix_build;
 mod nix_probe;
 mod playwright_report;
-pub mod pr;
 pub mod production_baseline;
 mod production_baseline_lifecycle;
 mod qualification;
@@ -90,8 +89,7 @@ mod steps {
 
 pub use cli::{
     CacheSafetyCommand, Cli, Command, CoverageCommand, E2eBackend, E2eBrowser, MutantsCommand,
-    NixCommand, SandboxProfile, ServerFnCoverageCommand, TracesCommand,
-    WasmCoverageCommand,
+    NixCommand, SandboxProfile, ServerFnCoverageCommand, TracesCommand, WasmCoverageCommand,
 };
 pub use dispatch::run;
 pub use host_tooling::prepare_checkout;

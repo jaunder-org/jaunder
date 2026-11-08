@@ -5464,48 +5464,42 @@ nix run --accept-flake-config --no-update-lock-file --no-write-lock-file .#adr-p
 
 Feature authors still must not promote. Rust keeps independent read-only
 `adr-format`, README/view parity, document-link and collision gates. Ordinary PR
-observation stays in `tools/pr-observer`; xtask retains the actual shared
-read-only GitHub transport consumer for performance evidence. No cross-project
-logic changes or dormant fallback are part of this extraction.
+observation stays in `tools/pr-observer`. Integration with the base's
+performance workflow extraction leaves no xtask consumer of the old PR
+re-exports or GitHub transport facade, so those adapters and xtask's observer
+dependency are removed. The independent observer and performance implementation
+remain unchanged; no cross-project logic changes or dormant fallback are part of
+this extraction.
+
+Trusted-main App permissions are unchanged. Open attempt heads/diffs remain
+immutable; generation and per-PR recovery coalesce separately without active
+cancellation. Generate-only orphan resumption and conflict retirement require
+the existing exact identity/local proof, observed-SHA lease, verified absence
+and same-PR close checks. Dequeue re-arm requires one correlated merge group and
+complete green required contexts on both exact SHAs; pending reruns take
+precedence. Failed writes succeed only with verified exact postconditions. Safe
+refusals/successful outcomes exit zero; operational failures, unsafe state and
+unverified writes exit nonzero.
 
 Tests cover project-owned evidence selection, correlation, refusal/outcome and
-postcondition policy, expected-head/retry arguments, byte outputs, staging and
-admission. Real Git checks exercise our lease/conflict invocation and policy;
-one selected-package smoke covers runtime integration. Dependency mechanics are
-trusted, not reconstructed as provider/retry or fake route matrices.
+postcondition policy, expected-head/retry arguments, complete original-byte
+outputs, staging and admission. The three Marko exclusions remain covered. Real
+Git checks exercise our lease/conflict argv, exit interpretation and policy; one
+selected-package smoke covers runtime integration, not bootstrap. Trust
+documented PyGithub, Marko and Git behavior; do not rebuild HTTP, SDK,
+retry/pagination engines, provider/library or unconsumed field/error matrices,
+or add a fake route framework. Normal locked realization retains configured
+substitutes; it does not guarantee cold source bootstrap or hide realization
+failures.
 
 This branch is not delivered to or observed on trusted `main`; the numberless
 [Python ADR promoter draft](adr/drafts/adr-promoter-host-tool-extraction.md)
 remains proposed. One cohesive PR #1917 requires its separate exact-head human
-merge gate, then trusted-main observation as rollout acceptance. Trusted App
-scope, immutable attempts, distinct generation/per-PR coalescing, queue-only
-writes to `main` and promotion-as-acceptance remain unchanged.
-
-### Proposed final simplification — approved design, not shipped
-
-The
-[revised #1897 promoter proposal](superpowers/specs/2026-11-08-issue-1897-promoter-simplification.md)
-defines the branch implementation above: locked PyGithub replaces the custom
-GitHub transport/schema layer; queue correlation and authorization remain
-custom. One Python admission path consumes the Nix predicate; the package is
-invoked directly. Rust public mutation commands are retired, moving recovery to
-the package's `sync-readme` action. These are approved design choices, including
-a public command change, under human response via
-`9c324a59-7b2c-4519-925a-927c9c89816f` / `issue-1897-simplification-design-v2`:
-“Approve with this boundary.” This resolves qualification `ace338e3` for this
-exact design boundary only. The human approved one cohesive PR via
-`2ee4041c-3fd5-4481-9748-b1beb36c8899` / `issue-1897-single-pr-v1`: “Use one
-cohesive PR.” This supersedes only the two-PR/observe-before-retirement
-ordering. The preceding subsection describes the current branch implementation,
-not prospective trusted-main delivery. The unchanged controller/promotion
-contract and exact proposal limits are recorded in the linked spec. Tests target
-promoter behavior and integration, not SDK/library internals. The human approved
-the revised outline and implementation via
-`89ec8287-4f38-479c-bcbd-24cf540bfc7c` / `issue-1897-simplification-outline-v2`,
-for the exact reviewed outline and only its stated scope. The cohesive PR has
-one exact-head merge gate; observe trusted-main operation after merge as rollout
-acceptance before completion. Diagnose observation failure with scoped repair or
-revert; do not retain or revive a dormant fallback.
+merge gate and ordinary required checks, then trusted-main observation as
+rollout acceptance before completing #1897. On observation failure, diagnose and
+use a scoped repair or revert; never retain or revive a dormant fallback. These
+gates remain pending. Queue-only writes to `main` and promotion-as-acceptance
+remain unchanged; source conformance does not ship or accept the decision.
 
 This document is itself a gated artifact. The `adr-view-parity` step requires
 every `accepted` ADR to be cited here, and fails the ladder by name and title
