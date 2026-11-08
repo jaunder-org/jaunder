@@ -35,6 +35,8 @@ use host::feed;
 /// [`create_rendered_post`] and [`render_post_input`] stay under the argument
 /// limit and share one named shape at every call site.
 pub struct RenderedPostContent {
+    /// Latest editing zone, independent of the publication instant.
+    pub timezone: common::time::PublicationTimezone,
     /// Author of the new post.
     pub user_id: UserId,
     /// Explicit title, or `None`.
@@ -422,6 +424,7 @@ fn render_post_input_with_identity(
     reserved_post_id: Option<PostId>,
 ) -> Result<CreatePostInput, host::render::HighlightError> {
     let RenderedPostContent {
+        timezone,
         user_id,
         title,
         slug,
@@ -440,7 +443,7 @@ fn render_post_input_with_identity(
         host::render::render_post(title, body, format)?
     };
     Ok(CreatePostInput {
-        timezone: common::time::PublicationTimezone::utc(),
+        timezone,
         user_id,
         reserved_post_id,
         slug,
@@ -479,6 +482,7 @@ pub fn seed_post_input(
     let (title, _) = common::render::derive_post_naming(None, &body, &PostFormat::Markdown)
         .unwrap_or_else(|error| panic!("fixture Post title derivation failed: {error}"));
     render_post_input(RenderedPostContent {
+        timezone: common::time::PublicationTimezone::utc(),
         user_id,
         title,
         slug,
@@ -567,6 +571,8 @@ impl From<PerformUpdateError> for host::error::InternalError {
 /// Raw, front-end-supplied inputs to [`perform_post_update`].
 ///
 pub struct PostUpdate<'a> {
+    /// Omission preserves the locked Post's saved editing zone.
+    pub timezone: Option<common::time::PublicationTimezone>,
     /// Post being edited.
     pub post_id: PostId,
     /// User performing the edit (ownership is checked in storage).
@@ -612,6 +618,7 @@ pub async fn perform_post_update(
     input: PostUpdate<'_>,
 ) -> Result<MutationOutcome<PostRecord>, PerformUpdateError> {
     let PostUpdate {
+        timezone,
         post_id,
         editor_user_id,
         body,
@@ -644,7 +651,7 @@ pub async fn perform_post_update(
     let rendered = host::render::render_post_scoped(post_id, title, body, format)
         .map_err(PerformUpdateError::Render)?;
     let input = UpdatePostInput {
-        timezone: None,
+        timezone,
         slug,
         rendered,
         publish,
@@ -711,6 +718,7 @@ pub async fn perform_post_update_with_media_ownership(
     input: PostUpdate<'_>,
 ) -> Result<MutationOutcome<PostRecord>, PerformUpdateError> {
     let PostUpdate {
+        timezone,
         post_id,
         editor_user_id,
         body,
@@ -735,7 +743,7 @@ pub async fn perform_post_update_with_media_ownership(
         .await
         .map_err(PerformUpdateError::Storage)?;
     let input = UpdatePostInput {
-        timezone: None,
+        timezone,
         slug,
         rendered,
         publish,
@@ -1021,6 +1029,8 @@ pub fn candidate_slug(slug_seed: &Slug, attempt: usize) -> Result<Slug, InvalidS
 /// Raw, front-end-supplied inputs to [`perform_post_creation`].
 ///
 pub struct PostCreation<'a> {
+    /// Latest editing zone, already resolved by the ingress.
+    pub timezone: common::time::PublicationTimezone,
     /// Author of the new post.
     pub user_id: UserId,
     /// Raw post body in `format`.
@@ -1095,6 +1105,7 @@ pub async fn perform_post_creation_at(
     input: PostCreation<'_>,
 ) -> Result<MutationOutcome<PostRecord>, PerformCreationError> {
     let PostCreation {
+        timezone,
         user_id,
         body,
         title,
@@ -1138,6 +1149,7 @@ pub async fn perform_post_creation_at(
             Arc::clone(&storage),
             Arc::clone(&feed_events),
             RenderedPostContent {
+                timezone: timezone.clone(),
                 user_id,
                 title: title.clone(),
                 slug,
@@ -1179,6 +1191,7 @@ pub async fn perform_post_creation_with_media_ownership(
     input: PostCreation<'_>,
 ) -> Result<MutationOutcome<PostRecord>, PerformCreationError> {
     let PostCreation {
+        timezone,
         user_id,
         body,
         title,
@@ -1210,6 +1223,7 @@ pub async fn perform_post_creation_with_media_ownership(
             Arc::clone(&feed_events),
             ownership,
             RenderedPostContent {
+                timezone: timezone.clone(),
                 user_id,
                 title: title.clone(),
                 slug,
@@ -1370,6 +1384,7 @@ mod tests {
             Arc::clone(&storage),
             Arc::clone(&env.feed_events()),
             PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 body: parse_post_body("Hello, world!"),
                 title: None,
@@ -1423,6 +1438,7 @@ mod tests {
             ),
         ] {
             let attempt = |body: &str| PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 body: parse_post_body(body),
                 title: None,
@@ -1465,6 +1481,7 @@ mod tests {
                 Arc::clone(&storage),
                 Arc::clone(&env.feed_events()),
                 PostUpdate {
+                    timezone: None,
                     post_id: created.post_id,
                     editor_user_id: user_id,
                     body: parse_post_body(invalid),
@@ -1521,6 +1538,7 @@ mod tests {
             Arc::clone(&storage),
             Arc::clone(&env.feed_events()),
             PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 body: parse_post_body("Private note."),
                 title: Some(&title),
@@ -1578,6 +1596,7 @@ mod tests {
             Arc::clone(&storage),
             Arc::clone(&env.feed_events()),
             PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 body: parse_post_body("Body without a heading."),
                 title: Some(&title),
@@ -1629,6 +1648,7 @@ mod tests {
                 format: PostFormat::Markdown,
                 slug_override: Some(&slug),
                 published_at: None,
+                timezone: common::time::PublicationTimezone::utc(),
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
@@ -1671,6 +1691,7 @@ mod tests {
             &ownership,
             UtcInstant::now(),
             PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id: UserId::from(1_i64),
                 body: parse_post_body("Hello, world!"),
                 title: None,
@@ -1721,6 +1742,7 @@ mod tests {
             &ownership,
             now,
             PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id: seeded_user.user_id,
                 body: parse_post_body("Post must not survive a failed feed enqueue."),
                 title: None,
@@ -2051,6 +2073,7 @@ mod tests {
             .returning(|_, _| Ok(()));
         let feed_events: Arc<dyn FeedEventStorage> = Arc::new(feed_events);
         let update = |body: &str, publish, audiences| PostUpdate {
+            timezone: None,
             post_id: post.post_id,
             editor_user_id: user.user_id,
             body: parse_post_body(body),
@@ -2132,6 +2155,7 @@ mod tests {
                 Arc::clone(&env.posts()),
                 Arc::clone(&env.feed_events()),
                 PostUpdate {
+                    timezone: None,
                     post_id: post.post_id,
                     editor_user_id: user.user_id,
                     body: parse_post_body("Changed body."),
@@ -2211,6 +2235,7 @@ mod tests {
             feed_events,
             &ownership,
             PostUpdate {
+                timezone: None,
                 post_id: post.post_id,
                 editor_user_id: seeded_user.user_id,
                 body: parse_post_body("Changed body."),
@@ -2269,6 +2294,7 @@ mod tests {
             Arc::clone(&storage),
             Arc::clone(&env.feed_events()),
             PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 body: parse_post_body("!!!"),
                 title: None,
@@ -2311,6 +2337,7 @@ mod tests {
             Arc::clone(&storage),
             Arc::clone(&env.feed_events()),
             PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 body: parse_post_body("# 日本語\n\nbody"),
                 title: None,
@@ -2377,6 +2404,7 @@ mod tests {
             Arc::clone(&storage),
             Arc::clone(&env.feed_events()),
             PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 body: parse_post_body("Hello, world!"),
                 title: None,
@@ -2400,6 +2428,7 @@ mod tests {
             Arc::clone(&storage),
             Arc::clone(&env.feed_events()),
             PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 body: parse_post_body("Hello, world!"),
                 title: None,
@@ -2423,6 +2452,7 @@ mod tests {
             Arc::clone(&storage),
             Arc::clone(&env.feed_events()),
             PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 body: parse_post_body("Hello, world!"),
                 title: None,
@@ -2460,6 +2490,7 @@ mod tests {
             .user_id;
         let storage = env.posts();
         let create_input = move || PostCreation {
+            timezone: common::time::PublicationTimezone::utc(),
             user_id,
             body: parse_post_body("Concurrent slug"),
             title: None,
@@ -2553,6 +2584,7 @@ mod tests {
         let expected_second = parse_slug("expected-1");
 
         let create = |user_id, expectations| PostCreation {
+            timezone: common::time::PublicationTimezone::utc(),
             user_id,
             body: parse_post_body("Expected"),
             title: None,
@@ -2726,6 +2758,7 @@ mod tests {
         let storage = Arc::clone(&env.posts());
 
         let create = |user_id, expectations| PostCreation {
+            timezone: common::time::PublicationTimezone::utc(),
             user_id,
             body: parse_post_body("Mismatch"),
             title: None,
@@ -2833,6 +2866,7 @@ mod tests {
             .await;
         let changed_slug = parse_slug("changed-slug");
         let update = |post_id, expected_slug| PostUpdate {
+            timezone: None,
             post_id,
             editor_user_id: user_id,
             body: parse_post_body("updated body"),
@@ -2902,6 +2936,7 @@ mod tests {
             Arc::clone(&storage),
             Arc::clone(&env.feed_events()),
             PostUpdate {
+                timezone: None,
                 post_id: draft.post_id,
                 editor_user_id: user_id,
                 body: parse_post_body("updated body"),
@@ -2956,6 +2991,7 @@ mod tests {
             .await
             .unwrap();
         let update = |expectations| PostUpdate {
+            timezone: None,
             post_id: post.post_id,
             editor_user_id: user_id,
             body: parse_post_body("changed body"),
@@ -3061,6 +3097,7 @@ mod tests {
             Arc::clone(&storage),
             Arc::clone(&env.feed_events()),
             PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 body: parse_post_body("Hello, world!"),
                 title: None,
@@ -3084,6 +3121,7 @@ mod tests {
             Arc::clone(&storage),
             Arc::clone(&env.feed_events()),
             PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 body: parse_post_body("Hello, world!"),
                 title: None,
@@ -3111,6 +3149,7 @@ mod tests {
             Arc::clone(&env.feed_events()),
             UtcInstant::now(),
             PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 body: parse_post_body("Hello, world!"),
                 title: None,
@@ -3142,6 +3181,7 @@ mod tests {
             &ownership,
             UtcInstant::now(),
             PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 body: parse_post_body("Hello, world!"),
                 title: None,
@@ -3182,6 +3222,7 @@ mod tests {
             Arc::clone(&storage),
             Arc::clone(&env.feed_events()),
             PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 body: parse_post_body("#+TITLE: Hi\n#+FOO: x\n\nHello"),
                 title: None,
@@ -3226,6 +3267,7 @@ mod tests {
                 Arc::clone(&env.posts()),
                 Arc::clone(&env.feed_events()),
                 PostCreation {
+                    timezone: common::time::PublicationTimezone::utc(),
                     user_id,
                     body: parse_post_body("First[fn:n]\n\n[fn:n] original note"),
                     title: None,
@@ -3259,6 +3301,7 @@ mod tests {
             Arc::clone(&env.posts()),
             Arc::clone(&env.feed_events()),
             PostUpdate {
+                timezone: None,
                 post_id: first_id,
                 editor_user_id: user_id,
                 body: parse_post_body("Changed[fn:n]\n\n[fn:n] revised note"),
@@ -3330,6 +3373,7 @@ mod tests {
             Arc::clone(&env.posts()),
             Arc::clone(&env.feed_events()),
             PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 body: parse_post_body("interleaved Markdown"),
                 title: None,
@@ -3370,6 +3414,7 @@ mod tests {
             Arc::clone(&storage),
             Arc::clone(&env.feed_events()),
             PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 body: parse_post_body("#+TITLE: First\n\noriginal"),
                 title: None,
@@ -3394,6 +3439,7 @@ mod tests {
             Arc::clone(&storage),
             Arc::clone(&env.feed_events()),
             PostUpdate {
+                timezone: None,
                 post_id: created.post_id,
                 editor_user_id: user_id,
                 body: parse_post_body("#+TITLE: Second\n#+FOO: keep\n\nupdated"),
@@ -3443,6 +3489,7 @@ mod tests {
         // ADR-0024 canonicalization treats a leading `* heading` as the title *source*
         // and strips it, so this body leaves nothing to store (#811 decision 2).
         let creation = |body: &str, format: PostFormat| PostCreation {
+            timezone: common::time::PublicationTimezone::utc(),
             user_id,
             body: parse_post_body(body),
             title: None,
@@ -3503,6 +3550,7 @@ mod tests {
             Arc::clone(&storage),
             Arc::clone(&env.feed_events()),
             PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 body: parse_post_body("* My Title\n\nreal content"),
                 title: None,
@@ -3527,6 +3575,7 @@ mod tests {
             Arc::clone(&storage),
             Arc::clone(&env.feed_events()),
             PostUpdate {
+                timezone: None,
                 post_id: created.post_id,
                 editor_user_id: user_id,
                 body: parse_post_body("* My Title\n"),
@@ -3568,6 +3617,7 @@ mod tests {
             Arc::clone(&storage),
             Arc::clone(&env.feed_events()),
             PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 body: parse_post_body("# H1\n\nBody text"),
                 title: None,
@@ -3611,6 +3661,7 @@ mod tests {
             Arc::clone(&storage),
             Arc::clone(&env.feed_events()),
             PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 body: parse_post_body("#+TITLE: Distinct Headline\n\nParagraph body"),
                 title: None,
@@ -3651,6 +3702,7 @@ mod tests {
         key: Option<&IdempotencyKey>,
     ) -> PostCreation<'_> {
         PostCreation {
+            timezone: common::time::PublicationTimezone::utc(),
             user_id,
             body,
             title: None,
@@ -3949,6 +4001,7 @@ mod tests {
             Arc::clone(&storage),
             Arc::clone(&env.feed_events()),
             RenderedPostContent {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 title: None,
                 slug: parse_slug("indeterminate-commit"),
@@ -4473,6 +4526,7 @@ mod tests {
             &ownership,
             UtcInstant::now(),
             PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id: author,
                 body: parse_post_body(&format!(
                     "<img src=\"{}\">",
@@ -4541,6 +4595,7 @@ mod tests {
                 &ownership,
                 UtcInstant::now(),
                 PostCreation {
+                    timezone: common::time::PublicationTimezone::utc(),
                     user_id: author,
                     body: parse_post_body(&format!("<img src=\"{reference}\">")),
                     title: None,
@@ -4591,6 +4646,7 @@ mod tests {
             &ownership,
             UtcInstant::now(),
             PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id: author,
                 body: parse_post_body(&format!(
                     "<img src=\"{}\">",
@@ -4642,6 +4698,7 @@ mod tests {
                 Arc::clone(&env.posts()),
                 Arc::clone(&env.feed_events()),
                 PostCreation {
+                    timezone: common::time::PublicationTimezone::utc(),
                     user_id: author,
                     body: parse_post_body("Draft without media."),
                     title: None,
@@ -4672,6 +4729,7 @@ mod tests {
                 Arc::clone(&env.feed_events()),
                 &ownership,
                 PostUpdate {
+                    timezone: None,
                     post_id: post.post_id,
                     editor_user_id: author,
                     body: parse_post_body(&format!(
@@ -4725,6 +4783,7 @@ mod tests {
                 Arc::clone(&env.posts()),
                 Arc::clone(&env.feed_events()),
                 PostCreation {
+                    timezone: common::time::PublicationTimezone::utc(),
                     user_id: author,
                     body: parse_post_body(&format!(
                         "<img src=\"{}\">",
@@ -4799,6 +4858,7 @@ mod tests {
                 &ownership,
                 UtcInstant::now(),
                 PostCreation {
+                    timezone: common::time::PublicationTimezone::utc(),
                     user_id: author,
                     body: parse_post_body(&format!(
                         "<img src=\"{}\">",
@@ -4827,6 +4887,7 @@ mod tests {
                 Arc::clone(&env.feed_events()),
                 &ownership,
                 PostUpdate {
+                    timezone: None,
                     post_id: post.post_id,
                     editor_user_id: author,
                     body: parse_post_body("Reference removed."),

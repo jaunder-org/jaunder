@@ -98,6 +98,9 @@ pub struct OrgEffectiveMetadata {
 /// Successful pure Org normalization.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OrgNormalization {
+    /// Recognized named header zone for persistence when transport omits one.
+    /// Existing DATE validation still rejects numeric offsets before precedence.
+    pub timezone: Option<crate::time::PublicationTimezone>,
     pub body: PostBody,
     pub metadata: OrgEffectiveMetadata,
     pub bookkeeping: OrgBookkeeping,
@@ -147,6 +150,7 @@ pub fn normalize_org(
     let lifecycle = choose(structured.lifecycle, parsed.lifecycle);
 
     Ok(OrgNormalization {
+        timezone: parsed.timezone,
         body,
         metadata: OrgEffectiveMetadata {
             title,
@@ -161,6 +165,7 @@ pub fn normalize_org(
 
 #[derive(Default)]
 struct ParsedBlock {
+    timezone: Option<crate::time::PublicationTimezone>,
     body: String,
     title: Presence<PostTitle>,
     summary: Presence<PostSummary>,
@@ -258,6 +263,10 @@ fn parse_leading_block(
     if !fields.audiences.is_empty() {
         parsed.audiences = Presence::Present(fields.audiences);
     }
+    parsed.timezone = fields
+        .timezone
+        .as_deref()
+        .and_then(|zone| zone.parse().ok());
     parsed.lifecycle = parse_lifecycle(fields.status, fields.date, fields.timezone, request_clock)?;
     Ok(parsed)
 }

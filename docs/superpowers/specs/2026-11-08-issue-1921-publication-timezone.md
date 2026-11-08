@@ -97,13 +97,14 @@ independently established structured `<published>` instant.
 
 For the persisted Post timezone, raw Org uses a valid explicit web
 `PostInputs.timezone` or AtomPub `j:timezone` first; absent that, a valid
-recognized named-zone `JAUNDER_DATE_TZ` header supplies the value. A legacy
-numeric offset may still interpret legacy DATE where existing behavior permits,
-but is not a valid persisted zone. If neither valid timezone source is present,
-create uses explicit UTC and reports the fallback, while update preserves its
-stored zone. Existing raw DATE parsing and `JAUNDER_DATE_UTC` final-value
-validation continue unchanged; no Emacs-local baseline comparison or
-missing-marker rejection is applied to raw ingress.
+recognized named-zone `JAUNDER_DATE_TZ` header supplies the value. Legacy
+numeric offsets are not valid persisted zones. Current raw DATE validation
+rejects numeric zones before structured/header precedence; Emacs-local legacy
+numeric baseline recovery remains separate. If neither timezone source is
+present in an otherwise-valid raw input, create uses explicit UTC and reports
+the fallback, while update preserves its stored zone. Existing raw DATE parsing
+and `JAUNDER_DATE_UTC` final-value validation continue unchanged; no Emacs-local
+baseline comparison or missing-marker rejection is applied to raw ingress.
 
 On Emacs create/update, capture and validate the current device zone before
 building the entry. For an existing Post, use the saved DATE/old zone and
@@ -166,11 +167,12 @@ timezone.
   reject; aliases with a named IANA identity are accepted and their exact
   accepted spelling is retained; `Etc/Unknown` is rejected.
 - Raw Org tests cover explicit transport timezone over header for the saved Post
-  zone, header-supplied zone when transport is absent, legacy numeric-offset
-  DATE interpretation with UTC/preserve persisted-zone fallback, and create-UTC
-  / update-preserve when no valid zone is present. Independently verify ADR-0155
-  final `JAUNDER_DATE_UTC` assertions, marker-free raw Org, and structured Atom
-  `<published>` precedence over header lifecycle.
+  zone, header-supplied zone when transport is absent, and existing raw-ingress
+  rejection of numeric-offset DATE zones without mutation. Test create-UTC /
+  update-preserve with timezone genuinely omitted from otherwise-valid raw Org;
+  numeric local DATE baseline recovery belongs to Emacs, not raw server ingress.
+  Independently verify ADR-0155 final `JAUNDER_DATE_UTC` assertions, marker-free
+  raw Org, and structured Atom `<published>` precedence over header lifecycle.
 - Emacs-local tests alone compare DATE civil fields in the recorded old zone and
   preserve exact `JAUNDER_DATE_UTC` precision/fold identity. Test fractional
   seconds, an unchanged later-fold instant, changed DATE, invalid/missing marker
@@ -190,6 +192,15 @@ timezone.
 - Recovery extractor reports local ID/zone exceptions and preserves exact
   strings. Server-ID absence checks require the separate supplied inventory;
   tests do not access production or mutate Post data.
+
+The numeric raw-ingress acceptance wording above was factually corrected by
+Manager clarification following Lead's SLICE3 numeric-ingress discrepancy
+report. The original acceptance wording incorrectly assumed raw numeric DATE
+support; existing raw DATE validation rejects it before structured/header
+precedence. This preserves the approved design's “where existing behavior
+permits” and “Existing raw DATE parsing ... continue unchanged” requirements; it
+does not add numeric-offset server ingress or change Emacs-local numeric
+baseline recovery.
 
 ## Boundaries and rationale
 

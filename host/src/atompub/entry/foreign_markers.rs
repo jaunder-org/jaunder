@@ -37,6 +37,52 @@ fn direct_text(extension: &Extension) -> String {
         .collect()
 }
 
+/// Reads the latest editing zone by expanded XML name, independently of prefix.
+///
+/// # Errors
+/// Rejects duplicate, nested, empty, or unsupported timezone markers.
+pub fn j_timezone(
+    entry: &Entry,
+) -> Result<Option<common::time::PublicationTimezone>, InvalidAtomTimezone> {
+    let mut markers = entry
+        .extensions
+        .iter()
+        .filter(|marker| has_name(marker, ns::J_NS, "timezone"));
+    let Some(marker) = markers.next() else {
+        return Ok(None);
+    };
+    if markers.next().is_some()
+        || marker
+            .content
+            .iter()
+            .any(|part| matches!(part, ExtensionContent::Element(_)))
+    {
+        return Err(InvalidAtomTimezone);
+    }
+    direct_text(marker)
+        .parse()
+        .map(Some)
+        .map_err(|_| InvalidAtomTimezone)
+}
+
+/// Invalid explicit editing timezone on an Atom Entry.
+#[derive(Debug, Error)]
+#[error("invalid Atom publication timezone")]
+pub struct InvalidAtomTimezone;
+
+/// Emits the saved editing timezone without changing Atom's publication instant.
+pub fn set_j_timezone(entry: &mut Entry, timezone: &common::time::PublicationTimezone) {
+    let prefix = preferred_prefix(entry, ns::J_NS, "timezone", "j");
+    entry
+        .extensions
+        .retain(|marker| !has_name(marker, ns::J_NS, "timezone"));
+    let mut marker = extension(ns::J_NS, "timezone", &prefix);
+    marker
+        .content
+        .push(ExtensionContent::Text(timezone.to_string()));
+    entry.extensions.push(marker);
+}
+
 fn preferred_prefix(
     entry: &Entry,
     namespace_uri: &str,

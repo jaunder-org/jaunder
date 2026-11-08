@@ -1014,6 +1014,7 @@ main = putStrLn "hello"
         let history = db.pool.string_quintuples(HISTORY).await.unwrap();
         let member_etag = |row: &(String, String, String, String, String)| {
             host::etag::PostContentEtag {
+                timezone: &common::time::PublicationTimezone::utc(),
                 title: None,
                 slug: &row.0.parse().unwrap(),
                 body: &row.1.parse().unwrap(),

@@ -47,7 +47,7 @@ the end-to-end round trip is proven; no intermediate slice is feature-complete.
     package only; server storage integration coverage is in the `jaunder`
     package in Task 3.
 
-- [ ] **3. Carry editor timezone through web and AtomPub read/write paths.**
+- [x] **3. Carry editor timezone through web and AtomPub read/write paths.**
   - Contract: `PostInputs.timezone` is optional JSON input. On each browser
     create/edit submission capture and validate the supported IANA device zone;
     capture failure explicitly sends UTC and shows a warning. Test that behavior

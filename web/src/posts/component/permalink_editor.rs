@@ -368,10 +368,10 @@ fn EditPostForm(
                 if state.audience.with(|selection| {
                     named.with(|state| state.selection_for_submit(selection).is_some())
                 }) {
-                    action.dispatch(posts::Update {
-                        post_id,
-                        post: state.inputs(body, publication, slug_field.parsed()),
-                    });
+                    let mut post = state.inputs(body, publication, slug_field.parsed());
+                    post.timezone =
+                        Some(expect_context::<posts::EditingTimezoneNotice>().capture());
+                    action.dispatch(posts::Update { post_id, post });
                 }
             }),
         );

@@ -70,6 +70,7 @@ async fn create_post_with_media(
         ownership,
         UtcInstant::now(),
         PostCreation {
+            timezone: common::time::PublicationTimezone::utc(),
             user_id,
             body: parse_post_body(&format!("![media]({media_url})")),
             title: None,

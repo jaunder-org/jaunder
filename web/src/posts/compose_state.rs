@@ -208,6 +208,7 @@ impl ComposeState {
             PublicationIntent::PublishAt(at) => (Some(true), Some(at)),
         };
         PostInputs {
+            timezone: None,
             body,
             format: self.format.get(),
             slug_override,

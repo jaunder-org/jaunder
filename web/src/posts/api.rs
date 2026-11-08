@@ -605,9 +605,26 @@ pub struct PostInputs {
     pub slug_override: Option<Slug>,
     pub publish: Option<bool>,
     pub publish_at: Option<UtcInstant>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_editing_timezone",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub timezone: Option<common::time::PublicationTimezone>,
     pub tags: Option<Vec<TagLabel>>,
     pub summary: Option<PostSummary>,
     pub audience: Option<AudienceSelection>,
+}
+
+// Only a missing field earns compatibility defaults; present null must pass the
+// same named-zone validator as every other explicit value.
+fn deserialize_editing_timezone<'de, D>(
+    deserializer: D,
+) -> Result<Option<common::time::PublicationTimezone>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    common::time::PublicationTimezone::deserialize(deserializer).map(Some)
 }
 
 impl PostInputs {
@@ -623,6 +640,7 @@ impl PostInputs {
             slug_override: None,
             publish: None,
             publish_at: None,
+            timezone: None,
             tags: None,
             summary: None,
             audience: None,
@@ -646,6 +664,7 @@ pub async fn create(post: PostInputs) -> WebResult<MutationOutcome<ClassifiedSav
         slug_override,
         publish,
         publish_at,
+        mut timezone,
         tags,
         summary,
         audience,
@@ -676,6 +695,7 @@ pub async fn create(post: PostInputs) -> WebResult<MutationOutcome<ClassifiedSav
             OrgOperation::Create,
             request_clock,
         )?;
+        timezone = timezone.or(normalized.timezone);
         let metadata = normalized.metadata;
         let audiences = match metadata.audiences {
             Presence::Present(audiences) => audiences,
@@ -741,6 +761,12 @@ pub async fn create(post: PostInputs) -> WebResult<MutationOutcome<ClassifiedSav
         &media_ownership,
         request_clock,
         PostCreation {
+            timezone: timezone.unwrap_or_else(|| {
+                tracing::warn!(
+                    "Post creation omitted a supported named editing timezone; using UTC"
+                );
+                common::time::PublicationTimezone::utc()
+            }),
             user_id: auth.user_id,
             body,
             title: title.as_ref(),
@@ -914,6 +940,7 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<MutationOutc
         slug_override,
         publish,
         publish_at,
+        mut timezone,
         tags,
         summary,
         audience,
@@ -969,6 +996,7 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<MutationOutc
             OrgOperation::Update { post_id },
             request_clock,
         )?;
+        timezone = timezone.or(normalized.timezone);
         let metadata = normalized.metadata;
         let audiences = match metadata.audiences {
             Presence::Present(audiences) => audiences,
@@ -1026,6 +1054,7 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<MutationOutc
         Arc::clone(&feed_events),
         &media_ownership,
         PostUpdate {
+            timezone,
             post_id,
             editor_user_id: auth.user_id,
             body,
@@ -1631,6 +1660,14 @@ mod tests {
         assert_eq!(post.tags, None);
         assert_eq!(post.summary, None);
         assert_eq!(post.audience, None);
+        let wire = serde_json::to_value(&post).unwrap();
+        assert!(wire.get("timezone").is_none());
+        assert!(
+            serde_json::from_value::<PostInputs>(wire)
+                .unwrap()
+                .timezone
+                .is_none()
+        );
     }
 
     // #498: the create/update RPC input contracts carry `format` as a typed
@@ -1642,6 +1679,7 @@ mod tests {
         use super::PostInputs;
         use common::render::PostFormat;
         let post = PostInputs {
+            timezone: None,
             body: parse_post_body("hi"),
             format: PostFormat::Markdown,
             slug_override: None,
@@ -2407,6 +2445,7 @@ mod server_tests {
     /// `PostInputs`; `update` names the post it edits in a separate argument.
     fn post_inputs(tags: Option<Vec<TagLabel>>) -> PostInputs {
         PostInputs {
+            timezone: None,
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
             slug_override: None,
@@ -2506,6 +2545,7 @@ mod server_tests {
         let result = update(
             PostId::from(1),
             PostInputs {
+                timezone: None,
                 body: parse_post_body("Body"),
                 format: PostFormat::Org,
                 slug_override: None,
@@ -2538,6 +2578,7 @@ mod server_tests {
         let result = update(
             PostId::from(1),
             PostInputs {
+                timezone: None,
                 body: parse_post_body(
                     "#+PROPERTY: JAUNDER_ID 1\n#+PROPERTY: JAUNDER_SYNCED \"sha256-stale\"\n\nbody",
                 ),

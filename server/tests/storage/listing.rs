@@ -158,6 +158,7 @@ async fn seed_post_published_at(
             posts,
             feed_events,
             RenderedPostContent {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 title: None,
                 slug: slug.parse().expect("valid slug"),

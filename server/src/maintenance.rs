@@ -299,6 +299,7 @@ mod tests {
                 env.feed_events(),
                 created_at,
                 PostCreation {
+                    timezone: common::time::PublicationTimezone::utc(),
                     user_id,
                     body: parse_post_body("original body"),
                     title: None,
@@ -342,6 +343,7 @@ mod tests {
             env.feed_events(),
             "2030-08-31T12:00:00Z".parse().expect("replay instant"),
             PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 body: parse_post_body("replacement body"),
                 title: None,

@@ -157,6 +157,7 @@ impl SeedPost {
             posts,
             feed_events,
             crate::PostCreation {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id: self.user_id,
                 body: self.body,
                 title: self.title.as_ref(),

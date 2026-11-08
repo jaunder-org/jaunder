@@ -466,6 +466,7 @@ fn build_post_content(
         .map(|tag| format!("perf-{index}-{tag}").parse::<TagLabel>())
         .collect::<Result<Vec<_>, _>>()?;
     Ok(RenderedPostContent {
+        timezone: common::time::PublicationTimezone::utc(),
         user_id: authors[author_index].1,
         title: Some(format!("Performance Post {index}").parse::<PostTitle>()?),
         slug: format!("performance-{index:06}").parse::<Slug>()?,
@@ -1157,6 +1158,7 @@ mod tests {
         let contents = ["performance-footnote-one", "performance-footnote-two"]
             .into_iter()
             .map(|slug| RenderedPostContent {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 title: None,
                 slug: slug.parse().unwrap(),
@@ -1250,6 +1252,7 @@ mod tests {
     #[tokio::test]
     async fn fixture_render_failure_preserves_typed_highlighter_cause() {
         let content = RenderedPostContent {
+            timezone: common::time::PublicationTimezone::utc(),
             user_id: UserId::from(1_i64),
             title: None,
             slug: "highlight-fault".parse().unwrap(),

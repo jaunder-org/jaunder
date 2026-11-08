@@ -983,6 +983,7 @@ fn sandbox_post_content(
         .parse::<PostBody>()
         .map_err(|error| anyhow::anyhow!("invalid sandbox Post body: {error}"))?;
     Ok(RenderedPostContent {
+        timezone: common::time::PublicationTimezone::utc(),
         user_id,
         title: Some(title),
         slug,

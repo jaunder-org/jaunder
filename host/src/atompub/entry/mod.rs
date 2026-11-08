@@ -16,7 +16,7 @@ pub use collection::{FeedMeta, render_feed};
 pub use entry_document::entry_to_xml;
 pub(crate) use foreign_markers::canonical_audience_values;
 pub use foreign_markers::{
-    InvalidAtomAudience, draft_marker, is_draft, j_audiences, j_member_etag, j_slug, set_draft,
-    set_j_audiences, set_j_member_etag, set_j_slug,
+    InvalidAtomAudience, InvalidAtomTimezone, draft_marker, is_draft, j_audiences, j_member_etag,
+    j_slug, j_timezone, set_draft, set_j_audiences, set_j_member_etag, set_j_slug, set_j_timezone,
 };
 pub use media_member::{MediaLinkEntry, render_media_link_entry};

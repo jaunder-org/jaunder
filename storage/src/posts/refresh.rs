@@ -1061,6 +1061,7 @@ mod tests {
                 env.posts(),
                 env.feed_events(),
                 PostUpdate {
+                    timezone: None,
                     post_id: edit.post_id,
                     editor_user_id: owner,
                     body: parse_post_body("#+begin_src elisp\n(message \"edited\")\n#+end_src"),
@@ -1375,6 +1376,7 @@ mod tests {
         assert_eq!(updated_org.rendered_title, original.rendered_title);
         let member_etag = |record: &PostRecord| {
             host::etag::PostContentEtag {
+                timezone: &record.timezone,
                 title: record.title.as_ref(),
                 slug: &record.slug,
                 body: &record.body,

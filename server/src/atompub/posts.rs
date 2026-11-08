@@ -123,6 +123,7 @@ impl PostServices {
 /// its complete stored audience target set.
 pub(crate) fn etag_for(post: &PostRecord, audiences: &[AudienceTarget]) -> ETag {
     etag::PostContentEtag {
+        timezone: &post.timezone,
         title: post.title.as_ref(),
         slug: &post.slug,
         body: &post.body,
@@ -144,6 +145,42 @@ fn if_match_satisfied(headers: &HeaderMap, etag: &ETag) -> bool {
         Some(if_match) => if_match == "*" || *etag == if_match,
         None => true,
     }
+}
+
+/// Report a legacy create's explicit UTC fallback without conflating it with device capture.
+fn creation_timezone(
+    timezone: Option<common::time::PublicationTimezone>,
+) -> common::time::PublicationTimezone {
+    timezone.unwrap_or_else(|| {
+        tracing::warn!("AtomPub creation omitted a supported named editing timezone; using UTC");
+        common::time::PublicationTimezone::utc()
+    })
+}
+
+// Fence the HTTP lookup's validator under the write lock too, without replacing
+// an independently supplied Org sync precondition.
+fn lock_http_precondition(
+    headers: &HeaderMap,
+    current: &PostRecord,
+    audiences: &[AudienceTarget],
+    expectations: &mut storage::PostBookkeepingExpectation,
+) -> Result<(), HandlerError> {
+    if headers
+        .get(header::IF_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value != "*")
+    {
+        let expected = etag_for(current, audiences);
+        if expectations
+            .content_etag
+            .as_ref()
+            .is_some_and(|value| value != &expected)
+        {
+            return Err(HandlerError::PreconditionFailed);
+        }
+        expectations.content_etag = Some(expected);
+    }
+    Ok(())
 }
 
 /// Parses the optional retry key while preserving `AtomPub`'s compatibility policy:
@@ -188,6 +225,7 @@ async fn authorize_audiences(
 
 /// Atom entry fields after format-specific normalization and shared validation.
 struct NormalizedAtomInput {
+    timezone: Option<common::time::PublicationTimezone>,
     body: PostBody,
     title: Option<PostTitle>,
     summary: Option<PostSummary>,
@@ -214,6 +252,7 @@ async fn normalize_atom_input(
         };
         let audiences = authorize_audiences(audiences, author_user_id, atom_audiences).await?;
         return Ok(NormalizedAtomInput {
+            timezone: fields.timezone,
             body: fields.body,
             title: fields.title,
             summary: fields.summary,
@@ -240,6 +279,7 @@ async fn normalize_atom_input(
         authorize_audiences(audiences, author_user_id, normalized.metadata.audiences).await?;
 
     Ok(NormalizedAtomInput {
+        timezone: fields.timezone.or(normalized.timezone),
         body: normalized.body,
         title: match normalized.metadata.title {
             Presence::Present(title) => Some(title),
@@ -511,6 +551,7 @@ pub async fn collection_post(
     let format = fields.format;
     let is_draft = fields.is_draft;
     let NormalizedAtomInput {
+        timezone,
         body,
         title,
         summary,
@@ -546,6 +587,7 @@ pub async fn collection_post(
         services.media_ownership(),
         request_clock,
         PostCreation {
+            timezone: creation_timezone(timezone),
             user_id: auth_user.user_id,
             body,
             title: title.as_ref(),
@@ -673,13 +715,14 @@ pub async fn member_put(
     let format = fields.format;
     let is_draft = fields.is_draft;
     let NormalizedAtomInput {
+        timezone,
         body,
         title,
         summary,
         categories,
         lifecycle,
         audiences: audience_input,
-        expectations,
+        mut expectations,
     } = normalize_atom_input(
         fields,
         atom_audience_input,
@@ -693,6 +736,7 @@ pub async fn member_put(
         Presence::Present(audiences) => audiences,
         Presence::Absent => posts.get_post_audiences(post_id).await?,
     };
+    lock_http_precondition(&headers, &current, &current_audiences, &mut expectations)?;
     let update_outcome = storage::perform_post_update_with_media_ownership(
         &write_scope,
         services.content_locks(),
@@ -700,6 +744,7 @@ pub async fn member_put(
         Arc::clone(&feed_events),
         services.media_ownership(),
         storage::PostUpdate {
+            timezone,
             post_id,
             editor_user_id: auth_user.user_id,
             body,
@@ -922,6 +967,7 @@ mod etag_tests {
     }
     fn org_fields(body: &str) -> PostFields {
         PostFields {
+            timezone: None,
             title: None,
             body: parse_post_body(body),
             format: PostFormat::Org,

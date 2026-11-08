@@ -480,6 +480,7 @@ pub(crate) fn update_expectation_error(
     }
 
     let current_etag = etag::PostContentEtag {
+        timezone: &existing.timezone,
         title: existing.title.as_ref(),
         slug: &existing.slug,
         body: &existing.body,
