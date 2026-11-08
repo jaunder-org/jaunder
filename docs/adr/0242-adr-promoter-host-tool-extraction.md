@@ -1,14 +1,14 @@
-# ADR-DRAFT: Nix-Selected Python ADR Promoter
+# ADR-0242: Nix-Selected Python ADR Promoter
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-07
 - Issue: [#1897](https://github.com/jaunder-org/jaunder/issues/1897)
 
 ## Context
 
-[ADR-0152](../0152-adr-numbering-happens-after-merge.md) assigns promotion to a
+[ADR-0152](0152-adr-numbering-happens-after-merge.md) assigns promotion to a
 trusted workflow and serialized controller;
-[ADR-0088](../0088-promotion-is-the-acceptance-event.md) makes promotion the
+[ADR-0088](0088-promotion-is-the-acceptance-event.md) makes promotion the
 acceptance event. The promoter's custom transport and dormant Rust controller
 increased maintained responsibilities without adding authority or safety.
 
@@ -55,7 +55,7 @@ nix run --accept-flake-config --no-update-lock-file --no-write-lock-file .#adr-p
 
 One Python admission path consumes the authoritative Nix source-membership
 predicate before mutation, as required by
-[ADR-0225](../0225-nix-cached-host-tooling.md). Refuse relevant nonignored
+[ADR-0225](0225-nix-cached-host-tooling.md). Refuse relevant nonignored
 untracked inputs that Git flakes omit; tracked dirty and intent-to-add inputs
 participate. Do not duplicate membership rules, stage inputs automatically, add
 a digest/RPC framework, or fall back to an ambient or older binary. Generation
@@ -173,6 +173,6 @@ fake-Nix matrices.
 The maintained implementation owns policy and source-preserving mutation, not a
 parallel GitHub transport or dormant fallback. Public Rust mutation commands are
 removed deliberately; package synchronization is the recovery interface. The
-[branch architecture projection](../../ARCHITECTURE.md#host-side-adr-promoter-extraction--branch-implementation-not-shipped)
+[branch architecture projection](../ARCHITECTURE.md#host-side-adr-promoter-extraction--branch-implementation-not-shipped)
 describes the implemented but unshipped state. Numbering and acceptance remain
 post-merge automation, not an authoring or planning-document retirement action.
