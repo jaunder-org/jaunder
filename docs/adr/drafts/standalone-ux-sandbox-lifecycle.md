@@ -16,10 +16,9 @@ used by `e2e-local` and remain after this change.
 ADR-0028 places host orchestration in xtask by default. ADR-0046 keeps
 out-of-process real-storage seeding in test-support. ADR-0058 defines host as a
 shared host-only floor. ADR-0180 assigns sandbox lifecycle ownership to xtask.
-Issue #1893 requires an overall simpler system, not relocation. The
-overall-simplification criterion remains binding. A standalone bin inside xtask
-retains coupling; separate host-runtime plus sandbox crates add an unnecessary
-shared layer.
+The focused owner reduces orchestration coupling rather than merely relocating
+the lifecycle state machine. A standalone bin inside xtask retains coupling;
+separate host-runtime plus sandbox crates add an unnecessary shared layer.
 
 ## Decision
 
@@ -86,44 +85,34 @@ kernel-safety guarantee.
 
 SIGINT/SIGTERM begin graceful drain. Further SIGINT may force earlier; repeated
 SIGTERM joins the drain without escalation per ADR-0181. Automatic escalation
-occurs after exactly 10 seconds without requiring a second signal, as approved
-in the human S1 design decision. Preserve initiating status (130/143), or the
-child's exact status when no signal initiated shutdown. Do not change
-`jaunder shut-down`'s separate 30-second wait/no-escalation contract. Unexpected
-parent exit does not permit cleanup until process-tree containment/reap finishes
-on supported platforms; this is a proof obligation, not a universal kernel
-guarantee.
+occurs after exactly 10 seconds without requiring a second signal. Preserve
+initiating status (130/143), or the child's exact status when no signal
+initiated shutdown. Do not change `jaunder shut-down`'s separate 30-second
+wait/no-escalation contract. Unexpected parent exit does not permit cleanup
+until process-tree containment/reap finishes on supported platforms; this is a
+proof obligation, not a universal kernel guarantee.
 
-The design is simpler only if removing sandbox-specific xtask protocol, broad
-package linkage/private adapters and sync/runtime bridges outweighs the new
-package/manifest, Just recipe, helper app adapters, duplicate readiness probe,
-tests and extra cold command-mode helper build. No raw line-count target
-applies; most lifecycle responsibility remains. Reject if actual integration is
-relocation or total system is not simpler.
+Removing sandbox-specific xtask CLI/dispatch/reporting, broad package linkage
+and synchronous runtime bridges reduces ownership indirection and
+private-package coupling. The focused package/manifest, Just bootstrap, helper
+adapters, duplicate readiness probe, maintained tests and extra cold
+command-mode helper build are real costs. Lifecycle and storage responsibility
+remains in the helper, and e2e ownership remains in xtask; neither is counted as
+eliminated. The tradeoff is structural simplification, not a
+performance-improvement claim.
 
-## Approval and proof
+## Maintenance and validation
 
-Human S1 approved the design, including the exact 10-second grace, ADR-0028
-placement exception and partial ADR-0180 owner/signal-clause supersession. Human
-O1 approved the required implementation outline and implementation (request
-`0a5e9118-864e-47ab-9247-ebaecf0aaa74`, decision `1893-o1`); the planning
-contract was committed before implementation. ADR-0046 and ADR-0058 remain
-unchanged.
+This numberless draft remains `proposed` until serialized post-merge numbering
+and promotion. It records the implemented Just-owned design; ADR-0046 and
+ADR-0058 remain unchanged. ADR-0180's dated clarification records only partial
+supersession, preserving its historical Decision and remaining contracts.
 
-The design is implemented: the public Just helper owns all modes and the old
-xtask sandbox route is retired. This draft deliberately remains `proposed` for
-serialized post-merge numbering and acceptance; that automation state does not
-mean human implementation approval is pending. Historical accepted ADR Decision
-text is preserved, with a dated partial-supersession clarification on ADR-0180.
-
-Focused proof covers artifact output/lock integration, lifecycle/profile/reset/
-command behavior, actual Jaunder runtime-info readiness, signal distinctions,
-the automatic deadline and actual descendant containment/reap on this Linux
-host. Earlier real standard/demo Media and legacy-workspace compatibility proofs
-remain applicable to the unchanged helper. Independent whole-branch review and
-D2 overall-simplification acceptance remain required; focused success does not
-substitute for final repository gates or foreign-native proof. Apply
-CONTRIBUTING's cadence: production validation on x86_64 Linux and periodic
-development-environment checks on committed changes for Apple Silicon macOS; no
-ARM Linux native-delivery gate. Do not require an invented matrix or claim
-untested guarantees.
+Maintained public-command and native process tests cover exact argv, artifact
+preparation and lock contention, lifecycle/profile/reset/command behavior,
+runtime-info identity/readiness, signal distinctions, the automatic deadline,
+and descendant containment/reap before storage cleanup or guard release.
+CONTRIBUTING defines the verification cadence: production validation on x86_64
+Linux and periodic development-environment checks on committed changes for Apple
+Silicon macOS, with no ARM Linux native-delivery gate. Focused tests do not
+replace repository gates or establish untested foreign-native guarantees.

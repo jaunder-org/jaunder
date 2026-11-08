@@ -4248,18 +4248,22 @@ metadata, locks or disposable storage cleanup. This is supported-platform
 process ownership, not a universal OS guarantee. The separate
 `jaunder shut-down` 30-second wait/no-escalation contract remains ADR-0181.
 
-The human-approved, implemented design is recorded in the
+The design is recorded in the
 [standalone UX sandbox lifecycle decision](adr/drafts/standalone-ux-sandbox-lifecycle.md),
-by draft path `docs/adr/drafts/standalone-ux-sandbox-lifecycle.md`. Its
-serialized post-merge numbering/promotion is pending, so its status remains
-`proposed`; implementation approval is not pending. It is a narrow ADR-0028
-placement exception and partially supersedes
+by draft path `docs/adr/drafts/standalone-ux-sandbox-lifecycle.md`. The draft
+remains `proposed` until serialized post-merge numbering and promotion. It is a
+narrow ADR-0028 placement exception and partially supersedes
 [host UX sandbox lifecycle](adr/0180-host-ux-sandbox-lifecycle.md) only for the
 sandbox owner and literal signal-escalation clause. The remaining persistence,
 profile, reset/recovery, admission and lock contracts remain current. ADR-0058's
-host-floor boundary is unchanged. Overall D2 simplification still requires
-independent whole-branch acceptance; moved lifecycle responsibility and the
-retained e2e modules do not count as eliminated complexity.
+host-floor boundary is unchanged.
+
+Removing the sandbox-specific xtask protocol and synchronous runtime bridges
+reduces ownership indirection and cross-package coupling. The focused package
+and manifest, helper bootstrap, and duplicate readiness adapter are retained
+costs. Lifecycle and storage responsibility stays in the helper; independent e2e
+ownership stays in xtask. Neither responsibility is eliminated. This is a
+structural simplification, not a performance-improvement claim.
 
 Ordinary specs are parallel-safe by construction, via per-test identity fixtures
 in `end2end/tests/provisioning.ts`, composed only by `end2end/tests/fixtures.ts`
