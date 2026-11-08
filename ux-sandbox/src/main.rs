@@ -23,19 +23,37 @@ async fn main() {
             .error(clap::error::ErrorKind::ValueValidation, error)
             .exit();
     }
-    let mut signals = match session::Signals::new() {
+    std::process::exit(execute(cli, session::Signals::new()).await);
+}
+
+async fn execute(cli: cli::Cli, signals: anyhow::Result<session::Signals>) -> i32 {
+    let mut signals = match signals {
         Ok(signals) => signals,
         Err(error) => {
             eprintln!("sandbox signals: {error:#}");
-            std::process::exit(1);
+            return 1;
         }
     };
-    let code = match lifecycle::run(cli, &mut signals).await {
+    match lifecycle::run(cli, &mut signals).await {
         Ok(code) => code,
         Err(error) => {
             eprintln!("sandbox: {error:#}");
             signals.status().unwrap_or(1)
         }
-    };
-    std::process::exit(code);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn signal_registration_failure_returns_failure_before_workspace_access() {
+        let cli = cli::Cli::try_parse_from(["ux-sandbox"]).unwrap();
+        let error = std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "one-shot signal registration failure",
+        );
+        assert_eq!(execute(cli, Err(error.into())).await, 1);
+    }
 }

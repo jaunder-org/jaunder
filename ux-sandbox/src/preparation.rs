@@ -23,33 +23,61 @@ pub enum Prepared {
     Exited(i32),
 }
 
+struct ArtifactLock {
+    file: File,
+    #[cfg(test)]
+    fail_acquire: bool,
+}
+impl ArtifactLock {
+    fn try_lock(&mut self) -> Result<(), fs::TryLockError> {
+        #[cfg(test)]
+        if std::mem::take(&mut self.fail_acquire) {
+            return Err(fs::TryLockError::Error(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "one-shot artifact lock failure",
+            )));
+        }
+        self.file.try_lock()
+    }
+    async fn acquire(&mut self, path: &Path, signals: &mut Signals) -> anyhow::Result<Option<i32>> {
+        let mut waiting = false;
+        loop {
+            match self.try_lock() {
+                Ok(()) => return Ok(None),
+                Err(fs::TryLockError::WouldBlock) => {
+                    if !waiting {
+                        eprintln!("Waiting for host artifacts: {}", path.display());
+                        waiting = true;
+                    }
+                    tokio::select! {
+                        code = signals.next() => return Ok(Some(code)),
+                        () = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+                    }
+                }
+                Err(fs::TryLockError::Error(error)) => return Err(error.into()),
+            }
+        }
+    }
+}
+
 pub async fn prepare(server: bool, signals: &mut Signals) -> anyhow::Result<Prepared> {
     let root = std::env::current_dir()?.canonicalize()?;
     workspace::directory(&root.join(".xtask"))?;
     let lock_path = root.join(".xtask/host-artifacts.lock");
     workspace::regular(&lock_path)?;
-    let lock = OpenOptions::new()
+    let file = OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
         .open(&lock_path)?;
-    let mut waiting = false;
-    loop {
-        match lock.try_lock() {
-            Ok(()) => break,
-            Err(fs::TryLockError::WouldBlock) => {
-                if !waiting {
-                    eprintln!("Waiting for host artifacts: {}", lock_path.display());
-                    waiting = true;
-                }
-                tokio::select! {
-                    code = signals.next() => return Ok(Prepared::Exited(code)),
-                    () = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
-                }
-            }
-            Err(fs::TryLockError::Error(error)) => return Err(error.into()),
-        }
+    let mut lock = ArtifactLock {
+        file,
+        #[cfg(test)]
+        fail_acquire: false,
+    };
+    if let Some(code) = lock.acquire(&lock_path, signals).await? {
+        return Ok(Prepared::Exited(code));
     }
     let mut builds = Vec::new();
     if server {
@@ -68,7 +96,7 @@ pub async fn prepare(server: bool, signals: &mut Signals) -> anyhow::Result<Prep
             .env_remove("JAUNDER_PUBLIC_DIR");
         let code = session::run(command, None, signals).await?;
         if code != 0 {
-            lock.unlock()?;
+            lock.file.unlock()?;
             return Ok(Prepared::Exited(code));
         }
     }
@@ -92,7 +120,7 @@ pub async fn prepare(server: bool, signals: &mut Signals) -> anyhow::Result<Prep
     }
     // Fingerprint the selected generation while the producer still has exclusion.
     let digest = fingerprint(&jaunder)?;
-    lock.unlock()?;
+    lock.file.unlock()?;
     Ok(Prepared::Ready(Artifacts {
         jaunder,
         support,
@@ -118,4 +146,40 @@ fn fingerprint(path: &Path) -> anyhow::Result<String> {
         write!(&mut hex, "{byte:02x}")?;
     }
     Ok(hex)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn artifact_lock_error_is_not_cancellation_and_releases_the_descriptor() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let mut lock = ArtifactLock {
+            file: file.reopen().unwrap(),
+            fail_acquire: true,
+        };
+        let mut signals = Signals::new().unwrap();
+        let error = lock.acquire(file.path(), &mut signals).await.unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert!(signals.status().is_none());
+        drop(lock);
+        let mut retry = ArtifactLock {
+            file: file.reopen().unwrap(),
+            fail_acquire: false,
+        };
+        assert_eq!(
+            retry.acquire(file.path(), &mut signals).await.unwrap(),
+            None
+        );
+        assert!(matches!(
+            file.as_file().try_lock(),
+            Err(fs::TryLockError::WouldBlock)
+        ));
+        retry.file.unlock().unwrap();
+        file.as_file().try_lock().unwrap();
+    }
 }

@@ -2869,23 +2869,14 @@ mkWasmCoverageMeasurementProducer =
               "/.prettierignore"
               "/sgconfig.yml"
             ]
-            || builtins.any (directory: pkgs.lib.hasInfix "/${directory}/" path) [
+            || builtins.any (directory: pkgs.lib.hasInfix "/${directory}/" path) (workspaceMembers ++ [
               ".cargo"
               "ast-grep"
-              "common"
-              "macros"
-              "server"
-              "storage"
-              "web"
-              "client"
-              "csr"
-              "host"
-              "test-support"
               "public"
               "tools"
               "end2end"
               "elisp"
-            ]
+            ])
           )
         )
       )
@@ -2896,6 +2887,8 @@ mkWasmCoverageMeasurementProducer =
       assert clippySourceFilter "${toString ../.}/Cargo.toml" "regular";
       assert clippySourceFilter "${toString ../.}/tools/Cargo.lock" "regular";
       assert clippySourceFilter "${toString ../.}/server/build.rs" "regular";
+      assert clippySourceFilter "${toString ../.}/ux-sandbox/Cargo.toml" "regular";
+      assert clippySourceFilter "${toString ../.}/ux-sandbox/src/main.rs" "regular";
       assert clippySourceFilter "${toString ../.}/csr/index.html" "regular";
       assert clippySourceFilter "${toString ../.}/testdata/theme-repository/minimal/preview.png" "regular";
       assert !(clippySourceFilter "${toString ../.}/README.md" "regular");

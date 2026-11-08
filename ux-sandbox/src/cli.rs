@@ -77,6 +77,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn profiles_keep_the_cli_seeder_and_metadata_spelling() {
+        for (profile, spelling) in [
+            (Profile::Empty, "empty"),
+            (Profile::Standard, "standard"),
+            (Profile::Demo, "demo"),
+        ] {
+            assert_eq!(profile.as_str(), spelling);
+            assert_eq!(
+                serde_json::to_string(&profile).unwrap(),
+                format!("\"{spelling}\"")
+            );
+            assert_eq!(
+                serde_json::from_str::<Profile>(&format!("\"{spelling}\"")).unwrap(),
+                profile
+            );
+        }
+        assert!(serde_json::from_str::<Profile>("\"unknown\"").is_err());
+    }
+
+    #[test]
     fn clap_retains_the_validated_name_inward() {
         let cli =
             Cli::try_parse_from(["ux-sandbox", "writing-flow_2", "--profile", "demo"]).unwrap();

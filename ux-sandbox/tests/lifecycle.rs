@@ -290,6 +290,133 @@ mod tests {
     });
     }
 
+    fn helper(root: &Path) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_ux-sandbox"));
+        command
+            .current_dir(root)
+            .env("UX_FIXTURE_ROOT", root)
+            .env("UX_FIXTURE_EXE", std::env::current_exe().unwrap())
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    root.join("bin").display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            );
+        command
+    }
+
+    fn assert_artifact_lock_released(root: &Path) {
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(root.join(".xtask/host-artifacts.lock"))
+            .unwrap();
+        file.try_lock()
+            .expect("failed preparation must release artifact exclusion");
+    }
+
+    #[test]
+    fn failed_build_status_returns_unchanged_in_all_three_modes_and_releases_locks() {
+        for args in [vec![], vec!["writing"], vec!["writing", "--", "backup"]] {
+            let root = fixture_root();
+            executable(&root.path().join("bin/cargo"), "#!/bin/sh\nexit 37\n");
+            let output = helper(root.path()).args(&args).output().unwrap();
+            assert_eq!(output.status.code(), Some(37), "{args:?}: {output:?}");
+            assert_artifact_lock_released(root.path());
+            let locks = root.path().join(".xtask/sandboxes/.locks");
+            assert_control_locks_released(&locks);
+            assert!(!root.path().join(".xtask/sandboxes/writing").exists());
+            assert!(!root.path().join("app-pid").exists());
+        }
+    }
+
+    fn assert_control_locks_released(locks: &Path) {
+        if !locks.exists() {
+            return;
+        }
+        for path in fs::read_dir(locks).unwrap() {
+            let file = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path.unwrap().path())
+                .unwrap();
+            file.try_lock()
+                .expect("failed preparation must release workspace and server locks");
+        }
+    }
+
+    #[test]
+    fn interrupting_artifact_wait_keeps_caller_lock_and_releases_workspace_locks() {
+        let root = fixture_root();
+        fs::create_dir(root.path().join(".xtask")).unwrap();
+        let path = root.path().join(".xtask/host-artifacts.lock");
+        let caller = fs::File::create(&path).unwrap();
+        caller.lock().unwrap();
+        let mut child = helper(root.path())
+            .arg("writing")
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let line = BufReader::new(stderr).lines().next().unwrap().unwrap();
+            tx.send(line).unwrap();
+        });
+        let waiting = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(
+            waiting.starts_with("Waiting for host artifacts:"),
+            "{waiting}"
+        );
+        send_signal(child.id(), "-INT");
+        assert_eq!(wait_child(&mut child).code(), Some(130));
+        reader.join().unwrap();
+        let probe = fs::File::open(&path).unwrap();
+        assert!(matches!(
+            probe.try_lock(),
+            Err(fs::TryLockError::WouldBlock)
+        ));
+        assert_control_locks_released(&root.path().join(".xtask/sandboxes/.locks"));
+        assert!(!root.path().join("build-calls").exists());
+        caller.unlock().unwrap();
+        assert_artifact_lock_released(root.path());
+    }
+
+    #[test]
+    fn selected_non_executable_is_rejected_before_initialization() {
+        let root = fixture_root();
+        let path = root.path().join("target/debug/jaunder");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let output = helper(root.path()).output().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("not an executable"), "{stderr}");
+        assert!(stderr.contains(&path.display().to_string()), "{stderr}");
+        assert_artifact_lock_released(root.path());
+        assert!(!root.path().join("storage").exists());
+    }
+
+    #[test]
+    fn disposable_init_failure_keeps_child_status_and_removes_partial_storage() {
+        let root = fixture_root();
+        let output = helper(root.path())
+            .env("UX_INIT_EXIT", "41")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(41), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let storage = stderr
+            .lines()
+            .find_map(|line| line.strip_prefix("Disposable storage: "))
+            .unwrap();
+        assert!(!Path::new(storage).exists());
+        assert!(!Path::new(storage).parent().unwrap().exists());
+        assert_artifact_lock_released(root.path());
+        assert!(!root.path().join("app-pid").exists());
+    }
+
     #[test]
     fn disposable_initializes_reaches_http_and_reaps_before_cleanup() {
         exercise(Scenario::Identity);

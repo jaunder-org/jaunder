@@ -226,6 +226,52 @@ fn app_command(executable: &Path, storage: &Path) -> Command {
 mod tests {
     use super::*;
 
+    #[test]
+    fn primary_operation_error_survives_a_secondary_cleanup_error() {
+        let primary = std::io::Error::new(std::io::ErrorKind::BrokenPipe, "primary operation");
+        let secondary =
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "secondary cleanup");
+        let error = completed(Err(primary.into()), Err(secondary.into())).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::BrokenPipe
+        );
+        assert_eq!(error.to_string(), "primary operation");
+    }
+
+    #[tokio::test]
+    async fn failed_init_spawn_does_not_publish_or_discard_existing_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        let mut paths = Named::open(root.path(), &"writing".parse().unwrap()).unwrap();
+        std::fs::create_dir(&paths.current).unwrap();
+        workspace::write_profile(&paths.current, Profile::Demo).unwrap();
+        std::fs::write(paths.current.join("marker"), "existing generation").unwrap();
+        let artifacts = Artifacts {
+            jaunder: root.path().join("missing-executable"),
+            support: None,
+            digest: "abc".into(),
+        };
+        let mut signals = Signals::new().unwrap();
+        let error = prepare_named(&mut paths, &artifacts, Profile::Empty, true, &mut signals)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("missing-executable"),
+            "{error:#}"
+        );
+        assert!(!paths.new.exists());
+        assert_eq!(
+            workspace::read_profile(&paths.current).unwrap(),
+            Profile::Demo
+        );
+        assert_eq!(
+            std::fs::read_to_string(paths.current.join("marker")).unwrap(),
+            "existing generation"
+        );
+        assert!(!paths.old.exists());
+        assert!(Lock::runtime(&paths.current).is_ok());
+    }
+
     #[tokio::test]
     async fn stopped_admission_keeps_lease_while_waiting_and_does_not_self_deadlock() {
         let root = tempfile::tempdir().unwrap();

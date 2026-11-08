@@ -43,10 +43,14 @@ pub fn directory(path: &Path) -> anyhow::Result<()> {
 }
 
 /// Explicit unlock prevents an unrelated inherited descriptor from extending ownership.
-pub struct Lock(File);
+pub struct Lock {
+    file: File,
+    #[cfg(test)]
+    failure: Option<tests::LockOperation>,
+}
 impl Drop for Lock {
     fn drop(&mut self) {
-        if let Err(error) = self.0.unlock() {
+        if let Err(error) = self.unlock() {
             eprintln!("sandbox unlock failed: {error}");
         }
     }
@@ -54,20 +58,24 @@ impl Drop for Lock {
 impl Lock {
     fn open(path: &Path) -> anyhow::Result<Self> {
         regular(path)?;
-        Ok(Self(
-            OpenOptions::new()
+        Ok(Self {
+            file: OpenOptions::new()
                 .create(true)
                 .truncate(false)
                 .read(true)
                 .write(true)
                 .open(path)
                 .with_context(|| format!("opening lock {}", path.display()))?,
-        ))
+            #[cfg(test)]
+            failure: None,
+        })
     }
     pub fn try_exclusive(path: &Path) -> anyhow::Result<Option<Self>> {
-        let lock = Self::open(path)?;
-        match lock.0.try_lock() {
-            Ok(()) => Ok(Some(lock)),
+        Self::open(path)?.acquire(path)
+    }
+    fn acquire(mut self, path: &Path) -> anyhow::Result<Option<Self>> {
+        match self.try_lock() {
+            Ok(()) => Ok(Some(self)),
             Err(fs::TryLockError::WouldBlock) => Ok(None),
             Err(fs::TryLockError::Error(error)) => {
                 Err(error).with_context(|| format!("locking {}", path.display()))
@@ -76,7 +84,7 @@ impl Lock {
     }
     pub fn shared(path: &Path) -> anyhow::Result<Self> {
         let lock = Self::open(path)?;
-        lock.0
+        lock.file
             .try_lock_shared()
             .with_context(|| format!("sandbox is starting/stopping: {}", path.display()))?;
         Ok(lock)
@@ -91,6 +99,17 @@ impl Lock {
                 () = tokio::time::sleep(Duration::from_millis(25)) => {}
             }
         }
+    }
+    fn try_lock(&mut self) -> Result<(), fs::TryLockError> {
+        #[cfg(test)]
+        self.fail_once(tests::LockOperation::Acquire)
+            .map_err(fs::TryLockError::Error)?;
+        self.file.try_lock()
+    }
+    fn unlock(&mut self) -> io::Result<()> {
+        #[cfg(test)]
+        self.fail_once(tests::LockOperation::Unlock)?;
+        self.file.unlock()
     }
     pub fn runtime(workspace: &Path) -> anyhow::Result<Self> {
         Self::try_exclusive(&workspace.join("runtime.lock"))?
@@ -108,6 +127,8 @@ pub struct Named {
     pub metadata: PathBuf,
     #[cfg(test)]
     fail_publication: bool,
+    #[cfg(test)]
+    fail_restoration: bool,
 }
 impl Named {
     pub fn open(root: &Path, name: &SandboxName) -> anyhow::Result<Self> {
@@ -126,6 +147,8 @@ impl Named {
             metadata: control.join(format!("{name}.server.json")),
             #[cfg(test)]
             fail_publication: false,
+            #[cfg(test)]
+            fail_restoration: false,
         };
         paths.validate()?;
         Ok(paths)
@@ -199,7 +222,7 @@ impl Named {
         fs::rename(&self.current, &self.old).context("retaining old sandbox workspace")?;
         let publish = self.publish_rename();
         if let Err(error) = publish {
-            if let Err(restore) = fs::rename(&self.old, &self.current) {
+            if let Err(restore) = self.restore_rename() {
                 return Err(error).with_context(|| {
                     format!("publishing replacement; restoring old also failed: {restore}")
                 });
@@ -219,6 +242,16 @@ impl Named {
             ));
         }
         fs::rename(&self.new, &self.current)
+    }
+    fn restore_rename(&mut self) -> io::Result<()> {
+        #[cfg(test)]
+        if std::mem::take(&mut self.fail_restoration) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "one-shot restoration failure",
+            ));
+        }
+        fs::rename(&self.old, &self.current)
     }
     pub fn remove_metadata(&self) -> anyhow::Result<()> {
         if regular(&self.metadata)? {
