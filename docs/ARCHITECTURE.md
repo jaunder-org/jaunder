@@ -5510,14 +5510,20 @@ recovery to the package's `sync-readme` action. These are approved design
 choices, including a public command change, under human response via
 `9c324a59-7b2c-4519-925a-927c9c89816f` / `issue-1897-simplification-design-v2`:
 “Approve with this boundary.” This resolves qualification `ace338e3` for this
-exact design boundary only. It does not describe this branch's current
-implementation: the preceding subsection remains the current branch state and
-explicitly distinguishes it from prospective trusted-main delivery. The
-unchanged controller/promotion contract and exact proposal limits are recorded
-in the linked spec. Tests target promoter behavior and integration, not
-SDK/library internals. The revised outline requires independent review and
-separate human approval before implementation. Both PR merge gates and
-trusted-main observation remain unchanged.
+exact design boundary only. The human approved one cohesive PR via
+`2ee4041c-3fd5-4481-9748-b1beb36c8899` / `issue-1897-single-pr-v1`: “Use one
+cohesive PR.” This supersedes only the two-PR/observe-before-retirement
+ordering. It does not describe this branch's current implementation: the
+preceding subsection remains the current branch state and explicitly
+distinguishes it from prospective trusted-main delivery. The unchanged
+controller/promotion contract and exact proposal limits are recorded in the
+linked spec. Tests target promoter behavior and integration, not SDK/library
+internals. The human approved the revised outline and implementation via
+`89ec8287-4f38-479c-bcbd-24cf540bfc7c` / `issue-1897-simplification-outline-v2`,
+for the exact reviewed outline and only its stated scope. The cohesive PR has
+one exact-head merge gate; observe trusted-main operation after merge as rollout
+acceptance before completion. Diagnose observation failure with scoped repair or
+revert; do not retain or revive a dormant fallback.
 
 This document is itself a gated artifact. The `adr-view-parity` step requires
 every `accepted` ADR to be cited here, and fails the ladder by name and title

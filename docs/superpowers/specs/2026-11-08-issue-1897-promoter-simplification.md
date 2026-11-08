@@ -1,12 +1,24 @@
 # #1897: Simplify the ADR promoter
 
-- Status: proposed; architecture is not shipped and implementation remains gated
-  on separate revised-outline review and human approval
+- Status: proposed; architecture is not shipped. Implementation is approved only
+  within the separately human-approved outline's recorded scope
 - Approval provenance: human response via `9c324a59-7b2c-4519-925a-927c9c89816f`
   to `issue-1897-simplification-design-v2`: “Approve with this boundary.” This
   resolves qualification `ace338e3` for this exact revised design boundary only;
   it does not approve an outline, implementation, builds, pushes, watches,
   privilege, merges, or cleanup.
+- Outline/implementation approval provenance: human response via
+  `89ec8287-4f38-479c-bcbd-24cf540bfc7c` to
+  `issue-1897-simplification-outline-v2` approves the revised outline and
+  implementation for the exact outline reviewed at SHA-256
+  `3bfd75b7641ae666155bc2fc9f9d4c8177b52aa24415770dc3a3d1415118758c`; scope is
+  limited to that outline. The exact-head PR merge gate and post-merge
+  trusted-main rollout observation remain separate gates.
+- Ordering amendment provenance: human response via
+  `2ee4041c-3fd5-4481-9748-b1beb36c8899` to `issue-1897-single-pr-v1`: “Use one
+  cohesive PR.” This supersedes only the two-PR/observe-before-retirement
+  ordering; it does not waive the separate outline approval, exact-head PR merge
+  gate, or post-merge trusted-main rollout observation.
 - Issue: #1897
 
 ## Outcome
@@ -56,10 +68,10 @@ automatic staging.
 
 ### Explicit public command migration
 
-Retire the dormant Rust controller and the public `cargo xtask adr promote` and
-`cargo xtask adr sync-readme` commands only with explicit human approval. This
-is a public command change, not an internal cleanup. Migrate documented recovery
-to:
+Retire the dormant Rust controller and public `cargo xtask adr promote` and
+`cargo xtask adr sync-readme` commands in the same cohesive PR #1917 as the
+simplified package, after reviewing actual integrated callers. This is a public
+command change, not an internal cleanup. Migrate documented recovery to:
 
 ```text
 nix run --accept-flake-config --no-update-lock-file --no-write-lock-file .#adr-promoter -- sync-readme
@@ -98,12 +110,16 @@ The earlier approved contract at
 sections “Existing behavior and explicit parser-eligibility differences,”
 “Ownership and command compatibility,” “Nix-selected invocation,” and “Preserved
 controller and staged delivery,” remains normative except for the stated SDK,
-runtime/invocation, public-command and testing choices. All controller,
-promotion ordering, byte editing, staging, Prettier, read-only gate, delivery
-and safety requirements remain unchanged. The older acceptance section's
-detailed testing requirements are explicitly superseded by the bounded
-project-owned test responsibility above; no system behavior or acceptance
-guarantee is waived.
+runtime/invocation, public-command, testing, and rollout/delivery-order choices.
+The rollout/delivery-order exception is the human-approved amendment
+`2ee4041c-3fd5-4481-9748-b1beb36c8899` / `issue-1897-single-pr-v1`: one cohesive
+PR, one exact-head merge gate, then trusted-main operation observation as
+rollout acceptance before completion. All other controller and promotion
+requirements, byte editing, staging, Prettier, independent read-only gates, and
+safety guarantees remain unchanged. The older acceptance section's detailed
+testing requirements are explicitly superseded by the bounded project-owned test
+responsibility above; no other system behavior or acceptance guarantee is
+waived.
 
 Safe policy refusals and all successful outcomes exit zero. Operational errors,
 unsafe inconsistent state and unverified writes exit nonzero. A failed write
@@ -120,9 +136,11 @@ approved Marko exclusions (orphan textual, indented-code, and
 multiline-code-span links). No fallback scanner, framework, duplicate parser or
 FFI bridge.
 
-Keep two reviewed PRs and both human gates: PR1 switches package path and proves
-it on trusted main; PR2 removes Rust controller and approved legacy commands
-after caller review/observation. Neither merges without its gate.
+Deliver the simplified package, actual caller migration, and obsolete Rust
+command/controller retirement together in one cohesive PR #1917, with one exact-
+head human merge gate. After merge, observe the operation on trusted `main` as
+rollout acceptance before completion. If observation fails, diagnose and use a
+scoped repair or revert; do not retain or revive a dormant fallback.
 
 ## Acceptance
 
@@ -135,8 +153,10 @@ after caller review/observation. Neither merges without its gate.
 - Adapter uses locked PyGithub and one admission path consumes the Nix
   predicate; direct package route, recovery and independent read-only gates are
   preserved.
-- Each PR passes ordinary checks and its separate human gate; observe
-  trusted-main before PR2. Preserve promotion-as-acceptance.
+- The cohesive PR #1917 passes ordinary checks and its one exact-head human
+  merge gate. After merge, observe trusted-main operation as rollout acceptance
+  before completion; diagnose failure with scoped repair or revert, never a
+  dormant fallback. Preserve promotion-as-acceptance.
 
 Accounting: raw +4249/-1389; conservative dormant Rust removal 2326 lines. Not
 semantic totals or a promised LOC target: describe reduced responsibilities, not
@@ -144,12 +164,13 @@ invented net counts.
 
 ## Boundaries
 
-Design-doc boundary only. The revised design is approved as specified above;
-implementation is not authorized until the revised outline is independently
-reviewed and separately approved by a human. The prior spec/outline remain
-historical contracts and are not deleted. Do not modify implementation/tests,
-packages, pins/lockfiles, workflow, staged repair/index or accepted ADR/index.
-No builds, tests, installs, pushes, watches, staging, unstaging or cleanup.
+The revised design and outline/implementation are approved only within the scope
+and provenance recorded above. This does not authorize work beyond the outline;
+the exact-head PR merge gate and post-merge trusted-main rollout observation
+remain separate requirements. The prior spec/outline remain historical contracts
+and are not deleted. Do not modify implementation/tests, packages,
+pins/lockfiles, workflow, staged repair/index or accepted ADR/index. No builds,
+tests, installs, pushes, watches, staging, unstaging or cleanup.
 
 ## Evidence and unresolved choices
 
@@ -162,7 +183,8 @@ no raw mutation fallback is required.
 The human approved (1) PyGithub replacing the approved GitHub adapter and direct
 package invocation replacing the CI-shell/Just route; (2) retiring Rust commands
 and migrating recovery; and (3) focused behavior/package proof replacing route
-matrices, under the boundary in the approval provenance above. Both PR gates and
-trusted-main observation remain unchanged. This does not approve implementation;
-the revised outline requires its own independent review and human approval
-first.
+matrices, under the design boundary in the approval provenance above. The
+ordering amendment is recorded above; the single exact-head PR merge gate and
+post-merge trusted-main rollout observation remain required. Implementation
+approval is limited to the separately approved outline and does not authorize
+merging or work beyond its scope.
