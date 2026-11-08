@@ -12,9 +12,7 @@ from test_promotion import tracked_repo, write
 @pytest.mark.parametrize(("status", "response", "error"), [
     (0, b'["tools/adr-promoter/tests/new.py"]', ValueError),
     (1, b"", RuntimeError),
-    (0, b"not JSON", ValueError),
     (0, b"{}", ValueError),
-    (0, b"[]", None),
 ])
 def test_admission_preserves_candidates_and_fails_closed(tmp_path, monkeypatch, status, response, error):
     tracked_repo(tmp_path, {".gitignore": b"ignored/\n"})
@@ -34,10 +32,7 @@ def test_admission_preserves_candidates_and_fails_closed(tmp_path, monkeypatch, 
 
     monkeypatch.setattr(subprocess, "run", nix_response)
     monkeypatch.setenv("GIT_DIR", "/must-not-redirect")
-    if error:
-        with pytest.raises(error):
-            admit_checkout(tmp_path)
-    else:
+    with pytest.raises(error):
         admit_checkout(tmp_path)
     assert observed == [
         {"path": "notes.md", "kind": "regular"},

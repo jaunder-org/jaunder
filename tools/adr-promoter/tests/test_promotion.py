@@ -44,12 +44,12 @@ OLD = b"# ADR-0001: Old heading\n\n- Status: accepted\n"
 README = (b"# Records\r\n" + BEGIN + b"\r\n\r\n"
           b"| [0001](adr/wrong.md) | Curated old | rejected |\r\n" + END + b"\r\nFooter\r\n")
 ALPHA = ("# ADR-DRAFT: Alpha é\r\n\r\n- Status: proposed\r\n\r\n"
-         "See [beta](../drafts/beta.md) and ![old](../0001-old.md \"title\").\r\n"
+         "See [beta](../drafts/beta.md) and ![old](<../0001-old.md> \"title\").\r\n"
          "Literal ADR-DRAFT proposed; docs/adr/drafts/beta.md#part\r\n"
          "\r\n    [code](../code.md)\r\n\r\n"
          "`multi\r\n[code](../code.md)`\r\nprose ](../code.md)\r\n").encode()
 ALPHA_EXPECTED = ("# ADR-0002: Alpha é\r\n\r\n- Status: accepted\r\n\r\n"
-                  "See [beta](0003-beta.md) and ![old](0001-old.md \"title\").\r\n"
+                  "See [beta](0003-beta.md) and ![old](<0001-old.md> \"title\").\r\n"
                   "Literal ADR-DRAFT proposed; docs/adr/0003-beta.md#part\r\n"
                   "\r\n    [code](../code.md)\r\n\r\n"
                   "`multi\r\n[code](../code.md)`\r\nprose ](../code.md)\r\n").encode()

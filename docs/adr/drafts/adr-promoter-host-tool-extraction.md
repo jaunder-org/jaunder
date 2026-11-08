@@ -151,18 +151,22 @@ cleanup.
 
 ### Testing responsibility
 
-Trust documented PyGithub, Marko and Git behavior; do not test SDK internals,
-HTTP mechanics, retry/pagination engines, or provider/library matrices. Test our
-bounded evidence selection and consumed policy distinctions; assert our
+Remove all tests redundant with the consumed dependencies' own testing, even
+when the test invokes our adapter. Trust documented PyGithub, Marko, Git and
+standard-library behavior; do not test SDK internals, HTTP mechanics,
+retry/pagination engines, parser recognition or provider/library matrices. Test
+our bounded evidence selection and consumed policy distinctions; assert our
 load-bearing SDK boundary arguments (`expected_head_oid` and `retry=None`), not
 that the library implements them. Test our correlation, refusals,
 postconditions/outcomes, byte-range edits and complete resulting documents,
-staging, admission and runtime wiring. Real-Git tests cover only our lease and
-conflict argv, exit interpretation and resulting policy—not generic Git
-correctness. One selected-package smoke test covers our integration, not package
-bootstrap or library internals. Avoid per-field/error permutations not consumed
-by policy and do not add a fake framework; remove route × action × source-kind ×
-outcome fake-Nix matrices.
+staging, admission and runtime wiring. Byte tests cover our original-byte
+mapping/patch output, not Marko's AST or normalization implementation. Git
+boundary tests cover our lease/conflict argv, exit interpretation and resulting
+policy with supplied results, not Git correctness. One selected-package smoke
+uses nonprivileged temporary Git to cover our integration, not package bootstrap
+or library internals. Avoid per-field/error permutations not consumed by policy
+and do not add a fake framework; remove route × action × source-kind × outcome
+fake-Nix matrices.
 
 ## Consequences
 

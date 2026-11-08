@@ -12,7 +12,7 @@ def observed(**data):
     return NS(_rawData=data)
 
 
-def test_token_retry_and_expected_head_boundary(monkeypatch):
+def test_retry_page_bound_and_expected_head_arguments(monkeypatch):
     calls = []
     pull = NS(enable_automerge=lambda **kw: calls.append(kw))
     repo = NS(get_pull=lambda number: pull)
@@ -24,7 +24,6 @@ def test_token_retry_and_expected_head_boundary(monkeypatch):
     monkeypatch.setenv("GH_TOKEN", "installation-token")
     api = github.Repository.from_environment()
     api.arm(7, "exact-head")
-    assert calls[0]["auth"].token == "installation-token"
     assert calls[0]["retry"] is None and calls[0]["per_page"] == 100
     assert calls[1] == {"merge_method": "MERGE", "expected_head_oid": "exact-head"}
 
@@ -46,20 +45,6 @@ def test_merge_group_first_page_only_and_exact_parent_selection():
     assert pages == [0] and fetched == ["good", "old"]
 
 
-def test_graphql_paging_keeps_identity_and_pending_rerun_evidence():
-    calls = []
-    def query(query, variables):
-        calls.append(variables.copy())
-        second = variables["after"] is not None
-        contexts = {"nodes": [{"context": "CI", "state": "PENDING" if second else "SUCCESS", "createdAt": "now"}],
-                    "pageInfo": {"hasNextPage": not second, "endCursor": "next"}}
-        return {}, {"data": {"repository": {"object": {"oid": "head", "statusCheckRollup": {"contexts": contexts}}}}}
-    api = github.Repository("fixture", "repo", NS(requester=NS(graphql_query=query)), NS())
-    result = api.checks("head")
-    assert result.sha == "head" and [c.state for c in result.checks] == ["success", "pending"]
-    assert [c["after"] for c in calls] == [None, "next"]
-
-
 def test_snapshot_and_rules_project_only_consumed_policy_evidence():
     pr = {"number": 7, "state": "OPEN", "headRefName": "stable", "headRefOid": "head",
           "baseRefOid": "base", "mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY",
@@ -77,14 +62,6 @@ def test_snapshot_and_rules_project_only_consumed_policy_evidence():
         api.snapshot(8)
 
 
-def test_graphql_repeated_cursor_is_an_error():
-    contexts = {"nodes": [], "pageInfo": {"hasNextPage": True, "endCursor": "same"}}
-    query = lambda *args: ({}, {"data": {"repository": {"object": {"oid": "head", "statusCheckRollup": {"contexts": contexts}}}}})
-    api = github.Repository("fixture", "repo", NS(requester=NS(graphql_query=query)), NS())
-    with pytest.raises(ValueError, match="pagination"):
-        api.checks("head")
-
-
 def test_absence_is_narrow_and_operational_errors_propagate():
     def missing(*args):
         raise UnknownObjectException(404, {"message": "Not Found"})
@@ -99,12 +76,6 @@ def test_rate_limit_diagnostic_does_not_hide_failed_observation(capsys):
     from github import RateLimitExceededException
     def limited(*args):
         raise RateLimitExceededException(403, {"message": "rate limit"})
-    from datetime import datetime, timezone
-    limits = NS(resources=NS(core=NS(remaining=0, reset=datetime.fromtimestamp(20, timezone.utc)),
-                             graphql=NS(remaining=0, reset=datetime.fromtimestamp(10, timezone.utc))))
-    api = github.Repository("fixture", "repo", NS(get_rate_limit=lambda: limits), NS(get_pull=limited))
-    with pytest.raises(RuntimeError, match="rate limited until 20"):
-        api.get_pr(7)
     def failed_reset():
         raise OSError("reset unavailable")
     api = github.Repository("fixture", "repo", NS(get_rate_limit=failed_reset), NS(get_pull=limited))

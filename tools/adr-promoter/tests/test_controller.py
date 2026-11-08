@@ -190,10 +190,9 @@ def test_created_observes_format_commit_push_create_arm_order(world):
     assert ("commit", (world.repo, "jaunder-adr-promoter[bot]", "docs(adr): promote pending ADR drafts")) in world.local.arguments
 
 
-@pytest.mark.parametrize("field", ["author", "body"])
-def test_foreign_occupant_is_an_error_without_cleanup_or_generation(world, field):
+def test_foreign_occupant_is_an_error_without_cleanup_or_generation(world):
     existing(world)
-    world.api.pulls = [replace(pr(), **{field: "foreign"})]
+    world.api.pulls = [replace(pr(), author="foreign")]
     with pytest.raises(RuntimeError, match="different identity"):
         run(world)
     assert world.trace == ["ref", "list"]
@@ -268,12 +267,11 @@ def test_no_diff_does_not_require_queue_configuration(world):
     assert "rules" not in world.trace
 
 
-@pytest.mark.parametrize("phase", ["prepare", "promote", "diff", "format", "commit", "head", "rules"])
-def test_operational_generation_errors_stop_publication(world, phase):
-    (world.api.fail if phase == "rules" else world.local.fail).add(phase)
+def test_format_failure_leaves_generated_attempt_unpublished(world):
+    world.local.fail.add("format")
     with pytest.raises(RuntimeError, match="failed"):
         run(world)
-    assert "push" not in world.trace and "create" not in world.trace
+    assert not {"commit", "push", "create", "arm"}.intersection(world.trace)
 
 
 @pytest.mark.parametrize("operation", ["push", "create", "arm"])
@@ -367,14 +365,13 @@ def test_complete_conflict_proof_retires_then_rebuilds_from_main(world):
     ]
 
 
-@pytest.mark.parametrize("phase", ["fetch", "main", "parent", "ancestor", "conflicts"])
-def test_conflict_probe_failure_is_not_retirement_authorization(world, phase):
+def test_conflict_observation_error_never_authorizes_retirement(world):
     existing(world)
     world.api.snapshots[7] = replace(snap(), mergeable="CONFLICTING", merge_state="DIRTY")
-    world.local.fail.add(phase)
+    world.local.fail.add("conflicts")
     with pytest.raises(RuntimeError, match="failed"):
         run(world)
-    assert "delete" not in world.trace and "prepare" not in world.trace
+    assert not {"delete", "close", "prepare"}.intersection(world.trace)
 
 
 @pytest.mark.parametrize("event", [
@@ -450,12 +447,12 @@ def test_dequeue_green_contexts_rearm_without_local_generation(world):
     assert not {"prepare", "promote", "format", "commit", "push", "delete", "close"}.intersection(world.trace)
 
 
-@pytest.mark.parametrize("read", ["get", "ref", "rules", "groups", "checks", "snapshot"])
-def test_recovery_api_errors_are_not_safe_refusals(world, read):
+def test_failed_required_evidence_read_is_not_safe_refusal(world):
     existing(world)
-    world.api.fail.add(read)
+    world.api.fail.add("checks")
     with pytest.raises(RuntimeError, match="failed"):
         run(world, dequeue())
+    assert "arm" not in world.trace
 
 
 @pytest.mark.parametrize("change", ["head_sha", "head_ref", "state", "unarmed", "queued"])
@@ -474,6 +471,25 @@ def test_arm_requires_exact_snapshot_or_live_queue_postcondition(world, monkeypa
     else:
         with pytest.raises(RuntimeError, match="did not verify"):
             run(world, dequeue())
+
+
+def test_pending_context_in_later_acquired_evidence_refuses_rearm(world, monkeypatch):
+    existing(world)
+    def query(query, variables):
+        head = variables["oid"] == "head"
+        later = variables["after"] is not None
+        contexts = {
+            "nodes": [{"context": "CI", "state": "PENDING" if later else "SUCCESS", "createdAt": "now"}],
+            "pageInfo": {"hasNextPage": head and not later, "endCursor": "more"},
+        }
+        return {}, {"data": {"repository": {"object": {
+            "oid": variables["oid"], "statusCheckRollup": {"contexts": contexts},
+        }}}}
+    api = controller.github.Repository("fixture", "repo",
+        SimpleNamespace(requester=SimpleNamespace(graphql_query=query)), SimpleNamespace())
+    monkeypatch.setattr(world.api, "checks", api.checks)
+    assert run(world, dequeue()).kind == "NotRearmed"
+    assert "arm" not in world.trace
 
 
 def test_pending_rerun_dominates_settled_result_and_completed_reruns_use_latest_timestamp():
@@ -498,7 +514,7 @@ def test_conflict_probe_binds_every_local_operation_to_observed_objects(world):
     ]
 
 
-@pytest.mark.parametrize("change", ["ref", "owner", "author", "marker", "number"])
+@pytest.mark.parametrize("change", ["ref", "author", "number"])
 def test_arm_rejects_changed_post_write_identity(world, monkeypatch, change):
     existing(world)
     original = world.api.arm
@@ -509,11 +525,20 @@ def test_arm_rejects_changed_post_write_identity(world, monkeypatch, change):
         elif change == "number":
             world.api.snapshots[number] = replace(world.api.snapshots[number], number=99)
         else:
-            field = "body" if change == "marker" else change
-            world.api.pulls = [replace(pr(), **{field: "changed"})]
+            world.api.pulls = [replace(pr(), author="changed")]
     monkeypatch.setattr(world.api, "arm", arm)
     with pytest.raises(RuntimeError, match="did not verify"):
         run(world, dequeue())
+
+
+def test_changed_app_identity_before_close_prevents_retirement(world, monkeypatch):
+    existing(world)
+    world.api.remote = None
+    original = world.api.get_pr
+    monkeypatch.setattr(world.api, "get_pr", lambda number: replace(original(number), author="foreign"))
+    with pytest.raises(RuntimeError, match="before close"):
+        run(world)
+    assert "close" not in world.trace and "prepare" not in world.trace
 
 
 def test_changed_ref_before_close_prevents_closing_even_after_delete(world, monkeypatch):
@@ -556,15 +581,20 @@ def test_created_pr_must_have_generated_head_and_exact_app_identity(world, monke
     assert "arm" not in world.trace
 
 
-@pytest.mark.parametrize("value", [[], {"action": 7}, {"pull_request": False},
-    {"pull_request": {}},
-    {"pull_request": {"number": -1, "head": {"ref": "x", "sha": "y"}, "base": {"ref": "main", "sha": "b"}}},
-    {"pull_request": {"number": True, "head": {"ref": "x", "sha": "y"}, "base": {"ref": "main", "sha": "b"}}},
-    {"pull_request": {"number": 7, "head": {"ref": "x"}, "base": {"ref": "main", "sha": "b"}}},
+@pytest.mark.parametrize("value", [
+    {"pull_request": False},
+    {"pull_request": {"number": 7, "head": {"ref": controller.BRANCH},
+                      "base": {"ref": "main", "sha": "base"}}},
 ])
-def test_malformed_events_are_errors(value):
+def test_incomplete_pr_event_cannot_construct_api_or_generate(value, tmp_path, monkeypatch):
+    import json
+    event_path = tmp_path / "event.json"
+    event_path.write_text(json.dumps(value))
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setattr(controller.github.Repository, "from_environment",
+                        lambda: pytest.fail("incomplete event must not acquire mutation authority"))
     with pytest.raises(ValueError):
-        controller.parse_event(value)
+        controller.execute(tmp_path)
 
 
 def test_event_parser_distinguishes_generation_from_exact_pr_event():

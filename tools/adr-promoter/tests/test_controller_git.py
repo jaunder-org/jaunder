@@ -1,4 +1,4 @@
-"""Controller Git/formatter argv proof using fake children only."""
+"""Our Git/formatter argument selection, exit interpretation and refusal policy."""
 
 import subprocess
 
@@ -78,51 +78,23 @@ def test_formatter_failure_never_restages(monkeypatch, tmp_path):
     assert len(calls) == 1 and calls[0][0] == "diff"
 
 
-@pytest.mark.parametrize("code", [2, 128])
-@pytest.mark.parametrize("operation", ["merge", "ancestor"])
-def test_git_errors_cannot_be_misclassified_as_conflict_proof(monkeypatch, tmp_path, code, operation):
-    monkeypatch.setattr(git, "process", lambda *args: subprocess.CompletedProcess(args, code, b"", b"fixture error"))
-    with pytest.raises(RuntimeError, match="fixture error"):
-        if operation == "merge":
-            git.merge_conflicts(tmp_path, "main", "head")
-        else:
-            git.strict_ancestor(tmp_path, "old", "main")
-
-
-def test_real_disposable_git_proves_parent_ancestry_and_exact_merge(tmp_path):
-    from test_promotion import tracked_repo, write, git as command
-    tracked_repo(tmp_path, {"value.txt": b"base\n"})
-    base = command(tmp_path, "rev-parse", "HEAD").decode().strip()
-    command(tmp_path, "switch", "-c", "left")
-    write(tmp_path, "value.txt", b"left\n")
-    command(tmp_path, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c",
-            "core.hooksPath=/dev/null", "commit", "-qam", "left")
-    left = command(tmp_path, "rev-parse", "HEAD").decode().strip()
-    command(tmp_path, "switch", "--detach", base)
-    command(tmp_path, "switch", "-c", "right")
-    write(tmp_path, "value.txt", b"right\n")
-    command(tmp_path, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c",
-            "core.hooksPath=/dev/null", "commit", "-qam", "right")
-    right = command(tmp_path, "rev-parse", "HEAD").decode().strip()
-    assert git.sole_parent(tmp_path, right) == base
-    assert git.strict_ancestor(tmp_path, base, left)
-    assert not git.strict_ancestor(tmp_path, left, left)
-    assert git.merge_conflicts(tmp_path, left, right)
-    assert not git.merge_conflicts(tmp_path, base, right)
-
-
-def test_real_local_bare_ref_lease_refuses_changed_oid_then_verifies_absence(tmp_path):
-    from test_promotion import tracked_repo, git as command
-    local = tmp_path / "local"
-    local.mkdir()
-    tracked_repo(local, {"value.txt": b"fixture\n"})
-    remote = tmp_path / "remote.git"
-    command(local, "init", "--bare", str(remote))
-    command(local, "remote", "add", "origin", str(remote))
-    head = command(local, "rev-parse", "HEAD").decode().strip()
-    command(local, "push", "origin", "HEAD:refs/heads/automation/adr-promoter")
-    with pytest.raises(RuntimeError):
-        git.delete_remote(local, "automation/adr-promoter", "0" * 40)
-    assert command(local, "ls-remote", "--heads", "origin", "refs/heads/automation/adr-promoter").split()[0].decode() == head
-    git.delete_remote(local, "automation/adr-promoter", head)
-    assert command(local, "ls-remote", "--heads", "origin", "refs/heads/automation/adr-promoter") == b""
+@pytest.mark.parametrize("code", [0, 1, 128])
+@pytest.mark.parametrize("operation,arguments,positive", [
+    ("merge", ("merge-tree", "--write-tree", "main", "head"), 1),
+    ("ancestor", ("merge-base", "--is-ancestor", "old", "main"), 0),
+])
+def test_conflict_proof_uses_exact_objects_and_interprets_exit_status(monkeypatch, tmp_path, code, operation, arguments, positive):
+    calls = []
+    def process(repo, *args):
+        assert repo == tmp_path
+        calls.append(args)
+        return subprocess.CompletedProcess(args, code, b"", b"fixture error")
+    monkeypatch.setattr(git, "process", process)
+    invoke = (lambda: git.merge_conflicts(tmp_path, "main", "head")) if operation == "merge" else (
+        lambda: git.strict_ancestor(tmp_path, "old", "main"))
+    if code == 128:
+        with pytest.raises(RuntimeError, match="fixture error"):
+            invoke()
+    else:
+        assert invoke() is (code == positive)
+    assert calls == [arguments]

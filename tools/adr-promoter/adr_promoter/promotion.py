@@ -50,8 +50,11 @@ def _destinations(source):
     def visit(node):
         if type(node) in (Link, Image) and node.dest_span is not None:
             start, end = (boundaries[index] for index in node.dest_span)
-            target = source[start:end]
-            found.append((start, end, target))
+            # Marko's parsed destination span includes authored angle delimiters.
+            # Both byte edits and link inspection consume only the path interior.
+            if source[start:end].startswith(b"<") and source[start:end].endswith(b">"):
+                start, end = start + 1, end - 1
+            found.append((start, end, source[start:end]))
         for child in getattr(node, "children", ()):
             if not isinstance(child, str):
                 visit(child)

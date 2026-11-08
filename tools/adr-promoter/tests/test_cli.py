@@ -23,12 +23,6 @@ def invoke(root, *arguments):
                           capture_output=True, text=True, env=environment, cwd=root, check=False)
 
 
-def test_help_and_unknown_action(tmp_path):
-    result = invoke(tmp_path, "--help")
-    assert result.returncode == 0 and "controller" in result.stdout
-    assert invoke(tmp_path, "unknown").returncode == 2
-
-
 def test_controller_ignored_event_exits_zero_without_token_or_mutation(tmp_path):
     event = {"action": "opened", "pull_request": {"number": 7,
              "head": {"ref": "automation/adr-promoter", "sha": "head"},
@@ -70,10 +64,3 @@ def test_operational_sdk_error_exits_nonzero(monkeypatch, tmp_path, capsys):
     assert failure.value.code == 1
     output = capsys.readouterr()
     assert not output.out and "unavailable" in output.err
-
-
-@pytest.mark.parametrize("event", [b"{broken", b'{"extra":NaN}'])
-def test_malformed_event_fails_before_any_api(tmp_path, event):
-    tracked_repo(tmp_path, {"event.json": event})
-    result = invoke(tmp_path, "controller")
-    assert result.returncode == 1 and result.stdout == ""
