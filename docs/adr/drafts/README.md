@@ -43,9 +43,9 @@ explainer rather than a draft, and `promote` intentionally skips it.
 ## Automated promotion
 
 Feature authors commit drafts and their path citations; they do **not** run
-`cargo xtask adr promote` while shipping. After the feature reaches `main`, the
-serialized ADR promoter invokes that deterministic local mutation against fresh
-`main` and opens its merge-queue PR.
+promotion while shipping (including the package's `promote` action). After the
+feature reaches `main`, the serialized ADR promoter invokes that deterministic
+local mutation against fresh `main` and opens its merge-queue PR.
 
 For each tracked draft, sorted by slug, promotion assigns the next free number,
 stages the source deletion and numbered destination, rewrites the heading and

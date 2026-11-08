@@ -317,7 +317,7 @@ See [`docs/adr/drafts/README.md`](docs/adr/drafts/README.md) for the link forms
 that resolve both while the draft is tracked and after its one-directory
 promotion.
 
-Feature shipping must not invoke `cargo xtask adr promote` and must not edit
+Feature authors and shipping flows must not invoke promotion and must not edit
 `docs/README.md`. The draft remains `proposed` when the feature reaches `main`.
 A serialized workflow then derives from current `main`, runs the deterministic
 promotion mutation, and opens one stable promoter PR. Promotion assigns each
@@ -335,7 +335,11 @@ create, check, or merge is failed-automation lag and requires diagnosis; it is
 not a reason to promote from the feature branch.
 
 When promoter automation fails, diagnose the visible PR, ref, check, or workflow
-state and rerun the authorized controller. The controller cleans up incomplete
+state and rerun the authorized controller with
+`nix run --accept-flake-config --no-update-lock-file --no-write-lock-file .#adr-promoter -- controller`
+in the trusted workflow context (not from a feature-author checkout). This
+branch selects the Python package directly; trusted-main delivery and
+observation remain separately gated. The controller cleans up incomplete
 controller-owned state only with an exact-SHA lease and regenerates it from
 fresh `main`; failed required checks remain visible. Never manually close,
 delete, rebase, force-update, promote, or otherwise alter a promoter attempt.
@@ -345,9 +349,13 @@ and a single-token `- Status: <token>` line. A **numbered** ADR carries one of
 accepted/superseded/deprecated/rejected — never `proposed`, because promotion
 and numbering are the acceptance event (ADR-0088). The table in `docs/README.md`
 is a **generated** projection whose number, link, and status cells are owned by
-promotion and `cargo xtask adr sync-readme`; only row titles are hand-curated.
-The `adr-format` and `adr-readme-parity` gates reject a non-canonical ADR or
-drifted table (recovery for table-only drift: `cargo xtask adr sync-readme`).
+promotion and the package's `sync-readme` action; only row titles are
+hand-curated. The `adr-format` and `adr-readme-parity` gates reject a
+non-canonical ADR or drifted table. Recovery for table-only drift is:
+
+```text
+nix run --accept-flake-config --no-update-lock-file --no-write-lock-file .#adr-promoter -- sync-readme
+```
 
 The `adr-view-parity` gate requires every `accepted` ADR to be cited in
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Update the view in the feature

@@ -4,12 +4,12 @@ use std::time::Instant;
 use xshell::Shell;
 
 use crate::{
-    adr, adr_readme, audit_wasm, cache_safety, census,
+    audit_wasm, cache_safety, census,
     cli::{
-        AdrCommand, CacheSafetyCommand, Cli, Command, CoverageCommand, MutantsCommand, NixCommand,
+        CacheSafetyCommand, Cli, Command, CoverageCommand, MutantsCommand, NixCommand,
         TracesCommand, WasmCoverageCommand,
     },
-    coverage, lifecycle, nix_probe, pr,
+    coverage, lifecycle, nix_probe,
     result::{CommandResult, StepResult},
     steps, traces, wasm_coverage,
 };
@@ -284,30 +284,6 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            Ok(result)
-        }
-        Command::Adr(AdrCommand::SyncReadme) => {
-            let start = Instant::now();
-            let mut result = CommandResult::new("adr-sync-readme");
-            let step_start = Instant::now();
-            result.push(adr_readme::sync_readme().with_duration(step_start.elapsed()));
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::Adr(AdrCommand::Promote) => {
-            let start = Instant::now();
-            let mut result = CommandResult::new("adr-promote");
-            let step_start = Instant::now();
-            result.push(adr::promote().with_duration(step_start.elapsed()));
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::Adr(AdrCommand::Promoter) => {
-            let start = Instant::now();
-            let mut result = CommandResult::new("adr-promoter");
-            let step_start = Instant::now();
-            result.push(pr::promoter::execute().with_duration(step_start.elapsed()));
-            lifecycle::finalize(&mut result, start);
             Ok(result)
         }
         Command::Traces(TracesCommand::Analyze {

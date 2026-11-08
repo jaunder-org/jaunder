@@ -119,11 +119,8 @@ fn heading_title(content: &str) -> String {
     after.to_string()
 }
 
-/// The status token a draft carries until promotion numbers it, and the token
-/// promotion writes in its place. Spelled once here because the gate, the table
-/// projection and `adr promote`'s rewrite all test against them.
-pub(crate) const PROPOSED: &str = "proposed";
-pub(crate) const ACCEPTED: &str = "accepted";
+/// The gate rejects this token on numbered ADRs; Python owns its acceptance edit.
+const PROPOSED: &str = "proposed";
 
 /// An ADR's status line, located once for every consumer.
 pub(crate) struct StatusLine<'a> {
@@ -149,16 +146,9 @@ pub(crate) struct StatusLine<'a> {
 /// Locate `content`'s status line: the first line whose `trim_start` begins
 /// `- Status:` or a bare `Status:`.
 ///
-/// The single home of "which line is the status line, and what does it say" — the
-/// `adr-format` gate, the table projection, and `adr promote`'s status rewrite all
-/// read it here, so they cannot disagree. They previously disagreed: this parse
-/// tolerated indentation and the bare form, while the gate matched only a column-0
-/// `- Status:`. A rewrite that picked a different line than the gate would emit a
-/// promoted ADR that instantly fails `adr-format`.
-///
-/// Locating leniently and *judging* strictly is the point: agreement on the line is
-/// a parsing concern, canonical spelling is a policy one, and [`StatusLine`] hands
-/// each consumer the part it owns.
+/// Read-only consumers locate leniently but judge canonical spelling strictly.
+/// Python promotion retains the same first-line/remainder contract; the fixture
+/// proof runs this gate against its output rather than sharing mutation code.
 pub(crate) fn status_line(content: &str) -> Option<StatusLine<'_>> {
     let mut offset = 0;
     for line in content.split_inclusive('\n') {

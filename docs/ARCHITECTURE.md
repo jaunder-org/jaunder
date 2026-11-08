@@ -5383,10 +5383,9 @@ that replaces the heading token, `promote` rewrites a `- Status: proposed` line
 to `accepted`. Any other token a draft carries — `superseded`, `rejected`,
 `deprecated` — is a deliberate authorial claim and survives untouched. The
 rewrite alone would not hold the property, so `adr-format` enforces the other
-half by rejecting `proposed` on any numbered file; rewrite, gate, and table
-renderer share one status-line parse, so they cannot disagree about which line
-they are reading (`xtask/src/adr.rs:81`, `xtask/src/adr_readme/files.rs:125`,
-`xtask/src/adr_readme/files.rs:213`).
+half by rejecting `proposed` on any numbered file. Python's rewrite and table
+projection preserve the status rule; independent Rust format/parity gates remain
+the read-only check on the resulting documents.
 
 Identifier collisions remain loud
 ([ADR-0036](adr/0036-identifier-collision-policy.md)): the
@@ -5398,8 +5397,8 @@ ephemeral queue branch and runs the required checks
 ([ADR-0077](adr/0077-adopt-github-merge-queue.md)).
 
 The ADR index table in `docs/README.md` is a generated projection of the ADR
-files' headings and Status lines: `cargo xtask adr sync-readme`, invoked by
-promotion, regenerates the number, link, and status cells between
+files' headings and Status lines: the selected Python package's `sync-readme`,
+invoked by promotion, regenerates the number, link, and status cells between
 `<!-- adr-table:begin/end -->` markers; titles stay hand-curated, and the
 `adr-readme-parity` gate keeps table and directory in agreement, naming
 `sync-readme` as its recovery
@@ -5424,6 +5423,85 @@ another draft is `../drafts/<slug>.md`. References elsewhere use the sole
 repo-root identity `docs/adr/drafts/<slug>.md`. Promotion rewrites those path
 forms to the numbered destination; a bare draft token or a different path form
 would survive pointing at nothing.
+
+### Host-side ADR promoter extraction — branch implementation, not shipped
+
+In this branch, `.github/workflows/adr-promoter.yml` selects the Python package
+directly, without a CI devShell or Just hop:
+
+```text
+nix run --accept-flake-config --no-update-lock-file --no-write-lock-file .#adr-promoter -- controller
+```
+
+The single standard `buildPythonApplication` under `tools/adr-promoter/` owns
+controller policy, promotion and README synchronization. It uses locked Python
+3.14.7, Marko 2.2.4 and PyGithub 2.8.1, with pinned Git/Prettier on its wrapped
+entry point's PATH. PyGithub supplies transport, App-token authentication and
+errors (`Auth.Token`, `retry=None`); auto-merge supplies `expected_head_oid`.
+Only consumed queue/check observations absent from SDK methods use GraphQL, with
+explicit bounded paging. Merge-group acquisition explicitly consumes the first
+page of 100 runs, never automatic SDK iteration or implicit object loads. Policy
+retains exact identity/parent/check correlation, pending-rerun precedence,
+narrow lookup absence, rate-limit diagnostics and verified write postconditions.
+
+One Python admission path consumes the authoritative Nix source predicate before
+mutation. Tracked dirt and unrelated inputs do not require a clean tree;
+generation separately retains clean-worktree and fresh-main guards. Marko GFM
+link/image destination spans, including table cells, map back to original bytes;
+there is no AST serialization or fallback scanner. The approved exclusions are
+orphan textual link substrings, indented code and multiline code spans.
+Promotion retains allocation, heading/admission-before-move ordering, complete
+staging, curated README titles, warnings and staged Prettier-before-commit
+ordering.
+
+Rust public `adr promote`, `adr sync-readme` and `adr promoter`, their
+delegates, and the dormant controller/armer and exclusive helpers are removed
+together. Recovery uses the selected package's `sync-readme` action:
+
+```text
+nix run --accept-flake-config --no-update-lock-file --no-write-lock-file .#adr-promoter -- sync-readme
+```
+
+Feature authors still must not promote. Rust keeps independent read-only
+`adr-format`, README/view parity, document-link and collision gates. Ordinary PR
+observation stays in `tools/pr-observer`. Integration with the base's
+performance workflow extraction leaves no xtask consumer of the old PR
+re-exports or GitHub transport facade, so those adapters and xtask's observer
+dependency are removed. The independent observer and performance implementation
+remain unchanged; no cross-project logic changes or dormant fallback are part of
+this extraction.
+
+Trusted-main App permissions are unchanged. Open attempt heads/diffs remain
+immutable; generation and per-PR recovery coalesce separately without active
+cancellation. Generate-only orphan resumption and conflict retirement require
+the existing exact identity/local proof, observed-SHA lease, verified absence
+and same-PR close checks. Dequeue re-arm requires one correlated merge group and
+complete green required contexts on both exact SHAs; pending reruns take
+precedence. Failed writes succeed only with verified exact postconditions. Safe
+refusals/successful outcomes exit zero; operational failures, unsafe state and
+unverified writes exit nonzero.
+
+Tests cover project-owned evidence selection, correlation, refusal/outcome and
+postcondition policy, expected-head/retry arguments, complete original-byte
+outputs, staging and admission. The three Marko exclusions remain covered in
+whole-promotion output. Git boundary tests exercise our lease/conflict argv,
+exit interpretation and policy with supplied results; one selected-package smoke
+uses temporary Git for runtime integration, not bootstrap. Remove all tests
+redundant with consumed-library testing, even behind our adapters. Trust
+PyGithub, Marko, Git and standard-library mechanics; do not test parser/AST
+recognition, HTTP, SDK or pagination engines, provider/library or unconsumed
+field/error matrices, or add a fake route framework. Normal locked realization
+retains configured substitutes; it does not guarantee cold source bootstrap or
+hide realization failures.
+
+This branch is not delivered to or observed on trusted `main`; the numberless
+[Python ADR promoter draft](adr/drafts/adr-promoter-host-tool-extraction.md)
+remains proposed. One cohesive PR #1917 requires its separate exact-head human
+merge gate and ordinary required checks, then trusted-main observation as
+rollout acceptance before completing #1897. On observation failure, diagnose and
+use a scoped repair or revert; never retain or revive a dormant fallback. These
+gates remain pending. Queue-only writes to `main` and promotion-as-acceptance
+remain unchanged; source conformance does not ship or accept the decision.
 
 This document is itself a gated artifact. The `adr-view-parity` step requires
 every `accepted` ADR to be cited here, and fails the ladder by name and title

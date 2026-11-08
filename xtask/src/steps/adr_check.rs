@@ -13,9 +13,9 @@
 //!   `docs/ARCHITECTURE.md`. No allowlist, no exemptions: an ADR nobody can
 //!   describe in the view is an ADR the view is lying about.
 //!
-//! None mutates the tree; resolution is a guided manual fix (format), `cargo
-//! xtask adr sync-readme` (README parity), or writing prose (view parity — there
-//! is no mechanical recovery).
+//! None mutates the tree; resolution is a guided manual fix (format), the
+//! selected Python package's `sync-readme` (README parity), or writing prose
+//! (view parity — there is no mechanical recovery).
 
 use std::path::Path;
 
@@ -36,7 +36,7 @@ pub(crate) fn readme_parity_step_at(root: &Path) -> StepResult {
 }
 
 pub(crate) fn parity_step(report: anyhow::Result<Vec<String>>) -> StepResult {
-    const RECOVERY: &str = "  recovery: cargo xtask adr sync-readme";
+    const RECOVERY: &str = "  recovery: nix run --accept-flake-config --no-update-lock-file --no-write-lock-file .#adr-promoter -- sync-readme";
     match report {
         Ok(problems) if problems.is_empty() => StepResult::ok("adr-readme-parity"),
         Ok(problems) => StepResult::fail("adr-readme-parity")

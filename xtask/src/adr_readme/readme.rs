@@ -1,13 +1,11 @@
-//! README ADR-table projection, synchronization, and parity validation.
+//! Read-only README ADR-table parsing and parity validation.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::result::StepResult;
-
-use super::files::{AdrEntry, AdrFile, adr_link, parse_adr_dir, parse_adr_files};
+use super::files::{AdrEntry, AdrFile, adr_link, parse_adr_files};
 
 pub const README: &str = "docs/README.md";
 pub const BEGIN: &str = "<!-- adr-table:begin -->";
@@ -50,20 +48,6 @@ pub fn parse_table_block(block: &str) -> Vec<TableRow> {
     block.lines().filter_map(parse_row).collect()
 }
 
-/// The generated table block: header + separator + one row per ADR entry
-/// (ascending), reusing an existing row's title when present, else seeding the
-/// title from the ADR heading. Single-space padded — prettier owns alignment.
-pub fn render_block(entries: &[AdrEntry], existing: &[TableRow]) -> String {
-    let mut out = String::from("| #   | Title | Status |\n| --- | ----- | ------ |\n");
-    for r in resolved_rows(entries, existing) {
-        out.push_str(&format!(
-            "| [{:04}]({}) | {} | {} |\n",
-            r.num, r.target, r.title, r.status
-        ));
-    }
-    out.trim_end().to_string()
-}
-
 /// The byte range strictly between the ADR-table markers: `(start, end)` where
 /// `start` is just past `BEGIN` and `end` is at `END`. Errors when either marker
 /// is missing or they are out of order.
@@ -78,100 +62,10 @@ fn marker_bounds(readme: &str) -> Result<(usize, usize)> {
     Ok((begin + BEGIN.len(), end))
 }
 
-/// Replace the text strictly between the markers with `new_block`. Errors when a
-/// marker is missing or out of order.
-pub fn splice_block(readme: &str, new_block: &str) -> Result<String> {
-    let (after_begin, end) = marker_bounds(readme)?;
-    Ok(format!(
-        "{}\n\n{}\n\n{}",
-        &readme[..after_begin],
-        new_block,
-        &readme[end..]
-    ))
-}
-
 /// The block text between the markers (for reading existing titles).
 fn extract_block(readme: &str) -> Result<String> {
     let (start, end) = marker_bounds(readme)?;
     Ok(readme[start..end].to_string())
-}
-
-/// The desired table rows, ascending by number, applying the title-preservation
-/// rule once: reuse an existing row's title when a row with that number exists,
-/// else seed it from the ADR heading. The single source of that rule — both the
-/// renderer ([`render_block`]) and the idempotence check ([`sync_readme_at`])
-/// consume it, so they can never disagree.
-fn resolved_rows(entries: &[AdrEntry], existing: &[TableRow]) -> Vec<TableRow> {
-    let title_by_num: BTreeMap<u32, &str> =
-        existing.iter().map(|r| (r.num, r.title.as_str())).collect();
-    let mut sorted: Vec<&AdrEntry> = entries.iter().collect();
-    sorted.sort_by_key(|e| e.num);
-    sorted
-        .into_iter()
-        .map(|e| {
-            let title = title_by_num
-                .get(&e.num)
-                .copied()
-                .unwrap_or(e.title.as_str())
-                .to_string();
-            TableRow {
-                num: e.num,
-                target: adr_link(&e.filename),
-                title,
-                status: e.status.clone(),
-            }
-        })
-        .collect()
-}
-
-/// Regenerate the ADR table in `repo/docs/README.md` from `repo/docs/adr`.
-/// A no-op (no write) when the table already matches semantically, so it is
-/// idempotent regardless of prettier's column padding. Returns a human summary.
-pub fn sync_readme_at(repo: &Path) -> Result<String> {
-    let readme_path = repo.join(README);
-    let readme = std::fs::read_to_string(&readme_path)
-        .with_context(|| format!("reading {}", readme_path.display()))?;
-    let entries = parse_adr_dir(repo)?;
-    let existing = parse_table_block(&extract_block(&readme)?);
-
-    let desired = resolved_rows(&entries, &existing);
-    if desired == existing {
-        return Ok(format!("{} rows, already in sync", entries.len()));
-    }
-
-    let updated = splice_block(&readme, &render_block(&entries, &existing))?;
-    std::fs::write(&readme_path, &updated)
-        .with_context(|| format!("writing {}", readme_path.display()))?;
-
-    let existing_nums: BTreeSet<u32> = existing.iter().map(|r| r.num).collect();
-    let entry_nums: BTreeSet<u32> = entries.iter().map(|e| e.num).collect();
-    let added = entry_nums.difference(&existing_nums).count();
-    let removed = existing_nums.difference(&entry_nums).count();
-    Ok(format!(
-        "{} rows ({added} added, {removed} removed)",
-        entries.len()
-    ))
-}
-
-/// Whether `repo`'s README carries the ADR-table markers. `Ok(false)` when the
-/// README is absent (a scratch/test repo may omit it entirely) so the caller can
-/// skip table sync; a genuine read error still propagates rather than being
-/// mistaken for "no markers".
-pub fn readme_has_markers(repo: &Path) -> Result<bool> {
-    let readme_path = repo.join(README);
-    match std::fs::read_to_string(&readme_path) {
-        Ok(s) => Ok(s.contains(BEGIN) && s.contains(END)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(e).with_context(|| format!("reading {}", readme_path.display())),
-    }
-}
-
-/// Entry point for `cargo xtask adr sync-readme`.
-pub fn sync_readme() -> StepResult {
-    match sync_readme_at(Path::new(".")) {
-        Ok(summary) => StepResult::ok("adr-sync-readme").detail(summary),
-        Err(e) => StepResult::fail("adr-sync-readme").detail(format!("{e:#}")),
-    }
 }
 
 /// The `adr-readme-parity` problems: the committed table's mechanical cells
@@ -268,73 +162,6 @@ mod tests {
         assert!(parse_row("| # | Title | Status |").is_none());
         assert!(parse_row("| --- | --- | --- |").is_none());
         assert!(parse_row("plain text").is_none());
-    }
-
-    #[test]
-    fn render_block_preserves_existing_title_and_seeds_new_from_heading() {
-        let entries = vec![
-            entry(1, "0001-a.md", "Heading One", "accepted"),
-            entry(2, "0002-b.md", "Heading Two", "accepted"),
-        ];
-        let existing = vec![TableRow {
-            num: 1,
-            target: "adr/0001-a.md".into(),
-            title: "Curated One".into(),
-            status: "accepted".into(),
-        }];
-        let block = render_block(&entries, &existing);
-        // Existing row keeps its curated title; the new row seeds from the heading.
-        assert!(block.contains("| [0001](adr/0001-a.md) | Curated One | accepted |"));
-        assert!(block.contains("| [0002](adr/0002-b.md) | Heading Two | accepted |"));
-    }
-
-    #[test]
-    fn render_block_drops_orphans_and_sorts_ascending() {
-        let entries = vec![
-            entry(3, "0003-c.md", "Three", "accepted"),
-            entry(1, "0001-a.md", "One", "accepted"),
-        ];
-        // An existing row for a now-deleted ADR 2 must not survive.
-        let existing = vec![TableRow {
-            num: 2,
-            target: "adr/0002-b.md".into(),
-            title: "Two".into(),
-            status: "accepted".into(),
-        }];
-        let block = render_block(&entries, &existing);
-        let one = block.find("0001-a.md").unwrap();
-        let three = block.find("0003-c.md").unwrap();
-        assert!(one < three, "ascending order");
-        assert!(!block.contains("0002-b.md"), "orphan dropped");
-    }
-
-    #[test]
-    fn splice_block_replaces_only_between_markers() {
-        let readme = format!("intro\n\n{BEGIN}\n\nOLD TABLE\n\n{END}\n\noutro\n");
-        let out = splice_block(&readme, "NEW TABLE").unwrap();
-        assert!(out.contains("intro\n"));
-        assert!(out.contains("outro\n"));
-        assert!(out.contains(&format!("{BEGIN}\n\nNEW TABLE\n\n{END}")));
-        assert!(!out.contains("OLD TABLE"));
-    }
-
-    #[test]
-    fn splice_block_errors_on_missing_marker() {
-        let err = splice_block("no markers here", "x").unwrap_err();
-        assert!(format!("{err:#}").contains("marker"));
-    }
-
-    #[test]
-    fn desired_matches_current_when_in_sync() {
-        let entries = vec![entry(1, "0001-a.md", "Heading", "accepted")];
-        let existing = vec![TableRow {
-            num: 1,
-            target: "adr/0001-a.md".into(),
-            title: "Curated".into(),
-            status: "accepted".into(),
-        }];
-        // The preserved title is the curated one, so desired == current: a no-op.
-        assert_eq!(resolved_rows(&entries, &existing), existing);
     }
 
     #[test]
@@ -527,23 +354,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
-    #[test]
-    fn readme_has_markers_distinguishes_absent_present_and_missing() {
-        let repo = scratch_repo("has-markers");
-        // No README file: absent, reported as false (not an error).
-        assert!(!readme_has_markers(&repo).unwrap());
-        // Present markers.
-        std::fs::write(
-            repo.join("docs/README.md"),
-            format!("# Docs\n\n{BEGIN}\n\n{END}\n"),
-        )
-        .unwrap();
-        assert!(readme_has_markers(&repo).unwrap());
-        // README exists but carries no markers.
-        std::fs::write(repo.join("docs/README.md"), "# Docs\n").unwrap();
-        assert!(!readme_has_markers(&repo).unwrap());
-        let _ = std::fs::remove_dir_all(&repo);
-    }
     #[test]
     fn gates_ignore_docs_adr_template_md() {
         // `docs/adr/template.md` (the copyable ADR skeleton, #207) has no leading

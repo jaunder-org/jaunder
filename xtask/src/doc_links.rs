@@ -1,10 +1,8 @@
 //! Markdown link scanning — the single home of "what is a link, and where does it
 //! point" for the whole of `xtask` (#682).
 //!
-//! Two callers share it: `adr::strip_one_level` (rewriting a promoted draft's
-//! targets) and the `doc-links` gate step (checking the tracked corpus). Keeping
-//! one scanner is what makes those two agree about code spans, URL schemes, and
-//! fragments — a second implementation would drift.
+//! The read-only `doc-links` gate retains its existing scanner. Python promotion
+//! uses Marko source positions, including its approved parser eligibility changes.
 
 use std::collections::BTreeSet;
 use std::path::{Component, Path};
@@ -186,21 +184,8 @@ pub struct DeadLink {
     pub target: String,
 }
 
-/// Relative links in `repo`/`rel` whose stripped target is not tracked by Git.
-///
-/// The shared per-file unit: `promote` checks the one file it just wrote, the gate
-/// maps this over the whole corpus. Neither owns a second resolver, so "what counts
-/// as dead" cannot diverge between a warning and a hard failure.
-///
-/// Targets resolve against the file's own directory, and a `#fragment` is dropped
-/// first — anchors within a document are not validated (a link to a tracked file with
-/// a stale anchor still passes). Directory targets pass only when at least one
-/// tracked path lives below that directory.
-pub fn dead_links_in(repo: &Path, rel: &str) -> Result<Vec<DeadLink>> {
-    let tracked = tracked_paths(repo)?;
-    dead_links_in_with_tracked(repo, rel, &tracked)
-}
-
+/// Gate-only resolution against tracked paths, dropping unvalidated fragments.
+/// Directory targets require at least one tracked path below them.
 fn dead_links_in_with_tracked(
     repo: &Path,
     rel: &str,
@@ -327,6 +312,10 @@ pub fn problems(repo: &Path) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dead_links_in(repo: &Path, rel: &str) -> Result<Vec<DeadLink>> {
+        dead_links_in_with_tracked(repo, rel, &tracked_paths(repo)?)
+    }
     use crate::test_support::{commit, write};
 
     fn repo(tag: &str) -> crate::test_support::TestRepo {
