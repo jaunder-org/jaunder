@@ -153,26 +153,27 @@ struct RetainedProducer {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
-        CommandLine::Compare { result } => baseline::compare(&result)?,
-        CommandLine::ImportBaseline { run_id } => baseline::import(run_id)?,
-        CommandLine::Nonce => println!("{}", freshness_nonce()?),
-        CommandLine::ValidateSelection { selection } => validate_selection(&selection)?,
+        CommandLine::Compare { result } => baseline::compare(&result),
+        CommandLine::ImportBaseline { run_id } => baseline::import(run_id),
+        CommandLine::Nonce => {
+            println!("{}", freshness_nonce()?);
+            Ok(())
+        }
+        CommandLine::ValidateSelection { selection } => validate_selection(&selection),
         CommandLine::ValidateProducer {
             performance_root,
             producer,
             backend,
             browser,
-        } => {
-            validate_producer_root(
-                &performance_root,
-                producer.into(),
-                backend.into(),
-                browser.map(Into::into),
-            )?;
-        }
-        CommandLine::Assemble { invocation } => assemble(&invocation)?,
+        } => validate_producer_root(
+            &performance_root,
+            producer.into(),
+            backend.into(),
+            browser.map(Into::into),
+        )
+        .map(drop),
+        CommandLine::Assemble { invocation } => assemble(&invocation),
     }
-    Ok(())
 }
 
 fn validate_selection(path: &Path) -> Result<()> {
@@ -205,17 +206,13 @@ fn validate_producer_root(
     );
     ensure!(status.ok, "producer reported failure: {}", status.detail);
 
-    match producer {
-        Producer::Storage => ensure!(
-            browser.is_none(),
-            "storage producer cannot select a browser"
-        ),
-        Producer::Browser => ensure!(browser.is_some(), "browser producer requires a browser"),
-    }
+    // Select the fragment only after validating the same identity tuple; a
+    // second match after separate guards would contain an impossible fallback.
     let filename = match (producer, browser) {
         (Producer::Storage, None) => storage_fragment_filename(backend),
+        (Producer::Storage, Some(_)) => bail!("storage producer cannot select a browser"),
         (Producer::Browser, Some(browser)) => browser_fragment_filename(backend, browser),
-        _ => bail!("producer identity is inconsistent"),
+        (Producer::Browser, None) => bail!("browser producer requires a browser"),
     };
     let performance_root =
         fs::canonicalize(performance_root).context("resolving retained producer")?;

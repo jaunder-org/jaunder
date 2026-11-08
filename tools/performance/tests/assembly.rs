@@ -207,6 +207,177 @@ fn browser_fragment() -> Result<Value> {
     )?)?)
 }
 
+// These fixtures exercise the public validation leaves that Just calls, not
+// another implementation of the shared fragment or selection policies.
+fn write_producer_evidence(root: &Path, backend: Backend, browser: Option<Browser>) -> Result<()> {
+    let envelope = support::fragment(DatasetProfile::Small, backend, browser)?;
+    let fragments = root.join("fragments");
+    fs::create_dir_all(&fragments)?;
+    let filename = match browser {
+        Some(browser) => performance::browser_fragment_filename(backend, browser),
+        None => performance::storage_fragment_filename(backend),
+    };
+    write_json(&fragments.join(filename), &serde_json::to_value(&envelope)?)?;
+    if let performance::Fragment::Browser(value) = &envelope.fragment {
+        for reference in value
+            .diagnostics
+            .navigation_artifacts
+            .iter()
+            .chain(&value.diagnostics.trace_artifacts)
+            .chain(std::iter::once(&value.diagnostics.otel_trace_artifact))
+        {
+            fs::write(fragments.join(reference), "diagnostic")?;
+        }
+    }
+    write_json(
+        &root.join("producer-status-v1.json"),
+        &json!({"schema_version": 1, "ok": true, "detail": "success"}),
+    )
+}
+
+fn validate_producer(
+    root: &Path,
+    producer: &str,
+    backend: &str,
+    browser: Option<&str>,
+) -> Result<Output> {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_perf-data"));
+    command
+        .arg("validate-producer")
+        .arg("--performance-root")
+        .arg(root)
+        .args(["--producer", producer, "--backend", backend]);
+    if let Some(browser) = browser {
+        command.args(["--browser", browser]);
+    }
+    Ok(command.output()?)
+}
+
+#[test]
+fn public_validation_leaves_accept_retained_producers_and_reject_invalid_selection() -> Result<()> {
+    for (backend_name, backend) in [("sqlite", Backend::Sqlite), ("postgres", Backend::Postgres)] {
+        for (browser_name, browser) in [
+            (None, None),
+            (Some("chromium"), Some(Browser::Chromium)),
+            (Some("firefox"), Some(Browser::Firefox)),
+        ] {
+            let directory = tempfile::tempdir()?;
+            write_producer_evidence(directory.path(), backend, browser)?;
+            let producer = if browser.is_some() {
+                "browser"
+            } else {
+                "storage"
+            };
+            let output = validate_producer(directory.path(), producer, backend_name, browser_name)?;
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(output.stdout.is_empty());
+        }
+    }
+
+    let fixture = Fixture::new()?;
+    let selection = fixture.invocation.with_file_name("selection.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_perf-data"))
+        .args(["validate-selection", "--selection"])
+        .arg(&selection)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    mutate(&selection, |value| {
+        value["selection"]["backends"] = json!([]);
+    })?;
+    let output = Command::new(env!("CARGO_BIN_EXE_perf-data"))
+        .args(["validate-selection", "--selection"])
+        .arg(&selection)
+        .output()?;
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("invalid performance producer selection")
+    );
+    Ok(())
+}
+
+#[test]
+fn public_producer_validation_rejects_inconsistent_identity_before_fragment_lookup() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    write_producer_evidence(directory.path(), Backend::Sqlite, None)?;
+    for (producer, browser, error) in [
+        (
+            "storage",
+            Some("chromium"),
+            "storage producer cannot select a browser",
+        ),
+        ("browser", None, "browser producer requires a browser"),
+    ] {
+        let output = validate_producer(directory.path(), producer, "sqlite", browser)?;
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(error),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn canonical_cli_assembly_publishes_the_complete_selected_matrix() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let run_root = fixture.invocation.parent().context("invocation parent")?;
+    let mut selected = Vec::new();
+    let mut retained = Vec::new();
+    for (backend_name, backend) in [("sqlite", Backend::Sqlite), ("postgres", Backend::Postgres)] {
+        for browser in [None, Some(Browser::Chromium)] {
+            let kind = if browser.is_some() {
+                "browser"
+            } else {
+                "storage"
+            };
+            let suffix = if browser.is_some() { "-chromium" } else { "" };
+            let name = format!("performance-{kind}-{backend_name}{suffix}");
+            let root = run_root.join("producers").join(&name).join("performance");
+            write_producer_evidence(&root, backend, browser)?;
+            let producer = json!({"name": name, "identity": format!("/nix/store/{name}"),
+                "producer": kind, "backend": backend, "browser": browser});
+            selected.push(producer.clone());
+            let mut producer = producer;
+            producer["retained_root"] = json!(root);
+            retained.push(producer);
+        }
+    }
+    let selection = json!({"backends": ["sqlite", "postgres"], "browsers": ["chromium"],
+        "storage": true, "browser": true,
+        "count_overrides": {"posts": null, "authors": null, "revisions": null}});
+    write_json(
+        &run_root.join("selection.json"),
+        &json!({"profile": "small", "selection": selection, "producers": selected}),
+    )?;
+    write_json(
+        &fixture.invocation,
+        &json!({"profile": "small", "freshness_nonce": NONCE, "selection": selection, "producers": retained}),
+    )?;
+    let output = fixture.run(true)?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("(canonical selection)"));
+    let bytes = fs::read(fixture.result())?;
+    assert_eq!(bytes, fs::read(fixture.stable())?);
+    let run: performance::RunEnvelope = serde_json::from_slice(&bytes)?;
+    performance::validate_run(&run)?;
+    assert!(run.canonical_selection);
+    assert_eq!(run.evidence.producer_derivation_identities.len(), 4);
+    Ok(())
+}
+
 #[test]
 fn complete_cli_assembly_publishes_identical_valid_results_and_provenance() -> Result<()> {
     for github in [false, true] {

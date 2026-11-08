@@ -221,6 +221,31 @@ fn change(path: &Path, pointer: &str, value: Value) -> Result<()> {
 }
 
 #[test]
+fn import_publication_failure_preserves_existing_destination_and_cleans_staging() -> Result<()> {
+    let fixture = Fixture::new()?;
+    // A valid download must not turn an unreplaceable destination into success
+    // or disturb the existing contents while attempting atomic publication.
+    fs::remove_file(&fixture.baseline)?;
+    fs::create_dir(&fixture.baseline)?;
+    let sentinel = fixture.baseline.join("previous");
+    fs::write(&sentinel, "retained destination")?;
+    let output = fixture.import()?;
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("publishing"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fs::read_to_string(sentinel)?, "retained destination");
+    assert_eq!(fs::read_dir(&fixture.baseline)?.count(), 1);
+    assert_eq!(
+        fs::read_dir(fixture.baseline.parent().context("baseline parent")?)?.count(),
+        1
+    );
+    Ok(())
+}
+
+#[test]
 fn valid_trusted_canonical_import_atomically_replaces_baseline() -> Result<()> {
     for event in ["workflow_dispatch", "schedule"] {
         let fixture = Fixture::new()?;
