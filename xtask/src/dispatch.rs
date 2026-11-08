@@ -9,7 +9,7 @@ use crate::{
         AdrCommand, CacheSafetyCommand, Cli, Command, CoverageCommand, MutantsCommand, NixCommand,
         TracesCommand, WasmCoverageCommand,
     },
-    coverage, lifecycle, nix_probe, pr,
+    coverage, lifecycle, nix_probe,
     result::{CommandResult, StepResult},
     steps, traces, wasm_coverage,
 };

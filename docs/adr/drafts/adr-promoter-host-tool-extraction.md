@@ -74,12 +74,15 @@ checks remain read-only Rust consumers and keep their parsers/reporting.
 Python-generated output must pass these gates. No Rust mutation or controller
 remains after PR 2; no `host-tools` crate is added.
 
-**ADR-0087 clarification:** Rust `xtask/src/pr/gh.rs` remains the one transport
-implementation for Rust `pr` watch/land consumers. The Python promoter has its
-own narrow adapter over the same pinned `gh` executable because it cannot call
-that Rust library. It does not introduce a Python GitHub SDK, general shared API
-layer, duplicate controller policy, or new workflow/permission path. This
-proposed language-specific adapter is an explicit exception to ADR-0087's
+**ADR-0087 clarification:** Ordinary PR observation now belongs to
+`tools/pr-observer`, with landing exposed through `just pr-land`.
+`xtask/src/pr/gh.rs` re-exports the current shared observation transport and
+classification seam and retains a small native mutation wrapper for the
+test-only promoter armer. The Python promoter has its own narrow adapter over
+the same pinned `gh` executable because it cannot call that Rust library. It
+does not introduce a Python GitHub SDK, general shared API layer, duplicate
+controller policy, or new workflow/permission path. This proposed
+language-specific adapter is an explicit exception to ADR-0087's
 single-Rust-wrapper ownership, not a silent claim that the same Rust file serves
 Python.
 

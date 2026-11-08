@@ -5474,8 +5474,11 @@ removes the temporary spelling only after trusted-main execution is observed.
 The manual-promotion prohibition and `sync-readme` recovery command remain. Rust
 owns no mutation; its historical controller policy and controller-only Git
 helpers are dormant under `cfg(test)`, retaining tests until PR 2 retirement.
-Rust `gh` transport remains for its PR watch/land consumers; the Python CLI
-adapter is narrow and does not add a general SDK or RPC protocol.
+Ordinary PR observation belongs to `tools/pr-observer`, with landing exposed
+through `just pr-land`. xtask retains the shared `gh` transport seam for
+performance queries and a native compatibility wrapper used by its test-only
+promoter armer; the Python CLI adapter is narrow and does not add a general SDK
+or RPC protocol.
 
 The existing authority, successful safe-refusal outcomes, generation coalescing,
 immutable head/diff, exact recovery/check correlation, deterministic mutation
