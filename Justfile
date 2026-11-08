@@ -302,6 +302,8 @@ perf profile="medium" backends="sqlite,postgres" browsers="" workload="all" post
       producer_root="$run_root/producers/$name"
       mkdir -p "$producer_root"
       cp -a -- "$output/performance" "$producer_root/performance"
+      # Retained evidence is disposable; leave store referents and symlink entries untouched.
+      find -P "$producer_root/performance" \( -type f -o -type d \) -exec chmod u+w -- {} +
       validator=(validate-producer --producer "$kind" --backend "$backend")
       if [[ -n "$browser" ]]; then
         validator+=(--browser "$browser")

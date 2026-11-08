@@ -1,6 +1,8 @@
 use std::fmt;
 use std::fs;
 use std::io;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
@@ -124,6 +126,18 @@ fn copy_file(src: &Path, dst: &Path) -> Result<(), BundleStageError> {
             dst.display()
         ))
     })?;
+    // The caller recreates the staging tree, so these are independent local
+    // files. Use source modes because writing copied bytes can clear set-ID bits.
+    #[cfg(unix)]
+    {
+        let mut permissions = fs::metadata(src)
+            .map_err(|error| BundleStageError(format!("stating {}: {error}", src.display())))?
+            .permissions();
+        permissions.set_mode(permissions.mode() | 0o200);
+        fs::set_permissions(dst, permissions).map_err(|error| {
+            BundleStageError(format!("making {} owner-writable: {error}", dst.display()))
+        })?;
+    }
     Ok(())
 }
 
