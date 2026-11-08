@@ -5147,7 +5147,7 @@ verifies actual arm/queue/complete merged readback and observes the same head
 until merged. No-op or uncertain evidence never permits retry/rearming. Just
 cannot attest that human approval exists. This replaces ordinary xtask ownership
 under the
-[approved successor draft](adr/drafts/just-frontdoors-host-pr-observer.md),
+[approved successor draft](adr/0240-just-frontdoors-host-pr-observer.md),
 preserving [ADR-0087](adr/0087-xtask-github-pr-observation.md)'s capability
 split. The observer's transport is `gh` (`tools/pr-observer/src/pr/gh.rs`), with
 `snapshot` turning JSON into typed values and `decide` holding pure verdict
@@ -5213,7 +5213,7 @@ capability (decision: `docs/adr/0220-explicit-one-shot-pr-reenqueue.md`).
 **Post-land checkout cleanup.** Root
 `just pr-cleanup <PR> <exact-head-SHA> unmanaged` is the explicit local-only
 replacement frontdoor under the
-[approved ownership direction](adr/drafts/just-frontdoors-host-pr-observer.md),
+[approved ownership direction](adr/0240-just-frontdoors-host-pr-observer.md),
 preserving [ADR-0171](adr/0171-explicit-post-land-cleanup-command.md)'s guards.
 The caller must positively establish unmanaged ownership; the argument is an
 assertion, not runtime discovery or proof. Managed or uncertain ownership means
@@ -5287,7 +5287,7 @@ allocation.
 
 Issue #1896 has approved a replacement ownership design, recorded in the
 proposed
-[Just frontdoors with a host-only PR observer decision](adr/drafts/just-frontdoors-host-pr-observer.md).
+[Just frontdoors with a host-only PR observer decision](adr/0240-just-frontdoors-host-pr-observer.md).
 Once implemented, root Just recipes will be the ordinary issue/PR frontdoors,
 using `gh`/`git` for operations and a purpose-specific read-only
 `tools/pr-observer/` host binary for polling and evidence classification. Its

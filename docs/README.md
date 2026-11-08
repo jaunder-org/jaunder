@@ -268,6 +268,7 @@ convention). See the Status column below for each ADR's current status.
 | [0237](adr/0237-just-owned-gate-workflows.md)                            | Just Owns Developer Gate Workflows                                                                           | accepted   |
 | [0238](adr/0238-just-e2e-workflow-ownership.md)                          | Just owns the E2E workflow entrypoint                                                                        | accepted   |
 | [0239](adr/0239-qualification-workflow-ownership.md)                     | Just Owns Qualification Workflow Entry Points; Nix Owns Provenance                                           | accepted   |
+| [0240](adr/0240-just-frontdoors-host-pr-observer.md)                     | Just frontdoors with a host-only PR observer                                                                 | accepted   |
 
 <!-- adr-table:end -->
 

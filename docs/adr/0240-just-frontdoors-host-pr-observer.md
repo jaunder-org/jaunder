@@ -1,6 +1,6 @@
-# ADR-DRAFT: Just frontdoors with a host-only PR observer
+# ADR-0240: Just frontdoors with a host-only PR observer
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-07
 - Issue: [#1896](https://github.com/jaunder-org/jaunder/issues/1896)
 
@@ -12,19 +12,19 @@ operations. The approved design moves read-only PR observation to a focused
 host-only executable at `tools/pr-observer/`, a member of the existing `tools/`
 Cargo workspace.
 
-[ADR-0087](../0087-xtask-github-pr-observation.md) assigned host-side GitHub PR
+[ADR-0087](0087-xtask-github-pr-observation.md) assigned host-side GitHub PR
 observation to xtask even though this operation neither invokes Nix nor analyzes
 build outputs. Its decision also records essential safeguards: the live ruleset
 is the required-check authority, observation and merge authority are separate,
 and the observer must distinguish incomplete/untrustworthy evidence from a
-mergeable result. [ADR-0028](../0028-devtool-vs-xtask-boundary.md) currently
-places host tools that invoke Nix or analyze build output in xtask and reserves
+mergeable result. [ADR-0028](0028-devtool-vs-xtask-boundary.md) currently places
+host tools that invoke Nix or analyze build output in xtask and reserves
 `tools/` for sandbox tools or pure shared libraries. GitHub CLI check watching
 alone does not demonstrate the complete ruleset, failure/transport/timeout, and
 native merge-queue outcome evidence required by ADR-0087,
-[ADR-0135](../0135-pr-watch-actionable-handoff.md),
-[ADR-0195](../0195-dynamic-pr-check-classification.md), and
-[ADR-0198](../0198-active-workflow-incomplete-pr-evidence.md).
+[ADR-0135](0135-pr-watch-actionable-handoff.md),
+[ADR-0195](0195-dynamic-pr-check-classification.md), and
+[ADR-0198](0198-active-workflow-incomplete-pr-evidence.md).
 
 ## Decision
 
@@ -66,23 +66,22 @@ action/readback never permits another call. It verifies actual arm, queue or
 complete merged readback, then observes the same approved head to merge;
 arming/queueing is not merge success.
 
-Explicit recovery preserves
-[ADR-0220](../0220-explicit-one-shot-pr-reenqueue.md)'s one-shot semantics.
-Human approval `issue-1896-observer-continuation-v1`, request
-`4fc22750-206c-49bd-9056-c7b3e07543a5` ("Approve narrow observer extension"),
-authorizes read-only `--expected-head <SHA>` and `--acknowledged-ejection <URL>`
-backed by existing `WatchContinuation`. This narrowly supersedes ADR-0220's
-assumption that no operator-supplied head/run inputs are needed, without
-changing its failed-verdict or recovery guarantees. Just captures a historical
-URL from live `ejected` preflight, refuses queued or armed PRs, then uses the
-SAME observer for a one-snapshot readiness proof with only that run acknowledged
-before ONE separately approved head-bound native call. Post-action observation
-uses that same head/acknowledgment. No second classifier/poller, retries, extra
-armer or observer mutation is introduced. Only the historical run is disregarded
-as an ejection discriminator; its failed verdict remains failed, delayed
-visibility uses the normal deadline, and a fresh distinct failure is terminal.
-Observation and implementation approval never authorize per-PR/head merge or
-recovery.
+Explicit recovery preserves [ADR-0220](0220-explicit-one-shot-pr-reenqueue.md)'s
+one-shot semantics. Human approval `issue-1896-observer-continuation-v1`,
+request `4fc22750-206c-49bd-9056-c7b3e07543a5` ("Approve narrow observer
+extension"), authorizes read-only `--expected-head <SHA>` and
+`--acknowledged-ejection <URL>` backed by existing `WatchContinuation`. This
+narrowly supersedes ADR-0220's assumption that no operator-supplied head/run
+inputs are needed, without changing its failed-verdict or recovery guarantees.
+Just captures a historical URL from live `ejected` preflight, refuses queued or
+armed PRs, then uses the SAME observer for a one-snapshot readiness proof with
+only that run acknowledged before ONE separately approved head-bound native
+call. Post-action observation uses that same head/acknowledgment. No second
+classifier/poller, retries, extra armer or observer mutation is introduced. Only
+the historical run is disregarded as an ejection discriminator; its failed
+verdict remains failed, delayed visibility uses the normal deadline, and a fresh
+distinct failure is terminal. Observation and implementation approval never
+authorize per-PR/head merge or recovery.
 
 Approval `issue-1896-observer-queue-continuation-v1`, request
 `df5154f8-1d48-4725-9550-72460d456d8b` ("Approve queue-history input"), adds
@@ -95,14 +94,14 @@ observed evidence, not a trust registry, approval bypass or mutation capability;
 no second classifier/poller is introduced.
 
 Unmanaged cleanup preserves
-[ADR-0171](../0171-explicit-post-land-cleanup-command.md)'s guards: merged PR
+[ADR-0171](0171-explicit-post-land-cleanup-command.md)'s guards: merged PR
 targeting `main`, exact local branch and HEAD match, clean tree, and captured
 head ancestry of `origin/main` before safe detach/delete and `cargo clean`. The
 approved replacement frontdoor is Just; the guard contract does not change. The
 caller must positively establish that the assignment is unmanaged and must not
 invoke cleanup for Manager-assigned or uncertain ownership; Just cannot infer
 that assignment fact. Managed work preserves its branch and checkout for Manager
-handoff. [ADR-0077](../0077-adopt-github-merge-queue.md)'s native merge queue
+handoff. [ADR-0077](0077-adopt-github-merge-queue.md)'s native merge queue
 remains authoritative. The privileged ADR promoter remains untouched.
 
 The new issue #1896 design was approved under decision identity
