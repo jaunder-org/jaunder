@@ -5495,7 +5495,7 @@ retains configured substitutes; it does not guarantee cold source bootstrap or
 hide realization failures.
 
 This branch is not delivered to or observed on trusted `main`; the numberless
-[Python ADR promoter draft](adr/drafts/adr-promoter-host-tool-extraction.md)
+[Python ADR promoter draft](adr/0242-adr-promoter-host-tool-extraction.md)
 remains proposed. One cohesive PR #1917 requires its separate exact-head human
 merge gate and ordinary required checks, then trusted-main observation as
 rollout acceptance before completing #1897. On observation failure, diagnose and
