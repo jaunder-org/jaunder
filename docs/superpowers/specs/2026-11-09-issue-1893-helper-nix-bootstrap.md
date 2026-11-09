@@ -8,9 +8,7 @@ separately approved by the direct human response **“approved”** following co
 review `result:a2-outline-review#2` (no findings). These approvals cover only
 the stated A2 scope. Exact proposal snapshot and both approval records are
 retained at `/tmp/issue-1893-helper-bootstrap-intake/`; the v3 snapshot SHA-256
-is `a79f0939488c0b31e3ccce653f50ba597a3ff2109da4bbc9daeeeeb858175b01`. The
-approved spec and outline versions still require the ordinary hook-backed
-planning commit before implementation.
+is `a79f0939488c0b31e3ccce653f50ba597a3ff2109da4bbc9daeeeeb858175b01`.
 
 ## Outcome
 
