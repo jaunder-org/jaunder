@@ -31,7 +31,7 @@ mod tests {
             &root.path().join("bin/nix"),
             concat!(
                 "#!/bin/sh\n",
-                "if [ \"$1\" = eval ]; then printf '%s' \"${UX_OMITTED_INPUTS:-[]}\"; exit 0; fi\n",
+                "if [ \"$1\" = eval ]; then printf '%s' \"$JAUNDER_SANDBOX_UNTRACKED_INPUTS\" > admission-candidates; printf '%s' \"${UX_OMITTED_INPUTS:-[]}\"; exit 0; fi\n",
                 "printf '%s\\0' \"$@\" > nix-argv\n",
                 "[ \"$1 $2 $3 $4\" = 'build --no-update-lock-file --no-write-lock-file --out-link' ] || exit 98\n",
                 "[ \"$6\" = '.#sandboxArtifacts' ] || exit 99\n",
@@ -384,6 +384,106 @@ mod tests {
             b"unrecovered generation"
         );
         assert_selection_retired(root.path());
+    }
+
+    #[test]
+    fn failed_source_admission_preserves_tool_status_without_selecting_or_opening_storage() {
+        for (program, code) in [("git", 23), ("nix", 29)] {
+            let root = fixture_root();
+            if program == "nix" {
+                fs::write(root.path().join("note.txt"), "untracked").unwrap();
+                executable(
+                    &root.path().join("bin/git"),
+                    "#!/bin/sh\nprintf 'note.txt\\0'\n",
+                );
+            }
+            executable(
+                &root.path().join("bin").join(program),
+                &format!(
+                    "#!/bin/sh\nprintf '%s\\0' \"$@\" > admission-argv\n[ \"$1\" != build ] || {{ printf selection > selection-started; exit 97; }}\nprintf '%s\\n' admission-diagnostic >&2\nexit {code}\n"
+                ),
+            );
+            let output = helper(root.path())
+                .arg("writing")
+                .env("UX_INIT_EXIT", "67")
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), Some(code));
+            let args = fs::read(root.path().join("admission-argv")).unwrap();
+            assert_eq!(
+                args.split(|byte| *byte == 0).next().unwrap(),
+                if program == "git" {
+                    b"ls-files".as_slice()
+                } else {
+                    b"eval".as_slice()
+                }
+            );
+            assert!(!root.path().join("selection-started").exists());
+            assert!(String::from_utf8_lossy(&output.stderr).contains("admission-diagnostic"));
+            assert!(output.stdout.is_empty(), "admission output leaked");
+            assert!(!root.path().join("selected-root").exists());
+            assert!(!root.path().join("last-argv").exists());
+            assert!(!root.path().join(".xtask/sandboxes/writing").exists());
+            assert!(
+                !root
+                    .path()
+                    .join(".xtask/sandboxes/.writing.reset-new")
+                    .exists()
+            );
+            for suffix in ["workspace.lock", "server.lock"] {
+                let probe = fs::File::open(
+                    root.path()
+                        .join(format!(".xtask/sandboxes/.locks/writing.{suffix}")),
+                )
+                .unwrap();
+                probe.try_lock().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn admitted_untracked_path_kinds_continue_to_owned_selection_without_leaking_json() {
+        let root = fixture_root();
+        fs::write(root.path().join("note.txt"), "preserved").unwrap();
+        std::os::unix::fs::symlink("note.txt", root.path().join("linked-note")).unwrap();
+        fs::create_dir(root.path().join("pending-dir")).unwrap();
+        // Enumerated paths are classified from metadata, not filename spelling;
+        // symlinks must not be followed and directory kinds remain data.
+        executable(
+            &root.path().join("bin/git"),
+            "#!/bin/sh\nprintf 'note.txt\\0linked-note\\0pending-dir\\0'\n",
+        );
+        let output = helper(root.path())
+            .arg("writing")
+            .env("UX_INIT_EXIT", "23")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(23));
+        let candidates: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.path().join("admission-candidates")).unwrap())
+                .unwrap();
+        assert_eq!(
+            candidates,
+            serde_json::json!([
+                {"path": "note.txt", "kind": "regular"},
+                {"path": "linked-note", "kind": "symlink"},
+                {"path": "pending-dir", "kind": "directory"}
+            ])
+        );
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("\"kind\""));
+        assert!(root.path().join("selected-root").is_file());
+        assert_selection_retired(root.path());
+        assert!(!root.path().join(".xtask/sandboxes/writing").exists());
+        assert_eq!(
+            fs::read(root.path().join("note.txt")).unwrap(),
+            b"preserved"
+        );
+        assert!(
+            fs::symlink_metadata(root.path().join("linked-note"))
+                .unwrap()
+                .is_symlink()
+        );
+        assert!(root.path().join("pending-dir").is_dir());
     }
 
     #[test]

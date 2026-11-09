@@ -176,6 +176,15 @@ async fn run_owned(
     {
         stopped = observe_forced_drain(&group, signals).await;
     }
+    confirm_terminal(&stopped, &waited).await;
+    observed.map(|code| signals.initiating.unwrap_or(code))
+}
+
+/// Application guards may leave custody only after both terminal observations.
+async fn confirm_terminal(
+    stopped: &processkit::Result<processkit::ShutdownReport>,
+    waited: &io::Result<ExitStatus>,
+) {
     if !stopped
         .as_ref()
         .is_ok_and(|report| report.members_after() == Some(0))
@@ -188,7 +197,6 @@ async fn run_owned(
         // guards. Keep custody without rebuilding a polling/retry supervisor.
         std::future::pending::<()>().await;
     }
-    observed.map(|code| signals.initiating.unwrap_or(code))
 }
 
 async fn observe_forced_drain(

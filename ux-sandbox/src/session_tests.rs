@@ -58,6 +58,36 @@ fn native_tree() {
     });
 }
 
+async fn assert_unconfirmed_retains_exclusion(
+    root: &Path,
+    stopped: &processkit::Result<processkit::ShutdownReport>,
+    waited: &io::Result<ExitStatus>,
+) {
+    let guard_path = root.join("unconfirmed.lock");
+    let guard = fs::File::create(&guard_path).unwrap();
+    guard.lock().unwrap();
+    let probe = fs::File::open(&guard_path).unwrap();
+    {
+        // A real reaped-child/nonempty-group outcome cannot release application
+        // exclusion. Only this test cancels the decision to finish its fixture.
+        let custody = async move {
+            let _guard = guard;
+            confirm_terminal(stopped, waited).await;
+        };
+        tokio::pin!(custody);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut custody)
+                .await
+                .is_err()
+        );
+        assert!(matches!(
+            probe.try_lock(),
+            Err(fs::TryLockError::WouldBlock)
+        ));
+    }
+    probe.try_lock().unwrap();
+}
+
 #[tokio::test]
 async fn bounded_observation_confirms_descendant_exit_under_guard_and_consumes_signals() {
     if std::env::var_os("UX_OBSERVATION_TEST").is_none() {
@@ -95,9 +125,17 @@ async fn bounded_observation_confirms_descendant_exit_under_guard_and_consumes_s
     // Keep a real descendant until explicitly released: exercise our observation
     // deterministically, without depending on how quickly SIGKILL is scheduled.
     child.start_kill().unwrap();
-    child.wait().await.unwrap();
-    let snapshot = group.stop(Duration::ZERO, false).await.unwrap();
-    assert!(snapshot.members_after().is_some_and(|n| n > 0));
+    let waited = child.wait().await;
+    assert!(waited.is_ok());
+    let snapshot = group.stop(Duration::ZERO, false).await;
+    assert!(
+        snapshot
+            .as_ref()
+            .unwrap()
+            .members_after()
+            .is_some_and(|n| n > 0)
+    );
+    assert_unconfirmed_retains_exclusion(root.path(), &snapshot, &waited).await;
     let descendant: u32 = fs::read_to_string(root.path().join("descendant"))
         .unwrap()
         .parse()
