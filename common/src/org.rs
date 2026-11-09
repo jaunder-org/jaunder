@@ -328,6 +328,38 @@ fn parse_keywords(value: &str) -> Result<Vec<TagLabel>, OrgMetadataError> {
         .collect()
 }
 
+/// Raw singleton candidates from the leading Org metadata block, for local
+/// read-only recovery. Unlike server normalization this does not interpret DATE,
+/// require lifecycle metadata, or validate unrelated authoring fields. Repeated
+/// and blank values remain visible so the caller can report every exception.
+#[derive(Debug, Default)]
+pub struct OrgTimezoneProperties {
+    pub post_ids: Vec<String>,
+    pub timezones: Vec<String>,
+}
+
+/// Extract only local recovery evidence using the server's Org block boundary
+/// and keyword/property names. No title, date, slug, or body matching is involved.
+#[must_use]
+pub fn org_timezone_properties(source: &str) -> OrgTimezoneProperties {
+    let end = leading_keyword_end(&Org::parse(source));
+    let mut properties = OrgTimezoneProperties::default();
+    for line in source[..end].lines() {
+        let Some(HeaderKeyword::Property(value)) = header_keyword(line) else {
+            continue;
+        };
+        let (name, value) = value
+            .split_once(char::is_whitespace)
+            .map_or((value, ""), |(name, value)| (name, value.trim()));
+        match property_name(name) {
+            Some(PropertyName::Id) => properties.post_ids.push(value.to_owned()),
+            Some(PropertyName::DateTimezone) => properties.timezones.push(value.to_owned()),
+            _ => {}
+        }
+    }
+    properties
+}
+
 fn leading_keyword_end(document: &Org) -> usize {
     let Some(section) = document
         .first_node::<Document>()

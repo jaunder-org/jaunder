@@ -100,7 +100,7 @@ the end-to-end round trip is proven; no intermediate slice is feature-complete.
     `traced-run -- cargo build -p jaunder`;
     `traced-run -- env JAUNDER_TEST_BINARY=target/debug/jaunder emacs --batch -Q -l elisp/scripts/run-integration-tests.el`.
 
-- [ ] **6. Add bounded local-original recovery evidence.**
+- [x] **6. Add bounded local-original recovery evidence.**
   - Contract: build only the read-only `JAUNDER_ID` → `JAUNDER_DATE_TZ` local
     manifest extractor. Preserve exact valid alias spelling; report local
     duplicates/missing/invalid values. Report server IDs absent from originals

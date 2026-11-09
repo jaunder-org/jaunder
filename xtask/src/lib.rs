@@ -23,6 +23,8 @@ pub mod markers;
 mod mutants;
 mod nix_build;
 mod nix_probe;
+pub mod org_timezone_manifest;
+mod performance;
 mod playwright_report;
 pub mod production_baseline;
 mod production_baseline_lifecycle;

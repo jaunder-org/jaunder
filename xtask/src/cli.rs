@@ -101,6 +101,12 @@ impl SandboxProfile {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Read explicit local Org originals into a timezone evidence manifest (JSON).
+    OrgTimezoneManifest {
+        /// Explicit UTF-8 Org files; no recursive discovery or server access.
+        #[arg(required = true, num_args = 1..)]
+        files: Vec<PathBuf>,
+    },
     /// Invoke one existing check/safety adapter from Just; hidden from the workflow list.
     #[command(hide = true)]
     CheckLeaf {
@@ -440,6 +446,7 @@ impl Cli {
         match self.command {
             Command::CheckLeaf { .. } => "check-leaf",
             Command::PrecommitSafety => "precommit-safety",
+            Command::OrgTimezoneManifest { .. } => "org-timezone-manifest",
             Command::Census => "census",
             Command::AuditWasm { .. } => "audit-wasm",
             Command::E2eVerify { .. } => "e2e-verify",
