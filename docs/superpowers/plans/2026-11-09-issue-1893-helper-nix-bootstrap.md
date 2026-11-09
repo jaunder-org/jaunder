@@ -1,23 +1,26 @@
 # #1893 helper Nix bootstrap implementation outline
 
-> Draft only; not approved for implementation. The approved planning contract is
-> `docs/superpowers/specs/2026-11-09-issue-1893-helper-nix-bootstrap.md`. This
-> outline is needed for the durable package/source boundary and CI publication
-> path. Scope is the human-approved A2 v3 proposal snapshot at
+> **Outline approved** by the separate direct human response “approved” to
+> Parent's four-step outline brief, following cold review
+> `result:a2-outline-review#2` (no findings). The approved scope contract is
+> `docs/superpowers/specs/2026-11-09-issue-1893-helper-nix-bootstrap.md`. The A2
+> v3 proposal snapshot is
 > `/tmp/issue-1893-helper-bootstrap-intake/approved-proposal-v3.snapshot.md`
-> (SHA-256 `a79f0939488c0b31e3ccce653f50ba597a3ff2109da4bbc9daeeeeb858175b01`).
-> The direct human answer was: “yes, do it through nix”. This outline still
-> requires its own soundness review and explicit outline approval before work.
+> (SHA-256 `a79f0939488c0b31e3ccce653f50ba597a3ff2109da4bbc9daeeeeb858175b01`);
+> its direct human response was “yes, do it through nix”. Preserve the scope
+> boundary. Before Task 1, commit these approved spec and outline versions using
+> the ordinary hook-backed planning commit.
 
 ## Execution prerequisite
 
-This outline is not executable until separately approved. After explicit outline
-approval, read `dev-cycle-iterate` and the matching Jaunder iterate overlay,
-then make the ordinary hook-backed planning commit containing **both** approved
-A2 spec and outline before Task 1. If that hook is blocked by the shared SQLite
-advisory issue, retain its failure and coordinate with the Manager-owned repair
-owner; do not edit/ignore dependencies, bypass the hook, or repeat an unchanged
-failing gate. Do not implement before this preservation step.
+The outline is approved but not executable until these approved artifact
+versions are preserved. Read `dev-cycle-iterate` and the matching Jaunder
+iterate overlay, then make the ordinary hook-backed planning commit containing
+**both** approved A2 spec and outline before Task 1. If that hook is blocked by
+the shared SQLite advisory issue, retain its failure and coordinate with the
+Manager-owned repair owner; do not edit/ignore dependencies, bypass the hook, or
+repeat an unchanged failing gate. Do not implement before this preservation
+step.
 
 ## Execution summary
 

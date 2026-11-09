@@ -2,12 +2,15 @@
 
 Issue: [#1893](https://github.com/jaunder-org/jaunder/issues/1893)
 
-**Status:** approved in scope by direct human response: **“yes, do it through
-nix”**. The response answered the qualified A2 v3 proposal; it does not approve
-the separate implementation outline, waive its review/approval gate, or expand
-this scope. Exact proposal snapshot and approval provenance are retained at
-`/tmp/issue-1893-helper-bootstrap-intake/` (snapshot SHA-256
-`a79f0939488c0b31e3ccce653f50ba597a3ff2109da4bbc9daeeeeb858175b01`).
+**Status:** approved in scope by the direct human response **“yes, do it through
+nix”** to the qualified A2 v3 proposal; the corrected four-step outline was
+separately approved by the direct human response **“approved”** following cold
+review `result:a2-outline-review#2` (no findings). These approvals cover only
+the stated A2 scope. Exact proposal snapshot and both approval records are
+retained at `/tmp/issue-1893-helper-bootstrap-intake/`; the v3 snapshot SHA-256
+is `a79f0939488c0b31e3ccce653f50ba597a3ff2109da4bbc9daeeeeb858175b01`. The
+approved spec and outline versions still require the ordinary hook-backed
+planning commit before implementation.
 
 ## Outcome
 
