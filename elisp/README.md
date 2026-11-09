@@ -243,7 +243,13 @@ distinct from the authoritative hermetic coverage producer/consumer verdict.
 
 Each authored create or update captures the current named IANA device timezone
 before constructing its Entry and sends `j:timezone`. Missing, numeric, or
-unrecognized device zones explicitly use UTC and emit a warning. Authored writes
+unrecognized device zones explicitly use UTC and emit a warning. Named capture
+checks the local `TZDIR/tzdata.zi` Zone/Link inventory (or
+`/usr/share/zoneinfo/tzdata.zi`), not arbitrary TZif files such as `posix/` or
+administrator-local paths. If that inventory is unavailable, capture uses UTC
+and warns. Accepted aliases retain their exact spelling. This is a local IANA
+inventory check, not a cross-version equivalence guarantee with the server's
+bundled Jiff database; server validation remains authoritative. Authored writes
 require the Service Document's version-1 `timezone` feature.
 
 `JAUNDER_DATE_TZ` is the latest saved editing zone, not an immutable creation

@@ -291,5 +291,32 @@
                                       (should-error (jaunder-publish))
                                       (should (equal before (buffer-string)))))))))
 
+(ert-deftest jaunder-publication-timezone-live-zoneinfo-only-capture-uses-utc ()
+  (jaunder-test--with-live-server
+   (let ((process-environment (copy-sequence process-environment)) warnings)
+     (jaunder-pub-test--in-buffer "#+PROPERTY: JAUNDER_STATUS draft\n\nUTC fallback body.\n"
+                                  (let* ((source (or (getenv "TZDIR") "/usr/share/zoneinfo"))
+                                         (inventory-root (expand-file-name "zoneinfo" dir))
+                                         (zone "posix/America/New_York"))
+                                    (make-directory (expand-file-name "posix/America" inventory-root) t)
+                                    (copy-file (expand-file-name "America/New_York" source) (expand-file-name zone inventory-root))
+                                    (copy-file (expand-file-name "UTC" source) (expand-file-name "UTC" inventory-root))
+                                    (with-temp-file (expand-file-name "tzdata.zi" inventory-root)
+                                      (insert "# version fixture\nZ UTC 0 - UTC\n"))
+                                    (setenv "TZDIR" inventory-root)
+                                    (setenv "TZ" zone)
+                                    (should (jaunder--local-baseline-zone-p zone))
+                                    (cl-letf (((symbol-function 'display-warning)
+                                               (lambda (type text &optional level &rest _)
+                                                 (push (list type text level) warnings))))
+                                      (jaunder-publish))
+                                    (should (equal (jaunder--buffer-property "JAUNDER_DATE_TZ") "UTC"))
+                                    (should (= (length warnings) 1))
+                                    (should (string-match-p "using UTC" (cadar warnings)))
+                                    (let ((fields (jaunder--harvest-response-fields
+                                                   (plist-get (jaunder--http-request
+                                                               "GET" (jaunder--member-url (jaunder--buffer-property "JAUNDER_ID"))) :body))))
+                                      (should (equal (cdr (assq 'timezones fields)) '("UTC")))))))))
+
 (provide 'jaunder-publish-integration)
 ;;; jaunder-publish-integration.el ends here

@@ -143,12 +143,32 @@ write-back belong to the publish workflow, not this pure preparation step."
     (list :utc utc :date (jaunder--utc->org-date utc latest-zone)
           :zone latest-zone)))
 
+(defun jaunder--local-iana-zone-p (zone)
+  "Return non-nil for ZONE in local tzdata's named IANA Zone/Link inventory.
+A TZif file alone may be a posix/right or administrator-local name.  Use the
+machine-readable tzdata.zi inventory, including aliases, without normalizing
+spelling.  A missing inventory makes capture unavailable.  Its tzdata version
+may differ from the server's bundled Jiff database; server validation remains
+authoritative."
+  (and (jaunder--local-baseline-zone-p zone)
+       (not (jaunder--zone-offset-p zone))
+       (let ((inventory (expand-file-name "tzdata.zi" (or (getenv "TZDIR") "/usr/share/zoneinfo"))))
+         (when (file-readable-p inventory)
+           (with-temp-buffer
+             (insert-file-contents inventory)
+             (let ((case-fold-search t)
+                   (name (regexp-quote zone)))
+               (or (re-search-forward (concat "^\\(?:Z\\|Zone\\)[ \t]+" name "\\(?:[ \t]\\|$\\)") nil t)
+                   (progn
+                     (goto-char (point-min))
+                     (re-search-forward
+                      (concat "^\\(?:L\\|Link\\)[ \t]+[^ \t\n]+[ \t]+" name "\\(?:[ \t]\\|$\\)") nil t)))))))))
+
 (defun jaunder--capture-editing-zone ()
   "Return the current recognized named device zone, warning on UTC fallback.
 Numeric offsets are usable only as old local baselines, never new Post zones."
   (let ((zone (condition-case nil (jaunder--current-zone-name) (error nil))))
-    (if (and (jaunder--local-baseline-zone-p zone)
-             (not (jaunder--zone-offset-p zone)))
+    (if (jaunder--local-iana-zone-p zone)
         zone
       (jaunder--warn "cannot capture a supported named device timezone; using UTC")
       "UTC")))

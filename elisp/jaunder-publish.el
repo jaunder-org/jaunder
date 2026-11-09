@@ -494,14 +494,14 @@ retains its validator and cannot republish a concurrently changed Post."
     (when (and id (not draft) (not (jaunder--buffer-property "JAUNDER_DATE_UTC")))
       (unless (jaunder--strong-etag-p (jaunder--buffer-property "JAUNDER_SYNCED"))
         (error "jaunder: JAUNDER_ID requires a strong JAUNDER_SYNCED ETag"))
-      (setq confirmed-draft
-            (condition-case nil
-                (let* ((response (jaunder--http-request "GET" (jaunder--member-url id)))
-                       (fields (jaunder--harvest-response-fields (plist-get response :body))))
-                  (and (eq (plist-get response :status) 200)
-                       (equal (cdr (assq 'drafts fields)) '("yes"))
-                       (equal (cdr (assq 'edit-uris fields)) (list (jaunder--member-url id)))))
-              (error nil)))
+      (let ((response (jaunder--http-request "GET" (jaunder--member-url id))))
+        (unless (eq (plist-get response :status) 200)
+          (error "jaunder: draft confirmation GET failed (HTTP %s)" (plist-get response :status)))
+        ;; A failed read/decode is not evidence of a missing publication baseline.
+        (let ((fields (jaunder--harvest-response-fields (plist-get response :body))))
+          (setq confirmed-draft
+                (and (equal (cdr (assq 'drafts fields)) '("yes"))
+                     (equal (cdr (assq 'edit-uris fields)) (list (jaunder--member-url id)))))))
       (unless confirmed-draft
         (user-error "jaunder: missing JAUNDER_DATE_UTC; pull/reconcile before publishing")))
     (jaunder--org->atom zone force-draft confirmed-draft)))
