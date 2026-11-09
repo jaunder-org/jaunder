@@ -2721,6 +2721,8 @@ mkWasmCoverageMeasurementProducer =
           pkgs.jq
           pkgs.bash
           pkgs.coreutils
+          # The sandbox admission regression evaluates an isolated local flake.
+          pkgs.nix
           # devtool runs the whole test suite under an ephemeral
           # PostgreSQL (via devtool pg) so
           # storage/src/postgres/* gets instrumented coverage. The
@@ -3732,22 +3734,13 @@ static-code =
                 "/recipes/prettier.just"
                 "/sgconfig.yml"
               ]
-              || builtins.any (directory: pkgs.lib.hasInfix "/${directory}/" path) [
+              || builtins.any (directory: pkgs.lib.hasInfix "/${directory}/" path) (workspaceMembers ++ [
                 ".cargo"
                 "ast-grep"
-                "common"
-                "macros"
-                "server"
-                "storage"
-                "web"
-                "client"
-                "csr"
-                "host"
-                "test-support"
                 "public"
                 "tools"
                 "end2end"
-              ]
+              ])
             )
           )
         )
@@ -3755,6 +3748,12 @@ static-code =
     staticCodeSrc = pkgs.lib.cleanSourceWith {
       src = craneLib.path ../.;
       filter =
+        # Every root workspace member must retain real Cargo targets for metadata.
+        assert builtins.all (member:
+          staticCodeSourceFilter (cargoSourcePath "${member}/Cargo.toml") "regular"
+          && staticCodeSourceFilter (cargoSourcePath "${member}/src/main.rs") "regular"
+        ) workspaceMembers;
+        assert staticCodeSourceFilter (cargoSourcePath "ux-sandbox/tests/lifecycle.rs") "regular";
         assert staticCodeSourceFilter "/source/recipes/prettier.just" "regular";
         assert staticCodeSourceFilter "/source/xtask/theme.css" "regular";
         assert staticCodeSourceFilter "/source/nix/otel-processors.yaml" "regular";

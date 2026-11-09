@@ -425,16 +425,58 @@ mod tests {
         let relative = "server/src/space \"quote\" ${not-code}.rs";
         fs::create_dir_all(root.path().join("server/src")).unwrap();
         fs::write(root.path().join(relative), "not silently omitted").unwrap();
-        let output = helper(root.path()).arg("writing").output().unwrap();
+        // This evaluation needs neither the host daemon/store nor user Nix config.
+        let home = root.path().join("home");
+        fs::create_dir(&home).unwrap();
+        let output = helper(root.path())
+            .arg("writing")
+            .env("HOME", &home)
+            .env("NIX_CONF_DIR", &home)
+            .env("NIX_USER_CONF_FILES", "/dev/null")
+            .env("NIX_CONFIG", "experimental-features = nix-command flakes")
+            .env(
+                "NIX_REMOTE",
+                format!("local?root={}", root.path().join("nix-store").display()),
+            )
+            .output()
+            .unwrap();
+        let tracked = git(&["ls-files", relative]);
+        let selected = root.path().join("selected-root").exists();
+        let started = root.path().join("last-argv").exists();
+        let workspace = root.path().join(".xtask/sandboxes/writing").exists();
+        // Nix makes its private source directory read-only. Restore only directory
+        // owner-write for destruction; never change real store or file permissions.
+        for directory in ["nix-store", "nix-store/nix", "nix-store/nix/store"] {
+            assert!(
+                fs::symlink_metadata(root.path().join(directory))
+                    .unwrap()
+                    .is_dir()
+            );
+        }
+        for entry in fs::read_dir(root.path().join("nix-store/nix/store")).unwrap() {
+            let entry = entry.unwrap();
+            let metadata = fs::symlink_metadata(entry.path()).unwrap();
+            if entry.file_name().to_string_lossy().ends_with("-source") {
+                assert!(metadata.is_dir(), "private source must not be a symlink");
+                fs::set_permissions(
+                    entry.path(),
+                    fs::Permissions::from_mode(metadata.permissions().mode() | 0o200),
+                )
+                .unwrap();
+            }
+        }
+        let fixture = root.path().to_path_buf();
+        root.close().unwrap();
+        assert!(!fixture.exists(), "private Nix fixture was not retired");
         assert_eq!(output.status.code(), Some(1));
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains(relative), "{stderr}");
         assert!(stderr.contains("git add -N"), "{stderr}");
         assert!(output.stdout.is_empty(), "admission JSON leaked to stdout");
-        assert_eq!(git(&["ls-files", relative]), b"");
-        assert!(!root.path().join("selected-root").exists());
-        assert!(!root.path().join("last-argv").exists());
-        assert!(!root.path().join(".xtask/sandboxes/writing").exists());
+        assert_eq!(tracked, b"");
+        assert!(!selected);
+        assert!(!started);
+        assert!(!workspace);
     }
 
     fn assert_selection_retired(root: &Path) {
