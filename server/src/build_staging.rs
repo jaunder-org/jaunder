@@ -1,6 +1,8 @@
 use std::fmt;
 use std::fs;
 use std::io;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
@@ -123,6 +125,22 @@ fn copy_file(src: &Path, dst: &Path) -> Result<(), BundleStageError> {
             src.display(),
             dst.display()
         ))
+    })?;
+    #[cfg(unix)]
+    make_copied_file_owner_writable(src, dst)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn make_copied_file_owner_writable(src: &Path, dst: &Path) -> Result<(), BundleStageError> {
+    // The caller recreates the staging tree, so these are independent local
+    // files. Use source modes because writing copied bytes can clear set-ID bits.
+    let mut permissions = fs::metadata(src)
+        .map_err(|error| BundleStageError(format!("stating {}: {error}", src.display())))?
+        .permissions();
+    permissions.set_mode(permissions.mode() | 0o200);
+    fs::set_permissions(dst, permissions).map_err(|error| {
+        BundleStageError(format!("making {} owner-writable: {error}", dst.display()))
     })?;
     Ok(())
 }
@@ -303,6 +321,34 @@ mod tests {
             site.path().join("index.html").display()
         )));
         assert!(site.path().join("index.html").is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copied_file_permission_failure_reports_destination_and_preserves_source() {
+        let root = tempdir().unwrap();
+        let source = root.path().join("source.js");
+        let destination = root.path().join("missing.js");
+        fs::write(&source, b"immutable source").unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o451)).unwrap();
+        let io_error =
+            fs::set_permissions(&destination, fs::Permissions::from_mode(0o651)).unwrap_err();
+        assert_eq!(io_error.kind(), io::ErrorKind::NotFound);
+
+        let error = make_copied_file_owner_writable(&source, &destination).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "making {} owner-writable: {io_error}",
+                destination.display()
+            )
+        );
+        assert!(!destination.exists());
+        assert_eq!(fs::read(&source).unwrap(), b"immutable source");
+        assert_eq!(
+            fs::metadata(&source).unwrap().permissions().mode() & 0o7777,
+            0o451
+        );
     }
 
     #[test]

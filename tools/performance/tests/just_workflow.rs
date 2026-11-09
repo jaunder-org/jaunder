@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use std::{
     env, fs,
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{MetadataExt, PermissionsExt, symlink},
     path::{Path, PathBuf},
     process::{Command, Output},
 };
@@ -285,6 +285,178 @@ fn later_nix_build_failure_preserves_completed_producer_and_stops_sequence() -> 
             "build:performance-browser-sqlite-chromium",
         ]
     );
+    Ok(())
+}
+
+fn set_fixture_mode(path: &Path, mode: u32) -> std::io::Result<u32> {
+    let ordinary = mode & !0o6000;
+    fs::set_permissions(path, fs::Permissions::from_mode(ordinary))?;
+    assert_eq!(fs::metadata(path)?.permissions().mode() & 0o7777, ordinary);
+    match fs::set_permissions(path, fs::Permissions::from_mode(mode)) {
+        Ok(()) => {
+            assert_eq!(fs::metadata(path)?.permissions().mode() & 0o7777, mode);
+            Ok(mode)
+        }
+        // Nix builders deny set-ID chmod with EPERM; ordinary modes must still work.
+        Err(error) if mode != ordinary && error.raw_os_error() == Some(1) => {
+            eprintln!(
+                "set-ID fixture denied with EPERM: {}; testing {ordinary:o}",
+                path.display()
+            );
+            assert_eq!(fs::metadata(path)?.permissions().mode() & 0o7777, ordinary);
+            Ok(ordinary)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[test]
+fn retained_performance_is_owner_writable_without_changing_sources_or_links() -> Result<()> {
+    let fixture = WorkflowFixture::new(None)?;
+    let source = fixture
+        .outputs
+        .join("performance-storage-sqlite/performance");
+    let mut files = [
+        ("fragments/placeholder.json", 0o444, b"{}".as_slice()),
+        ("executable", 0o4551, b"executable evidence".as_slice()),
+        ("hardlink-a", 0o440, b"linked evidence".as_slice()),
+    ];
+    for (name, mode, bytes) in &mut files {
+        fs::write(source.join(*name), *bytes)?;
+        *mode = set_fixture_mode(&source.join(*name), *mode)?;
+    }
+    fs::hard_link(source.join("hardlink-a"), source.join("hardlink-b"))?;
+    let referent = fixture.directory.path().join("store-like");
+    fs::create_dir(&referent)?;
+    fs::write(referent.join("evidence"), b"immutable referent")?;
+    fs::set_permissions(referent.join("evidence"), fs::Permissions::from_mode(0o444))?;
+    symlink(referent.join("evidence"), source.join("file-link"))?;
+    symlink(&referent, source.join("directory-link"))?;
+    symlink("missing", source.join("dangling-link"))?;
+    let mut directories = [("", 0o1555), ("fragments", 0o2555)];
+    for (name, mode) in &mut directories {
+        *mode = set_fixture_mode(&source.join(*name), *mode)?;
+    }
+
+    let output = fixture.run("build-failure", &["small"])?;
+    assert!(
+        !output.status.success(),
+        "later producer failure is injected"
+    );
+    assert_eq!(fixture.calls()?[2], "validate:performance-storage-sqlite");
+    let destination = fixture
+        .run_root()
+        .join("producers/performance-storage-sqlite/performance");
+    for (name, mode, bytes) in files {
+        let src = fs::metadata(source.join(name))?;
+        let dst = fs::metadata(destination.join(name))?;
+        assert_eq!(src.permissions().mode() & 0o7777, mode, "source {name}");
+        assert_eq!(fs::read(source.join(name))?, bytes);
+        assert_eq!(fs::read(destination.join(name))?, bytes);
+        assert_ne!((src.dev(), src.ino()), (dst.dev(), dst.ino()));
+        assert_eq!(
+            dst.permissions().mode() & 0o7777,
+            mode | 0o200,
+            "destination {name}"
+        );
+    }
+    for (name, mode) in directories {
+        let src = fs::metadata(source.join(name))?;
+        let dst = fs::metadata(destination.join(name))?;
+        assert_eq!(src.permissions().mode() & 0o7777, mode);
+        assert_eq!(dst.permissions().mode() & 0o7777, mode | 0o200);
+        assert_ne!((src.dev(), src.ino()), (dst.dev(), dst.ino()));
+    }
+    assert_eq!(
+        fs::metadata(destination.join("hardlink-a"))?.ino(),
+        fs::metadata(destination.join("hardlink-b"))?.ino()
+    );
+    assert_eq!(
+        fs::metadata(source.join("hardlink-b"))?
+            .permissions()
+            .mode()
+            & 0o7777,
+        0o440
+    );
+    assert_eq!(fs::read(source.join("hardlink-b"))?, b"linked evidence");
+    for name in ["file-link", "directory-link", "dangling-link"] {
+        assert!(
+            fs::symlink_metadata(destination.join(name))?
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read_link(destination.join(name))?,
+            fs::read_link(source.join(name))?
+        );
+    }
+    assert_eq!(
+        fs::metadata(referent.join("evidence"))?
+            .permissions()
+            .mode()
+            & 0o7777,
+        0o444
+    );
+    assert_eq!(fs::read(referent.join("evidence"))?, b"immutable referent");
+    fs::write(destination.join("fragments/placeholder.json"), b"updated")?;
+    fs::write(destination.join("fragments/new.json"), b"new")?;
+    fs::remove_dir_all(&destination)?;
+    assert!(!destination.exists());
+    for (name, _, bytes) in files {
+        assert_eq!(fs::read(source.join(name))?, bytes);
+    }
+    // Restore only disposable fixture directories so their owner can remove them.
+    for name in ["", "fragments"] {
+        fs::set_permissions(source.join(name), fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(())
+}
+
+#[test]
+fn retained_performance_starting_symlink_does_not_normalize_its_referent() -> Result<()> {
+    let fixture = WorkflowFixture::new(None)?;
+    let source = fixture
+        .outputs
+        .join("performance-storage-sqlite/performance");
+    let referent = fixture
+        .outputs
+        .join("performance-storage-sqlite/store-like");
+    fs::rename(&source, &referent)?;
+    fs::set_permissions(
+        referent.join("fragments/placeholder.json"),
+        fs::Permissions::from_mode(0o444),
+    )?;
+    fs::set_permissions(&referent, fs::Permissions::from_mode(0o555))?;
+    symlink(&referent, &source)?;
+
+    let output = fixture.run("build-failure", &["small"])?;
+    assert!(
+        !output.status.success(),
+        "later producer failure is injected"
+    );
+    assert_eq!(fixture.calls()?[2], "validate:performance-storage-sqlite");
+    let destination = fixture
+        .run_root()
+        .join("producers/performance-storage-sqlite/performance");
+    assert!(fs::symlink_metadata(&destination)?.file_type().is_symlink());
+    assert_eq!(fs::read_link(&destination)?, referent);
+    assert_eq!(fs::read_link(&source)?, referent);
+    assert_eq!(
+        fs::metadata(&referent)?.permissions().mode() & 0o7777,
+        0o555
+    );
+    assert_eq!(
+        fs::metadata(referent.join("fragments/placeholder.json"))?
+            .permissions()
+            .mode()
+            & 0o7777,
+        0o444
+    );
+    assert_eq!(
+        fs::read(referent.join("fragments/placeholder.json"))?,
+        b"{}"
+    );
+    fs::set_permissions(&referent, fs::Permissions::from_mode(0o755))?;
     Ok(())
 }
 
