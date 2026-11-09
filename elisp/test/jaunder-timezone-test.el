@@ -85,6 +85,14 @@
      (should (equal (jaunder--buffer-property "JAUNDER_DATE_UTC")
                     "2026-07-01T13:00:42.123456789Z")))))
 
+(ert-deftest jaunder-timezone-pull-rejects-unsupported-server-zone-in-member ()
+  (let ((xml (jaunder-timezone-test--member "Not/A_Zone" "2026-07-01T13:00:42Z")))
+    (let ((failure (should-error
+                    (jaunder--parse-pulled-member
+                     xml "\"remote\"" (date-to-time "2026-07-02T00:00:00Z") "UTC" t))))
+      (should (string-match-p "one supported named j:timezone; pull/reconcile"
+                              (error-message-string failure))))))
+
 (ert-deftest jaunder-timezone-pull-adopts-server-pair-not-supplied-device-zone ()
   (let ((org (jaunder--atom->org
               (jaunder-timezone-test--member "Europe/London" "2026-07-01T13:00:42.123456789Z")
@@ -188,6 +196,24 @@
          (should (equal (cdr (assq 'published sent)) expected))
          (should (equal (jaunder--buffer-property "JAUNDER_DATE_UTC") expected))
          (should (equal (jaunder--buffer-property "JAUNDER_DATE_TZ") zone)))))))
+
+(ert-deftest jaunder-timezone-publish-rejects-unparseable-local-date-before-network-write ()
+  (jaunder-timezone-test--with-post
+   (concat "#+DATE: not-an-org-date\n"
+           "#+PROPERTY: JAUNDER_DATE_TZ Europe/London\n"
+           "#+PROPERTY: JAUNDER_STATUS published\n\nBody\n")
+   (setenv "TZ" "America/New_York")
+   (let ((before (buffer-string)) (requests 0))
+     (cl-letf (((symbol-function 'jaunder--http-request)
+                (lambda (&rest _)
+                  (cl-incf requests)
+                  (error "invalid local DATE must fail before network"))))
+       (let ((failure (should-error (jaunder-publish))))
+         (should (string-match-p "invalid DATE; supply an Org date and time"
+                                 (error-message-string failure)))))
+     (should (zerop requests))
+     (should (equal before (buffer-string)))
+     (should (equal before (with-temp-buffer (insert-file-contents path) (buffer-string)))))))
 
 (ert-deftest jaunder-timezone-invalid-baseline-and-gap-stop-before-post-write ()
   (dolist (marker '(nil "invalid" "2026-07-01T13:00:42.123Z"))
@@ -340,6 +366,59 @@
                                   "Europe/London" "2026-07-01T13:00:42.123456789Z") t t))))))
        (should-error (jaunder-publish)))
      (should (= writes 1))
+     (should (equal before (buffer-string)))
+     (should (equal before (with-temp-buffer (insert-file-contents path) (buffer-string)))))))
+
+(ert-deftest jaunder-timezone-publish-rejects-mismatched-zone-and-missing-publication-receipt ()
+  (dolist (receipt (list
+                    (jaunder-timezone-test--member
+                     "America/New_York" "2026-07-01T13:00:42Z")
+                    (replace-regexp-in-string
+                     "<published>[^<]+</published>" ""
+                     (jaunder-timezone-test--member
+                      "Europe/London" "2026-07-01T13:00:42Z") t t)))
+    (jaunder-timezone-test--with-post
+     (concat "#+DATE: [2026-07-01 Wed 09:00]\n"
+             "#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n"
+             "#+PROPERTY: JAUNDER_DATE_UTC 2026-07-01T13:00:42Z\n"
+             "#+PROPERTY: JAUNDER_ID 7\n#+PROPERTY: JAUNDER_SYNCED \"old\"\n\nBody\n")
+     (setenv "TZ" "Europe/London")
+     (let ((before (buffer-string)) (writes 0))
+       (cl-letf (((symbol-function 'jaunder--http-request)
+                  (lambda (method &rest _)
+                    (if (equal method "GET")
+                        (list :status 200 :body jaunder-timezone-test--service)
+                      (cl-incf writes)
+                      (list :status 200 :headers '(("etag" . "\"new\""))
+                            :body receipt)))))
+         (should-error (jaunder-publish)))
+       (should (= writes 1))
+       (should (equal before (buffer-string)))
+       (should (equal before (with-temp-buffer (insert-file-contents path) (buffer-string))))))))
+
+(ert-deftest jaunder-timezone-reviewed-update-requires-post-id-before-preparation ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+PROPERTY: JAUNDER_STATUS draft\n\nBody\n")
+    (let ((before (buffer-string)))
+      (should-error (jaunder--prepare-reviewed-update))
+      (should (equal before (buffer-string))))))
+
+(ert-deftest jaunder-timezone-update-rejects-weak-saved-validator-before-write ()
+  (jaunder-timezone-test--with-post
+   (concat "#+DATE: [2026-07-01 Wed 09:00]\n"
+           "#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n"
+           "#+PROPERTY: JAUNDER_DATE_UTC 2026-07-01T13:00:42Z\n"
+           "#+PROPERTY: JAUNDER_STATUS published\n#+PROPERTY: JAUNDER_ID 7\n"
+           "#+PROPERTY: JAUNDER_SYNCED weak\n\nBody\n")
+   (setenv "TZ" "Europe/London")
+   (let ((before (buffer-string)) (writes 0))
+     (cl-letf (((symbol-function 'jaunder--http-request)
+                (lambda (method &rest _)
+                  (unless (equal method "GET") (cl-incf writes))
+                  (list :status 200 :body jaunder-timezone-test--service))))
+       (should-error (jaunder-publish)))
+     (should (zerop writes))
      (should (equal before (buffer-string)))
      (should (equal before (with-temp-buffer (insert-file-contents path) (buffer-string)))))))
 

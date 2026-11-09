@@ -24,19 +24,26 @@ impl EditingTimezoneNotice {
 
 // Reflect's fallible calls also cover missing Intl and exceptions from the device
 // boundary, rather than letting a JavaScript exception abort a save.
-fn device_timezone() -> Option<String> {
+fn intl_formatter() -> Option<JsValue> {
     let intl = Reflect::get(&js_sys::global(), &JsValue::from_str("Intl")).ok()?;
     let constructor = Reflect::get(&intl, &JsValue::from_str("DateTimeFormat"))
         .ok()?
         .dyn_into::<Function>()
         .ok()?;
-    let formatter = Reflect::construct(&constructor, &Array::new()).ok()?;
-    let resolved = Reflect::get(&formatter, &JsValue::from_str("resolvedOptions"))
+    Reflect::construct(&constructor, &Array::new()).ok()
+}
+
+fn resolved_intl_options(formatter: &JsValue) -> Option<JsValue> {
+    let method = Reflect::get(formatter, &JsValue::from_str("resolvedOptions"))
         .ok()?
         .dyn_into::<Function>()
-        .ok()?
-        .call0(&formatter)
         .ok()?;
+    method.call0(formatter).ok()
+}
+
+fn device_timezone() -> Option<String> {
+    let formatter = intl_formatter()?;
+    let resolved = resolved_intl_options(&formatter)?;
     Reflect::get(&resolved, &JsValue::from_str("timeZone"))
         .ok()?
         .as_string()

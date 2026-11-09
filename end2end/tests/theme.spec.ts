@@ -99,6 +99,11 @@ test(
       );
     }
     await expect(page.getByRole("button", { name: "Actions" })).toHaveCount(2);
+    // Apply the screenshot-only geometry before Playwright measures the mask
+    // rectangle; stylePath alone is injected after mask bounds are resolved.
+    await page.addStyleTag({
+      path: join(__dirname, "home-timeline.visual.css"),
+    });
     await expectVisual(page, "home-timeline.png", {
       mask: [page.locator(".j-post-time")],
       stylePath: join(__dirname, "home-timeline.visual.css"),

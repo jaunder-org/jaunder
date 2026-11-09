@@ -271,6 +271,15 @@ mod tests {
     }
 
     #[test]
+    fn rendered_post_presents_publication_time_or_draft_creation_time() {
+        let created = instant();
+        let published: UtcInstant = "2026-07-20T10:30:00Z".parse().unwrap();
+
+        assert_eq!(rendered_post(None).display_time(), created);
+        assert_eq!(rendered_post(Some(published)).display_time(), published);
+    }
+
+    #[test]
     fn rendered_post_derives_draft_state_and_omits_it_from_the_wire() {
         let draft = rendered_post(None);
         let published = rendered_post(Some("2026-07-19T10:30:00Z".parse().unwrap()));

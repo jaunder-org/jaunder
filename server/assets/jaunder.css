@@ -1013,8 +1013,10 @@
   display: inline-flex;
   flex: 0 0 auto;
   align-items: baseline;
+  flex-wrap: wrap;
   gap: 6px;
   margin-left: auto;
+  max-width: 100%;
 }
 
 .j-post-time {

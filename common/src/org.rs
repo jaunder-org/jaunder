@@ -656,6 +656,16 @@ Body";
     }
 
     #[test]
+    fn local_timezone_recovery_reads_only_leading_singleton_property_candidates() {
+        let properties = org_timezone_properties(
+            "#+TITLE: Recovery Post\n#+PROPERTY: JAUNDER_ID 17\n#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n#+PROPERTY: JAUNDER_ID 18\n#+PROPERTY: JAUNDER_DATE_TZ\n#+PROPERTY: EXPORT_FILE_NAME ignored\n\nBody paragraph\n#+PROPERTY: JAUNDER_ID body-value\n",
+        );
+
+        assert_eq!(properties.post_ids, ["17", "18"]);
+        assert_eq!(properties.timezones, ["America/New_York", ""]);
+    }
+
+    #[test]
     fn publication_state_projects_published_at() {
         let at: UtcInstant = "2026-11-01T05:30:00Z".parse().expect("valid instant");
 
