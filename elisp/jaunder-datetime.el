@@ -143,6 +143,23 @@ write-back belong to the publish workflow, not this pure preparation step."
     (list :utc utc :date (jaunder--utc->org-date utc latest-zone)
           :zone latest-zone)))
 
+(defun jaunder--capture-editing-zone ()
+  "Return the current recognized named device zone, warning on UTC fallback.
+Numeric offsets are usable only as old local baselines, never new Post zones."
+  (let ((zone (condition-case nil (jaunder--current-zone-name) (error nil))))
+    (if (and (jaunder--local-baseline-zone-p zone)
+             (not (jaunder--zone-offset-p zone)))
+        zone
+      (jaunder--warn "cannot capture a supported named device timezone; using UTC")
+      "UTC")))
+
+(defun jaunder--publication-utc (published)
+  "Canonicalize server PUBLISHED to UTC without discarding fractional digits."
+  (let ((fraction (and (string-match "\\.\\([0-9]+\\)" published)
+                       (match-string 1 published))))
+    (concat (format-time-string "%Y-%m-%dT%H:%M:%S" (date-to-time published) t)
+            (and fraction (concat "." fraction)) "Z")))
+
 (defun jaunder--current-zone-name ()
   "Return the machine's current IANA zone name, else a numeric offset string.
 Prefers a `TZ' IANA name, then the /etc/localtime symlink target; falls back to

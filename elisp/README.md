@@ -239,6 +239,35 @@ as data or attributed to a helper. Edebug/coverage instrumentation must not turn
 field plists into function calls. Host pure/live and controlled-wire proofs are
 distinct from the authoritative hermetic coverage producer/consumer verdict.
 
+## Publication time and editing timezone
+
+Each authored create or update captures the current named IANA device timezone
+before constructing its Entry and sends `j:timezone`. Missing, numeric, or
+unrecognized device zones explicitly use UTC and emit a warning. Authored writes
+require the Service Document's version-1 `timezone` feature.
+
+`JAUNDER_DATE_TZ` is the latest saved editing zone, not an immutable creation
+zone. DATE is its minute-resolution wall time; `JAUNDER_DATE_UTC` retains the
+canonical publication instant, including fractional seconds. If DATE's civil
+fields still match that instant in the recorded old zone, publishing preserves
+the exact instant while moving the DATE/zone pair to the editing device's zone.
+An edited DATE is interpreted in the latest zone: gaps reject and folds choose
+the earlier occurrence. Legacy numeric old zones are usable only for local
+baseline recovery, never as newly saved Post zones or raw server DATE input.
+
+Pull and server-ahead reconciliation adopt the server's saved zone and render
+DATE there; reading never captures a new editing zone. Existing published or
+scheduled Posts with a missing/invalid UTC marker or zone must be pulled or
+reconciled before updating. New Posts and drafts need no publication baseline; a
+targeted Member read can confirm first publication of an existing draft.
+
+Preparation does not rewrite the local pair. Only a confirmed, validated write
+receipt checkpoints it. Rejected, stale, or uncertain writes preserve local
+metadata; local drift after a remote commit stops checkpointing and requires
+reconciliation rather than an automatic retry. Durable create replay preserves
+unsent authored DATE/zone edits while establishing the recovered server instant
+as the comparison marker.
+
 ## Post audience metadata
 
 An Org Post may declare its explicit audience with repeated file properties:

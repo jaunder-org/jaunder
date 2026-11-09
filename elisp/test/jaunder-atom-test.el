@@ -8,6 +8,22 @@
 (require 'ert)
 (require 'jaunder)
 
+(ert-deftest jaunder-atom-timezone-round-trip-uses-expanded-name ()
+  (let* ((xml (jaunder--atom-entry->xml
+               (jaunder--make-entry :timezone "Europe/London"
+                                    :content-type "text/org" :body "Body")))
+         (fields (jaunder--harvest-response-fields xml)))
+    (should (string-match-p "<j:timezone>Europe/London</j:timezone>" xml))
+    (should (equal (cdr (assq 'timezones fields)) '("Europe/London")))
+    (should
+     (equal (cdr (assq 'timezones
+                       (jaunder--harvest-response-fields
+                        (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\">"
+                                "<x:timezone xmlns:x=\"https://jaunder.org/ns/atompub\">US/Eastern</x:timezone>"
+                                "<j:timezone xmlns:j=\"urn:foreign\">UTC</j:timezone>"
+                                "</entry>"))))
+            '("US/Eastern")))))
+
 ;;; atom-entry -> xml serializer
 
 (ert-deftest jaunder-atom-entry->xml-full-entry ()
@@ -148,7 +164,7 @@
                    '(content-src content-type slug published
                                  titles categories summaries content-nodes drafts
                                  published-values edit-uris alternate-uris slugs
-                                 audiences)))
+                                 audiences timezones)))
     (should (equal (cdr (assq 'content-src fields)) "https://h/image.png"))
     (should (equal (cdr (assq 'content-type fields)) "image/png"))
     (should (null (cdr (assq 'slug fields))))

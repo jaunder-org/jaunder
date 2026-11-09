@@ -24,7 +24,8 @@
 (defun jaunder-author-debug--run (enabled prefix action &optional kind)
   "Run actual ACTION with PREFIX and ENABLED; inject native KIND if requested."
   (jaunder-debug-boundary--with-session
-   (let* ((root (file-name-as-directory (make-temp-file "jaunder-author-private-" t)))
+   (let* ((process-environment (cons "TZ=UTC" process-environment))
+          (root (file-name-as-directory (make-temp-file "jaunder-author-private-" t)))
           (default-directory root)
           (jaunder-blogs nil)
           (jaunder--service-doc-cache nil)
@@ -64,7 +65,7 @@
                                           " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
                                           "<workspace><atom:title>private-service</atom:title>"
                                           "<j:extension version=\"1\""
-                                          " features=\"audience format-media-type\"/>"
+                                          " features=\"audience format-media-type timezone\"/>"
                                           "</workspace></service>"))
                           (list :status 201
                                 :headers '(("location" . "https://private.example/atompub/private-user/posts/42")
@@ -73,6 +74,7 @@
                                 (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\""
                                         " xmlns:j=\"https://jaunder.org/ns/atompub\">"
                                         "<j:slug>private-post</j:slug><j:audience>private</j:audience>"
+                                        "<j:timezone>UTC</j:timezone>"
                                         "<content type=\"text/org\">private-body</content></entry>"))))))
              (setq result
                    (condition-case condition

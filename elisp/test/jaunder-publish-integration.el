@@ -190,5 +190,106 @@
                (with-temp-buffer (insert-file-contents path) (buffer-string))))
       (should (equal (cdr (assq 'audiences fields)) '("private")))))))
 
+(defun jaunder-pub-test--web-zone-edit (id zone utc)
+  "Edit harness Post ID through the browser API in ZONE, retaining UTC."
+  (let* ((login (jaunder--plz-response->plist
+                 (plz 'post (concat jaunder-test-base-url "/api/auth/login")
+                      :headers (list '("Content-Type" . "application/x-www-form-urlencoded")
+                                     (cons "Origin" jaunder-test-base-url))
+                      :body (concat "username=" jaunder-test-username "&password=password123")
+                      :as 'response)))
+         (cookie (car (split-string (or (jaunder--response-header login "Set-Cookie") "") ";"))))
+    (should (eq (plist-get login :status) 200))
+    (should (string-prefix-p "session=" cookie))
+    (let ((edited
+           (plz 'post (concat jaunder-test-base-url "/api/posts/update")
+                :headers (list '("Content-Type" . "application/json")
+                               (cons "Origin" jaunder-test-base-url) (cons "Cookie" cookie))
+                :body (json-encode
+                       `((post_id . ,(string-to-number id))
+                         (post . ((body . "London web edit.") (format . "org")
+                                  (publish . t) (publish_at . ,utc) (timezone . ,zone)))))
+                :as 'response)))
+      (should (eq (plz-response-status edited) 200)))))
+
+(ert-deftest jaunder-publication-timezone-live-org-web-reconcile-round-trip ()
+  "NY authoring -> London web edit -> server-ahead pull preserves the instant."
+  (jaunder-test--with-live-server
+   (let ((process-environment (copy-sequence process-environment)))
+     (jaunder-pub-test--in-buffer
+      (concat "#+TITLE: Timezone round trip\n#+DATE: [2024-07-01 Mon 09:00]\n"
+              "#+PROPERTY: JAUNDER_STATUS published\n\nNY Org source.\n")
+      (setenv "TZ" "America/New_York")
+      (jaunder-publish)
+      (let ((id (jaunder--buffer-property "JAUNDER_ID"))
+            (utc (jaunder--buffer-property "JAUNDER_DATE_UTC"))
+            (local (current-buffer)))
+        (should (equal utc "2024-07-01T13:00:00Z"))
+        (should (equal (jaunder--buffer-property "JAUNDER_DATE_TZ") "America/New_York"))
+        (jaunder-pub-test--web-zone-edit id "Europe/London" utc)
+        ;; Pull runs on the NY device.  It must adopt London's server pair,
+        ;; never recapture NY as though reading were an authored edit.
+        (save-window-excursion
+          (jaunder-reconcile dir)
+          (with-current-buffer "*Jaunder Reconcile*"
+            (let ((row (cl-find id (jaunder-reconcile-report-rows jaunder-reconcile-report)
+                                :key #'jaunder--reconcile-row-post-id :test #'equal)))
+              (should (eq (jaunder-reconcile-row-state row) 'server-ahead))
+              (puthash (concat "post:" id) t jaunder-reconcile-marks))
+            (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t)))
+              (jaunder-reconcile-pull-selected))
+            (should (eq (jaunder-reconcile-result-outcome
+                         (car jaunder-reconcile-last-batch-results)) 'success))))
+        (with-current-buffer local
+          (should (equal (jaunder--buffer-property "JAUNDER_DATE_TZ") "Europe/London"))
+          (should (equal (jaunder--buffer-keyword "DATE") "[2024-07-01 Mon 14:00]"))
+          (should (equal (jaunder--buffer-property "JAUNDER_DATE_UTC") utc))
+          (should (string-match-p "London web edit" (buffer-string)))
+          ;; A new authored NY PUT legitimately changes the saved zone back,
+          ;; but cannot reinterpret London's unchanged wall DATE as NY time.
+          (jaunder-publish)
+          (should (equal (jaunder--buffer-property "JAUNDER_DATE_TZ") "America/New_York"))
+          (should (equal (jaunder--buffer-keyword "DATE") "[2024-07-01 Mon 09:00]"))
+          (let ((fields (jaunder--harvest-response-fields
+                         (plist-get (jaunder--http-request "GET" (jaunder--member-url id)) :body))))
+            (should (member (cdr (assq 'published fields))
+                            '("2024-07-01T13:00:00Z" "2024-07-01T13:00:00+00:00")))
+            (should (equal (jaunder--buffer-property "JAUNDER_DATE_UTC") utc))
+            (should (equal (cdr (assq 'timezones fields)) '("America/New_York"))))))))))
+
+(ert-deftest jaunder-publication-timezone-live-scheduled-later-fold-retains-precision ()
+  (jaunder-test--with-live-server
+   (let ((process-environment (copy-sequence process-environment)))
+     (jaunder-pub-test--in-buffer "#+PROPERTY: JAUNDER_STATUS draft\n\nBody.\n"
+                                  (setenv "TZ" "America/New_York")
+                                  (jaunder-publish)
+                                  (let* ((id (jaunder--buffer-property "JAUNDER_ID"))
+                                         (url (jaunder--member-url id))
+                                         (utc "2030-11-03T06:30:17.987654321Z")
+                                         (response (jaunder--http-request
+                                                    "PUT" url
+                                                    (jaunder--atom-entry->xml
+                                                     (jaunder--make-entry :body "Scheduled body." :content-type "text/org"
+                                                                          :timezone "America/New_York" :published utc))
+                                                    jaunder--entry-content-type
+                                                    (list (cons "If-Match" (jaunder--buffer-property "JAUNDER_SYNCED")))))
+                                         (org (jaunder--atom->org (plist-get response :body)
+                                                                  (jaunder--response-header response "ETag")
+                                                                  (current-time) "UTC" t)))
+                                    (should (eq (plist-get response :status) 200))
+                                    (erase-buffer) (insert org) (save-buffer)
+                                    (should (equal (jaunder--buffer-keyword "DATE") "[2030-11-03 Sun 01:30]"))
+                                    (setenv "TZ" "Europe/London")
+                                    (jaunder-publish)
+                                    (should (equal (jaunder--buffer-property "JAUNDER_DATE_UTC") utc))
+                                    (should (equal (jaunder--buffer-keyword "DATE") "[2030-11-03 Sun 06:30]"))
+                                    (should (equal (jaunder--buffer-property "JAUNDER_DATE_TZ") "Europe/London"))
+                                    (let ((before (buffer-string)))
+                                      (jaunder--set-property "JAUNDER_SYNCED" "\"stale\"") (save-buffer)
+                                      (setq before (buffer-string))
+                                      (setenv "TZ" "America/New_York")
+                                      (should-error (jaunder-publish))
+                                      (should (equal before (buffer-string)))))))))
+
 (provide 'jaunder-publish-integration)
 ;;; jaunder-publish-integration.el ends here

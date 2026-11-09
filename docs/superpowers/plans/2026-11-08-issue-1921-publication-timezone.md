@@ -79,7 +79,7 @@ the end-to-end round trip is proven; no intermediate slice is feature-complete.
     `traced-run -- cargo xtask e2e-local end2end/tests/posts.spec.ts` and
     `traced-run -- cargo xtask e2e-local end2end/tests/history.spec.ts`.
 
-- [ ] **5. Preserve Emacs Org instant identity through publish and reconcile.**
+- [x] **5. Preserve Emacs Org instant identity through publish and reconcile.**
   - Contract: capture and validate the latest named device zone before entry
     construction; a missing/invalid Emacs capture explicitly uses UTC and shows
     a warning, tested separately from successful capture. Send the zone as

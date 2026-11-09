@@ -22,7 +22,7 @@
            " xmlns:j=\"https://jaunder.org/ns/atompub\""
            " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
            "<workspace><atom:title>Blog</atom:title>"
-           "<j:extension version=\"1\" features=\"audience\"/>"
+           "<j:extension version=\"1\" features=\"audience timezone\"/>"
            "</workspace></service>")))
 
 (defun jaunder-publish-test--legacy-service-document (&rest _)
@@ -30,7 +30,9 @@
   (jaunder--parse-service-document
    (concat "<service xmlns=\"http://www.w3.org/2007/app\""
            " xmlns:atom=\"http://www.w3.org/2005/Atom\">"
-           "<workspace><atom:title>Blog</atom:title></workspace></service>")))
+           "<workspace><atom:title>Blog</atom:title>"
+           "<j:extension xmlns:j=\"https://jaunder.org/ns/atompub\" version=\"1\" features=\"timezone\"/>"
+           "</workspace></service>")))
 
 ;;; Publish-time warnings (shared idiom) ----------------------------------
 
@@ -61,10 +63,10 @@ Lets the warning tests assert on emitted warnings without touching the real
   "Conflict preparation refuses unknown service evidence and carries valid scope."
   (with-temp-buffer
     (org-mode)
-    (insert "#+PROPERTY: JAUNDER_ID 7\n\nBody\n")
+    (insert "#+PROPERTY: JAUNDER_ID 7\n#+PROPERTY: JAUNDER_STATUS draft\n\nBody\n")
     (let ((document 'unknown))
       (cl-letf (((symbol-function 'jaunder--org->atom)
-                 (lambda () (jaunder--make-entry :body "Body")))
+                 (lambda (&rest _) (jaunder--make-entry :body "Body")))
                 ((symbol-function 'jaunder--validate-publish) (lambda (&rest _) nil))
                 ((symbol-function 'jaunder--active-base-url)
                  (lambda () "https://example.test"))
@@ -415,7 +417,8 @@ Lets the warning tests assert on emitted warnings without touching the real
 
 (ert-deftest jaunder-publish-changed-audience-replay-sends-unsent-conditional-put ()
   "An authored audience edit survives a replay and reaches the next PUT."
-  (let* ((root (file-name-as-directory (make-temp-file "jaunder-audience-replay-" t)))
+  (let* ((process-environment (cons "TZ=UTC" process-environment))
+         (root (file-name-as-directory (make-temp-file "jaunder-audience-replay-" t)))
          (path (expand-file-name "draft.org" root))
          (jaunder-blogs (list (cons root '(:base-url "https://blog" :username "alice"))))
          (jaunder-warn-zone-mismatch nil)
@@ -427,14 +430,16 @@ Lets the warning tests assert on emitted warnings without touching the real
                  ("ETag" . "\"created\""))
            (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\""
                    " xmlns:j=\"https://jaunder.org/ns/atompub\">"
-                   "<j:slug>recovered</j:slug>"
+                   "<j:slug>recovered</j:slug><j:timezone>UTC</j:timezone>"
+                   "<published>2026-07-01T13:00:42.123Z</published>"
                    "<j:audience>public</j:audience></entry>")))
          (put-response
           (jaunder-test--response
            200 '(("ETag" . "\"updated\""))
            (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\""
                    " xmlns:j=\"https://jaunder.org/ns/atompub\">"
-                   "<j:slug>recovered</j:slug>"
+                   "<j:slug>recovered</j:slug><j:timezone>UTC</j:timezone>"
+                   "<published>2026-07-01T13:00:42.123Z</published>"
                    "<j:audience>subscribers</j:audience></entry>")))
          methods sent-audience)
     (unwind-protect
@@ -487,7 +492,8 @@ Lets the warning tests assert on emitted warnings without touching the real
 
 (ert-deftest jaunder-publish-replay-with-changed-entry-remains-local-ahead ()
   "A recovered create keeps the replay baseline while exposing local changes."
-  (let* ((root (file-name-as-directory (make-temp-file "jaunder-recovery-" t)))
+  (let* ((process-environment (cons "TZ=UTC" process-environment))
+         (root (file-name-as-directory (make-temp-file "jaunder-recovery-" t)))
          (path (expand-file-name "draft.org" root))
          (jaunder-blogs (list (cons root '(:base-url "https://blog" :username "alice"))))
          (jaunder-warn-zone-mismatch nil)
@@ -501,6 +507,7 @@ Lets the warning tests assert on emitted warnings without touching the real
            (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\""
                    " xmlns:j=\"https://jaunder.org/ns/atompub\">"
                    "<content type=\"text/org\">Original</content>"
+                   "<j:timezone>UTC</j:timezone><published>2026-07-01T13:00:42.123Z</published>"
                    "<j:slug>recovered</j:slug>"
                    "<j:audience>private</j:audience></entry>"))))
     (unwind-protect
@@ -561,7 +568,8 @@ Lets the warning tests assert on emitted warnings without touching the real
                                 200 '(("ETag" . "\"updated\""))
                                 (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\""
                                         " xmlns:j=\"https://jaunder.org/ns/atompub\">"
-                                        "<j:slug>recovered</j:slug>"
+                                        "<j:slug>recovered</j:slug><j:timezone>UTC</j:timezone>"
+                                        "<published>2026-07-01T13:00:42.123Z</published>"
                                         "<j:audience>private</j:audience></entry>")))))
                     (jaunder-publish))
                   (should (string-match-p "Changed after uncertain create" put-xml))
@@ -599,7 +607,8 @@ Lets the warning tests assert on emitted warnings without touching the real
   "A create checkpoint atomically persists identity and its strong validator.
 An interruption before intent cleanup must reopen into a conditional PUT, never
 an unconditional update."
-  (let* ((root (file-name-as-directory (make-temp-file "jaunder-create-checkpoint-" t)))
+  (let* ((process-environment (cons "TZ=UTC" process-environment))
+         (root (file-name-as-directory (make-temp-file "jaunder-create-checkpoint-" t)))
          (path (expand-file-name "draft.org" root))
          (jaunder-blogs (list (cons root '(:base-url "https://blog" :username "alice"))))
          (jaunder-warn-zone-mismatch nil)
@@ -612,6 +621,7 @@ an unconditional update."
            (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\""
                    " xmlns:j=\"https://jaunder.org/ns/atompub\">"
                    "<content type=\"text/org\">Body</content>"
+                   "<j:timezone>UTC</j:timezone><published>2026-07-01T13:00:42.123Z</published>"
                    "<j:slug>my-post</j:slug>"
                    "<j:audience>private</j:audience></entry>"))))
     (unwind-protect
@@ -631,7 +641,8 @@ an unconditional update."
                            (if (= save-count 2)
                                (error "injected intent cleanup failure")
                              (apply real-save-buffer args)))))
-                (should-error (jaunder--write-back response t 'matched nil t))))
+                (should-error (jaunder--write-back
+                               response t 'matched nil t (jaunder--make-entry :timezone "UTC")))))
             ;; Simulate an Emacs restart, reading only the first checkpoint.
             (set-buffer-modified-p nil)
             (kill-buffer buffer)
@@ -657,6 +668,7 @@ an unconditional update."
                               (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\""
                                       " xmlns:j=\"https://jaunder.org/ns/atompub\">"
                                       "<content type=\"text/org\">Body</content>"
+                                      "<j:timezone>UTC</j:timezone><published>2026-07-01T13:00:42.123Z</published>"
                                       "<j:slug>my-post</j:slug>"
                                       "<j:audience>private</j:audience></entry>")))))
                   (jaunder-publish))

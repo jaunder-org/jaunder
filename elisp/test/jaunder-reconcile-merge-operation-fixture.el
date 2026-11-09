@@ -17,7 +17,8 @@
   "Run public merge preparation and completion with event HOOK, returning proof.
 HOOK receives event and state plists and may override a wire response.  During
 editing it may explicitly finish additional attempts before the default finish."
-  (let* ((root (file-name-as-directory (make-temp-file "jaunder-merge-operation-" t)))
+  (let* ((process-environment (cons "TZ=UTC" process-environment))
+         (root (file-name-as-directory (make-temp-file "jaunder-merge-operation-" t)))
          (path (expand-file-name "post-001.org" root))
          (target (expand-file-name "post-025.org" root))
          (jaunder-blogs (list (cons root '(:base-url "https://example.test" :username "alice"))))
@@ -64,7 +65,7 @@ editing it may explicitly finish additional attempts before the default finish."
                      (lambda (method url &optional xml _type headers)
                        (cond
                         ((string-suffix-p "/service" url)
-                         '(:status 200 :body "<service xmlns=\"http://www.w3.org/2007/app\" xmlns:atom=\"http://www.w3.org/2005/Atom\"><workspace><atom:title>User</atom:title></workspace></service>"))
+                         '(:status 200 :body "<service xmlns=\"http://www.w3.org/2007/app\" xmlns:atom=\"http://www.w3.org/2005/Atom\"><workspace><atom:title>User</atom:title><j:extension xmlns:j=\"https://jaunder.org/ns/atompub\" version=\"1\" features=\"timezone\"/></workspace></service>"))
                         ((not (equal method "GET"))
                          (let ((prior (gethash "1" members)))
                            (push (list :xml xml :headers headers) writes)

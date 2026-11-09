@@ -26,6 +26,7 @@
 (require 'dom)
 (require 'xml)
 (require 'jaunder-entry)
+(require 'jaunder-datetime)
 (require 'jaunder-debug)
 
 (defconst jaunder--atom-ns "http://www.w3.org/2005/Atom"
@@ -54,7 +55,8 @@ here."
                                                 (list (cons 'xmlns jaunder--atom-ns))
                                                 ;; Declare foreign namespaces only when they are used.
                                                 (when draft (list (cons 'xmlns:app jaunder--app-ns)))
-                                                (when audiences (list (cons 'xmlns:j jaunder--atompub-ns)))))
+                                                (when (or audiences (jaunder-entry-timezone entry))
+                                                  (list (cons 'xmlns:j jaunder--atompub-ns)))))
                                         (children '()))
                                    (when (jaunder-entry-title entry)
                                      (push (list 'title nil (jaunder-entry-title entry)) children))
@@ -64,6 +66,8 @@ here."
                                      (push (list 'category (list (cons 'term term))) children))
                                    (dolist (audience audiences)
                                      (push (list 'j:audience nil audience) children))
+                                   (when (jaunder-entry-timezone entry)
+                                     (push (list 'j:timezone nil (jaunder-entry-timezone entry)) children))
                                    (push (list 'content
                                                (list (cons 'type (jaunder-entry-content-type entry)))
                                                (or (jaunder-entry-body entry) ""))
@@ -136,12 +140,12 @@ checks that wrapper's namespace separately."
 The existing singular `content-src', `content-type', `slug', and `published'
 keys retain their first direct-child values.  The ordered plural `titles',
 `categories', `summaries', `content-nodes', `drafts', `published-values',
-`edit-uris', `slugs', and `audiences' keys expose all direct-child values for
-Member parsing.
+`edit-uris', `slugs', `timezones', and `audiences' expose direct-child values.
+They are used for Member parsing.
 `content-nodes' deliberately retains DOM nodes for the later text/XHTML
 projection.  Atom metadata is accepted only from the Atom namespace,
-`app:control'/`app:draft' only from APP, and `slug'/`audience' only from the
-Jaunder extension namespace.  No Member-required cardinality is enforced here,
+APP owns `control'/`draft'; the Jaunder extension namespace owns `slug',
+`audience', and `timezone'.  No Member-required cardinality is enforced here,
 so media and publish responses remain valid."
   (jaunder--with-debug-operation "atom.parse" (format "atom")
                                  (let* ((dom (with-temp-buffer
@@ -164,6 +168,8 @@ so media and publish responses remain valid."
                                                 dom 'link jaunder--atom-ns entry-namespaces))
                                         (slugs (jaunder--atom-direct-elements-in-namespace
                                                 dom 'slug jaunder--atompub-ns entry-namespaces))
+                                        (timezones (jaunder--atom-direct-elements-in-namespace
+                                                    dom 'timezone jaunder--atompub-ns entry-namespaces))
                                         (audiences (jaunder--atom-direct-elements-in-namespace
                                                     dom 'audience jaunder--atompub-ns entry-namespaces))
                                         (drafts (apply #'append
@@ -199,7 +205,22 @@ so media and publish responses remain valid."
                                          (cons 'alternate-uris (mapcar (lambda (link) (dom-attr link 'href))
                                                                        alternate-links))
                                          (cons 'slugs (mapcar #'dom-inner-text slugs))
-                                         (cons 'audiences (mapcar #'dom-inner-text audiences))))))
+                                         (cons 'audiences (mapcar #'dom-inner-text audiences))
+                                         (cons 'timezones (mapcar #'dom-inner-text timezones))))))
+
+(defun jaunder--confirmed-timezone (fields &optional legacy-zone)
+  "Return FIELDS' sole recognized named timezone, or explicit LEGACY-ZONE.
+Present malformed or duplicate values never fall back.  LEGACY-ZONE is only
+for pre-extension Member projections, never an authored write receipt."
+  (let ((zones (cdr (assq 'timezones fields))))
+    (if (and (null zones) legacy-zone)
+        (if (jaunder--local-baseline-zone-p legacy-zone) legacy-zone
+          (error "jaunder: invalid legacy pull zone"))
+      (unless (and (= (length zones) 1)
+                   (jaunder--local-baseline-zone-p (car zones))
+                   (not (jaunder--zone-offset-p (car zones))))
+        (error "jaunder: Member must contain one supported named j:timezone; pull/reconcile"))
+      (car zones))))
 
 (provide 'jaunder-atom)
 ;;; jaunder-atom.el ends here
