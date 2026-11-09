@@ -141,6 +141,9 @@ proc-macro2 = "1.0.107"
 #
 # rev cb9e574 = fix/mailbox-quoted-local-part-and-domain-literal
 [patch.crates-io]
+# Temporary RUSTSEC-2026-0459 bound patch of published sqlx-sqlite 0.9.0 source;
+# provenance, packaging, and coordinated removal: docs/sqlx-sqlite-patch.md.
+sqlx-sqlite = { path = "vendor/sqlx-sqlite-0.9.0" }
 # Org special-string, footnote, and verse parity; based on PoiScript/orgize v0.10
 # at 5f26c94dcec2a33b37b1c880ace053b29b5d021e (#1656/#1670/#1697).
 orgize = { git = "https://github.com/jaunder-org/orgize", rev = "17311ba02d4317571fab04a752a479e09bef2397" }

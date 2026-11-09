@@ -8,6 +8,7 @@
   workspaceMembers,
   withWorkspacePlaceholders,
   vendorPinnedFork,
+  sqlxSqlitePatchSource,
 }:
 let
   root = toString ../.;
@@ -17,38 +18,81 @@ let
   manifestMembers = workspaceMembers ++ toolsMembers;
   # Expose this same admission predicate to checkout launchers. Nix remains the
   # authority for source selection, including files absent from Git snapshots.
-  sourceAdmits = relative: type:
+  sourceAdmits =
+    relative: type:
     if type == "directory" then
       relative == ""
-      || builtins.any (member:
-        relative == member || pkgs.lib.hasPrefix "${member}/" relative
-        || pkgs.lib.hasPrefix "${relative}/" member
-      ) (members ++ [ "host/system_theme_sources" ])
-      || builtins.any (directory:
-        relative == directory || pkgs.lib.hasPrefix "${relative}/" directory
-      ) (manifestMembers ++ [ ".cargo" "csr" "server/assets" "docs" "end2end" "nix" ".github" ".github/workflows" "test-support/src" ])
-    else cargoMemberSource members "${root}/${relative}" type
-    || relative == "xtask/Cargo.lock"
-    # The all-target recipe regression embeds the checkout's Justfile.
-    || relative == "Justfile"
-    || relative == ".gitignore"
-    || relative == "test-support/src/lib.rs"
-    || relative == "rust-toolchain.toml"
-    || relative == ".clippy.toml"
-    || relative == "clippy.toml"
-    || relative == ".github/workflows/ci.yml"
-    || relative == ".github/workflows/performance.yml"
-    || relative == "tools/Cargo.toml"
-    || relative == "tools/Cargo.lock"
-    || builtins.any (member: relative == "${member}/Cargo.toml") manifestMembers
-    || relative == "csr/index.html"
-    || relative == "server/assets/jaunder.css"
-    || relative == "docs/production-baseline.schema.json"
-    || relative == "end2end/e2e-lanes.json"
-    || relative == "end2end/otel-collector.yaml"
-    || relative == "nix/otel-processors.yaml"
-    || pkgs.lib.hasPrefix "host/system_theme_sources/" relative;
+      ||
+        builtins.any
+          (
+            member:
+            relative == member
+            || pkgs.lib.hasPrefix "${member}/" relative
+            || pkgs.lib.hasPrefix "${relative}/" member
+          )
+          (
+            members
+            ++ [
+              "host/system_theme_sources"
+              "vendor/sqlx-sqlite-0.9.0"
+            ]
+          )
+      || builtins.any (directory: relative == directory || pkgs.lib.hasPrefix "${relative}/" directory) (
+        manifestMembers
+        ++ [
+          ".cargo"
+          "csr"
+          "server/assets"
+          "docs"
+          "end2end"
+          "nix"
+          ".github"
+          ".github/workflows"
+          "test-support/src"
+        ]
+      )
+    else
+      cargoMemberSource members "${root}/${relative}" type
+      || relative == "xtask/Cargo.lock"
+      # The all-target recipe regression embeds the checkout's Justfile.
+      || relative == "Justfile"
+      || relative == ".gitignore"
+      || relative == "test-support/src/lib.rs"
+      || relative == "rust-toolchain.toml"
+      || relative == ".clippy.toml"
+      || relative == "clippy.toml"
+      || relative == ".github/workflows/ci.yml"
+      || relative == ".github/workflows/performance.yml"
+      || relative == "tools/Cargo.toml"
+      || relative == "tools/Cargo.lock"
+      || builtins.any (member: relative == "${member}/Cargo.toml") manifestMembers
+      || relative == "csr/index.html"
+      || relative == "server/assets/jaunder.css"
+      || relative == "docs/production-baseline.schema.json"
+      || relative == "end2end/e2e-lanes.json"
+      || relative == "end2end/otel-collector.yaml"
+      || relative == "nix/otel-processors.yaml"
+      || pkgs.lib.hasPrefix "host/system_theme_sources/" relative
+      || sqlxSqlitePatchSource "${root}/${relative}";
   filteredSource =
+    assert sourceAdmits "vendor" "directory";
+    assert sourceAdmits "vendor/sqlx-sqlite-0.9.0" "directory";
+    assert sourceAdmits "vendor/sqlx-sqlite-0.9.0/src/connection" "directory";
+    assert sourceAdmits "vendor/sqlx-sqlite-0.9.0/Cargo.toml" "regular";
+    assert sourceAdmits "vendor/sqlx-sqlite-0.9.0/src/database.rs" "regular";
+    assert sourceAdmits "vendor/sqlx-sqlite-0.9.0/LICENSE-MIT" "regular";
+    assert sourceAdmits "vendor/sqlx-sqlite-0.9.0/LICENSE-APACHE" "regular";
+    assert builtins.all (name: !(sourceAdmits "vendor/sqlx-sqlite-0.9.0/${name}" "regular")) [
+      "Cargo.toml.orig"
+      "Cargo.lock"
+      ".cargo-ok"
+      ".cargo_vcs_info.json"
+      "excluded.rs"
+      "excluded.sql"
+      "excluded.css"
+    ];
+    assert sourceAdmits "vendor/LICENSE-MIT" "regular";
+    assert sourceAdmits "vendor/LICENSE-APACHE" "regular";
     assert sourceAdmits "xtask/src/lib.rs" "regular";
     assert sourceAdmits "xtask/tests" "directory";
     assert sourceAdmits "xtask/src/testdata" "directory";
@@ -76,16 +120,23 @@ let
     assert sourceAdmits "xtask/src/testdata/coverage-line-table.txt" "regular";
     assert !(sourceAdmits "tools/devtool/src/main.rs" "regular");
     pkgs.lib.cleanSourceWith {
-    src = craneLib.path ../.;
-    filter = path: type:
-      toString path == root
-      || (!(pkgs.lib.hasSuffix "/.git" path || pkgs.lib.hasInfix "/.git/" path)
-      && sourceAdmits (pkgs.lib.removePrefix "${root}/" (toString path)) type);
-  };
-  source = withWorkspacePlaceholders "jaunder-xtask-cargo-source" filteredSource
-    (builtins.filter (member: !(builtins.elem member members)) manifestMembers);
-  rawClippySource = withWorkspacePlaceholders "jaunder-xtask-clippy-source" filteredSource
-    (builtins.filter (member: !(builtins.elem member members) && member != "test-support") manifestMembers);
+      src = craneLib.path ../.;
+      filter =
+        path: type:
+        toString path == root
+        || (
+          !(pkgs.lib.hasSuffix "/.git" path || pkgs.lib.hasInfix "/.git/" path)
+          && sourceAdmits (pkgs.lib.removePrefix "${root}/" (toString path)) type
+        );
+    };
+  source = withWorkspacePlaceholders "jaunder-xtask-cargo-source" filteredSource (
+    builtins.filter (member: !(builtins.elem member members)) manifestMembers
+  );
+  rawClippySource = withWorkspacePlaceholders "jaunder-xtask-clippy-source" filteredSource (
+    builtins.filter (
+      member: !(builtins.elem member members) && member != "test-support"
+    ) manifestMembers
+  );
   vendor = craneLib.vendorCargoDeps {
     src = source;
     cargoLock = "${source}/xtask/Cargo.lock";
@@ -97,9 +148,16 @@ let
     version = "0.1.0";
     cargoVendorDir = vendor;
     cargoArtifacts = null;
-    nativeBuildInputs = [ toolchain pkgs.pkg-config ]
-      ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
-    buildInputs = [ pkgs.openssl pkgs.sqlite pkgs.dav1d ];
+    nativeBuildInputs = [
+      toolchain
+      pkgs.pkg-config
+    ]
+    ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
+    buildInputs = [
+      pkgs.openssl
+      pkgs.sqlite
+      pkgs.dav1d
+    ];
     CARGO_PROFILE = "dev";
     CARGO_PROFILE_DEV_DEBUG = "0";
     JAUNDER_XTASK_BUILD_NIX_OUTPUT = builtins.placeholder "out";
@@ -127,9 +185,15 @@ craneLib.buildPackage {
   # Explicit host tests own this workspace's verdict (ADR-0141).
   doCheck = false;
   strictDeps = true;
-  nativeBuildInputs = [ pkgs.pkg-config ]
-    ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
-  buildInputs = [ pkgs.openssl pkgs.sqlite pkgs.dav1d ];
+  nativeBuildInputs = [
+    pkgs.pkg-config
+  ]
+  ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
+  buildInputs = [
+    pkgs.openssl
+    pkgs.sqlite
+    pkgs.dav1d
+  ];
   # Cargo binary discovery at the product root would query an unrelated graph.
   doNotPostBuildInstallCargoBinaries = true;
   installPhase = ''
@@ -137,6 +201,12 @@ craneLib.buildPackage {
     cp xtask/target/debug/xtask "$out/bin/xtask"
   '';
   postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-    patchelf --add-rpath ${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.sqlite pkgs.dav1d ]} "$out/bin/xtask"
+    patchelf --add-rpath ${
+      pkgs.lib.makeLibraryPath [
+        pkgs.openssl
+        pkgs.sqlite
+        pkgs.dav1d
+      ]
+    } "$out/bin/xtask"
   '';
 }

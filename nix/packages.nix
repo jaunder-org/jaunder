@@ -83,12 +83,48 @@ let
     "test-support"
     "web"
   ];
+  sqlxSqlitePatchRoot = "vendor/sqlx-sqlite-0.9.0";
+  # This temporary local patch is the complete normalized manifest, unchanged
+  # Rust source tree, and upstream licenses only (issue #1928).
+  sqlxSqlitePatchSource =
+    path:
+    let
+      absolute = toString path;
+      relative =
+        if pkgs.lib.hasPrefix "${toString ../.}/" absolute then
+          pkgs.lib.removePrefix "${toString ../.}/" absolute
+        else if pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/" absolute then
+          pkgs.lib.removePrefix "${toString (craneLib.path ../.)}/" absolute
+        else
+          absolute;
+    in
+    relative == "vendor/LICENSE-MIT"
+    || pkgs.lib.hasSuffix "/vendor/LICENSE-MIT" absolute
+    || relative == "vendor/LICENSE-APACHE"
+    || pkgs.lib.hasSuffix "/vendor/LICENSE-APACHE" absolute
+    || relative == "${sqlxSqlitePatchRoot}/Cargo.toml"
+    || pkgs.lib.hasSuffix "/${sqlxSqlitePatchRoot}/Cargo.toml" absolute
+    || pkgs.lib.hasPrefix "${sqlxSqlitePatchRoot}/src/" relative
+    || pkgs.lib.hasInfix "/${sqlxSqlitePatchRoot}/src/" absolute
+    || pkgs.lib.hasPrefix "${sqlxSqlitePatchRoot}/src/" absolute
+    || relative == "${sqlxSqlitePatchRoot}/LICENSE-MIT"
+    || pkgs.lib.hasSuffix "/${sqlxSqlitePatchRoot}/LICENSE-MIT" absolute
+    || relative == "${sqlxSqlitePatchRoot}/LICENSE-APACHE"
+    || pkgs.lib.hasSuffix "/${sqlxSqlitePatchRoot}/LICENSE-APACHE" absolute;
+  # Registry macros consume this path dependency's real API during dependency
+  # preparation. Keep only the approved driver real; Crane still stubs members.
+  sqlxSqliteExtraDummyScript = ''
+    chmod -R u+w "$out/${sqlxSqlitePatchRoot}"
+    cp -r --no-preserve=mode ${../vendor/sqlx-sqlite-0.9.0}/. "$out/${sqlxSqlitePatchRoot}/"
+    cp ${../vendor/LICENSE-MIT} ${../vendor/LICENSE-APACHE} "$out/vendor/"
+  '';
   cargoWorkspaceInput =
     path:
     let
       relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
     in
-    relative == "Cargo.toml"
+    sqlxSqlitePatchSource path
+    || relative == "Cargo.toml"
     || relative == "Cargo.lock"
     || relative == "rust-toolchain.toml"
     || relative == ".cargo/config.toml"
@@ -247,7 +283,9 @@ let
   ];
   siteSourceFilter =
     path: type:
-    cargoTargetSource siteCargoMembers path type || pkgs.lib.hasSuffix "csr/index.html" path;
+    sqlxSqlitePatchSource path
+    || cargoTargetSource siteCargoMembers path type
+    || pkgs.lib.hasSuffix "csr/index.html" path;
   # Minimal source closure for the Vite CSR producer. Cargo source remains a
   # separate derivation input; Vite receives only the HTML/entry/config/pins.
   csrViteSourceFilter =
@@ -291,6 +329,34 @@ let
     '';
   };
   siteSrc =
+    assert siteSourceFilter "${toString (craneLib.path ../.)}/vendor" "directory";
+    assert siteSourceFilter "${toString (craneLib.path ../.)}/${sqlxSqlitePatchRoot}" "directory";
+    assert siteSourceFilter "${toString (craneLib.path ../.)}/${sqlxSqlitePatchRoot}/src/connection"
+      "directory";
+    assert siteSourceFilter "${toString (craneLib.path ../.)}/${sqlxSqlitePatchRoot}/Cargo.toml"
+      "regular";
+    assert siteSourceFilter "${toString (craneLib.path ../.)}/${sqlxSqlitePatchRoot}/src/database.rs"
+      "regular";
+    assert siteSourceFilter "${toString (craneLib.path ../.)}/${sqlxSqlitePatchRoot}/LICENSE-MIT"
+      "regular";
+    assert siteSourceFilter "${toString (craneLib.path ../.)}/${sqlxSqlitePatchRoot}/LICENSE-APACHE"
+      "regular";
+    assert builtins.all
+      (
+        name:
+        !(siteSourceFilter "${toString (craneLib.path ../.)}/${sqlxSqlitePatchRoot}/${name}" "regular")
+      )
+      [
+        "Cargo.toml.orig"
+        "Cargo.lock"
+        ".cargo-ok"
+        ".cargo_vcs_info.json"
+        "excluded.rs"
+        "excluded.sql"
+        "excluded.css"
+      ];
+    assert siteSourceFilter "${toString (craneLib.path ../.)}/vendor/LICENSE-MIT" "regular";
+    assert siteSourceFilter "${toString (craneLib.path ../.)}/vendor/LICENSE-APACHE" "regular";
     withWorkspacePlaceholders "jaunder-site-cargo-source"
       (pkgs.lib.cleanSourceWith {
         src = craneLib.path ../.;
@@ -322,10 +388,23 @@ let
         "web"
       ];
 
-  src = pkgs.lib.cleanSourceWith {
-    src = craneLib.path ../.;
-    filter =
-      path: type:
+  productSourceFilter =
+    path: type:
+    # Do not let generic Cargo/data filters admit archive metadata beneath
+    # the local patch. Only its approved files and traversal belong here.
+    if
+      pkgs.lib.hasSuffix "/${sqlxSqlitePatchRoot}" path
+      || pkgs.lib.hasInfix "/${sqlxSqlitePatchRoot}/" path
+    then
+      sqlxSqlitePatchSource path
+      || (
+        type == "directory"
+        && (
+          pkgs.lib.hasSuffix "/${sqlxSqlitePatchRoot}" path
+          || pkgs.lib.hasSuffix "/${sqlxSqlitePatchRoot}/src" path
+        )
+      )
+    else
       # xtask/ is the host-only dev driver (a separate workspace these
       # derivations never build). Excluding it keeps driver edits from
       # busting the app caches AND guarantees a derivation can never run a
@@ -349,9 +428,37 @@ let
         # (not a broad .html suffix) to keep stray HTML out of the crane src.
         || (pkgs.lib.hasSuffix "csr/index.html" path)
         || (builtins.match "scripts/.*" path != null)
-        || (craneLib.filterCargoSources path type)
+        || (
+          let
+            relative = pkgs.lib.removePrefix "${toString (craneLib.path ../.)}/" (toString path);
+          in
+          (
+            type == "directory"
+            && (relative == "vendor" || pkgs.lib.hasPrefix "${sqlxSqlitePatchRoot}/" relative)
+          )
+          || sqlxSqlitePatchSource path
+          || (craneLib.filterCargoSources path type)
+        )
       );
-  };
+  src =
+    assert builtins.all
+      (
+        name:
+        !(productSourceFilter "${toString (craneLib.path ../.)}/${sqlxSqlitePatchRoot}/${name}" "regular")
+      )
+      [
+        "Cargo.toml.orig"
+        "Cargo.lock"
+        ".cargo-ok"
+        ".cargo_vcs_info.json"
+        "excluded.rs"
+        "excluded.sql"
+        "excluded.css"
+      ];
+    pkgs.lib.cleanSourceWith {
+      src = craneLib.path ../.;
+      filter = productSourceFilter;
+    };
 
   # Supply each exact-revision Cargo git patch from its pinned flake checkout
   # for the product and tools workspaces without sandbox network access.
@@ -380,6 +487,7 @@ let
       workspaceMembers
       withWorkspacePlaceholders
       vendorPinnedFork
+      sqlxSqlitePatchSource
       ;
   };
   cargoVendorDir = craneLib.vendorCargoDeps {
@@ -389,6 +497,7 @@ let
 
   commonArgs = {
     inherit src cargoVendorDir;
+    extraDummyScript = sqlxSqliteExtraDummyScript;
     meta.license = pkgs.lib.licenses.gpl3Plus;
     pname = "jaunder";
     version = "0.1.0";
@@ -545,7 +654,12 @@ let
       pkgs.python3Packages.pygithub
     ];
     makeWrapperArgs = [
-      "--prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.git pkgs.prettier ]}"
+      "--prefix PATH : ${
+        pkgs.lib.makeBinPath [
+          pkgs.git
+          pkgs.prettier
+        ]
+      }"
     ];
     nativeCheckInputs = [
       pkgs.python3Packages.pytestCheckHook
@@ -576,6 +690,7 @@ let
     || relative == "server/assets/jaunder.css"
     || pkgs.lib.hasPrefix "host/system_theme_sources/" relative
     || pkgs.lib.hasPrefix "storage/migrations/" relative
+    || sqlxSqlitePatchSource path
     || cargoMemberSource [ "common" "host" "macros" "storage" ] path type
     || pkgs.lib.hasPrefix "tools/doctests/testdata/" relative
     || (pkgs.lib.hasPrefix "tools/" relative && craneLib.filterCargoSources path type);
@@ -594,6 +709,34 @@ let
     || relative == "flake.lock"
     || pkgs.lib.hasPrefix "nix/" relative;
   toolsSrc =
+    assert toolsSourceFilter "${toString (craneLib.path ../.)}/vendor" "directory";
+    assert toolsSourceFilter "${toString (craneLib.path ../.)}/${sqlxSqlitePatchRoot}" "directory";
+    assert toolsSourceFilter "${toString (craneLib.path ../.)}/${sqlxSqlitePatchRoot}/src/connection"
+      "directory";
+    assert toolsSourceFilter "${toString (craneLib.path ../.)}/${sqlxSqlitePatchRoot}/Cargo.toml"
+      "regular";
+    assert toolsSourceFilter "${toString (craneLib.path ../.)}/${sqlxSqlitePatchRoot}/src/database.rs"
+      "regular";
+    assert toolsSourceFilter "${toString (craneLib.path ../.)}/${sqlxSqlitePatchRoot}/LICENSE-MIT"
+      "regular";
+    assert toolsSourceFilter "${toString (craneLib.path ../.)}/${sqlxSqlitePatchRoot}/LICENSE-APACHE"
+      "regular";
+    assert builtins.all
+      (
+        name:
+        !(toolsSourceFilter "${toString (craneLib.path ../.)}/${sqlxSqlitePatchRoot}/${name}" "regular")
+      )
+      [
+        "Cargo.toml.orig"
+        "Cargo.lock"
+        ".cargo-ok"
+        ".cargo_vcs_info.json"
+        "excluded.rs"
+        "excluded.sql"
+        "excluded.css"
+      ];
+    assert toolsSourceFilter "${toString (craneLib.path ../.)}/vendor/LICENSE-MIT" "regular";
+    assert toolsSourceFilter "${toString (craneLib.path ../.)}/vendor/LICENSE-APACHE" "regular";
     withWorkspacePlaceholders "jaunder-tools-cargo-source"
       (pkgs.lib.cleanSourceWith {
         src = craneLib.path ../.;
@@ -608,6 +751,7 @@ let
       ];
   toolsBaseArgs = {
     src = toolsSrc;
+    extraDummyScript = sqlxSqliteExtraDummyScript;
     pname = "jaunder-tools";
     version = "0.1.0";
     meta.license = pkgs.lib.licenses.gpl3Plus;
