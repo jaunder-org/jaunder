@@ -2156,7 +2156,9 @@ nix build .#checks.x86_64-linux.elisp-coverage-producer
 
 ## Code conventions
 
-- Use Rust, except end-to-end tests, which use Playwright and TypeScript.
+- Use Rust for product code and by default for infrastructure. End-to-end tests
+  use Playwright and TypeScript. Python may be used for any infrastructure
+  function when it produces more focused, easier-to-maintain code.
 - All Rust code is formatted with `cargo fmt`.
 - Files containing Leptos `view!` macros are additionally formatted with
   `leptosfmt` (run it first, then `cargo fmt`).
