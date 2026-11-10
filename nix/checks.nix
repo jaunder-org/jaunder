@@ -18,6 +18,8 @@ let
     cargoMemberSource
     cargoPackageClosure
     withWorkspacePlaceholders
+    sqlxSqlitePatchRoot
+    sqlxSqlitePatchSource
     cargoArtifacts
     leanTestProfile
     leanDevAndTestProfile
@@ -2835,7 +2837,12 @@ mkWasmCoverageMeasurementProducer =
     let
       isXtask = pkgs.lib.hasSuffix "/xtask" path || pkgs.lib.hasInfix "/xtask/" path;
     in
-    type == "directory"
+    # The generic Cargo-manifest fallback must not admit excluded patch metadata.
+    if pkgs.lib.hasSuffix "/${sqlxSqlitePatchRoot}" path || pkgs.lib.hasInfix "/${sqlxSqlitePatchRoot}/" path then
+      type == "directory" || sqlxSqlitePatchSource path
+    else
+    sqlxSqlitePatchSource path
+    || type == "directory"
     || (
       !(pkgs.lib.hasSuffix ".md" path)
       && (
@@ -2888,6 +2895,18 @@ mkWasmCoverageMeasurementProducer =
       assert !(clippySourceFilter "${toString ../.}/README.md" "regular");
       assert !(clippySourceFilter "${toString ../.}/docs/ARCHITECTURE.md" "regular");
       assert !(clippySourceFilter "${toString ../.}/xtask/src/lib.rs" "regular");
+      assert builtins.all (relative: clippySourceFilter (cargoSourcePath relative) "directory") [
+        "vendor" "${sqlxSqlitePatchRoot}" "${sqlxSqlitePatchRoot}/src" "${sqlxSqlitePatchRoot}/src/connection"
+      ];
+      assert builtins.all (relative: clippySourceFilter (cargoSourcePath relative) "regular") [
+        "${sqlxSqlitePatchRoot}/Cargo.toml" "${sqlxSqlitePatchRoot}/src/lib.rs"
+        "${sqlxSqlitePatchRoot}/src/connection/describe.rs"
+        "${sqlxSqlitePatchRoot}/LICENSE-MIT" "${sqlxSqlitePatchRoot}/LICENSE-APACHE"
+        "vendor/LICENSE-MIT" "vendor/LICENSE-APACHE"
+      ];
+      assert builtins.all (name: !(clippySourceFilter (cargoSourcePath "${sqlxSqlitePatchRoot}/${name}") "regular")) [
+        "Cargo.lock" "Cargo.toml.orig" ".cargo-ok" ".cargo_vcs_info.json" "excluded.rs" "excluded.css"
+      ];
       clippySourceFilter;
   };
   mkClippyLeaf = name: nonSubstitutable (pkgs.runCommand name {
@@ -3551,7 +3570,9 @@ xtask-format =
       let
         relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
       in
-      if type == "directory" then
+      sqlxSqlitePatchSource path
+      || (type == "directory" && (relative == "vendor" || relative == sqlxSqlitePatchRoot || pkgs.lib.hasPrefix "${sqlxSqlitePatchRoot}/" relative))
+      || (if type == "directory" then
         toString path == toString ../.
         || builtins.any (input: pkgs.lib.hasPrefix "${relative}/" input) metadataInputs
         || builtins.any (
@@ -3565,7 +3586,7 @@ xtask-format =
             relative == "xtask/build.rs"
             || builtins.any (directory: pkgs.lib.hasPrefix "${directory}/" relative) targetDirectories
           )
-        );
+        ));
     formatSource = pkgs.lib.cleanSourceWith {
       src = craneLib.path ../.;
       filter =
@@ -3601,9 +3622,13 @@ rust-format =
       let
         relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
       in
+      if relative == sqlxSqlitePatchRoot || pkgs.lib.hasPrefix "${sqlxSqlitePatchRoot}/" relative then
+        type == "directory" || sqlxSqlitePatchSource path
+      else
       !(relative == "xtask" || pkgs.lib.hasPrefix "xtask/" relative)
       && (
-        type == "directory"
+        sqlxSqlitePatchSource path
+        || type == "directory"
         || pkgs.lib.hasSuffix ".rs" path
         || builtins.any (suffix: pkgs.lib.hasSuffix suffix path) [
           "/Cargo.toml"
@@ -3681,7 +3706,11 @@ static-code =
       let
         isXtask = pkgs.lib.hasSuffix "/xtask" path || pkgs.lib.hasInfix "/xtask/" path;
       in
-      (type == "directory"
+      if pkgs.lib.hasSuffix "/${sqlxSqlitePatchRoot}" path || pkgs.lib.hasInfix "/${sqlxSqlitePatchRoot}/" path then
+        type == "directory" || sqlxSqlitePatchSource path
+      else
+      sqlxSqlitePatchSource path
+      || (type == "directory"
         && !(pkgs.lib.hasSuffix "/elisp" path || pkgs.lib.hasInfix "/elisp/" path))
       || (
         !(pkgs.lib.hasSuffix ".md" path)

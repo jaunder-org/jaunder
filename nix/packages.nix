@@ -1408,6 +1408,8 @@ in
       cargoMemberSource
       cargoPackageClosure
       withWorkspacePlaceholders
+      sqlxSqlitePatchRoot
+      sqlxSqlitePatchSource
       appOfflineCargoHome
       toolsOfflineCargoHome
       cargoArtifacts

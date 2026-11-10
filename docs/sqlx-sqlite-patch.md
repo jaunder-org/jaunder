@@ -53,7 +53,8 @@ remove together:
 - The path patches in root, `tools/`, and `xtask/` `Cargo.toml` files.
 - The 54-file driver copy and the two ancillary notices under `vendor/`.
 - Their Nix admission exceptions/assertions and dummy-source restoration in
-  `nix/packages.nix` and `nix/xtask.nix`.
+  `nix/packages.nix`, `nix/xtask.nix`, and the Clippy/static-code/Cargo-format
+  source projections in `nix/checks.nix`.
 - The isolated metadata-root patch projection in
   `xtask/src/steps/common_host_target_closure.rs` and its patch-specific
   fixture.
