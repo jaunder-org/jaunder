@@ -22,6 +22,13 @@ tsc mode="verify":
     setup-e2e-node-modules "$E2E_TYPES_NODE_MODULES" "$E2E_PLAYWRIGHT_TEST"
     {{devtool}} check tsc {{if mode == "fix" { "--fix" } else { "" }}}
 
+# Keep caller text in argv: Just interpolation would reparse shell metacharacters.
+[positional-arguments]
+sandbox *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    exec nix run --no-update-lock-file --no-write-lock-file .#ux-sandbox -- "$@"
+
 # Verify workflows refuse dirty or unavailable Git state before work.
 coverage: _clean-tree coverage-workflow
 

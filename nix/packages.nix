@@ -81,6 +81,7 @@ let
     "server"
     "storage"
     "test-support"
+    "ux-sandbox"
     "web"
   ];
   sqlxSqlitePatchRoot = "vendor/sqlx-sqlite-0.9.0";
@@ -247,6 +248,8 @@ let
         "src/main.rs"
         "tests/main.rs"
       ]
+    else if member == "ux-sandbox" then
+      [ "src/main.rs" ]
     else if member == "test-support" then
       [
         "src/lib.rs"
@@ -362,12 +365,7 @@ let
         src = craneLib.path ../.;
         filter = siteSourceFilter;
       })
-      [
-        "host"
-        "server"
-        "storage"
-        "test-support"
-      ];
+      (builtins.filter (member: !(builtins.elem member siteCargoMembers)) workspaceMembers);
   wasmTestSrc =
     withWorkspacePlaceholders "jaunder-wasm-test-cargo-source"
       (pkgs.lib.cleanSourceWith {
@@ -379,14 +377,7 @@ let
           in
           cargoTargetSource wasmTestCargoMembers path type || pkgs.lib.hasPrefix "client/tests/" relative;
       })
-      [
-        "csr"
-        "host"
-        "server"
-        "storage"
-        "test-support"
-        "web"
-      ];
+      (builtins.filter (member: !(builtins.elem member wasmTestCargoMembers)) workspaceMembers);
 
   productSourceFilter =
     path: type:
@@ -544,6 +535,10 @@ let
   };
 
   cargoArtifacts = craneLib.buildDepsOnly hostArgs;
+  debugHostArgs = hostArgs // {
+    CARGO_PROFILE = "dev";
+  };
+  debugCargoArtifacts = craneLib.buildDepsOnly debugHostArgs;
 
   # Compile-only and test-only gates do not need full DWARF. Keep these
   # overrides local to gate derivations so production packages and normal
@@ -561,14 +556,17 @@ let
   mkJaunderBin =
     {
       pname ? "jaunder",
+      debug ? false,
       csrBundle ? csrWasmBundle,
       passthru ? { },
     }:
     craneLib.buildPackage (
-      hostArgs
+      (if debug then debugHostArgs else hostArgs)
       // {
-        inherit cargoArtifacts pname passthru;
-        cargoExtraArgs = "-p jaunder";
+        inherit pname passthru;
+        cargoArtifacts = if debug then debugCargoArtifacts else cargoArtifacts;
+        # RustEmbed otherwise reads the vanished build directory in dev builds.
+        cargoExtraArgs = "-p jaunder" + pkgs.lib.optionalString debug " --features rust-embed/debug-embed";
         # Embed the CSR bundle + public assets into the binary (#237): the
         # release artifact is self-contained (ADR-0003/0008), serving pkg/*
         # and public/* with no external files. `server/build.rs` stages these
@@ -609,27 +607,68 @@ let
   # ONLY on the e2e VM PATH — deliberately absent from the `jaunder` prod
   # binary and the `services.jaunder` NixOS module, so there is no seed
   # surface anywhere near the release artifact.
-  testSupportBin = craneLib.buildPackage (
-    hostArgs
-    // {
-      inherit cargoArtifacts;
-      pname = "test-support";
-      cargoExtraArgs = "-p test-support";
-      doCheck = false;
-      nativeBuildInputs =
-        hostArgs.nativeBuildInputs ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
-      postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-        patchelf --add-rpath \
-          "${
-            pkgs.lib.makeLibraryPath [
-              pkgs.openssl
-              pkgs.dav1d
-            ]
-          }" \
-          "$out/bin/test-support"
-      '';
-    }
-  );
+  mkTestSupportBin =
+    {
+      debug ? false,
+    }:
+    craneLib.buildPackage (
+      (if debug then debugHostArgs else hostArgs)
+      // {
+        cargoArtifacts = if debug then debugCargoArtifacts else cargoArtifacts;
+        pname = "test-support";
+        cargoExtraArgs = "-p test-support";
+        doCheck = false;
+        nativeBuildInputs =
+          hostArgs.nativeBuildInputs ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
+        postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+          patchelf --add-rpath \
+            "${
+              pkgs.lib.makeLibraryPath [
+                pkgs.openssl
+                pkgs.dav1d
+              ]
+            }" \
+            "$out/bin/test-support"
+        '';
+      }
+    );
+
+  testSupportBin = mkTestSupportBin { };
+
+  # One rooted selection retains both executables and the server's embedded CSR.
+  # Consumers admit untracked inputs with sourceAdmits before nix build, use only
+  # the successful request's output, and hold their unique --out-link until exit.
+  mkSandboxArtifacts =
+    csrBundle:
+    let
+      jaunder = mkJaunderBin {
+        pname = "jaunder-debug";
+        debug = true;
+        inherit csrBundle;
+      };
+      testSupport = mkTestSupportBin { debug = true; };
+    in
+    (pkgs.linkFarm "jaunder-sandbox-artifacts" [
+      {
+        name = "bin/jaunder";
+        path = "${jaunder}/bin/jaunder";
+      }
+      {
+        name = "bin/test-support";
+        path = "${testSupport}/bin/test-support";
+      }
+    ]).overrideAttrs
+      (_: {
+        passthru = {
+          inherit jaunder testSupport csrBundle;
+          sourceAdmits =
+            relative: type:
+            productSourceFilter "${toString ../.}/${relative}" type
+            || csrSourceAdmits relative type
+            || relative == "public"
+            || pkgs.lib.hasPrefix "public/" relative;
+        };
+      });
 
   # Keep the Python host package independent of Cargo and application sources.
   # Tests are admitted with runtime sources so build-time pytest is fully offline.
@@ -1352,10 +1391,25 @@ in
     csrBundle = csrWasmBundle;
     csr-vite-node-modules = csrViteNodeModules;
     inherit csrDebugBundle;
+    sandboxArtifacts = mkSandboxArtifacts csrDebugBundle;
+    sandboxArtifactsReleaseCsr = mkSandboxArtifacts csrWasmBundle;
     traced-run = tracedRunBin;
     devtool = devtoolBin;
     node-modules-setup = nodeModulesSetup;
     xtask = xtaskBin;
+    ux-sandbox = import ./ux-sandbox.nix {
+      inherit
+        pkgs
+        craneLib
+        cargoPackageClosure
+        cargoMemberSource
+        workspaceMembers
+        withWorkspacePlaceholders
+        vendorPinnedFork
+        sqlxSqlitePatchRoot
+        sqlxSqlitePatchSource
+        ;
+    };
     adr-promoter = adrPromoter;
     # The out-of-process e2e seed helper (ADR-0046). Exposed so it is
     # directly buildable/verifiable; it is placed only on the e2e VM PATH,

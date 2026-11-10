@@ -79,26 +79,6 @@ impl E2eLocalBrowser {
     }
 }
 
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, serde::Serialize, serde::Deserialize,
-)]
-#[serde(rename_all = "lowercase")]
-pub enum SandboxProfile {
-    Empty,
-    Standard,
-    Demo,
-}
-
-impl SandboxProfile {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Empty => "empty",
-            Self::Standard => "standard",
-            Self::Demo => "demo",
-        }
-    }
-}
-
 #[derive(Subcommand)]
 pub enum Command {
     /// Read explicit local Org originals into a timezone evidence manifest (JSON).
@@ -254,19 +234,6 @@ pub enum Command {
         source: Option<String>,
         #[arg(long, requires = "source")]
         target: Option<String>,
-    },
-    /// Start an interactive disposable or named UX sandbox, or run an admitted
-    /// operational Jaunder command against a named sandbox after `--`.
-    Sandbox {
-        /// Persistent workspace name. Omit for a disposable sandbox.
-        name: Option<String>,
-        #[arg(long, value_enum)]
-        profile: Option<SandboxProfile>,
-        #[arg(long)]
-        reset: bool,
-        /// A Jaunder command run against an existing named workspace.
-        #[arg(last = true, allow_hyphen_values = true)]
-        command: Vec<String>,
     },
 }
 
@@ -470,7 +437,6 @@ impl Cli {
                 "server-fn-coverage-verify"
             }
             Command::QualificationLeaf { .. } => "qualification-leaf",
-            Command::Sandbox { .. } => "sandbox",
             Command::Mutants(MutantsCommand::VerifyEvidence { .. }) => "mutants-verify-evidence",
         }
     }
@@ -1007,57 +973,30 @@ mod tests {
         }
     }
     #[test]
-    fn sandbox_parses_disposable_named_reset_and_command_modes() {
-        let disposable = Cli::try_parse_from(["xtask", "sandbox"]).unwrap();
-        assert!(matches!(
-            disposable.command,
-            Command::Sandbox {
-                name: None,
-                profile: None,
-                reset: false,
-                command,
-            } if command.is_empty()
-        ));
-
-        let named = Cli::try_parse_from([
-            "xtask",
-            "sandbox",
-            "demo",
-            "--profile",
-            "standard",
-            "--reset",
-        ])
-        .unwrap();
-        assert!(matches!(
-            named.command,
-            Command::Sandbox {
-                name: Some(name),
-                profile: Some(SandboxProfile::Standard),
-                reset: true,
-                command,
-            } if name == "demo" && command.is_empty()
-        ));
-
-        let operational = Cli::try_parse_from([
-            "xtask",
-            "sandbox",
-            "demo",
-            "--",
-            "site-config",
-            "get",
-            "site.title",
-        ])
-        .unwrap();
-        assert!(matches!(
-            operational.command,
-            Command::Sandbox {
-                name: Some(name),
-                profile: None,
-                reset: false,
-                command,
-            } if name == "demo"
-                && command == ["site-config", "get", "site.title"]
-        ));
+    fn retired_sandbox_route_is_rejected() {
+        for args in [
+            vec!["xtask", "sandbox"],
+            vec![
+                "xtask",
+                "sandbox",
+                "demo",
+                "--profile",
+                "standard",
+                "--reset",
+            ],
+            vec![
+                "xtask",
+                "sandbox",
+                "demo",
+                "--",
+                "site-config",
+                "get",
+                "site.title",
+            ],
+        ] {
+            let error = Cli::try_parse_from(args).err().expect("retired route");
+            assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
+        }
     }
 
     #[test]

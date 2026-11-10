@@ -89,7 +89,7 @@ let
   coverageAuxiliarySource =
     relative:
     relative == ".config/nextest.toml"
-    # Performance integration tests exercise the production Just recipes.
+    # Performance and sandbox regressions exercise the real production Just recipes.
     || relative == "Justfile"
     || relative == "csr/index.html"
     || pkgs.lib.hasPrefix "server/assets/" relative
@@ -121,6 +121,10 @@ let
     assert (coverageAuxiliarySource "host/system_theme_sources/studio/style.css");
     assert (coverageAuxiliarySource "testdata/theme-repository/minimal/preview.png");
     assert !(coverageAuxiliarySource "testdata/unrelated.png");
+    assert (coverageAuxiliarySource "Justfile");
+    assert (builtins.elem "ux-sandbox" coverageMembers);
+    assert (cargoMemberSource coverageMembers (cargoSourcePath "ux-sandbox/Cargo.toml") "regular");
+    assert (cargoMemberSource coverageMembers (cargoSourcePath "ux-sandbox/tests/public_command.rs") "regular");
     assert !(builtins.elem "xtask" coverageMembers);
     assert !(builtins.elem "tools/devtool" coverageMembers);
     assert !(builtins.elem "tools/doctests" coverageMembers);
@@ -2683,7 +2687,7 @@ mkWasmCoverageMeasurementProducer =
         pname = "jaunder-coverage";
         # Just's embedded recipe shebangs are not at the start of a shell file,
         # so patchShebangs cannot make these production recipes sandbox-safe.
-        postPatch = ''
+        postPatch = (hostArgs.postPatch or "") + ''
           substituteInPlace Justfile \
             --replace-fail '#!/usr/bin/env bash' '#!${pkgs.bash}/bin/bash'
         '';
@@ -2710,11 +2714,15 @@ mkWasmCoverageMeasurementProducer =
           pkgs.cargo-llvm-cov
           pkgs.cargo-nextest
           pkgs.exiftool
-          # Performance CLI fixtures create Git provenance and exercise real Just
-          # recipes (including their jq selection/retention operations).
+          # Performance fixtures need Git provenance and jq; sandbox fixtures
+          # exercise the public Just front door and its literal argv.
           pkgs.git
           pkgs.just
           pkgs.jq
+          pkgs.bash
+          pkgs.coreutils
+          # The sandbox admission regression evaluates an isolated local flake.
+          pkgs.nix
           # devtool runs the whole test suite under an ephemeral
           # PostgreSQL (via devtool pg) so
           # storage/src/postgres/* gets instrumented coverage. The
@@ -2863,23 +2871,14 @@ mkWasmCoverageMeasurementProducer =
               "/.prettierignore"
               "/sgconfig.yml"
             ]
-            || builtins.any (directory: pkgs.lib.hasInfix "/${directory}/" path) [
+            || builtins.any (directory: pkgs.lib.hasInfix "/${directory}/" path) (workspaceMembers ++ [
               ".cargo"
               "ast-grep"
-              "common"
-              "macros"
-              "server"
-              "storage"
-              "web"
-              "client"
-              "csr"
-              "host"
-              "test-support"
               "public"
               "tools"
               "end2end"
               "elisp"
-            ]
+            ])
           )
         )
       )
@@ -2890,6 +2889,8 @@ mkWasmCoverageMeasurementProducer =
       assert clippySourceFilter "${toString ../.}/Cargo.toml" "regular";
       assert clippySourceFilter "${toString ../.}/tools/Cargo.lock" "regular";
       assert clippySourceFilter "${toString ../.}/server/build.rs" "regular";
+      assert clippySourceFilter "${toString ../.}/ux-sandbox/Cargo.toml" "regular";
+      assert clippySourceFilter "${toString ../.}/ux-sandbox/src/main.rs" "regular";
       assert clippySourceFilter "${toString ../.}/csr/index.html" "regular";
       assert clippySourceFilter "${toString ../.}/testdata/theme-repository/minimal/preview.png" "regular";
       assert !(clippySourceFilter "${toString ../.}/README.md" "regular");
@@ -3733,22 +3734,13 @@ static-code =
                 "/recipes/prettier.just"
                 "/sgconfig.yml"
               ]
-              || builtins.any (directory: pkgs.lib.hasInfix "/${directory}/" path) [
+              || builtins.any (directory: pkgs.lib.hasInfix "/${directory}/" path) (workspaceMembers ++ [
                 ".cargo"
                 "ast-grep"
-                "common"
-                "macros"
-                "server"
-                "storage"
-                "web"
-                "client"
-                "csr"
-                "host"
-                "test-support"
                 "public"
                 "tools"
                 "end2end"
-              ]
+              ])
             )
           )
         )
@@ -3756,6 +3748,12 @@ static-code =
     staticCodeSrc = pkgs.lib.cleanSourceWith {
       src = craneLib.path ../.;
       filter =
+        # Every root workspace member must retain real Cargo targets for metadata.
+        assert builtins.all (member:
+          staticCodeSourceFilter (cargoSourcePath "${member}/Cargo.toml") "regular"
+          && staticCodeSourceFilter (cargoSourcePath "${member}/src/main.rs") "regular"
+        ) workspaceMembers;
+        assert staticCodeSourceFilter (cargoSourcePath "ux-sandbox/tests/lifecycle.rs") "regular";
         assert staticCodeSourceFilter "/source/recipes/prettier.just" "regular";
         assert staticCodeSourceFilter "/source/xtask/theme.css" "regular";
         assert staticCodeSourceFilter "/source/nix/otel-processors.yaml" "regular";

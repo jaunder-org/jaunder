@@ -4202,46 +4202,137 @@ is streamed unchanged to the live terminal and a per-run file; stopping the
 child closes the pipe so the driver can drain that journal-equivalent input
 before invoking the shared zero-panic verifier.
 
-Ordinary host E2E resolves native `.#csrDebugBundle`, a dev-profile WASM variant
-of the existing Nix producer using the shared bundle postprocessor. Existing
-release outputs are unchanged. The selected immutable bundle is validated and
-passed through `JAUNDER_CSR_BUNDLE_DIR` during host server compilation, before
-embedding; it is not copied into `target/site`. Source admission includes
-tracked dirty and intent-to-add inputs and refuses relevant omitted untracked
-producer inputs. Nix owns freshness/reuse; the output manifest owns integrity
-and asset naming, not producer provenance. An explicit bundle remains validated,
-caller-owned input whose source/profile equivalence and stable lifetime are the
-caller's responsibility. Automatic selection has no stale-root or release
-fallback. The pinned debug artifact may cost more on its first miss and retains
-additional store space.
+Ordinary host E2E selects `.#sandboxArtifacts`: a source-consistent immutable
+set with debug-profile server and seed executables and the selected debug CSR
+embedded in Jaunder. `--update-visual-snapshots` selects
+`.#sandboxArtifactsReleaseCsr`, embedding the existing release CSR while keeping
+the host and seed executables debug-profile; there is no separate release-CSR
+flag. E2E admits tracked dirty and intent-to-add inputs through the existing
+package `sourceAdmits` predicate and refuses relevant omitted untracked inputs
+before building. A set `JAUNDER_CSR_BUNDLE_DIR` is refused before artifact
+selection, server startup or seeding, with unset guidance; e2e does not silently
+ignore it or fall back to Cargo/site output. This refusal is specific to the e2e
+immutable artifact contract; the variable remains a build-time input for Nix
+packages and an explicit input for `test-local` and manual Cargo/Vite workflows.
 
-Prepared E2E artifacts own the checkout-local host-artifact lock from bundle
-selection through all browser lifecycle teardown, protecting their GC root and
-host binary generation. Handled foreground SIGINT/SIGTERM uses the existing host
-signal/process machinery to stop consumers, then finalize server/collector
-capture and panic verification before releasing ownership. Sandboxes retain
-their preparation-only host-artifact lock duration so commands can operate
-against an already running named sandbox; their separate workspace/server leases
-remain authoritative for that lifetime.
+Each e2e invocation creates a unique output link under
+`.xtask/gcroots/e2e-local-*` and retains it through browser lifecycles and
+server/collector teardown. Nix owns immutable artifact identity, store
+concurrency and reuse. E2E no longer selects mutable checkout application
+outputs or takes `.xtask/host-artifacts.lock`; handled foreground SIGINT/SIGTERM
+still stops consumers before capture finalization and root release. The Nix
+daemon and shared store workers are not owned child processes.
 
-The same host process-control seam also serves interactive UX sandboxes
-([host UX sandbox lifecycle](adr/0180-host-ux-sandbox-lifecycle.md)).
-`cargo xtask sandbox [NAME]` builds current host artifacts, starts on an
-ephemeral loopback port, prints the discovered URL, and owns foreground signal
-handling. Omitted names use disposable storage; named workspaces persist
-database, configuration, Media, and profile metadata under
-`.xtask/sandboxes/NAME`. A stable parent-directory workspace lock is exclusive
-for recovery/create/reset and server-generation transitions, then shared by a
-ready server or one-shot operational command for its full active lifetime; a
-separate server lease rejects a second sandbox server. The server retains its
-distinct storage-local runtime lock. Reset publishes a fully seeded sibling
-through a recoverable two-rename protocol; resume runs migrations but never
-reapplies profile fixtures. Passing arguments after `--` runs an allowlisted
-Jaunder operational command against an existing named workspace without exposing
-lifecycle or storage selectors. Atomically published ready/stopping lease
-metadata pins the executable generation: a live command must match the server's
-content fingerprint, while mismatch or an unmanaged runtime-lock holder rejects
-before the command opens and potentially migrates the database.
+#### Standalone UX sandbox owner
+
+`just sandbox [NAME]` is the single public front door for interactive UX
+sandboxes. It builds the focused root-workspace `ux-sandbox` binary and forwards
+exact argv. One Tokio runtime directly owns async processkit children/groups;
+the helper has COTS-only dependencies, with no xtask, host or test-support Rust
+dependency and no shared-runtime crate. The xtask sandbox CLI, dispatch and
+result/report path are retired. The retained xtask `host_server`,
+`host_signals`, and `process` modules still serve `e2e-local`; they are not a
+shared sandbox runtime.
+
+The helper builds current debug host artifacts, starts on an ephemeral loopback
+port, prints the discovered URL, and owns foreground signal handling. Omitted
+names use disposable storage; named workspaces persist database, configuration,
+Media, and profile metadata under `.xtask/sandboxes/NAME`. A stable
+parent-directory workspace lock is exclusive for recovery/create/reset and
+server-generation transitions, then shared by a ready server or one-shot
+operational command for its full active lifetime; a separate server lease
+rejects a second sandbox server. The server retains its distinct storage-local
+runtime lock. Reset publishes a fully seeded sibling through a recoverable
+two-rename protocol; resume runs migrations but never reapplies profile
+fixtures. Passing arguments after `--` runs an allowlisted Jaunder operational
+command against an existing named workspace without exposing lifecycle or
+storage selectors. Atomically published ready/stopping lease metadata pins the
+executable generation: a live command must match the server's content
+fingerprint, while mismatch or an unmanaged runtime-lock holder rejects before
+the command opens and potentially migrates the database.
+
+The public Just front door now executes
+`nix run --no-update-lock-file --no-write-lock-file .#ux-sandbox -- "$@"` from
+the active checkout, retaining positional literal argv. The private
+`nix/ux-sandbox.nix` package uses existing Cargo closure/filter/placeholder and
+Crane mechanisms to compile only the dev-profile helper and its required local
+package closure. It retains workspace manifests/configuration, root lockfile and
+pinned toolchain, not unrelated application/CSR implementation, public assets or
+documentation. Root Cargo metadata also requires the retained SQLx SQLite path
+patch and parent license notices; these are source inputs, not compiled helper
+SQLx dependencies. Its helper-specific dependency artifact is separate from
+product Cargo artifacts; patch inputs, shared manifests, lock/toolchain inputs
+and required helper dependencies can still invalidate it.
+
+Tracked-dirty and intent-to-add helper inputs participate in Git-flake capture.
+New untracked helper inputs are omitted without automatic refusal by bootstrap;
+users must add or intent-to-add them. No staging or pre-bootstrap admission
+mechanism is introduced. The old Cargo route already supported warm reuse; no
+warm-speed or cache-hit guarantee follows from switching to Nix. The existing
+`validate-test-checks` CI job requests the ordinary helper build after unchanged
+Cachix setup. Eligibility/request wiring is not evidence of actual CI
+completion, upload or later substitution.
+
+Application preparation is a separate unchanged admission step. Before selecting
+application artifacts, the helper checks relevant untracked checkout inputs
+against the selected Nix source and refuses omitted inputs. It then invokes Nix
+interruptibly for `.#sandboxArtifacts`, a single immutable set containing
+debug-profile Jaunder and test-support executables, with the debug CSR embedded
+in Jaunder. A fresh `.xtask/sandbox-artifacts-*` output link is retained through
+preparation and the full server or command consumer lifetime. Nix owns store
+build concurrency; sandbox no longer publishes mutable checkout application
+artifacts or takes `.xtask/host-artifacts.lock` for preparation. The separate
+named-workspace, server-lease and application runtime locks remain unchanged.
+
+Jaunder embeds the selected CSR at build time; there is no runtime CSR path. The
+existing `server/build.rs` build staging and debug `rust-embed/debug-embed`
+feature remain in use. Profile seeding stays an out-of-process
+`test-support seed-sandbox-profile` operation under ADR-0046; its stdout is
+captured and withheld from operational command output while stderr and exact
+child status are retained. The helper owns its narrow runtime-info
+identity/address parser and HTTP readiness probe rather than exposing xtask's
+private session adapters. Once ready, it prints the URL and, for a nonempty
+profile (including a named resume's recorded profile), the seeded `user` and
+`operator` development credentials. Empty profiles do not print credential
+hints.
+
+First SIGINT/SIGTERM initiates graceful drain; ProcessKit owns the ten-second
+automatic group-stop escalation. A subsequent SIGINT may force earlier; repeated
+SIGTERM does not escalate. Application code waits for the direct child
+concurrently with group stop and preserves the initiating status (130/143), or
+the child's status if no signal initiated shutdown. If a successful force report
+still lists members after direct-child reap, the application makes one bounded
+follow-up ProcessKit stop/report with a five-second grace and escalation
+disabled, consuming further signals without restarting that operation. Cleanup
+requires both direct-child reap and an explicit empty-group report. An
+unconfirmed stop/wait logs diagnostics and retains process/group and application
+guards rather than polling/retrying or releasing storage. This is not a
+universal OS guarantee or a claim that ProcessKit is defective based on an
+instantaneous PID state. The Nix daemon and shared build workers are not owned
+children. The separate `jaunder shut-down` 30-second wait/no-escalation contract
+remains ADR-0181.
+
+The design is recorded in the
+[standalone UX sandbox lifecycle decision](adr/drafts/standalone-ux-sandbox-lifecycle.md),
+by draft path `docs/adr/drafts/standalone-ux-sandbox-lifecycle.md`. The draft
+remains `proposed` until serialized post-merge numbering and promotion. It is a
+narrow ADR-0028 placement exception and partially supersedes
+[host UX sandbox lifecycle](adr/0180-host-ux-sandbox-lifecycle.md) only for the
+sandbox owner and literal signal-escalation clause. The immutable Nix artifact
+selection further replaces mutable application artifact publication only in
+sandbox and `e2e-local`; `test-local`, its separate artifact-lock use, and
+manual `just build-csr`/`target/site` remain unchanged. The separate helper
+bootstrap now uses its Nix package, without changing application selection,
+persistence, profiles, reset/recovery, admission or application lock contracts.
+ADR-0058's host-floor boundary is unchanged.
+
+Removing the sandbox-specific xtask protocol and synchronous runtime bridges
+reduces ownership indirection and cross-package coupling. The focused package,
+manifest, separately filtered Nix helper bootstrap, application artifact
+composition and duplicate readiness adapter are retained costs. Lifecycle and
+storage responsibility stays in the helper; independent e2e orchestration stays
+in xtask. Neither responsibility is eliminated. This is a structural
+simplification, not a performance-improvement or cache-hit claim.
 
 Ordinary specs are parallel-safe by construction, via per-test identity fixtures
 in `end2end/tests/provisioning.ts`, composed only by `end2end/tests/fixtures.ts`

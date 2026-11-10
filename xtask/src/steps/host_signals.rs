@@ -5,20 +5,11 @@ use std::time::Duration;
 use anyhow::Context;
 use tokio::runtime::Builder;
 
-use super::host_server::HostServerSession;
 use super::process::Process;
 
 pub(super) enum ServerExit {
     Signal(i32),
-    Unexpected(i32),
-}
-
-impl ServerExit {
-    pub(super) fn code(&self) -> i32 {
-        match self {
-            Self::Signal(code) | Self::Unexpected(code) => *code,
-        }
-    }
+    Unexpected,
 }
 
 pub(super) struct ServerSignals {
@@ -53,13 +44,6 @@ impl ServerSignals {
         self.pending.take().or_else(|| self.receive_pending())
     }
 
-    pub(super) fn has_pending(&mut self) -> bool {
-        if self.pending.is_none() {
-            self.pending = self.receive_pending();
-        }
-        self.pending.is_some()
-    }
-
     fn receive_pending(&mut self) -> Option<i32> {
         self.runtime.block_on(async {
             tokio::time::timeout(Duration::from_millis(1), async {
@@ -73,10 +57,6 @@ impl ServerSignals {
         })
     }
 
-    pub(super) fn wait_for_server(&mut self, session: &mut HostServerSession) -> ServerExit {
-        self.wait_until_stopped(|| session.is_stopped())
-    }
-
     pub(super) fn wait_until_stopped(&mut self, mut stopped: impl FnMut() -> bool) -> ServerExit {
         if let Some(code) = self.take_pending() {
             return ServerExit::Signal(code);
@@ -84,7 +64,7 @@ impl ServerSignals {
         self.runtime.block_on(async {
             loop {
                 if stopped() {
-                    return ServerExit::Unexpected(1);
+                    return ServerExit::Unexpected;
                 }
                 tokio::select! {
                     _ = tokio::time::sleep(Duration::from_millis(100)) => {},
@@ -93,17 +73,6 @@ impl ServerSignals {
                 }
             }
         })
-    }
-
-    pub(super) fn shutdown_session(
-        &mut self,
-        session: &mut HostServerSession,
-        exit: ServerExit,
-    ) -> anyhow::Result<()> {
-        match exit {
-            ServerExit::Signal(_) => session.stop_interruptible(self.next_signal()),
-            ServerExit::Unexpected(_) => Ok(()),
-        }
     }
 
     pub(super) fn shutdown_process(&mut self, process: &mut Process) -> anyhow::Result<()> {
