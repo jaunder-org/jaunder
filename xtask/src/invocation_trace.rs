@@ -208,6 +208,7 @@ pub fn execute(cli: crate::Cli) -> anyhow::Result<crate::CommandResult> {
     let capture = matches!(&cli.command, crate::Command::TestLocal { .. })
         .then(|| Capture::with_command_args(command_args));
     let mut root = None;
+    let mut receipt = None;
     let invoke = || {
         let outer = capture.as_ref().map(|_| phase("xtask.command"));
         eprintln!("xtask-start: checkout-prepare");
@@ -217,6 +218,7 @@ pub fn execute(cli: crate::Cli) -> anyhow::Result<crate::CommandResult> {
                 .ok()
                 .and_then(|cwd| crate::git::toplevel(&cwd).ok())
                 .map(PathBuf::from);
+            receipt = start_receipt(root.as_deref());
         }
         let prepared = crate::prepare_checkout();
         if let Some(checkout) = checkout {
@@ -247,6 +249,7 @@ pub fn execute(cli: crate::Cli) -> anyhow::Result<crate::CommandResult> {
         Some(capture) => capture.with_default(invoke),
         None => invoke(),
     };
+    finish_receipt(receipt, &result);
     if let Some(capture) = capture {
         let finalized = capture.finish().and_then(|trace| {
             if let Ok(result) = &mut result {
@@ -267,6 +270,36 @@ pub fn execute(cli: crate::Cli) -> anyhow::Result<crate::CommandResult> {
         }
     }
     result
+}
+
+fn start_receipt(root: Option<&Path>) -> Option<crate::invocation_receipt::Receipt> {
+    match root
+        .ok_or("checkout-unavailable")
+        .and_then(|root| crate::invocation_receipt::Receipt::start(root, None))
+    {
+        Ok(receipt) => Some(receipt),
+        Err(_) => {
+            // Ancillary capture must not replace preparation or workload failures.
+            eprintln!("xtask-receipt: status=unavailable reason=capture-gap");
+            None
+        }
+    }
+}
+
+fn finish_receipt(
+    receipt: Option<crate::invocation_receipt::Receipt>,
+    result: &anyhow::Result<crate::CommandResult>,
+) {
+    if let Some(receipt) = receipt {
+        let (ok, exit_code) = match result {
+            Ok(result) => (result.ok, result.exit_code()),
+            Err(_) => (false, 2),
+        };
+        if receipt.complete(ok, exit_code).is_err() {
+            // The owner has already settled its work and required cleanup.
+            eprintln!("xtask-receipt: status=unavailable reason=capture-gap");
+        }
+    }
 }
 
 pub(crate) fn active() -> bool {
@@ -432,7 +465,11 @@ impl Trace {
         Ok(Path::new(directory).with_extension("json"))
     }
 }
-fn persist_file(directory: &Path, path: &Path, bytes: &[u8]) -> Result<(), &'static str> {
+pub(crate) fn persist_file(
+    directory: &Path,
+    path: &Path,
+    bytes: &[u8],
+) -> Result<(), &'static str> {
     let mut file = tempfile::NamedTempFile::new_in(directory).map_err(|_| "file-create")?;
     write_trace(&mut file, bytes)?;
     file.persist_noclobber(path).map_err(|_| "file-rename")?;
@@ -523,6 +560,56 @@ fn intervals(bytes: &[u8]) -> Result<BTreeMap<String, u128>, &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn passive_receipts_preserve_owner_status_and_slow_mandatory_cleanup() {
+        use std::time::{Duration, Instant};
+        for available in [true, false] {
+            for code in [17, 130] {
+                let root = tempfile::tempdir().unwrap();
+                let blocked = root.path().join("blocked");
+                std::fs::write(&blocked, "secret-token").unwrap();
+                let output = if available { root.path() } else { &blocked };
+                let receipt = start_receipt(Some(output));
+                assert_eq!(receipt.is_some(), available);
+                // This fixture is the sole lifecycle owner. Recording receives no
+                // cleanup callback, process handle, or authority to shorten it.
+                let started = Instant::now();
+                let mut cleanup_count = 0;
+                let mut result = crate::CommandResult::new("test-local");
+                result.push(crate::StepResult::fail("test-local"));
+                result.exit_override = Some(code);
+                std::thread::sleep(Duration::from_millis(2100));
+                cleanup_count += 1;
+                let result = Ok(result);
+                finish_receipt(receipt, &result);
+                assert_eq!(cleanup_count, 1);
+                assert!(started.elapsed() > Duration::from_secs(2));
+                assert!(
+                    result
+                        .as_ref()
+                        .is_ok_and(|result| !result.ok && result.exit_code() == code)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn partial_receipt_does_not_replace_owner_error() {
+        let root = tempfile::tempdir().unwrap();
+        let receipt = crate::invocation_receipt::Receipt::start(root.path(), None).unwrap();
+        let bundle = std::fs::read_dir(root.path().join(".xtask/workflow-traces"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        std::fs::create_dir(bundle.join("completion.json")).unwrap();
+        let result = Err(anyhow::anyhow!("password-SUPERSECRET"));
+        finish_receipt(Some(receipt), &result);
+        assert_eq!(result.err().unwrap().to_string(), "password-SUPERSECRET");
+        assert!(bundle.join("start.json").is_file());
+    }
 
     #[test]
     fn command_metadata_is_allowlisted_and_selector_is_bounded() {

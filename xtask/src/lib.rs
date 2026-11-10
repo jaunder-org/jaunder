@@ -17,6 +17,7 @@ mod files;
 pub mod git;
 mod host_tooling;
 mod ids;
+mod invocation_receipt;
 pub mod invocation_trace;
 mod lifecycle;
 pub mod markers;
