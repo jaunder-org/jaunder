@@ -488,9 +488,10 @@ mod tests {
     }
 
     #[test]
-    fn every_rs_file_in_the_repo_falls_under_exactly_one_scan_root() {
-        // A file under no root is invisible to the gate; a file under two would be
-        // reconciled against the wrong run. Either is a population bug, and this is
+    fn every_tracked_rust_source_has_exactly_one_owner() {
+        // Maintained files require one scan root; imported dependency source is
+        // owned separately because workspace doctest runs do not execute it.
+        // Missing or overlapping ownership is a population bug, and this is
         // the assertion that covers shrink vector 4 — a crate outside every root —
         // which no fixture crate can demonstrate.
         //
@@ -508,9 +509,10 @@ mod tests {
         for path in tracked {
             let n = roots::ALL
                 .iter()
+                .chain(roots::VENDORED_DEPENDENCY_SOURCES)
                 .filter(|r| path.starts_with(&format!("{r}/")))
                 .count();
-            assert_eq!(n, 1, "{path} falls under {n} scan roots, want exactly 1");
+            assert_eq!(n, 1, "{path} has {n} source owners, want exactly 1");
         }
     }
 

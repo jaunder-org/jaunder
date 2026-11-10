@@ -241,9 +241,44 @@ fn root_crates_io_patch_section(root: &Path) -> Result<String> {
         .to_owned())
 }
 
+/// Copies only the selected source tree, not adjacent archive/cache metadata.
+fn copy_patch_source_tree(source: &Path, destination: &Path) -> Result<()> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let target = destination.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_patch_source_tree(&entry.path(), &target)?;
+        } else {
+            fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
 /// Materializes an isolated package for a single product target's metadata.
 fn prepare_metadata_root(root: &Path, directory: &Path, package: &str) -> Result<PathBuf> {
     let patches = root_crates_io_patch_section(root)?;
+    // Relative patch paths resolve at the isolated manifest, unlike the absolute
+    // product dependency below. Preserve the approved subset and parent notices.
+    // Remove this projection with the temporary patch (docs/sqlx-sqlite-patch.md).
+    let driver = "vendor/sqlx-sqlite-0.9.0";
+    if patches.contains(&format!("path = \"{driver}\"")) {
+        let projected = directory.join(driver);
+        copy_patch_source_tree(&root.join(driver).join("src"), &projected.join("src"))
+            .context("projecting local SQLx SQLite sources for metadata")?;
+        for file in ["Cargo.toml", "LICENSE-MIT", "LICENSE-APACHE"] {
+            fs::copy(root.join(driver).join(file), projected.join(file))
+                .context("projecting local SQLx SQLite manifest and license pointers")?;
+        }
+        for license in ["LICENSE-MIT", "LICENSE-APACHE"] {
+            fs::copy(
+                root.join("vendor").join(license),
+                directory.join("vendor").join(license),
+            )
+            .context("projecting SQLx parent license notices")?;
+        }
+    }
     let manifest = directory.join("Cargo.toml");
     let source = directory.join("src");
     fs::create_dir(&source).context("creating temporary metadata source directory")?;
@@ -346,18 +381,68 @@ mod tests {
         fs::create_dir_all(product.join("host/src")).unwrap();
         fs::write(
             product.join("Cargo.toml"),
-            "[workspace]\nmembers = [\"host\"]\nresolver = \"3\"\n",
+            "[workspace]\nmembers = [\"host\"]\nresolver = \"3\"\n\
+             [patch.crates-io]\nsqlx-sqlite = { path = \"vendor/sqlx-sqlite-0.9.0\" }\n",
         )
         .unwrap();
         fs::write(product.join("Cargo.lock"), "version = 4\n").unwrap();
         fs::write(
             product.join("host/Cargo.toml"),
-            "[package]\nname = \"host\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+            "[package]\nname = \"host\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\
+             [dependencies]\nsqlx-sqlite = \"0.0.0\"\n",
         )
         .unwrap();
         fs::write(product.join("host/src/lib.rs"), "").unwrap();
+        let driver = product.join("vendor/sqlx-sqlite-0.9.0");
+        fs::create_dir_all(driver.join("src/connection")).unwrap();
+        fs::write(
+            driver.join("Cargo.toml"),
+            "[package]\nname = \"sqlx-sqlite\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        fs::write(driver.join("src/lib.rs"), "pub mod connection;\n").unwrap();
+        fs::write(driver.join("src/connection/mod.rs"), "").unwrap();
+        for license in ["LICENSE-MIT", "LICENSE-APACHE"] {
+            fs::write(driver.join(license), format!("../{license}\n")).unwrap();
+            fs::write(product.join("vendor").join(license), "upstream notice\n").unwrap();
+        }
+        for excluded in [
+            "Cargo.lock",
+            "Cargo.toml.orig",
+            ".cargo-ok",
+            ".cargo_vcs_info.json",
+        ] {
+            fs::write(driver.join(excluded), "excluded archive metadata\n").unwrap();
+        }
         let isolated = tempfile::tempdir_in(owned.path()).unwrap();
         let manifest = prepare_metadata_root(&product, isolated.path(), "host").unwrap();
+        let projected = isolated.path().join("vendor/sqlx-sqlite-0.9.0");
+        for retained in [
+            "Cargo.toml",
+            "src/lib.rs",
+            "src/connection/mod.rs",
+            "LICENSE-MIT",
+            "LICENSE-APACHE",
+        ] {
+            assert_eq!(
+                fs::read(projected.join(retained)).unwrap(),
+                fs::read(driver.join(retained)).unwrap()
+            );
+        }
+        for license in ["LICENSE-MIT", "LICENSE-APACHE"] {
+            assert_eq!(
+                fs::read(isolated.path().join("vendor").join(license)).unwrap(),
+                b"upstream notice\n"
+            );
+        }
+        for excluded in [
+            "Cargo.lock",
+            "Cargo.toml.orig",
+            ".cargo-ok",
+            ".cargo_vcs_info.json",
+        ] {
+            assert!(!projected.join(excluded).exists());
+        }
 
         // Cargo must accept the generated package beneath the real checkout workspace,
         // without resolving the product's full dependency graph for this regression.
