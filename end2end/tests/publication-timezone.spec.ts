@@ -113,6 +113,12 @@ test("offset fallback is exact, bounded, signed and visibly distinguished from U
     [60.5, "UTC"],
     [780, "UTC"],
     [-780, "UTC"],
+    [2147483647, "UTC"],
+    [-2147483648, "UTC"],
+    [35791395, "UTC"],
+    [-35791395, "UTC"],
+    ["missing", "UTC"],
+    ["not-callable", "UTC"],
     [null, "UTC"],
     ["throws", "UTC"],
   ] as const) {
@@ -120,6 +126,14 @@ test("offset fallback is exact, bounded, signed and visibly distinguished from U
       Intl.DateTimeFormat.prototype.resolvedOptions = function () {
         throw new Error("no named zone");
       };
+      if (west === "missing") {
+        Reflect.deleteProperty(Date.prototype, "getTimezoneOffset");
+        return;
+      }
+      if (west === "not-callable") {
+        Reflect.set(Date.prototype, "getTimezoneOffset", 0);
+        return;
+      }
       Date.prototype.getTimezoneOffset = function () {
         if (west === "throws") throw new Error("no offset");
         return west === null ? NaN : west;

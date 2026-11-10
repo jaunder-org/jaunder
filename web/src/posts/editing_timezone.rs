@@ -44,17 +44,18 @@ fn intl_formatter() -> Option<JsValue> {
     Reflect::construct(&constructor, &Array::new()).ok()
 }
 
-fn resolved_intl_options(formatter: &JsValue) -> Option<JsValue> {
-    let method = Reflect::get(formatter, &JsValue::from_str("resolvedOptions"))
+// Both device APIs need fallible lookup and invocation with their own receiver.
+fn call_device_method(receiver: &JsValue, name: &str) -> Option<JsValue> {
+    let method = Reflect::get(receiver, &JsValue::from_str(name))
         .ok()?
         .dyn_into::<Function>()
         .ok()?;
-    method.call0(formatter).ok()
+    method.call0(receiver).ok()
 }
 
 fn device_timezone() -> Option<String> {
     let formatter = intl_formatter()?;
-    let resolved = resolved_intl_options(&formatter)?;
+    let resolved = call_device_method(&formatter, "resolvedOptions")?;
     Reflect::get(&resolved, &JsValue::from_str("timeZone"))
         .ok()?
         .as_string()
@@ -64,23 +65,16 @@ fn device_timezone() -> Option<String> {
 // supply the current device offset. JS reports minutes WEST of UTC, not east.
 fn device_offset_seconds_east() -> Option<i32> {
     let date = js_sys::Date::new_0();
-    let method = Reflect::get(&date, &JsValue::from_str("getTimezoneOffset"))
-        .ok()?
-        .dyn_into::<Function>()
-        .ok()?;
     // Exact integer parsing rejects NaN, infinities and fractional minutes
     // rather than using a float-to-integer cast that could truncate them.
-    let minutes_west: i32 = method
-        .call0(&date)
-        .ok()?
+    let minutes_west: i32 = call_device_method(&date, "getTimezoneOffset")?
         .as_f64()?
         .to_string()
         .parse()
         .ok()?;
-    if !(-720..=720).contains(&minutes_west) || minutes_west % 60 != 0 {
-        return None;
-    }
-    Some(-minutes_west * 60)
+    // The shared PublicationTimezone capture constructor owns whole-hour/range
+    // validation; this boundary only converts units/sign without overflow.
+    minutes_west.checked_mul(-60)
 }
 
 #[component]
