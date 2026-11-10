@@ -9,7 +9,7 @@ use sqlx::{
 use crate::backup::CatalogTableName;
 use crate::code_migrations;
 use crate::db::StorageRuntimeConfig;
-use crate::sql::Exists;
+use crate::sql::{Exists, QueryStorageExt, RowCount};
 use crate::{StorageFactory, instance_identity};
 
 /// Resolves application `SQLite` options from the runtime connection snapshot.
@@ -52,11 +52,36 @@ pub(crate) async fn open_sqlite_database_with_pool(
         .execute(&pool)
         .await?;
 
+    // Report legacy fallback rows only after the paired schema migration succeeds.
+    let timezone_fallback_rows = publication_timezone_fallback_rows(&pool).await?;
     sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
+    if timezone_fallback_rows > 0 {
+        tracing::warn!(
+            timezone_fallback_rows,
+            "publication timezone migration used UTC fallback for existing Post and revision rows"
+        );
+    }
     let instance_id = instance_identity::ensure(&pool).await?;
     code_migrations::drain_pending(&pool, authorize_drain).await?;
     crate::posts::search::backfill_post_search_projections(&pool).await?;
     Ok((StorageFactory::sqlite(pool.clone()), pool, instance_id))
+}
+
+/// Counts rows requiring the explicit UTC fallback before the timezone upgrade.
+pub(crate) async fn publication_timezone_fallback_rows(pool: &SqlitePool) -> sqlx::Result<u64> {
+    let mut rows = 0_u64;
+    for table in ["posts", "post_revisions"] {
+        let legacy: Exists = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $1) AND NOT EXISTS(SELECT 1 FROM pragma_table_info($1) WHERE name = 'timezone')")
+            .bind_storage(CatalogTableName::from(table)).fetch_one(pool).await?;
+        if legacy.into_bool() {
+            let count: RowCount =
+                sqlx::query_scalar(AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
+                    .fetch_one(pool)
+                    .await?;
+            rows += count.into_u64();
+        }
+    }
+    Ok(rows)
 }
 
 /// Returns `true` if the `SQLite` database holds no user data — every table

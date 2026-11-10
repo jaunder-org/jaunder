@@ -562,9 +562,9 @@ fn CreationComposer(
                     named.with(|state| state.selection_for_submit(selection).is_some())
                 })
             {
-                create_action.dispatch(Create {
-                    post: state.inputs(body, publication, slug_field.parsed()),
-                });
+                let mut post = state.inputs(body, publication, slug_field.parsed());
+                post.timezone = Some(expect_context::<posts::EditingTimezoneNotice>().capture());
+                create_action.dispatch(Create { post });
             }
         }),
     );

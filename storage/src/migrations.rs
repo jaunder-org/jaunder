@@ -58,6 +58,58 @@ mod tests {
         });
     }
 
+    #[apply(backends)]
+    #[tokio::test]
+    async fn publication_timezone_upgrade_backfills_posts_and_prior_revisions(
+        #[case] backend: Backend,
+    ) {
+        let database = MigrationDatabase::new(backend).await;
+        database.migrate_to(52).await.unwrap();
+        crate::with_closeable_pool!(&database.pool, pool, {
+            sqlx::query("INSERT INTO users (username, password_hash, created_at) VALUES ('tzlegacy', 'hash', CURRENT_TIMESTAMP)").execute(pool).await.unwrap();
+            sqlx::query("INSERT INTO posts (user_id, slug, body, format, rendered_html, created_at, updated_at, published_at) SELECT user_id, 'legacy-zone', 'body', 'markdown', '<p>body</p>', '2020-01-01T00:00:00Z', '2020-01-02T00:00:00Z', '2020-01-03T00:00:00Z' FROM users WHERE username = 'tzlegacy'").execute(pool).await.unwrap();
+            sqlx::query("INSERT INTO post_revisions (post_id, user_id, slug, body, format, rendered_html, created_at, updated_at, published_at, captured_at) SELECT post_id, user_id, slug, body, format, rendered_html, created_at, updated_at, published_at, updated_at FROM posts").execute(pool).await.unwrap();
+        });
+        let fallback_rows = match &database.pool {
+            CloseablePool::Sqlite(pool) => crate::sqlite::publication_timezone_fallback_rows(pool)
+                .await
+                .unwrap(),
+            CloseablePool::Postgres(pool) => {
+                crate::postgres::publication_timezone_fallback_rows(pool)
+                    .await
+                    .unwrap()
+            }
+        };
+        assert_eq!(fallback_rows, 2);
+        database.migrate_current().await.unwrap();
+        let remaining = match &database.pool {
+            CloseablePool::Sqlite(pool) => crate::sqlite::publication_timezone_fallback_rows(pool)
+                .await
+                .unwrap(),
+            CloseablePool::Postgres(pool) => {
+                crate::postgres::publication_timezone_fallback_rows(pool)
+                    .await
+                    .unwrap()
+            }
+        };
+        assert_eq!(
+            remaining, 0,
+            "subsequent starts must not report migrated rows again"
+        );
+        crate::with_closeable_pool!(&database.pool, pool, {
+            for table in ["posts", "post_revisions"] {
+                let sql = format!("SELECT timezone, published_at FROM {table}");
+                let (zone, at): (String, common::time::UtcInstant) =
+                    sqlx::query_as(sqlx::AssertSqlSafe(sql))
+                        .fetch_one(pool)
+                        .await
+                        .unwrap();
+                assert_eq!(zone, "UTC");
+                assert_eq!(at, "2020-01-03T00:00:00Z".parse().unwrap());
+            }
+        });
+    }
+
     fn migrator_through(source: &Migrator, version: i64) -> Migrator {
         Migrator {
             migrations: Cow::Owned(
@@ -752,6 +804,8 @@ main = putStrLn "hello"
             1,
             "bounded refresh can checkpoint without duplicate changes afterward"
         );
+        // Current projection consumers require the complete current record schema.
+        db.migrate_current().await.unwrap();
         let factory = match &db.pool {
             CloseablePool::Sqlite(pool) => crate::StorageFactory::sqlite(pool.clone()),
             CloseablePool::Postgres(pool) => crate::StorageFactory::postgres(pool.clone()),
@@ -960,6 +1014,7 @@ main = putStrLn "hello"
         let history = db.pool.string_quintuples(HISTORY).await.unwrap();
         let member_etag = |row: &(String, String, String, String, String)| {
             host::etag::PostContentEtag {
+                timezone: &common::time::PublicationTimezone::utc(),
                 title: None,
                 slug: &row.0.parse().unwrap(),
                 body: &row.1.parse().unwrap(),

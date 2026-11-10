@@ -103,6 +103,7 @@ export async function createPostViaApi(
     publish?: boolean;
     slug?: string | null;
     publishAt?: string;
+    timezone?: string;
   },
 ): Promise<{ post_id: number; permalink: string }> {
   const res = await withTimedAction(page, "api.posts.create", () =>
@@ -114,6 +115,7 @@ export async function createPostViaApi(
           slug_override: opts.slug ?? null,
           publish: opts.publish ?? true,
           ...(opts.publishAt ? { publish_at: opts.publishAt } : {}),
+          ...(opts.timezone ? { timezone: opts.timezone } : {}),
           ...(opts.tags ? { tags: opts.tags } : {}),
           audience: audienceForWire(opts.audience ?? "public"),
         },

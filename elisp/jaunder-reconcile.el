@@ -1322,7 +1322,7 @@ remote strong-ETag revalidation, one local preflight, then replacement."
          (jaunder--reconcile-execute-batch buffer rows 'pull
                                            #'jaunder--reconcile-pull-row))))))
 
-(defun jaunder--reconcile-keep-local-send (row path xml &optional merged-bytes audience-capable)
+(defun jaunder--reconcile-keep-local-send (row path xml &optional merged-bytes audience-capable sent-entry)
   "Send reviewed XML for ROW, then checkpoint PATH only on confirmed commit.
 When MERGED-BYTES is present, atomically install that authored result before
 server-confirmed metadata write-back.  AUDIENCE-CAPABLE is the service evidence
@@ -1372,6 +1372,9 @@ bound during preparation; never install a Post before the PUT."
           (let ((checkpoint
                  (condition-case err
                      (progn
+                       (when sent-entry
+                         (jaunder--confirmed-publication-zone
+                          (jaunder--harvest-response-fields (plist-get received :body)) sent-entry))
                        (when merged-bytes
                          (jaunder--reconcile-replace-pulled-file
                           path path merged-bytes))
@@ -1379,10 +1382,9 @@ bound during preparation; never install a Post before the PUT."
                              (jaunder--reconcile-call-with-source-buffer
                               path
                               (lambda ()
-                                ;; Record timezone only after confirmed commitment.
-                                (jaunder--ensure-date-tz)
+                                ;; Use the preparation's captured zone, never recapture after PUT.
                                 (let ((slug (jaunder--write-back
-                                             received nil nil t audience-capable)))
+                                             received nil nil t audience-capable sent-entry)))
                                   (list :slug slug :path (jaunder--rename-to-slug slug)))))))
                    (error (list :error err)))))
             (if (plist-get checkpoint :error)
@@ -1423,7 +1425,7 @@ bound during preparation; never install a Post before the PUT."
                                                    final
                                                  (jaunder--reconcile-keep-local-send
                                                   row path (plist-get prepared :xml) nil
-                                                  (plist-get prepared :audience-capable))))))))))
+                                                  (plist-get prepared :audience-capable) (plist-get prepared :entry))))))))))
 
 (defun jaunder-reconcile-keep-local-selected ()
   "Publish reviewed local content for selected conflicts after confirmation."
@@ -1628,6 +1630,7 @@ unknown, failed, or partial result; only confirmed success retires it."
                                                                               (update (jaunder--reconcile-merge-prepared-update
                                                                                        path bytes)))
                                                                          (list :bytes bytes :xml (plist-get update :xml)
+                                                                               :entry (plist-get update :entry)
                                                                                :audience-capable
                                                                                (plist-get update :audience-capable)))
                                                                      (error (list :error err)))))
@@ -1645,7 +1648,7 @@ unknown, failed, or partial result; only confirmed success retires it."
                                                                     (jaunder--reconcile-keep-local-send
                                                                      row path (plist-get prepared :xml)
                                                                      (plist-get prepared :bytes)
-                                                                     (plist-get prepared :audience-capable)))))))))))))))))
+                                                                     (plist-get prepared :audience-capable) (plist-get prepared :entry)))))))))))))))))
                                        (setq-local jaunder-reconcile-merge-last-result result)
                                        (jaunder--reconcile-merge-record session report-buffer result)
                                        (if (eq (plist-get result :outcome) 'success)

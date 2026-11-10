@@ -3560,7 +3560,7 @@ test.describe("new post publication time", () => {
       { url: permalink!, ready: "article.j-post" },
     );
     await expect(page.locator(".j-page")).toContainText(
-      "Scheduled for 2999-01-01 00:00 local time",
+      "Scheduled for 2999-01-01 00:00 UTC",
     );
 
     const authorPath = new URL(permalink!, BASE_URL).pathname.split("/")[1]!;

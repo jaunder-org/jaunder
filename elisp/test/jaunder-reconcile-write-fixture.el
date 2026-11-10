@@ -13,13 +13,14 @@
 
 (defun jaunder-test--write-entry (id slug href &optional duplicate-alternate)
   "Return native Member XML for ID, SLUG and HREF."
-  (format "<entry xmlns=\"http://www.w3.org/2005/Atom\" xmlns:j=\"https://jaunder.org/ns/atompub\" xmlns:app=\"http://www.w3.org/2007/app\"><title>Remote</title><link rel=\"edit\" href=\"https://example.test/atompub/alice/posts/%s\"/><link rel=\"alternate\" href=\"%s\"/>%s<j:slug>%s</j:slug><content type=\"text/org\">Remote body.</content><app:control><app:draft>yes</app:draft></app:control></entry>"
+  (format "<entry xmlns=\"http://www.w3.org/2005/Atom\" xmlns:j=\"https://jaunder.org/ns/atompub\" xmlns:app=\"http://www.w3.org/2007/app\"><title>Remote</title><link rel=\"edit\" href=\"https://example.test/atompub/alice/posts/%s\"/><link rel=\"alternate\" href=\"%s\"/>%s<j:slug>%s</j:slug><j:timezone>UTC</j:timezone><content type=\"text/org\">Remote body.</content><app:control><app:draft>yes</app:draft></app:control></entry>"
           id href (if duplicate-alternate (format "<link rel=\"alternate\" href=\"%s\"/>" href) "") slug))
 
 (defun jaunder-test--confirmed-write-batch (action hook &optional ids links)
   "Run public ACTION for IDS with LINKS and event HOOK, returning observed proof.
 HOOK receives an event plist and state and may override an HTTP response."
-  (let* ((ids (or ids '(1 50 100)))
+  (let* ((process-environment (cons "TZ=UTC" process-environment))
+         (ids (or ids '(1 50 100)))
          (root (file-name-as-directory (make-temp-file "jaunder-write-proof-" t)))
          (jaunder-blogs (list (cons root '(:base-url "https://example.test" :username "alice"))))
          (members (make-hash-table :test #'equal))
@@ -66,7 +67,7 @@ HOOK receives an event plist and state and may override an HTTP response."
                      (lambda (method url &optional xml _content-type headers)
                        (cond
                         ((string-suffix-p "/service" url)
-                         '(:status 200 :body "<service xmlns=\"http://www.w3.org/2007/app\" xmlns:atom=\"http://www.w3.org/2005/Atom\"><workspace><atom:title>User</atom:title></workspace></service>"))
+                         '(:status 200 :body "<service xmlns=\"http://www.w3.org/2007/app\" xmlns:atom=\"http://www.w3.org/2005/Atom\"><workspace><atom:title>User</atom:title><j:extension xmlns:j=\"https://jaunder.org/ns/atompub\" version=\"1\" features=\"timezone\"/></workspace></service>"))
                         ((not (equal method "GET"))
                          (let* ((key (cdr (assoc "Idempotency-Key" headers)))
                                 (id (if (equal method "POST")

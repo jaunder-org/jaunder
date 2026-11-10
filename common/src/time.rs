@@ -7,6 +7,123 @@ use jiff::{Timestamp, civil, tz::TimeZone};
 use serde::{Deserialize, Serialize, de};
 use thiserror::Error;
 
+/// Supported named IANA publication zone, retaining the author's exact spelling.
+#[derive(Clone, Debug, PartialEq, Eq, macros::StrNewtype)]
+pub struct PublicationTimezone(String);
+
+/// A publication zone must resolve through the bundled named IANA database.
+#[derive(Debug, Error)]
+#[error("publication timezone must be a supported named IANA timezone")]
+pub struct InvalidPublicationTimezone;
+
+impl FromStr for PublicationTimezone {
+    type Err = InvalidPublicationTimezone;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let zone = TimeZone::get(value).map_err(|_| InvalidPublicationTimezone)?;
+        if value.trim() != value
+            || zone
+                .iana_name()
+                .is_none_or(|name| name.eq_ignore_ascii_case("Etc/Unknown"))
+        {
+            return Err(InvalidPublicationTimezone);
+        }
+        Ok(Self(value.to_owned()))
+    }
+}
+
+impl PublicationTimezone {
+    /// Capture-only fallback from the device's current UTC offset, in seconds east.
+    /// Whole hours within ±12 map to POSIX-sign-reversed named Etc/GMT zones.
+    /// This records a fixed offset, not a regional timezone or its DST history.
+    #[must_use]
+    pub fn from_device_offset_seconds(seconds_east: i32) -> Option<Self> {
+        if !(-43_200..=43_200).contains(&seconds_east) || seconds_east % 3600 != 0 {
+            return None;
+        }
+        let hours_west = -seconds_east / 3600;
+        let name = if hours_west == 0 {
+            "Etc/GMT".to_owned()
+        } else {
+            format!("Etc/GMT{hours_west:+}")
+        };
+        name.parse().ok()
+    }
+
+    /// Explicit compatibility fallback for legacy callers and migrated rows.
+    #[must_use]
+    pub fn utc() -> Self {
+        Self("UTC".to_owned())
+    }
+}
+
+/// Formats a publication instant in its saved editing zone, including the
+/// date-specific IANA abbreviation. Audit instants and input conversion are separate.
+#[must_use]
+pub fn format_publication_time(instant: UtcInstant, timezone: &PublicationTimezone) -> String {
+    let zone = TimeZone::get(timezone.as_ref()).unwrap_or_else(|_| {
+        unreachable!("PublicationTimezone already validated against the bundled named database")
+    });
+    instant
+        .value()
+        .to_zoned(zone)
+        .strftime("%Y-%m-%d %H:%M %Z")
+        .to_string()
+}
+
+#[cfg(test)]
+mod publication_timezone_tests {
+    #[test]
+    fn device_offset_capture_is_exact_bounded_and_posix_reversed() {
+        use super::PublicationTimezone;
+        for (seconds_east, expected) in [
+            (-43200, "Etc/GMT+12"),
+            (-18000, "Etc/GMT+5"),
+            (0, "Etc/GMT"),
+            (3600, "Etc/GMT-1"),
+            (43200, "Etc/GMT-12"),
+        ] {
+            assert_eq!(
+                PublicationTimezone::from_device_offset_seconds(seconds_east)
+                    .unwrap()
+                    .as_ref(),
+                expected
+            );
+        }
+        for seconds_east in [-46800, -19800, -1, 1, 20700, 46800, i32::MIN, i32::MAX] {
+            assert!(PublicationTimezone::from_device_offset_seconds(seconds_east).is_none());
+        }
+    }
+
+    #[test]
+    fn publication_timezone_accepts_named_aliases_without_normalizing() {
+        for name in ["UTC", "America/New_York", "US/Eastern", "Europe/London"] {
+            let zone: super::PublicationTimezone = name.parse().unwrap();
+            assert_eq!(zone.as_ref(), name);
+            let encoded = serde_json::to_string(&zone).unwrap();
+            assert_eq!(
+                serde_json::from_str::<super::PublicationTimezone>(&encoded).unwrap(),
+                zone
+            );
+        }
+        for name in [
+            "",
+            " ",
+            " UTC",
+            "UTC ",
+            "Etc/Unknown",
+            "+05:00",
+            "-0400",
+            "No/Such_Zone",
+        ] {
+            assert!(
+                name.parse::<super::PublicationTimezone>().is_err(),
+                "{name:?}"
+            );
+        }
+    }
+}
+
 /// A UTC instant that crosses the web `#[server]` boundary as a domain value
 /// instead of a bare RFC 3339 `String` (ADR-0063; see
 /// `docs/adr/0072-timestamps-cross-boundary-as-utcinstant.md`).

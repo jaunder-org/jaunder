@@ -19,7 +19,7 @@ use crate::{
     render::{self, PostFormat},
     slug::Slug,
     tag::{self, TagLabel},
-    time::UtcInstant,
+    time::{PublicationTimezone, UtcInstant},
     visibility::AudienceTarget,
 };
 
@@ -98,6 +98,9 @@ pub struct OrgEffectiveMetadata {
 /// Successful pure Org normalization.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OrgNormalization {
+    /// Recognized named header zone used only when transport omits its timezone.
+    /// Raw DATE validation and `JAUNDER_DATE_UTC` semantics remain unchanged.
+    pub timezone: Option<PublicationTimezone>,
     pub body: PostBody,
     pub metadata: OrgEffectiveMetadata,
     pub bookkeeping: OrgBookkeeping,
@@ -147,6 +150,7 @@ pub fn normalize_org(
     let lifecycle = choose(structured.lifecycle, parsed.lifecycle);
 
     Ok(OrgNormalization {
+        timezone: parsed.timezone,
         body,
         metadata: OrgEffectiveMetadata {
             title,
@@ -161,6 +165,7 @@ pub fn normalize_org(
 
 #[derive(Default)]
 struct ParsedBlock {
+    timezone: Option<PublicationTimezone>,
     body: String,
     title: Presence<PostTitle>,
     summary: Presence<PostSummary>,
@@ -258,6 +263,10 @@ fn parse_leading_block(
     if !fields.audiences.is_empty() {
         parsed.audiences = Presence::Present(fields.audiences);
     }
+    parsed.timezone = fields
+        .timezone
+        .as_deref()
+        .and_then(|zone| zone.parse().ok());
     parsed.lifecycle = parse_lifecycle(fields.status, fields.date, fields.timezone, request_clock)?;
     Ok(parsed)
 }
@@ -317,6 +326,48 @@ fn parse_keywords(value: &str) -> Result<Vec<TagLabel>, OrgMetadataError> {
                 .map_err(|_| OrgMetadataError::Invalid("invalid KEYWORDS tag".into()))
         })
         .collect()
+}
+
+/// One raw singleton property candidate from the leading Org metadata block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OrgTimezoneProperty {
+    PostId(String),
+    DateTimezone(String),
+}
+
+/// Raw property candidates for local read-only recovery. Unlike server
+/// normalization this does not interpret DATE, require lifecycle metadata, or
+/// validate unrelated authoring fields. Repeated and blank values remain
+/// visible, in source order, so the caller can report every exception.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct OrgTimezoneProperties {
+    pub properties: Vec<OrgTimezoneProperty>,
+}
+
+/// Extract only local recovery evidence using the server's Org block boundary
+/// and keyword/property names. No title, date, slug, or body matching is involved.
+#[must_use]
+pub fn org_timezone_properties(source: &str) -> OrgTimezoneProperties {
+    let end = leading_keyword_end(&Org::parse(source));
+    let mut properties = OrgTimezoneProperties::default();
+    for line in source[..end].lines() {
+        let Some(HeaderKeyword::Property(value)) = header_keyword(line) else {
+            continue;
+        };
+        let (name, value) = value
+            .split_once(char::is_whitespace)
+            .map_or((value, ""), |(name, value)| (name, value.trim()));
+        match property_name(name) {
+            Some(PropertyName::Id) => properties
+                .properties
+                .push(OrgTimezoneProperty::PostId(value.to_owned())),
+            Some(PropertyName::DateTimezone) => properties
+                .properties
+                .push(OrgTimezoneProperty::DateTimezone(value.to_owned())),
+            _ => {}
+        }
+    }
+    properties
 }
 
 fn leading_keyword_end(document: &Org) -> usize {
@@ -612,6 +663,25 @@ Body";
 
     fn clock() -> UtcInstant {
         "2026-08-26T12:00:00Z".parse().expect("valid fixed clock")
+    }
+
+    #[test]
+    fn local_timezone_recovery_reads_only_leading_singleton_property_candidates() {
+        let properties = org_timezone_properties(
+            "#+TITLE: Recovery Post\n#+PROPERTY: JAUNDER_ID 17\n#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n#+PROPERTY: JAUNDER_ID 18\n#+PROPERTY: JAUNDER_DATE_TZ\n#+PROPERTY: JAUNDER_ID 17\n#+PROPERTY: JAUNDER_DATE_TZ UTC\n#+PROPERTY: EXPORT_FILE_NAME ignored\n\nBody paragraph\n#+PROPERTY: JAUNDER_ID body-value\n",
+        );
+
+        assert_eq!(
+            properties.properties,
+            [
+                OrgTimezoneProperty::PostId("17".to_owned()),
+                OrgTimezoneProperty::DateTimezone("America/New_York".to_owned()),
+                OrgTimezoneProperty::PostId("18".to_owned()),
+                OrgTimezoneProperty::DateTimezone(String::new()),
+                OrgTimezoneProperty::PostId("17".to_owned()),
+                OrgTimezoneProperty::DateTimezone("UTC".to_owned()),
+            ]
+        );
     }
 
     #[test]

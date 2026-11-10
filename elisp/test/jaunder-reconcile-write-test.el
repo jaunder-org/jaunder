@@ -363,7 +363,7 @@
                         ('location-conflicting '(:headers (("etag" . "\"written\"") ("location" . "https://example.test/atompub/alice/posts/2"))))
                         ('edit-conflicting (list :body (replace-regexp-in-string "posts/1" "posts/2" body t t)))
                         ('slug-duplicate (list :body (replace-regexp-in-string "</entry>" "<j:slug>other</j:slug></entry>" body t t)))
-                        ('omitted '(:body "<entry xmlns=\"http://www.w3.org/2005/Atom\"/>")))))))
+                        ('omitted '(:body "<entry xmlns=\"http://www.w3.org/2005/Atom\"><j:timezone xmlns:j=\"https://jaunder.org/ns/atompub\">UTC</j:timezone></entry>")))))))
                nil t)))
         (ert-info ((format "action=%S fault=%S details=%S" action fault
                            (mapcar #'jaunder-reconcile-result-detail (plist-get proof :results))))

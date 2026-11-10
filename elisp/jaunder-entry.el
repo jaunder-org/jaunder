@@ -30,7 +30,7 @@
 Holds abstract field values only; wire encoding (namespaces, media types,
 `app:draft' nesting) lives in `jaunder--atom-entry->xml'.  `body' is the
 body-only content with the metadata header block stripped."
-  title categories summary audiences draft content-type body published)
+  title categories summary audiences draft content-type body published timezone)
 
 (defconst jaunder--max-audience-id 9223372036854775807
   "Largest Named audience ID accepted by the AtomPub protocol.")

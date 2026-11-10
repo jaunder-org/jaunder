@@ -68,6 +68,7 @@ async fn create_via_service(
         posts,
         feed_events,
         crate::PostCreation {
+            timezone: common::time::PublicationTimezone::utc(),
             user_id,
             body,
             title: None,
@@ -108,6 +109,7 @@ pub async fn update_post_body_via_service(
         posts,
         feed_events,
         crate::PostUpdate {
+            timezone: None,
             post_id,
             editor_user_id,
             body,

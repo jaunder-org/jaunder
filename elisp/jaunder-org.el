@@ -233,8 +233,13 @@ the same identity to equivalent `JAUNDER_ID' values."
     (let ((id (replace-regexp-in-string "\\`0+" "" value)))
       (if (string= id "") "0" id))))
 
-(defun jaunder--org->atom ()
+(defun jaunder--org->atom (&optional editing-zone force-draft confirmed-draft)
   "Map the current org buffer to a `jaunder-entry'.
+EDITING-ZONE is a captured validated device zone for an authored write.
+With it, preserve an existing publication baseline or interpret changed DATE
+in that zone, without rewriting local headers.  FORCE-DRAFT skips publication
+baseline requirements.  CONFIRMED-DRAFT permits first publication of an
+existing server-confirmed draft.  Without EDITING-ZONE, retain legacy mapping.
 Reads the metadata header block via `org-collect-keywords' and carries the
 body-only content with the header block stripped.  Non-mutating.  The
 `published' slot is filled by the timezone computation (see
@@ -257,13 +262,22 @@ later by the media unit."
                                                      (equal (car property) "JAUNDER_AUDIENCE"))
                                                    props))))
                                         (status (cdr (assoc "JAUNDER_STATUS" props)))
-                                        (draft (and status (string= (downcase status) "draft") t))
+                                        (draft (or force-draft (and status (string= (downcase status) "draft") t)))
                                         (date-raw (cadr (assoc "DATE" kws)))
                                         (tz (cdr (assoc "JAUNDER_DATE_TZ" props)))
                                         ;; Drafts carry no publish time; "publish now" (published status, no
                                         ;; #+DATE) omits it so the server stamps it (see the spec status table).
-                                        (published (and (not draft) date-raw
-                                                        (jaunder--org-date->utc date-raw tz))))
+                                        (published
+                                         (unless draft
+                                           (if editing-zone
+                                               (when (or date-raw (and (not confirmed-draft)
+                                                                       (cdr (assoc "JAUNDER_ID" props))))
+                                                 (plist-get
+                                                  (jaunder--prepare-local-date
+                                                   date-raw tz (cdr (assoc "JAUNDER_DATE_UTC" props))
+                                                   editing-zone (and (not confirmed-draft)
+                                                                     (cdr (assoc "JAUNDER_ID" props)))) :utc))
+                                             (and date-raw (jaunder--org-date->utc date-raw tz))))))
                                    (jaunder--make-entry
                                     :title title
                                     :categories categories
@@ -273,7 +287,7 @@ later by the media unit."
                                     :content-type jaunder--org-media-type
                                     :body (string-trim-right
                                            (buffer-substring-no-properties (jaunder--body-start) (point-max)))
-                                    :published published))))
+                                    :published published :timezone editing-zone))))
 
 (defun jaunder--ensure-date-tz ()
   "Ensure the buffer records a JAUNDER_DATE_TZ; return the effective zone string.

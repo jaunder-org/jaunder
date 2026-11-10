@@ -183,15 +183,14 @@ KIND is `text' or `xhtml'."
 
 (defun jaunder--parse-pulled-member (entry-xml etag captured-at zone &optional audience-capable)
   "Parse Member ENTRY-XML once into exact Org bytes and native source fields.
-ETAG, CAPTURED-AT, and ZONE have the same validation and projection semantics
-as `jaunder--atom->org'.  AUDIENCE-CAPABLE is the current service verdict.
-This function performs no network or filesystem I/O."
+ETAG and CAPTURED-AT are response evidence; ZONE is an explicit legacy fallback.
+A present server timezone always wins.  AUDIENCE-CAPABLE is the service verdict.
+This performs no network or Post-file I/O; zone validation reads local zoneinfo."
   (jaunder--with-debug-operation "member.parse" ()
                                  (unless (jaunder--strong-etag-p etag)
                                    (jaunder--pull-error "Member response must carry a strong quoted ETag"))
-                                 (unless (and (stringp zone) (not (string-empty-p zone)))
-                                   (jaunder--pull-error "pull zone must be non-empty"))
                                  (let* ((fields (jaunder--harvest-response-fields entry-xml))
+                                        (zone (jaunder--confirmed-timezone fields zone))
                                         (title (jaunder--pull-exactly-one fields 'titles "title"))
                                         (content (jaunder--pull-exactly-one fields 'content-nodes "content"))
                                         (edit-uri (jaunder--pull-exactly-one fields 'edit-uris "edit URI"))
@@ -222,7 +221,8 @@ This function performs no network or filesystem I/O."
                                      (unless (and (stringp category) (not (string-empty-p category)))
                                        (jaunder--pull-error "Member category term must be non-empty")))
                                    (if draft
-                                       (setq status "draft")
+                                       (setq status "draft"
+                                             date-tz (and (cdr (assq 'timezones fields)) zone))
                                      (unless published
                                        (jaunder--pull-error "non-draft Member must have published"))
                                      (let ((published-time (jaunder--pull-rfc-3339-time published)))
@@ -231,7 +231,7 @@ This function performs no network or filesystem I/O."
                                                       "published")
                                              date-line (jaunder--utc->org-date published zone)
                                              date-tz zone
-                                             date-utc published)))
+                                             date-utc (jaunder--publication-utc published))))
                                    (let ((lines (append
                                                  (jaunder--pull-header-lines "TITLE" title)
                                                  (when date-line (list (format "#+DATE: %s" date-line)))
@@ -245,8 +245,9 @@ This function performs no network or filesystem I/O."
                                                            (format "#+PROPERTY: JAUNDER_AUDIENCE %s" audience))
                                                          audiences)
                                                  (when date-tz
-                                                   (list (format "#+PROPERTY: JAUNDER_DATE_TZ %s" date-tz)
-                                                         (format "#+PROPERTY: JAUNDER_DATE_UTC %s" date-utc)))
+                                                   (list (format "#+PROPERTY: JAUNDER_DATE_TZ %s" date-tz)))
+                                                 (when date-utc
+                                                   (list (format "#+PROPERTY: JAUNDER_DATE_UTC %s" date-utc)))
                                                  (list (format "#+PROPERTY: JAUNDER_FORMAT %s" format)
                                                        (format "#+PROPERTY: JAUNDER_SLUG %s" slug)
                                                        (format "#+PROPERTY: JAUNDER_ID %s" id)
@@ -383,9 +384,10 @@ proof when scoped.  Otherwise staging uses supplied
   (jaunder--with-debug-operation "pull.stage" ()
 				 (unless (jaunder-inventory-member-p member)
 				   (jaunder--pull-error "pull input must be a D1 inventory Member"))
-				 (let* ((audience-capable
-					 (jaunder--require-synchronization-audience-evidence
-					  (jaunder--active-base-url) nil))
+                                 (let* ((capabilities
+                                         (jaunder--require-synchronization-capabilities
+                                          (jaunder--active-base-url) nil))
+                                        (audience-capable (plist-get capabilities :audience))
 					(response (jaunder--http-request "GET" (jaunder-inventory-member-edit-uri member))))
 				   (unless (and (integerp (plist-get response :status))
 						(<= 200 (plist-get response :status) 299))
@@ -403,7 +405,7 @@ proof when scoped.  Otherwise staging uses supplied
 				     (let* ((captured-at (current-time))
 					    (pulled-member
 					     (jaunder--parse-pulled-member entry-xml etag captured-at
-									   (jaunder--current-zone-name)
+                                                                           (unless (plist-get capabilities :timezone) "UTC")
 									   audience-capable))
 					    (source-body (jaunder-pulled-member-body pulled-member))
                                             (evidence

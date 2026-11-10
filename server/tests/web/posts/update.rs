@@ -149,6 +149,7 @@ async fn web_update_preserves_separately_supplied_non_org_title(#[case] backend:
             env.posts(),
             env.feed_events(),
             PostUpdate {
+                timezone: None,
                 post_id,
                 editor_user_id: record.user_id,
                 body: parse_post_body("Original body"),
@@ -1642,6 +1643,7 @@ async fn update_org_current_sync_succeeds_and_stale_sync_preserves_post(#[case] 
         .await
         .expect("read current audiences");
     let current_etag = host::etag::PostContentEtag {
+        timezone: &before.timezone,
         title: before.title.as_ref(),
         slug: &before.slug,
         body: &before.body,

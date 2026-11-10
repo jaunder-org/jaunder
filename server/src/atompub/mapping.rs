@@ -28,11 +28,15 @@ pub(super) enum InvalidPostFields {
     PublishedTime,
     #[error(transparent)]
     Category(#[from] InvalidTagLabel),
+    #[error(transparent)]
+    Timezone(#[from] atompub::InvalidAtomTimezone),
 }
 
 /// The post-shaped data carried by an incoming `AtomPub` `Entry`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PostFields {
+    /// Explicit latest editing zone, independent of Atom's published instant.
+    pub timezone: Option<common::time::PublicationTimezone>,
     /// Explicit title carried by the entry (`None` when absent/blank).
     pub title: Option<PostTitle>,
     /// Raw source body (in the selected format).
@@ -160,6 +164,7 @@ pub(super) fn entry_to_post_fields(
     // read-only server property, derived here from the title/body, never the wire.
 
     Ok(PostFields {
+        timezone: atompub::j_timezone(entry)?,
         title,
         body,
         format,
@@ -274,6 +279,7 @@ pub fn post_to_entry_with_audiences(
     // (a serialization boundary, like the JSON serde bridge), not a slug-value
     // carrier; the typed `Slug` is derefed to its text here.
     atompub::set_j_slug(&mut entry, post.slug.as_ref());
+    atompub::set_j_timezone(&mut entry, &post.timezone);
     atompub::set_j_audiences(&mut entry, audiences)
         .map_err(host::atompub::AtomPubError::InvalidAudience)?;
     Ok(entry)
@@ -791,6 +797,7 @@ mod tests {
             .collect();
 
         PostRecord {
+            timezone: common::time::PublicationTimezone::utc(),
             author_display_name: None,
             post_id,
             user_id: UserId::from(1),

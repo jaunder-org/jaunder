@@ -21,7 +21,7 @@ use crate::site::SiteIdentity;
 use crate::slug::Slug;
 use crate::tag::{Tag, TagLabel};
 use crate::theme::PublishedThemePresentation;
-use crate::time::UtcInstant;
+use crate::time::{PublicationTimezone, UtcInstant};
 use crate::username::Username;
 
 /// A tag row returned by the `list_tags` server fn.
@@ -51,6 +51,8 @@ impl From<TagLabel> for TagSummary {
 /// published.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RenderedPost {
+    /// Latest saved editing zone for publication presentation, not audit instants.
+    pub timezone: PublicationTimezone,
     pub post_id: PostId,
     pub username: Username,
     pub display_name: Option<DisplayName>,
@@ -227,7 +229,8 @@ pub enum PageSeed {
         order: TimelineOrder,
         page: Page<RenderedPost, TimelineCursor>,
     },
-    Permalink(AuthoredPost),
+    // Keep the source-heavy one-post payload indirect instead of inflating every seed.
+    Permalink(Box<AuthoredPost>),
     /// A public index of existing Syndication Feed representations, scoped to one timeline.
     FeedDiscovery(FeedSurface),
 }
@@ -242,6 +245,7 @@ mod tests {
 
     fn rendered_post(published_at: Option<UtcInstant>) -> RenderedPost {
         RenderedPost {
+            timezone: PublicationTimezone::utc(),
             post_id: PostId::from(1),
             username: "alice".parse().unwrap(),
             display_name: None,
@@ -264,6 +268,15 @@ mod tests {
 
         assert_eq!(summary.slug, "rust");
         assert_eq!(summary.display, "Rust");
+    }
+
+    #[test]
+    fn rendered_post_presents_publication_time_or_draft_creation_time() {
+        let created = instant();
+        let published: UtcInstant = "2026-07-20T10:30:00Z".parse().unwrap();
+
+        assert_eq!(rendered_post(None).display_time(), created);
+        assert_eq!(rendered_post(Some(published)).display_time(), published);
     }
 
     #[test]

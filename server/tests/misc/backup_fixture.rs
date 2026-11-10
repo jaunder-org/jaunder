@@ -357,9 +357,12 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
     }
     let passkey = seed_backup_passkey(args, factory.passkeys(), write_scope.clone(), author).await;
     let public = SeedRawPost::new(author)
+        .timezone("US/Eastern".parse().unwrap())
         .published_at(fixture_published_at())
         .tags(["Backup-Test"])
         .seed(factory.posts(), write_scope.clone())
+        .await;
+    seed_backup_timezone_snapshot(factory.posts(), write_scope.clone(), public.post_id, author)
         .await;
     seed_historical_permalink_alias(args, public.post_id, author).await;
     let (viewer, audience, subscription, named_post) = seed_named_audience_post(
@@ -401,6 +404,42 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
         passkey_last_used_at: passkey.last_used_at,
         system,
     }
+}
+
+/// Seed distinct current/prior zones without changing the publication instant.
+async fn seed_backup_timezone_snapshot(
+    posts: Arc<dyn storage::PostStorage>,
+    write_scope: storage::WriteScope,
+    post_id: PostId,
+    author: UserId,
+) {
+    let prior = posts
+        .get_post_by_id(post_id, &ViewerIdentity::local(author))
+        .await
+        .unwrap()
+        .unwrap();
+    let update = storage::UpdatePostInput {
+        timezone: Some("Europe/London".parse().unwrap()),
+        slug: prior.slug.clone(),
+        rendered: host::render::render_post(prior.title, prior.body, prior.format).unwrap(),
+        publish: storage::PublishUpdate::Publish {
+            at: prior.published_at,
+        },
+        summary: prior.summary,
+        audiences: vec![AudienceTarget::Public],
+        tags: None,
+        request_clock: fixture_published_at(),
+        expectations: storage::PostBookkeepingExpectation::default(),
+    };
+    confirmed_for(
+        write_scope
+            .run(move |tx| {
+                Box::pin(async move { posts.update_post(tx, post_id, author, &update).await })
+            })
+            .await
+            .unwrap(),
+        "backup timezone snapshot",
+    );
 }
 
 async fn install_system_backup_fixture(
@@ -871,6 +910,30 @@ async fn assert_restored_public_post_and_passkey(
         .await
         .expect("get post")
         .expect("restored post");
+    assert_eq!(post.timezone.as_ref(), "Europe/London");
+    let history = posts
+        .list_post_revision_history(
+            ids.author,
+            ids.public_post,
+            None,
+            common::test_support::parse_page_size("20"),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(history.revisions.len(), 1);
+    let snapshot = posts
+        .get_post_revision_detail(
+            ids.author,
+            ids.public_post,
+            history.revisions[0].revision_id,
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .revision;
+    assert_eq!(snapshot.timezone.as_ref(), "US/Eastern");
+    assert_eq!(snapshot.published_at, Some(fixture_published_at()));
     assert_eq!(post.title.as_ref(), Some(&ids.public_post_title));
     assert_eq!(post.slug, ids.public_post_slug);
     // Restore preserves the instant, its UTC civil date, microsecond precision,

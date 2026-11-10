@@ -46,6 +46,8 @@ pub use bootstrap::{PgBootstrapError, create_postgres_database_and_role};
 mod open;
 pub(crate) use open::database_is_empty;
 pub(crate) use open::open_postgres_database_with_pool;
+#[cfg(test)]
+pub(crate) use open::publication_timezone_fallback_rows;
 pub use open::resolved_postgres_options;
 
 pub(crate) mod backup;

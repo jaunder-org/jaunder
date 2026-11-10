@@ -41,6 +41,8 @@ mod audiences;
 pub use audiences::SqliteAudienceStorage;
 
 mod open;
+#[cfg(test)]
+pub(crate) use open::publication_timezone_fallback_rows;
 pub(crate) use open::{database_is_empty, open_sqlite_database_with_pool, resolved_sqlite_options};
 
 pub(crate) mod backup;

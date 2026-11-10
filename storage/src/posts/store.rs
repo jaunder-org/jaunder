@@ -54,7 +54,7 @@ use common::render::PostFormat;
 use common::render::RenderedPostTitle;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
-use common::time::UtcInstant;
+use common::time::{PublicationTimezone, UtcInstant};
 use common::username::Username;
 use common::visibility::{AudienceTarget, SubscriberRef, TargetKind, ViewerIdentity};
 
@@ -931,6 +931,7 @@ fn push_management_predicates<DB>(
 impl<DB> PostStorage for PostStore<DB>
 where
     DB: PostDialect,
+    for<'q> &'q PublicationTimezone: Encode<'q, DB> + Type<DB>,
     PostRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
     ManagedPostRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     (PostId, PostMutationVersion): for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -958,6 +959,7 @@ where
         UtcInstant,
         Option<UtcInstant>,
         Option<UtcInstant>,
+        PublicationTimezone,
     ): for<'r> sqlx::FromRow<'r, DB::Row>,
     RevisionMetadataRow: DecodeRawRow<DB>,
     // `feed_urls_needing_catchup` reads `feed_cache` a row at a time (a bad `feed_url`
@@ -1223,8 +1225,9 @@ where
             UtcInstant,
             Option<UtcInstant>,
             Option<UtcInstant>,
+            PublicationTimezone,
         )> = sqlx::query_as(
-            "SELECT post_id, title, slug, format, created_at, updated_at, published_at, deleted_at
+            "SELECT post_id, title, slug, format, created_at, updated_at, published_at, deleted_at, timezone
              FROM posts WHERE post_id = $1 AND user_id = $2",
         )
         .bind_storage(post_id)
@@ -1232,8 +1235,19 @@ where
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(
-            |(post_id, title, slug, format, created_at, updated_at, published_at, deleted_at)| {
+            |(
+                post_id,
+                title,
+                slug,
+                format,
+                created_at,
+                updated_at,
+                published_at,
+                deleted_at,
+                timezone,
+            )| {
                 CurrentPostRevisionSummary {
+                    timezone,
                     post_id,
                     title,
                     slug,
@@ -1257,7 +1271,7 @@ where
     ) -> Result<Option<PostRevisionDetail>> {
         let row = sqlx::query(
             "SELECT revision_id, post_id, user_id, title, rendered_title, slug, body, format, rendered_html,
-                    summary, created_at, updated_at, published_at, deleted_at, captured_at
+                    summary, created_at, updated_at, published_at, deleted_at, timezone, captured_at
              FROM post_revisions
              WHERE revision_id = $1 AND post_id = $2 AND user_id = $3",
         )
@@ -1269,6 +1283,7 @@ where
         .map(lifecycle::RevisionDetailRow::decode)
         .transpose()?;
         let Some(lifecycle::RevisionDetailRow {
+            timezone,
             revision_id,
             post_id,
             user_id,
@@ -1322,6 +1337,7 @@ where
 
         Ok(Some(PostRevisionDetail {
             revision: PostRevisionRecord {
+                timezone,
                 revision_id,
                 post_id,
                 user_id,
@@ -7216,6 +7232,7 @@ mod tests {
             env.posts().clone(),
             env.write_scope().clone(),
             CreatePostInput {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 reserved_post_id: None,
                 slug: parse_slug("no-title"),

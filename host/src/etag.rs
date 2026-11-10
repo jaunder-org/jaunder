@@ -201,6 +201,7 @@ const fn serializer_revision(format: FeedFormat) -> u16 {
 /// Complete serializer inputs for a Post's canonical strong validator.
 #[derive(Serialize)]
 pub struct PostContentEtag<'a> {
+    pub timezone: &'a common::time::PublicationTimezone,
     pub title: Option<&'a PostTitle>,
     pub slug: &'a Slug,
     pub body: &'a PostBody,
@@ -457,7 +458,9 @@ mod tests {
         let first_slug = parse_slug("first-canonical-slug");
         let second_slug = parse_slug("second-canonical-slug");
 
+        let timezone = common::time::PublicationTimezone::utc();
         let content = |slug| PostContentEtag {
+            timezone: &timezone,
             title: Some(&title),
             slug,
             body: &body,

@@ -160,19 +160,25 @@ Transport errors, non-2xx responses, and invalid documents never signal."
                                          'unknown))
                                    (error 'unknown))))
 
-(defun jaunder--require-synchronization-audience-evidence (base-url audiences)
-  "Return BASE-URL's audience capability for one synchronization operation.
-A valid service document without support is a legacy server; unavailable or
-malformed evidence cannot establish that the audience may be omitted.  Explicit
-AUDIENCES still require the advertised extension before mutation."
+(defun jaunder--require-synchronization-capabilities (base-url audiences &optional authored)
+  "Return operation capability evidence for BASE-URL and explicit AUDIENCES.
+AUTHORED writes require timezone support before mutation.  Legacy reads may
+omit timezone, using explicit UTC rather than capturing the reading device."
   (let ((document (jaunder--fetch-service-document base-url)))
     (when (eq document 'unknown)
-      (error "jaunder: cannot verify audience capability at %s" base-url))
-    (let ((supported (jaunder--service-advertises-audience-p document)))
-      (when (and audiences (not supported))
-        (error "jaunder: server at %s does not advertise audience feature version 1"
-               base-url))
-      supported)))
+      (error "jaunder: cannot verify synchronization capabilities at %s" base-url))
+    (let* ((features (jaunder--service-features document))
+           (audience (jaunder--service-advertises-audience-p document))
+           (timezone (member "timezone" features)))
+      (when (and audiences (not audience))
+        (error "jaunder: server at %s does not advertise audience feature version 1" base-url))
+      (when (and authored (not timezone))
+        (error "jaunder: server at %s does not advertise timezone feature version 1" base-url))
+      (list :audience audience :timezone timezone))))
+
+(defun jaunder--require-synchronization-audience-evidence (base-url audiences)
+  "Return BASE-URL's audience capability for one synchronization operation."
+  (plist-get (jaunder--require-synchronization-capabilities base-url audiences) :audience))
 
 (defun jaunder--synchronized-response-audiences (fields audience-capable)
   "Return FIELDS' complete canonical audience, or nil for legacy omission.

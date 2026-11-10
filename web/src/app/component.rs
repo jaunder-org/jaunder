@@ -445,6 +445,7 @@ fn reconcile_theme_stylesheet(presentation: &PublishedThemePresentation) -> WebR
 
 #[component]
 fn AppShell() -> impl IntoView {
+    provide_context(crate::posts::EditingTimezoneNotice::new());
     let site_warning =
         crate::warning_revalidation::SiteBaseUrlWarning(crate::reactive::Invalidator::new());
     let backup_warning =
@@ -541,6 +542,7 @@ fn AppShell() -> impl IntoView {
                             <div id="j-trusted-chrome" class="j-trusted-chrome">
                                 <BackupBanner />
                                 <SiteBaseUrlBanner />
+                                <crate::posts::EditingTimezoneBanner />
                             </div>
                         }
                             .into_any()
@@ -551,6 +553,7 @@ fn AppShell() -> impl IntoView {
                                 <div class="j-main-region">
                                     <BackupBanner />
                                     <SiteBaseUrlBanner />
+                                    <crate::posts::EditingTimezoneBanner />
                                     <main class="j-main">
                                         <Outlet />
                                     </main>

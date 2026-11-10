@@ -35,6 +35,15 @@ pub(crate) fn format_post_time(ts: UtcInstant) -> String {
     ts.value().strftime("%Y-%m-%d %H:%M").to_string()
 }
 
+/// Public and reactive Post timestamps share this decision: only publication
+/// uses the saved zone; an unpublished draft's creation fallback stays UTC.
+pub(crate) fn post_time_label(post: &RenderedPost) -> String {
+    post.published_at.map_or_else(
+        || format_post_time(post.created_at),
+        |at| common::time::format_publication_time(at, &post.timezone),
+    )
+}
+
 /// Builds the known-valid edit route for a typed post identifier.
 ///
 /// The literal route shape begins at the site root and `PostId`'s display form
@@ -165,7 +174,7 @@ pub(crate) fn permalink_article(post: &RenderedPost) -> Markup {
         banner: None,
         summary: post.summary.as_ref(),
         rendered_html: &post.rendered_html,
-        time: &format_post_time(post.display_time()),
+        time: &post_time_label(post),
         permalink: post.permalink.as_ref(),
         tags: &post.tags,
         tag_ctx: &ctx,
@@ -178,7 +187,7 @@ pub(crate) fn permalink_article(post: &RenderedPost) -> Markup {
 fn render_posts(posts: &[RenderedPost], tag_ctx: &TagCtx) -> Markup {
     Markup::new(html! {
         @for post in posts {
-            @let time = format_post_time(post.display_time());
+            @let time = post_time_label(post);
             (render_post_article(&PostView {
                 post_id: post.post_id,
                 username: &post.username,
@@ -396,6 +405,7 @@ pub(crate) mod test_fixtures {
     pub(crate) fn sample_post() -> AuthoredPost {
         AuthoredPost {
             post: RenderedPost {
+                timezone: common::time::PublicationTimezone::utc(),
                 post_id: PostId::from(7),
                 username: parse_username("alice"),
                 display_name: None,
@@ -424,6 +434,7 @@ pub(crate) mod test_fixtures {
 
     pub(crate) fn sample_summary() -> RenderedPost {
         RenderedPost {
+            timezone: common::time::PublicationTimezone::utc(),
             post_id: PostId::from(1),
             username: parse_username("bob"),
             display_name: None,
@@ -595,7 +606,7 @@ mod tests {
 
     #[test]
     fn permalink_body_injects_rendered_title_and_html_raw() {
-        let html = body(&PageSeed::Permalink(sample_post())).into_string();
+        let html = body(&PageSeed::Permalink(Box::new(sample_post()))).into_string();
         assert!(
             html.contains("Hello &amp; &lt;World&gt;"),
             "canonical Rendered Title bytes must reach the trusted heading: {html}"
@@ -824,7 +835,7 @@ mod tests {
             "post layout must be CSS-owned: {timeline}"
         );
 
-        let permalink = body(&PageSeed::Permalink(sample_post())).into_string();
+        let permalink = body(&PageSeed::Permalink(Box::new(sample_post()))).into_string();
         assert!(
             !permalink.contains("data-jaunder-part=\"post-list\""),
             "{permalink}"
@@ -867,7 +878,7 @@ mod tests {
 
     #[test]
     fn permalink_body_has_masthead_and_wraps_article_in_page() {
-        let html = body(&PageSeed::Permalink(sample_post())).into_string();
+        let html = body(&PageSeed::Permalink(Box::new(sample_post()))).into_string();
         assert!(
             html.contains("j-topbar"),
             "permalink needs masthead: {html}"
@@ -885,7 +896,7 @@ mod tests {
         let mut post = sample_post();
         post.post.published_at = None;
         post.post.permalink = None;
-        let html = body(&PageSeed::Permalink(post)).into_string();
+        let html = body(&PageSeed::Permalink(Box::new(post))).into_string();
         // The time is formatted (mirroring the reactive `format_post_time`), not raw.
         assert!(html.contains("2026-01-02 03:04"), "{html}");
     }

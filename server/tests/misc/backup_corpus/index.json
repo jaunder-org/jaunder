@@ -44,7 +44,14 @@
       "fixture": "format-3-schema-52.zip",
       "format_version": 3,
       "support": "supported",
+      "materializable": false,
       "digest": "c9433574d39304d2e08dc9452ba9989bba824e7ac1dea0f2ef74b464bb7967c1"
+    },
+    {
+      "fixture": "format-3-schema-53.zip",
+      "format_version": 3,
+      "support": "supported",
+      "digest": "84ba7ef7778416d7419ff12c6d2e93c07b0b8b773dda82de646b13ba30f766d2"
     }
   ]
 }

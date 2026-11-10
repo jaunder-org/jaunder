@@ -1484,6 +1484,13 @@ mod reader_tests {
         );
 
         assert_restored_reader_roles!(args, user_id, post_id, user, post, revision, media);
+        if format_version == 3 {
+            assert_eq!(post.timezone.as_ref(), "Europe/London");
+            assert_eq!(revision.timezone.as_ref(), "US/Eastern");
+        } else {
+            assert_eq!(post.timezone.as_ref(), "UTC");
+            assert_eq!(revision.timezone.as_ref(), "UTC");
+        }
         if expects_rendered_titles {
             assert_eq!(
                 post.rendered_title.as_ref().map(AsRef::as_ref),
@@ -1870,7 +1877,7 @@ mod writer_tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn current_writer_satisfies_independent_schema_52_v3_raw_wire_oracle(
+    async fn current_writer_satisfies_independent_schema_53_v3_raw_wire_oracle(
         #[case] backend: Backend,
     ) {
         for output in CorpusIoMode::ALL {
@@ -1903,7 +1910,7 @@ mod writer_tests {
             };
 
             assert_writer_version_is_uniquely_supported(&extracted);
-            assert_schema_52_v3_raw_wire_oracle(&extracted, output, &ids);
+            assert_schema_53_v3_raw_wire_oracle(&extracted, output, &ids);
         }
     }
 
@@ -1941,7 +1948,7 @@ mod writer_tests {
             format_compatibility_diagnostic("format-3 is the sole current writer oracle")
         );
     }
-    fn assert_schema_52_v3_raw_wire_oracle(
+    fn assert_schema_53_v3_raw_wire_oracle(
         export: &Path,
         output: CorpusIoMode,
         ids: &BackupFixtureIds,
@@ -1977,9 +1984,9 @@ mod writer_tests {
         );
         assert_eq!(
             manifest["schema_version"],
-            Value::from(52),
+            Value::from(53),
             "{}",
-            format_compatibility_diagnostic("current writer must match the schema-52 oracle")
+            format_compatibility_diagnostic("current writer must match the schema-53 oracle")
         );
         assert!(
             manifest["schema_checksum"].is_string(),
@@ -2399,6 +2406,21 @@ mod writer_tests {
         let viewer = ids.viewer.to_string();
         let audience = ids.audience.to_string();
         let subscription = ids.subscription.to_string();
+
+        let current = table_rows(rows, "posts")
+            .iter()
+            .find(|row| row_id_is(row, "post_id", &ids.public_post.to_string()))
+            .expect("seeded current Post");
+        assert_eq!(current["timezone"], "Europe/London");
+        let revisions = table_rows(rows, "post_revisions");
+        assert_eq!(revisions.len(), 1);
+        assert!(row_id_is(
+            &revisions[0],
+            "post_id",
+            &ids.public_post.to_string()
+        ));
+        assert_eq!(revisions[0]["timezone"], "US/Eastern");
+        assert_eq!(revisions[0]["published_at"], current["published_at"]);
 
         let sessions = table_rows(rows, "sessions");
         assert_eq!(

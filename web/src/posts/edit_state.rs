@@ -289,6 +289,7 @@ mod tests {
 
     fn saved(published_at: Option<UtcInstant>) -> SavedPost {
         SavedPost {
+            timezone: common::time::PublicationTimezone::utc(),
             post_id: 1_i64.into(),
             slug: "post".parse().unwrap(),
             published_at,

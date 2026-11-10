@@ -20,6 +20,11 @@ mod server;
 mod component;
 
 #[cfg(target_arch = "wasm32")]
+mod editing_timezone;
+#[cfg(target_arch = "wasm32")]
+pub(crate) use editing_timezone::{EditingTimezoneBanner, EditingTimezoneNotice};
+
+#[cfg(target_arch = "wasm32")]
 mod history_component;
 #[cfg(target_arch = "wasm32")]
 mod manage_component;

@@ -344,11 +344,17 @@ test("owner permalink Post Actions menu stays attached to its trigger", async ({
   await signInAsNewUser(page);
   const post = await createPostViaApi(page, {
     body: "# Permalink actions placement probe\n\nBody",
+    timezone: "UTC",
   });
   await goto(page, post.permalink, { timeout: firstNav });
 
+  const postCard = page.locator(`#j-post-${post.post_id}`);
+  await expect(postCard).toBeVisible();
   const trigger = page.getByRole("button", { name: "Actions" });
   await expect(trigger).toBeVisible();
+  const publishedTime = postCard.locator(".j-post-time");
+  await expect(publishedTime).toBeVisible();
+  await expect(publishedTime).toHaveText(/\bUTC$/);
 
   for (const viewport of [
     { width: 1280, height: 720 },

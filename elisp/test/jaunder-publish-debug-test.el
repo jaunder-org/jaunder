@@ -32,7 +32,8 @@
 (defun jaunder-publish-debug--run (enabled scenario &optional kind)
   "Run real SCENARIO with ENABLED, optionally faulting native wire or rename with KIND."
   (jaunder-debug-boundary--with-session
-   (let* ((root (file-name-as-directory (make-temp-file "jaunder-publish-private-" t)))
+   (let* ((process-environment (cons "TZ=UTC" process-environment))
+          (root (file-name-as-directory (make-temp-file "jaunder-publish-private-" t)))
           (path (expand-file-name "private-input.org" root))
           (jaunder-blogs (list (cons root '(:base-url "https://private.example" :username "private-user"))))
           (jaunder--service-doc-cache nil)
@@ -48,6 +49,7 @@
      (with-temp-file path
        (insert "#+TITLE: private-title\n#+DATE: [2026-10-07 Wed 00:00]\n"
                "#+PROPERTY: JAUNDER_STATUS published\n#+PROPERTY: JAUNDER_DATE_TZ UTC\n"
+               "#+PROPERTY: JAUNDER_DATE_UTC 2026-10-07T00:00:00Z\n"
                "#+PROPERTY: JAUNDER_AUDIENCE private\n")
        (when existing (insert "#+PROPERTY: JAUNDER_ID 42\n#+PROPERTY: JAUNDER_SYNCED \"private-old\"\n"))
        (insert "\nprivate-body\n"))
@@ -78,7 +80,7 @@
                                         " xmlns:atom=\"http://www.w3.org/2005/Atom\""
                                         " xmlns:j=\"https://jaunder.org/ns/atompub\">"
                                         "<workspace><atom:title>private-service</atom:title>"
-                                        "<j:extension version=\"1\" features=\"audience format-media-type\"/>"
+                                        "<j:extension version=\"1\" features=\"audience format-media-type timezone\"/>"
                                         "</workspace></service>")))
                          ((equal method "DELETE") '(:status 204))
                          (t (list :status (if (or recover existing) 200 201)
@@ -87,6 +89,8 @@
                                   :body (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\""
                                                 " xmlns:j=\"https://jaunder.org/ns/atompub\">"
                                                 "<j:slug>private-post</j:slug><j:audience>private</j:audience>"
+                                                "<j:timezone>UTC</j:timezone>"
+                                                (unless (eq scenario 'draft) "<published>2026-10-07T00:00:00Z</published>")
                                                 "<content type=\"text/org\">private-body</content></entry>")))))))
              (when recover
                (setq first-result (condition-case condition (jaunder-publish) (error condition) (quit condition)))

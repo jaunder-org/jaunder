@@ -212,7 +212,7 @@ impl PublicProjector {
         };
         Ok(PublicPresentation {
             theme,
-            page: PageSeed::Permalink(posts::public_authored_post(record, false)),
+            page: PageSeed::Permalink(Box::new(posts::public_authored_post(record, false))),
         })
     }
 

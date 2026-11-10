@@ -77,7 +77,7 @@
                     "#+DESCRIPTION: First\n#+DESCRIPTION: Second\n"
                     "#+PROPERTY: JAUNDER_STATUS scheduled\n"
                     "#+PROPERTY: JAUNDER_DATE_TZ UTC\n"
-                    "#+PROPERTY: JAUNDER_DATE_UTC 2026-08-26T13:00:00+02:00\n"
+                    "#+PROPERTY: JAUNDER_DATE_UTC 2026-08-26T11:00:00Z\n"
                     "#+PROPERTY: JAUNDER_FORMAT markdown\n"
                     "#+PROPERTY: JAUNDER_SLUG scheduled-post\n"
                     "#+PROPERTY: JAUNDER_ID 7\n"
@@ -223,8 +223,8 @@
 
 (ert-deftest jaunder-atom->org-rejects-semantic-rfc-3339-invalidity ()
   ;; `date-to-time' normalizes several malformed calendar values, so the pull
-  ;; boundary validates each component before parsing while retaining valid wire
-  ;; text with leap days, fractions, and numeric offsets verbatim.
+  ;; boundary validates each component before parsing and canonicalizes UTC
+  ;; without discarding fractional precision.
   (let ((parts '("<title>T</title>"
                  "<link rel=\"edit\" href=\"https://h/atompub/alice/posts/1\"/>"
                  "<j:slug>safe-slug</j:slug>"
@@ -241,14 +241,14 @@
        (jaunder-pull-test--org
         (apply #'jaunder-pull-test--entry
                (cons (format "<published>%s</published>" published) parts)))))
-    (dolist (published '("2024-02-29T23:59:59.123+14:30"
-                         "2024-02-29T00:00:00Z"))
+    (dolist (pair '(("2024-02-29T23:59:59.123+14:30" . "2024-02-29T09:29:59.123Z")
+                    ("2024-02-29T00:00:00Z" . "2024-02-29T00:00:00Z")))
       (should
        (string-match-p
-        (regexp-quote (concat "#+PROPERTY: JAUNDER_DATE_UTC " published))
+        (regexp-quote (concat "#+PROPERTY: JAUNDER_DATE_UTC " (cdr pair)))
         (jaunder-pull-test--org
          (apply #'jaunder-pull-test--entry
-                (cons (format "<published>%s</published>" published) parts))))))))
+                (cons (format "<published>%s</published>" (car pair)) parts))))))))
 
 (ert-deftest jaunder-atom->org-rejects-malformed-member-or-etag ()
   ;; Required Member cardinality and strong sync identity fail before any caller

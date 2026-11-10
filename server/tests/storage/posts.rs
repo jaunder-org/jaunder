@@ -258,6 +258,7 @@ fn update_input<'a>(
     publish: PublishUpdate,
 ) -> PostUpdate<'a> {
     PostUpdate {
+        timezone: None,
         post_id,
         editor_user_id,
         body: parse_post_body("updated body"),
@@ -1467,6 +1468,7 @@ async fn create_rendered_post_does_not_persist_derived_summary_or_revision(
             Arc::clone(&env.posts()),
             Arc::clone(&env.feed_events()),
             RenderedPostContent {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 title: Some(parse_post_title("Rendered Markdown")),
                 slug: "rendered-markdown".parse().unwrap(),
@@ -1513,6 +1515,7 @@ async fn create_rendered_post_does_not_persist_derived_summary_or_revision(
             Arc::clone(&env.posts()),
             Arc::clone(&env.feed_events()),
             PostUpdate {
+                timezone: None,
                 post_id,
                 editor_user_id: user_id,
                 title: Some(&title),
@@ -1564,6 +1567,7 @@ async fn create_rendered_post_org_renders_and_stores(#[case] backend: Backend) {
             Arc::clone(&env.posts()),
             Arc::clone(&env.feed_events()),
             RenderedPostContent {
+                timezone: common::time::PublicationTimezone::utc(),
                 user_id,
                 title: Some(parse_post_title("Rendered Org")),
                 slug: "rendered-org".parse().unwrap(),
@@ -1623,6 +1627,7 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
         Arc::clone(&env.posts()),
         Arc::clone(&env.feed_events()),
         RenderedPostContent {
+            timezone: common::time::PublicationTimezone::utc(),
             user_id,
             title: Some(parse_post_title("Second Post")),
             slug: occ.slug.clone(),
@@ -1772,6 +1777,7 @@ async fn perform_post_update_markdown_renders_and_updates(#[case] backend: Backe
             Arc::clone(&env.posts()),
             Arc::clone(&env.feed_events()),
             PostUpdate {
+                timezone: None,
                 post_id: post.post_id,
                 editor_user_id: user_id,
                 title: Some(&title),
@@ -1825,6 +1831,7 @@ async fn perform_post_update_org_renders_and_updates(#[case] backend: Backend) {
             Arc::clone(&env.posts()),
             Arc::clone(&env.feed_events()),
             PostUpdate {
+                timezone: None,
                 post_id: post.post_id,
                 editor_user_id: user_id,
                 title: Some(&title),

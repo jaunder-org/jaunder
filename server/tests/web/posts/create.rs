@@ -20,6 +20,37 @@ use storage::test_support::{Backend, backends, backends_matrix, confirmed_for};
 
 use super::fixtures::{list_drafts, login_and_env};
 
+#[apply(backends)]
+#[tokio::test]
+async fn publication_timezone_web_create_retains_exact_alias(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let session = create_user_and_session(env.users(), env.sessions(), env.write_scope()).await;
+    let cookie = session.cookie();
+    let app = make_app!(&env, &env.base);
+    let (status, body) = post_json(
+        app,
+        <web::posts::Create as ServerFn>::PATH,
+        serde_json::json!({"post": {
+            "body": "Zone round trip", "format": "markdown", "publish": false,
+            "timezone": "US/Eastern"
+        }}),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let created = confirmed_created_post(&body);
+    let record = env
+        .posts()
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::local(session.user_id),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.timezone.as_ref(), "US/Eastern");
+}
+
 async fn create_audience_confirmed(
     audiences: std::sync::Arc<dyn AudienceStorage>,
     write_scope: WriteScope,

@@ -5,7 +5,7 @@ use sqlx::postgres::PgConnectOptions;
 
 use crate::backup::CatalogTableName;
 use crate::code_migrations;
-use crate::sql::Exists;
+use crate::sql::{Exists, QueryStorageExt, RowCount};
 use crate::{StorageFactory, instance_identity};
 
 /// Resolve final Postgres options from the application connection snapshot.
@@ -32,11 +32,36 @@ pub(crate) async fn open_postgres_database_with_pool(
 ) -> sqlx::Result<(StorageFactory, PgPool, crate::InstanceId)> {
     let options = resolved_postgres_options(options, runtime);
     let pool = PgPool::connect_with(options).await?;
+    // Report legacy fallback rows only after the paired schema migration succeeds.
+    let timezone_fallback_rows = publication_timezone_fallback_rows(&pool).await?;
     sqlx::migrate!("./migrations/postgres").run(&pool).await?;
+    if timezone_fallback_rows > 0 {
+        tracing::warn!(
+            timezone_fallback_rows,
+            "publication timezone migration used UTC fallback for existing Post and revision rows"
+        );
+    }
     let instance_id = instance_identity::ensure(&pool).await?;
     code_migrations::drain_pending(&pool, authorize_drain).await?;
     crate::posts::search::backfill_post_search_projections(&pool).await?;
     Ok((StorageFactory::postgres(pool.clone()), pool, instance_id))
+}
+
+/// Counts rows requiring the explicit UTC fallback before the timezone upgrade.
+pub(crate) async fn publication_timezone_fallback_rows(pool: &PgPool) -> sqlx::Result<u64> {
+    let mut rows = 0_u64;
+    for table in ["posts", "post_revisions"] {
+        let legacy: Exists = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1) AND NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 AND column_name = 'timezone')")
+            .bind_storage(CatalogTableName::from(table)).fetch_one(pool).await?;
+        if legacy.into_bool() {
+            let count: RowCount =
+                sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
+                    .fetch_one(pool)
+                    .await?;
+            rows += count.into_u64();
+        }
+    }
+    Ok(rows)
 }
 
 /// Returns `true` if the `PostgreSQL` database holds no user data — every table

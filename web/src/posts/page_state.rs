@@ -642,7 +642,10 @@ pub fn current_history_rows(current: CurrentPostHistory) -> Vec<HistoryDisplayRo
         display_row("Updated", current.updated_at.to_string()),
         display_row(
             "Published",
-            optional_display(current.published_at, "Not set"),
+            current.published_at.map_or_else(
+                || "Not set".to_owned(),
+                |at| common::time::format_publication_time(at, &current.timezone),
+            ),
         ),
         display_row("Deleted", optional_display(current.deleted_at, "Not set")),
     ]
@@ -665,7 +668,10 @@ pub fn revision_history_rows(detail: &RevisionHistoryDetail) -> Vec<HistoryDispl
         display_row("Updated", detail.updated_at.to_string()),
         display_row(
             "Published",
-            optional_display(detail.published_at, "Not set"),
+            detail.published_at.map_or_else(
+                || "Not set".to_owned(),
+                |at| common::time::format_publication_time(at, &detail.timezone),
+            ),
         ),
         display_row("Deleted", optional_display(detail.deleted_at, "Not set")),
         display_row("Captured", detail.captured_at.to_string()),
@@ -1054,6 +1060,7 @@ mod tests {
     fn draft(post_id: i64) -> UnpublishedPost {
         UnpublishedPost {
             post: SavedPost {
+                timezone: common::time::PublicationTimezone::utc(),
                 post_id: PostId::from(post_id),
                 slug: format!("draft-{post_id}").parse().unwrap(),
                 published_at: None,
@@ -1372,6 +1379,7 @@ mod tests {
 
     fn saved_post(published_at: Option<UtcInstant>) -> SavedPost {
         SavedPost {
+            timezone: common::time::PublicationTimezone::utc(),
             post_id: PostId::from(7),
             slug: parse_slug("hello"),
             published_at,
@@ -1739,6 +1747,7 @@ mod tests {
             (RevisionLifecycle::Deleted, "Deleted"),
         ] {
             let rows = current_history_rows(CurrentPostHistory {
+                timezone: common::time::PublicationTimezone::utc(),
                 post_id: PostId::from(7),
                 title: None,
                 slug: parse_slug("history-post"),
@@ -1804,9 +1813,10 @@ mod tests {
     }
 
     #[test]
-    fn current_history_rows_preserve_present_title_and_timestamps() {
+    fn publication_timezone_history_rows_current_preserves_audit_timestamps() {
         let at = parse_utc_instant("2026-08-27T12:00:00Z");
         let rows = current_history_rows(CurrentPostHistory {
+            timezone: "US/Eastern".parse().unwrap(),
             post_id: PostId::from(7),
             title: Some(common::test_support::parse_post_title("Current title")),
             slug: parse_slug("history-post"),
@@ -1819,14 +1829,17 @@ mod tests {
         });
         assert_eq!(rows[1].value, "Current title");
         assert_eq!(rows[3].value, "org");
-        assert_eq!(rows[7].value, at.to_string());
-        assert_eq!(rows[8].value, at.to_string());
+        assert_eq!(rows[5].value, "2026-08-27T12:00:00Z");
+        assert_eq!(rows[6].value, "2026-08-27T12:00:00Z");
+        assert_eq!(rows[7].value, "2026-08-27 08:00 EDT");
+        assert_eq!(rows[8].value, "2026-08-27T12:00:00Z");
     }
 
     #[test]
-    fn revision_history_rows_project_every_scalar_and_optional_value() {
+    fn publication_timezone_history_rows_revision_preserves_audit_timestamps() {
         let at = parse_utc_instant("2026-08-27T12:00:00Z");
         let detail = RevisionHistoryDetail {
+            timezone: "Europe/London".parse().unwrap(),
             revision_id: common::ids::RevisionId::from(8),
             post_id: PostId::from(7),
             title: Some(common::test_support::parse_post_title("Snapshot title")),
@@ -1889,7 +1902,7 @@ mod tests {
                 },
                 HistoryDisplayRow {
                     label: "Published",
-                    value: at.to_string(),
+                    value: "2026-08-27 13:00 BST".to_owned(),
                     data_test: None
                 },
                 HistoryDisplayRow {

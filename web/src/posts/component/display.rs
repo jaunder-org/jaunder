@@ -24,7 +24,7 @@ pub fn PostDisplay<'a>(
     #[prop(default = &TagCtx::SiteWide)]
     tag_context: &'a TagCtx,
 ) -> impl IntoView + use<> {
-    let time_label = posts::render::format_post_time(post.display_time());
+    let time_label = posts::render::post_time_label(post);
     let view = posts::render::PostView {
         post_id: post.post_id,
         username: &post.username,

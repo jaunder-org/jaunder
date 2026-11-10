@@ -19,7 +19,7 @@ pub use common::render::{InvalidPostFormat, PostFormat, RenderedHtml, RenderedPo
 use common::root_relative_url::RootRelativeUrl;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
-use common::time::UtcInstant;
+use common::time::{PublicationTimezone, UtcInstant};
 use common::username::Username;
 use common::visibility::AudienceTarget;
 use host::render::PostRenderOutput;
@@ -63,6 +63,8 @@ pub use common::time::PermalinkDate;
 /// (via JOIN or correlated subquery), so callers never need a second author lookup.
 #[derive(Clone, Debug)]
 pub struct PostRecord {
+    /// Latest supported editing zone; never changes the publication instant.
+    pub timezone: PublicationTimezone,
     /// Unique internal identifier.
     pub post_id: PostId,
     /// ID of the user who owns the post.
@@ -106,7 +108,7 @@ pub struct PostRecord {
 /// Portable scalar projection shared by dynamic `PostRecord` queries.
 ///
 /// Tags remain dialect-owned because their aggregate subquery differs by backend.
-pub(crate) const POST_RECORD_COLUMNS: &str = "p.post_id, p.user_id, u.username, u.display_name, p.title, p.rendered_title, p.slug, p.body, p.format, p.rendered_html, p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary";
+pub(crate) const POST_RECORD_COLUMNS: &str = "p.post_id, p.user_id, u.username, u.display_name, p.title, p.rendered_title, p.slug, p.body, p.format, p.rendered_html, p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary, p.timezone";
 
 /// Rejects a title and derivative pair that cannot represent a persisted Rendered Title.
 /// Empty canonical fragments remain present derivatives, distinct from `NULL`.
@@ -157,6 +159,7 @@ where
     RenderedPostTitle: Decode<'r, R::Database> + Type<R::Database>,
     UtcInstant: Decode<'r, R::Database> + Type<R::Database>,
     PostSummary: Decode<'r, R::Database> + Type<R::Database>,
+    PublicationTimezone: Decode<'r, R::Database> + Type<R::Database>,
     SerializedPostTags: Decode<'r, R::Database> + Type<R::Database>,
 {
     fn from_row(row: &'r R) -> Result<Self> {
@@ -178,8 +181,10 @@ where
         let summary = row.try_get::<Option<PostSummary>, _>("summary")?;
         let tags_json = row.try_get::<SerializedPostTags, _>("tags")?;
         let tags = tags_json.into_tags(post_id);
+        let timezone = row.try_get::<PublicationTimezone, _>("timezone")?;
 
         Ok(Self {
+            timezone,
             post_id,
             user_id,
             author_username,
@@ -207,6 +212,8 @@ where
 /// legitimate whole-store writer (ADR-0136).
 #[derive(Clone, Debug)]
 pub struct PostRevisionRecord {
+    /// Editing zone of the immutable prior state.
+    pub timezone: PublicationTimezone,
     /// Unique identifier for this snapshot.
     pub revision_id: RevisionId,
     /// Durable identity of the Post whose prior state was captured.
@@ -281,6 +288,7 @@ pub struct PostRevisionMetadata {
 /// The non-revision current state heading a per-Post history page.
 #[derive(Clone, Debug)]
 pub struct CurrentPostRevisionSummary {
+    pub timezone: PublicationTimezone,
     pub post_id: PostId,
     pub title: Option<PostTitle>,
     pub slug: Slug,
@@ -364,6 +372,8 @@ pub struct PostMutation {
 /// Input for creating a new post.
 #[derive(Clone)]
 pub struct CreatePostInput {
+    /// Required validated zone; legacy callers explicitly select UTC.
+    pub timezone: PublicationTimezone,
     pub user_id: UserId,
     /// ID reserved before rendering; Org creates must carry this identity.
     pub reserved_post_id: Option<PostId>,
@@ -414,6 +424,8 @@ impl From<PublicationState> for PublishUpdate {
 /// Input for updating an existing post.
 #[derive(Clone)]
 pub struct UpdatePostInput {
+    /// Omission preserves the zone of the locked current Post.
+    pub timezone: Option<PublicationTimezone>,
     /// The new slug. Note: Slugs are typically immutable once published.
     pub slug: Slug,
     /// Authored source and every derivative, assembled only by host rendering.
@@ -438,6 +450,7 @@ pub struct UpdatePostInput {
 #[cfg(test)]
 mod tests {
     use super::{PostRecord, PublishUpdate, validate_rendered_title_presence};
+    use crate::test_support::{Backend, SeedRawPost, SeedUser, backends, confirmed};
     use common::ids::{PostId, UserId};
     use common::org::PublicationState;
     use common::render::PostFormat;
@@ -445,6 +458,244 @@ mod tests {
         parse_post_body, parse_post_title, parse_slug, parse_username, parse_utc_instant,
         rendered_html,
     };
+    use rstest::*;
+    use rstest_reuse::*;
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn publication_timezone_zone_only_change_captures_prior_state(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let owner = SeedUser::new()
+            .seed(env.users(), env.write_scope())
+            .await
+            .user_id;
+        let mut input = SeedRawPost::new(owner).build();
+        input.timezone = "US/Eastern".parse().unwrap();
+        let posts = env.posts();
+        let created = env
+            .write_scope()
+            .run(move |tx| {
+                Box::pin(async move {
+                    posts
+                        .create_post(tx, &input, common::time::UtcInstant::now())
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+        let old = confirmed(created).record;
+        let earlier = SeedRawPost::new(owner)
+            .published_at(parse_utc_instant("2020-01-01T00:00:00Z"))
+            .seed(env.posts(), env.write_scope())
+            .await;
+        let update = super::UpdatePostInput {
+            timezone: Some("Europe/London".parse().unwrap()),
+            slug: old.slug.clone(),
+            rendered: host::render::render_post(old.title.clone(), old.body.clone(), old.format)
+                .unwrap(),
+            publish: PublishUpdate::Publish {
+                at: old.published_at,
+            },
+            summary: old.summary.clone(),
+            audiences: vec![common::visibility::AudienceTarget::Public],
+            tags: None,
+            request_clock: common::time::UtcInstant::now(),
+            expectations: super::PostBookkeepingExpectation::default(),
+        };
+        for (zone, changed) in [
+            (update.timezone.clone(), true),
+            (update.timezone.clone(), false),
+            (None, false),
+        ] {
+            let mut update = update.clone();
+            update.timezone = zone;
+            let posts = env.posts();
+            let post_id = old.post_id;
+            let outcome = env
+                .write_scope()
+                .run(move |tx| {
+                    Box::pin(async move { posts.update_post(tx, post_id, owner, &update).await })
+                })
+                .await
+                .unwrap();
+            let mutation = confirmed(outcome);
+            assert_eq!(mutation.changed, changed);
+            assert_eq!(mutation.record.timezone.as_ref(), "Europe/London");
+            assert_eq!(mutation.record.published_at, old.published_at);
+            assert_eq!(mutation.record.permalink(), old.permalink());
+            let timeline = env
+                .posts()
+                .list_published(
+                    crate::posts::PublishedPageRequest::first(
+                        common::seed::TimelineOrder::Newest,
+                        "20".parse().unwrap(),
+                    ),
+                    &common::visibility::ViewerIdentity::Anonymous,
+                    common::time::UtcInstant::now(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                timeline.iter().map(|row| row.post_id).collect::<Vec<_>>(),
+                vec![old.post_id, earlier.post_id]
+            );
+        }
+        let page = env
+            .posts()
+            .list_post_revision_history(owner, old.post_id, None, "20".parse().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(page.revisions.len(), 1);
+        let detail = env
+            .posts()
+            .get_post_revision_detail(owner, old.post_id, page.revisions[0].revision_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(detail.revision.timezone.as_ref(), "US/Eastern");
+        assert_eq!(detail.revision.published_at, old.published_at);
+
+        // Every independent revision producer must carry the locked zone snapshot.
+        for action in 0..5 {
+            let posts = env.posts();
+            let post_id = old.post_id;
+            let snapshot = posts
+                .resolve_post_selection(
+                    owner,
+                    &crate::posts::PostSelectionIntent::Explicit(vec![post_id]),
+                )
+                .await
+                .unwrap();
+            confirmed(
+                env.write_scope()
+                    .run(move |tx| {
+                        Box::pin(async move {
+                            let now = common::time::UtcInstant::now();
+                            match action {
+                                0 => posts
+                                    .set_post_tags(
+                                        tx,
+                                        post_id,
+                                        owner,
+                                        &["Timezone".parse().unwrap()],
+                                    )
+                                    .await
+                                    .map_err(|e| sqlx::Error::Protocol(e.to_string())),
+                                1 => posts
+                                    .unpublish_post(tx, post_id, owner, now)
+                                    .await
+                                    .map(|_| ())
+                                    .map_err(|e| sqlx::Error::Protocol(e.to_string())),
+                                2 => posts
+                                    .publish_post(tx, post_id, owner, now)
+                                    .await
+                                    .map(|_| ())
+                                    .map_err(|e| sqlx::Error::Protocol(e.to_string())),
+                                3 => posts
+                                    .bulk_mutate_posts(
+                                        tx,
+                                        owner,
+                                        &snapshot,
+                                        &crate::posts::BulkPostOperation::ChangeAudience(vec![
+                                            common::visibility::AudienceTarget::Subscribers,
+                                        ]),
+                                        now,
+                                    )
+                                    .await
+                                    .map(|_| ())
+                                    .map_err(|e| sqlx::Error::Protocol(e.to_string())),
+                                _ => posts
+                                    .soft_delete_post(tx, post_id, owner, now)
+                                    .await
+                                    .map(|_| ())
+                                    .map_err(|e| sqlx::Error::Protocol(e.to_string())),
+                            }
+                        })
+                    })
+                    .await
+                    .unwrap(),
+            );
+        }
+        let page = env
+            .posts()
+            .list_post_revision_history(owner, old.post_id, None, "20".parse().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(page.revisions.len(), 6);
+        for revision in &page.revisions[..5] {
+            let snapshot = env
+                .posts()
+                .get_post_revision_detail(owner, old.post_id, revision.revision_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .revision;
+            assert_eq!(snapshot.timezone.as_ref(), "Europe/London");
+        }
+        let current = env
+            .posts()
+            .get_current_revision_summary(owner, old.post_id, common::time::UtcInstant::now())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(current.timezone.as_ref(), "Europe/London");
+
+        let bulk_deleted = SeedRawPost::new(owner)
+            .timezone("US/Eastern".parse().unwrap())
+            .draft()
+            .seed(env.posts(), env.write_scope())
+            .await;
+        let posts = env.posts();
+        let snapshot = posts
+            .resolve_post_selection(
+                owner,
+                &crate::posts::PostSelectionIntent::Explicit(vec![bulk_deleted.post_id]),
+            )
+            .await
+            .unwrap();
+        confirmed(
+            env.write_scope()
+                .run(move |tx| {
+                    Box::pin(async move {
+                        posts
+                            .bulk_mutate_posts(
+                                tx,
+                                owner,
+                                &snapshot,
+                                &crate::posts::BulkPostOperation::Delete,
+                                common::time::UtcInstant::now(),
+                            )
+                            .await
+                    })
+                })
+                .await
+                .unwrap(),
+        );
+        let history = env
+            .posts()
+            .list_post_revision_history(owner, bulk_deleted.post_id, None, "20".parse().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(history.revisions.len(), 1);
+        let prior = env
+            .posts()
+            .get_post_revision_detail(
+                owner,
+                bulk_deleted.post_id,
+                history.revisions[0].revision_id,
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .revision;
+        assert_eq!(prior.timezone.as_ref(), "US/Eastern");
+        assert!(prior.published_at.is_none());
+        assert!(prior.deleted_at.is_none());
+    }
+
     #[test]
     fn rendered_title_presence_requires_exact_title_correspondence() {
         let title = Some(parse_post_title("title"));
@@ -478,6 +729,7 @@ mod tests {
     #[test]
     fn permalink_formats_username_date_and_slug() {
         let post = PostRecord {
+            timezone: common::time::PublicationTimezone::utc(),
             author_display_name: None,
             post_id: PostId::from(1),
             user_id: UserId::from(1),

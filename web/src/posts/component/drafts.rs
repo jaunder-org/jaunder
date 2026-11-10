@@ -174,7 +174,7 @@ fn render_scheduled_row(scheduled: UnpublishedPost) -> impl IntoView {
     let DraftRowDisplay { label, .. } = posts::draft_row_display(&scheduled);
     let go_live = scheduled.post.published_at.map_or_else(
         || "Scheduled time unavailable".to_owned(),
-        |when| when.to_string(),
+        |when| common::time::format_publication_time(when, &scheduled.post.timezone),
     );
     view! {
         <li data-test="scheduled-row">

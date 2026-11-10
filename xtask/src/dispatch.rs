@@ -69,7 +69,8 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
-        Command::QualificationLeaf { .. }
+        Command::OrgTimezoneManifest { .. }
+        | Command::QualificationLeaf { .. }
         | Command::CheckLeaf { .. }
         | Command::PrecommitSafety => {
             anyhow::bail!(
