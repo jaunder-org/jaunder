@@ -110,7 +110,7 @@ outside the wrapper because they would bypass or replace the lifecycle it owns.
 The human-approved standalone sandbox design was implemented with one public
 `just sandbox` front door and the focused `ux-sandbox` owner. The change was
 recorded in the
-[standalone UX sandbox lifecycle decision](drafts/standalone-ux-sandbox-lifecycle.md),
+[standalone UX sandbox lifecycle decision](0244-standalone-ux-sandbox-lifecycle.md),
 which was left proposed only for serialized post-merge promotion. It superseded
 this ADR's xtask sandbox owner/entrypoint and literal second-signal escalation
 clause: first SIGINT/SIGTERM initiated drain, automatic force followed after

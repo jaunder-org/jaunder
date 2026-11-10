@@ -272,6 +272,7 @@ convention). See the Status column below for each ADR's current status.
 | [0241](adr/0241-performance-workflow-ownership.md)                       | Just and Nix Own Performance Workflow Orchestration                                                          | accepted   |
 | [0242](adr/0242-adr-promoter-host-tool-extraction.md)                    | Nix-Selected Python ADR Promoter                                                                             | accepted   |
 | [0243](adr/0243-post-publication-timezone.md)                            | A Post's publication instant is displayed in its latest editing timezone                                     | accepted   |
+| [0244](adr/0244-standalone-ux-sandbox-lifecycle.md)                      | A focused standalone host UX sandbox owner                                                                   | accepted   |
 
 <!-- adr-table:end -->
 

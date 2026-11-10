@@ -1,6 +1,6 @@
-# ADR-DRAFT: A focused standalone host UX sandbox owner
+# ADR-0244: A focused standalone host UX sandbox owner
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-07
 - Issue: #1893
 
