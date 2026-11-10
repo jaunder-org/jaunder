@@ -165,13 +165,27 @@ authoritative."
                       (concat "^\\(?:L\\|Link\\)[ \t]+[^ \t\n]+[ \t]+" name "\\(?:[ \t]\\|$\\)") nil t)))))))))
 
 (defun jaunder--capture-editing-zone ()
-  "Return the current recognized named device zone, warning on UTC fallback.
-Numeric offsets are usable only as old local baselines, never new Post zones."
-  (let ((zone (condition-case nil (jaunder--current-zone-name) (error nil))))
-    (if (jaunder--local-iana-zone-p zone)
+  "Capture the current named device zone, else an exact bounded fixed offset.
+Warn for every inferred fixed offset or explicit UTC fallback.  Never infer
+regional identity or DST history from an offset, or reuse the old Post zone."
+  (let* ((zone (condition-case nil (jaunder--current-zone-name) (error nil)))
+         (named (condition-case nil (jaunder--local-iana-zone-p zone) (error nil))))
+    (if named
         zone
-      (jaunder--warn "cannot capture a supported named device timezone; using UTC")
-      "UTC")))
+      ;; Emacs reports current device offset in seconds EAST of UTC; Etc/GMT
+      ;; names reverse that sign.  Require integer whole hours, never round.
+      (let* ((east (condition-case nil (car (current-time-zone)) (error nil)))
+             (fixed (when (and (integerp east) (<= -43200 east 43200)
+                               (zerop (% east 3600)))
+                      (if (zerop east) "Etc/GMT"
+                        (format "Etc/GMT%+d" (- (/ east 3600)))))))
+        ;; Conversion must work locally even when the name inventory is absent.
+        (if (and fixed (jaunder--local-baseline-zone-p fixed))
+            (progn
+              (jaunder--warn "device timezone name unavailable or unsupported; inferred fixed offset %s; regional timezone and DST history are unknown" fixed)
+              fixed)
+          (jaunder--warn "cannot capture a supported named device timezone or exact supported whole-hour offset; using UTC")
+          "UTC")))))
 
 (defun jaunder--publication-utc (published)
   "Canonicalize server PUBLISHED to UTC without discarding fractional digits."

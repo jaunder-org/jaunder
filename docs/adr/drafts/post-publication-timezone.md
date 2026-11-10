@@ -57,9 +57,17 @@ comparison is not raw-ingress behavior.
 - All selected publication displays use the saved Post/revision zone and
   date-specific abbreviation; absolute instants remain authoritative for
   ordering and identity.
-- Browser and Emacs clients explicitly use UTC with a visible warning when
-  device-zone capture fails. Older clients retain omission semantics; malformed
-  supplied values do not silently fall back.
+- Browser and Emacs capture prefer supported named IANA identities, retaining
+  aliases. If unavailable, the current device's exact integer whole-hour UTC
+  offset within ±12 hours inclusive selects a supported `Etc/GMT` zone, with
+  POSIX-reversed sign (`UTC+1` becomes `Etc/GMT-1`; zero uses `Etc/GMT`). A
+  visible warning identifies this as an inferred fixed offset, not a regional
+  timezone or historical/future DST identity. Missing, fractional, out-of-range
+  or unsupported offset capture instead sends explicit UTC with a distinct
+  visible warning; offsets are never rounded. Emacs also requires local fixed
+  zone conversion support. This capture-only fallback changes neither server
+  named-zone validation nor absolute instants. Older clients retain omission
+  semantics; malformed supplied values do not silently fall back.
 - Org can refresh a wall-time/zone pair after a web edit without changing the
   instant, and failed or uncertain writes do not checkpoint local metadata.
 - Both storage backends, immutable revision paths, and current-schema

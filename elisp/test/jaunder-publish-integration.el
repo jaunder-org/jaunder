@@ -318,5 +318,75 @@
                                                                "GET" (jaunder--member-url (jaunder--buffer-property "JAUNDER_ID"))) :body))))
                                       (should (equal (cdr (assq 'timezones fields)) '("UTC")))))))))
 
+(ert-deftest jaunder-publication-timezone-live-tz-unset-uses-actual-device-offset ()
+  "With TZ absent and no discoverable name, store the actual device offset."
+  (jaunder-test--with-live-server
+   (let ((process-environment (copy-sequence process-environment)))
+     (jaunder-pub-test--in-buffer "#+PROPERTY: JAUNDER_STATUS draft\n\nActual device offset.\n"
+                                  (setenv "TZ" nil)
+                                  (should-not (getenv "TZ"))
+                                  ;; Independent literal mapping, not the production conversion algorithm.
+                                  (let* ((east (car (current-time-zone)))
+                                         (expected (or (alist-get east
+                                                                  '((-43200 . "Etc/GMT+12") (-39600 . "Etc/GMT+11")
+                                                                    (-36000 . "Etc/GMT+10") (-32400 . "Etc/GMT+9")
+                                                                    (-28800 . "Etc/GMT+8") (-25200 . "Etc/GMT+7")
+                                                                    (-21600 . "Etc/GMT+6") (-18000 . "Etc/GMT+5")
+                                                                    (-14400 . "Etc/GMT+4") (-10800 . "Etc/GMT+3")
+                                                                    (-7200 . "Etc/GMT+2") (-3600 . "Etc/GMT+1")
+                                                                    (0 . "Etc/GMT") (3600 . "Etc/GMT-1")
+                                                                    (7200 . "Etc/GMT-2") (10800 . "Etc/GMT-3")
+                                                                    (14400 . "Etc/GMT-4") (18000 . "Etc/GMT-5")
+                                                                    (21600 . "Etc/GMT-6") (25200 . "Etc/GMT-7")
+                                                                    (28800 . "Etc/GMT-8") (32400 . "Etc/GMT-9")
+                                                                    (36000 . "Etc/GMT-10") (39600 . "Etc/GMT-11")
+                                                                    (43200 . "Etc/GMT-12"))) "UTC"))
+                                         warnings)
+                                    ;; Only named discovery is unavailable; current-time-zone is untouched.
+                                    (cl-letf (((symbol-function 'file-symlink-p) (lambda (_) nil))
+                                              ((symbol-function 'display-warning)
+                                               (lambda (_ text &rest _) (push text warnings))))
+                                      (jaunder-publish))
+                                    (should (equal (jaunder--buffer-property "JAUNDER_DATE_TZ") expected))
+                                    (should (string-match-p (if (equal expected "UTC") "using UTC" "inferred fixed offset")
+                                                            (car warnings)))
+                                    (let ((fields (jaunder--harvest-response-fields
+                                                   (plist-get (jaunder--http-request
+                                                               "GET" (jaunder--member-url (jaunder--buffer-property "JAUNDER_ID"))) :body))))
+                                      (should (equal (cdr (assq 'timezones fields)) (list expected)))))))))
+
+(ert-deftest jaunder-publication-timezone-live-tz-unset-stores-device-offset-and-preserves-instant ()
+  "An unnamed device publishes and changes zone without moving its instant."
+  (jaunder-test--with-live-server
+   (let ((process-environment (copy-sequence process-environment)) warnings)
+     (jaunder-pub-test--in-buffer
+      (concat "#+TITLE: Unnamed device\n#+DATE: [2024-07-01 Mon 09:00]\n"
+              "#+PROPERTY: JAUNDER_STATUS published\n\nOffset source.\n")
+      (setenv "TZ" nil)
+      (should-not (getenv "TZ"))
+      ;; Deterministic device boundary, not a stored-zone override: TZ is truly
+      ;; absent and no localtime name can be recovered. Exercise real POST/PUT/GET.
+      (cl-letf (((symbol-function 'file-symlink-p) (lambda (_) nil))
+                ((symbol-function 'current-time-zone) (lambda (&rest _) '(-18000 "unknown")))
+                ((symbol-function 'display-warning)
+                 (lambda (_ text &rest _) (push text warnings))))
+        (jaunder-publish))
+      (should (equal (jaunder--buffer-property "JAUNDER_DATE_TZ") "Etc/GMT+5"))
+      (should (equal (jaunder--buffer-property "JAUNDER_DATE_UTC") "2024-07-01T14:00:00Z"))
+      (should (string-match-p (regexp-quote "inferred fixed offset Etc/GMT+5") (car warnings)))
+      (cl-letf (((symbol-function 'file-symlink-p) (lambda (_) nil))
+                ((symbol-function 'current-time-zone) (lambda (&rest _) '(3600 "unknown")))
+                ((symbol-function 'display-warning) (lambda (&rest _))))
+        (jaunder-publish))
+      (should (equal (jaunder--buffer-property "JAUNDER_DATE_TZ") "Etc/GMT-1"))
+      (should (equal (jaunder--buffer-keyword "DATE") "[2024-07-01 Mon 15:00]"))
+      (should (equal (jaunder--buffer-property "JAUNDER_DATE_UTC") "2024-07-01T14:00:00Z"))
+      (let ((fields (jaunder--harvest-response-fields
+                     (plist-get (jaunder--http-request
+                                 "GET" (jaunder--member-url (jaunder--buffer-property "JAUNDER_ID"))) :body))))
+        (should (equal (cdr (assq 'timezones fields)) '("Etc/GMT-1")))
+        (should (member (cdr (assq 'published fields))
+                        '("2024-07-01T14:00:00Z" "2024-07-01T14:00:00+00:00"))))))))
+
 (provide 'jaunder-publish-integration)
 ;;; jaunder-publish-integration.el ends here

@@ -12,7 +12,7 @@ use crate::post_title::PostTitle;
 use crate::render::{self, PostFormat, RenderedHtml};
 use crate::slug::Slug;
 use crate::tag::{Tag, TagLabel};
-use crate::time::UtcInstant;
+use crate::time::{PublicationTimezone, UtcInstant};
 
 /// One normalized tag captured with a revision.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -34,7 +34,7 @@ pub struct RevisionHistoryAudience {
 /// tag/audience/media state for historical state.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RevisionHistoryDetail {
-    pub timezone: crate::time::PublicationTimezone,
+    pub timezone: PublicationTimezone,
     pub revision_id: RevisionId,
     pub post_id: PostId,
     pub title: Option<PostTitle>,

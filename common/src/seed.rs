@@ -21,7 +21,7 @@ use crate::site::SiteIdentity;
 use crate::slug::Slug;
 use crate::tag::{Tag, TagLabel};
 use crate::theme::PublishedThemePresentation;
-use crate::time::UtcInstant;
+use crate::time::{PublicationTimezone, UtcInstant};
 use crate::username::Username;
 
 /// A tag row returned by the `list_tags` server fn.
@@ -52,7 +52,7 @@ impl From<TagLabel> for TagSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RenderedPost {
     /// Latest saved editing zone for publication presentation, not audit instants.
-    pub timezone: crate::time::PublicationTimezone,
+    pub timezone: PublicationTimezone,
     pub post_id: PostId,
     pub username: Username,
     pub display_name: Option<DisplayName>,
@@ -229,7 +229,7 @@ pub enum PageSeed {
         order: TimelineOrder,
         page: Page<RenderedPost, TimelineCursor>,
     },
-    // Keep the singleton's source-heavy payload out of every listing seed's allocation.
+    // Keep the source-heavy one-post payload indirect instead of inflating every seed.
     Permalink(Box<AuthoredPost>),
     /// A public index of existing Syndication Feed representations, scoped to one timeline.
     FeedDiscovery(FeedSurface),
@@ -245,7 +245,7 @@ mod tests {
 
     fn rendered_post(published_at: Option<UtcInstant>) -> RenderedPost {
         RenderedPost {
-            timezone: crate::time::PublicationTimezone::utc(),
+            timezone: PublicationTimezone::utc(),
             post_id: PostId::from(1),
             username: "alice".parse().unwrap(),
             display_name: None,

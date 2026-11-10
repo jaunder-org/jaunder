@@ -5,7 +5,7 @@ use common::{
         parse_audience_name, parse_display_name, parse_etag, parse_post_body, parse_row_limit,
         permalink_date,
     },
-    time::UtcInstant,
+    time::{PublicationTimezone, UtcInstant},
     username::Username,
     visibility::{AudienceTarget, ViewerIdentity},
 };
@@ -158,7 +158,7 @@ async fn seed_post_published_at(
             posts,
             feed_events,
             RenderedPostContent {
-                timezone: common::time::PublicationTimezone::utc(),
+                timezone: PublicationTimezone::utc(),
                 user_id,
                 title: None,
                 slug: slug.parse().expect("valid slug"),

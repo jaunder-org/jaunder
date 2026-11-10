@@ -552,7 +552,8 @@ its conditional PUT.  Uploaded Media can survive a later blocked Post write."
 
 (defun jaunder-publish (&optional force-draft)
   "Publish the current buffer's org post over AtomPub.
-Resolves the blog from the buffer's file, captures the latest named device zone,
+Resolves the blog from the buffer's file, captures the latest device zone
+\(named first, then warned exact fixed offset or UTC fallback),
 maps + validates without changing the local DATE/zone, uploads media (sent body
 only), sends POST create or conditional PUT, checkpoints confirmed metadata,
 and renames to

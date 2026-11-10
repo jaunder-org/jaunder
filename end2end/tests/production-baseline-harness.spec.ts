@@ -756,29 +756,53 @@ contractTest(
 );
 
 contractTest("Post create parsing and audience are fixture-owned", () => {
-  const saved = {
+  const legacySaved = {
     post_id: 1,
     slug: "baseline-html",
     published_at: "2026-09-12T12:00:00Z",
     permalink: "/~alice/2026/09/12/baseline-html",
   };
-  const legacy = { Confirmed: saved };
-  const modern = { Confirmed: { post: saved, publication: "published" } };
-  expect(parseCreatedPost("legacy1419", legacy)).toEqual(saved);
-  expect(parseCreatedPost("modern", modern)).toEqual(saved);
+  const modernSaved = { timezone: "UTC", ...legacySaved };
+  const legacy = { Confirmed: legacySaved };
+  const modern = {
+    Confirmed: { post: modernSaved, publication: "published" },
+  };
+  expect(parseCreatedPost("legacy1419", legacy)).toEqual(legacySaved);
+  expect(parseCreatedPost("modern", modern)).toEqual(modernSaved);
   for (const wrong of [
     modern,
-    saved,
-    { Confirmed: { post: saved } },
-    { Indeterminate: saved },
-    { Confirmed: { ...saved, post_id: "1" } },
-    { Confirmed: { ...saved, permalink: "https://example.invalid/post" } },
+    legacySaved,
+    { Confirmed: { post: legacySaved } },
+    { Indeterminate: legacySaved },
+    { Confirmed: { ...legacySaved, post_id: "1" } },
+    {
+      Confirmed: { ...legacySaved, permalink: "https://example.invalid/post" },
+    },
+    { Confirmed: { ...legacySaved, timezone: "UTC" } },
   ])
     expect(() => parseCreatedPost("legacy1419", wrong)).toThrow();
   expect(() => parseCreatedPost("modern", legacy)).toThrow();
+  for (const timezone of [undefined, 7, ""]) {
+    const post = { ...modernSaved, timezone };
+    expect(() =>
+      parseCreatedPost("modern", {
+        Confirmed: { post, publication: "published" },
+      }),
+    ).toThrow();
+  }
+  expect(() =>
+    parseCreatedPost("modern", {
+      Confirmed: {
+        post: { ...modernSaved, unexpected: true },
+        publication: "published",
+      },
+    }),
+  ).toThrow();
   for (const publication of [["published"], { value: "published" }, null]) {
     expect(() =>
-      parseCreatedPost("modern", { Confirmed: { post: saved, publication } }),
+      parseCreatedPost("modern", {
+        Confirmed: { post: modernSaved, publication },
+      }),
     ).toThrow();
   }
   expect(baselineAudience("legacy1419", "subscribers")).toEqual({

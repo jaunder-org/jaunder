@@ -1231,15 +1231,22 @@ its absolute instant. Explicit transport timezone wins over a recognized named
 `JAUNDER_DATE_TZ` in raw Org; absent transport, valid named header input may
 supply it. Omitted timezone means UTC on create and preservation on update,
 while an explicitly empty or invalid value rejects
-([publication timezone decision](adr/drafts/post-publication-timezone.md)). It
-binds the `atom` prefix to the Atom namespace for its workspace/collection
-titles and categories, so its existing markup is namespace-valid. Authenticated
-Collection Entries additionally carry read-only `j:etag`, the exact strong
-validator of their Member resource computed from Post content and its complete
-audience set, rather than the Collection page's validator. The service document
-advertises `member-etag`; extension-aware consumers can classify Posts without
-one Member request per match and fall back to Member reads for absent or invalid
-metadata
+([publication timezone decision](adr/drafts/post-publication-timezone.md)).
+Browser and Emacs authored capture prefer supported named zones. Without one,
+only the current device's exact whole-hour UTC offset within ±12 inclusive may
+select a supported POSIX-sign-reversed `Etc/GMT` name (zero: `Etc/GMT`), with a
+visible inferred-fixed-offset warning disclaiming regional/DST identity.
+Missing, fractional, out-of-range or unsupported offset capture uses explicit
+UTC and a distinct warning, never rounding. This is client capture only, not
+server inference or a change to the absolute publication instant. The Service
+Document binds the `atom` prefix to the Atom namespace for its
+workspace/collection titles and categories, so its existing markup is
+namespace-valid. Authenticated Collection Entries additionally carry read-only
+`j:etag`, the exact strong validator of their Member resource computed from Post
+content and its complete audience set, rather than the Collection page's
+validator. The service document advertises `member-etag`; extension-aware
+consumers can classify Posts without one Member request per match and fall back
+to Member reads for absent or invalid metadata
 ([Collection Member ETags](adr/0209-atompub-collection-member-etags.md)).
 
 Repeated text-valued `j:audience` elements carry the complete target set as

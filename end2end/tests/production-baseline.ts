@@ -154,6 +154,7 @@ const onServer = (url: string) => {
   return `${BASE_URL}${parsed.pathname}${parsed.search}`;
 };
 type SavedPost = {
+  timezone?: string;
   post_id: number;
   slug: string;
   published_at: string | null;
@@ -185,11 +186,15 @@ export function parseCreatedPost(
   )
     throw new Error("invalid modern Post publication");
   const saved = fixture === "legacy1419" ? confirmed : object(confirmed.post);
+  const savedKeys =
+    fixture === "modern"
+      ? ["timezone", "post_id", "slug", "published_at", "permalink"]
+      : ["post_id", "slug", "published_at", "permalink"];
   if (
-    Object.keys(saved).length !== 4 ||
-    !["post_id", "slug", "published_at", "permalink"].every(
-      (key) => key in saved,
-    ) ||
+    Object.keys(saved).length !== savedKeys.length ||
+    !savedKeys.every((key) => key in saved) ||
+    (fixture === "modern" &&
+      (typeof saved.timezone !== "string" || saved.timezone.trim() === "")) ||
     !Number.isSafeInteger(saved.post_id) ||
     Number(saved.post_id) <= 0 ||
     typeof saved.slug !== "string" ||

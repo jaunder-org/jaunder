@@ -19,7 +19,7 @@ use crate::{
     render::{self, PostFormat},
     slug::Slug,
     tag::{self, TagLabel},
-    time::UtcInstant,
+    time::{PublicationTimezone, UtcInstant},
     visibility::AudienceTarget,
 };
 
@@ -98,9 +98,9 @@ pub struct OrgEffectiveMetadata {
 /// Successful pure Org normalization.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OrgNormalization {
-    /// Recognized named header zone for persistence when transport omits one.
-    /// Existing DATE validation still rejects numeric offsets before precedence.
-    pub timezone: Option<crate::time::PublicationTimezone>,
+    /// Recognized named header zone used only when transport omits its timezone.
+    /// Raw DATE validation and `JAUNDER_DATE_UTC` semantics remain unchanged.
+    pub timezone: Option<PublicationTimezone>,
     pub body: PostBody,
     pub metadata: OrgEffectiveMetadata,
     pub bookkeeping: OrgBookkeeping,
@@ -165,7 +165,7 @@ pub fn normalize_org(
 
 #[derive(Default)]
 struct ParsedBlock {
-    timezone: Option<crate::time::PublicationTimezone>,
+    timezone: Option<PublicationTimezone>,
     body: String,
     title: Presence<PostTitle>,
     summary: Presence<PostSummary>,
@@ -328,14 +328,20 @@ fn parse_keywords(value: &str) -> Result<Vec<TagLabel>, OrgMetadataError> {
         .collect()
 }
 
-/// Raw singleton candidates from the leading Org metadata block, for local
-/// read-only recovery. Unlike server normalization this does not interpret DATE,
-/// require lifecycle metadata, or validate unrelated authoring fields. Repeated
-/// and blank values remain visible so the caller can report every exception.
-#[derive(Debug, Default)]
+/// One raw singleton property candidate from the leading Org metadata block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OrgTimezoneProperty {
+    PostId(String),
+    DateTimezone(String),
+}
+
+/// Raw property candidates for local read-only recovery. Unlike server
+/// normalization this does not interpret DATE, require lifecycle metadata, or
+/// validate unrelated authoring fields. Repeated and blank values remain
+/// visible, in source order, so the caller can report every exception.
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct OrgTimezoneProperties {
-    pub post_ids: Vec<String>,
-    pub timezones: Vec<String>,
+    pub properties: Vec<OrgTimezoneProperty>,
 }
 
 /// Extract only local recovery evidence using the server's Org block boundary
@@ -352,8 +358,12 @@ pub fn org_timezone_properties(source: &str) -> OrgTimezoneProperties {
             .split_once(char::is_whitespace)
             .map_or((value, ""), |(name, value)| (name, value.trim()));
         match property_name(name) {
-            Some(PropertyName::Id) => properties.post_ids.push(value.to_owned()),
-            Some(PropertyName::DateTimezone) => properties.timezones.push(value.to_owned()),
+            Some(PropertyName::Id) => properties
+                .properties
+                .push(OrgTimezoneProperty::PostId(value.to_owned())),
+            Some(PropertyName::DateTimezone) => properties
+                .properties
+                .push(OrgTimezoneProperty::DateTimezone(value.to_owned())),
             _ => {}
         }
     }
@@ -658,11 +668,20 @@ Body";
     #[test]
     fn local_timezone_recovery_reads_only_leading_singleton_property_candidates() {
         let properties = org_timezone_properties(
-            "#+TITLE: Recovery Post\n#+PROPERTY: JAUNDER_ID 17\n#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n#+PROPERTY: JAUNDER_ID 18\n#+PROPERTY: JAUNDER_DATE_TZ\n#+PROPERTY: EXPORT_FILE_NAME ignored\n\nBody paragraph\n#+PROPERTY: JAUNDER_ID body-value\n",
+            "#+TITLE: Recovery Post\n#+PROPERTY: JAUNDER_ID 17\n#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n#+PROPERTY: JAUNDER_ID 18\n#+PROPERTY: JAUNDER_DATE_TZ\n#+PROPERTY: JAUNDER_ID 17\n#+PROPERTY: JAUNDER_DATE_TZ UTC\n#+PROPERTY: EXPORT_FILE_NAME ignored\n\nBody paragraph\n#+PROPERTY: JAUNDER_ID body-value\n",
         );
 
-        assert_eq!(properties.post_ids, ["17", "18"]);
-        assert_eq!(properties.timezones, ["America/New_York", ""]);
+        assert_eq!(
+            properties.properties,
+            [
+                OrgTimezoneProperty::PostId("17".to_owned()),
+                OrgTimezoneProperty::DateTimezone("America/New_York".to_owned()),
+                OrgTimezoneProperty::PostId("18".to_owned()),
+                OrgTimezoneProperty::DateTimezone(String::new()),
+                OrgTimezoneProperty::PostId("17".to_owned()),
+                OrgTimezoneProperty::DateTimezone("UTC".to_owned()),
+            ]
+        );
     }
 
     #[test]

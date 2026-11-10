@@ -33,6 +33,23 @@ impl FromStr for PublicationTimezone {
 }
 
 impl PublicationTimezone {
+    /// Capture-only fallback from the device's current UTC offset, in seconds east.
+    /// Whole hours within ±12 map to POSIX-sign-reversed named Etc/GMT zones.
+    /// This records a fixed offset, not a regional timezone or its DST history.
+    #[must_use]
+    pub fn from_device_offset_seconds(seconds_east: i32) -> Option<Self> {
+        if !(-43_200..=43_200).contains(&seconds_east) || seconds_east % 3600 != 0 {
+            return None;
+        }
+        let hours_west = -seconds_east / 3600;
+        let name = if hours_west == 0 {
+            "Etc/GMT".to_owned()
+        } else {
+            format!("Etc/GMT{hours_west:+}")
+        };
+        name.parse().ok()
+    }
+
     /// Explicit compatibility fallback for legacy callers and migrated rows.
     #[must_use]
     pub fn utc() -> Self {
@@ -56,6 +73,28 @@ pub fn format_publication_time(instant: UtcInstant, timezone: &PublicationTimezo
 
 #[cfg(test)]
 mod publication_timezone_tests {
+    #[test]
+    fn device_offset_capture_is_exact_bounded_and_posix_reversed() {
+        use super::PublicationTimezone;
+        for (seconds_east, expected) in [
+            (-43200, "Etc/GMT+12"),
+            (-18000, "Etc/GMT+5"),
+            (0, "Etc/GMT"),
+            (3600, "Etc/GMT-1"),
+            (43200, "Etc/GMT-12"),
+        ] {
+            assert_eq!(
+                PublicationTimezone::from_device_offset_seconds(seconds_east)
+                    .unwrap()
+                    .as_ref(),
+                expected
+            );
+        }
+        for seconds_east in [-46800, -19800, -1, 1, 20700, 46800, i32::MIN, i32::MAX] {
+            assert!(PublicationTimezone::from_device_offset_seconds(seconds_east).is_none());
+        }
+    }
+
     #[test]
     fn publication_timezone_accepts_named_aliases_without_normalizing() {
         for name in ["UTC", "America/New_York", "US/Eastern", "Europe/London"] {

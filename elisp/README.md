@@ -242,15 +242,22 @@ distinct from the authoritative hermetic coverage producer/consumer verdict.
 ## Publication time and editing timezone
 
 Each authored create or update captures the current named IANA device timezone
-before constructing its Entry and sends `j:timezone`. Missing, numeric, or
-unrecognized device zones explicitly use UTC and emit a warning. Named capture
-checks the local `TZDIR/tzdata.zi` Zone/Link inventory (or
+before constructing its Entry and sends `j:timezone`. Named capture checks the
+local `TZDIR/tzdata.zi` Zone/Link inventory (or
 `/usr/share/zoneinfo/tzdata.zi`), not arbitrary TZif files such as `posix/` or
-administrator-local paths. If that inventory is unavailable, capture uses UTC
-and warns. Accepted aliases retain their exact spelling. This is a local IANA
-inventory check, not a cross-version equivalence guarantee with the server's
-bundled Jiff database; server validation remains authoritative. Authored writes
-require the Service Document's version-1 `timezone` feature.
+administrator-local paths. Accepted aliases retain their exact spelling and win
+regardless of the current offset. If the name or inventory is unavailable or
+unsupported, capture tries the current device offset (Emacs seconds east of
+UTC). Exact integer whole hours within ±12 inclusive use the supported fixed
+`Etc/GMT` convention with reversed sign: UTC+1 becomes `Etc/GMT-1`, UTC-5
+becomes `Etc/GMT+5`, and zero uses `Etc/GMT`. This requires local fixed-zone
+conversion support and visibly warns that the offset is inferred, with unknown
+regional timezone and DST history. Missing, fractional, out-of-range or
+unavailable offsets explicitly use UTC with a distinct warning; no rounding or
+old Post timezone reuse occurs. This is a local IANA inventory check, not a
+cross-version equivalence guarantee with the server's bundled Jiff database;
+server validation remains authoritative. Authored writes require the Service
+Document's version-1 `timezone` feature.
 
 `JAUNDER_DATE_TZ` is the latest saved editing zone, not an immutable creation
 zone. DATE is its minute-resolution wall time; `JAUNDER_DATE_UTC` retains the
