@@ -13,15 +13,14 @@ mod tests {
     #[test]
     fn just_forwards_literal_argv_without_interpolation() {
         let temp = tempfile::tempdir().unwrap();
-        fs::create_dir_all(temp.path().join("target/debug")).unwrap();
         fs::create_dir(temp.path().join("bin")).unwrap();
         executable(
             &temp.path().join("bin/cargo"),
-            "#!/bin/sh\n[ \"$CARGO_TARGET_DIR\" = target ] || exit 97\nprintf '%s\\0' \"$@\" > cargo-argv\n",
+            "#!/bin/sh\ntouch cargo-called\nexit 97\n",
         );
         executable(
-            &temp.path().join("target/debug/ux-sandbox"),
-            "#!/bin/sh\nprintf '%s\\0' \"$@\" > helper-argv\n",
+            &temp.path().join("bin/nix"),
+            "#!/bin/sh\nprintf '%s\\0' \"$@\" > nix-argv\npwd > nix-cwd\n",
         );
         let args = ["space here", "", "--", "$(touch injected); * ' \\"];
         let output = Command::new("just")
@@ -33,7 +32,6 @@ mod tests {
             .arg(temp.path())
             .arg("sandbox")
             .args(args)
-            .env("CARGO_TARGET_DIR", temp.path().join("stale-alternate"))
             .env(
                 "PATH",
                 format!(
@@ -45,12 +43,25 @@ mod tests {
             .output()
             .unwrap();
         assert!(output.status.success(), "{output:?}");
-        let expected: Vec<u8> = args.iter().flat_map(|s| s.bytes().chain([0])).collect();
-        assert_eq!(fs::read(temp.path().join("helper-argv")).unwrap(), expected);
+        let expected: Vec<u8> = [
+            "run",
+            "--no-update-lock-file",
+            "--no-write-lock-file",
+            ".#ux-sandbox",
+            "--",
+        ]
+        .into_iter()
+        .chain(args)
+        .flat_map(|s| s.bytes().chain([0]))
+        .collect();
+        assert_eq!(fs::read(temp.path().join("nix-argv")).unwrap(), expected);
         assert_eq!(
-            fs::read(temp.path().join("cargo-argv")).unwrap(),
-            b"build\0--locked\0-p\0ux-sandbox\0"
+            fs::read_to_string(temp.path().join("nix-cwd"))
+                .unwrap()
+                .trim(),
+            temp.path().to_str().unwrap()
         );
+        assert!(!temp.path().join("cargo-called").exists());
         assert!(!temp.path().join("injected").exists());
     }
 

@@ -4230,12 +4230,31 @@ executable generation: a live command must match the server's content
 fingerprint, while mismatch or an unmanaged runtime-lock holder rejects before
 the command opens and potentially migrates the database.
 
-The public Just front door still builds the focused `ux-sandbox` helper with
-`cargo build --locked -p ux-sandbox` and forwards exact argv; Cargo may reuse
-up-to-date local helper artifacts. A separate helper-package/Cachix bootstrap is
-not part of this application-artifact decision. Before selecting application
-artifacts, the helper checks relevant untracked checkout inputs against the
-selected Nix source and refuses omitted inputs. It then invokes Nix
+The public Just front door now executes
+`nix run --no-update-lock-file --no-write-lock-file .#ux-sandbox -- "$@"` from
+the active checkout, retaining positional literal argv. The private
+`nix/ux-sandbox.nix` package uses existing Cargo closure/filter/placeholder and
+Crane mechanisms to compile only the dev-profile helper and its required local
+package closure. It retains workspace manifests/configuration, root lockfile and
+pinned toolchain, not unrelated application/CSR implementation, public assets or
+documentation. Root Cargo metadata also requires the retained SQLx SQLite path
+patch and parent license notices; these are source inputs, not compiled helper
+SQLx dependencies. Its helper-specific dependency artifact is separate from
+product Cargo artifacts; patch inputs, shared manifests, lock/toolchain inputs
+and required helper dependencies can still invalidate it.
+
+Tracked-dirty and intent-to-add helper inputs participate in Git-flake capture.
+New untracked helper inputs are omitted without automatic refusal by bootstrap;
+users must add or intent-to-add them. No staging or pre-bootstrap admission
+mechanism is introduced. The old Cargo route already supported warm reuse; no
+warm-speed or cache-hit guarantee follows from switching to Nix. The existing
+`validate-test-checks` CI job requests the ordinary helper build after unchanged
+Cachix setup. Eligibility/request wiring is not evidence of actual CI
+completion, upload or later substitution.
+
+Application preparation is a separate unchanged admission step. Before selecting
+application artifacts, the helper checks relevant untracked checkout inputs
+against the selected Nix source and refuses omitted inputs. It then invokes Nix
 interruptibly for `.#sandboxArtifacts`, a single immutable set containing
 debug-profile Jaunder and test-support executables, with the debug CSR embedded
 in Jaunder. A fresh `.xtask/sandbox-artifacts-*` output link is retained through
@@ -4281,19 +4300,18 @@ narrow ADR-0028 placement exception and partially supersedes
 sandbox owner and literal signal-escalation clause. The immutable Nix artifact
 selection further replaces mutable application artifact publication only in
 sandbox and `e2e-local`; `test-local`, its separate artifact-lock use, and
-manual `just build-csr`/`target/site` remain unchanged. The helper's Just/Cargo
-bootstrap also remains the current implementation; no helper-package cache or
-publication claim is made here. Persistence, profile, reset/recovery, admission
-and application lock contracts remain current. ADR-0058's host-floor boundary is
-unchanged.
+manual `just build-csr`/`target/site` remain unchanged. The separate helper
+bootstrap now uses its Nix package, without changing application selection,
+persistence, profiles, reset/recovery, admission or application lock contracts.
+ADR-0058's host-floor boundary is unchanged.
 
 Removing the sandbox-specific xtask protocol and synchronous runtime bridges
 reduces ownership indirection and cross-package coupling. The focused package,
-manifest, Cargo helper bootstrap, Nix artifact composition and duplicate
-readiness adapter are retained costs. Lifecycle and storage responsibility stays
-in the helper; independent e2e orchestration stays in xtask. Neither
-responsibility is eliminated. This is a structural simplification, not a
-performance-improvement or cache-hit claim.
+manifest, separately filtered Nix helper bootstrap, application artifact
+composition and duplicate readiness adapter are retained costs. Lifecycle and
+storage responsibility stays in the helper; independent e2e orchestration stays
+in xtask. Neither responsibility is eliminated. This is a structural
+simplification, not a performance-improvement or cache-hit claim.
 
 Ordinary specs are parallel-safe by construction, via per-test identity fixtures
 in `end2end/tests/provisioning.ts`, composed only by `end2end/tests/fixtures.ts`

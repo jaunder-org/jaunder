@@ -27,8 +27,7 @@ tsc mode="verify":
 sandbox *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    CARGO_TARGET_DIR=target cargo build --locked -p ux-sandbox
-    exec ./target/debug/ux-sandbox "$@"
+    exec nix run --no-update-lock-file --no-write-lock-file .#ux-sandbox -- "$@"
 
 # Verify workflows refuse dirty or unavailable Git state before work.
 coverage: _clean-tree coverage-workflow

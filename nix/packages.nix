@@ -1397,6 +1397,19 @@ in
     devtool = devtoolBin;
     node-modules-setup = nodeModulesSetup;
     xtask = xtaskBin;
+    ux-sandbox = import ./ux-sandbox.nix {
+      inherit
+        pkgs
+        craneLib
+        cargoPackageClosure
+        cargoMemberSource
+        workspaceMembers
+        withWorkspacePlaceholders
+        vendorPinnedFork
+        sqlxSqlitePatchRoot
+        sqlxSqlitePatchSource
+        ;
+    };
     adr-promoter = adrPromoter;
     # The out-of-process e2e seed helper (ADR-0046). Exposed so it is
     # directly buildable/verifiable; it is placed only on the e2e VM PATH,

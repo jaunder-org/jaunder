@@ -23,11 +23,11 @@ separate host-runtime plus sandbox crates add an unnecessary shared layer.
 ## Decision
 
 Use one small root-workspace binary package, `ux-sandbox`, as the focused
-application owner, invoked only through `just sandbox ...`. The helper depends
-directly on existing COTS processkit, Tokio, Clap, serde, error, hash and
-tempfile crates; it has no xtask, host, or test-support package dependency. One
-Tokio runtime owns async processkit child/group lifetimes and signal handling.
-Do not add a shared-runtime library or expose xtask private APIs.
+application owner, with `just sandbox ...` as its public front door. The helper
+depends directly on existing COTS processkit, Tokio, Clap, serde, error, hash
+and tempfile crates; it has no xtask, host, or test-support package dependency.
+One Tokio runtime owns async processkit child/group lifetimes and signal
+handling. Do not add a shared-runtime library or expose xtask private APIs.
 
 This is a narrow host-placement exception to ADR-0028, not a general move of
 host orchestration out of xtask. It removes sandbox-specific xtask
@@ -49,13 +49,36 @@ and paths.
 
 ## Contract and consequences
 
-The single Just recipe uses the pinned Just per-recipe
-`[ positional-arguments ]` attribute and `sandbox *args`; it still runs
-`cargo build --locked -p ux-sandbox` and then execs
-`./target/debug/ux-sandbox "$@"`. Cargo may reuse up-to-date local helper
-artifacts. Caller argv is forwarded without string reconstruction. A separate
-Nix package/Just helper-cache bootstrap is not part of this application-artifact
-decision.
+The single Just recipe retains the pinned per-recipe `[ positional-arguments ]`
+attribute and `sandbox *args`, and executes
+`nix run --no-update-lock-file --no-write-lock-file .#ux-sandbox -- "$@"` from
+the active checkout. Caller argv is forwarded without string reconstruction. The
+separate `nix/ux-sandbox.nix` package uses the existing Cargo path-closure,
+source-filter, placeholder, vendor and Crane conventions to build only the
+helper at its dev profile. Required workspace manifests/configuration, root
+lockfile and pinned toolchain remain inputs; excluded workspace targets receive
+placeholders, not real application/CSR implementation, public assets or docs.
+The helper's own dependency artifact does not inherit product Cargo artifacts or
+application environment. The root Cargo path patch requires the retained SQLx
+SQLite driver source and parent license notices for metadata resolution, without
+adding SQLx to the helper's compiled dependencies. These patch inputs, shared
+manifests, lock/toolchain inputs and required helper dependencies can invalidate
+this package.
+
+Git-flake capture includes tracked-dirty and intent-to-add helper inputs. New
+untracked helper inputs are omitted without automatic refusal by bootstrap;
+users must `git add` or `git add -N` them. Do not add staging or a pre-bootstrap
+admission check. This limitation is separate from the existing application-input
+admission below, which still refuses relevant omitted inputs. The previous Cargo
+bootstrap already supported warm reuse, so this change promises neither faster
+warm invocation nor a cache hit.
+
+The existing `validate-test-checks` CI job requests an ordinary helper build
+after unchanged Cachix setup. The existing helper name is eligible for
+publication; build-request wiring and cache eligibility do not establish actual
+CI completion, upload or later substitution. Those claims require direct
+retained evidence; no cache trust/filter/token machinery or test-verdict caching
+is added.
 
 For application preparation, the helper admits relevant untracked checkout
 inputs against the selected Nix source and refuses omitted inputs before
@@ -138,12 +161,12 @@ and synchronous runtime bridges reduces ownership indirection and
 private-package coupling. Replacing mutable application artifact publication
 with Nix-built, per-invocation rooted package sets removes the sandbox/e2e
 checkout artifact-lock path while retaining `test-local`'s separate lock. The
-focused package/manifest, Cargo helper bootstrap, Nix artifact composition,
-helper adapters, duplicate readiness probe, maintained tests and required
-package builds are real costs. Lifecycle and storage responsibility remains in
-the helper, and e2e ownership remains in xtask; neither is counted as
-eliminated. The tradeoff is structural simplification, not a
-performance-improvement claim.
+focused package/manifest, separately filtered Nix helper bootstrap, application
+artifact composition, helper adapters, duplicate readiness probe, maintained
+tests and required package builds are real costs. Lifecycle and storage
+responsibility remains in the helper, and e2e ownership remains in xtask;
+neither is counted as eliminated. The tradeoff is structural simplification, not
+a performance-improvement claim.
 
 ## Maintenance and validation
 

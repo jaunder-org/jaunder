@@ -42,7 +42,7 @@ behavior under Nix.
 
 ## Task outline
 
-- [ ] **Task 1: Build a bounded runnable helper package.**
+- [x] **Task 1: Build a bounded runnable helper package.**
   - **Files:** add the helper-specific package definition in
     `nix/ux-sandbox.nix` following the isolated host-package pattern in
     `nix/xtask.nix`; expose it as `packages.ux-sandbox` from `nix/packages.nix`.
@@ -67,7 +67,7 @@ behavior under Nix.
     omitted without refusal. Do not touch another checkout/worktree, add source
     staging/refusal, or create a persistent framework or broad input matrix.
 
-- [ ] **Task 2: Switch only the public Just bootstrap.**
+- [x] **Task 2: Switch only the public Just bootstrap.**
   - **Files:** change the `sandbox *args` recipe in `Justfile`; adjust
     `ux-sandbox/tests/public_command.rs::just_forwards_literal_argv_without_interpolation`.
   - **Contract:** retain `[ positional-arguments ]`, the active-checkout flake,
@@ -99,6 +99,9 @@ behavior under Nix.
   - **Verification:** the current CI lane must actually request and complete the
     helper build. Claim publication/substitution only if the existing retained
     CI/cache evidence directly shows it.
+  - **Local state:** the build request is wired and inspected. Actual CI
+    execution/completion and any publication/substitution evidence remain
+    pending.
 
 - [ ] **Task 4: Conform, project enduring docs, and retire only A2 planning
       artifacts.**
@@ -119,6 +122,9 @@ behavior under Nix.
     lifecycle. Ordinary post-implementation verification and commit hooks remain
     those of `dev-cycle-iterate`/`jaunder-iterate` and `dev-cycle-commit`; this
     outline does not replace or duplicate their gate checklist.
+  - **Local state:** enduring descriptions are projected. Keep both A2 planning
+    artifacts tracked while Task 3 CI completion remains pending; final cleanup
+    and Task 4 completion follow conformance of that remaining obligation.
 
 ## Risk checks
 

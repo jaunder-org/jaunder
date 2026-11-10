@@ -113,6 +113,10 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Build UX sandbox helper for Cachix
+        run:
+          nix build --no-update-lock-file --no-write-lock-file --no-link
+          .#ux-sandbox
       - name: Validate test checks lane (via Just)
         run:
           nix develop .#ci --accept-flake-config -c just ci-validate-test-checks

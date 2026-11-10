@@ -489,20 +489,41 @@ and returns the child's exact exit status. It accepts only `site-config`,
 `websub`; storage selectors and lifecycle commands remain owned by the sandbox
 supervisor.
 
-The public Just front door still builds the focused root-workspace `ux-sandbox`
-helper with `cargo build --locked -p ux-sandbox` and forwards exact argv. This
-helper bootstrap remains Cargo-based; Cargo may reuse up-to-date local helper
-artifacts. For application preparation, the helper checks relevant untracked
-checkout inputs against the selected Nix source admission and refuses omitted
-inputs rather than silently selecting an incomplete source snapshot. It then
-selects `.#sandboxArtifacts`, one immutable set containing debug-profile
-`jaunder` and `test-support`; the Nix-built Jaunder executable embeds the
-selected debug CSR bundle with `rust-embed/debug-embed`. The helper keeps its
-unique `.xtask/sandbox-artifacts-*` Nix output link alive through preparation
-and the server or command consumer lifetime. Nix/store owns this build
-concurrency; the sandbox no longer publishes `target` application artifacts or
-takes `.xtask/host-artifacts.lock` for them. Its named workspace, server-lease
-and application runtime locks remain unchanged. Seeding remains the
+The public Just front door forwards literal argv from the active checkout with
+`exec nix run --no-update-lock-file --no-write-lock-file .#ux-sandbox -- "$@"`.
+The separately filtered `packages.ux-sandbox` builds only the helper and its
+required Cargo path-dependency closure at the dev profile. It retains required
+workspace manifests/configuration and the root lockfile, using placeholders for
+excluded workspace targets rather than their implementation or application
+CSR/public inputs. The root Cargo path patch also requires the retained SQLx
+SQLite driver source and parent license notices for metadata resolution, even
+though the helper does not compile SQLx. Those patch inputs, shared manifests,
+lockfile, pinned toolchain or required helper dependencies can invalidate it.
+The previous Cargo bootstrap already supported warm artifact reuse; this route
+promises neither faster warm runs nor cache hits.
+
+Helper bootstrap uses Git-flake capture: tracked-dirty and intent-to-add inputs
+participate, but new untracked helper inputs are omitted without automatic
+refusal by the bootstrap itself. Use `git add` or `git add -N` to include them.
+This is distinct from subsequent application-artifact admission below; bootstrap
+neither stages files nor adds a pre-bootstrap admission check.
+
+The existing `validate-test-checks` CI job requests an ordinary helper build
+through the unchanged Cachix setup. The helper name is eligible under the
+existing filter, but this wiring establishes neither CI completion, upload nor
+later substitution; those claims require direct retained evidence.
+
+For application preparation, the helper still checks relevant untracked checkout
+inputs against the selected Nix source admission and refuses omitted inputs
+rather than silently selecting an incomplete source snapshot. It then selects
+`.#sandboxArtifacts`, one immutable set containing debug-profile `jaunder` and
+`test-support`; the Nix-built Jaunder executable embeds the selected debug CSR
+bundle with `rust-embed/debug-embed`. The helper keeps its unique
+`.xtask/sandbox-artifacts-*` Nix output link alive through preparation and the
+server or command consumer lifetime. Nix/store owns this build concurrency; the
+sandbox no longer publishes `target` application artifacts or takes
+`.xtask/host-artifacts.lock` for them. Its named workspace, server-lease and
+application runtime locks remain unchanged. Seeding remains the
 `test-support seed-sandbox-profile` subprocess; its stdout is captured and
 withheld from operational output while stderr and exact child status are
 retained. No production seed API is added. The old xtask sandbox command is
