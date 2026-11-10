@@ -271,6 +271,7 @@ convention). See the Status column below for each ADR's current status.
 | [0240](adr/0240-just-frontdoors-host-pr-observer.md)                     | Just frontdoors with a host-only PR observer                                                                 | accepted   |
 | [0241](adr/0241-performance-workflow-ownership.md)                       | Just and Nix Own Performance Workflow Orchestration                                                          | accepted   |
 | [0242](adr/0242-adr-promoter-host-tool-extraction.md)                    | Nix-Selected Python ADR Promoter                                                                             | accepted   |
+| [0243](adr/0243-post-publication-timezone.md)                            | A Post's publication instant is displayed in its latest editing timezone                                     | accepted   |
 
 <!-- adr-table:end -->
 
