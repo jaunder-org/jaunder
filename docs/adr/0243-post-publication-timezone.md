@@ -1,6 +1,6 @@
-# ADR-DRAFT: A Post's publication instant is displayed in its latest editing timezone
+# ADR-0243: A Post's publication instant is displayed in its latest editing timezone
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-08
 - Issue: [#1921](https://github.com/jaunder-org/jaunder/issues/1921)
 

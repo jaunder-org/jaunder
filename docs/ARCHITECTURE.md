@@ -211,7 +211,7 @@ update is a revision-producing change whose revision contains the old zone.
 Current-schema backups carry both fields; restore retains ADR-0174's
 exact-schema compatibility and performs no implicit cross-version conversion.
 The storage and backup contract is exercised for both backends
-([publication timezone decision](adr/drafts/post-publication-timezone.md)).
+([publication timezone decision](adr/0243-post-publication-timezone.md)).
 
 SQLx migrations can also enqueue offline Rust operations in
 `pending_code_migrations`. On open, `storage/src/code_migrations/` drains these
@@ -1231,7 +1231,7 @@ its absolute instant. Explicit transport timezone wins over a recognized named
 `JAUNDER_DATE_TZ` in raw Org; absent transport, valid named header input may
 supply it. Omitted timezone means UTC on create and preservation on update,
 while an explicitly empty or invalid value rejects
-([publication timezone decision](adr/drafts/post-publication-timezone.md)).
+([publication timezone decision](adr/0243-post-publication-timezone.md)).
 Browser and Emacs authored capture prefer supported named zones. Without one,
 only the current device's exact whole-hour UTC offset within ±12 inclusive may
 select a supported POSIX-sign-reversed `Etc/GMT` name (zero: `Etc/GMT`), with a
