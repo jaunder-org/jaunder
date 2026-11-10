@@ -4313,8 +4313,8 @@ children. The separate `jaunder shut-down` 30-second wait/no-escalation contract
 remains ADR-0181.
 
 The design is recorded in the
-[standalone UX sandbox lifecycle decision](adr/drafts/standalone-ux-sandbox-lifecycle.md),
-by draft path `docs/adr/drafts/standalone-ux-sandbox-lifecycle.md`. The draft
+[standalone UX sandbox lifecycle decision](adr/0244-standalone-ux-sandbox-lifecycle.md),
+by draft path `docs/adr/0244-standalone-ux-sandbox-lifecycle.md`. The draft
 remains `proposed` until serialized post-merge numbering and promotion. It is a
 narrow ADR-0028 placement exception and partially supersedes
 [host UX sandbox lifecycle](adr/0180-host-ux-sandbox-lifecycle.md) only for the
