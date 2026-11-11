@@ -60,7 +60,8 @@ sha2 = "0.11.0"
 # `e2e-local` bridges processkit's async supervision into xtask's synchronous
 # command runner; a background worker keeps process I/O pumps live between calls.
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "signal", "time"] }
-serde_yaml = "0.9.34"
+# Maintained YAML-org successor; preserve the existing Serde/Value API (#1939).
+serde_yaml = { package = "yaml_serde", version = "0.10.7" }
 base64 = "0.22.1"
 # The standalone host adapter inherits version requirements, but not the root
 # workspace's patches. Keep the required forks at the exact root revisions.
@@ -74,7 +75,7 @@ webauthn-rs-core = { git = "https://github.com/jaunder-org/webauthn-rs", rev = "
 [target.'cfg(unix)'.dependencies]
 # Safe OS-provided lease flags and effective UID, without numeric flag tables,
 # /proc parsing for user identity, or shelling out to id.
-rustix = { version = "1.1.4", features = ["fs", "process", "time"] }
+rustix = { version = "1.1.6", features = ["fs", "process", "time"] }
 
 [dev-dependencies]
 # Closed synthetic releases are used only by canonical adapter unit fixtures.
