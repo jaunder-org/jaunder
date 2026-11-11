@@ -4548,9 +4548,13 @@ The explicit local workflows are:
   and Elisp producer/consumer. **`just validate`** adds the currently landed E2E
   producers and final authoritative flow consumer; it never reruns live ERT.
   Chromium runs once per backend; each backend's Firefox command owns its three
-  retained lanes and reconciliation. Landed #1891 owns coverage/doctest
-  composition and hard status gates; the temporary coverage consumer adapter is
-  gone. Only E2E composition awaits #1890's actual landing.
+  retained lanes and reconciliation. Just owns coverage/doctest composition and
+  hard status-gate requests. `just e2e` owns the full local E2E workflow; CI
+  calls its producer and reconciliation boundaries directly, using the shared
+  enabled-lane catalog and artifact verifiers
+  ([ADR-0238](adr/0238-just-e2e-workflow-ownership.md)). Local dispatch and
+  distributed CI scheduling remain distinct; a producer-output join alone does
+  not establish the complete reconciled verdict.
 
 CI invokes four independent recipes: `just ci-validate-host`,
 `just ci-validate-hermetic`, `just ci-validate-test-checks`, and
@@ -4826,15 +4830,39 @@ is intentionally removed under approved request
 `2f0929a1-ebbd-4735-9a6c-b53e99a7a141`; root/tools lock and test contexts remain
 distinct. Host xtask lanes execute each definition through their existing
 static-check mechanism while retaining host-local Cargo artifacts and sccache
-for Rust-compiling checks. Nix has independent docs, TypeScript, Rust-format,
-residual-code, ERT and raw xtask-format leaves; residual code requests the
-six-leaf Clippy aggregate once. `xtask-fmt` and `xtask-clippy` remain native
-host checks. The independent `xtask-format` flake check runs only pinned
-`cargo fmt --manifest-path xtask/Cargo.toml --check`, without `--all`, devtool,
-or offline Cargo homes. Its direct source filter admits xtask Rust targets,
-required manifests/configuration, and dependency metadata target placeholders,
-not dependency implementation sources. This narrow source exception preserves
-ADR-0028: Nix never executes xtask.
+for Rust-compiling checks. Nix has independent documentation, TypeScript,
+Rust-format, residual-code, Elisp-static, E2E-census, pure ERT, raw xtask-format
+and raw xtask-Clippy leaves; residual code requests the six-leaf Clippy
+aggregate once without rerunning lint. Native host formatting and Clippy remain
+required. The independent `xtask-clippy` verdict runs raw
+`cargo clippy --manifest-path xtask/Cargo.toml --all-targets -- -D warnings`
+with the xtask package's pinned vendoring and native dependencies, separately
+from the six-unit aggregate. The independent `xtask-format` flake check runs
+only pinned `cargo fmt --manifest-path xtask/Cargo.toml --check`, without
+`--all`, devtool, or offline Cargo homes. Its direct source filter admits xtask
+Rust targets, required manifests/configuration, and dependency metadata target
+placeholders, not dependency implementation sources. This narrow source
+exception preserves ADR-0028: Nix never executes xtask.
+
+[Verification-family decisions](../CONTRIBUTING.md#prepush-parity-by-failure-surface)
+retain the bounded x86_64-linux Markdown shared verdict and full-local/CI E2E
+producer/reconciliation sharing. Other formatting, TypeScript/census, Elisp
+static/ERT/coverage, root/auxiliary Rust tests and Clippy, doctests, Rust
+coverage, and wasm/browser checks retain their distinct mode, environment or
+population authorities. Just composes consumers; host safety owns Fix/index
+admission and reconciliation; Nix owns immutable inputs/producer outputs;
+required status gates, policy consumers and CI joins own their respective
+verdicts. This deliberately accepts repeated checks instead of adding universal
+routing machinery. Further sharing/pruning is deferred pending a concrete
+utility case. Retained sharing combines structural identical-selector and
+declared-input Nix reasoning with actual successful consumers, representative
+Markdown-input invalidation and executed admission/topology/failure/handoff
+fixtures. Literal runtime production-output reuse for Markdown/E2E and empirical
+E2E relevant-input invalidation are deferred, not demonstrated. Revisit those
+observations only on a consumer/input-contract change, unexpected
+reuse/invalidation behavior or concrete maintenance defect. This does not claim
+universal workflow equivalence, speedup, fresh execution from output
+availability or a cache attestation.
 
 | Step                                       | Guards                                                                                                                                                           |
 | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
