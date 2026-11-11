@@ -61,6 +61,22 @@ fn checkout() -> TempDir {
 }
 
 #[test]
+fn artifact_verdict_bypasses_checkout_bootstrap() {
+    let dir = tempfile::tempdir().unwrap();
+    let summary = dir.path().join("summary.md");
+    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["org-timezone-manifest", "missing.org"])
+        .current_dir(dir.path())
+        .env("GITHUB_STEP_SUMMARY", &summary)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(!report["diagnostics"].as_array().unwrap().is_empty());
+    assert!(!summary.exists());
+    assert!(!dir.path().join(".xtask").exists());
+}
+#[test]
 fn qualification_leaf_rejects_json_before_admission_without_report_artifacts() {
     let harness = "1111111111111111111111111111111111111111";
     let source = "2222222222222222222222222222222222222222";
@@ -240,95 +256,4 @@ fn consumer_leaves_fail_closed_without_producer_evidence_or_report_artifacts() {
         assert!(!summary.exists());
         assert_eq!(git(dir.path(), &["write-tree"]).stdout, index_before);
     }
-}
-
-#[cfg(unix)]
-#[test]
-fn precommit_safety_process_routes_once_and_emits_no_report_envelope() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = checkout();
-    std::fs::write(dir.path().join("guide.md"), "# Guide\n").unwrap();
-    git(dir.path(), &["add", "guide.md"]);
-    let fake_env = tempfile::tempdir().expect("fake command directory");
-    let bin = fake_env.path().join("bin");
-    std::fs::create_dir(&bin).unwrap();
-    let just = bin.join("just");
-    std::fs::write(
-        &just,
-        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$JUST_ARGS\"\nexit 23\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&just, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let args_file = fake_env.path().join("just-args.txt");
-    let summary = fake_env.path().join("github-summary.md");
-    let mut search_path = vec![bin];
-    search_path.extend(std::env::split_paths(
-        &std::env::var_os("PATH").unwrap_or_default(),
-    ));
-    let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
-    command
-        .arg("precommit-safety")
-        .current_dir(dir.path())
-        .env("JUST_ARGS", &args_file)
-        .env("GITHUB_STEP_SUMMARY", &summary)
-        .env("PATH", std::env::join_paths(search_path).unwrap());
-    for variable in [
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_COMMON_DIR",
-        "GIT_NAMESPACE",
-    ] {
-        command.env_remove(variable);
-    }
-    let output = command.output().expect("run precommit safety process");
-
-    assert_eq!(output.status.code(), Some(1));
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("precommit-host"), "{stderr}");
-    assert!(stderr.contains("exit status: 23"), "{stderr}");
-    assert_eq!(
-        std::fs::read_to_string(args_file).unwrap(),
-        "precommit-markdown-host\n"
-    );
-    assert!(!dir.path().join(".xtask/last-result.json").exists());
-    assert!(!summary.exists());
-    assert_eq!(
-        git(dir.path(), &["diff", "--cached", "--name-only"]).stdout,
-        b"guide.md\n"
-    );
-}
-
-#[test]
-fn failed_leaf_process_is_nonzero_and_keeps_its_diagnostic_only() {
-    let dir = checkout();
-    std::fs::write(
-        dir.path().join("docs/adr/0001-broken.md"),
-        "# Wrong heading\n\n- Status: proposed\n",
-    )
-    .unwrap();
-    git(dir.path(), &["add", "docs/adr/0001-broken.md"]);
-    git(
-        dir.path(),
-        &[
-            "-c",
-            "user.name=Fixture",
-            "-c",
-            "user.email=fixture@example.invalid",
-            "commit",
-            "--quiet",
-            "-m",
-            "bad ADR fixture",
-        ],
-    );
-    let summary = dir.path().join("github-summary.md");
-    let output = run_leaf(dir.path(), "adr-format", &summary);
-
-    assert_eq!(output.status.code(), Some(1));
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("[FAIL] adr-format"), "{stdout}");
-    assert!(!dir.path().join(".xtask/last-result.json").exists());
-    assert!(!summary.exists());
 }

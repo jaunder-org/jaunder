@@ -27,15 +27,6 @@ pub(crate) fn run(name: &str) -> Result<crate::result::StepResult> {
 fn run_at(name: &str, root: &Path) -> Result<crate::result::StepResult> {
     let mut result = CommandResult::new("check-leaf");
     match name {
-        "prepush-docs" => {
-            crate::lifecycle::run_shared_static_docs_request(
-                root,
-                true,
-                steps::nix::shared_static_docs_check,
-                &mut result,
-            );
-            return consumer_result(name, result);
-        }
         "workspace-doctests" => {
             steps::doctest_fences::run_workspace(&xshell::Shell::new()?, &mut result);
         }
@@ -45,7 +36,6 @@ fn run_at(name: &str, root: &Path) -> Result<crate::result::StepResult> {
             return consumer_result(name, result);
         }
         "sequence-check" => steps::sequence_check::run(&mut result),
-        "adr-format" => result.push(steps::adr_check::format_step_at(root)),
         "adr-readme-parity" => result.push(steps::adr_check::readme_parity_step_at(root)),
         "adr-view-parity" => result.push(steps::adr_check::view_parity_step_at(root)),
         "doc-links" => steps::doc_links::run(&mut result),
@@ -121,7 +111,13 @@ mod tests {
 
     #[test]
     fn unknown_or_retired_check_leaf_is_a_caller_error() {
-        for name in ["not-a-check", "clean-tree", "server-fn-flow"] {
+        for name in [
+            "not-a-check",
+            "clean-tree",
+            "server-fn-flow",
+            "adr-format",
+            "prepush-docs",
+        ] {
             assert!(run(name).is_err());
         }
     }
@@ -137,11 +133,8 @@ mod tests {
         .unwrap();
         std::fs::write(root.path().join("docs/ARCHITECTURE.md"), "# Architecture\n").unwrap();
 
-        let format_ok = run_at("adr-format", root.path()).unwrap();
         let readme_ok = run_at("adr-readme-parity", root.path()).unwrap();
         let view_ok = run_at("adr-view-parity", root.path()).unwrap();
-        assert_eq!(format_ok.name, "adr-format");
-        assert!(format_ok.ok);
         assert_eq!(readme_ok.name, "adr-readme-parity");
         assert!(readme_ok.ok);
         assert_eq!(view_ok.name, "adr-view-parity");
@@ -152,9 +145,6 @@ mod tests {
             "# Not a canonical ADR heading\n\n- Status: accepted\n",
         )
         .unwrap();
-        let format_failed = run_at("adr-format", root.path()).unwrap();
-        assert_eq!(format_failed.name, "adr-format");
-        assert!(!format_failed.ok);
 
         std::fs::write(
             root.path().join("docs/README.md"),

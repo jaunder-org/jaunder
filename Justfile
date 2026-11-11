@@ -16,6 +16,7 @@ export SCCACHE_BASEDIRS := ```
 
 devtool := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p devtool --bin devtool --"
 prettier := "just --justfile recipes/prettier.just --working-directory ."
+repository_policy := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin"
 
 # Setup follows the current checkout even after cd in an existing devShell.
 tsc mode="verify":
@@ -118,7 +119,10 @@ check-no-test: (_host "fix" "host") _host-tests
 check: check-no-test _product-tests _wasm-tests doctests-workflow
 
 precommit:
-    cargo xtask precommit-safety
+    {{repository_policy}} git-index-safety -- precommit
+
+adr-format:
+    {{repository_policy}} repository-docs -- adr-format
 
 # Called only by the focused Git/index safety owner, never by public precommit.
 precommit-markdown-host: (_markdown "fix") _docs-shape
@@ -150,7 +154,7 @@ _markdown mode:
 [private]
 _docs-shape:
     cargo xtask check-leaf sequence-check
-    cargo xtask check-leaf adr-format
+    just adr-format
     cargo xtask check-leaf adr-readme-parity
     cargo xtask check-leaf adr-view-parity
     cargo xtask check-leaf doc-links
@@ -160,7 +164,7 @@ _docs-shape:
 _host mode docs:
     {{devtool}} check fmt {{if mode == "fix" { "--fix" } else { "" }}}
     {{devtool}} check leptosfmt {{if mode == "fix" { "--fix" } else { "" }}}
-    {{if docs + "-" + os() + "-" + arch() == "prepush-linux-x86_64" { "cargo xtask check-leaf prepush-docs" } else { prettier + " prettier-markdown " + mode }}}
+    {{if docs + "-" + os() + "-" + arch() == "prepush-linux-x86_64" { repository_policy + " git-index-safety -- prepush-docs" } else { prettier + " prettier-markdown " + mode }}}
     {{prettier}} prettier-end2end {{mode}}
     {{prettier}} prettier-css {{mode}}
     {{devtool}} check elisp-fmt {{if mode == "fix" { "--fix" } else { "" }}}

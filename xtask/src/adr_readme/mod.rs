@@ -7,6 +7,5 @@ mod files;
 mod readme;
 mod view;
 
-pub(crate) use files::format_problems;
 pub(crate) use readme::parity_report;
 pub(crate) use view::view_parity_problems;

@@ -104,10 +104,3 @@ pub fn run_check_leaf_process(name: &str) -> Result<StepResult, String> {
     let step = steps::check_leaf::run(name).map_err(|error| format!("{error:#}"))?;
     Ok(step.with_duration(start.elapsed()))
 }
-
-/// Run precommit's narrow Git/index safety wrapper without a result envelope.
-pub fn run_precommit_safety_process() -> Result<(), String> {
-    prepare_checkout().map_err(|error| format!("{error:#}"))?;
-    ensure_hooks_installed();
-    lifecycle::run_precommit_safety(std::path::Path::new("."))
-}

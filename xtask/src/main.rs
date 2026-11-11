@@ -82,20 +82,6 @@ fn main() {
             };
             std::process::exit(exit_code);
         }
-        Command::PrecommitSafety => {
-            if json {
-                eprintln!("xtask: --json is not supported for `precommit-safety`");
-                std::process::exit(2);
-            }
-            match xtask::run_precommit_safety_process() {
-                Ok(()) => println!("[ ok ] precommit-safety"),
-                Err(error) => {
-                    eprintln!("[FAIL] precommit-safety — {error}");
-                    std::process::exit(1);
-                }
-            }
-            std::process::exit(0);
-        }
         command => {
             let cli = Cli { json, command };
             let result = xtask::invocation_trace::execute(cli);

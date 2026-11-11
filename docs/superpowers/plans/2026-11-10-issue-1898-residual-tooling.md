@@ -22,7 +22,7 @@ staged design bytes/index and shared stashes remain untouched now.
 
 ## Task outline
 
-- [ ] 1. Real precommit safety and one repository policy work without omnibus
+- [x] 1. Real precommit safety and one repository policy work without omnibus
       glue.
   - Contract: start repository-policy with single-process git-index-safety and
     repository-docs ADR-format path. Native Git/caller selection/source

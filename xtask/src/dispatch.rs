@@ -71,8 +71,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         }
         Command::OrgTimezoneManifest { .. }
         | Command::QualificationLeaf { .. }
-        | Command::CheckLeaf { .. }
-        | Command::PrecommitSafety => {
+        | Command::CheckLeaf { .. } => {
             anyhow::bail!(
                 "internal leaf and precommit safety commands use the plain process boundary"
             )

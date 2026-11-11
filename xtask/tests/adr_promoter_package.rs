@@ -143,12 +143,8 @@ fn selected_package_promotes_complete_documents_and_passes_read_only_gates() {
     assert!(
         staged.contains("docs/adr/0002-alpha.md") && !staged.contains("docs/adr/drafts/alpha.md")
     );
-    for gate in [
-        "adr-format",
-        "adr-readme-parity",
-        "adr-view-parity",
-        "doc-links",
-    ] {
+    assert!(repository_policy::adr::format_problems(root).is_empty());
+    for gate in ["adr-readme-parity", "adr-view-parity", "doc-links"] {
         let output = checked(
             command(env!("CARGO_BIN_EXE_xtask"), root)
                 .args(["check-leaf", gate])

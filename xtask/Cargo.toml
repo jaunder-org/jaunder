@@ -29,6 +29,7 @@ jsonschema = { version = "0.40", default-features = false }
 flate2 = "1.1.10"
 tar = "0.4.46"
 coverage = { path = "../tools/coverage" }
+repository-policy = { path = "../tools/repository-policy" }
 host = { path = "../host" }
 common = { path = "../common" }
 doctests = { path = "../tools/doctests" }

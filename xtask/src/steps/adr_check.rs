@@ -22,15 +22,6 @@ use std::path::Path;
 use crate::adr_readme;
 use crate::result::StepResult;
 
-pub(crate) fn format_step_at(root: &Path) -> StepResult {
-    let problems = adr_readme::format_problems(root);
-    if problems.is_empty() {
-        StepResult::ok("adr-format")
-    } else {
-        StepResult::fail("adr-format").detail(problems.join("\n"))
-    }
-}
-
 pub(crate) fn readme_parity_step_at(root: &Path) -> StepResult {
     parity_step(adr_readme::parity_report(root))
 }

@@ -4,12 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-/// The leading integer of a filename like `0034-foo.md` or `0023_create_x.sql`.
-/// `None` when the name does not start with a digit.
-pub fn leading_number(filename: &str) -> Option<u32> {
-    let digits: String = filename.chars().take_while(char::is_ascii_digit).collect();
-    digits.parse().ok()
-}
+pub use repository_policy::ids::leading_number;
 
 /// Filename without its final extension: `0023_create_x.sql` -> `0023_create_x`.
 fn stem(filename: &str) -> &str {

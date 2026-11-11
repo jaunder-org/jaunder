@@ -93,9 +93,6 @@ pub enum Command {
         #[arg(value_parser = nonempty)]
         name: String,
     },
-    /// Run Just's selected precommit host recipe inside the Git/index safety boundary.
-    #[command(hide = true)]
-    PrecommitSafety,
     /// Produce a host-side repository census for manual maintenance audits. The
     /// report is informational: candidates are neither findings nor gate failures.
     #[command(after_help = "EXAMPLES:\n  \
@@ -412,7 +409,6 @@ impl Cli {
     pub fn command_name(&self) -> &'static str {
         match self.command {
             Command::CheckLeaf { .. } => "check-leaf",
-            Command::PrecommitSafety => "precommit-safety",
             Command::OrgTimezoneManifest { .. } => "org-timezone-manifest",
             Command::Census => "census",
             Command::AuditWasm { .. } => "audit-wasm",
@@ -453,7 +449,6 @@ impl Command {
             self,
             Command::QualificationLeaf { .. }
                 | Command::CheckLeaf { .. }
-                | Command::PrecommitSafety
                 | Command::Traces(
                     TracesCommand::Analyze { .. }
                         | TracesCommand::Run { .. }
@@ -566,7 +561,7 @@ mod tests {
     }
 
     #[test]
-    fn just_leaf_and_precommit_safety_commands_are_hidden_process_boundaries() {
+    fn just_leaf_is_hidden_and_precommit_safety_alias_is_retired() {
         let leaf = Cli::try_parse_from(["xtask", "check-leaf", "doc-links"]).unwrap();
         assert_eq!(leaf.command_name(), "check-leaf");
         assert!(!leaf.command.produces_json_payload());
@@ -575,10 +570,7 @@ mod tests {
             Command::CheckLeaf { name } if name == "doc-links"
         ));
 
-        let safety = Cli::try_parse_from(["xtask", "precommit-safety"]).unwrap();
-        assert_eq!(safety.command_name(), "precommit-safety");
-        assert!(!safety.command.produces_json_payload());
-        assert!(matches!(safety.command, Command::PrecommitSafety));
+        assert!(Cli::try_parse_from(["xtask", "precommit-safety"]).is_err());
     }
 
     #[test]

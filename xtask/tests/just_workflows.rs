@@ -368,7 +368,7 @@ fn broad(mode: &str, shared_docs: bool) -> Vec<Vec<String>> {
         "no-full-reload",
     ] {
         if name == "prettier-markdown" && shared_docs {
-            expected.extend(commands(&["cargo xtask check-leaf prepush-docs"]));
+            expected.extend(commands(&["cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin git-index-safety -- prepush-docs"]));
         } else {
             expected.push(devtool(name, mode));
         }
@@ -410,12 +410,16 @@ fn broad(mode: &str, shared_docs: bool) -> Vec<Vec<String>> {
         "e2e-scaffold",
         "xlang-literal",
     ] {
-        expected.push(vec![
-            "cargo".into(),
-            "xtask".into(),
-            "check-leaf".into(),
-            name.into(),
-        ]);
+        if name == "adr-format" {
+            expected.extend(commands(&["cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin repository-docs -- adr-format"]));
+        } else {
+            expected.push(vec![
+                "cargo".into(),
+                "xtask".into(),
+                "check-leaf".into(),
+                name.into(),
+            ]);
+        }
     }
     for name in [
         "byte-compile",
@@ -737,10 +741,18 @@ fn synchronous_producer_cleanup_finishes_before_just_returns_success_or_failure(
 #[test]
 fn precommit_calls_only_the_focused_single_process_safety_owner() {
     let workflow = Workflow::new();
-    for failure in ["", "cargo xtask precommit-safety"] {
+    for failure in [
+        "",
+        "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin git-index-safety -- precommit",
+    ] {
         let (ok, actual, stderr) = workflow.run(&["precommit"], failure);
         assert_eq!(ok, failure.is_empty(), "{stderr}");
-        assert_eq!(actual, commands(&["cargo xtask precommit-safety"]));
+        assert_eq!(
+            actual,
+            commands(&[
+                "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin git-index-safety -- precommit"
+            ])
+        );
     }
 }
 
@@ -966,7 +978,7 @@ fn markdown_host_runs_the_complete_narrow_fix_surface_in_order() {
             "prettier -w **/*.md",
             "prettier -w end2end",
             "cargo xtask check-leaf sequence-check",
-            "cargo xtask check-leaf adr-format",
+            "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin repository-docs -- adr-format",
             "cargo xtask check-leaf adr-readme-parity",
             "cargo xtask check-leaf adr-view-parity",
             "cargo xtask check-leaf doc-links",
