@@ -942,6 +942,62 @@ different environments. They have the following explicit authority split
 root-workspace fence population in both directions; neither path may silently
 shrink it. Only the Nix path establishes the pinned sandbox/offline verdict.
 
+Shared command definitions are not automatically shared verification verdicts.
+The family decisions below retain useful sharing without replacing distinct
+assurance. The table above and [Nix check inventory](#nix-vm-checks) describe
+selected consumers, inputs and populations in detail:
+
+- **Markdown/Prettier:** retain the x86_64-linux `static-docs` verdict shared by
+  selected hook and hermetic consumers. Host Fix, complete raw/index admission,
+  one staging reconciliation and post-request state checks remain host
+  responsibilities; other platforms retain host Markdown verification.
+- **Other formatting:** retain shared Prettier/devtool definitions and distinct
+  host Fix/Verify versus hermetic Verify. Product/tools Rust formatting
+  populations overlap within `rust-format`; raw `xtask-format` remains separate.
+- **TypeScript/census:** retain separate compiler and E2E-population verdicts.
+  The same named `tsc` definition serves host and hermetic callers, but neither
+  its dedicated leaf nor shared dependency inputs replace the census contract.
+- **Elisp static/ERT/coverage:** retain formatter/byte-compilation, standalone
+  pure ERT and combined pure/live coverage. Repeated pure tests do not make
+  these environments, populations or coverage responsibilities interchangeable.
+- **Root/auxiliary Rust tests and Clippy:** retain fresh host product tests,
+  explicit auxiliary suites and target-specific lint units. Auxiliary tests
+  remain outside product coverage; lint compilation is not behavioral proof.
+  Host cargo-deny includes advisories; sandbox mode intentionally checks only
+  offline bans, licenses and sources (ADR-0145).
+- **Doctests:** retain host and hermetic execution of the root fence population
+  plus separate auxiliary doctests. Shared bidirectional reconciliation prevents
+  population loss; it does not erase the offline execution boundary.
+- **Rust coverage/CRAP:** retain the instrumented SQLite/PostgreSQL producer,
+  hard status gate and host source-aware policy. A host test pass or a produced
+  report alone cannot replace that verdict chain.
+- **Wasm/browser/E2E:** retain distinct browser-primitive tests, artifact-size
+  budget and diagnostic coverage. Full local E2E and CI share the enabled lane
+  catalog, immutable producers and artifact reconciliation, while local dispatch
+  and distributed scheduling differ. Focused host E2E is not the full matrix; a
+  producer-output join is not the reconciled workflow verdict.
+
+These decisions accept repeated host/hermetic checks rather than add universal
+admission or orchestration machinery. Further sharing and dependency pruning are
+deferred unless a concrete maintenance defect, consumer need or attributable
+workflow cost justifies a separately scoped decision. Independent derivations
+and narrow direct source filters alone establish neither equivalent verdicts nor
+isolated transitive source/tool inputs.
+
+For retained Markdown and full-local/CI E2E sharing, identical producer
+selectors and declared-input Nix semantics establish structural identity, not
+empirical whole-workflow equivalence. Actual successful hook/CI consumers,
+representative changed-Markdown-input invalidation and executed admission,
+topology, failure and output-handoff fixtures support the retained boundaries.
+Literal runtime production-output reuse for either family and empirical E2E
+relevant-input invalidation remain explicitly deferred, not demonstrated.
+Revisit these observations only on a consumer/input-contract change, unexpected
+reuse/invalidation behavior or concrete maintenance defect. No universal
+workflow equivalence, speedup or cache attestation follows from this
+disposition. Status-as-data still requires its verdict gate; missing, malformed,
+incomplete or wrong-output evidence cannot pass. Output availability is not
+proof of fresh execution.
+
 Focused `cargo xtask test-local -- <nextest args>` and
 `cargo xtask e2e-local <spec-or-file:line>` are the default feedback paths while
 editing. After a repair, rerun the same targeted proof before broadening the
@@ -1033,7 +1089,9 @@ and the
   workspaces retain separate lock/test contexts (including `csr_bundle` and
   `performance` in tools). The former combined root web(server+CSR)
   configuration is intentionally not retained under approved request
-  `2f0929a1-ebbd-4735-9a6c-b53e99a7a141`; `xtask-clippy` remains host-only.
+  `2f0929a1-ebbd-4735-9a6c-b53e99a7a141`; `xtask-clippy` remains required in the
+  host surface and also has an independent raw Nix verdict selected by hermetic
+  validation. The derivation runs Cargo Clippy, never xtask.
 - `cargo nextest run` runs the default Rust unit and integration test suite.
 - Whole-test budgets are **ambient** — an auto fixture gives every test a scaled
   `DEFAULT_TEST_BUDGET_MS`, which covers the entire suite (#270). Don't set one
@@ -2002,9 +2060,9 @@ server-function coverage verification to `just validate-no-e2e`.
 - `checks.x86_64-linux.rust-format` —
   `devtool check --group rust-format --sandbox-cargo`: product `fmt`, scoped
   `leptosfmt`, then `tools-fmt --all`. Product/tools Cargo populations overlap,
-  so these share one verdict. It is consumed once by flake checks and once as
-  `nix-rust-format` between docs and residual code in hermetic validation.
-  Direct inputs include non-xtask Rust sources, Cargo manifests/locks/build
+  so these share one verdict. Flake checks select it, and hermetic validation
+  requests it between `static-typescript` and residual `static-code`. Direct
+  inputs include non-xtask Rust sources, Cargo manifests/locks/build
   configuration, Rust toolchain and formatter configuration. Its real closure
   also includes compiled `devtoolBin`, both workspace offline Cargo homes and
   the pinned toolchain/formatter, with their transitive sources, embedded assets
@@ -2021,8 +2079,9 @@ server-function coverage verification to `just validate-no-e2e`.
   executes no lint itself. `devtool check --all` is the ordered, duplicate-free
   union of `typescript`, `rust-format`, `code`, and `ert`, including the six
   Clippy units in the code group; Prettier is outside this inventory and called
-  directly by Just/Nix. Just also runs the separate host-only `xtask-clippy`
-  step.
+  directly by Just/Nix. Just also runs the separate host `xtask-clippy` step;
+  hermetic validation requests its independent raw Nix verdict alongside the
+  six-unit aggregate, not as part of that aggregate's population.
 - `checks.x86_64-linux.static-elisp` — the existing `devtool check elisp-fmt`
   verify command followed by `devtool check byte-compile`, over the complete
   non-Markdown Elisp source tree in a writable copy. Direct inputs include that
@@ -2046,27 +2105,33 @@ server-function coverage verification to `just validate-no-e2e`.
 - `checks.x86_64-linux.static-ert` — `devtool check --group ert`, the standalone
   pure runner over the complete non-Markdown Elisp tree, in a writable copy,
   with existing `emacsForCi`, Git and timezone inputs. The separate combined
-  pure/live coverage producer below is unchanged. `validate` builds static
-  leaves in docs/typescript/rust-format/code/elisp/e2e-census/ert/xtask-format
-  order. The ERT leaf is non-substitutable but may reuse a valid local output.
-  Child timing is separate from request duration: host xtask accepts only
-  current captured devtool stderr through one check-parameterized bounded
-  parser. Both tsc and ERT use the same child timing producer. Their Nix
-  requests share current live `internal-json` local-builder activity correlation
-  parameterized by selected derivation and check, verified with Nix 2.34.9:
-  exact selected derivation, active activity-ID-linked child event and matching
-  stop. Reuse or missing/malformed/ambiguous/unsupported evidence leaves
-  execution timing unavailable; retained logs are never timing inputs. Request
-  duration and reuse classification remain separate.
+  pure/live coverage producer below is unchanged. Hermetic validation requests
+  `static-docs`, `static-typescript`, `rust-format`, `static-code`,
+  `static-elisp`, `static-e2e-census`, `static-ert`, `xtask-format`, and
+  `xtask-clippy`, in that order. The ERT leaf is non-substitutable but may reuse
+  a valid local output. Child timing is separate from request duration: host
+  xtask accepts only current captured devtool stderr through one
+  check-parameterized bounded parser. Both tsc and ERT use the same child timing
+  producer. Their Nix requests share current live `internal-json` local-builder
+  activity correlation parameterized by selected derivation and check, verified
+  with Nix 2.34.9: exact selected derivation, active activity-ID-linked child
+  event and matching stop. Reuse or missing/malformed/ambiguous/unsupported
+  evidence leaves execution timing unavailable; retained logs are never timing
+  inputs. Request duration and reuse classification remain separate.
 - `checks.x86_64-linux.xtask-format` — pinned raw
   `cargo fmt --manifest-path xtask/Cargo.toml --check`, without `--all`. Its
   bounded source includes xtask Rust targets and required Cargo/configuration
   inputs, plus dependency target placeholders for metadata, not dependency
   implementation sources. It requires neither compiled devtool nor offline Cargo
   homes and never executes xtask. Hermetic validation requires it once alongside
-  `static-docs`, `static-typescript`, `rust-format`, `static-code`,
-  `static-e2e-census`, and `static-ert`; host `xtask-fmt` and Fix/index behavior
+  the other static leaves listed above; host `xtask-fmt` and Fix/index behavior
   remain unchanged.
+- `checks.x86_64-linux.xtask-clippy` — the independent raw
+  `cargo clippy --manifest-path xtask/Cargo.toml --all-targets -- -D warnings`
+  verdict, reusing the xtask package lock, pinned vendoring and native
+  dependencies. It is separate from the six-unit Clippy aggregate; the required
+  host invocation remains. Neither this derivation nor `xtask-format` executes
+  xtask.
 - `checks.x86_64-linux.wasm-tests` — `wasm-bindgen-test` cases executed in
   headless Nix-store Chromium through the matching Nix-store chromedriver. This
   is behavioral pass/fail execution for irreducible browser code, not wasm line
