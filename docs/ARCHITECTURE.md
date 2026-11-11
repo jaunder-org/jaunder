@@ -4742,10 +4742,15 @@ admission and reconciliation; Nix owns immutable inputs/producer outputs;
 required status gates, policy consumers and CI joins own their respective
 verdicts. This deliberately accepts repeated checks instead of adding universal
 routing machinery. Further sharing/pruning is deferred pending a concrete
-utility case. Existing shared definitions or leaf wiring are not executable
-proof of equality, invalidation, reuse or failure propagation; retained sharing
-still needs applicable evidence, and unresolved proof is not waived by
-documenting these decisions.
+utility case. Retained sharing combines structural identical-selector and
+declared-input Nix reasoning with actual successful consumers, representative
+Markdown-input invalidation and executed admission/topology/failure/handoff
+fixtures. Literal runtime production-output reuse for Markdown/E2E and empirical
+E2E relevant-input invalidation are deferred, not demonstrated. Revisit those
+observations only on a consumer/input-contract change, unexpected
+reuse/invalidation behavior or concrete maintenance defect. This does not claim
+universal workflow equivalence, speedup, fresh execution from output
+availability or a cache attestation.
 
 | Step                                       | Guards                                                                                                                                                           |
 | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |

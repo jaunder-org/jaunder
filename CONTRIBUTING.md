@@ -897,15 +897,19 @@ workflow cost justifies a separately scoped decision. Independent derivations
 and narrow direct source filters alone establish neither equivalent verdicts nor
 isolated transitive source/tool inputs.
 
-For retained sharing too, acceptance needs applicable consumer-contract,
-derivation-identity or proven-equivalence, legitimate-reuse, relevant-input
-invalidation and failure-propagation evidence through both consumers.
-Status-as-data requires its verdict gate; missing, malformed, incomplete or
-wrong-output evidence cannot pass. Source wiring, historical green results and
-available outputs alone do not discharge those obligations. Unresolved proof
-remains open until applicable existing evidence or the results of separately
-authorized focused proof are accepted; authorization alone is not proof. These
-dispositions make no new execution or speedup claim.
+For retained Markdown and full-local/CI E2E sharing, identical producer
+selectors and declared-input Nix semantics establish structural identity, not
+empirical whole-workflow equivalence. Actual successful hook/CI consumers,
+representative changed-Markdown-input invalidation and executed admission,
+topology, failure and output-handoff fixtures support the retained boundaries.
+Literal runtime production-output reuse for either family and empirical E2E
+relevant-input invalidation remain explicitly deferred, not demonstrated.
+Revisit these observations only on a consumer/input-contract change, unexpected
+reuse/invalidation behavior or concrete maintenance defect. No universal
+workflow equivalence, speedup or cache attestation follows from this
+disposition. Status-as-data still requires its verdict gate; missing, malformed,
+incomplete or wrong-output evidence cannot pass. Output availability is not
+proof of fresh execution.
 
 Focused `cargo xtask test-local -- <nextest args>` and
 `cargo xtask e2e-local <spec-or-file:line>` are the default feedback paths while
