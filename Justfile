@@ -19,8 +19,22 @@ prettier := "just --justfile recipes/prettier.just --working-directory ."
 
 # Setup follows the current checkout even after cd in an existing devShell.
 tsc mode="verify":
+    #!/usr/bin/env bash
+    # Observation cannot gate work or replace the owner's immediately saved status.
+    handle=$(traced-run record-start tsc-request {{quote(mode)}}) || handle=
     setup-e2e-node-modules "$E2E_TYPES_NODE_MODULES" "$E2E_PLAYWRIGHT_TEST"
-    {{devtool}} check tsc {{if mode == "fix" { "--fix" } else { "" }}}
+    status=$?
+    boundary=setup
+    if [ "$status" -eq 0 ]; then
+      {{devtool}} check tsc {{if mode == "fix" { "--fix" } else { "" }}}
+      status=$?
+      boundary=request
+    fi
+    if [ "$status" -eq 0 ]; then boundary=none; fi
+    if [ -n "$handle" ]; then
+      traced-run record-finish "$handle" "$status" "$boundary" || :
+    fi
+    exit "$status"
 
 # Verify workflows refuse dirty or unavailable Git state before work.
 coverage: _clean-tree coverage-workflow
