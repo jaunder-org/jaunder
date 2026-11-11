@@ -1,91 +1,119 @@
-# Rustix security repair (#1939)
+# Dependency-security repair (#1939)
 
 ## Outcome
 
-Remove the known RUSTSEC-2026-0486 rustix 1.1.4 resolution from the root,
-`tools` and `xtask` Cargo contexts without suppressing the advisory or changing
-application behavior. Restore the required host dependency-security verdict that
-blocked PR #1937's merge-group validation.
+Resolve the root/tools/xtask dependency-security findings without weakening
+advisory, source or license checks: rustix RUSTSEC-2026-0486, auxiliary
+unsafe-libyaml RUSTSEC-2024-0449, and xtask's borrow-or-share MIT-0 rejection.
+All three actual host Cargo contexts must pass full cargo-deny. Preserve
+application behavior and the existing workflow/collector validation contracts.
 
 ## Approach and tradeoffs
 
-Use Cargo's existing targeted resolver to select exactly rustix 1.1.6 in each
-lockfile. Raise the three first-party rustix minimums from `1.1.4` to `1.1.6`,
-preserving all existing features, default-feature choices and target conditions.
-These remain normal caret requirements; committed lockfiles supply exact pins. A
-lock-only repair would clear the present resolution but leave manifest minimums
-allowing the known-affected release after re-resolution. No exact `=`
-requirement, custom machinery or broad dependency upgrade is needed.
+Keep the initial rustix repair: raise only its three first-party minimums from
+`1.1.4` to `1.1.6`, preserving features/defaults/target conditions, and lock
+exactly 1.1.6 in all three contexts. Manifest requirements remain caret ranges;
+the lockfiles provide exact pins. No other existing package version is upgraded.
 
-The implementation surfaces are exactly:
+Replace deprecated serde_yaml in `tools/pr-observer/Cargo.toml` and
+`xtask/Cargo.toml` with the maintained `yaml_serde` 0.10.7 package through
+Cargo's `serde_yaml` dependency alias. This preserves existing imports, Serde
+entry points and the YAML Value/Mapping interface, including non-string keys
+needed for explicit rejection paths. Lock yaml_serde 0.10.7 and its maintained
+libyaml-rs 0.3.0 dependency, removing serde_yaml and unsafe-libyaml from both
+auxiliary graphs. Use the normal Cargo resolver and inspect every lock hunk.
 
-- `Cargo.toml`: `workspace.dependencies.rustix.version` only.
-- `tools/traced-run/Cargo.toml`: `dependencies.rustix.version` only.
-- `xtask/Cargo.toml`: Unix-target `dependencies.rustix.version` only.
-- `Cargo.lock`, `tools/Cargo.lock`, `xtask/Cargo.lock`: rustix package version
-  and checksum only; source and dependency entries remain unchanged.
+This is a maintained fork, not a claim that all C-derived unsafe parsing has
+been removed or independently audited. Upstream assumes maintenance and has
+published fixes beyond renaming. The alternative safe-Rust parsers inspected
+would change the Value/Mapping interface or introduce a young compatibility
+surface; that additional consumer churn is unnecessary for this bounded fix.
+Focused consumer tests must confirm actual compatibility, not just compilation.
 
-Existing first-party requirements, tempfile 3.27.0 and xattr 1.6.1 permit 1.1.6.
-The inspected transitive bounds are satisfied by already-locked dependencies.
-Cargo resolution must confirm that no additional package-version change is
-necessary. If it requires one, stop for renewed scope approval rather than
-broadening the update. Do not hand-edit generated lockfiles as a substitute for
-Cargo resolution.
+The actual borrow-or-share 0.2.4 license grant/disclaimer matches SPDX MIT-0
+(MIT No Attribution), ignoring whitespace and the copyright header. SPDX lists
+it as OSI-approved and nondeprecated. Add that reviewed standard identifier to
+`deny.toml`'s normal SPDX allowlist with a short rationale. MIT-0 removes MIT's
+attribution paragraph; its permissive grant imposes no conflicting obligation on
+Jaunder's GPL-3.0-or-later grant. Existing policy already accepts MIT and 0BSD.
+Do not falsify declared licensing, add a per-crate exception or change
+first-party licensing; retain actual license/source checks for the full graphs.
+Replacing jsonschema's unrelated dependency chain solely to avoid this license
+would create unnecessary dependency/API churn.
 
-Direct first-party consumers remain host theme-repository filesystem handling,
-jaunder Linux shutdown, traced-run monotonic timing, and xtask timing/Unix
-lease-owner handling. Transitive xattr/tar remain present; absence of direct
-first-party xattr calls is not a safety exemption.
+Expanded implementation surfaces beyond the original rustix changes are the two
+YAML dependency declarations, necessary auxiliary lock additions/removals,
+`deny.toml`, and a focused assertion that the actual GitHub workflow's `on` key
+remains a string mapping. No parser adapter, gate framework or public API is
+introduced. Preserve unrelated versions, features, source patches and lock
+edges; changes outside the necessary replacement closure require explanation,
+not a broad update. Source inspection and existing package mechanisms do the
+work.
 
 ## Acceptance
 
-1. All three lockfiles contain exactly one rustix package at 1.1.6, with the
-   registry checksum verified by Cargo. The complete six-file implementation
-   diff contains no unrelated package-version, source, feature, policy or API
-   changes. Preserve rustix's existing dependency entries.
-2. Run the product host security leaf used by Just:
+1. Root/tools/xtask locks each select exactly rustix 1.1.6. Root lock changes
+   remain rustix version/checksum only. Both auxiliary graphs contain yaml_serde
+   0.10.7 and libyaml-rs 0.3.0, with no serde_yaml or unsafe-libyaml. No
+   unrelated package versions/features/edges change. Keep all source patches.
+2. Run the actual product host security leaf:
    `cargo run --locked --quiet --manifest-path tools/Cargo.toml -p devtool --bin devtool -- check cargo-deny`.
    Run
    `cargo deny --manifest-path tools/Cargo.toml --config deny.toml --locked check`
-   and the equivalent `xtask/Cargo.toml` command. All three must pass with
-   advisories included; sandbox checks that omit advisories are not a
-   replacement.
-3. Run the approved focused product consumer proofs:
-   `cargo xtask test-local -- --locked -p host theme_repository` and
-   `cargo xtask test-local -- --locked -p jaunder shut_down`.
-4. Run the approved auxiliary proofs:
-   `cargo test --locked --manifest-path tools/Cargo.toml -p traced-run --lib`,
-   `cargo test --locked --manifest-path xtask/Cargo.toml --test invocation_trace`,
-   and
-   `cargo test --locked --manifest-path xtask/Cargo.toml --lib production_baseline::platform::unix`.
-   Every test selection must be nonempty. These test affected consumers, not an
-   independent reproduction of upstream unsoundness.
-5. Execute commands through `traced-run --`, preserve honest exit status and
-   parked logs, and distinguish failures and unavailable evidence from passes.
-   Existing supplied PR #1937 failure is the red evidence; do not rerun the
-   merge group or unrelated lanes. Normal hooks and PR CI retain their
-   authority; do not duplicate full local validation.
-6. Keep this working spec through conformance. Proof logs, diff packets and
-   reviews belong in ignored/session storage, not tracked evidence archives.
-   Final independent Standards/Spec review must inspect the intended tree and
-   proof before the normal implementation commit/push/PR lifecycle continues.
+   and the equivalent xtask manifest command. All three must pass advisories,
+   bans, licenses and sources, without new ignores, warnings overrides or skips.
+   Sandboxed mode omitting advisories is not equivalent proof.
+3. Run focused actual YAML consumers: the pr-observer package tests, xtask's
+   collector-config library tests, and `e2e_topology`, `performance_workflow`
+   and `just_workflows` integration targets. Preserve workflow ancestry/matrix
+   classification and fail-closed malformed/unsupported input behavior,
+   collector privacy-policy digest and strict shape validation, plus the
+   workflow `on` key. Require nonempty test selections. No real merge/queue
+   operation is a test.
+4. Keep valid existing rustix consumer proof when its inputs are unchanged: host
+   theme-repository, jaunder shutdown, traced-run library, xtask invocation
+   timing and Unix platform tests. Re-run affected auxiliary proof after the
+   YAML dependency change; do not duplicate broad validation merely for
+   confidence. All normal hook/PR CI requirements remain authoritative for final
+   delivery.
+5. Run commands through `traced-run --`. Copy complete emitted stdout/stderr and
+   honest runner status promptly into ignored review storage, before further
+   lifecycle work can prune it. Preserve failures/retry reasons. Supported
+   test-local adapters do not emit successful inner per-test output; distinguish
+   retained adapter output and non-executing listings from per-test reports.
+6. Return one immutable complete diff/spec/proof packet with exact source/tree
+   identity and dirty/staged/untracked inventory for Lead-owned independent
+   Standards/Spec review. Keep this spec through conformance; evidence remains
+   ignored, not a checked-in archive. Lead accepts the integrated reviewed tree
+   before the normal hook-backed implementation commit/push/PR CI sequence.
 
-## Boundaries and ownership
+## Authority, historical deviation and boundaries
 
-The human approved `rustix-security-intake-v1` with “Approve bounded repair”,
-relayed through Manager background `b0c1713e-1ecf-4649-b0f2-4522aadbbc3a` and
-acknowledged by Lead. The approved consumer testing seams are confirmed. This
-spec records that approved scope; no outline is required for this mechanical
-patch without a new architecture, protocol, authentication or storage invariant.
+The initial human decision `rustix-security-intake-v1`, “Approve bounded
+repair”, was relayed through Manager background
+`b0c1713e-1ecf-4649-b0f2-4522aadbbc3a` and acknowledged by Lead. After explicit
+discussion of both auxiliary findings, the human expanded authority via Manager
+with “Make the fixes, stat!”. Lead acknowledges this supersedes the pending
+deferral-amendment request: fix the findings, do not defer them or repeat a
+routine scope gate. Consumer testing seams are confirmed for this approved
+replacement. No outline is needed because existing interfaces and architecture
+remain unchanged.
 
-Preserve the assigned `fix/rustix-rustsec-2026-0486` branch and checkout under
-the managed-assignment exception. The current execution phase may commit this
-spec before implementation, then stops after focused proof and an immutable
-implementation review packet, before the implementation commit, push or PR.
+Historical deviation: initial resolver/hook and some proof raw logs expired
+before review. Original receipts are not logs and cannot recreate that history;
+current successful proof was restored separately, without pretending to recover
+original operations. Preserve this disclosed deviation and the prior immutable
+packets. New execution must retain real emitted output through review. The gap
+is not retroactively erased or used to weaken present dependency acceptance.
 
-Issue #1898 is independent in another checkout. Coordinate only intersecting
-`tools/Cargo.lock` rustix version/checksum and `tools/traced-run/Cargo.toml`
-rustix requirement; never replace a whole lockfile or hold its independent work.
-Issue #1933 and PR #1937 remain untouched. No advisory suppression, broad
-upgrade, resource override, weakened gate, merge, reenqueue or cleanup is in
-scope. Exact-head human merge approval remains a separate later gate.
+Preserve assigned branch `fix/rustix-rustsec-2026-0486` and checkout. Commit
+this approved expanded working scope before expanded implementation, preserving
+the initial rustix patch. Stop with the completed immutable packet before final
+implementation commit only for Lead's integrated review/acceptance, not a new
+routine approval request. Exact-head human merge approval remains separate.
+
+Issue #1898 is independent in another checkout: coordinate actual shared
+pr-observer manifest/auxiliary lock hunks in addition to the known rustix and
+traced-run minimum hunks, never replace a whole lockfile or hold its independent
+work. Issue #1933 and PR #1937 stay untouched. No merge, reenqueue, cleanup,
+resource override, broad upgrade or suppression is authorized by this scope.
