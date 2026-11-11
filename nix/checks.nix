@@ -2843,6 +2843,9 @@ mkWasmCoverageMeasurementProducer =
     else
     sqlxSqlitePatchSource path
     || type == "directory"
+    # traced-run all-target tests embed these maintained workflow owners.
+    || path == "${toString ../.}/Justfile"
+    || path == "${toString ../.}/.github/workflows/ci.yml"
     || (
       !(pkgs.lib.hasSuffix ".md" path)
       && (
@@ -2889,6 +2892,8 @@ mkWasmCoverageMeasurementProducer =
     filter =
       assert clippySourceFilter "${toString ../.}/Cargo.toml" "regular";
       assert clippySourceFilter "${toString ../.}/tools/Cargo.lock" "regular";
+      assert clippySourceFilter "${toString ../.}/Justfile" "regular";
+      assert clippySourceFilter "${toString ../.}/.github/workflows/ci.yml" "regular";
       assert clippySourceFilter "${toString ../.}/server/build.rs" "regular";
       assert clippySourceFilter "${toString ../.}/csr/index.html" "regular";
       assert clippySourceFilter "${toString ../.}/testdata/theme-repository/minimal/preview.png" "regular";
