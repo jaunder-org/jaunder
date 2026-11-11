@@ -571,18 +571,16 @@ pub struct FeedEventStore<DB: Database> {
 /// The one enqueue statement, shared by [`FeedEventStorage::enqueue`] (which
 /// appends `RETURNING id`) and [`FeedEventStorage::enqueue_many`] — a column
 /// change edits it once.
-const INSERT_FEED_EVENT: &str = "INSERT INTO feed_events (feed_url) VALUES ($1)";
+const INSERT_FEED_EVENT: &str =
+    "INSERT INTO feed_events (feed_url, next_attempt_at, created_at) VALUES ($1, $2, $3)";
 
 /// The maximum rows one terminal-retention statement may delete.
 const TERMINAL_PRUNE_LIMIT: RowLimit = RowLimit::at_most(200);
 const FAILED_EVENT_RETENTION: Duration = Duration::from_hours(168);
 
 fn failed_event_cutoff(now: UtcInstant) -> UtcInstant {
-    UtcInstant::from(
-        now.value()
-            .saturating_sub(FAILED_EVENT_RETENTION)
-            .map_or(jiff::Timestamp::MIN, std::convert::identity),
-    )
+    now.checked_sub(FAILED_EVENT_RETENTION)
+        .unwrap_or(UtcInstant::MIN)
 }
 
 impl<DB: Database> FeedEventStore<DB> {
@@ -600,6 +598,7 @@ impl<DB: Database> FeedEventStore<DB> {
 impl<DB> FeedEventStorage for FeedEventStore<DB>
 where
     DB: FeedEventDialect,
+    for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `FeedPath` binds and decodes as itself via the ADR-0071 sqlx bridge (the
     // `enqueue` bind encodes `&FeedPath`; the per-dialect claim row-mappers
@@ -624,8 +623,11 @@ where
         let connection = DB::write_connection(transaction)?;
         // The only dynamic fragment is this fixed `RETURNING` clause; feed data stays bound.
         let sql = sqlx::AssertSqlSafe(format!("{INSERT_FEED_EVENT} RETURNING id"));
+        let now = UtcInstant::now();
         let id = sqlx::query_scalar::<_, FeedEventId>(sql)
             .bind_storage(feed_path)
+            .bind_storage(now)
+            .bind_storage(now)
             .fetch_one(&mut *connection)
             .await?;
         Ok(id)
@@ -642,10 +644,15 @@ where
         feed_paths: &[FeedPath],
     ) -> Result<(), FeedEventError> {
         let connection = DB::write_connection(transaction)?;
+        let now = UtcInstant::now();
         for feed_paths in feed_paths.chunks(SET_OPERATION_BIND_BATCH) {
-            let mut query = QueryBuilder::<DB>::new("INSERT INTO feed_events (feed_url) ");
+            let mut query = QueryBuilder::<DB>::new(
+                "INSERT INTO feed_events (feed_url, next_attempt_at, created_at) ",
+            );
             query.push_values(feed_paths, |mut row, feed_path| {
-                row.push_storage_bind(feed_path);
+                row.push_storage_bind(feed_path)
+                    .push_storage_bind(now)
+                    .push_storage_bind(now);
             });
             query.build().execute(&mut *connection).await?;
         }
@@ -664,7 +671,9 @@ where
         lease_timeout: Duration,
     ) -> Result<Vec<FeedEventRecord>, FeedEventError> {
         let now = UtcInstant::now();
-        let lease_cutoff = UtcInstant::from(now.value() - lease_timeout);
+        let lease_cutoff = now
+            .checked_sub(lease_timeout)
+            .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
         let limit = FeedEventClaimLimit::from_usize(limit);
         let connection = DB::write_connection(transaction)?;
         DB::claim_pending_batch(connection, now, lease_cutoff, limit).await
@@ -677,7 +686,9 @@ where
     )]
     async fn claimable_count(&self, lease_timeout: Duration) -> Result<u64, FeedEventError> {
         let now = UtcInstant::now();
-        let lease_cutoff = UtcInstant::from(now.value() - lease_timeout);
+        let lease_cutoff = now
+            .checked_sub(lease_timeout)
+            .map_err(|error| sqlx::Error::Decode(Box::new(error)))?;
         DB::claimable_count(&self.pool, now, lease_cutoff).await
     }
 
@@ -1255,12 +1266,13 @@ mod tests {
             terminal,
         )
         .await;
-        let now = UtcInstant::from(
+        let now = UtcInstant::try_from(
             terminal
                 .value()
                 .checked_add(192.hours())
                 .expect("test instant remains representable"),
-        );
+        )
+        .expect("test instant is within application bounds");
 
         let rejection = env
             .write_scope()
@@ -1294,8 +1306,9 @@ mod tests {
                  (feed_url, status, phase, regeneration_attempts, publication_attempts, \
                   next_attempt_at, terminal_at, created_at) \
                  VALUES ('not-a-feed-path', 'failed', 'regeneration', 1, 0, \
-                         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+                         $1, $1, $1)",
             )
+            .bind_storage(UtcInstant::now())
             .execute(pool)
             .await
             .unwrap();
@@ -1321,6 +1334,16 @@ mod tests {
         )
         .await;
         assert!(i64::from(id) > 0);
+        let rows = claim(
+            &env.write_scope(),
+            Arc::clone(&env.feed_events()),
+            10,
+            Duration::from_mins(5),
+        )
+        .await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, id);
+        assert_eq!(rows[0].created_at, rows[0].next_attempt_at);
     }
 
     #[apply(backends)]
@@ -1352,6 +1375,41 @@ mod tests {
         let urls: std::collections::HashSet<_> =
             claimed.iter().map(|r| r.feed_path.clone()).collect();
         assert_eq!(urls, expected);
+        let sampled = claimed[0].created_at;
+        assert!(
+            claimed
+                .iter()
+                .all(|row| row.created_at == sampled && row.next_attempt_at == sampled),
+            "one typed clock governs every batch row"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn enqueue_many_uses_one_clock_across_bind_batches(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let paths = vec![fp("/feed.rss"); SET_OPERATION_BIND_BATCH + 1];
+        let count = paths.len();
+        let events = env.feed_events();
+        crate::test_support::run_confirmed(
+            &env.write_scope(),
+            "enqueue across bind batches",
+            |transaction| Box::pin(async move { events.enqueue_many(transaction, &paths).await }),
+        )
+        .await;
+        let rows = claim(
+            &env.write_scope(),
+            env.feed_events(),
+            count + 1,
+            Duration::from_mins(5),
+        )
+        .await;
+        assert_eq!(rows.len(), count);
+        let clock = rows[0].created_at;
+        assert!(
+            rows.iter()
+                .all(|row| row.created_at == clock && row.next_attempt_at == clock)
+        );
     }
 
     #[apply(backends)]
@@ -1437,12 +1495,13 @@ mod tests {
             Arc::clone(&env.feed_events()),
             vec![id],
             "retry later".to_owned(),
-            UtcInstant::from(
+            UtcInstant::try_from(
                 UtcInstant::now()
                     .value()
                     .checked_add(1.hour())
                     .expect("test instant remains representable"),
-            ),
+            )
+            .expect("test instant is within application bounds"),
         )
         .await;
 
@@ -1516,11 +1575,10 @@ mod tests {
         let env = backend.setup().await;
         // Simulate DB tampering/corruption: a feed_url that bypasses FeedPath
         // validation (which `enqueue` could never write), alongside a valid row.
-        env.base
-            .pool()
-            .execute("INSERT INTO feed_events (feed_url) VALUES ('not a feed path')")
-            .await
-            .unwrap();
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("INSERT INTO feed_events (feed_url, next_attempt_at, created_at) VALUES ('not a feed path', $1, $1)")
+                .bind_storage(UtcInstant::now()).execute(pool).await.unwrap();
+        });
         enqueue(
             &env.write_scope(),
             Arc::clone(&env.feed_events()),
@@ -1724,11 +1782,10 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        env.base
-            .pool()
-            .execute("INSERT INTO feed_events (feed_url) VALUES ('not a feed path')")
-            .await
-            .unwrap();
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("INSERT INTO feed_events (feed_url, next_attempt_at, created_at) VALUES ('not a feed path', $1, $1)")
+                .bind_storage(UtcInstant::now()).execute(pool).await.unwrap();
+        });
         enqueue(
             &env.write_scope(),
             Arc::clone(&env.feed_events()),
@@ -1957,12 +2014,13 @@ mod tests {
             Duration::from_mins(5),
         )
         .await;
-        let future = UtcInstant::from(
+        let future = UtcInstant::try_from(
             UtcInstant::now()
                 .value()
                 .checked_add(1.minute())
                 .expect("test instant remains representable"),
-        );
+        )
+        .expect("test instant is within application bounds");
         retry_regeneration(
             &env.write_scope(),
             Arc::clone(&env.feed_events()),
@@ -2275,11 +2333,12 @@ mod tests {
     ) {
         let env = backend.setup().await;
         let now = fixture_instant(900_000);
-        let cutoff = UtcInstant::from(
+        let cutoff = UtcInstant::try_from(
             now.value()
                 .checked_sub(168.hours())
                 .expect("test instant remains representable"),
-        );
+        )
+        .expect("test instant is within application bounds");
         crate::with_closeable_pool!(env.base.pool(), pool, {
             for (path, status, terminal_at) in [
                 (
@@ -2295,28 +2354,34 @@ mod tests {
                 (
                     fp("/~failed-newer/feed.rss"),
                     FeedEventStatus::Failed,
-                    Some(UtcInstant::from(
-                        cutoff
-                            .value()
-                            .checked_add(1.second())
-                            .expect("test instant remains representable"),
-                    )),
+                    Some(
+                        UtcInstant::try_from(
+                            cutoff
+                                .value()
+                                .checked_add(1.second())
+                                .expect("test instant remains representable"),
+                        )
+                        .expect("test instant is within application bounds"),
+                    ),
                 ),
                 (
                     fp("/~completed-future/feed.rss"),
                     FeedEventStatus::Done,
-                    Some(UtcInstant::from(
-                        now.value()
-                            .checked_add(1.second())
-                            .expect("test instant remains representable"),
-                    )),
+                    Some(
+                        UtcInstant::try_from(
+                            now.value()
+                                .checked_add(1.second())
+                                .expect("test instant remains representable"),
+                        )
+                        .expect("test instant is within application bounds"),
+                    ),
                 ),
                 (fp("/~pending/feed.rss"), FeedEventStatus::Pending, None),
                 (fp("/~claimed/feed.rss"), FeedEventStatus::Claimed, None),
             ] {
                 sqlx::query(
-                    "INSERT INTO feed_events (feed_url, status, next_attempt_at, terminal_at) \
-                     VALUES ($1, $2, $3, $4)",
+                    "INSERT INTO feed_events (feed_url, status, next_attempt_at, terminal_at, created_at) \
+                     VALUES ($1, $2, $3, $4, $3)",
                 )
                 .bind(path)
                 .bind(status)
@@ -2353,8 +2418,8 @@ mod tests {
         crate::with_closeable_pool!(env.base.pool(), pool, {
             for index in 0..=TERMINAL_PRUNE_LIMIT.value().unsigned_abs() {
                 sqlx::query(
-                    "INSERT INTO feed_events (feed_url, status, next_attempt_at, terminal_at) \
-                     VALUES ($1, 'done', $2, $2)",
+                    "INSERT INTO feed_events (feed_url, status, next_attempt_at, terminal_at, created_at) \
+                     VALUES ($1, 'done', $2, $2, $2)",
                 )
                 .bind(format!("/~completed-{index}/feed.rss"))
                 .bind(now)
@@ -2381,8 +2446,8 @@ mod tests {
         crate::with_closeable_pool!(env.base.pool(), pool, {
             for index in 0..=TERMINAL_PRUNE_LIMIT.value().unsigned_abs() {
                 sqlx::query(
-                    "INSERT INTO feed_events (feed_url, status, next_attempt_at, terminal_at) \
-                     VALUES ($1, 'done', $2, $2)",
+                    "INSERT INTO feed_events (feed_url, status, next_attempt_at, terminal_at, created_at) \
+                     VALUES ($1, 'done', $2, $2, $2)",
                 )
                 .bind(format!("/~completed-{index}/feed.rss"))
                 .bind(now)
@@ -2404,11 +2469,10 @@ mod tests {
         time::timeout(StdDuration::from_secs(2), gate.wait_for_batch())
             .await
             .expect("first prune batch");
-        env.base
-            .pool()
-            .execute("INSERT INTO feed_events (feed_url) VALUES ('/~writer/feed.rss')")
-            .await
-            .expect("independent writer commits between cleanup batches");
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("INSERT INTO feed_events (feed_url, next_attempt_at, created_at) VALUES ('/~writer/feed.rss', $1, $1)")
+                .bind_storage(UtcInstant::now()).execute(pool).await.expect("independent writer commits between cleanup batches");
+        });
         feed_events.install_prune_batch_gate(None).await;
         gate.resume();
 

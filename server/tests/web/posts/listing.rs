@@ -197,21 +197,23 @@ async fn list_drafts_surfaces_scheduled_with_marker_excludes_live(#[case] backen
     // Seed a scheduled post (future `published_at`) and a live post (past)
     // directly via storage — the web compose datetime control is Task 6.
     let now = UtcInstant::now();
-    let scheduled_at = UtcInstant::from(
+    let scheduled_at = UtcInstant::try_from(
         now.value()
             .checked_add(72.hours())
             .expect("fixture is within Timestamp range"),
-    );
+    )
+    .expect("test instant is within application bounds");
     let sched_id = SeedRawPost::new(author.user_id)
         .published_at(scheduled_at)
         .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await
         .post_id;
-    let live_at = UtcInstant::from(
+    let live_at = UtcInstant::try_from(
         now.value()
             .checked_sub(24.hours())
             .expect("fixture is within Timestamp range"),
-    );
+    )
+    .expect("test instant is within application bounds");
     let live_id = SeedRawPost::new(author.user_id)
         .published_at(live_at)
         .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
@@ -262,32 +264,35 @@ async fn list_scheduled_returns_current_user_future_posts_ordered_by_schedule(
     let author_cookie = author.cookie();
 
     let now = UtcInstant::now();
-    let same_time = UtcInstant::from(
+    let same_time = UtcInstant::try_from(
         now.value()
             .checked_add(72.hours())
             .expect("fixture is within Timestamp range"),
-    );
+    )
+    .expect("test instant is within application bounds");
 
     let draft_id = SeedRawPost::new(author.user_id)
         .draft()
         .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await
         .post_id;
-    let live_at = UtcInstant::from(
+    let live_at = UtcInstant::try_from(
         now.value()
             .checked_sub(24.hours())
             .expect("fixture is within Timestamp range"),
-    );
+    )
+    .expect("test instant is within application bounds");
     let live_id = SeedRawPost::new(author.user_id)
         .published_at(live_at)
         .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await
         .post_id;
-    let deleted_at = UtcInstant::from(
+    let deleted_at = UtcInstant::try_from(
         now.value()
             .checked_add(48.hours())
             .expect("fixture is within Timestamp range"),
-    );
+    )
+    .expect("test instant is within application bounds");
     let deleted_id = SeedRawPost::new(author.user_id)
         .published_at(deleted_at)
         .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
@@ -309,22 +314,24 @@ async fn list_scheduled_returns_current_user_future_posts_ordered_by_schedule(
         })
         .await
         .unwrap();
-    let other_at = UtcInstant::from(
+    let other_at = UtcInstant::try_from(
         now.value()
             .checked_add(24.hours())
             .expect("fixture is within Timestamp range"),
-    );
+    )
+    .expect("test instant is within application bounds");
     let other_id = SeedRawPost::new(stranger.user_id)
         .published_at(other_at)
         .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await
         .post_id;
 
-    let earlier_at = UtcInstant::from(
+    let earlier_at = UtcInstant::try_from(
         now.value()
             .checked_add(24.hours())
             .expect("fixture is within Timestamp range"),
-    );
+    )
+    .expect("test instant is within application bounds");
     let earlier_id = SeedRawPost::new(author.user_id)
         .published_at(earlier_at)
         .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
@@ -340,11 +347,12 @@ async fn list_scheduled_returns_current_user_future_posts_ordered_by_schedule(
         .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
         .await
         .post_id;
-    let later_at = UtcInstant::from(
+    let later_at = UtcInstant::try_from(
         now.value()
             .checked_add(120.hours())
             .expect("fixture is within Timestamp range"),
-    );
+    )
+    .expect("test instant is within application bounds");
     let later_id = SeedRawPost::new(author.user_id)
         .published_at(later_at)
         .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())
@@ -923,11 +931,12 @@ async fn list_home_timeline_returns_authenticated_users_published_posts_only(
     let now = UtcInstant::now();
     let mut admitted_post_ids = Vec::with_capacity(51);
     for hours_ago in (1_i64..=51).rev() {
-        let published_at = UtcInstant::from(
+        let published_at = UtcInstant::try_from(
             now.value()
                 .checked_sub(hours_ago.hours())
                 .expect("fixture is within Timestamp range"),
-        );
+        )
+        .expect("test instant is within application bounds");
         let post_id = SeedRawPost::new(author.user_id)
             .published_at(published_at)
             .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())

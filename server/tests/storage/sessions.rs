@@ -95,22 +95,24 @@ async fn stale_authenticate_refreshes_the_persisted_last_used_at(#[case] backend
     .await;
 
     let token_hash = host::token::hash(&raw_token).unwrap();
-    let stale = UtcInstant::from(
+    let stale = UtcInstant::try_from(
         UtcInstant::now()
             .value()
             .checked_sub(120.seconds())
             .expect("fixture is within Timestamp range"),
-    );
+    )
+    .expect("test instant is within application bounds");
     set_last_used_at(env.base.pool(), &token_hash, stale).await;
 
     let record = authenticate(env.sessions(), env.write_scope(), raw_token).await;
     let persisted_after_auth = load_last_used_at(env.base.pool(), &token_hash).await;
-    let freshness_cutoff_after_auth = UtcInstant::from(
+    let freshness_cutoff_after_auth = UtcInstant::try_from(
         UtcInstant::now()
             .value()
             .checked_sub(60.seconds())
             .expect("fixture is within Timestamp range"),
-    );
+    )
+    .expect("test instant is within application bounds");
 
     assert!(record.last_used_at > stale);
     assert_eq!(record.last_used_at, persisted_after_auth);

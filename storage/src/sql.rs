@@ -9,7 +9,7 @@ use crate::backup::{
     CatalogColumnName, CatalogTableName, RestoreBinary, RestoreBoolean, RestoreInteger,
     RestoreJson, RestoreReal, RestoreText,
 };
-use crate::code_migrations::types::CodeMigrationQueueId;
+use crate::code_migrations::types::{CodeMigrationQueueId, LegacyInstantRowId};
 use crate::feed_cache::{
     FeedCacheGeneratedAt, FeedCacheRepresentationModifiedAt, StoredFeedBody,
     StoredFeedSemanticFingerprint,
@@ -201,6 +201,7 @@ approve_storage_binds!(
     ByteSize,
     ChannelId,
     CodeMigrationQueueId,
+    LegacyInstantRowId,
     ContentHash,
     ContentType,
     DefaultAudience,
@@ -337,6 +338,7 @@ approve_storage_binds!(
     CorruptEmail,
     CorruptEmailAddress,
     CorruptInviteCode,
+    crate::migrations::LegacyCollectionCursorText,
     CorruptPostBody,
     CorruptPostFormat,
     CorruptPostSlug,

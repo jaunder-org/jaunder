@@ -182,9 +182,7 @@ impl BrowserCredentialId {
 #[cfg(feature = "server")]
 fn ceremony_expiry() -> Result<common::time::UtcInstant, InternalError> {
     common::time::UtcInstant::now()
-        .value()
-        .saturating_add(CEREMONY_MINUTES.minutes())
-        .map(common::time::UtcInstant::from)
+        .checked_add(CEREMONY_MINUTES.minutes())
         .map_err(|_| InternalError::server_message("passkey ceremony expiry failed"))
 }
 

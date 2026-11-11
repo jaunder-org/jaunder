@@ -407,11 +407,12 @@ async fn routed_conditional_responses_preserve_the_get_head_validator_matrix(
     let feed_path = "/~charlie/feed.rss";
     let body = "cached feed body";
     let etag = "\"current-feed-etag\"";
-    let modified_at = UtcInstant::from(
+    let modified_at = UtcInstant::try_from(
         "2024-01-02T03:04:05Z"
             .parse::<Timestamp>()
             .expect("fixed HTTP date"),
-    );
+    )
+    .expect("test instant is within application bounds");
     SeedFeedCache::new(fp(feed_path))
         .body(body.to_owned())
         .etag(parse_etag(etag))

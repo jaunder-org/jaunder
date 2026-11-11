@@ -145,6 +145,10 @@ async fn restore_database_transaction(
     let schema_version = schema_version(&mut connection).await?;
     backup::ensure_schema_version(manifest, schema_version)?;
     backup::validate_instance_identity_backup(source_path, manifest)?;
+    let (pending,): (crate::sql::Exists,) = sqlx::query_as("SELECT EXISTS(SELECT 1 FROM pending_code_migrations WHERE operation = 'normalize_comparable_instants_v1')").fetch_one(&mut *connection).await?;
+    // Check the target independently of any queue rows about to be imported.
+    crate::code_migrations::check_postgres_enforcement(&mut connection, pending.into_bool())
+        .await?;
     sqlx::query("BEGIN")
         .execute(&mut *connection)
         .await
@@ -187,6 +191,10 @@ async fn restore_database_transaction(
             .await?;
         }
         backfill_legacy_passkey_user_handles(&mut connection, manifest).await?;
+        // Validate even when pending normalization legitimately has no DDL yet.
+        crate::code_migrations::validate_postgres_population(&mut connection).await?;
+        let (pending,): (crate::sql::Exists,) = sqlx::query_as("SELECT EXISTS(SELECT 1 FROM pending_code_migrations WHERE operation = 'normalize_comparable_instants_v1')").fetch_one(&mut *connection).await?;
+        crate::code_migrations::check_postgres_enforcement(&mut connection, pending.into_bool()).await?;
         // PostgreSQL's `setval` is not transactional. Preflight intentionally
         // rolls back its import, so it must not advance target sequences.
         if commit {
@@ -285,6 +293,7 @@ async fn import_table(
     validation_report: &mut RestoreValidationReport,
 ) -> Result<(), BackupError> {
     let rows = backup::read_table_rows(source_path, table)?;
+    backup::validate_restore_row_columns(table, &rows)?;
     if rows.is_empty() {
         return Ok(());
     }
@@ -309,7 +318,7 @@ async fn import_table(
                         column.name
                     ))
                 })?;
-                backup::restore_bind_value(column, value)
+                backup::restore_bind_value(table, column, value)
             })
             .collect::<Result<Vec<_>, _>>()?;
         bound_rows.push(values);
@@ -335,6 +344,7 @@ fn bind_restore_value(
 ) -> Query<'_, Postgres, sqlx::postgres::PgArguments> {
     match value {
         RestoreBindValue::Null => query.bind_storage(Option::<RestoreText>::None),
+        RestoreBindValue::Instant(value) => query.bind_storage(value),
         RestoreBindValue::Boolean(value) => query.bind_storage(value.into_text()),
         RestoreBindValue::Integer(value) => query.bind_storage(value.into_text()),
         RestoreBindValue::Real { text, .. } => query.bind_storage(text),
@@ -467,7 +477,24 @@ async fn export_table(
 
     while let Some(row) = rows.try_next().await? {
         let json: BackupRowJson = row.try_get(0)?;
-        writer.write_all(json.as_bytes())?;
+        let mut cells: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_slice(json.as_bytes())?;
+        for (column, value) in &mut cells {
+            if backup::comparable_instant_nullability(table, column).is_some() && !value.is_null() {
+                let text = value.as_str().ok_or_else(|| {
+                    BackupError::InvalidBackup(format!(
+                        "native timestamp cell is not text: {table}.{column}"
+                    ))
+                })?;
+                let instant: common::time::UtcInstant = text.parse().map_err(|_| {
+                    BackupError::InvalidBackup(format!(
+                        "native timestamp is outside application bounds: {table}.{column}"
+                    ))
+                })?;
+                *value = serde_json::Value::String(instant.to_string());
+            }
+        }
+        serde_json::to_writer(&mut writer, &cells)?;
         writer.write_all(b"\n")?;
     }
     writer.flush()?;

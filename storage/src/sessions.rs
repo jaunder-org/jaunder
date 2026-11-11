@@ -221,21 +221,14 @@ pub const BROWSER_SESSION_IDLE_SECONDS: i64 = 2_592_000;
 const SESSION_TOUCH_FRESHNESS_SECONDS: i64 = 60;
 
 pub(crate) fn session_idle_cutoff(now: UtcInstant) -> UtcInstant {
-    UtcInstant::from(
-        now.value()
-            .saturating_sub(BROWSER_SESSION_IDLE_SECONDS.seconds())
-            .map_or(jiff::Timestamp::MIN, std::convert::identity),
-    )
+    now.checked_sub(BROWSER_SESSION_IDLE_SECONDS.seconds())
+        .unwrap_or(UtcInstant::MIN)
 }
 
 pub(crate) fn session_touch_cutoff(now: UtcInstant) -> UtcInstant {
-    // At Timestamp::MIN there is no earlier session timestamp to refresh, so
-    // clamping preserves the freshness-window predicate.
-    UtcInstant::from(
-        now.value()
-            .saturating_sub(SESSION_TOUCH_FRESHNESS_SECONDS.seconds())
-            .map_or(jiff::Timestamp::MIN, std::convert::identity),
-    )
+    // No admissible session precedes application MIN; preserve the cutoff policy.
+    now.checked_sub(SESSION_TOUCH_FRESHNESS_SECONDS.seconds())
+        .unwrap_or(UtcInstant::MIN)
 }
 
 /// Per-backend serialization of Session eligibility and conditional activity.
@@ -533,8 +526,12 @@ mod tests {
             SessionKind::Unknown,
         ] {
             let (user_id, _, used) = idle_fixture(&env, kind).await;
-            let before = UtcInstant::from(used.value().checked_add(2_591_999.seconds()).unwrap());
-            let cutoff = UtcInstant::from(used.value().checked_add(2_592_000.seconds()).unwrap());
+            let before =
+                UtcInstant::try_from(used.value().checked_add(2_591_999.seconds()).unwrap())
+                    .expect("test instant is within application bounds");
+            let cutoff =
+                UtcInstant::try_from(used.value().checked_add(2_592_000.seconds()).unwrap())
+                    .expect("test instant is within application bounds");
             assert_eq!(
                 env.sessions()
                     .prune_expired_browser_sessions(before)
@@ -592,7 +589,7 @@ mod tests {
         .await;
         env.base
             .pool()
-            .execute("UPDATE sessions SET last_used_at = '2026-01-01 00:00:00+00'")
+            .execute("UPDATE sessions SET last_used_at = '2026-01-01T00:00:00.000000000Z'")
             .await
             .unwrap();
         // Fail after exactly one full batch. A statement exceeding 500 rows
@@ -671,7 +668,8 @@ mod tests {
         )
         .await;
         let last_used = env.sessions().list_sessions(user_id).await.unwrap()[0].last_used_at;
-        let now = UtcInstant::from(last_used.value().checked_add(2_592_000.seconds()).unwrap());
+        let now = UtcInstant::try_from(last_used.value().checked_add(2_592_000.seconds()).unwrap())
+            .expect("test instant is within application bounds");
         let sessions = env.sessions();
         let result = env
             .write_scope()
@@ -719,7 +717,9 @@ mod tests {
         .await;
         let original = env.sessions().list_sessions(user_id).await.unwrap()[0].last_used_at;
         for (elapsed, touched) in [(59, false), (60, true), (61, false)] {
-            let now = UtcInstant::from(original.value().checked_add(elapsed.seconds()).unwrap());
+            let now =
+                UtcInstant::try_from(original.value().checked_add(elapsed.seconds()).unwrap())
+                    .expect("test instant is within application bounds");
             let sessions = env.sessions();
             let token = raw.clone();
             let authentication = crate::test_support::confirmed_for(
@@ -741,7 +741,8 @@ mod tests {
                 if elapsed < 60 {
                     original
                 } else {
-                    UtcInstant::from(original.value().checked_add(60.seconds()).unwrap())
+                    UtcInstant::try_from(original.value().checked_add(60.seconds()).unwrap())
+                        .expect("test instant is within application bounds")
                 }
             );
         }
@@ -783,7 +784,9 @@ mod tests {
         ] {
             for elapsed in [2_591_999, 2_592_000, 2_592_001] {
                 let (user_id, raw, used) = idle_fixture(&env, kind).await;
-                let now = UtcInstant::from(used.value().checked_add(elapsed.seconds()).unwrap());
+                let now =
+                    UtcInstant::try_from(used.value().checked_add(elapsed.seconds()).unwrap())
+                        .expect("test instant is within application bounds");
                 let sessions = env.sessions();
                 let result = env
                     .write_scope()
@@ -827,7 +830,8 @@ mod tests {
         for elapsed in [59, 2_592_000, 2_592_001] {
             let sessions = env.sessions();
             let token = raw.clone();
-            let now = UtcInstant::from(used.value().checked_add(elapsed.seconds()).unwrap());
+            let now = UtcInstant::try_from(used.value().checked_add(elapsed.seconds()).unwrap())
+                .expect("test instant is within application bounds");
             let result = env
                 .write_scope()
                 .run(|transaction| {
@@ -933,8 +937,12 @@ mod tests {
     ) {
         let env = backend.setup().await;
         let (_, raw, used) = idle_fixture(&env, SessionKind::Browser).await;
-        let first_now = UtcInstant::from(used.value().checked_add(2_591_999.seconds()).unwrap());
-        let later_now = UtcInstant::from(used.value().checked_add(2_592_000.seconds()).unwrap());
+        let first_now =
+            UtcInstant::try_from(used.value().checked_add(2_591_999.seconds()).unwrap())
+                .expect("test instant is within application bounds");
+        let later_now =
+            UtcInstant::try_from(used.value().checked_add(2_592_000.seconds()).unwrap())
+                .expect("test instant is within application bounds");
         let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = tokio::sync::oneshot::channel();
         let sessions = env.sessions();
@@ -1001,8 +1009,10 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let env = backend.setup().await;
         let (user_id, raw, used) = idle_fixture(&env, SessionKind::Browser).await;
-        let before = UtcInstant::from(used.value().checked_add(2_591_999.seconds()).unwrap());
-        let cutoff = UtcInstant::from(used.value().checked_add(2_592_000.seconds()).unwrap());
+        let before = UtcInstant::try_from(used.value().checked_add(2_591_999.seconds()).unwrap())
+            .expect("test instant is within application bounds");
+        let cutoff = UtcInstant::try_from(used.value().checked_add(2_592_000.seconds()).unwrap())
+            .expect("test instant is within application bounds");
         let current = Arc::new(std::sync::Mutex::new(before));
         let reads = Arc::new(AtomicUsize::new(0));
         let clock = SessionClock::for_test({
@@ -1076,7 +1086,8 @@ mod tests {
     async fn serialized_revoke_prevents_waiting_stale_cookie_revival(#[case] backend: Backend) {
         let env = backend.setup().await;
         let (user_id, raw, used) = idle_fixture(&env, SessionKind::Browser).await;
-        let now = UtcInstant::from(used.value().checked_add(60.seconds()).unwrap());
+        let now = UtcInstant::try_from(used.value().checked_add(60.seconds()).unwrap())
+            .expect("test instant is within application bounds");
         let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = tokio::sync::oneshot::channel();
         let sessions = env.sessions();
@@ -1133,10 +1144,7 @@ mod tests {
 
     #[test]
     fn session_touch_cutoff_clamps_at_the_earliest_timestamp() {
-        assert_eq!(
-            session_touch_cutoff(UtcInstant::from(jiff::Timestamp::MIN)),
-            UtcInstant::from(jiff::Timestamp::MIN)
-        );
+        assert_eq!(session_touch_cutoff(UtcInstant::MIN), UtcInstant::MIN);
     }
 
     #[apply(backends)]
@@ -1345,29 +1353,32 @@ mod tests {
         let cases = [
             (
                 "stale",
-                UtcInstant::from(
+                UtcInstant::try_from(
                     stale_before
                         .value()
                         .checked_sub(1.microsecond())
                         .expect("fixture is within Timestamp range"),
-                ),
+                )
+                .expect("test instant is within application bounds"),
                 now,
             ),
             ("exact", stale_before, now),
             (
                 "fresh",
-                UtcInstant::from(
+                UtcInstant::try_from(
                     stale_before
                         .value()
                         .checked_add(1.microsecond())
                         .expect("fixture is within Timestamp range"),
-                ),
-                UtcInstant::from(
+                )
+                .expect("test instant is within application bounds"),
+                UtcInstant::try_from(
                     stale_before
                         .value()
                         .checked_add(1.microsecond())
                         .expect("fixture is within Timestamp range"),
-                ),
+                )
+                .expect("test instant is within application bounds"),
             ),
         ];
 

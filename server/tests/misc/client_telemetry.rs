@@ -541,7 +541,8 @@ async fn telemetry_commit_acknowledgement_loss_rejects_without_cookie_or_report(
         .find(|row| row.token_hash == hash)
         .unwrap()
         .last_used_at;
-    let now = UtcInstant::from(original.value().checked_add(60.seconds()).unwrap());
+    let now = UtcInstant::try_from(original.value().checked_add(60.seconds()).unwrap())
+        .expect("test instant is within application bounds");
     let renewal = web::auth::SessionCookieRenewal::default();
     let limiter = limiter();
     let observation = observe(
@@ -685,7 +686,8 @@ async fn explicit_authorization_suppresses_telemetry_cookie_renewal(#[case] back
     .enumerate()
     {
         let elapsed = i64::try_from(index + 1).unwrap() * 60;
-        let now = UtcInstant::from(original.value().checked_add(elapsed.seconds()).unwrap());
+        let now = UtcInstant::try_from(original.value().checked_add(elapsed.seconds()).unwrap())
+            .expect("test instant is within application bounds");
         let observation = observe(
             app.clone()
                 .layer(axum::Extension(storage::SessionClock::fixed(now))),

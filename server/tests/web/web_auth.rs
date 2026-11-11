@@ -63,7 +63,8 @@ async fn browser_cookie_renews_same_token_only_after_committed_activity(#[case] 
     let original = env.sessions().list_sessions(user.user_id).await.unwrap()[0].last_used_at;
     let request_cookie = format!("session={token}");
     for (elapsed, renew) in [(59, false), (60, true), (61, false)] {
-        let now = UtcInstant::from(original.value().checked_add(elapsed.seconds()).unwrap());
+        let now = UtcInstant::try_from(original.value().checked_add(elapsed.seconds()).unwrap())
+            .expect("test instant is within application bounds");
         let response = post_server_fn_response(
             app.clone()
                 .layer(axum::Extension(storage::SessionClock::fixed(now))),
@@ -130,7 +131,8 @@ async fn browser_cookie_is_not_emitted_without_commit_acknowledgement(
         });
     }
     if !lose_ack {
-        let fresh_now = UtcInstant::from(original.value().checked_add(59.seconds()).unwrap());
+        let fresh_now = UtcInstant::try_from(original.value().checked_add(59.seconds()).unwrap())
+            .expect("test instant is within application bounds");
         let fresh = post_server_fn_response(
             make_app!(&env, &env.base)
                 .layer(axum::Extension(storage::SessionClock::fixed(fresh_now))),
@@ -150,7 +152,8 @@ async fn browser_cookie_is_not_emitted_without_commit_acknowledgement(
     } else {
         env.write_scope()
     };
-    let now = UtcInstant::from(original.value().checked_add(60.seconds()).unwrap());
+    let now = UtcInstant::try_from(original.value().checked_add(60.seconds()).unwrap())
+        .expect("test instant is within application bounds");
     let app = make_app!(&env, &env.base; override_write_scope = scope)
         .layer(axum::Extension(storage::SessionClock::fixed(now)));
     let response = post_server_fn_response(
@@ -203,7 +206,8 @@ async fn durable_kind_not_transport_selects_expiry_and_cookie_renewal(#[case] ba
             .unwrap()
             .last_used_at;
         for (elapsed, transport) in [(60_i64, "cookie"), (120, "bearer"), (180, "basic")] {
-            let now = UtcInstant::from(used.value().checked_add(elapsed.seconds()).unwrap());
+            let now = UtcInstant::try_from(used.value().checked_add(elapsed.seconds()).unwrap())
+                .expect("test instant is within application bounds");
             let mut request = axum::http::Request::builder()
                 .method("POST")
                 .uri(<web::auth::GetSession as ServerFn>::PATH)
@@ -261,7 +265,8 @@ async fn durable_kind_not_transport_selects_expiry_and_cookie_renewal(#[case] ba
             assert_eq!(stored.kind, kind);
             assert_eq!(stored.last_used_at, now);
         }
-        let now = UtcInstant::from(used.value().checked_add(2_592_180.seconds()).unwrap());
+        let now = UtcInstant::try_from(used.value().checked_add(2_592_180.seconds()).unwrap())
+            .expect("test instant is within application bounds");
         let response = post_server_fn_response(
             app.clone()
                 .layer(axum::Extension(storage::SessionClock::fixed(now))),
@@ -305,7 +310,8 @@ async fn throttled_cookie_activity_followed_by_inactivity_expires_without_renewa
         .unwrap();
     let used = env.sessions().list_sessions(user.user_id).await.unwrap()[0].last_used_at;
     for elapsed in [59, 2_592_000, 2_592_001] {
-        let now = UtcInstant::from(used.value().checked_add(elapsed.seconds()).unwrap());
+        let now = UtcInstant::try_from(used.value().checked_add(elapsed.seconds()).unwrap())
+            .expect("test instant is within application bounds");
         let response = post_server_fn_response(
             app.clone()
                 .layer(axum::Extension(storage::SessionClock::fixed(now))),
@@ -466,12 +472,13 @@ async fn create_registration_invite(
     invites: std::sync::Arc<dyn InviteStorage>,
     write_scope: WriteScope,
 ) -> host::invite::InviteCode {
-    let expires_at = UtcInstant::from(
+    let expires_at = UtcInstant::try_from(
         UtcInstant::now()
             .value()
             .checked_add(24.hours())
             .expect("fixture is within Timestamp range"),
-    );
+    )
+    .expect("test instant is within application bounds");
     storage::test_support::confirmed_for(
         write_scope
             .run(|transaction| {
@@ -691,12 +698,13 @@ async fn register_nested_request_maps_invite_code(#[case] backend: Backend) {
         .await;
     let app = secure_app!(&env);
     let invites = std::sync::Arc::clone(&env.invites());
-    let expires_at = UtcInstant::from(
+    let expires_at = UtcInstant::try_from(
         UtcInstant::now()
             .value()
             .checked_add(24.hours())
             .expect("fixture is within Timestamp range"),
-    );
+    )
+    .expect("test instant is within application bounds");
     let outcome = env
         .write_scope()
         .run(|transaction| {
@@ -814,12 +822,13 @@ async fn register_invite_session_failure_rolls_back_user_and_invite(#[case] back
         .await;
     let app = secure_app!(&env);
     let invites = std::sync::Arc::clone(&env.invites());
-    let expires_at = UtcInstant::from(
+    let expires_at = UtcInstant::try_from(
         UtcInstant::now()
             .value()
             .checked_add(24.hours())
             .expect("fixture is within Timestamp range"),
-    );
+    )
+    .expect("test instant is within application bounds");
     let code = storage::test_support::confirmed_for(
         env.write_scope()
             .run(|transaction| {
@@ -950,12 +959,13 @@ async fn register_operator_invites_expired_code_returns_error(#[case] backend: B
 
     // Create an already-expired invite.
     let invites = std::sync::Arc::clone(&env.invites());
-    let expires_at = UtcInstant::from(
+    let expires_at = UtcInstant::try_from(
         UtcInstant::now()
             .value()
             .checked_sub(24.hours())
             .expect("fixture is within Timestamp range"),
-    );
+    )
+    .expect("test instant is within application bounds");
     let outcome = env
         .write_scope()
         .run(|transaction| {

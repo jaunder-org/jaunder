@@ -1322,8 +1322,8 @@ mod tests {
         env.insert_corrupt_media(
             user_id,
             &parse_content_hash(MEDIA_TEST_SHA256),
-            "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
-         VALUES ($1, $2, '../evil', 'upload', 'image/jpeg', 1)",
+            "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes, created_at) \
+         VALUES ($1, $2, '../evil', 'upload', 'image/jpeg', 1, '2000-01-01T00:00:00.000000000Z')",
         )
         .await
         .unwrap();
@@ -1365,8 +1365,8 @@ mod tests {
         env.insert_corrupt_media(
             user_id,
             &parse_content_hash(MEDIA_TEST_SHA256),
-            "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
-         VALUES ($1, $2, 'photo.jpg', 'upload', 'image/jpeg', -1)",
+            "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes, created_at) \
+         VALUES ($1, $2, 'photo.jpg', 'upload', 'image/jpeg', -1, '2000-01-01T00:00:00.000000000Z')",
         )
         .await
         .unwrap();
@@ -1400,8 +1400,8 @@ mod tests {
         env.insert_corrupt_media(
             user_id,
             &parse_content_hash(MEDIA_TEST_SHA256),
-            "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
-         VALUES ($1, $2, 'photo.jpg', 'upload', 'image/jpeg', -5)",
+            "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes, created_at) \
+         VALUES ($1, $2, 'photo.jpg', 'upload', 'image/jpeg', -5, '2000-01-01T00:00:00.000000000Z')",
         )
         .await
         .unwrap();
@@ -1447,8 +1447,8 @@ mod tests {
         // `filename` decode handling; #438). The skip *is* the proof `Decode` rejected it.
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query(
-                "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
-                 VALUES ($1, 'not-a-valid-hash', 'bad.jpg', 'upload', 'image/jpeg', 1)",
+                "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes, created_at) \
+                 VALUES ($1, 'not-a-valid-hash', 'bad.jpg', 'upload', 'image/jpeg', 1, '2000-01-01T00:00:00.000000000Z')",
             )
             .bind_storage(user_id)
             .execute(pool)
@@ -2273,9 +2273,9 @@ mod tests {
         env.base
             .pool()
             .execute(
-                "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
+                "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes, created_at) \
                  VALUES (1, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', \
-                         'remote.jpg', 'cached', 'image/jpeg', 99)",
+                         'remote.jpg', 'cached', 'image/jpeg', 99, '2000-01-01T00:00:00.000000000Z')",
             )
             .await
             .unwrap();

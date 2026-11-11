@@ -68,8 +68,27 @@ impl CatalogTypeName {
 pub(crate) struct CatalogDefinition(String);
 
 impl CatalogDefinition {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    #[cfg(test)]
+    pub(crate) fn into_inner(self) -> String {
+        self.0
+    }
+
     pub(crate) fn as_bytes(&self) -> &[u8] {
         self.0.as_bytes()
+    }
+}
+
+/// Whether `PostgreSQL` has validated a catalog constraint against existing rows.
+#[derive(Debug, macros::SqlxBridge)]
+pub(crate) struct CatalogConstraintValidated(bool);
+
+impl CatalogConstraintValidated {
+    pub(crate) const fn into_bool(self) -> bool {
+        self.0
     }
 }
 

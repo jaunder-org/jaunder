@@ -577,7 +577,8 @@ fn parse_org_date(value: &str, timezone: &str) -> Result<UtcInstant, OrgMetadata
     if timezone.to_datetime(timestamp) != datetime {
         return invalid("DATE is in a DST gap");
     }
-    Ok(UtcInstant::from(timestamp))
+    UtcInstant::from_timestamp(timestamp)
+        .map_err(|_| OrgMetadataError::Invalid("DATE is outside application UTC bounds".into()))
 }
 
 fn choose<T>(structured: Presence<T>, header: Presence<T>) -> Presence<T> {
@@ -735,6 +736,75 @@ Body";
                     .expect("expected UTC instant")
             ))
         );
+    }
+
+    #[test]
+    fn org_date_public_normalization_enforces_normalized_application_bounds() {
+        // DATE has minute precision; expected instants are independent literals.
+        // A local year zero that normalizes into UTC year one remains valid.
+        for (date, weekday, time, zone, expected) in [
+            ("0000-12-31", "Sun", "23:59", "UTC", None),
+            ("0001-01-01", "Mon", "00:59", "Etc/GMT-1", None),
+            (
+                "0001-01-01",
+                "Mon",
+                "01:00",
+                "Etc/GMT-1",
+                Some("0001-01-01T00:00:00.000000000Z"),
+            ),
+            (
+                "0001-01-01",
+                "Mon",
+                "01:01",
+                "Etc/GMT-1",
+                Some("0001-01-01T00:01:00.000000000Z"),
+            ),
+            ("0000-12-31", "Sun", "22:59", "Etc/GMT+1", None),
+            (
+                "0000-12-31",
+                "Sun",
+                "23:00",
+                "Etc/GMT+1",
+                Some("0001-01-01T00:00:00.000000000Z"),
+            ),
+            (
+                "9999-12-30",
+                "Thu",
+                "23:00",
+                "Etc/GMT-1",
+                Some("9999-12-30T22:00:00.000000000Z"),
+            ),
+            ("9999-12-30", "Thu", "23:01", "Etc/GMT-1", None),
+            (
+                "9999-12-30",
+                "Thu",
+                "21:00",
+                "Etc/GMT+1",
+                Some("9999-12-30T22:00:00.000000000Z"),
+            ),
+            ("9999-12-30", "Thu", "21:01", "Etc/GMT+1", None),
+        ] {
+            let source = format!(
+                "#+DATE: [{date} {weekday} {time}]\n#+PROPERTY: JAUNDER_DATE_TZ {zone}\n#+PROPERTY: JAUNDER_STATUS published\nBody"
+            );
+            let result = normalize_org(
+                &source,
+                OrgStructuredMetadata::default(),
+                OrgOperation::Create,
+                UtcInstant::MAX,
+            );
+            match expected {
+                None => assert!(
+                    matches!(result, Err(OrgMetadataError::Invalid(_))),
+                    "{source}: {result:?}"
+                ),
+                Some(expected) => assert_eq!(
+                    result.unwrap().metadata.lifecycle,
+                    Presence::Present(PublicationState::Published(expected.parse().unwrap())),
+                    "{source}"
+                ),
+            }
+        }
     }
 
     #[test]

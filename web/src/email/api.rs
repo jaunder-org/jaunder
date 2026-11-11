@@ -57,14 +57,10 @@ pub async fn request_verification(email: Email) -> WebResult<MutationOutcome<()>
     // Fetch the site's absolute base URL before minting a token so a
     // misconfigured site fails rather than mailing a dead relative link.
     let base_url = mail::require_base_url(&*site_config).await?;
-    // A system clock at Jiff's upper boundary cannot represent the full TTL;
-    // clamping keeps token creation total without wrapping the expiry.
-    let expires_at = UtcInstant::from(
-        UtcInstant::now()
-            .value()
-            .saturating_add(24.hours())
-            .map_or(jiff::Timestamp::MAX, std::convert::identity),
-    );
+    // An unrepresentable TTL is a failure, not a shorter-lived substitute.
+    let expires_at = UtcInstant::now().checked_add(24.hours()).map_err(|_| {
+        InternalError::server_message("email verification expiry is outside application UTC bounds")
+    })?;
     let verification_email = email.clone();
 
     let outcome = write_scope

@@ -160,6 +160,9 @@ async fn restore_database_transaction(
     let schema_version = schema_version(&mut connection).await?;
     backup::ensure_schema_version(manifest, schema_version)?;
     backup::validate_instance_identity_backup(source_path, manifest)?;
+    let (pending,): (crate::sql::Exists,) = sqlx::query_as("SELECT EXISTS(SELECT 1 FROM pending_code_migrations WHERE operation = 'normalize_comparable_instants_v1')").fetch_one(&mut *connection).await?;
+    // Check the target independently of any queue rows about to be imported.
+    crate::code_migrations::check_sqlite_enforcement(&mut connection, pending.into_bool()).await?;
     // Disable FK enforcement for the bulk import so rows need not be inserted in
     // referential order; integrity is verified once at the end via
     // `foreign_key_check`. FKs are re-enabled on every exit path below, since the
@@ -201,6 +204,10 @@ async fn restore_database_transaction(
             .await?;
         }
         backfill_legacy_passkey_user_handles(&mut connection, manifest).await?;
+        // Validate even when pending normalization legitimately has no DDL yet.
+        crate::code_migrations::validate_sqlite_population(&mut connection).await?;
+        let (pending,): (crate::sql::Exists,) = sqlx::query_as("SELECT EXISTS(SELECT 1 FROM pending_code_migrations WHERE operation = 'normalize_comparable_instants_v1')").fetch_one(&mut *connection).await?;
+        crate::code_migrations::check_sqlite_enforcement(&mut connection, pending.into_bool()).await?;
         // Validate FKs *before* committing so a violation rolls the whole restore
         // back rather than leaving invalid data committed. `foreign_key_check`
         // scans for violations and works with `foreign_keys = OFF`, so it runs
@@ -295,6 +302,7 @@ async fn import_table(
     validation_report: &mut RestoreValidationReport,
 ) -> Result<(), BackupError> {
     let rows = backup::read_table_rows(source_path, table)?;
+    backup::validate_restore_row_columns(table, &rows)?;
     if rows.is_empty() {
         return Ok(());
     }
@@ -321,7 +329,7 @@ async fn import_table(
                         "table {table} row is missing column {column_name}"
                     ))
                 })?;
-                backup::restore_bind_value(column, value)
+                backup::restore_bind_value(table, column, value)
             })
             .collect::<Result<Vec<_>, _>>()?;
         bound_rows.push(values);
@@ -364,6 +372,7 @@ fn bind_restore_value(
 ) -> sqlx::query::Query<'_, sqlx::Sqlite, sqlx::sqlite::SqliteArguments> {
     match value {
         RestoreBindValue::Null => query.bind_storage(Option::<RestoreText>::None),
+        RestoreBindValue::Instant(value) => query.bind_storage(value),
         RestoreBindValue::Boolean(value) => query.bind_storage(value),
         RestoreBindValue::Integer(value) => query.bind_storage(value),
         RestoreBindValue::Real { value, .. } => query.bind_storage(value),

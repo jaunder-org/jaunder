@@ -492,20 +492,18 @@ fn post_published_at(
             let hours = i64::try_from(index)?
                 .checked_add(1)
                 .context("backdated fixture clock offset overflows")?;
-            Ok(Some(UtcInstant::from(
+            Ok(Some(
                 clock
-                    .value()
                     .checked_sub(hours.hours())
                     .context("fixed clock range")?,
-            )))
+            ))
         }
         "live" => Ok(Some(clock)),
-        "scheduled" => Ok(Some(UtcInstant::from(
+        "scheduled" => Ok(Some(
             clock
-                .value()
                 .checked_add(SCHEDULED_OFFSET_HOURS.hours())
                 .context("fixed clock range")?,
-        ))),
+        )),
         _ => Ok(None),
     }
 }

@@ -76,16 +76,11 @@ pub async fn create(request: CreateInviteRequest) -> WebResult<MutationOutcome<(
     // address at decode time (ADR-0065), so no in-handler parse is needed.
     let base_url = mail::require_base_url(&*site_config).await?;
 
-    // `InviteTtlHours` bounds the requested duration to 1..=336. A system
-    // clock at Jiff's upper boundary clamps to the maximum instant rather than
-    // wrapping or panicking. `hours` is reused in the email body below.
+    // `hours` remains the requested TTL, including in the email body below.
     let hours = expires_in_hours.unwrap_or_default().value();
-    let expires_at = UtcInstant::from(
-        UtcInstant::now()
-            .value()
-            .saturating_add(hours.hours())
-            .map_or(jiff::Timestamp::MAX, std::convert::identity),
-    );
+    let expires_at = UtcInstant::now().checked_add(hours.hours()).map_err(|_| {
+        InternalError::server_message("invite expiry is outside application UTC bounds")
+    })?;
 
     let outcome = write_scope
         .run(|transaction| {

@@ -192,17 +192,14 @@ async fn deliver_reset_messages(
         }
     };
     let reset_url: MailConfirmUrl = tagged_url::compose(&base_url, "/reset-password");
-    // At Jiff's upper clock boundary, clamp the expiry rather than panicking
-    // inside detached account-enumeration-equalized work.
-
     for (user_id, verified_email) in recipients {
         let password_resets = Arc::clone(&password_resets);
-        let expires_at = UtcInstant::from(
-            UtcInstant::now()
-                .value()
-                .saturating_add(1.hour())
-                .map_or(jiff::Timestamp::MAX, std::convert::identity),
-        );
+        let Ok(expires_at) = UtcInstant::now().checked_add(1.hour()) else {
+            report_request_failure(&InternalError::server_message(
+                "password reset expiry is outside application UTC bounds",
+            ));
+            return;
+        };
         let outcome = match write_scope
             .run(|transaction| {
                 Box::pin(async move {

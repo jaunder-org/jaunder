@@ -690,20 +690,22 @@ mod tests {
             )
             .expect("valid representation"),
             parse_etag("\"sha256-discarded\""),
-            UtcInstant::from(
+            UtcInstant::try_from(
                 existing
                     .representation_modified_at
                     .value()
                     .checked_add(std::time::Duration::from_secs(1))
                     .expect("test instant remains representable"),
-            ),
-            UtcInstant::from(
+            )
+            .expect("test instant is within application bounds"),
+            UtcInstant::try_from(
                 existing
                     .generated_at
                     .value()
                     .checked_add(std::time::Duration::from_secs(1))
                     .expect("test instant remains representable"),
-            ),
+            )
+            .expect("test instant is within application bounds"),
             existing.semantic_fingerprint().clone(),
         )
         .expect("matching cache row");
@@ -728,13 +730,14 @@ mod tests {
                     existing.representation().clone(),
                     existing.etag.clone(),
                     existing.representation_modified_at,
-                    UtcInstant::from(
+                    UtcInstant::try_from(
                         existing
                             .generated_at
                             .value()
                             .checked_add(std::time::Duration::from_secs(1))
                             .expect("test instant remains representable"),
-                    ),
+                    )
+                    .expect("test instant is within application bounds"),
                     existing.semantic_fingerprint().clone(),
                 )
                 .expect("matching effective row")
@@ -767,32 +770,35 @@ mod tests {
                 )
                 .expect("valid representation"),
                 parse_etag("\"sha256-candidate\""),
-                UtcInstant::from(
+                UtcInstant::try_from(
                     existing
                         .representation_modified_at
                         .value()
                         .checked_add(std::time::Duration::from_secs(offset))
                         .expect("test instant remains representable"),
-                ),
-                UtcInstant::from(
+                )
+                .expect("test instant is within application bounds"),
+                UtcInstant::try_from(
                     existing
                         .generated_at
                         .value()
                         .checked_add(std::time::Duration::from_secs(offset))
                         .expect("test instant remains representable"),
-                ),
+                )
+                .expect("test instant is within application bounds"),
                 existing.semantic_fingerprint().clone(),
             )
             .expect("matching cache row")
         };
         let first = candidate("<rss>first candidate</rss>", 1);
-        let latest_generated_at = UtcInstant::from(
+        let latest_generated_at = UtcInstant::try_from(
             existing
                 .generated_at
                 .value()
                 .checked_add(std::time::Duration::from_secs(2))
                 .expect("test instant remains representable"),
-        );
+        )
+        .expect("test instant is within application bounds");
         let second = candidate("<rss>second candidate</rss>", 2);
         let barrier = Arc::new(Barrier::new(2));
         let one_publisher = Arc::clone(&env.publisher());

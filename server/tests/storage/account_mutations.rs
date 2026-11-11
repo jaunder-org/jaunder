@@ -90,21 +90,24 @@ async fn create_named_audience(
 async fn account_mutation_fanout_is_complete_distinct_and_public_only(#[case] backend: Backend) {
     let env = backend.setup().await;
     let user = SeedUser::new().seed(env.users(), env.write_scope()).await;
-    let now = UtcInstant::from(
+    let now = UtcInstant::try_from(
         "2026-09-21T12:00:00Z"
             .parse::<Timestamp>()
             .expect("fixed instant"),
-    );
-    let due = UtcInstant::from(
+    )
+    .expect("test instant is within application bounds");
+    let due = UtcInstant::try_from(
         now.value()
             .checked_sub(1.minute())
             .expect("fixture instant"),
-    );
-    let future = UtcInstant::from(
+    )
+    .expect("test instant is within application bounds");
+    let future = UtcInstant::try_from(
         now.value()
             .checked_add(1.minute())
             .expect("fixture instant"),
-    );
+    )
+    .expect("test instant is within application bounds");
 
     SeedRawPost::new(user.user_id)
         .published_at(due)
