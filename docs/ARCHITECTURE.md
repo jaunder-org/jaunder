@@ -5365,6 +5365,49 @@ retired along with ordinary watch/land CLI, dispatch and report consumers. The
 privileged ADR promoter and its required transport/arming predicates remain in
 xtask unchanged; shared evidence types/classification stay reusable.
 
+### Proposed direction: simplify residual capabilities and retire obsolete tooling endpoints
+
+The proposed [endpoint decision](adr/drafts/retire-xtask-devtool-endpoints.md)
+records a finite simplification, not current implementation. Useful
+development/CI capabilities retain named real consumers and convenient
+single-command workflows. Just owns local composition and shared named static
+invocation definitions; Nix pins and admits tools/immutable inputs/outputs;
+native CI owns scheduling, artifacts and required aggregates. Shared definitions
+do not equate distinct host/hermetic verdicts, modes, populations or Git/index
+admission.
+
+The proposed residual homes are two fixed repository-policy concern interfaces,
+one selected qualification-host executable behind its existing four Just
+workflows, and direct focused Rust/browser proof entrypoints sharing only their
+private existing host-proof algorithms. They reuse current parsers/schema/domain
+libraries and ProcessKit application adapters, not a generic checker registry,
+runner, supervisor or replacement omnibus. Standalone sandbox, performance,
+coverage, seeding and other landed concern owners stay separate. Qualification
+source/tool/lease/publication and host-proof lock/root/capture/cleanup semantics
+remain attached to their consumers; metadata/command success is not a verifier.
+One focused single-process Git/index safety target retains
+admission/reconciliation and shared best-effort checkout/hook preparation.
+Org-timezone evidence reuses common parsing; existing
+coverage/doctest/performance packages, canonical test-support seeding and a
+coverage-owned nondefault PG-custody module provide named residual interfaces.
+Host-proof retains trace-analysis/source diagnostics rather than a generic
+workflow engine.
+
+Only after actual consumer preservation or explicit disposition can obsolete
+endpoints, launchers and exclusive workspace/build/vendor/catalog/report layers
+be retired. Experimental coverage endpoints are explicitly deferred, with their
+necessary devtool build/tests retained until #1898 Lead completes the bounded
+caller/operator disposition and approved preserve/retire/material-loss decision.
+Full devtool retirement cannot be claimed while they remain. Compare total code,
+binary, recipe, Nix, test and documentation maintenance rather than deletion of
+executable names. Preserve existing manual measurement/cache/trace capabilities;
+any material capability/safety loss needs human confirmation.
+No-known-external-consumer remains a bounded qualification. #1864's distinct
+verdicts and #1933's selected passive observations/retention remain separately
+owned; no rejected PR1932 receipt or retiring-xtask tracing integration is
+required. This proposed direction neither claims retirement complete nor
+authorizes implementation, outline, commit, merge or cleanup.
+
 ## Documentation & decision process
 
 The documentation architecture is event-sourced: ADRs in `docs/adr/` are
