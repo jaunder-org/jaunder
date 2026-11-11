@@ -263,7 +263,7 @@ Lets the warning tests assert on emitted warnings without touching the real
           ;; The server's <published> offset is dropped to the canonical UTC
           ;; instant (tz-independent, so deterministic across machines).
           (should (equal (jaunder--buffer-property "JAUNDER_DATE_UTC")
-                         "2026-07-01T13:00:00Z"))
+                         "2026-07-01T13:00:00.000000000Z"))
           ;; publish-now (no author #+DATE:) → #+DATE: rendered from server time.
           (should (jaunder--buffer-keyword "DATE")))
       (when (buffer-file-name) (delete-file (buffer-file-name))))))
@@ -542,7 +542,7 @@ Lets the warning tests assert on emitted warnings without touching the real
                 (should (equal (jaunder--buffer-property "JAUNDER_ID") "42"))
                 (should (equal (jaunder--buffer-property "JAUNDER_SYNCED") "\"remote\""))
                 (should (equal (jaunder--buffer-property "JAUNDER_SYNCED_AT")
-                               "2020-01-01T00:00:00Z"))
+                               "2020-01-01T00:00:00.000000000Z"))
                 (should-not (jaunder--buffer-property "JAUNDER_CREATE_KEY"))
                 (should-not (jaunder--buffer-property "JAUNDER_AUDIENCE"))
                 (let* ((local (jaunder--make-inventory-local
@@ -1549,8 +1549,8 @@ an unconditional update."
     (insert "#+TITLE: T\n\nBody\n")
     (set-visited-file-name (make-temp-file "jaunder-write-back-" nil ".org") nil t)
     (unwind-protect
-        (cl-letf (((symbol-function 'format-time-string)
-                   (lambda (&rest _) "2026-09-18T00:00:00Z")))
+        (cl-letf (((symbol-function 'current-time)
+                   (lambda () (time-add (date-to-time "2026-09-18T00:00:00Z") '(0 0 0 1000)))))
           (jaunder--write-back
            (jaunder-test--response
             201 '( ("Location" . "https://example.test/posts/7") ("ETag" . "\"etag\""))
@@ -1559,7 +1559,7 @@ an unconditional update."
                     "<content type=\"text/org\">Body</content><j:slug>post</j:slug></entry>"))
            t 'changed)
           (should (equal (jaunder--buffer-property "JAUNDER_SYNCED_AT")
-                         "2026-09-18T00:00:00Z")))
+                         "2026-09-18T00:00:00.000000001Z")))
       (when (buffer-file-name) (delete-file (buffer-file-name))))))
 
 ;;; jaunder-publish-test.el ends here

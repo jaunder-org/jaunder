@@ -54,7 +54,7 @@
               "#+PROPERTY: JAUNDER_SLUG untitled-note\n"
               "#+PROPERTY: JAUNDER_ID 42\n"
               "#+PROPERTY: JAUNDER_SYNCED \"sha256-test\"\n"
-              "#+PROPERTY: JAUNDER_SYNCED_AT 2026-08-25T12:00:00Z\n"
+              "#+PROPERTY: JAUNDER_SYNCED_AT 2026-08-25T12:00:00.000000000Z\n"
               "\nBody\nhttps://h/media/x.png")))))
 
 (ert-deftest jaunder-atom->org-scheduled-multiline-metadata-is-reversible ()
@@ -77,12 +77,12 @@
                     "#+DESCRIPTION: First\n#+DESCRIPTION: Second\n"
                     "#+PROPERTY: JAUNDER_STATUS scheduled\n"
                     "#+PROPERTY: JAUNDER_DATE_TZ UTC\n"
-                    "#+PROPERTY: JAUNDER_DATE_UTC 2026-08-26T11:00:00Z\n"
+                    "#+PROPERTY: JAUNDER_DATE_UTC 2026-08-26T11:00:00.000000000Z\n"
                     "#+PROPERTY: JAUNDER_FORMAT markdown\n"
                     "#+PROPERTY: JAUNDER_SLUG scheduled-post\n"
                     "#+PROPERTY: JAUNDER_ID 7\n"
                     "#+PROPERTY: JAUNDER_SYNCED \"sha256-test\"\n"
-                    "#+PROPERTY: JAUNDER_SYNCED_AT 2026-08-25T12:00:00Z\n"
+                    "#+PROPERTY: JAUNDER_SYNCED_AT 2026-08-25T12:00:00.000000000Z\n"
                     "\n# Body\nhttps://h/media/y.png")))
     ;; The complete pull header is consumable by publishing without teaching this
     ;; test the server's Org grammar: assert only the client's outgoing entry.
@@ -207,7 +207,7 @@
                              (format "<published>%s</published>" published))
                        (cdr parts))))))
     (should (string-match-p
-             "#\\+PROPERTY: JAUNDER_DATE_UTC 2026-08-24T10:00:00.123Z"
+             "#\\+PROPERTY: JAUNDER_DATE_UTC 2026-08-24T10:00:00.123000000Z"
              (jaunder-pull-test--org
               (apply #'jaunder-pull-test--entry
                      (append (list "<title>T</title>"
@@ -241,8 +241,8 @@
        (jaunder-pull-test--org
         (apply #'jaunder-pull-test--entry
                (cons (format "<published>%s</published>" published) parts)))))
-    (dolist (pair '(("2024-02-29T23:59:59.123+14:30" . "2024-02-29T09:29:59.123Z")
-                    ("2024-02-29T00:00:00Z" . "2024-02-29T00:00:00Z")))
+    (dolist (pair '(("2024-02-29T23:59:59.123+14:30" . "2024-02-29T09:29:59.123000000Z")
+                    ("2024-02-29T00:00:00Z" . "2024-02-29T00:00:00.000000000Z")))
       (should
        (string-match-p
         (regexp-quote (concat "#+PROPERTY: JAUNDER_DATE_UTC " (cdr pair)))
@@ -893,6 +893,28 @@
                (lambda (&rest _) (setq requested t))))
       (should-error (jaunder--pull-stage-member "/tmp" 'not-a-member)))
     (should-not requested)))
+
+(ert-deftest jaunder-atom->org-canonical-clock-and-later-fold-publication ()
+  "Pull preserves exact publication and clock ns without changing zone identity."
+  (let* ((xml (jaunder-pull-test--entry
+               "<title>Fold</title>"
+               "<published>2030-11-03T01:30:17.987654321-05:00</published>"
+               "<j:timezone>US/Eastern</j:timezone>"
+               "<link rel=\"edit\" href=\"https://h/atompub/alice/posts/7\"/>"
+               "<j:slug>fold</j:slug><content type=\"text/org\">Body</content>"))
+         (org (jaunder--atom->org xml "\"etag\""
+                                  (time-add (date-to-time "2030-11-04T00:00:00Z") '(0 0 0 1000)) "UTC")))
+    (dolist (line '("#+DATE: [2030-11-03 Sun 01:30]"
+                    "#+PROPERTY: JAUNDER_DATE_TZ US/Eastern"
+                    "#+PROPERTY: JAUNDER_DATE_UTC 2030-11-03T06:30:17.987654321Z"
+                    "#+PROPERTY: JAUNDER_SYNCED_AT 2030-11-04T00:00:00.000000001Z"))
+      (should (string-match-p (regexp-quote line) org)))
+    (with-temp-buffer
+      (insert org)
+      (org-mode)
+      (should (equal (jaunder-entry-published
+                      (jaunder--org->atom "Europe/London"))
+                     "2030-11-03T06:30:17.987654321Z")))))
 
 (provide 'jaunder-pull-test)
 ;;; jaunder-pull-test.el ends here

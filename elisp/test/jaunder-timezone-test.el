@@ -181,17 +181,17 @@
 
 (ert-deftest jaunder-timezone-authored-dates-use-latest-zone-and-retain-fold-identity ()
   (dolist (case '((nil "[2026-07-01 Wed 09:00]" "America/New_York" nil "Europe/London"
-                       "2026-07-01T08:00:00Z")
+                       "2026-07-01T08:00:00Z" "2026-07-01T08:00:00.000000000Z")
                   (t "[2026-07-01 Wed 10:15]" "America/New_York"
-                     "2026-07-01T13:00:42.123Z" "Europe/London" "2026-07-01T09:15:00Z")
+                     "2026-07-01T13:00:42.123Z" "Europe/London" "2026-07-01T09:15:00Z" "2026-07-01T09:15:00.000000000Z")
                   (t "[2030-11-03 Sun 01:30]" "America/New_York"
-                     "2030-11-03T06:30:17.987654321Z" "Europe/London" "2030-11-03T06:30:17.987654321Z")
+                     "2030-11-03T06:30:17.987654321Z" "Europe/London" "2030-11-03T06:30:17.987654321Z" "2030-11-03T06:30:17.987654321Z")
                   (t "[2030-11-03 Sun 01:30]" "Europe/London"
-                     "2030-11-02T12:00:00Z" "America/New_York" "2030-11-03T05:30:00Z")
-                  (nil "[2026-07-01 Wed 09:00]" "UTC" nil "US/Eastern" "2026-07-01T13:00:00Z")
+                     "2030-11-02T12:00:00Z" "America/New_York" "2030-11-03T05:30:00Z" "2030-11-03T05:30:00.000000000Z")
+                  (nil "[2026-07-01 Wed 09:00]" "UTC" nil "US/Eastern" "2026-07-01T13:00:00Z" "2026-07-01T13:00:00.000000000Z")
                   (t "[2026-07-01 Wed 18:30]" "+0530"
-                     "2026-07-01T13:00:42.123Z" "Europe/London" "2026-07-01T13:00:42.123Z")))
-    (pcase-let ((`(,existing ,date ,old-zone ,marker ,zone ,expected) case))
+                     "2026-07-01T13:00:42.123Z" "Europe/London" "2026-07-01T13:00:42.123Z" "2026-07-01T13:00:42.123000000Z")))
+    (pcase-let ((`(,existing ,date ,old-zone ,marker ,zone ,expected ,owned) case))
       (jaunder-timezone-test--with-post
        (concat "#+DATE: " date "\n#+PROPERTY: JAUNDER_DATE_TZ " old-zone "\n"
                (when marker (concat "#+PROPERTY: JAUNDER_DATE_UTC " marker "\n"))
@@ -207,7 +207,7 @@
                         (jaunder-timezone-test--receipt xml)))))
            (jaunder-publish))
          (should (equal (cdr (assq 'published sent)) expected))
-         (should (equal (jaunder--buffer-property "JAUNDER_DATE_UTC") expected))
+         (should (equal (jaunder--buffer-property "JAUNDER_DATE_UTC") owned))
          (should (equal (jaunder--buffer-property "JAUNDER_DATE_TZ") zone)))))))
 
 (ert-deftest jaunder-timezone-publish-rejects-unparseable-local-date-before-network-write ()
@@ -296,7 +296,7 @@
        (jaunder-publish))
      (should (= reads 1))
      (should (equal (cdr (assq 'published sent)) "2026-07-01T08:00:00Z"))
-     (should (equal (jaunder--buffer-property "JAUNDER_DATE_UTC") "2026-07-01T08:00:00Z")))))
+     (should (equal (jaunder--buffer-property "JAUNDER_DATE_UTC") "2026-07-01T08:00:00.000000000Z")))))
 
 (ert-deftest jaunder-timezone-directory-authored-put-checkpoints-captured-zone ()
   "Both ordinary push and reviewed keep-local retain the zone sent by that PUT."

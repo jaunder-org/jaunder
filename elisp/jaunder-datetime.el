@@ -59,7 +59,9 @@ Returns nil when DATE-RAW does not parse to a time."
   (let ((decoded (ignore-errors (org-parse-time-string date-raw))))
     (when decoded
       (setf (nth 8 decoded) (jaunder--resolve-zone tz))
-      (format-time-string "%Y-%m-%dT%H:%M:%SZ" (encode-time decoded) t))))
+      (let ((utc (format-time-string "%Y-%m-%dT%H:%M:%SZ" (encode-time decoded) t)))
+        (jaunder--publication-utc utc)
+        utc))))
 
 (defun jaunder--utc->org-date (utc tz)
   "Render an org inactive timestamp for UTC interpreted in zone TZ.
@@ -91,8 +93,10 @@ Unlike `jaunder--org-date->utc', this is local preparation only."
             (push instant candidates)))))
     (unless candidates
       (user-error "jaunder: DATE is nonexistent or invalid in %s; choose another local time" zone))
-    (format-time-string "%Y-%m-%dT%H:%M:%SZ"
-                        (car (sort candidates #'time-less-p)) t)))
+    (let ((utc (format-time-string "%Y-%m-%dT%H:%M:%SZ"
+                                   (car (sort candidates #'time-less-p)) t)))
+      (jaunder--publication-utc utc)
+      utc)))
 
 (defun jaunder--local-baseline-zone-p (zone)
   "Return non-nil for a recognized named ZONE or valid legacy numeric offset.
@@ -122,13 +126,7 @@ write-back belong to the publish workflow, not this pure preparation step."
   ;; A missing baseline must never turn a routine edit into a new instant.
   (when existing
     (unless (and (stringp saved-utc)
-                 (string-match-p
-                  "\\`[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}T[0-9]\\{2\\}:[0-9]\\{2\\}:[0-9]\\{2\\}\\(?:\\.[0-9]\\{1,9\\}\\)?Z\\'"
-                  saved-utc)
-                 (ignore-errors
-                   (equal (format-time-string "%Y-%m-%dT%H:%M:%SZ"
-                                              (date-to-time saved-utc) t)
-                          (replace-regexp-in-string "\\.[0-9]+Z\\'" "Z" saved-utc))))
+                 (ignore-errors (jaunder--publication-utc saved-utc)))
       (user-error "jaunder: missing/invalid JAUNDER_DATE_UTC; pull/reconcile before publishing")))
   (when (and existing (not (jaunder--local-baseline-zone-p old-zone)))
     (user-error "jaunder: missing/invalid JAUNDER_DATE_TZ baseline; pull/reconcile before publishing"))
@@ -187,12 +185,74 @@ regional identity or DST history from an offset, or reuse the old Post zone."
           (jaunder--warn "cannot capture a supported named device timezone or exact supported whole-hour offset; using UTC")
           "UTC")))))
 
+(defconst jaunder--datetime-rfc-3339-regexp
+  "\\`\\([0-9]\\{4\\}\\)-\\([0-9]\\{2\\}\\)-\\([0-9]\\{2\\}\\)T\\([0-9]\\{2\\}\\):\\([0-9]\\{2\\}\\):\\([0-9]\\{2\\}\\)\\(?:\\.[0-9]\\{1,9\\}\\)?\\(?:Z\\|[+-]\\([0-9]\\{2\\}\\):\\([0-9]\\{2\\}\\)\\)\\'"
+  "RFC-3339 timestamp shape with captured calendar and numeric-offset fields.")
+
+(defun jaunder--datetime-components-valid-p (published)
+  "Return non-nil when matched RFC-3339 PUBLISHED fields are semantically valid.
+This rejects values `date-to-time' would normalize, including impossible
+Gregorian dates and out-of-range numeric offsets."
+  (let* ((year (string-to-number (match-string 1 published)))
+         (month (string-to-number (match-string 2 published)))
+         (day (string-to-number (match-string 3 published)))
+         (hour (string-to-number (match-string 4 published)))
+         (minute (string-to-number (match-string 5 published)))
+         (second (string-to-number (match-string 6 published)))
+         (offset-hour (match-string 7 published))
+         (offset-minute (match-string 8 published))
+         (days-in-month
+          (and (<= 1 month 12)
+               (aref [0 31 28 31 30 31 30 31 31 30 31 30 31] month))))
+    (when (and (= month 2)
+               (or (= 0 (% year 400))
+                   (and (= 0 (% year 4))
+                        (/= 0 (% year 100)))))
+      (setq days-in-month 29))
+    (and days-in-month
+         (<= 1 day days-in-month)
+         (<= 0 hour 23)
+         (<= 0 minute 59)
+         (<= 0 second 59)
+         (or (null offset-hour)
+             (and (<= (string-to-number offset-hour) 23)
+                  (<= (string-to-number offset-minute) 59))))))
+
 (defun jaunder--publication-utc (published)
-  "Canonicalize server PUBLISHED to UTC without discarding fractional digits."
-  (let ((fraction (and (string-match "\\.\\([0-9]+\\)" published)
-                       (match-string 1 published))))
-    (concat (format-time-string "%Y-%m-%dT%H:%M:%S" (date-to-time published) t)
-            (and fraction (concat "." fraction)) "Z")))
+  "Canonicalize PUBLISHED to fixed-nine UTC within the application range.
+Retain source nanoseconds as text; only whole seconds pass through Emacs."
+  (unless (and (stringp published)
+               (string-match jaunder--datetime-rfc-3339-regexp published)
+               (jaunder--datetime-components-valid-p published))
+    (error "jaunder: invalid offset-qualified RFC-3339 instant"))
+  (let* ((fraction (if (string-match "\\.\\([0-9]+\\)" published)
+                       (match-string 1 published) ""))
+         (utc (concat
+               (format-time-string
+                "%Y-%m-%dT%H:%M:%S"
+                (date-to-time
+                 (replace-regexp-in-string "\\.[0-9]+" "" published)) t)
+               "." fraction (make-string (- 9 (length fraction)) ?0) "Z")))
+    (unless (and (= (length utc) 30)
+                 (not (string< utc "0001-01-01T00:00:00.000000000Z"))
+                 (not (string< "9999-12-30T22:00:00.999999999Z" utc)))
+      (error "jaunder: UTC instant outside application range"))
+    utc))
+
+(defun jaunder--utc-time (value)
+  "Parse valid RFC-3339 VALUE into an exact Emacs time, preserving nanoseconds."
+  (let ((utc (jaunder--publication-utc value)))
+    ;; `date-to-time' ignores fractions on supported Emacs versions.  Add
+    ;; integer picoseconds to its whole-second result, never a floating clock.
+    (time-add (date-to-time (concat (substring utc 0 19) "Z"))
+              (list 0 0 0 (* 1000 (string-to-number (substring utc 20 29)))))))
+
+(defun jaunder--canonical-utc (&optional time)
+  "Emit TIME (or the current clock) as application-range fixed-nine UTC.
+String inputs retain their source precision through the publication seam."
+  (jaunder--publication-utc
+   (if (stringp time) time
+     (format-time-string "%Y-%m-%dT%H:%M:%S.%9NZ" (or time (current-time)) t))))
 
 (defun jaunder--current-zone-name ()
   "Return the machine's current IANA zone name, else a numeric offset string.

@@ -3042,7 +3042,7 @@ The current filename supplies the local slug evidence used by matched-pull tests
                                  "#+PROPERTY: JAUNDER_STATUS published\n"
                                  "#+PROPERTY: JAUNDER_AUDIENCE subscribers\n"
                                  "#+PROPERTY: JAUNDER_ID 42\n"
-                                 "#+PROPERTY: JAUNDER_SYNCED_AT 2026-08-25T00:00:00Z\n\nRemote body.\n"))))
+                                 "#+PROPERTY: JAUNDER_SYNCED_AT 2026-08-25T00:00:00.000000000Z\n\nRemote body.\n"))))
       (delete-file path))))
 
 (ert-deftest jaunder-reconcile-pull-malformed-remote-title-preserves-matched-post ()
@@ -3186,10 +3186,14 @@ The current filename supplies the local slug evidence used by matched-pull tests
             (should-not (file-exists-p path))
             (should (equal (buffer-file-name buffer) destination))
             (with-current-buffer buffer
-              (should (equal (buffer-string) new))
+              (should (equal (buffer-string)
+                             (replace-regexp-in-string
+                              "2026-09-17T00:00:00Z" "2026-09-17T00:00:00.000000000Z" new)))
               (should-not (buffer-modified-p))
-              (should (= (point) point)))
-            (should (= (window-start window) window-start))))
+              ;; Canonicalizing the historical sync header adds ten bytes;
+              ;; retain the same body position rather than its old offset.
+              (should (= (point) (+ point 10))))
+            (should (= (window-start window) (+ window-start 10)))))
       (when (buffer-live-p buffer) (kill-buffer buffer))
       (delete-directory root t))))
 
@@ -3231,7 +3235,7 @@ The current filename supplies the local slug evidence used by matched-pull tests
                 (should (equal (plist-get result :post-id) "7"))
                 (should (equal (plist-get result :slug) "new"))
                 (should (equal (plist-get result :etag) "\"old\""))
-                (should (equal (plist-get result :synced-at) "2026-09-17T00:00:00Z"))
+                (should (equal (plist-get result :synced-at) "2026-09-17T00:00:00.000000000Z"))
                 (should (= (plist-get result :http-status) 200)))))
           (should (file-exists-p path))
           (should-not (file-exists-p destination))

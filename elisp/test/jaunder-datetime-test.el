@@ -248,4 +248,51 @@ Lets the warning tests assert on emitted warnings without touching the real
             '(:utc "2026-07-01T13:00:42.123Z"
                    :date "[2026-07-01 Wed 14:00]" :zone "Europe/London")))))
 
+(ert-deftest jaunder-publication-utc-canonical-nanoseconds ()
+  "Owned UTC output pads precision without passing fractions through a clock."
+  (dolist (pair '(("2026-07-01T13:00:00Z" . "2026-07-01T13:00:00.000000000Z")
+                  ("1969-12-31T18:59:59.000000001-05:00" . "1969-12-31T23:59:59.000000001Z")
+                  ("2030-11-03T01:30:17.987654321-05:00" . "2030-11-03T06:30:17.987654321Z")
+                  ("2026-07-01T18:30:42.123+05:30" . "2026-07-01T13:00:42.123000000Z")))
+    (should (equal (jaunder--publication-utc (car pair)) (cdr pair)))))
+
+(ert-deftest jaunder-sync-marker-historical-and-canonical ()
+  "Reconciliation reads historical markers and exact new nanoseconds alike."
+  (dolist (value '("1969-12-31T23:59:59Z"
+                   "1969-12-31T18:59:59.123456789-05:00"
+                   "1969-12-31T23:59:59.123456789Z"
+                   "1969-12-31T23:59:59.1+00:00"))
+    (let ((time (jaunder--reconcile-synced-time value)))
+      (should time)
+      (should (equal (format-time-string "%Y-%m-%dT%H:%M:%S.%9NZ" time t)
+                     (cond ((string-match-p "123456789" value)
+                            "1969-12-31T23:59:59.123456789Z")
+                           ((string-suffix-p ".1+00:00" value)
+                            "1969-12-31T23:59:59.100000000Z")
+                           (t "1969-12-31T23:59:59.000000000Z")))))))
+
+(ert-deftest jaunder-owned-utc-normalized-application-bounds ()
+  "Bounds are UTC instants, not local-year or post-1970 restrictions."
+  (dolist (pair '(("0001-01-01T00:00:00Z" . "0001-01-01T00:00:00.000000000Z")
+                  ("0000-12-31T23:00:00-01:00" . "0001-01-01T00:00:00.000000000Z")
+                  ("9999-12-30T23:00:00.999999999+01:00" . "9999-12-30T22:00:00.999999999Z")))
+    (should (equal (jaunder--publication-utc (car pair)) (cdr pair)))
+    (should (jaunder--reconcile-synced-time (car pair))))
+  (dolist (value '("0000-12-31T23:59:59.999999999Z"
+                   "0001-01-01T00:00:00+00:01"
+                   "9999-12-30T22:00:01Z"
+                   "9999-12-30T22:00:00.999999999-00:01"
+                   "2026-02-30T12:00:00Z"
+                   "2026-07-01T12:00:00+24:00"
+                   "2026-07-01T12:00:00.1234567890Z"))
+    (should-error (jaunder--publication-utc value))
+    (should-not (jaunder--reconcile-synced-time value))))
+
+(ert-deftest jaunder-date-prepare-rejects-normalized-out-of-range-local-date ()
+  "Local preparation must reject UTC crossings before any publication request."
+  (dolist (case '(("[0001-01-01 Mon 00:00]" "Etc/GMT-1")
+                  ("[9999-12-31 Fri 00:00]" "UTC")))
+    (should-error (jaunder--prepare-local-date
+                   (car case) nil nil (cadr case) nil))))
+
 ;;; jaunder-datetime-test.el ends here
