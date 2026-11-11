@@ -1138,6 +1138,76 @@ does not rerun live ERT.
 Jaunder uses OpenTelemetry for deep performance analysis (see
 [ADR-0011](docs/adr/0011-unified-observability.md)).
 
+#### Surviving workflow observations
+
+Ordinary `just tsc` (including `just tsc fix`) best-effort records the
+recipe-owned request under `.xtask/run/<handle>.trace.d/` and, after completion,
+`<handle>.trace.json`. Its envelope begins at the passive recorder's monotonic
+start, before dependency setup, and ends when the owner publishes its saved
+setup/request result. It includes Cargo bootstrap and recorder handoff overhead;
+Just evaluation and other pre-entry work are outside the envelope and unknown.
+This is request duration, not compiler execution time. The recipe still runs
+setup and the unchanged Cargo/devtool request directly with inherited streams,
+skips the request after setup failure, and returns its immediately saved status.
+Recorder refusal, absence or write failure is diagnostic only. There are no
+observation traps, workload supervision or competing signal/cleanup owners.
+
+Records contain bounded verify/fix mode, monotonic timing and observed
+success/failure boundary/status. Source and compiler/tool identities currently
+remain explicitly `unknown`; the recorder's package version is not compiler
+identity or dirty-input provenance. Linux correlates the host clock with its
+boot UUID; macOS reads the fixed `/usr/sbin/sysctl -n kern.bootsessionuuid`
+metadata utility. Unavailable/malformed metadata or a mismatched boot/origin is
+refused, not replaced with fabricated elapsed time. A missing finish retains
+useful start context with outcome/boundary unknown: it does not imply success, a
+signal or cleanup. **Raw output not archived:** original compiler diagnostics
+remain on inherited stdout/stderr; these passive records promise no later
+retrieval. Explicit outer `traced-run -- just tsc` capture is separate,
+user-selected output capture, not automatic compiler-output archival.
+
+The native **Validation hermetic** CI job remains the owner of job/step timing,
+status, source context and logs. Its optional `always()` diagnostic upload keeps
+available complete/partial `.xtask/diagnostics/` and `.xtask/run/` evidence,
+including hidden paths, for **14 days**. Missing files and upload failure warn
+visibly without changing the workload verdict. Required producer evidence and
+aggregate checks remain authoritative; optional diagnostics do not certify
+completeness. Native CI logs retain their existing 14-day policy. Neither local
+request latency nor CI duration proves a fresh cache, substitution or newly
+executed Nix builder work. Nested/overlapping intervals are not additive CPU or
+human effort and must not be summed as such.
+
+Checkout-local runner stdout/stderr, named trace fragments and completed traces
+are not count-pruned: they remain for the worktree lifetime, with growing disk
+usage accepted. Monitor storage explicitly; capture/storage failures are
+incidents, not successful observations. No collector, expiry service or implicit
+removal is provided.
+
+For consumer-selected export, choose a fresh absolute destination and explicitly
+select the available files of the intended handle. For example, with a completed
+observation, run these existing coreutils commands from the checkout in Bash:
+
+```bash
+handle='<selected-handle>'
+destination='/absolute/consumer-selected/export'
+mkdir -- "$destination"
+cd .xtask/run
+files=("$handle.trace.d/start.jsonl" "$handle.trace.d/finish.jsonl" "$handle.trace.json")
+sha256sum -- "${files[@]}" > "$destination/selected.sha256"
+cp --parents -- "${files[@]}" "$destination/"
+sha256sum --check "$destination/selected.sha256"
+(cd "$destination" && sha256sum --check selected.sha256)
+```
+
+For a partial observation, select only its available fragments (at minimum
+`<handle>.trace.d/start.jsonl`), not an invented final trace. Check every
+command's exit status before proceeding. The manifest preserves selected
+relative handle identities and byte hashes; rechecking both source and export
+detects missing, changed or incorrectly selected bytes, not workload
+completeness or provenance. A failed copy/hash check is an export incident: keep
+source evidence, report the failure and do not infer removal or workload-rerun
+authority. Successful export also leaves source intact. Any removal requires
+separate explicit authorization; these commands and the observation grant none.
+
 #### Repeatable performance harness
 
 `just perf [profile] [backends] [browsers] [workload] [posts] [authors] [revisions]`

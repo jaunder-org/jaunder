@@ -95,14 +95,22 @@ jobs:
       - name: Validate hermetic lane (via Just)
         run: nix develop .#ci --accept-flake-config -c just ci-validate-hermetic
       - name: Upload hermetic validation diagnostics
+        id: hermetic-diagnostics
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v7.0.1
         with:
           name: validate-hermetic-diagnostics
           path: |
             .xtask/diagnostics/
-          if-no-files-found: ignore
+            .xtask/run/
+          include-hidden-files: true
+          if-no-files-found: warn
           retention-days: 14
+      - name: Warn on hermetic diagnostics upload failure
+        if: always() && steps.hermetic-diagnostics.outcome == 'failure'
+        run: |
+          echo "::warning::Hermetic diagnostics upload failed; workload verdict remains authoritative"
 
   validate-test-checks:
     name: Validation test checks
