@@ -1206,7 +1206,7 @@ async fn seed_pending_render_rebuild(database: &storage::DbConnectOptions) {
     const QUERIES: [&str; 3] = [
         "INSERT INTO users (username, password_hash, created_at) VALUES ('portable-author', 'hash', CURRENT_TIMESTAMP)",
         "INSERT INTO posts (user_id, slug, body, format, rendered_html, created_at, updated_at)
-         SELECT user_id, 'portable-org', 'A---B...', 'org', '<p>A---B...</p>', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+         SELECT user_id, 'portable-org', 'A---B...', 'org', '<p>A---B...</p>', '2026-01-02T03:04:05.000000000Z', '2026-01-02T03:04:05.000000000Z'
          FROM users WHERE username = 'portable-author'",
         "INSERT INTO pending_code_migrations (operation) VALUES ('rebuild_rendered_posts')",
     ];

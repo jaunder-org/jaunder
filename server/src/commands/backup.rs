@@ -298,7 +298,7 @@ mod tests {
         sqlx::query(
             "INSERT INTO posts (user_id, slug, body, format, rendered_html, created_at, updated_at)
              SELECT user_id, 'snapshot-post', 'A---B...', 'org', '<p>A---B...</p>',
-                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                    '2026-01-02T03:04:05.000000000Z', '2026-01-02T03:04:05.000000000Z'
              FROM users WHERE username = 'snapshot-author'",
         )
         .execute(&pool)

@@ -412,7 +412,12 @@ mod tests {
 
         let json = serde_json::to_value(&manifest).expect("manifest serializes");
         assert_eq!(json["format_version"], CURRENT_BACKUP_FORMAT_VERSION);
-        assert_eq!(json["timestamp"], "2026-08-26T01:02:03.123456Z");
+        assert_eq!(json["timestamp"], "2026-08-26T01:02:03.123456000Z");
+        // Canonical timestamp spelling changes no other manifest field or role.
+        assert_eq!(
+            serde_json::to_string(&manifest).expect("manifest bytes"),
+            r#"{"format_version":3,"version":"0.1.0","schema_version":1,"schema_checksum":"checksum","timestamp":"2026-08-26T01:02:03.123456000Z","mode":"directory","tables":[]}"#
+        );
         assert_eq!(
             serde_json::from_value::<BackupManifest>(json)
                 .expect("manifest deserializes")
@@ -437,7 +442,7 @@ mod tests {
         assert_eq!(manifest.format_version, LEGACY_BACKUP_FORMAT_VERSION);
         assert_eq!(
             manifest.timestamp.to_string(),
-            "2026-08-26T01:02:03.123456Z"
+            "2026-08-26T01:02:03.123456000Z"
         );
     }
 
@@ -461,7 +466,7 @@ mod tests {
             .expect("supported timestamp text")
             .parse()
             .expect("decode supported preceding row");
-        assert_eq!(supported.to_string(), "2026-08-26T01:02:03.123456Z");
+        assert_eq!(supported.to_string(), "2026-08-26T01:02:03.123456000Z");
         rows[1]["published_at"]
             .as_str()
             .expect("out-of-range timestamp text")

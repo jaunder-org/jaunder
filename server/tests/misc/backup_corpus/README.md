@@ -32,8 +32,10 @@ reader or writer contract check reports backup-format incompatibility:
    tar/gzip bytes and metadata are not canonical.
 
 The production writer must emit a version that resolves to exactly one supported
-fixture and its matching oracle. Do not repair a format mismatch by editing
-`format-1.zip` history: add the new fixture, oracle, and index entry instead.
+current-schema fixture and its matching oracle. Readable format versions do not
+waive the separate exact-schema and selected-cell admission rules. Do not repair
+a format mismatch by editing `format-1.zip` history: add the new fixture,
+oracle, and index entry instead.
 
 ## Fixture integrity and schema materialization
 
@@ -57,7 +59,10 @@ fixture is current-schema row-shape evidence: tests first verify it, extract it
 to temporary storage, and change **only** the copied `manifest.json`
 `schema_version` to the target's current version. The original fixture, its
 provenance sentinels, and every other byte remain unchanged. This is test
-materialization, not a schema migration or a format conversion.
+materialization, not a schema migration or a format conversion. It does not
+normalize row cells: the immutable format-1/2 materializable examples now assert
+canonical-cell rejection after manifest-only substitution. Their formats remain
+supported; incompatible supplied cells are not an unsupported-format verdict.
 
 A historical-schema fixture sets `materializable: false`. It remains immutable
 format evidence, but its original schema version is restored unchanged and must
@@ -114,21 +119,48 @@ publication-timezone provenance sentinels. Only these three payload members
 differ; all historical ZIP payloads and digests remain unchanged. Schema 52 is
 now historical-schema rejection evidence, not a current-schema input.
 
-The current writer oracle pins schema 53, the unchanged wire/path inventory, and
-distinct current/prior timezone strings with equal publication instants. The
-public reader matrix verifies the named zone and exact alias through both
-storage record types on both backends, from directory and archive inputs.
-Formats 1 and 2 retain their legacy omitted-field/default-UTC coverage. No
-production cross-schema restore conversion or format bump is introduced.
+At schema 53, the writer oracle pinned the unchanged wire/path inventory and
+distinct current/prior timezone strings with equal publication instants. Its
+reader matrix verified the named zone and exact alias through both storage
+record types on both backends, from directory and archive inputs. At that
+schema, formats 1 and 2 retained legacy omitted-field/default-UTC coverage. No
+production cross-schema restore conversion or format bump was introduced.
+
+## Schema-54 canonical-instant format-3 evidence
+
+`format-3-schema-54.zip` is a new immutable example, independently authored from
+the schema-53 row examples, not captured from the production encoder. Its new
+provenance manifest pins schema 54. The selected comparable timestamp cells in
+Posts, Revisions, Sessions, Media and Passkey credentials use exact fixed-nine
+UTC `Z`; six-digit fractions are padded without changing their instants. NULLs,
+IDs, relationships, timezone strings, structured JSON/real wire roles, media,
+all other row cells and the table/path inventory remain unchanged. Every older
+ZIP byte and normalized digest is preserved. The schema-53 entry is now
+historical-schema rejection evidence.
+
+The schema-54 writer oracle retains the existing member/path/type/relationship
+checks and independently checks fixed-nine ASCII timestamp shape. It
+additionally pins the public Post's `2026-04-29T12:34:56.789012000Z` bytes and
+the matching Revision instant with their distinct timezone strings. The reader
+matrix restores the new fixture through real directory and archive inputs on
+both backends and checks the durable Session kinds, Passkey microseconds and all
+prior wire roles. No production formatter supplies this oracle's expected
+strings.
+
+Format-1/2 historical materialization is still exercised through both input
+forms and backends, but now must reject `media.created_at` as a noncanonical
+comparable cell, leaving the target unchanged. Merely substituting schema 54
+cannot turn those cells into valid current input. No fixture bytes are silently
+upgraded, no supplied backup is normalized, and format support is not retired.
 
 ## Retirement
 
 Keep every historical fixture, including one for a retired format. After schema
-materialization, the public restore matrix must still show supported entries
-succeed and retired entries fail with the typed unsupported-format error before
-database or media mutation. Retiring support requires an explicit approved
-specification and ADR decision; changing `support` in `index.json` alone is
-insufficient.
+materialization, the public restore matrix must show compatible supported
+entries succeed, incompatible supported cells reject atomically, and retired
+entries fail with the typed unsupported-format error before database or media
+mutation. Retiring support requires an explicit approved specification and ADR
+decision; changing `support` in `index.json` alone is insufficient.
 
 Format wire compatibility is intentionally distinct from live schema/migration
 compatibility. Package version, timestamp, and backend-specific schema checksum
