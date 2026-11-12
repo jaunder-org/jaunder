@@ -103,7 +103,7 @@
                                                                          "\n#\\+PROPERTY: JAUNDER_ID " id
                                                                          "\n#\\+PROPERTY: JAUNDER_SYNCED \"sha256-[0-9a-f]+\""
                                                                          "\n#\\+PROPERTY: JAUNDER_SYNCED_AT "
-                                                                         "[0-9T:-]+Z\n\n")
+                                                                         "[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}T[0-9]\\{2\\}:[0-9]\\{2\\}:[0-9]\\{2\\}\\.[0-9]\\{9\\}Z\n\n")
                                                                  bytes))
                                                         (should (string-suffix-p server-body bytes))
                                                         (should (string-match-p (regexp-quote media-url) bytes))

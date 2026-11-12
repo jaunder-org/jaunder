@@ -43,11 +43,12 @@ async fn render_feed(
 }
 
 fn fixed_instant(day: u32) -> UtcInstant {
-    UtcInstant::from(
+    UtcInstant::try_from(
         format!("2024-01-{day:02}T00:00:00Z")
             .parse::<Timestamp>()
             .expect("fixed test instant"),
     )
+    .expect("test instant is within application bounds")
 }
 
 async fn set_tagline(

@@ -9,7 +9,79 @@ use crate::backup::BackupError;
 
 use super::ColumnInfo;
 
+use common::time::UtcInstant;
 use serde_json::Value;
+
+/// The approved comparable population only; this is not catalog discovery or
+/// an extensible export registry. `Some(true)` denotes a nullable selected cell.
+pub(crate) fn comparable_instant_nullability(table: &str, column: &str) -> Option<bool> {
+    match (table, column) {
+        ("posts" | "post_revisions", "created_at" | "updated_at")
+        | ("post_revisions", "captured_at")
+        | ("sessions", "created_at" | "last_used_at")
+        | ("invites" | "email_verifications" | "password_resets", "created_at" | "expires_at")
+        | ("media" | "idempotency_keys" | "passkey_credentials", "created_at")
+        | ("feed_events", "next_attempt_at" | "created_at")
+        | ("feed_cache", "representation_modified_at" | "generated_at")
+        | ("passkey_registration_ceremonies" | "passkey_authentication_ceremonies", "expires_at") => {
+            Some(false)
+        }
+        ("posts" | "post_revisions", "published_at" | "deleted_at")
+        | ("invites" | "email_verifications" | "password_resets", "used_at")
+        | ("passkey_credentials", "last_used_at")
+        | ("feed_events", "claimed_at" | "terminal_at" | "regenerated_at" | "pinged_at")
+        | ("passkey_registration_ceremonies" | "passkey_authentication_ceremonies", "claimed_at") => {
+            Some(true)
+        }
+        _ => None,
+    }
+}
+
+/// Validate spelling before a native PG cast can erase it. Selected timestamps
+/// enter the same closed bind sum as a checked instant, never as arbitrary text.
+pub(crate) fn restore_table_bind_value(
+    table: &str,
+    column: &ColumnInfo,
+    value: &Value,
+) -> Result<RestoreBindValue, BackupError> {
+    if let Some(nullable) = comparable_instant_nullability(table, &column.name) {
+        if nullable && value.is_null() {
+            return Ok(RestoreBindValue::Null);
+        }
+        if let Some(text) = value.as_str()
+            && let Ok(instant) = text.parse::<UtcInstant>()
+            && instant.to_string() == text
+        {
+            return Ok(RestoreBindValue::Instant(instant));
+        }
+        return Err(BackupError::InvalidBackup(format!(
+            "noncanonical comparable instant in {table}.{}",
+            column.name
+        )));
+    }
+    restore_bind_value(column, value)
+}
+
+/// An INSERT's columns are selected once, so every row must have exactly that
+/// same key set. Otherwise a later supplied cell could be silently discarded
+/// before strict timestamp admission (including a valid publication instant).
+pub(crate) fn validate_restore_row_columns(
+    table: &str,
+    rows: &[serde_json::Map<String, Value>],
+) -> Result<(), BackupError> {
+    let Some(first) = rows.first() else {
+        return Ok(());
+    };
+    for (index, row) in rows.iter().enumerate().skip(1) {
+        if row.len() != first.len() || row.keys().any(|key| !first.contains_key(key)) {
+            return Err(BackupError::InvalidBackup(format!(
+                "table {table} row {} has inconsistent row columns",
+                index + 1
+            )));
+        }
+    }
+    Ok(())
+}
 
 pub(crate) const BINARY_WIRE_KEY: &str = "$jaunder_binary_hex";
 /// A lossless binary cell from an NDJSON backup row.
@@ -148,6 +220,7 @@ mod tests {
 #[derive(Debug)]
 pub(crate) enum RestoreBindValue {
     Null,
+    Instant(UtcInstant),
     Boolean(RestoreBoolean),
     Integer(RestoreInteger),
     Real {

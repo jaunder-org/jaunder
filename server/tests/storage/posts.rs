@@ -281,11 +281,12 @@ fn update_input<'a>(
 #[tokio::test]
 async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let now = UtcInstant::from(
+    let now = UtcInstant::try_from(
         "2026-06-26T12:00:00Z"
             .parse::<Timestamp>()
             .expect("fixed test instant"),
-    );
+    )
+    .expect("test instant is within application bounds");
     let alice = SeedUser::new()
         .seed(env.users(), env.write_scope())
         .await
@@ -304,11 +305,12 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     let title = parse_post_title("Updated Title");
 
     // Publish { at: Some(future) } on a draft => scheduled at that instant.
-    let future = UtcInstant::from(
+    let future = UtcInstant::try_from(
         now.value()
             .checked_add(24.hours())
             .expect("fixture is within Timestamp range"),
-    );
+    )
+    .expect("test instant is within application bounds");
     let rec = confirmed(
         perform_post_update(
             &env.write_scope(),
@@ -333,11 +335,12 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     );
 
     // Publish { at: Some(past) } stores the exact backdated instant.
-    let past = UtcInstant::from(
+    let past = UtcInstant::try_from(
         now.value()
             .checked_sub(24.hours())
             .expect("fixture is within Timestamp range"),
-    );
+    )
+    .expect("test instant is within application bounds");
     let backdated = confirmed(
         perform_post_update(
             &env.write_scope(),
@@ -1365,11 +1368,12 @@ async fn current_revision_summary_derives_lifecycle_from_request_clock(#[case] b
         .await
         .user_id;
     let now = UtcInstant::now();
-    let scheduled_at = UtcInstant::from(
+    let scheduled_at = UtcInstant::try_from(
         now.value()
             .checked_add(1.hour())
             .expect("fixture is within Timestamp range"),
-    );
+    )
+    .expect("test instant is within application bounds");
     let post_id = SeedRawPost::new(owner)
         .published_at(scheduled_at)
         .seed(env.posts(), env.write_scope())
@@ -1387,12 +1391,13 @@ async fn current_revision_summary_derives_lifecycle_from_request_clock(#[case] b
         .get_current_revision_summary(
             owner,
             post_id,
-            UtcInstant::from(
+            UtcInstant::try_from(
                 scheduled_at
                     .value()
                     .checked_add(1.second())
                     .expect("fixture is within Timestamp range"),
-            ),
+            )
+            .expect("test instant is within application bounds"),
         )
         .await
         .unwrap()

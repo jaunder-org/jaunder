@@ -18,12 +18,13 @@ use storage::{
 async fn create_invite_and_list_invites_includes_it(#[case] backend: Backend) {
     let env = backend.setup().await;
 
-    let expires_at = UtcInstant::from(
+    let expires_at = UtcInstant::try_from(
         UtcInstant::now()
             .value()
             .checked_add(24.hours())
             .expect("fixture is within Timestamp range"),
-    );
+    )
+    .expect("test instant is within application bounds");
     let code = create_invite(env.invites(), env.write_scope(), expires_at).await;
 
     let list = env.invites().list_invites().await.unwrap();
@@ -268,12 +269,13 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken(
     // alice exists before the invite is used
     let user = SeedUser::new().seed(env.users(), env.write_scope()).await;
 
-    let expires_at = UtcInstant::from(
+    let expires_at = UtcInstant::try_from(
         UtcInstant::now()
             .value()
             .checked_add(24.hours())
             .expect("fixture is within Timestamp range"),
-    );
+    )
+    .expect("test instant is within application bounds");
     let code = create_invite(env.invites(), env.write_scope(), expires_at).await;
 
     let err = create_user_with_invite_result(
@@ -350,16 +352,18 @@ async fn create_user_with_invite_hash_failure_preserves_password_error_and_invit
 async fn invite_list_operations(#[case] backend: Backend) {
     let env = backend.setup().await;
     let now = UtcInstant::now();
-    let future = UtcInstant::from(
+    let future = UtcInstant::try_from(
         now.value()
             .checked_add(1.hour())
             .expect("fixture is within Timestamp range"),
-    );
-    let past = UtcInstant::from(
+    )
+    .expect("test instant is within application bounds");
+    let past = UtcInstant::try_from(
         now.value()
             .checked_sub(1.hour())
             .expect("fixture is within Timestamp range"),
-    );
+    )
+    .expect("test instant is within application bounds");
 
     let _invite1 = create_invite(env.invites(), env.write_scope(), future).await;
 

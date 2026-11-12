@@ -473,7 +473,8 @@ mod tests {
             .expect("timestamp scan")
             .expect("timestamp");
 
-        assert_eq!(timestamp.to_string(), "2026-01-02T00:00:00Z");
+        assert_eq!(timestamp, "2026-01-02T00:00:00Z".parse().unwrap());
+        assert_eq!(timestamp.to_string(), "2026-01-02T00:00:00.000000000Z");
     }
 
     #[test]
@@ -488,7 +489,8 @@ mod tests {
             .expect("timestamp scan")
             .expect("timestamp");
 
-        assert_eq!(timestamp.to_string(), "2026-01-02T00:00:00Z");
+        assert_eq!(timestamp, "2026-01-02T00:00:00Z".parse().unwrap());
+        assert_eq!(timestamp.to_string(), "2026-01-02T00:00:00.000000000Z");
     }
 
     #[test]

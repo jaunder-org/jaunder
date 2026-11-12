@@ -2928,9 +2928,9 @@ mod tests {
             .pool()
             .execute(
                 "UPDATE posts SET
-                   created_at = '2026-04-10T01:02:03.123456Z',
-                   updated_at = '2026-04-11T04:05:06.654321Z',
-                   deleted_at = '2026-04-13T07:08:09.999999Z'",
+                   created_at = '2026-04-10T01:02:03.123456000Z',
+                   updated_at = '2026-04-11T04:05:06.654321000Z',
+                   deleted_at = '2026-04-13T07:08:09.999999000Z'",
             )
             .await
             .unwrap();
@@ -5080,11 +5080,12 @@ mod tests {
 
         // Two stale cached feeds, both older than the post above, so both would need
         // catch-up if they were readable.
-        let stale = UtcInstant::from(
+        let stale = UtcInstant::try_from(
             now.value()
                 .checked_sub(Duration::from_hours(1))
                 .expect("test instant remains representable"),
-        );
+        )
+        .expect("test instant is within application bounds");
         for url in ["/feed.rss", "/feed.atom"] {
             SeedFeedCache::new(fp(url))
                 .body("<rss/>".to_owned())
@@ -6539,11 +6540,14 @@ mod tests {
         let mk = |slug: &str, published: bool| {
             let builder = SeedRawPost::new(uid).slug(slug);
             if published {
-                builder.published_at(UtcInstant::from(
-                    now.value()
-                        .checked_sub(Duration::from_mins(30))
-                        .expect("test instant remains representable"),
-                ))
+                builder.published_at(
+                    UtcInstant::try_from(
+                        now.value()
+                            .checked_sub(Duration::from_mins(30))
+                            .expect("test instant remains representable"),
+                    )
+                    .expect("test instant is within application bounds"),
+                )
             } else {
                 builder.draft()
             }
@@ -6566,21 +6570,27 @@ mod tests {
         // Give distinct updated_at (post2 more recent than post1) and soft-delete post3.
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query("UPDATE posts SET updated_at = $1 WHERE post_id = $2")
-                .bind_storage(UtcInstant::from(
-                    now.value()
-                        .checked_sub(Duration::from_hours(2))
-                        .expect("test instant remains representable"),
-                ))
+                .bind_storage(
+                    UtcInstant::try_from(
+                        now.value()
+                            .checked_sub(Duration::from_hours(2))
+                            .expect("test instant remains representable"),
+                    )
+                    .expect("test instant is within application bounds"),
+                )
                 .bind_storage(post1_id)
                 .execute(pool)
                 .await
                 .unwrap();
             sqlx::query("UPDATE posts SET updated_at = $1 WHERE post_id = $2")
-                .bind_storage(UtcInstant::from(
-                    now.value()
-                        .checked_sub(Duration::from_hours(1))
-                        .expect("test instant remains representable"),
-                ))
+                .bind_storage(
+                    UtcInstant::try_from(
+                        now.value()
+                            .checked_sub(Duration::from_hours(1))
+                            .expect("test instant remains representable"),
+                    )
+                    .expect("test instant is within application bounds"),
+                )
                 .bind_storage(post2_id)
                 .execute(pool)
                 .await
@@ -6937,11 +6947,12 @@ mod tests {
             )
             .await;
         let now = parse_utc_instant("2026-08-01T12:00:00Z");
-        let future = UtcInstant::from(
+        let future = UtcInstant::try_from(
             now.value()
                 .checked_add(Duration::from_hours(1))
                 .expect("future fixture remains representable"),
-        );
+        )
+        .expect("test instant is within application bounds");
         let private = SeedRawPost::new(user.user_id)
             .slug("historical-private-target")
             .published_at(now)
@@ -7067,11 +7078,12 @@ mod tests {
             .user_id;
         let now = parse_utc_instant("2026-08-01T12:00:00Z");
         let date = PermalinkDate::from(jiff::tz::Offset::UTC.to_datetime(now.value()).date());
-        let future = UtcInstant::from(
+        let future = UtcInstant::try_from(
             now.value()
                 .checked_add(Duration::from_hours(1))
                 .expect("future fixture instant remains representable"),
-        );
+        )
+        .expect("test instant is within application bounds");
 
         let private = SeedRawPost::new(user_id)
             .slug("alias-private")
@@ -7449,11 +7461,12 @@ mod tests {
         let env = backend.setup().await;
         let posts = &*env.posts();
         let now = UtcInstant::now();
-        let scheduled_at = UtcInstant::from(
+        let scheduled_at = UtcInstant::try_from(
             now.value()
                 .checked_add(Duration::from_hours(720))
                 .expect("test instant remains representable"),
-        );
+        )
+        .expect("test instant is within application bounds");
         let author = SeedUser::new()
             .seed(
                 std::sync::Arc::clone(&env.users()),

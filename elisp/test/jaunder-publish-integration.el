@@ -224,7 +224,7 @@
       (let ((id (jaunder--buffer-property "JAUNDER_ID"))
             (utc (jaunder--buffer-property "JAUNDER_DATE_UTC"))
             (local (current-buffer)))
-        (should (equal utc "2024-07-01T13:00:00Z"))
+        (should (equal utc "2024-07-01T13:00:00.000000000Z"))
         (should (equal (jaunder--buffer-property "JAUNDER_DATE_TZ") "America/New_York"))
         (jaunder-pub-test--web-zone-edit id "Europe/London" utc)
         ;; Pull runs on the NY device.  It must adopt London's server pair,
@@ -372,7 +372,7 @@
                  (lambda (_ text &rest _) (push text warnings))))
         (jaunder-publish))
       (should (equal (jaunder--buffer-property "JAUNDER_DATE_TZ") "Etc/GMT+5"))
-      (should (equal (jaunder--buffer-property "JAUNDER_DATE_UTC") "2024-07-01T14:00:00Z"))
+      (should (equal (jaunder--buffer-property "JAUNDER_DATE_UTC") "2024-07-01T14:00:00.000000000Z"))
       (should (string-match-p (regexp-quote "inferred fixed offset Etc/GMT+5") (car warnings)))
       (cl-letf (((symbol-function 'file-symlink-p) (lambda (_) nil))
                 ((symbol-function 'current-time-zone) (lambda (&rest _) '(3600 "unknown")))
@@ -380,7 +380,7 @@
         (jaunder-publish))
       (should (equal (jaunder--buffer-property "JAUNDER_DATE_TZ") "Etc/GMT-1"))
       (should (equal (jaunder--buffer-keyword "DATE") "[2024-07-01 Mon 15:00]"))
-      (should (equal (jaunder--buffer-property "JAUNDER_DATE_UTC") "2024-07-01T14:00:00Z"))
+      (should (equal (jaunder--buffer-property "JAUNDER_DATE_UTC") "2024-07-01T14:00:00.000000000Z"))
       (let ((fields (jaunder--harvest-response-fields
                      (plist-get (jaunder--http-request
                                  "GET" (jaunder--member-url (jaunder--buffer-property "JAUNDER_ID"))) :body))))

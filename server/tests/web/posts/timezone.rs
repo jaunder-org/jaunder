@@ -50,7 +50,7 @@ async fn publication_timezone_web_org_transport_over_header_preserves_instant(
         assert_eq!(record.timezone.as_ref(), expected);
         assert_eq!(
             record.published_at.unwrap().to_string(),
-            "2020-11-01T05:30:00Z"
+            "2020-11-01T05:30:00.000000000Z"
         );
     }
 }

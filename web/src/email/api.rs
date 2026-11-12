@@ -39,6 +39,13 @@ fn finalize_verification(outcome: &MutationOutcome<common::ids::UserId>) -> Muta
     }
 }
 
+#[cfg(feature = "server")]
+fn verification_expiry(now: UtcInstant) -> Result<UtcInstant, InternalError> {
+    now.checked_add(24.hours()).map_err(|_| {
+        InternalError::server_message("email verification expiry is outside application UTC bounds")
+    })
+}
+
 /// Sends a verification email to `email`. Requires authentication.
 ///
 /// Creates a 24-hour verification token, sends an absolute
@@ -57,14 +64,8 @@ pub async fn request_verification(email: Email) -> WebResult<MutationOutcome<()>
     // Fetch the site's absolute base URL before minting a token so a
     // misconfigured site fails rather than mailing a dead relative link.
     let base_url = mail::require_base_url(&*site_config).await?;
-    // A system clock at Jiff's upper boundary cannot represent the full TTL;
-    // clamping keeps token creation total without wrapping the expiry.
-    let expires_at = UtcInstant::from(
-        UtcInstant::now()
-            .value()
-            .saturating_add(24.hours())
-            .map_or(jiff::Timestamp::MAX, std::convert::identity),
-    );
+    // An unrepresentable TTL is a failure, not a shorter-lived substitute.
+    let expires_at = verification_expiry(UtcInstant::now())?;
     let verification_email = email.clone();
 
     let outcome = write_scope
@@ -139,6 +140,25 @@ pub async fn verify(token: RawToken) -> WebResult<MutationOutcome<()>> {
 mod tests {
     use super::finalize_verification;
     use common::{MutationOutcome, ids::UserId};
+
+    #[test]
+    fn verification_expiry_preserves_full_ttl_or_returns_exact_failure() {
+        use common::time::UtcInstant;
+        let now = "2026-01-01T00:00:00Z".parse().unwrap();
+        assert_eq!(
+            super::verification_expiry(now).unwrap().to_string(),
+            "2026-01-02T00:00:00.000000000Z"
+        );
+        let error = super::verification_expiry(UtcInstant::MAX).unwrap_err();
+        assert_eq!(
+            crate::error::project(error.kind(), error.public_message()),
+            crate::error::WebError::server_message("server operation failed")
+        );
+        assert_eq!(
+            error.operator_message(),
+            "email verification expiry is outside application UTC bounds"
+        );
+    }
 
     #[test]
     fn verification_indeterminate_outcome_preserves_uncertainty_and_erases_user_id() {

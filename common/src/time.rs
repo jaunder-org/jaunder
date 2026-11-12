@@ -1,6 +1,4 @@
 use std::fmt;
-#[cfg(feature = "sqlx")]
-use std::fmt::Write;
 use std::str::FromStr;
 
 use jiff::{Timestamp, civil, tz::TimeZone};
@@ -128,23 +126,75 @@ mod publication_timezone_tests {
 /// instead of a bare RFC 3339 `String` (ADR-0063; see
 /// `docs/adr/0072-timestamps-cross-boundary-as-utcinstant.md`).
 ///
-/// It wraps [`jiff::Timestamp`] and is serde-transparent, so it serializes as
-/// Jiff's canonical RFC 3339 UTC string. Parsing delegates directly to Jiff's
-/// Temporal timestamp parser; offset-bearing input therefore represents the
-/// same instant as its canonical `Z` form.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+/// It wraps [`jiff::Timestamp`] within the application's positive-year range.
+/// Parsing retains Jiff's Temporal input compatibility, while Display, serde
+/// and `SQLite` all emit the same lossless, fixed-nine UTC representation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct UtcInstant(Timestamp);
 
 /// Error returned when a string cannot be parsed as a [`UtcInstant`].
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("invalid RFC 3339 timestamp")]
+#[error("invalid timestamp or instant outside application UTC bounds")]
 pub struct InvalidInstant;
 
 impl UtcInstant {
+    /// The earliest sortable application instant, not Jiff's BCE minimum.
+    pub const MIN: Self = Self(Timestamp::constant(-62_135_596_800, 0));
+    /// Jiff's real maximum; the rest of calendar year 9999 is not representable.
+    pub const MAX: Self = Self(Timestamp::MAX);
+
+    /// Check after UTC normalization, so offset crossings cannot evade bounds.
+    ///
+    /// # Errors
+    /// Returns [`InvalidInstant`] when `timestamp` is outside [`Self::MIN`] through
+    /// [`Self::MAX`], inclusive.
+    pub fn from_timestamp(timestamp: Timestamp) -> Result<Self, InvalidInstant> {
+        if timestamp < Self::MIN.0 || timestamp > Self::MAX.0 {
+            return Err(InvalidInstant);
+        }
+        Ok(Self(timestamp))
+    }
+
+    /// Checked timestamp arithmetic never silently clamps a result.
+    ///
+    /// # Errors
+    /// Returns [`InvalidInstant`] if Jiff arithmetic fails or the result is
+    /// outside the application bounds.
+    pub fn checked_add<A: Into<jiff::TimestampArithmetic>>(
+        self,
+        amount: A,
+    ) -> Result<Self, InvalidInstant> {
+        Self::from_timestamp(self.0.checked_add(amount).map_err(|_| InvalidInstant)?)
+    }
+
+    /// Checks both Jiff overflow and the application's narrower lower bound.
+    ///
+    /// # Errors
+    /// Returns [`InvalidInstant`] if Jiff arithmetic fails or the result is
+    /// outside the application bounds.
+    pub fn checked_sub<A: Into<jiff::TimestampArithmetic>>(
+        self,
+        amount: A,
+    ) -> Result<Self, InvalidInstant> {
+        Self::from_timestamp(self.0.checked_sub(amount).map_err(|_| InvalidInstant)?)
+    }
+
     /// The current wall-clock instant in UTC.
+    ///
+    /// # Panics
+    /// Panics if the system clock is outside the application bounds.
     #[must_use]
     pub fn now() -> Self {
-        Self(Timestamp::now())
+        Self::from_clock(Timestamp::now())
+    }
+
+    fn from_clock(timestamp: Timestamp) -> Self {
+        match Self::from_timestamp(timestamp) {
+            Ok(instant) => instant,
+            Err(error) => panic!(
+                "system clock invariant: current UTC instant is outside application bounds: {error:?}"
+            ),
+        }
     }
 
     /// The inner [`Timestamp`] by value. Use `Timestamp::from(x)` / `x.into()`
@@ -155,9 +205,23 @@ impl UtcInstant {
     }
 }
 
-impl From<Timestamp> for UtcInstant {
-    fn from(timestamp: Timestamp) -> Self {
-        Self(timestamp)
+impl TryFrom<Timestamp> for UtcInstant {
+    type Error = InvalidInstant;
+
+    fn try_from(timestamp: Timestamp) -> Result<Self, Self::Error> {
+        Self::from_timestamp(timestamp)
+    }
+}
+
+impl Serialize for UtcInstant {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for UtcInstant {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::from_timestamp(Timestamp::deserialize(deserializer)?).map_err(de::Error::custom)
     }
 }
 
@@ -171,13 +235,17 @@ impl FromStr for UtcInstant {
     type Err = InvalidInstant;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        s.parse().map(Self).map_err(|_| InvalidInstant)
+        Self::from_timestamp(s.parse().map_err(|_| InvalidInstant)?)
     }
 }
 
 impl fmt::Display for UtcInstant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
+        f.write_str(
+            &jiff::fmt::temporal::DateTimePrinter::new()
+                .precision(Some(9))
+                .timestamp_to_string(&self.0),
+        )
     }
 }
 
@@ -340,7 +408,7 @@ fn utc_instant_from_local_in(local: &str, timezone: &TimeZone) -> Option<UtcInst
         .to_ambiguous_timestamp(datetime)
         .compatible()
         .ok()
-        .map(UtcInstant::from)
+        .and_then(|timestamp| UtcInstant::from_timestamp(timestamp).ok())
 }
 
 fn strict_utc_instant_from_local_in(local: &str, timezone: &TimeZone) -> Option<UtcInstant> {
@@ -349,7 +417,10 @@ fn strict_utc_instant_from_local_in(local: &str, timezone: &TimeZone) -> Option<
         .to_ambiguous_timestamp(datetime)
         .compatible()
         .ok()?;
-    (timezone.to_datetime(timestamp) == datetime).then_some(UtcInstant::from(timestamp))
+    if timezone.to_datetime(timestamp) != datetime {
+        return None;
+    }
+    UtcInstant::from_timestamp(timestamp).ok()
 }
 
 #[cfg(feature = "sqlx")]
@@ -381,9 +452,8 @@ impl<'r> sqlx::Decode<'r, sqlx::Postgres> for UtcInstant {
     fn decode(
         value: <sqlx::Postgres as sqlx::Database>::ValueRef<'r>,
     ) -> Result<Self, sqlx::error::BoxDynError> {
-        <jiff_sqlx::Timestamp as sqlx::Decode<'r, sqlx::Postgres>>::decode(value)
-            .map(jiff_sqlx::Timestamp::to_jiff)
-            .map(Self)
+        let timestamp = <jiff_sqlx::Timestamp as sqlx::Decode<'r, sqlx::Postgres>>::decode(value)?;
+        Self::from_timestamp(timestamp.to_jiff()).map_err(Into::into)
     }
 }
 
@@ -407,20 +477,7 @@ impl<'q> sqlx::Encode<'q, sqlx::Sqlite> for UtcInstant {
         &self,
         buffer: &mut <sqlx::Sqlite as sqlx::Database>::ArgumentBuffer,
     ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
-        let nanos = self.0.subsec_nanosecond().unsigned_abs();
-        let fractional_width = if nanos == 0 {
-            0
-        } else if nanos.is_multiple_of(1_000_000) {
-            3
-        } else if nanos.is_multiple_of(1_000) {
-            6
-        } else {
-            9
-        };
-        let mut timestamp = String::with_capacity(38);
-        write!(&mut timestamp, "{:.*}", fractional_width, self.0)?;
-        let _ = timestamp.pop();
-        timestamp.push_str("+00:00");
+        let timestamp = self.to_string();
         <String as sqlx::Encode<'q, sqlx::Sqlite>>::encode(timestamp, buffer)
     }
 }
@@ -431,27 +488,94 @@ impl<'r> sqlx::Decode<'r, sqlx::Sqlite> for UtcInstant {
         value: <sqlx::Sqlite as sqlx::Database>::ValueRef<'r>,
     ) -> Result<Self, sqlx::error::BoxDynError> {
         if sqlx::TypeInfo::name(sqlx::ValueRef::type_info(&value).as_ref()) != "TEXT" {
-            return <jiff_sqlx::Timestamp as sqlx::Decode<'r, sqlx::Sqlite>>::decode(value)
-                .map(jiff_sqlx::Timestamp::to_jiff)
-                .map(Self);
+            let timestamp =
+                <jiff_sqlx::Timestamp as sqlx::Decode<'r, sqlx::Sqlite>>::decode(value)?;
+            return Self::from_timestamp(timestamp.to_jiff()).map_err(Into::into);
         }
 
         let timestamp = <&str as sqlx::Decode<'r, sqlx::Sqlite>>::decode(value)?;
-        if let Ok(timestamp) = timestamp.parse() {
-            return Ok(Self(timestamp));
+        if let Ok(timestamp) = timestamp.parse::<Timestamp>() {
+            return Self::from_timestamp(timestamp).map_err(Into::into);
         }
 
-        timestamp
-            .parse::<civil::DateTime>()
-            .and_then(|datetime| datetime.to_zoned(TimeZone::UTC))
-            .map(|datetime| Self(datetime.timestamp()))
-            .map_err(Into::into)
+        let timestamp = timestamp
+            .parse::<civil::DateTime>()?
+            .to_zoned(TimeZone::UTC)?
+            .timestamp();
+        Self::from_timestamp(timestamp).map_err(Into::into)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utc_instant_closes_construction_and_serde_over_normalized_application_bounds() {
+        for text in [
+            "0000-12-31T23:59:59.999999999Z",
+            "0001-01-01T00:00:00+00:01",
+            "-000001-12-31T23:59:59Z",
+            "2025-02-29T00:00:00Z",
+        ] {
+            assert!(text.parse::<UtcInstant>().is_err(), "parse admitted {text}");
+            assert!(
+                serde_json::from_str::<UtcInstant>(&format!("\"{text}\"")).is_err(),
+                "serde admitted {text}"
+            );
+        }
+        assert!(UtcInstant::try_from(Timestamp::MIN).is_err());
+        for text in [
+            "0001-01-01T00:00:00.000000000Z",
+            "1969-12-31T23:59:59.000000001Z",
+            "9999-12-30T22:00:00.999999999Z",
+        ] {
+            let instant: UtcInstant = text.parse().unwrap();
+            assert_eq!(instant.to_string(), text);
+            assert_eq!(
+                serde_json::to_string(&instant).unwrap(),
+                format!("\"{text}\"")
+            );
+            assert_eq!(UtcInstant::try_from(instant.value()).unwrap(), instant);
+        }
+    }
+
+    #[test]
+    fn utc_instant_checked_arithmetic_rejects_library_and_application_overflow() {
+        use std::time::Duration;
+        assert!(
+            UtcInstant::MIN
+                .checked_sub(Duration::from_nanos(1))
+                .is_err()
+        );
+        assert!(
+            UtcInstant::MAX
+                .checked_add(Duration::from_nanos(1))
+                .is_err()
+        );
+        assert!(UtcInstant::MIN.checked_add(Duration::MAX).is_err());
+        assert!(UtcInstant::MAX.checked_sub(Duration::MAX).is_err());
+        assert_eq!(
+            UtcInstant::MIN.checked_add(Duration::ZERO).unwrap(),
+            UtcInstant::MIN
+        );
+        assert_eq!(
+            UtcInstant::MAX.checked_sub(Duration::ZERO).unwrap(),
+            UtcInstant::MAX
+        );
+        assert_eq!(
+            UtcInstant::MIN
+                .checked_add(Duration::from_nanos(999))
+                .unwrap()
+                .to_string(),
+            "0001-01-01T00:00:00.000000999Z"
+        );
+        assert!(
+            "9999-12-30T22:00:00.999999999-00:01"
+                .parse::<UtcInstant>()
+                .is_err()
+        );
+    }
 
     #[test]
     fn permalink_date_rejects_impossible_dates_and_preserves_iso_form() {
@@ -516,13 +640,13 @@ mod tests {
         let jiff_only = "2024-07-01T16:24Z".parse::<UtcInstant>().unwrap();
         let offset = "2024-07-01T18:24+02:00".parse::<UtcInstant>().unwrap();
         assert_eq!(jiff_only, offset);
-        assert_eq!(jiff_only.to_string(), "2024-07-01T16:24:00Z");
+        assert_eq!(jiff_only.to_string(), "2024-07-01T16:24:00.000000000Z");
     }
 
     #[test]
-    fn utc_instant_accepts_jiff_timestamp_endpoints() {
+    fn utc_instant_accepts_application_timestamp_endpoints() {
         for (text, endpoint) in [
-            ("-009999-01-02T01:59:59Z", Timestamp::MIN),
+            ("0001-01-01T00:00:00.000000000Z", UtcInstant::MIN.value()),
             ("9999-12-30T22:00:00.999999999Z", Timestamp::MAX),
         ] {
             let instant = text.parse::<UtcInstant>().unwrap();
@@ -534,7 +658,7 @@ mod tests {
     #[test]
     fn utc_instant_normalizes_a_leap_second() {
         let instant = "2024-07-01T16:24:60Z".parse::<UtcInstant>().unwrap();
-        assert_eq!(instant.to_string(), "2024-07-01T16:24:59Z");
+        assert_eq!(instant.to_string(), "2024-07-01T16:24:59.000000000Z");
     }
 
     #[test]
@@ -542,17 +666,28 @@ mod tests {
         let earlier = "2024-07-01T16:24Z".parse::<UtcInstant>().unwrap();
         let later = "2024-07-01T16:24:01Z".parse::<UtcInstant>().unwrap();
         let encoded = serde_json::to_string(&earlier).unwrap();
-        assert_eq!(encoded, "\"2024-07-01T16:24:00Z\"");
+        assert_eq!(encoded, "\"2024-07-01T16:24:00.000000000Z\"");
         assert_eq!(
             serde_json::from_str::<UtcInstant>(&encoded).unwrap(),
             earlier
         );
         assert!(earlier < later);
-        assert_eq!(UtcInstant::from(Timestamp::from(earlier)), earlier);
+        assert_eq!(
+            UtcInstant::try_from(Timestamp::from(earlier)).unwrap(),
+            earlier
+        );
         assert_eq!(Timestamp::from(earlier), earlier.value());
 
         let date = PermalinkDate::from_ymd(2024, 7, 1).unwrap();
         assert_eq!(civil::Date::from(date), date.value());
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "system clock invariant: current UTC instant is outside application bounds"
+    )]
+    fn out_of_domain_clock_panics_instead_of_clamping() {
+        UtcInstant::from_clock(Timestamp::MIN);
     }
 
     #[test]
@@ -571,13 +706,13 @@ mod tests {
             utc_instant_from_local_in("2024-03-10T02:30", &timezone)
                 .unwrap()
                 .to_string(),
-            "2024-03-10T07:30:00Z"
+            "2024-03-10T07:30:00.000000000Z"
         );
         assert_eq!(
             utc_instant_from_local_in("2024-07-01T16:24:45", &timezone)
                 .unwrap()
                 .to_string(),
-            "2024-07-01T20:24:45Z"
+            "2024-07-01T20:24:45.000000000Z"
         );
         for invalid in [
             "",
@@ -600,12 +735,106 @@ mod tests {
             strict_utc_instant_from_local_in("2024-11-03T01:30", &timezone)
                 .unwrap()
                 .to_string(),
-            "2024-11-03T05:30:00Z"
+            "2024-11-03T05:30:00.000000000Z"
         );
         assert_eq!(
             strict_utc_instant_from_local_in("2024-03-10T02:30", &timezone),
             None
         );
+    }
+
+    #[test]
+    fn civil_conversion_public_seams_enforce_normalized_application_bounds() {
+        const CHILD: &str = "JAUNDER_TEST_CIVIL_BOUNDS_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            // Send each zone together with its declared expectations. The child
+            // exercises system-zone entrypoints without a second fixture selector.
+            for (zone, cases) in [
+                (
+                    "UTC",
+                    vec![
+                        ("0000-12-31T23:59:59", None),
+                        (
+                            "0001-01-01T00:00:00",
+                            Some("0001-01-01T00:00:00.000000000Z"),
+                        ),
+                        (
+                            "9999-12-30T22:00:00",
+                            Some("9999-12-30T22:00:00.000000000Z"),
+                        ),
+                        ("9999-12-30T22:00:01", None),
+                    ],
+                ),
+                (
+                    "Etc/GMT-1",
+                    vec![
+                        ("0000-12-31T23:59:59", None),
+                        ("0001-01-01T00:59:59", None),
+                        (
+                            "0001-01-01T01:00:00",
+                            Some("0001-01-01T00:00:00.000000000Z"),
+                        ),
+                        (
+                            "0001-01-01T01:00:01",
+                            Some("0001-01-01T00:00:01.000000000Z"),
+                        ),
+                        (
+                            "9999-12-30T23:00:00",
+                            Some("9999-12-30T22:00:00.000000000Z"),
+                        ),
+                        ("9999-12-30T23:00:01", None),
+                    ],
+                ),
+                (
+                    "Etc/GMT+1",
+                    vec![
+                        ("0000-12-31T22:59:59", None),
+                        (
+                            "0000-12-31T23:00:00",
+                            Some("0001-01-01T00:00:00.000000000Z"),
+                        ),
+                        (
+                            "0001-01-01T00:00:00",
+                            Some("0001-01-01T01:00:00.000000000Z"),
+                        ),
+                        (
+                            "9999-12-30T21:00:00",
+                            Some("9999-12-30T22:00:00.000000000Z"),
+                        ),
+                        ("9999-12-30T21:00:01", None),
+                    ],
+                ),
+            ] {
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", "time::tests::civil_conversion_public_seams_enforce_normalized_application_bounds", "--nocapture"])
+                    .env(CHILD, serde_json::to_string(&cases).unwrap())
+                    .env("TZ", zone).output().unwrap();
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert!(
+                    output.status.success()
+                        && stdout.contains("civil-boundary public assertions complete"),
+                    "{zone}: {stdout}{stderr}"
+                );
+            }
+            return;
+        }
+        let cases: Vec<(String, Option<String>)> =
+            serde_json::from_str(&std::env::var(CHILD).unwrap()).unwrap();
+        for (local, expected) in cases {
+            let expected = expected.map(|text| text.parse::<UtcInstant>().unwrap());
+            assert_eq!(
+                utc_instant_from_local(&local),
+                expected,
+                "compatible {local}"
+            );
+            assert_eq!(
+                strict_utc_instant_from_local(&local),
+                expected,
+                "strict {local}"
+            );
+        }
+        println!("civil-boundary public assertions complete");
     }
 
     #[test]

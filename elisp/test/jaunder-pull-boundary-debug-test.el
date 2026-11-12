@@ -100,12 +100,12 @@
                                                                                        (regexp-quote staged-at) "$" )
                                                                                (concat "#+PROPERTY: JAUNDER_SYNCED_AT " installed-at)
                                                                                (plist-get staged :bytes) nil nil)))
-                                                               (should (equal staged-at "2026-10-19T00:32:54Z"))
-                                                               (should (equal installed-at "2026-10-19T00:32:55Z"))
+                                                               (should (equal staged-at "2026-10-19T00:32:54.000000000Z"))
+                                                               (should (equal installed-at "2026-10-19T00:32:55.000000000Z"))
                                                                (should (equal installed expected))
                                                                (should (equal installed-at
                                                                               (format-time-string
-                                                                               "%Y-%m-%dT%H:%M:%SZ"
+                                                                               "%Y-%m-%dT%H:%M:%S.%9NZ"
                                                                                (file-attribute-modification-time
                                                                                 (file-attributes installed-path)) t))))))))))
                                                   (should (= requests 2))

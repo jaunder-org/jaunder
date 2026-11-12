@@ -6,6 +6,20 @@ use std::str::FromStr;
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, macros::IdNewtype)]
 pub(crate) struct CodeMigrationQueueId(i64);
 
+/// `SQLite`'s stable row identity, scoped to one offline table conversion.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, macros::IdNewtype)]
+pub(crate) struct LegacyInstantRowId(i64);
+
+/// `PostgreSQL`'s physical tuple identity, retained only for offline diagnostics.
+#[derive(Clone, Debug, macros::SqlxBridge)]
+pub(crate) struct LegacyInstantTupleId(String);
+
+impl std::fmt::Display for LegacyInstantTupleId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// The stored dispatch key. Unknown values remain decodable so dispatch can
 /// report an explicit unsupported operation and keep the queue row intact.
 #[derive(Clone, Debug, PartialEq, Eq, macros::StrNewtype)]

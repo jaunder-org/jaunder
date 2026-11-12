@@ -167,11 +167,7 @@ where
     async fn prune_password_resets(&self, now: UtcInstant) -> sqlx::Result<u64> {
         // At the earliest representable instant, no unused row is older than
         // the retention window, so clamping the cutoff preserves expiry policy.
-        let unused_cutoff = UtcInstant::from(
-            now.value()
-                .saturating_sub(24.hours())
-                .map_or(jiff::Timestamp::MIN, std::convert::identity),
-        );
+        let unused_cutoff = now.checked_sub(24.hours()).unwrap_or(UtcInstant::MIN);
         let mut deleted = 0;
 
         loop {
@@ -275,16 +271,18 @@ mod tests {
             .await
             .user_id;
         let now: UtcInstant = "2050-01-02T03:04:05Z".parse().unwrap();
-        let expired_at = UtcInstant::from(
+        let expired_at = UtcInstant::try_from(
             now.value()
                 .checked_sub(24.hours())
                 .expect("fixture is within Timestamp range"),
-        );
-        let valid_until = UtcInstant::from(
+        )
+        .expect("test instant is within application bounds");
+        let valid_until = UtcInstant::try_from(
             now.value()
                 .checked_add(1.hour())
                 .expect("fixture is within Timestamp range"),
-        );
+        )
+        .expect("test instant is within application bounds");
 
         let password_resets = Arc::clone(&env.password_resets());
         let outcome = env

@@ -261,12 +261,18 @@ Document's version-1 `timezone` feature.
 
 `JAUNDER_DATE_TZ` is the latest saved editing zone, not an immutable creation
 zone. DATE is its minute-resolution wall time; `JAUNDER_DATE_UTC` retains the
-canonical publication instant, including fractional seconds. If DATE's civil
-fields still match that instant in the recorded old zone, publishing preserves
-the exact instant while moving the DATE/zone pair to the editing device's zone.
-An edited DATE is interpreted in the latest zone: gaps reject and folds choose
-the earlier occurrence. Legacy numeric old zones are usable only for local
-baseline recovery, never as newly saved Post zones or raw server DATE input.
+canonical publication instant, including nanoseconds. Newly written
+`JAUNDER_DATE_UTC` and `JAUNDER_SYNCED_AT` use fixed-nine UTC `Z` text, for
+example `2026-09-25T12:00:25.000000000Z`. Reconciliation also reads historical
+whole-second `Z` and valid offset/fraction sync markers. Instants are validated
+after UTC normalization, from `0001-01-01T00:00:00.000000000Z` through
+`9999-12-30T22:00:00.999999999Z`, inclusive; pre-1970 remains supported. If
+DATE's civil fields still match that instant in the recorded old zone,
+publishing preserves the exact instant while moving the DATE/zone pair to the
+editing device's zone. An edited DATE is interpreted in the latest zone: gaps
+reject and folds choose the earlier occurrence. Legacy numeric old zones are
+usable only for local baseline recovery, never as newly saved Post zones or raw
+server DATE input.
 
 Pull and server-ahead reconciliation adopt the server's saved zone and render
 DATE there; reading never captures a new editing zone. Existing published or

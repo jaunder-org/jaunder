@@ -35,13 +35,12 @@ impl BrowserSessionCookie {
         use jiff::ToSpan;
         let cutoff = self
             .last_used_at
-            .value()
-            .saturating_add(storage::BROWSER_SESSION_IDLE_SECONDS.seconds())
-            .unwrap_or(jiff::Timestamp::MAX);
+            .checked_add(storage::BROWSER_SESSION_IDLE_SECONDS.seconds())
+            .unwrap_or(common::time::UtcInstant::MAX);
         auth::persistent_session_cookie_header(
             &self.token,
             secure,
-            cutoff.into(),
+            cutoff,
             common::time::UtcInstant::now(),
         )
     }

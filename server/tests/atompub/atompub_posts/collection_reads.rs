@@ -164,6 +164,114 @@ async fn collection_paging_emits_next_link(#[case] backend: Backend) {
     );
 }
 
+// The migration fixture proves the legacy exclusion; this HTTP proof observes
+// the repaired indexed spelling through both Member and complete Collection reads.
+#[apply(backends)]
+#[tokio::test]
+async fn canonical_instants_member_five_matches_original_cursor_and_complete_refresh(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let base = &env.base;
+    let session = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await;
+    let identity_override = match backend {
+        Backend::Sqlite => "",
+        Backend::Postgres => "OVERRIDING SYSTEM VALUE",
+    };
+    let sql = format!("INSERT INTO posts (post_id, user_id, slug, body, format, rendered_html, created_at, updated_at) {identity_override} VALUES
+        (5, $1, 'five', 'five', 'markdown', '<p>five</p>', '2005-01-02T01:59:00.000000000Z', $2),
+        (266, $1, 'older', 'older', 'markdown', '<p>older</p>', '2005-01-02T01:59:00.000000000Z', $3),
+        (6, $1, 'tie-six', 'six', 'markdown', '<p>six</p>', '2005-01-02T01:59:00.000000000Z', $2),
+        (7, $1, 'tie-seven', 'seven', 'markdown', '<p>seven</p>', '2005-01-02T01:59:00.000000000Z', $2)");
+    let clock: UtcInstant = "2026-09-25T12:00:25Z".parse().unwrap();
+    let older: UtcInstant = "2026-09-24T12:00:25Z".parse().unwrap();
+    storage::with_closeable_pool!(base.pool(), pool, {
+        sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(session.user_id)
+            .bind(clock)
+            .bind(older)
+            .execute(pool)
+            .await
+            .unwrap();
+    });
+    let app = make_app!(&env, base);
+    let response = app
+        .clone()
+        .oneshot(atompub_get(&session, "posts/5"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let member: host::atompub::Entry = body_string(response).await.parse().unwrap();
+    assert_eq!(
+        member.updated().to_rfc3339().parse::<UtcInstant>().unwrap(),
+        clock
+    );
+    let ids = |feed: &host::atompub::Feed| -> Vec<i64> {
+        feed.entries()
+            .iter()
+            .map(|entry| {
+                entry
+                    .links()
+                    .iter()
+                    .find(|link| link.rel() == "edit")
+                    .unwrap()
+                    .href()
+                    .rsplit('/')
+                    .next()
+                    .unwrap()
+                    .parse()
+                    .unwrap()
+            })
+            .collect()
+    };
+    let response = app
+        .clone()
+        .oneshot(atompub_get(
+            &session,
+            "posts?updated_before=2026-09-25T12%3A00%3A25Z&id_before=6&limit=1",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let targeted: host::atompub::Feed = body_string(response).await.parse().unwrap();
+    assert_eq!(ids(&targeted), [5]);
+    let prefix = format!("https://example.com/atompub/{}/", session.username);
+    let mut path = "posts?limit=2".to_owned();
+    let mut all = Vec::new();
+    loop {
+        let response = app
+            .clone()
+            .oneshot(atompub_get(&session, &path))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let page: host::atompub::Feed = body_string(response).await.parse().unwrap();
+        all.extend(ids(&page));
+        assert!(all.len() <= 4, "a complete refresh must not repeat Members");
+        let Some(next) = page.links().iter().find(|link| link.rel() == "next") else {
+            break;
+        };
+        path = next.href().strip_prefix(&prefix).unwrap().to_owned();
+    }
+    assert_eq!(all, [7, 6, 5, 266]);
+    let response = app
+        .oneshot(atompub_get(
+            &session,
+            "posts?updated_before=2026-09-24T12%3A00%3A25Z&id_before=266&limit=2",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let empty: host::atompub::Feed = body_string(response).await.parse().unwrap();
+    assert!(empty.entries().is_empty());
+    assert!(!empty.links().iter().any(|link| link.rel() == "next"));
+}
+
 // Each Collection Entry advertises the same validator as its own Member response,
 // even when the user retrieves the Collection a page at a time.
 #[apply(backends)]

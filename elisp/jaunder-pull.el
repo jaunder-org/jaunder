@@ -62,10 +62,6 @@
       (when (and (stringp path) (string-match "/\\([0-9]+\\)\\'" path))
         (match-string 1 path)))))
 
-(defconst jaunder--pull-rfc-3339-offset-regexp
-  "\\`\\([0-9]\\{4\\}\\)-\\([0-9]\\{2\\}\\)-\\([0-9]\\{2\\}\\)T\\([0-9]\\{2\\}\\):\\([0-9]\\{2\\}\\):\\([0-9]\\{2\\}\\)\\(?:\\.[0-9]+\\)?\\(?:Z\\|[+-]\\([0-9]\\{2\\}\\):\\([0-9]\\{2\\}\\)\\)\\'"
-  "RFC-3339 timestamp shape with captured calendar and numeric-offset fields.")
-
 (defconst jaunder--pull-xhtml-ns "http://www.w3.org/1999/xhtml"
   "Namespace required on an Atom XHTML content wrapper.")
 
@@ -73,47 +69,12 @@
   "Return non-nil when CHARACTER is a Unicode control character."
   (eq (get-char-code-property character 'general-category) 'Cc))
 
-(defun jaunder--pull-rfc-3339-components-valid-p (published)
-  "Return non-nil when matched RFC-3339 PUBLISHED fields are semantically valid.
-This rejects values `date-to-time' would normalize, including impossible
-Gregorian dates and out-of-range numeric offsets."
-  (let* ((year (string-to-number (match-string 1 published)))
-         (month (string-to-number (match-string 2 published)))
-         (day (string-to-number (match-string 3 published)))
-         (hour (string-to-number (match-string 4 published)))
-         (minute (string-to-number (match-string 5 published)))
-         (second (string-to-number (match-string 6 published)))
-         (offset-hour (match-string 7 published))
-         (offset-minute (match-string 8 published))
-         (days-in-month
-          (and (<= 1 month 12)
-               (aref [0 31 28 31 30 31 30 31 31 30 31 30 31] month))))
-    (when (and (= month 2)
-               (or (= 0 (% year 400))
-                   (and (= 0 (% year 4))
-                        (/= 0 (% year 100)))))
-      (setq days-in-month 29))
-    (and days-in-month
-         (<= 1 day days-in-month)
-         (<= 0 hour 23)
-         (<= 0 minute 59)
-         (<= 0 second 59)
-         (or (null offset-hour)
-             (and (<= (string-to-number offset-hour) 23)
-                  (<= (string-to-number offset-minute) 59))))))
-
 (defun jaunder--pull-rfc-3339-time (published)
-  "Parse semantically valid offset-qualified RFC-3339 PUBLISHED text.
-The original text remains the wire value; the parsed time is used only for
-status and local-date projection."
-  (unless (and (stringp published)
-               (string-match jaunder--pull-rfc-3339-offset-regexp published)
-               (jaunder--pull-rfc-3339-components-valid-p published))
-    (jaunder--pull-error "Member published value must be offset-qualified RFC-3339"))
+  "Parse valid application-range RFC-3339 PUBLISHED for status projection."
   (condition-case nil
-      (date-to-time published)
+      (jaunder--utc-time published)
     (error (jaunder--pull-error
-            "Member published value must be RFC-3339"))))
+            "Member published value must be offset-qualified RFC-3339 in range"))))
 
 (defun jaunder--safe-pull-slug-p (slug)
   "Return non-nil when SLUG names one safe direct-child path component."
@@ -253,8 +214,7 @@ This performs no network or Post-file I/O; zone validation reads local zoneinfo.
                                                        (format "#+PROPERTY: JAUNDER_ID %s" id)
                                                        (format "#+PROPERTY: JAUNDER_SYNCED %s" etag)
                                                        (format "#+PROPERTY: JAUNDER_SYNCED_AT %s"
-                                                               (format-time-string "%Y-%m-%dT%H:%M:%SZ"
-                                                                                   captured-at t))))))
+                                                               (jaunder--canonical-utc captured-at))))))
                                      (let ((org-prefix (concat (mapconcat #'identity lines "\n") "\n\n")))
                                        (jaunder--debug-fields format format)
                                        (let ((member (jaunder--make-pulled-member
@@ -323,7 +283,7 @@ When STAGED-SYNCED-AT is supplied, renew that canonical header and align the
 file mtime with the same checkpoint.  Without it, write exact BYTES."
   (let* ((checkpoint (and staged-synced-at (current-time)))
          (synced-at (and checkpoint
-                         (format-time-string "%Y-%m-%dT%H:%M:%SZ" checkpoint t))))
+                         (jaunder--canonical-utc checkpoint))))
     (with-temp-buffer
       (insert bytes)
       (when staged-synced-at
@@ -443,7 +403,7 @@ proof when scoped.  Otherwise staging uses supplied
 						   plan))))
 					   (list :etag etag :id (car identity) :slug (cdr identity)
 						 :audience-omitted (jaunder-pulled-member-audience-omitted pulled-member)
-						 :synced-at (format-time-string "%Y-%m-%dT%H:%M:%SZ" captured-at t)
+						 :synced-at (jaunder--canonical-utc captured-at)
 						 :pulled-member pulled-member :original-proof original-proof
 						 :media-staged media-staged
 						 :bytes (jaunder--render-pulled-member pulled-member localized-body)))))))))

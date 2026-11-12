@@ -237,14 +237,10 @@ An active region selects only its rows, including when it touches none."
 
 
 (defun jaunder--reconcile-synced-time (value)
-  "Parse VALUE as the canonical UTC sync instant, or return nil."
-  (when (and (stringp value)
-             (string-match-p
-              "\\`[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}T[0-9]\\{2\\}:[0-9]\\{2\\}:[0-9]\\{2\\}Z\\'"
-              value))
+  "Parse valid historical or canonical UTC sync VALUE, or return nil."
+  (when (stringp value)
     (condition-case nil
-        (let ((time (date-to-time value)))
-          (and (equal (format-time-string "%Y-%m-%dT%H:%M:%SZ" time t) value) time))
+        (jaunder--utc-time value)
       (error nil))))
 
 (defun jaunder--reconcile-time-p (value)

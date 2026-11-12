@@ -39,6 +39,13 @@ pub struct CreateInviteRequest {
     pub recipient_email: Email,
 }
 
+#[cfg(feature = "server")]
+fn invite_expiry(now: UtcInstant, ttl: InviteTtlHours) -> Result<UtcInstant, InternalError> {
+    now.checked_add(ttl.value().hours()).map_err(|_| {
+        InternalError::server_message("invite expiry is outside application UTC bounds")
+    })
+}
+
 /// Creates an invite code expiring in `request.expires_in_hours` (default 168 = 7
 /// days) and **emails the invitation link** to `request.recipient_email`. Requires
 /// authentication. The code is never returned to the client (#400) — it is delivered
@@ -76,16 +83,10 @@ pub async fn create(request: CreateInviteRequest) -> WebResult<MutationOutcome<(
     // address at decode time (ADR-0065), so no in-handler parse is needed.
     let base_url = mail::require_base_url(&*site_config).await?;
 
-    // `InviteTtlHours` bounds the requested duration to 1..=336. A system
-    // clock at Jiff's upper boundary clamps to the maximum instant rather than
-    // wrapping or panicking. `hours` is reused in the email body below.
-    let hours = expires_in_hours.unwrap_or_default().value();
-    let expires_at = UtcInstant::from(
-        UtcInstant::now()
-            .value()
-            .saturating_add(hours.hours())
-            .map_or(jiff::Timestamp::MAX, std::convert::identity),
-    );
+    // `hours` remains the requested TTL, including in the email body below.
+    let ttl = expires_in_hours.unwrap_or_default();
+    let hours = ttl.value();
+    let expires_at = invite_expiry(UtcInstant::now(), ttl)?;
 
     let outcome = write_scope
         .run(|transaction| {
@@ -150,6 +151,33 @@ mod server_tests {
     use leptos::prelude::{Owner, provide_context};
     use std::sync::Arc;
     use storage::{MockSiteConfigStorage, MockUserStorage, SiteConfigStorage, UserStorage};
+
+    #[test]
+    fn invite_expiry_preserves_requested_ttl_or_returns_exact_failure() {
+        use common::{invite::InviteTtlHours, time::UtcInstant};
+        let now = "2026-01-01T00:00:00Z".parse().unwrap();
+        assert_eq!(
+            super::invite_expiry(now, InviteTtlHours::default())
+                .unwrap()
+                .to_string(),
+            "2026-01-08T00:00:00.000000000Z"
+        );
+        assert_eq!(
+            super::invite_expiry(now, common::test_support::parse_invite_ttl_hours("24"))
+                .unwrap()
+                .to_string(),
+            "2026-01-02T00:00:00.000000000Z"
+        );
+        let error = super::invite_expiry(UtcInstant::MAX, InviteTtlHours::default()).unwrap_err();
+        assert_eq!(
+            crate::error::project(error.kind(), error.public_message()),
+            WebError::server_message("server operation failed")
+        );
+        assert_eq!(
+            error.operator_message(),
+            "invite expiry is outside application UTC bounds"
+        );
+    }
 
     // guard:no-backend — verifies the authorization rejection precedes all write and mail work.
     #[tokio::test]

@@ -160,6 +160,9 @@ async fn restore_database_transaction(
     let schema_version = schema_version(&mut connection).await?;
     backup::ensure_schema_version(manifest, schema_version)?;
     backup::validate_instance_identity_backup(source_path, manifest)?;
+    let (pending,): (crate::sql::Exists,) = sqlx::query_as("SELECT EXISTS(SELECT 1 FROM pending_code_migrations WHERE operation = 'normalize_comparable_instants_v1')").fetch_one(&mut *connection).await?;
+    // Check the target independently of any queue rows about to be imported.
+    crate::code_migrations::check_sqlite_enforcement(&mut connection, pending.into_bool()).await?;
     // Disable FK enforcement for the bulk import so rows need not be inserted in
     // referential order; integrity is verified once at the end via
     // `foreign_key_check`. FKs are re-enabled on every exit path below, since the
@@ -201,6 +204,10 @@ async fn restore_database_transaction(
             .await?;
         }
         backfill_legacy_passkey_user_handles(&mut connection, manifest).await?;
+        // Validate even when pending normalization legitimately has no DDL yet.
+        crate::code_migrations::validate_sqlite_population(&mut connection).await?;
+        let (pending,): (crate::sql::Exists,) = sqlx::query_as("SELECT EXISTS(SELECT 1 FROM pending_code_migrations WHERE operation = 'normalize_comparable_instants_v1')").fetch_one(&mut *connection).await?;
+        crate::code_migrations::check_sqlite_enforcement(&mut connection, pending.into_bool()).await?;
         // Validate FKs *before* committing so a violation rolls the whole restore
         // back rather than leaving invalid data committed. `foreign_key_check`
         // scans for violations and works with `foreign_keys = OFF`, so it runs
@@ -295,6 +302,7 @@ async fn import_table(
     validation_report: &mut RestoreValidationReport,
 ) -> Result<(), BackupError> {
     let rows = backup::read_table_rows(source_path, table)?;
+    backup::validate_restore_row_columns(table, &rows)?;
     if rows.is_empty() {
         return Ok(());
     }
@@ -316,12 +324,10 @@ async fn import_table(
                 let Some(column) = columns.iter().find(|column| column.name == *column_name) else {
                     unreachable!("restore column names are selected from the catalog")
                 };
-                let value = row.get(column_name).ok_or_else(|| {
-                    BackupError::InvalidBackup(format!(
-                        "table {table} row is missing column {column_name}"
-                    ))
-                })?;
-                backup::restore_bind_value(column, value)
+                // The first row selects these names and equal key sets were
+                // validated above, so no later row can lack a selected cell.
+                let value = &row[column_name];
+                backup::restore_bind_value(table, column, value)
             })
             .collect::<Result<Vec<_>, _>>()?;
         bound_rows.push(values);
@@ -364,6 +370,7 @@ fn bind_restore_value(
 ) -> sqlx::query::Query<'_, sqlx::Sqlite, sqlx::sqlite::SqliteArguments> {
     match value {
         RestoreBindValue::Null => query.bind_storage(Option::<RestoreText>::None),
+        RestoreBindValue::Instant(value) => query.bind_storage(value),
         RestoreBindValue::Boolean(value) => query.bind_storage(value),
         RestoreBindValue::Integer(value) => query.bind_storage(value),
         RestoreBindValue::Real { value, .. } => query.bind_storage(value),
@@ -505,6 +512,78 @@ mod tests {
     use crate::test_support::{Backend, CloseablePool, sqlite_only};
     use rstest::*;
     use rstest_reuse::*;
+
+    // reason: SQLite text can be rewritten by a target trigger after checked
+    // binding. Final population validation must reject it before restore commits.
+    #[apply(sqlite_only)]
+    #[tokio::test]
+    async fn canonical_instants_verification_rejects_trigger_rewritten_cells(
+        #[case] backend: Backend,
+    ) {
+        let source = backend.setup().await;
+        let CloseablePool::Sqlite(source_pool) = source.base.pool() else {
+            unreachable!("sqlite_only supplies a SQLite pool")
+        };
+        sqlx::query("INSERT INTO feed_events (feed_url, next_attempt_at, created_at) VALUES ('/feed.atom', '2005-01-02T01:59:00.000000000Z', '2005-01-02T01:59:00.000000000Z')")
+            .execute(source_pool).await.unwrap();
+        sqlx::query("INSERT INTO pending_code_migrations (operation) VALUES ('normalize_comparable_instants_v1')")
+            .execute(source_pool).await.unwrap();
+        let backup = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir(backup.path().join("db")).unwrap();
+        let manifest = export_database(source_pool, backup.path(), BackupMode::Directory)
+            .await
+            .unwrap();
+        let target = backend.setup().await;
+        let CloseablePool::Sqlite(pool) = target.base.pool() else {
+            unreachable!("sqlite_only supplies a SQLite pool")
+        };
+        // A pending, uninstalled enforcement set is a supported restore target.
+        sqlx::query("INSERT INTO pending_code_migrations (operation) VALUES ('normalize_comparable_instants_v1')")
+            .execute(pool).await.unwrap();
+        let drops = sqlx::query_scalar::<_, crate::backup::CatalogDefinition>(
+            "SELECT 'DROP TRIGGER \"' || name || '\"' FROM sqlite_master WHERE type = 'trigger' AND name GLOB 'canonical_instants_v1_*'"
+        ).fetch_all(pool).await.unwrap();
+        for ddl in drops {
+            sqlx::query(sqlx::AssertSqlSafe(ddl.into_inner()))
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("CREATE TRIGGER rewrite_imported_instant AFTER INSERT ON feed_events BEGIN UPDATE feed_events SET created_at = '2005-01-02T01:59:00Z' WHERE id = NEW.id; END")
+            .execute(pool).await.unwrap();
+        let error = restore_database(pool, backup.path(), &manifest)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("noncanonical comparable instant in feed_events rowid="),
+            "{error}"
+        );
+        let (remaining,): (crate::sql::RowCount,) =
+            sqlx::query_as("SELECT COUNT(*) FROM feed_events")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            remaining.into_u64(),
+            0,
+            "failed validation rolls back imported cells"
+        );
+        sqlx::query("DROP TRIGGER rewrite_imported_instant")
+            .execute(pool)
+            .await
+            .unwrap();
+        restore_database(pool, backup.path(), &manifest)
+            .await
+            .unwrap();
+        let (remaining,): (crate::sql::RowCount,) =
+            sqlx::query_as("SELECT COUNT(*) FROM feed_events")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(remaining.into_u64(), 1);
+    }
 
     fn primary_io_error() -> BackupError {
         BackupError::Io(std::io::Error::new(

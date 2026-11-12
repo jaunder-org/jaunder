@@ -403,12 +403,13 @@ async fn get_post_returns_scheduled_post_at_canonical_permalink_to_author(
     )
     .await;
     let cookie = author.cookie();
-    let scheduled_at = common::time::UtcInstant::from(
+    let scheduled_at = common::time::UtcInstant::try_from(
         common::time::UtcInstant::now()
             .value()
             .checked_add(720.hours())
             .expect("fixture is within Timestamp range"),
-    );
+    )
+    .expect("test instant is within application bounds");
     let scheduled = SeedRawPost::new(author.user_id)
         .published_at(scheduled_at)
         .seed(std::sync::Arc::clone(&env.posts()), env.write_scope())

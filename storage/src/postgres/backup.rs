@@ -145,6 +145,10 @@ async fn restore_database_transaction(
     let schema_version = schema_version(&mut connection).await?;
     backup::ensure_schema_version(manifest, schema_version)?;
     backup::validate_instance_identity_backup(source_path, manifest)?;
+    let (pending,): (crate::sql::Exists,) = sqlx::query_as("SELECT EXISTS(SELECT 1 FROM pending_code_migrations WHERE operation = 'normalize_comparable_instants_v1')").fetch_one(&mut *connection).await?;
+    // Check the target independently of any queue rows about to be imported.
+    crate::code_migrations::check_postgres_enforcement(&mut connection, pending.into_bool())
+        .await?;
     sqlx::query("BEGIN")
         .execute(&mut *connection)
         .await
@@ -187,6 +191,10 @@ async fn restore_database_transaction(
             .await?;
         }
         backfill_legacy_passkey_user_handles(&mut connection, manifest).await?;
+        // Validate even when pending normalization legitimately has no DDL yet.
+        crate::code_migrations::validate_postgres_population(&mut connection).await?;
+        let (pending,): (crate::sql::Exists,) = sqlx::query_as("SELECT EXISTS(SELECT 1 FROM pending_code_migrations WHERE operation = 'normalize_comparable_instants_v1')").fetch_one(&mut *connection).await?;
+        crate::code_migrations::check_postgres_enforcement(&mut connection, pending.into_bool()).await?;
         // PostgreSQL's `setval` is not transactional. Preflight intentionally
         // rolls back its import, so it must not advance target sequences.
         if commit {
@@ -285,6 +293,7 @@ async fn import_table(
     validation_report: &mut RestoreValidationReport,
 ) -> Result<(), BackupError> {
     let rows = backup::read_table_rows(source_path, table)?;
+    backup::validate_restore_row_columns(table, &rows)?;
     if rows.is_empty() {
         return Ok(());
     }
@@ -303,13 +312,10 @@ async fn import_table(
         let values = column_names
             .iter()
             .map(|column| {
-                let value = row.get(&column.name).ok_or_else(|| {
-                    BackupError::InvalidBackup(format!(
-                        "table {table} row is missing column {}",
-                        column.name
-                    ))
-                })?;
-                backup::restore_bind_value(column, value)
+                // The first row selects these names and equal key sets were
+                // validated above, so no later row can lack a selected cell.
+                let value = &row[&column.name];
+                backup::restore_bind_value(table, column, value)
             })
             .collect::<Result<Vec<_>, _>>()?;
         bound_rows.push(values);
@@ -335,6 +341,7 @@ fn bind_restore_value(
 ) -> Query<'_, Postgres, sqlx::postgres::PgArguments> {
     match value {
         RestoreBindValue::Null => query.bind_storage(Option::<RestoreText>::None),
+        RestoreBindValue::Instant(value) => query.bind_storage(value),
         RestoreBindValue::Boolean(value) => query.bind_storage(value.into_text()),
         RestoreBindValue::Integer(value) => query.bind_storage(value.into_text()),
         RestoreBindValue::Real { text, .. } => query.bind_storage(text),
@@ -467,7 +474,22 @@ async fn export_table(
 
     while let Some(row) = rows.try_next().await? {
         let json: BackupRowJson = row.try_get(0)?;
-        writer.write_all(json.as_bytes())?;
+        let mut cells: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_slice(json.as_bytes())?;
+        for (column, value) in &mut cells {
+            if backup::comparable_instant_nullability(table, column).is_some() && !value.is_null() {
+                // UtcInstant's checked serde boundary validates both the JSON
+                // representation and bounds; native timestamps need no second parser.
+                let instant: common::time::UtcInstant = serde::Deserialize::deserialize(&*value)
+                    .map_err(|_| {
+                        BackupError::InvalidBackup(format!(
+                            "native timestamp is outside application bounds: {table}.{column}"
+                        ))
+                    })?;
+                *value = serde_json::Value::String(instant.to_string());
+            }
+        }
+        serde_json::to_writer(&mut writer, &cells)?;
         writer.write_all(b"\n")?;
     }
     writer.flush()?;
@@ -542,6 +564,38 @@ mod tests {
     use crate::test_support::{Backend, CloseablePool, SeedUser, postgres_only};
     use rstest::*;
     use rstest_reuse::*;
+
+    // reason: native PostgreSQL infinity is representable before the offline
+    // bounds transition; the export boundary must reject it without rewriting it.
+    #[apply(postgres_only)]
+    #[tokio::test]
+    async fn canonical_instants_export_rejects_native_infinity(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let CloseablePool::Postgres(pool) = env.base.pool() else {
+            unreachable!("postgres_only supplies a PostgreSQL pool")
+        };
+        sqlx::query("ALTER TABLE feed_events DROP CONSTRAINT canonical_instants_v1_feed_events")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO feed_events (feed_url, next_attempt_at, created_at) VALUES ('/feed.atom', 'infinity', CURRENT_TIMESTAMP)")
+            .execute(pool).await.unwrap();
+        let backup = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir(backup.path().join("db")).unwrap();
+        let error = export_database(pool, backup.path(), BackupMode::Directory)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, BackupError::InvalidBackup(ref message) if message == "native timestamp is outside application bounds: feed_events.next_attempt_at"),
+            "{error}"
+        );
+        let (remaining,): (crate::sql::RowCount,) =
+            sqlx::query_as("SELECT COUNT(*) FROM feed_events WHERE next_attempt_at = 'infinity'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(remaining.into_u64(), 1);
+    }
 
     fn primary_io_error() -> BackupError {
         BackupError::Io(std::io::Error::new(

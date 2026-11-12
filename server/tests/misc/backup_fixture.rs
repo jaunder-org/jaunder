@@ -209,10 +209,11 @@ pub fn assert_exported_system_theme_backup(backup_path: &std::path::Path, ids: &
 pub fn assert_exported_backup_timestamp_bytes(backup_path: &std::path::Path) {
     let rows = std::fs::read(backup_path.join("db").join("posts.ndjson"))
         .expect("read exported post rows");
+    let canonical = b"2026-04-29T12:34:56.789012000Z";
     assert!(
-        rows.windows(PRE_JIFF_BACKUP_PUBLISHED_AT_BYTES.len())
-            .any(|bytes| bytes == PRE_JIFF_BACKUP_PUBLISHED_AT_BYTES),
-        "export must retain the established timestamp bytes; rows: {}",
+        rows.windows(canonical.len())
+            .any(|bytes| bytes == canonical),
+        "selected export instants must use fixed-nine UTC bytes; rows: {}",
         String::from_utf8_lossy(&rows)
     );
 }
@@ -245,7 +246,11 @@ pub fn make_pre_jiff_backup_fixture(backup_path: &std::path::Path) {
         "fixture must contain both public and Named post timestamps"
     );
     std::fs::write(rows_path, format!("{rows}\n")).expect("write pre-Jiff post rows");
-    assert_exported_backup_timestamp_bytes(backup_path);
+    assert!(
+        rows.as_bytes()
+            .windows(PRE_JIFF_BACKUP_PUBLISHED_AT_BYTES.len())
+            .any(|bytes| bytes == PRE_JIFF_BACKUP_PUBLISHED_AT_BYTES)
+    );
 
     let manifest_path = backup_path.join("manifest.json");
     let mut manifest: serde_json::Value =
@@ -301,15 +306,15 @@ pub fn replace_named_post_timestamp_with_out_of_range(
 
 pub fn assert_fixture_timestamp_meaning(instant: UtcInstant) {
     let rendered = instant.to_string();
-    assert_eq!(rendered, "2026-04-29T12:34:56.789012Z");
+    assert_eq!(rendered, "2026-04-29T12:34:56.789012000Z");
     assert_eq!(&rendered[..10], "2026-04-29", "civil date");
     assert_eq!(&rendered[20..26], "789012", "microsecond precision");
     assert!(rendered.ends_with('Z'), "UTC timezone meaning");
 }
 
-/// Shows a valid backup row remains readable until a later out-of-range row is
-/// decoded through the normal storage query path.
-pub async fn assert_supported_post_precedes_out_of_range_post(
+/// Strict timestamp admission must roll back the whole import, including a
+/// valid earlier Post, before either can be read through storage.
+pub async fn assert_rejected_backup_did_not_import_posts(
     args: &StorageArgs,
     ids: &BackupFixtureIds,
 ) {
@@ -321,14 +326,17 @@ pub async fn assert_supported_post_precedes_out_of_range_post(
         posts
             .get_post_by_id(ids.public_post, &ViewerIdentity::local(ids.author))
             .await
-            .expect("decode supported preceding post row")
-            .is_some(),
-        "supported row preceding the out-of-range row must remain readable"
+            .expect("read unchanged target after rejection")
+            .is_none(),
+        "rejection must not import even the valid preceding row"
     );
-    posts
-        .get_post_by_id(ids.named_post, &ViewerIdentity::local(ids.viewer))
-        .await
-        .expect_err("decoding the out-of-range post row must fail");
+    assert!(
+        posts
+            .get_post_by_id(ids.named_post, &ViewerIdentity::local(ids.viewer))
+            .await
+            .expect("read rejected row identity")
+            .is_none()
+    );
 }
 
 pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {

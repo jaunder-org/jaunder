@@ -4,8 +4,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use jiff::Timestamp;
-
 use crate::publisher::{PublisherFinalizationGuard, PublisherService};
 use crate::scheduled_worker::{ScheduledWorkerGuard, WorkTracker};
 use crate::websub::{WebSubClient, WebSubError};
@@ -583,12 +581,9 @@ impl FeedWorker {
         for (next_index, ids) in retry_buckets {
             // Retry delays are positive: at Jiff's upper boundary, preserve the
             // "not before now" contract by saturating at the last representable instant.
-            let next = UtcInstant::from(
-                UtcInstant::now()
-                    .value()
-                    .checked_add(Duration::from_secs(REGEN_BACKOFFS_SECS[next_index]))
-                    .unwrap_or(Timestamp::MAX),
-            );
+            let next = UtcInstant::now()
+                .checked_add(Duration::from_secs(REGEN_BACKOFFS_SECS[next_index]))
+                .unwrap_or(UtcInstant::MAX);
             let events = Arc::clone(&self.feed_events);
             let message = message.to_owned();
             if let Err(error) = self
@@ -640,12 +635,9 @@ impl FeedWorker {
             );
             // Retry delays are positive: at Jiff's upper boundary, preserve the
             // "not before now" contract by saturating at the last representable instant.
-            let next = UtcInstant::from(
-                UtcInstant::now()
-                    .value()
-                    .checked_add(delay)
-                    .unwrap_or(Timestamp::MAX),
-            );
+            let next = UtcInstant::now()
+                .checked_add(delay)
+                .unwrap_or(UtcInstant::MAX);
             let events = Arc::clone(&self.feed_events);
             let message = message.to_owned();
             if let Err(error) = self

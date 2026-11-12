@@ -506,7 +506,7 @@ fn timeline_cursor(cursor: Option<&performance::Cursor>) -> anyhow::Result<Optio
     };
     let micros = cursor.created_at_us;
     Ok(Some(PostCursor {
-        published_at: jiff::Timestamp::from_microsecond(micros)?.into(),
+        published_at: jiff::Timestamp::from_microsecond(micros)?.try_into()?,
         post_id: PostId::from(i64::try_from(cursor.post_id)?),
         order: TimelineOrder::Newest,
     }))

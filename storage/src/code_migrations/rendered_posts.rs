@@ -122,10 +122,14 @@ where
             .bind_storage(&path)
             .execute(&mut *conn)
             .await?;
-        sqlx::query("INSERT INTO feed_events (feed_url) VALUES ($1)")
-            .bind_storage(&path)
-            .execute(&mut *conn)
-            .await?;
+        sqlx::query(
+            "INSERT INTO feed_events (feed_url, next_attempt_at, created_at) VALUES ($1, $2, $3)",
+        )
+        .bind_storage(&path)
+        .bind_storage(now)
+        .bind_storage(now)
+        .execute(&mut *conn)
+        .await?;
     }
     Ok(())
 }

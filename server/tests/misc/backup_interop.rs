@@ -7,7 +7,7 @@ use tempfile::TempDir;
 
 use crate::misc::backup_fixture::{
     assert_backup_fixture_restored, assert_exported_backup_timestamp_bytes,
-    assert_exported_system_theme_backup, assert_supported_post_precedes_out_of_range_post,
+    assert_exported_system_theme_backup, assert_rejected_backup_did_not_import_posts,
     make_pre_jiff_backup_fixture, populate_backup_fixture,
     replace_named_post_timestamp_with_out_of_range,
 };
@@ -58,7 +58,6 @@ async fn sqlite_backup_restores_into_postgres() {
     .expect("sqlite backup");
     assert_exported_backup_timestamp_bytes(&backup_path);
     assert_exported_system_theme_backup(&backup_path, &ids);
-    make_pre_jiff_backup_fixture(&backup_path);
 
     let (target_args, _pg_target) = postgres_storage_args(&base, "postgres-target").await;
     cmd_init(&target_args, false)
@@ -91,7 +90,6 @@ async fn postgres_backup_restores_into_sqlite() {
     .expect("postgres backup");
     assert_exported_backup_timestamp_bytes(&backup_path);
     assert_exported_system_theme_backup(&backup_path, &ids);
-    make_pre_jiff_backup_fixture(&backup_path);
 
     let target_args = sqlite_storage_args(&base, "sqlite-target");
     cmd_init(&target_args, false)
@@ -123,7 +121,6 @@ async fn sqlite_backup_restores_into_sqlite() {
     .expect("sqlite backup");
     assert_exported_backup_timestamp_bytes(&backup_path);
     assert_exported_system_theme_backup(&backup_path, &ids);
-    make_pre_jiff_backup_fixture(&backup_path);
 
     let target_args = sqlite_storage_args(&base, "sqlite-target");
     cmd_init(&target_args, false)
@@ -154,7 +151,6 @@ async fn postgres_backup_restores_into_postgres() {
     .expect("postgres backup");
     assert_exported_backup_timestamp_bytes(&backup_path);
     assert_exported_system_theme_backup(&backup_path, &ids);
-    make_pre_jiff_backup_fixture(&backup_path);
 
     let (target_args, _pg_target) = postgres_storage_args(&base, "postgres-target").await;
     cmd_init(&target_args, false)
@@ -169,7 +165,7 @@ async fn postgres_backup_restores_into_postgres() {
 // guard:low-level-db — the restore target is a live SQLite database driven through
 // the CLI, and the assertion must decode rows through the storage query seam.
 #[tokio::test]
-async fn sqlite_restore_defers_out_of_range_post_timestamp_until_that_row_is_read() {
+async fn sqlite_restore_rejects_out_of_range_and_noncanonical_selected_instants() {
     let base = TempDir::new().expect("temp dir");
     let source_args = sqlite_storage_args(&base, "sqlite-source");
     cmd_init(&source_args, false)
@@ -193,14 +189,19 @@ async fn sqlite_restore_defers_out_of_range_post_timestamp_until_that_row_is_rea
         .expect("init sqlite target");
     cmd_restore(&target_args, &backup_path)
         .await
-        .expect("restore defers row decoding");
-    assert_supported_post_precedes_out_of_range_post(&target_args, &ids).await;
+        .expect_err("selected out-of-range timestamp must reject the import");
+    assert_rejected_backup_did_not_import_posts(&target_args, &ids).await;
+    make_pre_jiff_backup_fixture(&backup_path);
+    cmd_restore(&target_args, &backup_path)
+        .await
+        .expect_err("historical noncanonical selected cells must reject before native binding");
+    assert_rejected_backup_did_not_import_posts(&target_args, &ids).await;
 }
 
 // guard:low-level-db — verifies the same table-row decoder boundary after a
 // cross-backend restore into a live PostgreSQL target.
 #[tokio::test]
-async fn postgres_restore_defers_out_of_range_post_timestamp_until_that_row_is_read() {
+async fn postgres_restore_rejects_out_of_range_and_noncanonical_selected_instants() {
     let base = TempDir::new().expect("temp dir");
     let source_args = sqlite_storage_args(&base, "sqlite-source");
     cmd_init(&source_args, false)
@@ -224,8 +225,13 @@ async fn postgres_restore_defers_out_of_range_post_timestamp_until_that_row_is_r
         .expect("init postgres target");
     cmd_restore(&target_args, &backup_path)
         .await
-        .expect("restore defers row decoding");
-    assert_supported_post_precedes_out_of_range_post(&target_args, &ids).await;
+        .expect_err("selected out-of-range timestamp must reject the import");
+    assert_rejected_backup_did_not_import_posts(&target_args, &ids).await;
+    make_pre_jiff_backup_fixture(&backup_path);
+    cmd_restore(&target_args, &backup_path)
+        .await
+        .expect_err("historical noncanonical selected cells must reject before native binding");
+    assert_rejected_backup_did_not_import_posts(&target_args, &ids).await;
 }
 
 /// Assert two backup directories are byte-identical over `db/*.ndjson` and

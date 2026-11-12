@@ -1,9 +1,46 @@
 //! Portable migration-contract coverage for upgrades that need to inspect both
 //! the pre-migration and current schema on fresh databases.
 
+/// Test-only old Collection cursor spelling, retained independently of the
+/// current encoder so the physical comparison regression remains reproducible.
+#[cfg(test)]
+#[derive(macros::SqlxBridge)]
+pub(crate) struct LegacyCollectionCursorText(String);
+
+/// Raw fixture identities span the explicitly seeded tables, not domain keys.
+#[cfg(test)]
+#[derive(Debug, macros::SqlxBridge)]
+struct InstantFixtureIdentity(String);
+
+/// Physical `SQLite` instant text, deliberately not parsed or normalized.
+#[cfg(test)]
+#[derive(Debug, macros::SqlxBridge)]
+struct PhysicalInstantText(String);
+
+/// Native `PostgreSQL` timestamp bytes rendered as hex for exact comparison.
+#[cfg(test)]
+#[derive(Debug, macros::SqlxBridge)]
+struct NativeInstantHex(String);
+
+/// Table-qualified trigger/constraint name in an exact durability snapshot.
+#[cfg(test)]
+#[derive(Debug, macros::SqlxBridge)]
+struct EnforcementFixtureName(String);
+
+/// `SQLite`'s allocated page count for the fixture-only DDL capacity failure.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, macros::NumNewtype)]
+#[num_newtype(inner = i64, min = 0, error = "page count must be nonnegative")]
+struct FixturePageCount(i64);
+
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;
+
+    use super::{
+        EnforcementFixtureName, FixturePageCount, InstantFixtureIdentity, NativeInstantHex,
+        PhysicalInstantText,
+    };
 
     use crate::DbConnectOptions;
     use crate::code_migrations;
@@ -15,8 +52,8 @@ mod tests {
     use crate::sql::{QueryStorageExt, RowCount};
     use crate::subscriptions::CorruptSubscriberRef;
     use crate::test_support::{
-        Backend, CloseablePool, PostgresDbGuard, PostgresTestConfig, backends, sqlite_url,
-        unique_postgres_url,
+        Backend, CloseablePool, PostgresDbGuard, PostgresTestConfig, backends, backends_matrix,
+        sqlite_url, unique_postgres_url,
     };
     use common::ids::PostId;
     use common::visibility::SubscriberRef;
@@ -26,6 +63,56 @@ mod tests {
     use sqlx::migrate::{MigrateError, Migrator};
     use sqlx::{PgPool, SqlitePool};
     use tempfile::TempDir;
+
+    const SELECTED_INSTANT_FIXTURE_COLUMNS: &[(&str, &[&str])] = &[
+        (
+            "posts",
+            &["created_at", "updated_at", "published_at", "deleted_at"],
+        ),
+        (
+            "post_revisions",
+            &[
+                "created_at",
+                "updated_at",
+                "published_at",
+                "deleted_at",
+                "captured_at",
+            ],
+        ),
+        ("sessions", &["created_at", "last_used_at"]),
+        ("invites", &["created_at", "expires_at", "used_at"]),
+        (
+            "email_verifications",
+            &["created_at", "expires_at", "used_at"],
+        ),
+        ("password_resets", &["created_at", "expires_at", "used_at"]),
+        ("media", &["created_at"]),
+        ("idempotency_keys", &["created_at"]),
+        (
+            "feed_events",
+            &[
+                "next_attempt_at",
+                "claimed_at",
+                "terminal_at",
+                "created_at",
+                "regenerated_at",
+                "pinged_at",
+            ],
+        ),
+        (
+            "feed_cache",
+            &["representation_modified_at", "generated_at"],
+        ),
+        ("passkey_credentials", &["created_at", "last_used_at"]),
+        (
+            "passkey_registration_ceremonies",
+            &["expires_at", "claimed_at"],
+        ),
+        (
+            "passkey_authentication_ceremonies",
+            &["expires_at", "claimed_at"],
+        ),
+    ];
 
     static SQLITE_MIGRATOR: Migrator = sqlx::migrate!("./migrations/sqlite");
     static POSTGRES_MIGRATOR: Migrator = sqlx::migrate!("./migrations/postgres");
@@ -110,6 +197,1607 @@ mod tests {
         });
     }
 
+    // This deliberately starts before 0041 and leaves the real rendering queue
+    // pending: enforcement must not run until those old writers have finished.
+    #[apply(backends_matrix)]
+    #[case::pre_0041(40)]
+    #[case::immediately_preceding(53)]
+    #[tokio::test]
+    async fn canonical_instants_upgrade_rebuilds_legacy_posts_before_enforcement(
+        backend: Backend,
+        #[case] version: i64,
+    ) {
+        use crate::posts::CollectionCursor;
+        use common::ids::UserId;
+        use common::pagination::RowLimit;
+        use common::time::UtcInstant;
+
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(version).await.unwrap();
+        let identity_override = match backend {
+            Backend::Sqlite => "",
+            Backend::Postgres => "OVERRIDING SYSTEM VALUE",
+        };
+        let user_sql = format!(
+            "INSERT INTO users (user_id, username, password_hash, created_at) {identity_override} VALUES (1, 'instant-author', 'hash', CURRENT_TIMESTAMP)"
+        );
+        let posts_sql = format!("INSERT INTO posts (post_id, user_id, slug, body, format, rendered_html, created_at, updated_at, published_at) {identity_override} VALUES
+            (5, 1, 'five', 'changed rendering', 'markdown', '<p>stale</p>', '2005-01-02T01:59:00+00:00', '2026-09-25T12:00:25Z', '2005-01-02T01:59:00+00:00'),
+            (266, 1, 'older', 'older', 'markdown', '<p>older</p>', '2005-01-02T01:59:00Z', '2026-09-24T12:00:25Z', NULL)");
+        crate::with_closeable_pool!(&db.pool, pool, {
+            sqlx::query(sqlx::AssertSqlSafe(user_sql))
+                .execute(pool)
+                .await
+                .unwrap();
+            sqlx::query(sqlx::AssertSqlSafe(posts_sql))
+                .execute(pool)
+                .await
+                .unwrap();
+        });
+        db.pool.execute("INSERT INTO post_audiences (post_id, target_kind_id, audience_id) SELECT 5, kind_id, NULL FROM target_kinds WHERE name = 'public'").await.unwrap();
+        db.migrate_current().await.unwrap();
+        let cursor = CollectionCursor {
+            updated_at: "2026-09-25T12:00:25Z".parse::<UtcInstant>().unwrap(),
+            post_id: PostId::from(6),
+        };
+        // Reproduce the human's old bound spelling even after the encoder is
+        // fixed; 266's older timestamp is a controlled fixture, not production data.
+        let old_sql = match backend {
+            Backend::Sqlite => {
+                "SELECT post_id FROM posts WHERE (updated_at, post_id) < ($1, $2) ORDER BY updated_at DESC, post_id DESC"
+            }
+            Backend::Postgres => {
+                "SELECT post_id FROM posts WHERE (updated_at, post_id) < ($1::timestamptz, $2) ORDER BY updated_at DESC, post_id DESC"
+            }
+        };
+        let old: Vec<i64> = crate::with_closeable_pool!(&db.pool, pool, {
+            sqlx::query_scalar(old_sql)
+                .bind_storage(super::LegacyCollectionCursorText(
+                    "2026-09-25T12:00:25+00:00".into(),
+                ))
+                .bind_storage(cursor.post_id)
+                .fetch_all(pool)
+                .await
+                .unwrap()
+        });
+        match backend {
+            Backend::Sqlite => {
+                assert_eq!(old, [266]);
+                assert_eq!(db.pool.scalar_i64("SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name GLOB 'canonical_instants_v1_*'").await.unwrap(), 0);
+            }
+            Backend::Postgres => assert_eq!(old, [5, 266]),
+        }
+        let queued = db
+            .pool
+            .string_quintuples(
+                "SELECT operation, '', '', '', '' FROM pending_code_migrations ORDER BY queue_id",
+            )
+            .await
+            .unwrap();
+        assert!(
+            queued[..queued.len() - 1]
+                .iter()
+                .any(|row| row.0 == "rebuild_rendered_posts")
+        );
+        assert_eq!(queued.last().unwrap().0, "normalize_comparable_instants_v1");
+        db.drain_pending_code_migrations().await;
+        let row = crate::with_closeable_pool!(&db.pool, pool, {
+            sqlx::query_as::<_, (String, UtcInstant, UtcInstant, String, i64)>("SELECT rendered_html, updated_at, created_at, timezone, mutation_version FROM posts WHERE post_id = 5").fetch_one(pool).await.unwrap()
+        });
+        assert_eq!(
+            row,
+            (
+                "<p>changed rendering</p>\n".into(),
+                cursor.updated_at,
+                "2005-01-02T01:59:00Z".parse().unwrap(),
+                "UTC".into(),
+                1
+            )
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM feed_events")
+                .await
+                .unwrap(),
+            6
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
+                .await
+                .unwrap(),
+            0
+        );
+        let factory = match &db.pool {
+            CloseablePool::Sqlite(pool) => {
+                assert_eq!(db.pool.scalar_i64("SELECT COUNT(*) FROM feed_events WHERE length(created_at) = 30 AND length(next_attempt_at) = 30").await.unwrap(), 6);
+                assert_eq!(db.pool.scalar_i64("SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name GLOB 'canonical_instants_v1_*'").await.unwrap(), 26);
+                assert_eq!(
+                    db.pool
+                        .string_quintuples(
+                            "SELECT updated_at, created_at, '', '', '' FROM posts WHERE post_id = 5"
+                        )
+                        .await
+                        .unwrap(),
+                    [(
+                        "2026-09-25T12:00:25.000000000Z".into(),
+                        "2005-01-02T01:59:00.000000000Z".into(),
+                        String::new(),
+                        String::new(),
+                        String::new()
+                    )]
+                );
+                crate::StorageFactory::sqlite(pool.clone())
+            }
+            CloseablePool::Postgres(pool) => {
+                assert_eq!(db.pool.scalar_i64("SELECT COUNT(*) FROM pg_constraint WHERE conname LIKE 'canonical_instants_v1_%'").await.unwrap(), 13);
+                crate::StorageFactory::postgres(pool.clone())
+            }
+        };
+        let posts = factory
+            .posts()
+            .list_collection_by_user(UserId::from(1), Some(&cursor), RowLimit::at_most(10))
+            .await
+            .unwrap();
+        assert_eq!(
+            posts.iter().map(|p| p.post_id).collect::<Vec<_>>(),
+            [PostId::from(5), PostId::from(266)]
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn canonical_instants_enforcement_rejects_invalid_sql_writes(#[case] backend: Backend) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_current().await.unwrap();
+        db.drain_pending_code_migrations().await;
+        db.pool.execute("INSERT INTO users (username, password_hash, created_at) VALUES ('raw-instants', 'hash', CURRENT_TIMESTAMP)").await.unwrap();
+        db.pool.execute("INSERT INTO posts (user_id, slug, body, format, rendered_html, created_at, updated_at) SELECT user_id, 'raw', 'body', 'markdown', '<p>body</p>', '0001-01-01T00:00:00.000000000Z', '9999-12-30T22:00:00.999999000Z' FROM users WHERE username = 'raw-instants'").await.unwrap();
+        let invalid: &[&str] = match backend {
+            Backend::Sqlite => &[
+                "'2026-09-25T12:00:25Z'",
+                "'2026-09-25T12:00:25.000000000+00:00'",
+                "'0000-12-31T23:59:59.999999999Z'",
+                "'9999-12-30T22:00:01.000000000Z'",
+                "'2025-02-29T00:00:00.000000000Z'",
+                "'1900-02-29T00:00:00.000000000Z'",
+                "'2026-04-31T00:00:00.000000000Z'",
+                "'2026-00-01T00:00:00.000000000Z'",
+                "'2026-01-00T00:00:00.000000000Z'",
+                "'2026-01-01T24:00:00.000000000Z'",
+                "'2026-01-01T00:60:00.000000000Z'",
+                "'2026-01-01T00:00:60.000000000Z'",
+                "'２０２６-01-01T00:00:00.000000000Z'",
+                "0",
+                "2440587.5",
+                "x'00'",
+                "NULL",
+            ],
+            Backend::Postgres => &[
+                "'-infinity'",
+                "'infinity'",
+                "'0001-01-01T00:00:00Z'::timestamptz - INTERVAL '1 microsecond'",
+                "'9999-12-30T22:00:01Z'",
+                "'2025-02-29T00:00:00Z'",
+                "NULL",
+            ],
+        };
+        for expression in invalid {
+            let sql = format!("UPDATE posts SET updated_at = {expression} WHERE slug = 'raw'");
+            let result = crate::with_closeable_pool!(&db.pool, pool, {
+                sqlx::query(sqlx::AssertSqlSafe(sql))
+                    .execute(pool)
+                    .await
+                    .map(|_| ())
+            });
+            assert!(result.is_err(), "admitted {expression}");
+        }
+        let leap = match backend {
+            Backend::Sqlite => {
+                "UPDATE posts SET updated_at = '2000-02-29T23:59:59.000000001Z' WHERE slug = 'raw'"
+            }
+            Backend::Postgres => {
+                "UPDATE posts SET updated_at = '2000-02-29T23:59:59.000001Z' WHERE slug = 'raw'"
+            }
+        };
+        db.pool.execute(leap).await.unwrap();
+        if matches!(backend, Backend::Sqlite) {
+            assert!(
+                db.pool
+                    .execute("INSERT INTO feed_events (feed_url) VALUES ('/feed.atom')")
+                    .await
+                    .is_err(),
+                "incompatible historical defaults must reject raw omission"
+            );
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn canonical_instants_reuses_full_enforcement_and_rejects_completed_missing_sets(
+        #[case] backend: Backend,
+    ) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_current().await.unwrap();
+        db.drain_pending_code_migrations().await;
+        db.pool.execute("INSERT INTO pending_code_migrations (operation) VALUES ('normalize_comparable_instants_v1')").await.unwrap();
+        db.drain_pending(&|| Ok(()))
+            .await
+            .expect("an identical full set must be reusable");
+        let drop_one = match backend {
+            Backend::Sqlite => "DROP TRIGGER canonical_instants_v1_posts_insert",
+            Backend::Postgres => "ALTER TABLE posts DROP CONSTRAINT canonical_instants_v1_posts",
+        };
+        db.pool.execute(drop_one).await.unwrap();
+        assert!(
+            crate::open_existing_database(&db.options, &crate::StorageRuntimeConfig::default())
+                .await
+                .is_err(),
+            "completed normalization cannot admit a missing enforcement definition"
+        );
+        db.pool.execute("INSERT INTO pending_code_migrations (operation) VALUES ('normalize_comparable_instants_v1')").await.unwrap();
+        assert!(
+            db.drain_pending(&|| Ok(())).await.is_err(),
+            "pending work cannot repair a partial set"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn canonical_instants_legacy_restore_backfills_distinct_passkey_handles(
+        #[case] backend: Backend,
+    ) {
+        let source = MigrationDatabase::new(backend).await;
+        source.migrate_current().await.unwrap();
+        source.drain_pending_code_migrations().await;
+        source.pool.execute("INSERT INTO users (username, password_hash, created_at) VALUES ('legacy-one', 'hash', CURRENT_TIMESTAMP), ('legacy-two', 'hash', CURRENT_TIMESTAMP)").await.unwrap();
+        crate::with_closeable_pool!(&source.pool, pool, {
+            crate::instance_identity::ensure(pool).await.unwrap();
+        });
+        let backup = TempDir::new().unwrap();
+        std::fs::create_dir(backup.path().join("db")).unwrap();
+        let mut manifest = source.export_fixture(backup.path()).await;
+        manifest.format_version = crate::backup::LEGACY_BACKUP_FORMAT_VERSION;
+        manifest
+            .tables
+            .retain(|table| table != "passkey_user_handles");
+        let target = MigrationDatabase::new(backend).await;
+        target.migrate_current().await.unwrap();
+        target.drain_pending_code_migrations().await;
+        let report = target
+            .restore_fixture(backup.path(), &manifest)
+            .await
+            .unwrap();
+        assert!(report.is_empty());
+        let users = crate::with_closeable_pool!(&target.pool, pool, {
+            sqlx::query_scalar::<_, common::ids::UserId>(
+                "SELECT user_id FROM users ORDER BY user_id",
+            )
+            .fetch_all(pool)
+            .await
+            .unwrap()
+        });
+        assert_eq!(users.len(), 2);
+        let factory = match &target.pool {
+            CloseablePool::Sqlite(pool) => crate::StorageFactory::sqlite(pool.clone()),
+            CloseablePool::Postgres(pool) => crate::StorageFactory::postgres(pool.clone()),
+        };
+        let passkeys = factory.passkeys();
+        let first = passkeys.user_handle(users[0]).await.unwrap().unwrap();
+        let second = passkeys.user_handle(users[1]).await.unwrap().unwrap();
+        assert_ne!(first, second);
+        assert_eq!(passkeys.user_handle(users[0]).await.unwrap(), Some(first));
+    }
+
+    #[apply(backends_matrix)]
+    #[case::same_backend_pending_absent(false, false)]
+    #[case::same_backend_pending_full(false, true)]
+    #[case::opposite_backend_pending_absent(true, false)]
+    #[case::opposite_backend_pending_full(true, true)]
+    #[tokio::test]
+    async fn canonical_instants_portable_restore_validates_pending_targets_before_native_binding(
+        backend: Backend,
+        #[case] opposite: bool,
+        #[case] initialized: bool,
+    ) {
+        use common::time::UtcInstant;
+        let source = MigrationDatabase::new(backend).await;
+        source.migrate_current().await.unwrap();
+        source.drain_pending_code_migrations().await;
+        source.pool.execute("INSERT INTO users (username, password_hash, created_at) VALUES ('portable-instant', 'hash', CURRENT_TIMESTAMP)").await.unwrap();
+        let instant: UtcInstant = "1999-12-31T23:59:59.123456700Z".parse().unwrap();
+        crate::with_closeable_pool!(&source.pool, pool, {
+            crate::instance_identity::ensure(pool).await.unwrap();
+            sqlx::query("INSERT INTO posts (user_id, slug, body, format, rendered_html, created_at, updated_at) SELECT user_id, 'portable', 'body', 'markdown', '<p>body</p>', $1, $1 FROM users WHERE username = 'portable-instant'").bind_storage(instant).execute(pool).await.unwrap();
+        });
+        source.pool.execute("INSERT INTO pending_code_migrations (operation) VALUES ('normalize_comparable_instants_v1')").await.unwrap();
+        let backup = TempDir::new().unwrap();
+        std::fs::create_dir(backup.path().join("db")).unwrap();
+        let manifest = match &source.pool {
+            CloseablePool::Sqlite(pool) => crate::sqlite::backup::export_database(
+                pool,
+                backup.path(),
+                crate::BackupMode::Directory,
+            )
+            .await
+            .unwrap(),
+            CloseablePool::Postgres(pool) => crate::postgres::backup::export_database(
+                pool,
+                backup.path(),
+                crate::BackupMode::Directory,
+            )
+            .await
+            .unwrap(),
+        };
+        let post_path = backup.path().join("db/posts.ndjson");
+        let raw = std::fs::read_to_string(&post_path).unwrap();
+        let original: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
+        let source_text = match backend {
+            Backend::Sqlite => "1999-12-31T23:59:59.123456700Z",
+            Backend::Postgres => "1999-12-31T23:59:59.123457000Z",
+        };
+        assert_eq!(
+            original["updated_at"], source_text,
+            "PG export must use the common canonical formatter without inventing lost ns"
+        );
+        assert!(original["published_at"].is_null());
+        let target_backend = match (backend, opposite) {
+            (Backend::Sqlite, true) => Backend::Postgres,
+            (Backend::Postgres, true) => Backend::Sqlite,
+            (backend, false) => backend,
+        };
+        let mut target = MigrationDatabase::new(target_backend).await;
+        target.migrate_current().await.unwrap();
+        if initialized {
+            target.drain_pending_code_migrations().await;
+        }
+        // Fixture DDL mutations and preflight share one physical schema cache;
+        // concurrent/stale pooled schema caches are not the admission contract.
+        target.reopen_durability_pool().await;
+        target
+            .restore_fixture(backup.path(), &manifest)
+            .await
+            .unwrap();
+        assert_eq!(target.pool.scalar_i64("SELECT COUNT(*) FROM pending_code_migrations WHERE operation = 'normalize_comparable_instants_v1'").await.unwrap(), 1, "import must not consume queued work");
+        let expected: UtcInstant = match target_backend {
+            Backend::Postgres => "1999-12-31T23:59:59.123457000Z",
+            Backend::Sqlite => source_text,
+        }
+        .parse()
+        .unwrap();
+        let restored = crate::with_closeable_pool!(&target.pool, pool, {
+            sqlx::query_scalar::<_, UtcInstant>(
+                "SELECT updated_at FROM posts WHERE slug = 'portable'",
+            )
+            .fetch_one(pool)
+            .await
+            .unwrap()
+        });
+        assert_eq!(restored, expected);
+        for invalid in [
+            serde_json::json!("1999-12-31T23:59:59.123457+00:00"),
+            serde_json::json!("0000-12-31T23:59:59.000000000Z"),
+            serde_json::json!("2025-02-29T00:00:00.000000000Z"),
+            serde_json::json!(2_440_587.5),
+            serde_json::Value::Null,
+        ] {
+            let mut row = original.clone();
+            row["updated_at"] = invalid.clone();
+            std::fs::write(
+                &post_path,
+                format!("{}\n", serde_json::to_string(&row).unwrap()),
+            )
+            .unwrap();
+            assert!(
+                target
+                    .restore_fixture(backup.path(), &manifest)
+                    .await
+                    .is_err(),
+                "restore admitted {invalid} on pending target"
+            );
+            let after = crate::with_closeable_pool!(&target.pool, pool, {
+                sqlx::query_scalar::<_, UtcInstant>(
+                    "SELECT updated_at FROM posts WHERE slug = 'portable'",
+                )
+                .fetch_one(pool)
+                .await
+                .unwrap()
+            });
+            assert_eq!(
+                after, expected,
+                "rejected restore must preserve durable prior rows"
+            );
+        }
+        std::fs::write(&post_path, raw).unwrap();
+        if initialized {
+            target
+                .pool
+                .execute(match target_backend {
+                    Backend::Sqlite => "DROP TRIGGER canonical_instants_v1_posts_insert",
+                    Backend::Postgres => {
+                        "ALTER TABLE posts DROP CONSTRAINT canonical_instants_v1_posts"
+                    }
+                })
+                .await
+                .unwrap();
+            let error = target
+                .restore_fixture(backup.path(), &manifest)
+                .await
+                .expect_err("restore must refuse a partial target set");
+            assert!(
+                error.to_string().contains("incomplete comparable-instant"),
+                "{error}"
+            );
+        }
+        target.pool.execute(match target_backend {
+            Backend::Sqlite => "CREATE TRIGGER canonical_instants_v1_posts_insert BEFORE INSERT ON posts BEGIN SELECT RAISE(ABORT, 'different definition'); END",
+            Backend::Postgres => "ALTER TABLE posts ADD CONSTRAINT canonical_instants_v1_posts CHECK (TRUE)",
+        }).await.unwrap();
+        let error = target
+            .restore_fixture(backup.path(), &manifest)
+            .await
+            .expect_err(
+                "restore must refuse different target DDL, regardless of imported queue rows",
+            );
+        assert!(
+            error.to_string().contains("different comparable-instant"),
+            "{error}"
+        );
+        for table in [
+            "posts",
+            "post_revisions",
+            "sessions",
+            "invites",
+            "email_verifications",
+            "password_resets",
+            "media",
+            "idempotency_keys",
+            "feed_events",
+            "feed_cache",
+            "passkey_credentials",
+            "passkey_registration_ceremonies",
+            "passkey_authentication_ceremonies",
+        ] {
+            let statements = match target_backend {
+                Backend::Sqlite => vec![
+                    format!("DROP TRIGGER IF EXISTS canonical_instants_v1_{table}_insert"),
+                    format!("DROP TRIGGER IF EXISTS canonical_instants_v1_{table}_update"),
+                ],
+                Backend::Postgres => vec![format!(
+                    "ALTER TABLE {table} DROP CONSTRAINT IF EXISTS canonical_instants_v1_{table}"
+                )],
+            };
+            for sql in statements {
+                crate::with_closeable_pool!(&target.pool, pool, {
+                    sqlx::query(sqlx::AssertSqlSafe(sql))
+                        .execute(pool)
+                        .await
+                        .unwrap();
+                });
+            }
+        }
+        target.pool.execute("DELETE FROM pending_code_migrations WHERE operation = 'normalize_comparable_instants_v1'").await.unwrap();
+        let error = target
+            .restore_fixture(backup.path(), &manifest)
+            .await
+            .expect_err(
+                "an incoming pending queue cannot excuse missing completed target enforcement",
+            );
+        assert!(
+            error.to_string().contains("incomplete comparable-instant"),
+            "{error}"
+        );
+        let after = crate::with_closeable_pool!(&target.pool, pool, {
+            sqlx::query_scalar::<_, UtcInstant>(
+                "SELECT updated_at FROM posts WHERE slug = 'portable'",
+            )
+            .fetch_one(pool)
+            .await
+            .unwrap()
+        });
+        assert_eq!(after, expected);
+    }
+
+    #[apply(backends_matrix)]
+    #[case::malformed_text("'broken'", "'infinity'")]
+    #[case::unsupported_blob("x'00'", "'-infinity'")]
+    #[case::julian_zero("0", "'10000-01-01T00:00:00Z'")]
+    #[tokio::test]
+    async fn canonical_instants_invalid_legacy_cells_identify_rows_and_rollback_all_tables(
+        backend: Backend,
+        #[case] sqlite_cell: &str,
+        #[case] postgres_cell: &str,
+    ) {
+        let mut db = MigrationDatabase::new(backend).await;
+        db.migrate_to(53).await.unwrap();
+        db.drain_pending_code_migrations().await;
+        db.pool.execute("INSERT INTO users (username, password_hash, created_at) VALUES ('invalid-legacy', 'hash', CURRENT_TIMESTAMP)").await.unwrap();
+        db.pool.execute("INSERT INTO posts (user_id, slug, body, format, rendered_html, created_at, updated_at) SELECT user_id, 'legacy', 'body', 'markdown', '<p>body</p>', '2005-01-02T01:59:00Z', '2005-01-02T01:59:00Z' FROM users WHERE username = 'invalid-legacy'").await.unwrap();
+        let cell = match backend {
+            Backend::Sqlite => sqlite_cell,
+            Backend::Postgres => postgres_cell,
+        };
+        let sql = format!(
+            "INSERT INTO feed_events (feed_url, next_attempt_at, created_at) VALUES ('/feed.atom', '2005-01-02T01:59:00Z', {cell})"
+        );
+        crate::with_closeable_pool!(&db.pool, pool, {
+            sqlx::query(sqlx::AssertSqlSafe(sql))
+                .execute(pool)
+                .await
+                .unwrap();
+        });
+        db.migrate_current().await.unwrap();
+        let error = db
+            .drain_pending(&|| Ok(()))
+            .await
+            .expect_err("invalid legacy cell must block normalization");
+        let diagnostic = error.to_string();
+        db.reopen_durability_pool().await;
+        assert!(diagnostic.contains("feed_events"), "{diagnostic}");
+        if matches!(backend, Backend::Sqlite) {
+            assert!(
+                diagnostic.contains("created_at") && diagnostic.contains("rowid=1"),
+                "{diagnostic}"
+            );
+            assert_eq!(
+                db.pool
+                    .string_quintuples(
+                        "SELECT updated_at, '', '', '', '' FROM posts WHERE slug = 'legacy'"
+                    )
+                    .await
+                    .unwrap()[0]
+                    .0,
+                "2005-01-02T01:59:00Z",
+                "a later bad table rolls back earlier normalized rows"
+            );
+            assert_eq!(db.pool.scalar_i64("SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name GLOB 'canonical_instants_v1_*'").await.unwrap(), 0);
+        } else {
+            assert_eq!(db.pool.scalar_i64("SELECT COUNT(*) FROM pg_constraint WHERE left(conname,22) = 'canonical_instants_v1_'").await.unwrap(), 0);
+        }
+        assert_eq!(db.pool.scalar_i64("SELECT COUNT(*) FROM pending_code_migrations WHERE operation = 'normalize_comparable_instants_v1'").await.unwrap(), 1);
+        db.pool
+            .execute("UPDATE feed_events SET created_at = '2005-01-02T01:59:00Z'")
+            .await
+            .unwrap();
+        db.drain_pending_code_migrations().await;
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn canonical_instants_rejected_commit_discards_transaction_and_reopens_old_state(
+        #[case] backend: Backend,
+    ) {
+        let mut db = MigrationDatabase::normalization_durability_fixture(backend).await;
+        db.pool
+            .execute("CREATE TABLE commit_parent (id INTEGER PRIMARY KEY)")
+            .await
+            .unwrap();
+        db.pool.execute("CREATE TABLE commit_child (parent_id INTEGER REFERENCES commit_parent(id) DEFERRABLE INITIALLY DEFERRED)").await.unwrap();
+        match backend {
+            Backend::Sqlite => db.pool.execute("CREATE TRIGGER reject_normalization_commit AFTER DELETE ON pending_code_migrations WHEN OLD.operation = 'normalize_comparable_instants_v1' BEGIN INSERT INTO commit_child VALUES (1); END").await.unwrap(),
+            Backend::Postgres => {
+                db.pool.execute("CREATE FUNCTION reject_normalization_commit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO commit_child VALUES (1); RETURN OLD; END; $$").await.unwrap();
+                db.pool.execute("CREATE TRIGGER reject_normalization_commit AFTER DELETE ON pending_code_migrations FOR EACH ROW WHEN (OLD.operation = 'normalize_comparable_instants_v1') EXECUTE FUNCTION reject_normalization_commit()").await.unwrap();
+            }
+        }
+        let error = db
+            .drain_pending(&|| Ok(()))
+            .await
+            .expect_err("deferred FK must reject the actual COMMIT");
+        assert!(
+            error.to_string().to_lowercase().contains("foreign key"),
+            "{error}"
+        );
+        // A single-connection fixture makes returning an open transaction to the
+        // pool observable, rather than letting another idle connection hide it.
+        crate::with_closeable_pool!(&db.pool, pool, {
+            let mut connection = pool.acquire().await.unwrap();
+            sqlx::query("BEGIN")
+                .execute(&mut *connection)
+                .await
+                .expect("failed COMMIT connection must be discarded, not pooled transactionally");
+            sqlx::query("ROLLBACK")
+                .execute(&mut *connection)
+                .await
+                .unwrap();
+        });
+        db.reopen_durability_pool().await;
+        db.assert_normalization_durable_state(false).await;
+        let drop_trigger = match backend {
+            Backend::Sqlite => "DROP TRIGGER reject_normalization_commit",
+            Backend::Postgres => {
+                "DROP TRIGGER reject_normalization_commit ON pending_code_migrations"
+            }
+        };
+        db.pool.execute(drop_trigger).await.unwrap();
+        db.drain_pending_code_migrations().await;
+        db.reopen_durability_pool().await;
+        db.assert_normalization_durable_state(true).await;
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn canonical_instants_commit_acknowledgment_returns_completed_state(
+        #[case] backend: Backend,
+    ) {
+        let mut db = MigrationDatabase::normalization_durability_fixture(backend).await;
+        let pause = code_migrations::CommitPause::new(true);
+        let task = db.spawn_paused_drain(std::sync::Arc::clone(&pause));
+        pause.reached.notified().await;
+        pause.resume.notify_one();
+        task.await.unwrap().unwrap();
+        db.reopen_durability_pool().await;
+        db.assert_normalization_durable_state(true).await;
+    }
+
+    #[apply(backends_matrix)]
+    #[case::cancel_before_commit(false)]
+    #[case::suppress_ack_after_commit(true)]
+    #[tokio::test]
+    async fn canonical_instants_cancel_and_lost_ack_reconcile_from_physical_state(
+        backend: Backend,
+        #[case] committed: bool,
+    ) {
+        let mut db = MigrationDatabase::normalization_durability_fixture(backend).await;
+        let pause = code_migrations::CommitPause::new(committed);
+        let task = db.spawn_paused_drain(std::sync::Arc::clone(&pause));
+        pause.reached.notified().await;
+        task.abort();
+        assert!(
+            task.await.unwrap_err().is_cancelled(),
+            "caller intentionally has no successful acknowledgment"
+        );
+        db.reopen_durability_pool().await;
+        db.assert_normalization_durable_state(committed).await;
+        if !committed {
+            db.drain_pending_code_migrations().await;
+            db.reopen_durability_pool().await;
+            db.assert_normalization_durable_state(true).await;
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn canonical_instants_normalizes_every_selected_table_without_domain_mutations(
+        #[case] backend: Backend,
+    ) {
+        use common::time::UtcInstant;
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(53).await.unwrap();
+        db.drain_pending_code_migrations().await;
+        let t = "1969-12-31T23:59:59.123456789+00:00";
+        let inserts = db.seed_comparable_population().await;
+        let index_sql = match backend {
+            Backend::Sqlite => {
+                "SELECT name, sql, '', '', '' FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL ORDER BY name"
+            }
+            Backend::Postgres => {
+                "SELECT indexname, indexdef, '', '', '' FROM pg_indexes WHERE schemaname = 'public' ORDER BY indexname"
+            }
+        };
+        let indexes = db.pool.string_quintuples(index_sql).await.unwrap();
+        let user_before = db.pool.string_quintuples("SELECT CAST(created_at AS TEXT), '', '', '', '' FROM users WHERE username = 'population'").await.unwrap();
+        db.migrate_current().await.unwrap();
+        db.drain_pending_code_migrations().await;
+        assert_eq!(
+            db.pool.string_quintuples(index_sql).await.unwrap(),
+            indexes,
+            "normalization must preserve every existing index"
+        );
+        assert_eq!(db.pool.string_quintuples("SELECT CAST(created_at AS TEXT), '', '', '', '' FROM users WHERE username = 'population'").await.unwrap(), user_before, "unselected descriptive timestamps remain physically unchanged");
+        let expected: UtcInstant = match backend {
+            Backend::Sqlite => "1969-12-31T23:59:59.123456789Z",
+            Backend::Postgres => "1969-12-31T23:59:59.123457000Z",
+        }
+        .parse()
+        .unwrap();
+        for (table, columns) in SELECTED_INSTANT_FIXTURE_COLUMNS {
+            let count = crate::with_closeable_pool!(&db.pool, pool, {
+                sqlx::query_scalar::<_, RowCount>(sqlx::AssertSqlSafe(format!(
+                    "SELECT COUNT(*) FROM {table}"
+                )))
+                .fetch_one(pool)
+                .await
+                .unwrap()
+            });
+            assert_eq!(count.into_u64(), 2);
+            for column in *columns {
+                let nullable = matches!(
+                    (*table, *column),
+                    ("posts" | "post_revisions", "published_at" | "deleted_at")
+                        | (
+                            "invites" | "email_verifications" | "password_resets",
+                            "used_at"
+                        )
+                        | (
+                            "feed_events",
+                            "claimed_at" | "terminal_at" | "regenerated_at" | "pinged_at"
+                        )
+                        | ("passkey_credentials", "last_used_at")
+                        | (
+                            "passkey_registration_ceremonies" | "passkey_authentication_ceremonies",
+                            "claimed_at"
+                        )
+                );
+                let (identity, nonnull_id, null_id) = match *table {
+                    "posts" | "post_revisions" => ("slug", "population", "population-null"),
+                    "sessions" => (
+                        "token_hash",
+                        "population-session",
+                        "population-null-session",
+                    ),
+                    "invites" => ("code", "population", "population-null"),
+                    "email_verifications" | "password_resets" => {
+                        ("token_hash", "population", "population-null")
+                    }
+                    "media" => ("CAST(user_id AS TEXT)", "1", "2"),
+                    "idempotency_keys" => ("key", "population", "population-null"),
+                    "feed_events" | "feed_cache" => {
+                        ("feed_url", "/feed.atom", "/~population-null/feed.atom")
+                    }
+                    "passkey_credentials" => ("credential_id", "population", "population-null"),
+                    "passkey_registration_ceremonies" | "passkey_authentication_ceremonies" => {
+                        ("handle_hash", "population", "population-null")
+                    }
+                    _ => unreachable!("explicit selected fixture table"),
+                };
+                let sql = format!("SELECT {identity}, {column} FROM {table}");
+                let mut actual = crate::with_closeable_pool!(&db.pool, pool, {
+                    sqlx::query_as::<_, (InstantFixtureIdentity, Option<UtcInstant>)>(
+                        sqlx::AssertSqlSafe(sql.clone()),
+                    )
+                    .fetch_all(pool)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|(identity, instant)| (identity.0, instant))
+                    .collect::<Vec<_>>()
+                });
+                actual.sort();
+                let mut expected_cells = vec![
+                    (nonnull_id.to_owned(), Some(expected)),
+                    (
+                        null_id.to_owned(),
+                        if nullable { None } else { Some(expected) },
+                    ),
+                ];
+                expected_cells.sort();
+                assert_eq!(
+                    actual, expected_cells,
+                    "{table}.{column}: preserve instants and NULLs on their own identities"
+                );
+                if let CloseablePool::Sqlite(pool) = &db.pool {
+                    let mut raw = sqlx::query_as::<
+                        _,
+                        (InstantFixtureIdentity, Option<PhysicalInstantText>),
+                    >(sqlx::AssertSqlSafe(sql))
+                    .fetch_all(pool)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|(identity, instant)| (identity.0, instant.map(|text| text.0)))
+                    .collect::<Vec<_>>();
+                    raw.sort();
+                    let canonical = "1969-12-31T23:59:59.123456789Z".to_owned();
+                    let mut expected_raw = vec![
+                        (nonnull_id.to_owned(), Some(canonical.clone())),
+                        (
+                            null_id.to_owned(),
+                            if nullable { None } else { Some(canonical) },
+                        ),
+                    ];
+                    expected_raw.sort();
+                    assert_eq!(
+                        raw, expected_raw,
+                        "physical canonical bytes and independent NULL identities for {table}.{column}"
+                    );
+                }
+                let bad = match backend {
+                    Backend::Sqlite => "broken",
+                    Backend::Postgres => "infinity",
+                };
+                let sql = format!("UPDATE {table} SET {column} = '{bad}'");
+                let error = crate::with_closeable_pool!(&db.pool, pool, {
+                    sqlx::query(sqlx::AssertSqlSafe(sql))
+                        .execute(pool)
+                        .await
+                        .map(|_| ())
+                        .expect_err("every selected column rejects an invalid raw update")
+                });
+                assert!(
+                    error.to_string().contains(match backend {
+                        Backend::Sqlite => "noncanonical comparable instant",
+                        Backend::Postgres => "canonical_instants_v1_",
+                    }),
+                    "{error}"
+                );
+                let sql = format!("UPDATE {table} SET {column} = NULL");
+                let result = crate::with_closeable_pool!(&db.pool, pool, {
+                    sqlx::query(sqlx::AssertSqlSafe(sql))
+                        .execute(pool)
+                        .await
+                        .map(|_| ())
+                });
+                assert_eq!(
+                    result.is_ok(),
+                    nullable,
+                    "explicit NULL rule for {table}.{column}: {result:?}"
+                );
+                if matches!(backend, Backend::Sqlite) {
+                    for invalid_class in ["0", "x'00'"] {
+                        let sql = format!("UPDATE {table} SET {column} = {invalid_class}");
+                        let result = crate::with_closeable_pool!(&db.pool, pool, {
+                            sqlx::query(sqlx::AssertSqlSafe(sql))
+                                .execute(pool)
+                                .await
+                                .map(|_| ())
+                        });
+                        assert!(result.is_err(), "{table}.{column} admitted {invalid_class}");
+                    }
+                }
+            }
+        }
+        for insert in &inserts {
+            let bad = match backend {
+                Backend::Sqlite => "broken",
+                Backend::Postgres => "infinity",
+            };
+            let sql = insert.replace(t, bad);
+            let error = crate::with_closeable_pool!(&db.pool, pool, {
+                sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await.map(|_| ()).expect_err("raw INSERT must be rejected by timestamp admission before duplicate identities")
+            });
+            assert!(
+                error.to_string().contains(match backend {
+                    Backend::Sqlite => "noncanonical comparable instant",
+                    Backend::Postgres => "canonical_instants_v1_",
+                }),
+                "{error}"
+            );
+        }
+        if matches!(backend, Backend::Sqlite) {
+            for omission in [
+                "INSERT INTO posts (user_id, slug, body, format, rendered_html) SELECT user_id, 'omitted', 'body', 'markdown', '<p>body</p>' FROM users WHERE username = 'population'",
+                "INSERT INTO post_revisions (post_id, user_id, slug, body, format, rendered_html, created_at, updated_at) SELECT post_id, user_id, slug, body, format, rendered_html, created_at, updated_at FROM posts WHERE slug = 'population'",
+                "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) SELECT user_id, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'omitted.png', 'upload', 'image/png', 1 FROM users WHERE username = 'population'",
+                "INSERT INTO idempotency_keys (user_id, key, post_id) SELECT user_id, 'omitted', post_id FROM posts WHERE slug = 'population'",
+            ] {
+                assert!(
+                    db.pool.execute(omission).await.is_err(),
+                    "incompatible default omission must reject"
+                );
+            }
+        }
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT mutation_version FROM posts WHERE slug = 'population'")
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.pool
+                .string_quintuples("SELECT timezone, '', '', '', '' FROM post_revisions")
+                .await
+                .unwrap()[0]
+                .0,
+            "US/Eastern"
+        );
+        if let CloseablePool::Sqlite(pool) = &db.pool {
+            assert!(
+                sqlx::query("PRAGMA foreign_key_check")
+                    .fetch_all(pool)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            let bytes: PhysicalInstantText =
+                sqlx::query_scalar("SELECT captured_at FROM post_revisions")
+                    .fetch_one(pool)
+                    .await
+                    .unwrap();
+            assert_eq!(bytes.0, "1969-12-31T23:59:59.123456789Z");
+        }
+    }
+
+    #[apply(backends_matrix)]
+    #[case::queue_delete(false)]
+    #[case::enforcement_ddl(true)]
+    #[tokio::test]
+    async fn canonical_instants_failed_ddl_or_queue_delete_reopens_old_state(
+        backend: Backend,
+        #[case] ddl: bool,
+    ) {
+        let mut db = MigrationDatabase::normalization_durability_fixture(backend).await;
+        if ddl {
+            match &db.pool {
+                CloseablePool::Sqlite(pool) => {
+                    let mut connection = pool.acquire().await.unwrap();
+                    let (pages,): (FixturePageCount,) = sqlx::query_as("PRAGMA page_count")
+                        .fetch_one(&mut *connection)
+                        .await
+                        .unwrap();
+                    // A local fixture-only capacity failure: no runner limits,
+                    // production setting, UDF, or generic fault facility changes.
+                    sqlx::query(sqlx::AssertSqlSafe(format!(
+                        "PRAGMA max_page_count = {}",
+                        pages.0
+                    )))
+                    .execute(&mut *connection)
+                    .await
+                    .unwrap();
+                }
+                CloseablePool::Postgres(pool) => {
+                    sqlx::query("SET default_transaction_read_only = on")
+                        .execute(pool)
+                        .await
+                        .unwrap();
+                }
+            }
+        } else {
+            match backend {
+                Backend::Sqlite => db.pool.execute("CREATE TRIGGER reject_normalization_delete BEFORE DELETE ON pending_code_migrations BEGIN SELECT RAISE(ABORT, 'injected queue delete failure'); END").await.unwrap(),
+                Backend::Postgres => {
+                    db.pool.execute("CREATE FUNCTION reject_normalization_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected queue delete failure'; END; $$").await.unwrap();
+                    db.pool.execute("CREATE TRIGGER reject_normalization_delete BEFORE DELETE ON pending_code_migrations FOR EACH ROW EXECUTE FUNCTION reject_normalization_delete()").await.unwrap();
+                }
+            }
+        }
+        let error = db
+            .drain_pending(&|| Ok(()))
+            .await
+            .expect_err("injected storage failure must block open");
+        assert!(
+            error.to_string().contains(if ddl {
+                "installing comparable-instant"
+            } else {
+                "injected queue delete failure"
+            }),
+            "failure must be at the assigned operation boundary: {error}"
+        );
+        db.reopen_durability_pool().await;
+        db.assert_normalization_durable_state(false).await;
+        if !ddl {
+            db.pool
+                .execute(match backend {
+                    Backend::Sqlite => "DROP TRIGGER reject_normalization_delete",
+                    Backend::Postgres => {
+                        "DROP TRIGGER reject_normalization_delete ON pending_code_migrations"
+                    }
+                })
+                .await
+                .unwrap();
+        }
+        db.drain_pending_code_migrations().await;
+        db.reopen_durability_pool().await;
+        db.assert_normalization_durable_state(true).await;
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn canonical_instants_sql_order_equality_and_collection_ties_match_checked_instants(
+        #[case] backend: Backend,
+    ) {
+        use crate::posts::CollectionCursor;
+        use common::{ids::UserId, pagination::RowLimit, time::UtcInstant};
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_current().await.unwrap();
+        db.drain_pending_code_migrations().await;
+        db.pool.execute("INSERT INTO users (username, password_hash, created_at) VALUES ('ordering', 'hash', CURRENT_TIMESTAMP)").await.unwrap();
+        let cases = [
+            ("0001-01-01T00:00:00Z", "0001-01-01T00:00:00.000000000Z"),
+            (
+                "1969-12-31T23:59:59.000000001Z",
+                "1969-12-31T23:59:59.000001000Z",
+            ),
+            ("1970-01-01T00:00:00Z", "1970-01-01T00:00:00.000000000Z"),
+            (
+                "1999-12-31T23:59:59.999999999Z",
+                "2000-01-01T00:00:00.000000000Z",
+            ),
+            (
+                "2000-01-01T00:00:00.000000001Z",
+                "2000-01-01T00:00:00.000000000Z",
+            ),
+            ("2026-09-25T12:00:25Z", "2026-09-25T12:00:25.000000000Z"),
+            (
+                "2026-09-25T12:00:25.000000001Z",
+                "2026-09-25T12:00:25.000000000Z",
+            ),
+            (
+                "2026-09-25T12:00:25.000000999Z",
+                "2026-09-25T12:00:25.000000000Z",
+            ),
+            (
+                "2026-09-25T12:00:25.000001Z",
+                "2026-09-25T12:00:25.000001000Z",
+            ),
+            (
+                "2026-09-25T14:00:25.1+02:00",
+                "2026-09-25T12:00:25.100000000Z",
+            ),
+            (
+                "2026-09-25T14:00:25+02:00",
+                "2026-09-25T12:00:25.000000000Z",
+            ),
+            ("2026-09-25T12:00:26Z", "2026-09-25T12:00:26.000000000Z"),
+            (
+                "2026-12-31T23:59:59.999999999Z",
+                "2026-12-31T23:59:59.999999000Z",
+            ),
+            ("2027-01-01T00:00:00Z", "2027-01-01T00:00:00.000000000Z"),
+            (
+                "9999-12-30T22:00:00.999999999Z",
+                "9999-12-30T22:00:00.999999000Z",
+            ),
+        ];
+        let mut expected = Vec::new();
+        for (index, (text, pg_text)) in cases.iter().enumerate() {
+            let instant: UtcInstant = text.parse().unwrap();
+            let stored = match backend {
+                Backend::Sqlite => instant,
+                Backend::Postgres => pg_text.parse().unwrap(),
+            };
+            let slug: common::slug::Slug = format!("ordering-{index}").parse().unwrap();
+            let id: PostId = crate::with_closeable_pool!(&db.pool, pool, {
+                sqlx::query_scalar("INSERT INTO posts (user_id, slug, body, format, rendered_html, created_at, updated_at) SELECT user_id, $1, 'ordering', 'markdown', '<p>ordering</p>', $2, $2 FROM users WHERE username = 'ordering' RETURNING post_id").bind_storage(slug).bind_storage(instant).fetch_one(pool).await.unwrap()
+            });
+            expected.push((stored, id));
+        }
+        expected.sort_by(|a, b| b.cmp(a));
+        let actual = crate::with_closeable_pool!(&db.pool, pool, {
+            sqlx::query_as::<_, (UtcInstant, PostId)>(
+                "SELECT updated_at, post_id FROM posts ORDER BY updated_at DESC, post_id DESC",
+            )
+            .fetch_all(pool)
+            .await
+            .unwrap()
+        });
+        assert_eq!(actual, expected);
+        for (instant, _) in &expected {
+            let count = crate::with_closeable_pool!(&db.pool, pool, {
+                sqlx::query_scalar::<_, RowCount>(
+                    "SELECT COUNT(*) FROM posts WHERE updated_at = $1",
+                )
+                .bind_storage(*instant)
+                .fetch_one(pool)
+                .await
+                .unwrap()
+            });
+            assert_eq!(
+                usize::try_from(count.into_u64()).unwrap(),
+                expected.iter().filter(|row| row.0 == *instant).count()
+            );
+        }
+        let factory = match &db.pool {
+            CloseablePool::Sqlite(pool) => crate::StorageFactory::sqlite(pool.clone()),
+            CloseablePool::Postgres(pool) => crate::StorageFactory::postgres(pool.clone()),
+        };
+        let mut cursor = None;
+        let mut traversed = Vec::new();
+        loop {
+            let page = factory
+                .posts()
+                .list_collection_by_user(UserId::from(1), cursor.as_ref(), RowLimit::at_most(2))
+                .await
+                .unwrap();
+            if page.is_empty() {
+                break;
+            }
+            assert!(
+                traversed.len() < expected.len(),
+                "cursor must terminate without repeated IDs"
+            );
+            let last = page.last().unwrap();
+            cursor = Some(CollectionCursor {
+                updated_at: last.updated_at,
+                post_id: last.post_id,
+            });
+            traversed.extend(page.iter().map(|post| (post.updated_at, post.post_id)));
+        }
+        assert_eq!(traversed, expected);
+    }
+
+    #[apply(backends_matrix)]
+    #[case::invalid_later_cell("1999-12-31T23:59:59+00:00")]
+    #[case::valid_later_cell("1999-12-31T23:59:59.123456000Z")]
+    #[tokio::test]
+    async fn canonical_instants_restore_rejects_inconsistent_row_columns_without_discarding_cells(
+        backend: Backend,
+        #[case] later: &str,
+    ) {
+        const POSTS: &str = "SELECT slug, body, CAST(created_at AS TEXT), CAST(updated_at AS TEXT), CAST(post_id AS TEXT) FROM posts ORDER BY post_id";
+        const QUEUE: &str = "SELECT CAST(queue_id AS TEXT), operation, '', '', '' FROM pending_code_migrations ORDER BY queue_id";
+        let source = MigrationDatabase::new(backend).await;
+        source.migrate_current().await.unwrap();
+        source.drain_pending_code_migrations().await;
+        source.pool.execute("INSERT INTO users (username, password_hash, created_at) VALUES ('row-shape-source', 'hash', CURRENT_TIMESTAMP)").await.unwrap();
+        for slug in ["first", "second"] {
+            let slug: common::slug::Slug = slug.parse().unwrap();
+            crate::with_closeable_pool!(&source.pool, pool, {
+                crate::instance_identity::ensure(pool).await.unwrap();
+                sqlx::query("INSERT INTO posts (user_id, slug, body, format, rendered_html, created_at, updated_at) SELECT user_id, $1, 'source', 'markdown', '<p>source</p>', '2000-01-01T00:00:00.000000000Z', '2000-01-02T00:00:00.000000000Z' FROM users WHERE username = 'row-shape-source'").bind_storage(slug).execute(pool).await.unwrap();
+            });
+        }
+        source.pool.execute("INSERT INTO pending_code_migrations (operation) VALUES ('normalize_comparable_instants_v1')").await.unwrap();
+        let backup = TempDir::new().unwrap();
+        std::fs::create_dir(backup.path().join("db")).unwrap();
+        let manifest = source.export_fixture(backup.path()).await;
+        let path = backup.path().join("db/posts.ndjson");
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let mut rows: Vec<serde_json::Value> = raw
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 2);
+        rows[0].as_object_mut().unwrap().remove("published_at");
+        rows[1]["published_at"] = serde_json::json!(later);
+        std::fs::write(
+            &path,
+            rows.iter()
+                .map(|row| serde_json::to_string(row).unwrap() + "\n")
+                .collect::<String>(),
+        )
+        .unwrap();
+        let target = MigrationDatabase::new(backend).await;
+        target.migrate_current().await.unwrap(); // Pending normalization, no new enforcement.
+        target.pool.execute("INSERT INTO users (username, password_hash, created_at) VALUES ('row-shape-target', 'hash', CURRENT_TIMESTAMP)").await.unwrap();
+        target.pool.execute("INSERT INTO posts (user_id, slug, body, format, rendered_html, created_at, updated_at) SELECT user_id, 'sentinel', 'keep', 'markdown', '<p>keep</p>', '2001-01-01T00:00:00.000000000Z', '2001-01-02T00:00:00.000000000Z' FROM users WHERE username = 'row-shape-target'").await.unwrap();
+        let before = target.pool.string_quintuples(POSTS).await.unwrap();
+        let queue = target.pool.string_quintuples(QUEUE).await.unwrap();
+        let bytes_before = target.portable_fixture_bytes().await;
+        let error = target.restore_fixture(backup.path(), &manifest).await.expect_err("neither valid nor invalid later supplied timestamps may disappear behind the first row's omitted column");
+        assert!(
+            error.to_string().contains("inconsistent row columns"),
+            "{error}"
+        );
+        assert_eq!(target.pool.string_quintuples(POSTS).await.unwrap(), before);
+        assert_eq!(target.pool.string_quintuples(QUEUE).await.unwrap(), queue);
+        assert_eq!(target.portable_fixture_bytes().await, bytes_before);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn canonical_instants_restore_rejects_every_selected_supplied_cell_on_pending_unenforced_targets(
+        #[case] backend: Backend,
+    ) {
+        let source = MigrationDatabase::new(backend).await;
+        source.migrate_to(53).await.unwrap();
+        source.drain_pending_code_migrations().await;
+        source.seed_comparable_population().await;
+        source.migrate_current().await.unwrap();
+        source.drain_pending_code_migrations().await;
+        crate::with_closeable_pool!(&source.pool, pool, {
+            crate::instance_identity::ensure(pool).await.unwrap();
+        });
+        source.pool.execute("INSERT INTO pending_code_migrations (operation) VALUES ('normalize_comparable_instants_v1')").await.unwrap();
+        let backup = TempDir::new().unwrap();
+        std::fs::create_dir(backup.path().join("db")).unwrap();
+        let manifest = source.export_fixture(backup.path()).await;
+        let target = MigrationDatabase::new(backend).await;
+        target.migrate_current().await.unwrap(); // Pending row, deliberately absent DDL.
+        target
+            .restore_fixture(backup.path(), &manifest)
+            .await
+            .unwrap();
+        let before = target.portable_fixture_bytes().await;
+
+        // These three tables are deliberately not normal export targets. Supply
+        // negative current-schema input cells to the existing importer without
+        // changing export eligibility or claiming portable live ceremony state.
+        let at = "1969-12-31T23:59:59.123457000Z";
+        let live_rows = [
+            (
+                "feed_cache",
+                serde_json::json!({"feed_url":"/feed.atom","body":"body","etag":"etag","content_type":"application/atom+xml","semantic_fingerprint":"fingerprint","representation_modified_at":at,"generated_at":at}),
+            ),
+            (
+                "passkey_registration_ceremonies",
+                serde_json::json!({"handle_hash":"negative-input","purpose":"registration","user_id":1,"session_token_hash":"population-session","label":"label","origin":"https://example.test","rp_id":"example.test","state":"{}","expires_at":at,"claimed_at":at}),
+            ),
+            (
+                "passkey_authentication_ceremonies",
+                serde_json::json!({"handle_hash":"negative-input","purpose":"authentication","origin":"https://example.test","rp_id":"example.test","state":"{}","expires_at":at,"claimed_at":at}),
+            ),
+        ];
+        let mut negative_manifest = manifest.clone();
+        for (table, row) in &live_rows {
+            assert!(!manifest.tables.iter().any(|name| name == table));
+            negative_manifest.tables.push((*table).to_owned());
+            std::fs::write(
+                backup.path().join(format!("db/{table}.ndjson")),
+                format!("{}\n", serde_json::to_string(row).unwrap()),
+            )
+            .unwrap();
+        }
+        for (table, columns) in SELECTED_INSTANT_FIXTURE_COLUMNS {
+            let path = backup.path().join(format!("db/{table}.ndjson"));
+            let raw = std::fs::read_to_string(&path).unwrap();
+            let rows: Vec<serde_json::Value> = raw
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            for column in *columns {
+                let index = rows
+                    .iter()
+                    .position(|row| row[*column].is_string())
+                    .expect("each selected column has a real nonnull fixture");
+                let canonical = rows[index][*column].as_str().unwrap();
+                let legacy = canonical.strip_suffix('Z').unwrap().to_owned() + "+00:00";
+                for invalid in [legacy, "0000-12-31T23:59:59.999999999Z".to_owned()] {
+                    let mut corrupted = rows.clone();
+                    corrupted[index][*column] = serde_json::json!(invalid);
+                    std::fs::write(
+                        &path,
+                        corrupted
+                            .iter()
+                            .map(|row| serde_json::to_string(row).unwrap() + "\n")
+                            .collect::<String>(),
+                    )
+                    .unwrap();
+                    let error = target
+                        .restore_fixture(backup.path(), &negative_manifest)
+                        .await
+                        .expect_err("every supplied selected cell must be admitted before binding");
+                    assert!(
+                        error.to_string().contains(&format!(
+                            "noncanonical comparable instant in {table}.{column}"
+                        )),
+                        "{error}"
+                    );
+                    assert_eq!(
+                        target.portable_fixture_bytes().await,
+                        before,
+                        "rejected {table}.{column} must leave the complete portable target unchanged"
+                    );
+                    for live in [
+                        "feed_cache",
+                        "passkey_registration_ceremonies",
+                        "passkey_authentication_ceremonies",
+                    ] {
+                        let count = crate::with_closeable_pool!(&target.pool, pool, {
+                            sqlx::query_scalar::<_, RowCount>(sqlx::AssertSqlSafe(format!(
+                                "SELECT COUNT(*) FROM {live}"
+                            )))
+                            .fetch_one(pool)
+                            .await
+                            .unwrap()
+                        });
+                        assert_eq!(
+                            count.into_u64(),
+                            0,
+                            "failed import cannot leave live transient rows"
+                        );
+                    }
+                }
+                std::fs::write(&path, &raw).unwrap();
+            }
+        }
+    }
+
+    // Ordered independently of SQL, with three genuinely equal instants at
+    // both ends in different legacy spellings. Ties cross pages 1/2 in either
+    // direction, alongside the interior zero/1/999ns and year/day boundaries.
+    const CURSOR_LEGACY_TIMES: [&str; 13] = [
+        "2019-12-31T23:59:59.999999Z",
+        "2019-12-31T23:59:59.999999000+00:00",
+        "2020-01-01T00:59:59.999999+01:00",
+        "2020-01-01T00:00:00Z",
+        "2020-01-01T01:00:00+01:00",
+        "2020-01-01T00:00:00.000000000Z",
+        "2020-01-01T00:00:00.000000001Z",
+        "2020-01-01T00:00:00.000000999Z",
+        "2020-01-01T00:00:00.000001Z",
+        "2020-01-01T00:00:01Z",
+        "2020-01-02T00:00:00Z",
+        "2020-01-02T00:00:00.0+00:00",
+        "2020-01-02T01:00:00+01:00",
+    ];
+
+    #[apply(backends_matrix)]
+    #[case::site("site")]
+    #[case::user("user")]
+    #[case::tag("tag")]
+    #[case::user_tag("user-tag")]
+    #[tokio::test]
+    async fn canonical_instants_upgraded_published_cursors_are_complete(
+        backend: Backend,
+        #[case] consumer: &str,
+    ) {
+        use crate::posts::{PostCursor, PublishedPageRequest};
+        use common::{pagination::RowLimit, seed::TimelineOrder, visibility::ViewerIdentity};
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(db.latest_migration_version() - 1)
+            .await
+            .unwrap();
+        let (published, _) = db.seed_legacy_cursor_posts().await;
+        db.migrate_current().await.unwrap();
+        db.drain_pending_code_migrations().await;
+        let factory = match &db.pool {
+            CloseablePool::Sqlite(pool) => crate::StorageFactory::sqlite(pool.clone()),
+            CloseablePool::Postgres(pool) => crate::StorageFactory::postgres(pool.clone()),
+        };
+        let posts = factory.posts();
+        let username = "cursor-owner".parse().unwrap();
+        let tag = "cursor".parse().unwrap();
+        let now = "2021-01-01T00:00:00Z".parse().unwrap();
+        for order in [TimelineOrder::Oldest, TimelineOrder::Newest] {
+            for size in [1, 2] {
+                let mut expected = published.clone();
+                if order == TimelineOrder::Newest {
+                    expected.reverse();
+                }
+                let mut cursor = None;
+                let mut actual = Vec::new();
+                loop {
+                    let request = cursor.as_ref().map_or_else(
+                        || PublishedPageRequest::first(order, RowLimit::at_most(size)),
+                        |cursor| PublishedPageRequest::after(cursor, RowLimit::at_most(size)),
+                    );
+                    let page = match consumer {
+                        "site" => posts
+                            .list_published(request, &ViewerIdentity::Anonymous, now)
+                            .await
+                            .unwrap(),
+                        "user" => posts
+                            .list_published_by_user(
+                                &username,
+                                request,
+                                &ViewerIdentity::Anonymous,
+                                now,
+                            )
+                            .await
+                            .unwrap(),
+                        "tag" => posts
+                            .list_posts_by_tag(&tag, request, &ViewerIdentity::Anonymous, now)
+                            .await
+                            .unwrap(),
+                        "user-tag" => posts
+                            .list_user_posts_by_tag(
+                                1.into(),
+                                &tag,
+                                request,
+                                &ViewerIdentity::Anonymous,
+                                now,
+                            )
+                            .await
+                            .unwrap(),
+                        _ => unreachable!("bounded consumer cases"),
+                    };
+                    if page.is_empty() {
+                        break;
+                    }
+                    assert!(
+                        actual.len() < expected.len(),
+                        "cursor must reach an empty page"
+                    );
+                    let last = page.last().unwrap();
+                    cursor = Some(PostCursor {
+                        published_at: last.published_at.unwrap(),
+                        post_id: last.post_id,
+                        order,
+                    });
+                    actual.extend(page.iter().map(|post| post.post_id));
+                }
+                assert_eq!(actual, expected, "{consumer}, {order:?}, size {size}");
+            }
+        }
+    }
+
+    #[apply(backends_matrix)]
+    #[case::drafts("drafts")]
+    #[case::scheduled("scheduled")]
+    #[case::collection("collection")]
+    #[case::management("management")]
+    #[tokio::test]
+    async fn canonical_instants_upgraded_owner_cursors_are_complete(
+        backend: Backend,
+        #[case] consumer: &str,
+    ) {
+        use crate::posts::{
+            CollectionCursor, DraftPostCursor, PostManagementAudienceFilter, PostManagementRequest,
+            PostManagementStateFilter, ScheduledPostCursor,
+        };
+        use common::pagination::{PageSize, RowLimit};
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(db.latest_migration_version() - 1)
+            .await
+            .unwrap();
+        let (published, drafts) = db.seed_legacy_cursor_posts().await;
+        db.migrate_current().await.unwrap();
+        db.drain_pending_code_migrations().await;
+        let submicros = crate::with_closeable_pool!(&db.pool, pool, {
+            sqlx::query_scalar::<_, common::time::UtcInstant>("SELECT updated_at FROM posts WHERE slug IN ('cursor-published-6', 'cursor-published-7') ORDER BY post_id").fetch_all(pool).await.unwrap()
+        });
+        let expected_submicros = match backend {
+            Backend::Sqlite => [
+                "2020-01-01T00:00:00.000000001Z",
+                "2020-01-01T00:00:00.000000999Z",
+            ],
+            // Native PG literal admission rounds to micros, unlike the typed
+            // encoder's post-2000 truncation covered by Deliverable A.
+            Backend::Postgres => [
+                "2020-01-01T00:00:00.000000000Z",
+                "2020-01-01T00:00:00.000001000Z",
+            ],
+        }
+        .map(|text| text.parse().unwrap());
+        assert_eq!(submicros, expected_submicros);
+        let factory = match &db.pool {
+            CloseablePool::Sqlite(pool) => crate::StorageFactory::sqlite(pool.clone()),
+            CloseablePool::Postgres(pool) => crate::StorageFactory::postgres(pool.clone()),
+        };
+        let posts = factory.posts();
+        let mut expected = match consumer {
+            "drafts" => drafts.clone(),
+            "scheduled" => published.clone(),
+            _ => published
+                .iter()
+                .zip(&drafts)
+                .flat_map(|(a, b)| [*a, *b])
+                .collect(),
+        };
+        if consumer != "scheduled" {
+            expected.reverse();
+        }
+        for size in [1, 2] {
+            let mut cursor: Option<CollectionCursor> = None;
+            let mut actual = Vec::new();
+            loop {
+                let draft = cursor.map(|c| DraftPostCursor {
+                    created_at: c.updated_at,
+                    post_id: c.post_id,
+                });
+                let scheduled = cursor.map(|c| ScheduledPostCursor {
+                    published_at: c.updated_at,
+                    post_id: c.post_id,
+                });
+                let rows = match consumer {
+                    "drafts" => posts
+                        .list_drafts_by_user(
+                            1.into(),
+                            draft.as_ref(),
+                            RowLimit::at_most(size),
+                            "2021-01-01T00:00:00Z".parse().unwrap(),
+                        )
+                        .await
+                        .unwrap(),
+                    "scheduled" => posts
+                        .list_scheduled_by_user(
+                            1.into(),
+                            scheduled.as_ref(),
+                            RowLimit::at_most(size),
+                            "2019-01-01T00:00:00Z".parse().unwrap(),
+                        )
+                        .await
+                        .unwrap(),
+                    "collection" => posts
+                        .list_collection_by_user(1.into(), cursor.as_ref(), RowLimit::at_most(size))
+                        .await
+                        .unwrap(),
+                    "management" => {
+                        let request = PostManagementRequest::new(
+                            PostManagementStateFilter::All,
+                            PostManagementAudienceFilter::All,
+                            "",
+                            cursor,
+                            PageSize::try_from(u32::try_from(size).unwrap()).unwrap(),
+                            "2021-01-01T00:00:00Z".parse().unwrap(),
+                        );
+                        let page = posts.list_managed_posts(1.into(), &request).await.unwrap();
+                        if page.posts.is_empty() {
+                            break;
+                        }
+                        assert!(
+                            actual.len() < expected.len(),
+                            "management cursor must terminate"
+                        );
+                        let last = page.posts.last().unwrap();
+                        cursor = Some(CollectionCursor {
+                            updated_at: last.updated_at,
+                            post_id: last.post_id,
+                        });
+                        if let Some(next) = page.next_cursor {
+                            assert_eq!(
+                                (next.updated_at, next.post_id),
+                                (last.updated_at, last.post_id)
+                            );
+                        }
+                        actual.extend(page.posts.iter().map(|post| post.post_id));
+                        continue;
+                    }
+                    _ => unreachable!("bounded consumer cases"),
+                };
+                if rows.is_empty() {
+                    break;
+                }
+                assert!(
+                    actual.len() < expected.len(),
+                    "cursor must reach an empty page"
+                );
+                let last = rows.last().unwrap();
+                let at = match consumer {
+                    "drafts" => last.created_at,
+                    "scheduled" => last.published_at.unwrap(),
+                    _ => last.updated_at,
+                };
+                cursor = Some(CollectionCursor {
+                    updated_at: at,
+                    post_id: last.post_id,
+                });
+                actual.extend(rows.iter().map(|post| post.post_id));
+            }
+            assert_eq!(actual, expected, "{consumer}, size {size}");
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn canonical_instants_upgraded_dead_letter_cursors_are_complete(
+        #[case] backend: Backend,
+    ) {
+        use crate::feed_events::FeedEventDeadLetterCursor;
+        use common::{ids::FeedEventId, pagination::PageSize};
+        use host::feed::FeedEventPhase;
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(db.latest_migration_version() - 1)
+            .await
+            .unwrap();
+        let mut expected = Vec::new();
+        for phase in ["regeneration", "publication"] {
+            let mut ids = Vec::new();
+            for (index, time) in CURSOR_LEGACY_TIMES.iter().enumerate() {
+                let sql = format!(
+                    "INSERT INTO feed_events (feed_url, status, phase, terminal_at, next_attempt_at, created_at) VALUES ('/~cursor-{phase}-{index}/feed.atom', 'failed', '{phase}', '{time}', '{time}', '{time}') RETURNING id"
+                );
+                let id: FeedEventId = crate::with_closeable_pool!(&db.pool, pool, {
+                    sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+                        .fetch_one(pool)
+                        .await
+                        .unwrap()
+                });
+                ids.push(id);
+            }
+            ids.reverse();
+            expected.push(ids);
+        }
+        db.migrate_current().await.unwrap();
+        db.drain_pending_code_migrations().await;
+        let factory = match &db.pool {
+            CloseablePool::Sqlite(pool) => crate::StorageFactory::sqlite(pool.clone()),
+            CloseablePool::Postgres(pool) => crate::StorageFactory::postgres(pool.clone()),
+        };
+        for (phase, expected) in [FeedEventPhase::Regeneration, FeedEventPhase::Publication]
+            .into_iter()
+            .zip(expected)
+        {
+            for size in [1, 2] {
+                let mut cursor = None;
+                let mut actual = Vec::new();
+                loop {
+                    let page = factory
+                        .feed_events()
+                        .dead_letters(phase, cursor, PageSize::try_from(size).unwrap())
+                        .await
+                        .unwrap();
+                    if page.events.is_empty() {
+                        break;
+                    }
+                    assert!(
+                        actual.len() < expected.len(),
+                        "dead-letter cursor must terminate"
+                    );
+                    let last = page.events.last().unwrap();
+                    cursor = Some(FeedEventDeadLetterCursor {
+                        terminal_at: last.terminal_at,
+                        id: last.id,
+                    });
+                    actual.extend(page.events.iter().map(|event| event.id));
+                }
+                assert_eq!(actual, expected, "{phase:?}, size {size}");
+            }
+        }
+    }
+
     fn migrator_through(source: &Migrator, version: i64) -> Migrator {
         Migrator {
             migrations: Cow::Owned(
@@ -123,9 +1811,15 @@ mod tests {
         }
     }
 
+    struct NormalizationDurabilityExpected {
+        post_cells: (String, String),
+        enforcement: Vec<(String, String, bool)>,
+    }
+
     struct MigrationDatabase {
         options: DbConnectOptions,
         pool: CloseablePool,
+        normalization_expected: Option<NormalizationDurabilityExpected>,
         _sqlite: Option<TempDir>,
         _postgres: Option<PostgresDbGuard>,
     }
@@ -146,6 +1840,7 @@ mod tests {
                     Self {
                         options,
                         pool: CloseablePool::Sqlite(pool),
+                        normalization_expected: None,
                         _sqlite: Some(base),
                         _postgres: None,
                     }
@@ -164,11 +1859,48 @@ mod tests {
                     Self {
                         options,
                         pool: CloseablePool::Postgres(pool),
+                        normalization_expected: None,
                         _sqlite: None,
                         _postgres: Some(guard),
                     }
                 }
             }
+        }
+
+        async fn seed_legacy_cursor_posts(&self) -> (Vec<PostId>, Vec<PostId>) {
+            self.pool.execute("INSERT INTO users (username, password_hash, created_at) VALUES ('cursor-owner', 'hash', CURRENT_TIMESTAMP)").await.unwrap();
+            self.pool
+                .execute("INSERT INTO tags (tag_slug) VALUES ('cursor')")
+                .await
+                .unwrap();
+            let mut published = Vec::new();
+            let mut drafts = Vec::new();
+            for (index, time) in CURSOR_LEGACY_TIMES.iter().enumerate() {
+                for (state, ids) in [("published", &mut published), ("draft", &mut drafts)] {
+                    let publication = if state == "published" {
+                        format!("'{time}'")
+                    } else {
+                        "NULL".to_owned()
+                    };
+                    let sql = format!(
+                        "INSERT INTO posts (user_id, slug, body, format, rendered_html, created_at, updated_at, published_at) VALUES (1, 'cursor-{state}-{index}', 'body', 'markdown', '<p>body</p>', '{time}', '{time}', {publication}) RETURNING post_id"
+                    );
+                    let id: PostId = crate::with_closeable_pool!(&self.pool, pool, {
+                        sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+                            .fetch_one(pool)
+                            .await
+                            .unwrap()
+                    });
+                    ids.push(id);
+                    crate::with_closeable_pool!(&self.pool, pool, {
+                        sqlx::query("INSERT INTO post_audiences (post_id, target_kind_id, audience_id) SELECT $1, kind_id, NULL FROM target_kinds WHERE name = 'public'").bind_storage(id).execute(pool).await.unwrap();
+                        sqlx::query("INSERT INTO post_tags (post_id, tag_id, tag_display) SELECT $1, tag_id, 'Cursor' FROM tags WHERE tag_slug = 'cursor'").bind_storage(id).execute(pool).await.unwrap();
+                    });
+                }
+            }
+            // Native PG literal admission quantizes to micros. The adjacent
+            // values remain ordered, including the larger native tie groups.
+            (published, drafts)
         }
 
         async fn migrate_to(&self, version: i64) -> Result<(), MigrateError> {
@@ -218,6 +1950,362 @@ mod tests {
                 }
                 CloseablePool::Postgres(pool) => {
                     code_migrations::drain_pending(pool, authorize).await
+                }
+            }
+        }
+
+        fn spawn_paused_drain(
+            &self,
+            pause: std::sync::Arc<code_migrations::CommitPause>,
+        ) -> tokio::task::JoinHandle<sqlx::Result<()>> {
+            match &self.pool {
+                CloseablePool::Sqlite(pool) => {
+                    let pool = pool.clone();
+                    tokio::spawn(async move {
+                        code_migrations::with_commit_pause(
+                            pause,
+                            code_migrations::drain_pending(&pool, &|| Ok(())),
+                        )
+                        .await
+                    })
+                }
+                CloseablePool::Postgres(pool) => {
+                    let pool = pool.clone();
+                    tokio::spawn(async move {
+                        code_migrations::with_commit_pause(
+                            pause,
+                            code_migrations::drain_pending(&pool, &|| Ok(())),
+                        )
+                        .await
+                    })
+                }
+            }
+        }
+
+        async fn normalization_durability_fixture(backend: Backend) -> Self {
+            let mut db = Self::new(backend).await;
+            db.migrate_to(53).await.unwrap();
+            db.drain_pending_code_migrations().await;
+            db.pool.execute("INSERT INTO users (username, password_hash, created_at) VALUES ('durability', 'hash', CURRENT_TIMESTAMP)").await.unwrap();
+            db.pool.execute("INSERT INTO posts (user_id, slug, body, format, rendered_html, created_at, updated_at) SELECT user_id, 'durability', 'body', 'markdown', '<p>body</p>', '2005-01-01T00:00:00.123456789+02:00', '2005-01-02T01:59:00Z' FROM users WHERE username = 'durability'").await.unwrap();
+            db.migrate_current().await.unwrap();
+            db.reopen_durability_pool().await;
+            // Capture a separate ordinary completed upgrade as the exact v1 DDL
+            // reference, then compare reopened fault outcomes to all its bytes.
+            let reference = Self::new(backend).await;
+            reference.migrate_current().await.unwrap();
+            reference.drain_pending_code_migrations().await;
+            let enforcement = reference.enforcement_snapshot().await;
+            let mut names = Vec::new();
+            for (table, _) in SELECTED_INSTANT_FIXTURE_COLUMNS {
+                match backend {
+                    Backend::Sqlite => {
+                        for event in ["insert", "update"] {
+                            names.push(format!("{table}.canonical_instants_v1_{table}_{event}"));
+                        }
+                    }
+                    Backend::Postgres => {
+                        names.push(format!("{table}.canonical_instants_v1_{table}"));
+                    }
+                }
+            }
+            names.sort();
+            assert_eq!(
+                enforcement
+                    .iter()
+                    .map(|row| row.0.clone())
+                    .collect::<Vec<_>>(),
+                names
+            );
+            assert!(
+                enforcement.iter().all(|row| !row.1.is_empty() && row.2),
+                "the canonical reference must contain complete definitions and validated PG constraints"
+            );
+            reference.pool.close().await;
+            db.normalization_expected = Some(NormalizationDurabilityExpected {
+                post_cells: db.physical_post_cells().await,
+                enforcement,
+            });
+            db
+        }
+
+        async fn reopen_durability_pool(&mut self) {
+            self.pool.close().await;
+            // One connection is a pooling-ownership assertion seam, not runner
+            // resource tuning: a second idle connection could conceal a leak.
+            self.pool = match &self.options {
+                DbConnectOptions::Sqlite(options) => CloseablePool::Sqlite(
+                    sqlx::sqlite::SqlitePoolOptions::new()
+                        .max_connections(1)
+                        .connect_with(options.clone())
+                        .await
+                        .unwrap(),
+                ),
+                DbConnectOptions::Postgres { options, .. } => CloseablePool::Postgres(
+                    sqlx::postgres::PgPoolOptions::new()
+                        .max_connections(1)
+                        .connect_with(options.clone())
+                        .await
+                        .unwrap(),
+                ),
+            };
+        }
+
+        async fn enforcement_snapshot(&self) -> Vec<(String, String, bool)> {
+            use crate::backup::{CatalogConstraintValidated, CatalogDefinition};
+            match &self.pool {
+                CloseablePool::Sqlite(pool) => sqlx::query_as::<_, (EnforcementFixtureName, CatalogDefinition)>("SELECT tbl_name || '.' || name, sql FROM sqlite_master WHERE type = 'trigger' AND name GLOB 'canonical_instants_v1_*' ORDER BY tbl_name, name").fetch_all(pool).await.unwrap().into_iter().map(|(name, definition)| (name.0, definition.into_inner(), true)).collect(),
+                CloseablePool::Postgres(pool) => sqlx::query_as::<_, (EnforcementFixtureName, CatalogDefinition, CatalogConstraintValidated)>("SELECT r.relname::text || '.' || c.conname::text, pg_get_constraintdef(c.oid, false), c.convalidated FROM pg_constraint c JOIN pg_class r ON r.oid = c.conrelid JOIN pg_namespace n ON n.oid = r.relnamespace WHERE n.nspname = 'public' AND left(c.conname,22) = 'canonical_instants_v1_' ORDER BY r.relname, c.conname").fetch_all(pool).await.unwrap().into_iter().map(|(name, definition, validated)| (name.0, definition.into_inner(), validated.into_bool())).collect(),
+            }
+        }
+
+        async fn physical_post_cells(&self) -> (String, String) {
+            match &self.pool {
+                CloseablePool::Sqlite(pool) => {
+                    let (created, updated) =
+                        sqlx::query_as::<_, (PhysicalInstantText, PhysicalInstantText)>(
+                            "SELECT created_at, updated_at FROM posts WHERE slug = 'durability'",
+                        )
+                        .fetch_one(pool)
+                        .await
+                        .unwrap();
+                    (created.0, updated.0)
+                }
+                CloseablePool::Postgres(pool) => {
+                    let (created, updated) = sqlx::query_as::<_, (NativeInstantHex, NativeInstantHex)>("SELECT encode(timestamptz_send(created_at), 'hex'), encode(timestamptz_send(updated_at), 'hex') FROM posts WHERE slug = 'durability'").fetch_one(pool).await.unwrap();
+                    (created.0, updated.0)
+                }
+            }
+        }
+
+        async fn assert_normalization_durable_state(&self, committed: bool) {
+            use common::time::UtcInstant;
+            let expected = self
+                .normalization_expected
+                .as_ref()
+                .expect("durability fixture has an exact canonical reference");
+            assert_eq!(self.pool.scalar_i64("SELECT COUNT(*) FROM pending_code_migrations WHERE operation = 'normalize_comparable_instants_v1'").await.unwrap(), i64::from(!committed));
+            let physical = self.physical_post_cells().await;
+            if committed && matches!(&self.pool, CloseablePool::Sqlite(_)) {
+                assert_eq!(
+                    physical,
+                    (
+                        "2004-12-31T22:00:00.123456789Z".to_owned(),
+                        "2005-01-02T01:59:00.000000000Z".to_owned()
+                    )
+                );
+            } else {
+                // PG's two native binary timestamp cells must never be rewritten;
+                // SQLite rollback must retain both original physical spellings.
+                assert_eq!(physical, expected.post_cells);
+            }
+            let actual = crate::with_closeable_pool!(&self.pool, pool, {
+                sqlx::query_as::<_, (UtcInstant, UtcInstant)>(
+                    "SELECT created_at, updated_at FROM posts WHERE slug = 'durability'",
+                )
+                .fetch_one(pool)
+                .await
+                .unwrap()
+            });
+            let created = match &self.pool {
+                CloseablePool::Sqlite(_) => "2004-12-31T22:00:00.123456789Z",
+                CloseablePool::Postgres(_) => "2004-12-31T22:00:00.123457000Z",
+            };
+            assert_eq!(
+                actual,
+                (
+                    created.parse().unwrap(),
+                    "2005-01-02T01:59:00Z".parse().unwrap()
+                )
+            );
+            let enforcement = self.enforcement_snapshot().await;
+            if committed {
+                assert_eq!(
+                    enforcement, expected.enforcement,
+                    "reopen requires exact names, full definitions and validated PG constraints, not equal counts"
+                );
+            } else {
+                assert!(
+                    enforcement.is_empty(),
+                    "rollback cannot leave any new enforcement definition"
+                );
+            }
+        }
+
+        async fn seed_comparable_population(&self) -> Vec<String> {
+            self.pool.execute("INSERT INTO users (username, password_hash, created_at) VALUES ('population', 'hash', '1999-01-01T00:00:00Z')").await.unwrap();
+            let t = "1969-12-31T23:59:59.123456789+00:00";
+            let inserts = vec![
+                format!(
+                    "INSERT INTO posts (user_id, slug, body, format, rendered_html, created_at, updated_at) SELECT user_id, 'population', 'body', 'markdown', '<p>body</p>', '{t}', '{t}' FROM users WHERE username = 'population'"
+                ),
+                format!(
+                    "INSERT INTO post_revisions (post_id, user_id, slug, body, format, rendered_html, created_at, updated_at, published_at, captured_at, timezone) SELECT post_id, user_id, slug, body, format, rendered_html, created_at, updated_at, '{t}', '{t}', 'US/Eastern' FROM posts WHERE slug = 'population'"
+                ),
+                format!(
+                    "INSERT INTO sessions (token_hash, user_id, label, created_at, last_used_at) SELECT 'population-session', user_id, 'label', '{t}', '{t}' FROM users WHERE username = 'population'"
+                ),
+                format!(
+                    "INSERT INTO invites (code, created_at, expires_at, used_at) VALUES ('population', '{t}', '{t}', '{t}')"
+                ),
+                format!(
+                    "INSERT INTO email_verifications (token_hash, user_id, email, created_at, expires_at) SELECT 'population', user_id, 'population@example.test', '{t}', '{t}' FROM users WHERE username = 'population'"
+                ),
+                format!(
+                    "INSERT INTO password_resets (token_hash, user_id, created_at, expires_at) SELECT 'population', user_id, '{t}', '{t}' FROM users WHERE username = 'population'"
+                ),
+                format!(
+                    "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes, created_at) SELECT user_id, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'fixture.png', 'upload', 'image/png', 1, '{t}' FROM users WHERE username = 'population'"
+                ),
+                format!(
+                    "INSERT INTO idempotency_keys (user_id, key, post_id, created_at) SELECT user_id, 'population', post_id, '{t}' FROM posts WHERE slug = 'population'"
+                ),
+                format!(
+                    "INSERT INTO feed_events (feed_url, next_attempt_at, claimed_at, created_at, regenerated_at) VALUES ('/feed.atom', '{t}', '{t}', '{t}', '{t}')"
+                ),
+                format!(
+                    "INSERT INTO feed_cache (feed_url, body, etag, content_type, representation_modified_at, generated_at, semantic_fingerprint) VALUES ('/feed.atom', 'body', 'etag', 'application/atom+xml', '{t}', '{t}', 'fingerprint')"
+                ),
+                format!(
+                    "INSERT INTO passkey_credentials (credential_id, user_id, label, credential, created_at, last_used_at) SELECT 'population', user_id, 'label', '{{}}', '{t}', '{t}' FROM users WHERE username = 'population'"
+                ),
+                format!(
+                    "INSERT INTO passkey_registration_ceremonies (handle_hash, purpose, user_id, session_token_hash, label, origin, rp_id, state, expires_at) SELECT 'population', 'registration', user_id, 'population-session', 'label', 'https://example.test', 'example.test', '{{}}', '{t}' FROM users WHERE username = 'population'"
+                ),
+                format!(
+                    "INSERT INTO passkey_authentication_ceremonies (handle_hash, purpose, origin, rp_id, state, expires_at, claimed_at) VALUES ('population', 'authentication', 'https://example.test', 'example.test', '{{}}', '{t}', '{t}')"
+                ),
+            ];
+            for insert in &inserts {
+                crate::with_closeable_pool!(&self.pool, pool, {
+                    sqlx::query(sqlx::AssertSqlSafe(insert.clone()))
+                        .execute(pool)
+                        .await
+                        .unwrap();
+                });
+            }
+
+            self.pool.execute("INSERT INTO users (username, password_hash, created_at) VALUES ('population-null', 'hash', '1999-01-01T00:00:00Z')").await.unwrap();
+            for insert in &inserts {
+                let copy = insert
+                    .replace("population", "population-null")
+                    .replace("'/feed.atom'", "'/~population-null/feed.atom'");
+                crate::with_closeable_pool!(&self.pool, pool, {
+                    sqlx::query(sqlx::AssertSqlSafe(copy))
+                        .execute(pool)
+                        .await
+                        .unwrap();
+                });
+            }
+            self.seed_comparable_nullable_cells(t).await;
+            inserts
+        }
+
+        /// Seed NULL and nonnull identities independently for every nullable cell.
+        async fn seed_comparable_nullable_cells(&self, t: &str) {
+            // Distinct physical rows prove every nullable field both as a legacy
+            // nonnull instant and as NULL; neither proof can stand in for the other.
+            let nullable: &[(&str, &[&str], &str)] = &[
+                ("posts", &["published_at", "deleted_at"], "slug"),
+                ("post_revisions", &["published_at", "deleted_at"], "slug"),
+                ("invites", &["used_at"], "code"),
+                ("email_verifications", &["used_at"], "token_hash"),
+                ("password_resets", &["used_at"], "token_hash"),
+                (
+                    "feed_events",
+                    &["claimed_at", "terminal_at", "regenerated_at", "pinged_at"],
+                    "feed_url",
+                ),
+                ("passkey_credentials", &["last_used_at"], "credential_id"),
+                (
+                    "passkey_registration_ceremonies",
+                    &["claimed_at"],
+                    "handle_hash",
+                ),
+                (
+                    "passkey_authentication_ceremonies",
+                    &["claimed_at"],
+                    "handle_hash",
+                ),
+            ];
+            for (table, columns, key) in nullable {
+                for (identity, value) in [
+                    ("population", format!("'{t}'")),
+                    ("population-null", "NULL".to_owned()),
+                ] {
+                    let identity = if *table == "feed_events" {
+                        if identity == "population" {
+                            "/feed.atom"
+                        } else {
+                            "/~population-null/feed.atom"
+                        }
+                    } else {
+                        identity
+                    };
+                    let assignments = columns
+                        .iter()
+                        .map(|column| format!("{column} = {value}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let sql =
+                        format!("UPDATE {table} SET {assignments} WHERE {key} = '{identity}'");
+                    crate::with_closeable_pool!(&self.pool, pool, {
+                        sqlx::query(sqlx::AssertSqlSafe(sql))
+                            .execute(pool)
+                            .await
+                            .unwrap();
+                    });
+                }
+            }
+        }
+
+        async fn portable_fixture_bytes(&self) -> Vec<(String, String)> {
+            let snapshot = TempDir::new().unwrap();
+            std::fs::create_dir(snapshot.path().join("db")).unwrap();
+            let manifest = self.export_fixture(snapshot.path()).await;
+            let mut tables = manifest
+                .tables
+                .iter()
+                .map(|table| {
+                    (
+                        table.clone(),
+                        std::fs::read_to_string(snapshot.path().join(format!("db/{table}.ndjson")))
+                            .unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            tables.sort();
+            tables
+        }
+
+        async fn export_fixture(&self, path: &std::path::Path) -> crate::BackupManifest {
+            match &self.pool {
+                CloseablePool::Sqlite(pool) => {
+                    crate::sqlite::backup::export_database(pool, path, crate::BackupMode::Directory)
+                        .await
+                        .unwrap()
+                }
+                CloseablePool::Postgres(pool) => crate::postgres::backup::export_database(
+                    pool,
+                    path,
+                    crate::BackupMode::Directory,
+                )
+                .await
+                .unwrap(),
+            }
+        }
+
+        async fn restore_fixture(
+            &self,
+            path: &std::path::Path,
+            manifest: &crate::BackupManifest,
+        ) -> Result<crate::RestoreValidationReport, crate::BackupError> {
+            match &self.pool {
+                CloseablePool::Sqlite(pool) => {
+                    crate::sqlite::backup::restore_database(pool, path, manifest).await
+                }
+                CloseablePool::Postgres(pool) => {
+                    crate::postgres::backup::restore_database(pool, path, manifest).await
                 }
             }
         }
@@ -1075,6 +3163,9 @@ main = putStrLn "hello"
             "text-only verse has no Media references"
         );
         db.migrate_current().await.unwrap();
+        assert_eq!(db.pool.scalar_i64("SELECT COUNT(*) FROM pending_code_migrations WHERE operation = 'rebuild_rendered_posts'").await.unwrap(), 0, "the completed verse rebuild is not requeued");
+        assert_eq!(db.pool.scalar_i64("SELECT COUNT(*) FROM pending_code_migrations WHERE operation = 'normalize_comparable_instants_v1'").await.unwrap(), 1, "the newer canonical-instant transition remains independently pending");
+        db.drain_pending_code_migrations().await;
         assert_eq!(
             db.pool
                 .scalar_i64("SELECT COUNT(*) FROM pending_code_migrations")
@@ -1082,7 +3173,6 @@ main = putStrLn "hello"
                 .unwrap(),
             0
         );
-        db.drain_pending_code_migrations().await;
         assert_eq!(db.pool.string_quintuples(RENDERED).await.unwrap(), rendered);
         assert_eq!(
             db.pool
@@ -1360,23 +3450,51 @@ module Main where
             )
             .await
             .unwrap();
-        let before =  db.pool.string_quintuples(
+        // The current upgrade also normalizes physical timestamp spelling.
+        // Compare the immutable instant, retaining every other snapshot field.
+        let post_instants = |rows: Vec<(String, String, String, String, String)>| {
+            rows.into_iter()
+                .map(|(id, title, body, html, at)| {
+                    (
+                        id,
+                        title,
+                        body,
+                        html,
+                        at.parse::<common::time::UtcInstant>().unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let revision_instants = |rows: Vec<(String, String, String, String, String)>| {
+            rows.into_iter()
+                .map(|(title, body, html, at, rendered)| {
+                    (
+                        title,
+                        body,
+                        html,
+                        at.parse::<common::time::UtcInstant>().unwrap(),
+                        rendered,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let before = post_instants(db.pool.string_quintuples(
             "SELECT CAST(post_id AS TEXT), COALESCE(title, ''), body, rendered_html, CAST(updated_at AS TEXT)
              FROM posts ORDER BY post_id",
-        ).await.unwrap();
-        let revision_before = db.pool.string_quintuples(
+        ).await.unwrap());
+        let revision_before = revision_instants(db.pool.string_quintuples(
             "SELECT title, body, rendered_html, CAST(updated_at AS TEXT), COALESCE(rendered_title, '') FROM post_revisions",
-        ).await.unwrap();
+        ).await.unwrap());
         db.pool.execute(
             "INSERT INTO feed_cache (feed_url, body, etag, content_type, representation_modified_at, generated_at, semantic_fingerprint)
              VALUES ('/feed.rss', 'stale', 'old-etag', 'application/rss+xml', '2025-02-01T00:00:00Z', '2025-02-01T00:00:00Z', 'old-fingerprint')",
         ).await.unwrap();
         db.migrate_current().await.unwrap();
         db.drain_pending_code_migrations().await;
-        let after = db.pool.string_quintuples(
+        let after = post_instants(db.pool.string_quintuples(
             "SELECT CAST(post_id AS TEXT), COALESCE(title, ''), body, rendered_html, CAST(updated_at AS TEXT)
              FROM posts ORDER BY post_id",
-        ).await.unwrap();
+        ).await.unwrap());
         let org = host::render::render_post(
             Some("A---B...".parse().unwrap()),
             "A---B...".parse().unwrap(),
@@ -1422,9 +3540,9 @@ module Main where
             .await
             .unwrap();
         assert_eq!(title_only[0].0, "title");
-        assert_eq!(db.pool.string_quintuples(
+        assert_eq!(revision_instants(db.pool.string_quintuples(
             "SELECT title, body, rendered_html, CAST(updated_at AS TEXT), COALESCE(rendered_title, '') FROM post_revisions"
-        ).await.unwrap(), revision_before, "historical Post Revision bytes are immutable");
+        ).await.unwrap()), revision_before, "historical Post Revision content and instants are immutable");
         assert_eq!(
             db.pool
                 .scalar_i64("SELECT COUNT(*) FROM post_revisions")

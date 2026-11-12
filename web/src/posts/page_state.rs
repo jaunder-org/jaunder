@@ -1829,10 +1829,10 @@ mod tests {
         });
         assert_eq!(rows[1].value, "Current title");
         assert_eq!(rows[3].value, "org");
-        assert_eq!(rows[5].value, "2026-08-27T12:00:00Z");
-        assert_eq!(rows[6].value, "2026-08-27T12:00:00Z");
+        assert_eq!(rows[5].value, "2026-08-27T12:00:00.000000000Z");
+        assert_eq!(rows[6].value, "2026-08-27T12:00:00.000000000Z");
         assert_eq!(rows[7].value, "2026-08-27 08:00 EDT");
-        assert_eq!(rows[8].value, "2026-08-27T12:00:00Z");
+        assert_eq!(rows[8].value, "2026-08-27T12:00:00.000000000Z");
     }
 
     #[test]

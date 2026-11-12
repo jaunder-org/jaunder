@@ -42,7 +42,13 @@ pub(crate) async fn open_postgres_database_with_pool(
         );
     }
     let instance_id = instance_identity::ensure(&pool).await?;
+    {
+        let mut connection = pool.acquire().await?;
+        let (pending,): (crate::sql::Exists,) = sqlx::query_as("SELECT EXISTS(SELECT 1 FROM pending_code_migrations WHERE operation = 'normalize_comparable_instants_v1')").fetch_one(&mut *connection).await?;
+        code_migrations::check_postgres_enforcement(&mut connection, pending.into_bool()).await?;
+    }
     code_migrations::drain_pending(&pool, authorize_drain).await?;
+    code_migrations::check_postgres_enforcement(&mut *pool.acquire().await?, false).await?;
     crate::posts::search::backfill_post_search_projections(&pool).await?;
     Ok((StorageFactory::postgres(pool.clone()), pool, instance_id))
 }

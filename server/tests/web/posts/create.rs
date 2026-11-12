@@ -627,7 +627,9 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
         app.clone(),
         PostInputs {
             publish: Some(true),
-            publish_at: Some(UtcInstant::from(future)),
+            publish_at: Some(
+                UtcInstant::try_from(future).expect("test instant is within application bounds"),
+            ),
             ..PostInputs::new(parse_post_body("scheduled body"), PostFormat::Markdown)
         },
         Some(&cookie),
@@ -647,7 +649,10 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
         .expect("post should exist");
     assert_eq!(
         record.published_at,
-        Some(common::time::UtcInstant::from(future))
+        Some(
+            common::time::UtcInstant::try_from(future)
+                .expect("test instant is within application bounds")
+        )
     );
 
     // The scheduled post is invisible on the public timeline at "now".
@@ -1274,11 +1279,12 @@ async fn create_org_metadata_failures_do_not_create_rows(#[case] backend: Backen
     )
     .await;
     let cookie = session.cookie();
-    let structured_publish_at = UtcInstant::from(
+    let structured_publish_at = UtcInstant::try_from(
         "2020-01-01T00:00:00Z"
             .parse::<jiff::Timestamp>()
             .expect("valid test instant"),
-    );
+    )
+    .expect("test instant is within application bounds");
     let cases = [
         ("#+PROPERTY: JAUNDER_STATUS draft", false, None),
         (

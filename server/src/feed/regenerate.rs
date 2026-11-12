@@ -45,10 +45,11 @@ pub async fn render(
         min_days: snapshot.feeds.min_days,
     };
     let generated_at = UtcInstant::now();
-    let representation_modified_at = UtcInstant::from(
+    let representation_modified_at = UtcInstant::try_from(
         jiff::Timestamp::from_second(generated_at.value().as_second())
             .map_err(|error| RegenerateError::Publisher(error.into()))?,
-    );
+    )
+    .map_err(|error| RegenerateError::Publisher(error.into()))?;
     let published = posts
         .list_published_in_window(&surface, &window, generated_at, &ViewerIdentity::Anonymous)
         .await

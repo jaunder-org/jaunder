@@ -49,7 +49,7 @@ async fn assert_zone_and_instant(response: Response, zone: &str, instant: &str) 
     assert!(xml.contains(&format!(">{zone}</")), "{xml}");
     let entry: host::atompub::Entry = xml.parse().unwrap();
     let at: common::time::UtcInstant = entry.published().unwrap().to_rfc3339().parse().unwrap();
-    assert_eq!(at.to_string(), instant);
+    assert_eq!(at, instant.parse::<common::time::UtcInstant>().unwrap());
 }
 
 #[apply(backends)]

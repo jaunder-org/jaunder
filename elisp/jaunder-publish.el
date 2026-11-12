@@ -144,9 +144,10 @@ unsent authored DATE and recorded zone."
                                         (etag (jaunder--response-header response "ETag"))
                                         (id (jaunder--location->id
                                              (jaunder--response-header response "Location")))
-                                        (now (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))
+                                        (now (jaunder--canonical-utc))
                                         (synced-at (if (eq create-intent-matches 'changed)
-                                                       (or (jaunder--buffer-property "JAUNDER_CREATE_ATTEMPT_AT") now)
+                                                       (jaunder--canonical-utc
+                                                        (or (jaunder--buffer-property "JAUNDER_CREATE_ATTEMPT_AT") now))
                                                      now)))
                                    ;; Refuse a partial create checkpoint: an ID without this validator would
                                    ;; turn a restart into an unconditional PUT.
@@ -475,7 +476,7 @@ have committed after a response-less request."
                                      (jaunder--set-property "JAUNDER_CREATE_KEY" key)
                                      (jaunder--set-property "JAUNDER_CREATE_DIGEST" (secure-hash 'sha256 xml))
                                      (jaunder--set-property "JAUNDER_CREATE_ATTEMPT_AT"
-                                                            (format-time-string "%Y-%m-%dT%H:%M:%SZ" nil t))
+                                                            (jaunder--canonical-utc))
                                      (jaunder--save-buffer-silently))
                                    (list :key key
                                          :matches (if (equal (jaunder--buffer-property "JAUNDER_CREATE_DIGEST")

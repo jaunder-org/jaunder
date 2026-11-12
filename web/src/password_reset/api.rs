@@ -142,6 +142,7 @@ fn report_request_storage_failure() {
 /// Performs the best-effort work accepted by [`request`] after its public response
 /// has been returned. Each eligible recipient is isolated so one failed token or
 /// mail send does not prevent a shared Email's other verified Users from recovery.
+/// The private sampler keeps each recipient's real clock read at token creation.
 #[cfg(feature = "server")]
 async fn deliver_reset_messages(
     identifier: PasswordResetIdentifier,
@@ -150,6 +151,7 @@ async fn deliver_reset_messages(
     password_resets: Arc<dyn PasswordResetStorage>,
     site_config: Arc<dyn SiteConfigStorage>,
     mailer: Arc<dyn MailSender>,
+    now: fn() -> UtcInstant,
 ) {
     let matched_users = match identifier {
         PasswordResetIdentifier::Username(username) => {
@@ -192,17 +194,14 @@ async fn deliver_reset_messages(
         }
     };
     let reset_url: MailConfirmUrl = tagged_url::compose(&base_url, "/reset-password");
-    // At Jiff's upper clock boundary, clamp the expiry rather than panicking
-    // inside detached account-enumeration-equalized work.
-
     for (user_id, verified_email) in recipients {
         let password_resets = Arc::clone(&password_resets);
-        let expires_at = UtcInstant::from(
-            UtcInstant::now()
-                .value()
-                .saturating_add(1.hour())
-                .map_or(jiff::Timestamp::MAX, std::convert::identity),
-        );
+        let Ok(expires_at) = now().checked_add(1.hour()) else {
+            report_request_failure(&InternalError::server_message(
+                "password reset expiry is outside application UTC bounds",
+            ));
+            return;
+        };
         let outcome = match write_scope
             .run(|transaction| {
                 Box::pin(async move {
@@ -264,6 +263,7 @@ pub async fn request(identifier: PasswordResetIdentifier) -> WebResult<()> {
             password_resets,
             site_config,
             mailer,
+            UtcInstant::now,
         )
         .with_current_subscriber(),
     ));
@@ -392,6 +392,7 @@ mod server_tests {
         PasswordResetStorage, SiteConfigStorage, UserRecord, UserStorage,
         test_support::mock_write_scope_with_commit_acknowledgement_loss,
     };
+    use tracing::instrument::WithSubscriber;
 
     struct TerminalMailer {
         terminal: Sender<()>,
@@ -431,6 +432,68 @@ mod server_tests {
             })
         });
         site_config
+    }
+
+    // guard:no-backend — clock failure must report once before token or mail side effects.
+    #[tokio::test]
+    async fn reset_expiry_overflow_reports_once_without_creating_or_sending() {
+        struct LogWriter(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for LogWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut users = MockUserStorage::new();
+        users
+            .expect_get_user_by_username()
+            .return_once(|_| Ok(Some(verified_user())));
+        // Unconfigured mocks reject any attempted token write.
+        let password_resets = MockPasswordResetStorage::new();
+        let (terminal_tx, terminal_rx) = channel();
+        let logs = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let capture = Arc::clone(&logs);
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_ansi(false)
+            .with_writer(move || LogWriter(Arc::clone(&capture)))
+            .finish();
+        super::deliver_reset_messages(
+            PasswordResetIdentifier::Username(parse_username("alice")),
+            Arc::new(users),
+            mock_write_scope_with_commit_acknowledgement_loss(),
+            Arc::new(password_resets),
+            Arc::new(site_config()),
+            Arc::new(TerminalMailer {
+                terminal: terminal_tx,
+            }),
+            || UtcInstant::MAX,
+        )
+        .with_subscriber(subscriber)
+        .await;
+        assert!(
+            terminal_rx.try_recv().is_err(),
+            "overflow must not send mail"
+        );
+        std::io::Write::flush(&mut LogWriter(Arc::clone(&logs))).unwrap();
+        let bytes = logs.lock().unwrap();
+        let events: Vec<serde_json::Value> = std::str::from_utf8(&bytes)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(events.len(), 1, "one redacted detached failure is reported");
+        assert_eq!(
+            events[0]["fields"]["error.context"],
+            "web.password_reset.request"
+        );
+        assert_eq!(events[0]["fields"]["error.source"], "redacted");
+        assert_eq!(events[0]["fields"]["error.kind"], "internal");
+        assert_eq!(events[0]["fields"]["error.class"], "bug");
+        assert!(!std::str::from_utf8(&bytes).unwrap().contains("alice"));
     }
 
     // The lookup blocks a Tokio worker after entering. The direct server-function

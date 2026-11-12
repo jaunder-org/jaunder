@@ -230,11 +230,24 @@ pending work remains allowed. Offline queue transactions alone may perform
 unbounded rendering inside SQLite's write lock; request-time work still follows
 ADR-0092's bounded occupancy rule
 ([Offline code migrations](adr/0226-offline-code-migration-queue.md)). The
-`0047` enqueues `rebuild_rendered_posts` again for the new syntax rules; `0048`
-re-enqueues it for Org footnotes, including databases that already drained
-`0047`; `0049` only enqueues it again for catalog-wide token quality even after
-both earlier requests completed, without resetting the separate bounded refresh
-checkpoint
+implemented #1940 transition extends this exception to explicit
+comparable-instant normalization and handler-owned enforcement DDL. Its SQL
+migrations only enqueue work; existing ascending queue order lets earlier
+rendering/outbox work complete before enforcement. One queue transaction reads
+identities/raw cells, normalizes the entire selected population, verifies,
+creates SQLite rejection triggers (PG finite-bound constraints), deletes the row
+and commits. Failures block open; earlier SQL/queue commits remain. Rejected
+COMMIT discards a still-transactional connection rather than returning it to the
+pool; uncertain acknowledgment is reconciled from durable
+cells/queue/enforcement. Pending work permits absent or identical complete
+enforcement; partial/different sets fail. Completed work requires the exact full
+set, including on restore
+([Canonical comparable instants](adr/drafts/canonical-comparable-instants.md)).
+The `0047` enqueues `rebuild_rendered_posts` again for the new syntax rules;
+`0048` re-enqueues it for Org footnotes, including databases that already
+drained `0047`; `0049` only enqueues it again for catalog-wide token quality
+even after both earlier requests completed, without resetting the separate
+bounded refresh checkpoint
 ([catalog-wide code token quality and repeatable projection refresh](adr/0216-catalog-code-token-quality-and-refresh.md)).
 `0050` re-enqueues the same operation for Org verse line boundaries and inline
 formatting, including databases that completed all prior requests. On SQLite,
@@ -460,7 +473,17 @@ and exact-schema authorities match. An unsupported format or schema mismatch is
 a typed incompatibility that fails before database or media mutation, distinct
 from malformed backup content and relational constraint failure. Typed-domain
 invariant violations instead retain #725's restore-and-report behavior: data and
-media restore, then the command reports current-domain violations.
+media restore, then the command reports current-domain violations. The #1940
+timestamp transition enforces a stricter database-admission rule: selected PG
+export timestamps use UtcInstant's canonical fixed-nine UTC output, preserving
+stored micros and NULLs. Restore validates canonical selected cells before
+native PG binding and validates the entire selected population before commit
+even with pending work and no triggers; queue import never bypasses validation
+or consumes work. Exact-schema compatibility, closed restore-cell roles and
+existing database/media/Theme ownership remain. Both-direction same-schema
+restore retains the existing ns/micros precision limitation, without a
+cross-schema legacy-backup framework
+([Canonical comparable instants](adr/drafts/canonical-comparable-instants.md)).
 
 Restore is authoritative and order-independent: both backends clear every target
 table in a first pass, then load all rows in a second, with FK enforcement
@@ -3888,23 +3911,30 @@ behaviour per site.
 
 **Time.** `common::time::UtcInstant` is the domain type for absolute UTC
 instants at web and storage boundaries, wrapping `jiff::Timestamp`; its
-`value()` and `From` conversions are deliberate Jiff escape hatches. Transparent
-serde retains RFC 3339 at that boundary, where Jiff Temporal parsing
-deliberately accepts its broader valid input set; output is canonical UTC `Z`
-form (`:60` normalizes to `:59`). That broad parsing belongs only to
-`UtcInstant`, not to fixed outer grammars: `PermalinkDate` remains civil
-`YYYY-MM-DD`, HTML datetime-local remains minute with optional seconds, and Org
-remains structured `DATE`/weekday/time/TZ. `PermalinkDate` uses Jiff's civil
-`Date`, and public Syndication Feed time seams use domain or Jiff types. Each
-time-domain type uses its native Jiff range: `Date` spans `-009999-01-01`
-through `9999-12-31`, while `Timestamp` spans `-009999-01-02T01:59:59Z` through
-`9999-12-30T22:00:00.999999999Z`; an older out-of-range value fails at the
-decode or restore boundary that reaches it, without a preflight scan. IANA TZDB
-is always bundled. The draft publish-at `datetime-local` seam retains
-browser-normalizing, non-strict conversion for gaps. The Scheduled Post editor
-and full new-Post control use strict conversion: nonexistent gap times are
-rejected, while ambiguous folds choose the earlier instant. The new-Post
-control's separate Date and Time Apply boundary is recorded by the
+`value()` and conversion out to Jiff remain deliberate escape hatches. The
+approved #1940 architecture below is recorded before source implementation:
+checked construction/TryFrom closes inbound conversion, parsing, serde, both
+SQLx decoders, civil conversion and clock sampling. Display, serde and SQLite
+output share Jiff's precision-nine UTC `Z` formatter; `:60` still normalizes to
+`:59`. Ordinary checked arithmetic rejects library/application overflow; named
+cutoff saturation uses application MIN. `now() -> Self` visibly panics for an
+out-of-domain clock rather than fabricating a timestamp. That broad parsing
+belongs only to `UtcInstant`, not to fixed outer grammars: `PermalinkDate`
+remains civil `YYYY-MM-DD`, HTML datetime-local remains minute with optional
+seconds, and Org remains structured `DATE`/weekday/time/TZ. `PermalinkDate` uses
+Jiff's civil `Date`, and public Syndication Feed time seams use domain or Jiff
+types. `Date` retains its native `-009999-01-01` through `9999-12-31` range. The
+approved UtcInstant range, checked after UTC offset normalization, is
+`0001-01-01T00:00:00.000000000Z` through `9999-12-30T22:00:00.999999999Z`,
+inclusive: pre-1970 remains supported, year zero/BCE does not. Legacy
+offset/civil/Julian decode keeps its established interpretation within that
+range; an identity-first storage-local compatibility reader preserves
+table/column/row diagnostics during offline normalization. IANA TZDB is always
+bundled. The draft publish-at `datetime-local` seam retains browser-normalizing,
+non-strict conversion for gaps. The Scheduled Post editor and full new-Post
+control use strict conversion: nonexistent gap times are rejected, while
+ambiguous folds choose the earlier instant. The new-Post control's separate Date
+and Time Apply boundary is recorded by the
 [strict new-Post local publication time decision](adr/0187-strict-new-post-local-publication-time.md).
 Other strict local-time seams, including Org, retain the same earlier-fold and
 gap-rejection policy. These retain the domain boundary established by
@@ -3914,15 +3944,26 @@ storage-wide `UtcInstant` seam established by
 
 Storage records and traits, private rows/cursors/inputs/dialects,
 `BackupManifest`, and storage fixtures carry `UtcInstant`; existing
-role-specific wrappers over it remain intact. A deliberate bridge with
-`jiff-sqlx` 0.2 and SQLx 0.9 preserves SQLite/Postgres schemas, physical values,
-backend-specific precision, timezone semantics, and exact SQLite timestamp text.
-Public-read APIs likewise take an explicit `UtcInstant` `now`, preserving
-ADR-0027's visibility behavior. Direct first-party Chrono and chrono-tz
-dependencies and uses are removed. Chrono may remain transitively through
-unavoidable third-party implementation dependencies, including the current
-non-protocol roots `axum-embed`, `croner`, and `tokio-cron-scheduler`
-([Jiff time model](adr/0182-jiff-time-model.md)).
+role-specific wrappers over it remain intact. The approved
+[canonical comparable-instant decision](adr/drafts/canonical-comparable-instants.md)
+supersedes only ADR-0153/0182's conflicting physical-byte/schema, unchecked
+inbound conversion, native instant range and arithmetic restrictions. The
+explicit comparison/Revision/lifecycle population in that decision uses lossless
+fixed-nine SQLite text and calendar/type/NULL/range rejection; descriptive
+timestamps, queue metadata, private SQLx history and numeric theme retention are
+excluded. Typed writers replace selected incompatible default omissions; raw
+required omissions reject. Encoding, writers, normalization, enforcement and
+portable restore/export form one coherent release. PostgreSQL remains native
+microseconds with finite application bounds and infinity rejection, not
+nanosecond parity. Exact instants, IDs, semantic edit times, mutation versions,
+nulls and publication timezone/fold remain unchanged. Org owned-UTC emission
+stays in jaunder-datetime, with historical valid sync markers readable and local
+DATE/zone semantics intact. Public-read APIs likewise take an explicit
+`UtcInstant` `now`, preserving ADR-0027's visibility behavior. Direct
+first-party Chrono and chrono-tz dependencies and uses are removed. Chrono may
+remain transitively through unavoidable third-party implementation dependencies,
+including the current non-protocol roots `axum-embed`, `croner`, and
+`tokio-cron-scheduler` ([Jiff time model](adr/0182-jiff-time-model.md)).
 
 **URLs.** The `url` crate is the sanctioned absolute-URL parser and normalizer,
 and it is a direct dependency of `common` (`common/Cargo.toml:24`) — which means

@@ -26,25 +26,28 @@ use rstest_reuse::*;
 
 use super::fixtures::{anon_by_tag, anon_published};
 fn fixed_instant(value: &str) -> UtcInstant {
-    UtcInstant::from(value.parse::<Timestamp>().expect("fixed test instant"))
+    UtcInstant::try_from(value.parse::<Timestamp>().expect("fixed test instant"))
+        .expect("test instant is within application bounds")
 }
 
 fn add(instant: UtcInstant, span: Span) -> UtcInstant {
-    UtcInstant::from(
+    UtcInstant::try_from(
         instant
             .value()
             .checked_add(span)
             .expect("fixture is within Timestamp range"),
     )
+    .expect("test instant is within application bounds")
 }
 
 fn subtract(instant: UtcInstant, span: Span) -> UtcInstant {
-    UtcInstant::from(
+    UtcInstant::try_from(
         instant
             .value()
             .checked_sub(span)
             .expect("fixture is within Timestamp range"),
     )
+    .expect("test instant is within application bounds")
 }
 
 async fn soft_delete_post_confirmed(

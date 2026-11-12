@@ -16,12 +16,10 @@ impl HybridWindow {
     /// Returns `None` when the cutoff predates all representable timestamps.
     #[must_use]
     pub fn cutoff_date(&self, now: UtcInstant) -> Option<UtcInstant> {
-        now.value()
-            .checked_sub(Duration::from_secs(
-                u64::from(self.min_days.value()) * 86_400,
-            ))
-            .ok()
-            .map(UtcInstant::from)
+        now.checked_sub(Duration::from_secs(
+            u64::from(self.min_days.value()) * 86_400,
+        ))
+        .ok()
     }
 
     /// `posts` must be ordered by `published_at DESC`.
@@ -49,10 +47,8 @@ mod tests {
     use crate::test_support::{parse_feed_min_days, parse_feed_min_items};
 
     fn days_ago(now: UtcInstant, days: i64) -> UtcInstant {
-        now.value()
-            .checked_sub(Duration::from_secs(days.unsigned_abs() * 86_400))
-            .expect("test instant remains representable")
-            .into()
+        now.checked_sub(Duration::from_secs(days.unsigned_abs() * 86_400))
+            .expect("test instant remains within application bounds")
     }
 
     #[derive(Debug)]

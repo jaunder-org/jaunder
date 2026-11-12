@@ -2045,22 +2045,27 @@ mod tests {
             )
             .await;
         let now: UtcInstant = "2042-07-01T12:00:00Z".parse().unwrap();
-        let future = UtcInstant::from(
+        let future = UtcInstant::try_from(
             now.value()
                 .checked_add(1.hour())
                 .expect("test instant remains representable"),
-        );
-        let later_future = UtcInstant::from(
+        )
+        .expect("test instant is within application bounds");
+        let later_future = UtcInstant::try_from(
             now.value()
                 .checked_add(2.hours())
                 .expect("test instant remains representable"),
-        );
+        )
+        .expect("test instant is within application bounds");
         let post = crate::test_support::SeedRawPost::new(user.user_id)
-            .published_at(UtcInstant::from(
-                now.value()
-                    .checked_sub(1.hour())
-                    .expect("test instant remains representable"),
-            ))
+            .published_at(
+                UtcInstant::try_from(
+                    now.value()
+                        .checked_sub(1.hour())
+                        .expect("test instant remains representable"),
+                )
+                .expect("test instant is within application bounds"),
+            )
             .audiences(vec![AudienceTarget::Public])
             .tags(["rust"])
             .seed(env.posts().clone(), env.write_scope().clone())
@@ -3950,12 +3955,13 @@ mod tests {
         let storage = Arc::clone(&env.posts());
         let committed_key = parse_idempotency_key("already-committed-key");
         let created_at: UtcInstant = "2026-08-31T12:00:00Z".parse().expect("fixed instant");
-        let cutoff = UtcInstant::from(
+        let cutoff = UtcInstant::try_from(
             created_at
                 .value()
                 .checked_add(1_i64.hour())
                 .expect("test instant remains representable"),
-        );
+        )
+        .expect("test instant is within application bounds");
 
         confirmed(
             perform_post_creation_at(

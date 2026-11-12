@@ -722,7 +722,12 @@ const MEDIUM_ORG: &str = "* A medium Org sandbox note\n\nThis fixture has enough
 pub fn sandbox_profile_anchor() -> UtcInstant {
     let now = UtcInstant::now().value();
     let minute = now.as_second().div_euclid(60) * 60;
-    UtcInstant::from(Timestamp::from_second(minute).map_or(now, std::convert::identity))
+    UtcInstant::try_from(Timestamp::from_second(minute).map_or(now, std::convert::identity))
+        .unwrap_or_else(|_| {
+            unreachable!(
+                "rounding an admissible clock instant down to a minute preserves application bounds"
+            )
+        })
 }
 
 /// Produces the demo Post collection after Media publication has returned its
@@ -797,12 +802,9 @@ fn sandbox_demo_manifest(
                 slug,
                 body,
                 format,
-                published_at: Some(UtcInstant::from(
-                    anchor
-                        .value()
-                        .saturating_sub(((first_offset + sequence - 1) * 24).hours())
-                        .map_or(Timestamp::MIN, std::convert::identity),
-                )),
+                published_at: Some(
+                    anchor.checked_sub(((first_offset + sequence - 1) * 24).hours())?,
+                ),
                 visibility: SandboxVisibility::Public,
             });
         }
@@ -854,12 +856,7 @@ fn sandbox_extension(
             slug: "formatted-markdown-title".to_owned(),
             body: "# Canonical seeded Markdown\n\nThis Post has a formatted title.".to_owned(),
             format: PostFormat::Markdown,
-            published_at: Some(UtcInstant::from(
-                anchor
-                    .value()
-                    .saturating_sub(1.hours())
-                    .map_or(Timestamp::MIN, std::convert::identity),
-            )),
+            published_at: Some(anchor.checked_sub(1.hours())?),
             visibility: SandboxVisibility::Public,
         },
         SandboxPost {
@@ -868,12 +865,7 @@ fn sandbox_extension(
             slug: "formatted-org-title".to_owned(),
             body: "* Canonical seeded Org\n\nThis Post has a formatted title.".to_owned(),
             format: PostFormat::Org,
-            published_at: Some(UtcInstant::from(
-                anchor
-                    .value()
-                    .saturating_sub(2.hours())
-                    .map_or(Timestamp::MIN, std::convert::identity),
-            )),
+            published_at: Some(anchor.checked_sub(2.hours())?),
             visibility: SandboxVisibility::Public,
         },
         SandboxPost {
@@ -882,12 +874,7 @@ fn sandbox_extension(
             slug: "baseline-seeded-scheduled".to_owned(),
             body: "# Canonical scheduled Markdown\n\nThis post remains scheduled.".to_owned(),
             format: PostFormat::Markdown,
-            published_at: Some(UtcInstant::from(
-                anchor
-                    .value()
-                    .saturating_add(168.hours())
-                    .map_or(Timestamp::MAX, std::convert::identity),
-            )),
+            published_at: Some(anchor.checked_add(168.hours())?),
             visibility: SandboxVisibility::Public,
         },
         SandboxPost {
@@ -1602,6 +1589,15 @@ mod sandbox_profile_tests {
 #[cfg(test)]
 mod content_tests {
     use super::*;
+
+    #[test]
+    fn sandbox_extension_rejects_out_of_range_fixture_instants() {
+        // Both failures precede Media lookup: fixture arithmetic must report
+        // bounds errors rather than clamp an instant or panic during seeding.
+        for anchor in [UtcInstant::MIN, UtcInstant::MAX] {
+            assert!(sandbox_extension(anchor, &[]).is_err());
+        }
+    }
 
     #[test]
     fn sandbox_seed_manifest_serializes_v2_ordered_media_and_empty_collections() {

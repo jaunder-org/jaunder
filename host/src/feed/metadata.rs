@@ -282,19 +282,40 @@ mod tests {
             )
         };
         let items = [item];
+        // The complete historical JSON golden reproduces its old body hash.
+        // Only the two instant spellings may change: IDs, URLs, content and
+        // rights must remain byte-identical, not just semantically equivalent.
+        let old_json = r#"{"feed_url":"https://example.com/feed.atom","home_page_url":"https://example.com/","items":[{"_jaunder":{"copyright":"© 2024 Ada <&>","license":{"spdx_id":"CC-BY-4.0","url":"https://creativecommons.org/licenses/by/4.0/"},"rights":"CC BY 4.0"},"content_html":"<p>Hi</p>","date_modified":"2026-01-02T03:04:05Z","date_published":"2026-01-02T03:04:05Z","id":"https://example.com/~ada/posts/7","url":"https://example.com/~ada/posts/7"}],"title":"Site","version":"https://jsonfeed.org/version/1.1"}"#;
+        assert_eq!(
+            crate::etag::sha256_of(old_json),
+            "\"sha256-bdcfd180c65e64b3b421102e7623ca8fea015e95f19bc752ad64ec2bd4900047\""
+        );
+        let json = render_json(&metadata, &items);
+        let mut expected: serde_json::Value = serde_json::from_str(old_json).unwrap();
+        for field in ["date_published", "date_modified"] {
+            expected["items"][0][field] = "2026-01-02T03:04:05.000000000Z".into();
+        }
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(json.body()).unwrap(),
+            expected
+        );
+        assert_eq!(
+            json.body(),
+            old_json.replace("2026-01-02T03:04:05Z", "2026-01-02T03:04:05.000000000Z")
+        );
         let bodies = [
             render_atom(&metadata, &items).unwrap(),
             render_rss(&metadata, &items),
-            render_json(&metadata, &items),
+            json,
         ];
-        // These are baseline hashes of the complete pre-refactor bytes, not
-        // recomputed expectations from the serialization code under test.
+        // Atom/RSS retain the complete pre-refactor golden bytes. JSON's new
+        // golden is justified above solely by the approved canonical instants.
         assert_eq!(
             bodies.map(|body| crate::etag::sha256_of(body.body()).to_string()),
             [
                 "\"sha256-59d4069d2ea71d9dc3c505459b8cb786827e859bdb5c344e1f0a1ff9000b554b\"",
                 "\"sha256-7e762d0517527c413a05b41c8bbde5963ac1ce99172c402a36d76014d2c3bf75\"",
-                "\"sha256-bdcfd180c65e64b3b421102e7623ca8fea015e95f19bc752ad64ec2bd4900047\"",
+                "\"sha256-3617b6ee834e4b2f759b340d109bcd028f97f422ab1f3391232543edce9cf4e8\"",
             ]
         );
         assert_eq!(

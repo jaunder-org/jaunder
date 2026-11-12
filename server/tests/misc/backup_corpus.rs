@@ -1095,6 +1095,7 @@ mod reader_tests {
     enum RestoreExpectation {
         Succeeds,
         SchemaMismatch,
+        NoncanonicalComparableInstant,
         TypedUnsupportedFormat,
     }
 
@@ -1107,6 +1108,17 @@ mod reader_tests {
             return RestoreExpectation::SchemaMismatch;
         }
         match entry.support {
+            // Manifest-only materialization does not rewrite legacy row cells.
+            // Formats 1/2 remain readable formats, but these immutable fixtures
+            // cannot satisfy current canonical comparable-instant admission.
+            SupportState::Supported
+                if matches!(
+                    entry.fixture.as_str(),
+                    "format-1-current.zip" | "format-2-current.zip"
+                ) =>
+            {
+                RestoreExpectation::NoncanonicalComparableInstant
+            }
             SupportState::Supported => RestoreExpectation::Succeeds,
             SupportState::Retired => RestoreExpectation::TypedUnsupportedFormat,
         }
@@ -1587,6 +1599,22 @@ mod reader_tests {
                     ));
                     assert_target_unmodified(&target, &before).await;
                 }
+                RestoreExpectation::NoncanonicalComparableInstant => {
+                    let before =
+                        snapshot_target_state(&target, "before-noncanonical-restore").await;
+                    let error = cmd_restore(&target.args, &restore_path).await.expect_err(
+                        "schema-version substitution must not normalize historical comparable cells",
+                    );
+                    assert!(
+                        matches!(
+                            error.downcast_ref::<BackupError>(),
+                            Some(BackupError::InvalidBackup(message))
+                                if message == "noncanonical comparable instant in media.created_at"
+                        ),
+                        "{error:#}"
+                    );
+                    assert_target_unmodified(&target, &before).await;
+                }
                 RestoreExpectation::TypedUnsupportedFormat => {
                     let before = snapshot_target_state(&target, "before-rejected-restore").await;
                     let Err(error) = cmd_restore(&target.args, &restore_path).await else {
@@ -1877,7 +1905,7 @@ mod writer_tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn current_writer_satisfies_independent_schema_53_v3_raw_wire_oracle(
+    async fn current_writer_satisfies_independent_schema_54_v3_raw_wire_oracle(
         #[case] backend: Backend,
     ) {
         for output in CorpusIoMode::ALL {
@@ -1910,7 +1938,7 @@ mod writer_tests {
             };
 
             assert_writer_version_is_uniquely_supported(&extracted);
-            assert_schema_53_v3_raw_wire_oracle(&extracted, output, &ids);
+            assert_schema_54_v3_raw_wire_oracle(&extracted, output, &ids);
         }
     }
 
@@ -1948,7 +1976,7 @@ mod writer_tests {
             format_compatibility_diagnostic("format-3 is the sole current writer oracle")
         );
     }
-    fn assert_schema_53_v3_raw_wire_oracle(
+    fn assert_schema_54_v3_raw_wire_oracle(
         export: &Path,
         output: CorpusIoMode,
         ids: &BackupFixtureIds,
@@ -1984,9 +2012,9 @@ mod writer_tests {
         );
         assert_eq!(
             manifest["schema_version"],
-            Value::from(53),
+            Value::from(54),
             "{}",
-            format_compatibility_diagnostic("current writer must match the schema-53 oracle")
+            format_compatibility_diagnostic("current writer must match the schema-54 oracle")
         );
         assert!(
             manifest["schema_checksum"].is_string(),
@@ -2053,6 +2081,79 @@ mod writer_tests {
         assert_writer_drained_queue(&rows);
         assert_writer_system_roles(&rows, &paths, ids);
         assert_writer_roles(&rows, ids);
+        assert_canonical_comparable_wire_cells(&rows);
+    }
+
+    // Independent schema-54 byte oracle: do not use the production timestamp
+    // formatter or selected-column registry to bless the writer's own output.
+    fn assert_canonical_comparable_wire_cells(rows: &BTreeMap<String, Vec<Value>>) {
+        let selected: &[(&str, &[&str])] = &[
+            (
+                "posts",
+                &["created_at", "updated_at", "published_at", "deleted_at"],
+            ),
+            (
+                "post_revisions",
+                &[
+                    "created_at",
+                    "updated_at",
+                    "published_at",
+                    "deleted_at",
+                    "captured_at",
+                ],
+            ),
+            ("sessions", &["created_at", "last_used_at"]),
+            ("invites", &["created_at", "expires_at", "used_at"]),
+            (
+                "email_verifications",
+                &["created_at", "expires_at", "used_at"],
+            ),
+            ("password_resets", &["created_at", "expires_at", "used_at"]),
+            ("media", &["created_at"]),
+            ("idempotency_keys", &["created_at"]),
+            (
+                "feed_events",
+                &[
+                    "next_attempt_at",
+                    "claimed_at",
+                    "terminal_at",
+                    "created_at",
+                    "regenerated_at",
+                    "pinged_at",
+                ],
+            ),
+            ("passkey_credentials", &["created_at", "last_used_at"]),
+        ];
+        for (table, columns) in selected {
+            for row in table_rows(rows, table) {
+                for column in *columns {
+                    let value = &row[*column];
+                    if value.is_null() {
+                        continue;
+                    }
+                    let bytes = value
+                        .as_str()
+                        .expect("comparable instant is text")
+                        .as_bytes();
+                    assert_eq!(bytes.len(), 30, "{table}.{column}: {value}");
+                    for (position, byte) in bytes.iter().enumerate() {
+                        let separator = match position {
+                            4 | 7 => Some(b'-'),
+                            10 => Some(b'T'),
+                            13 | 16 => Some(b':'),
+                            19 => Some(b'.'),
+                            29 => Some(b'Z'),
+                            _ => None,
+                        };
+                        if let Some(expected) = separator {
+                            assert_eq!(*byte, expected);
+                        } else {
+                            assert!(byte.is_ascii_digit(), "{table}.{column}: {value}");
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn schema_52_writer_paths(ids: &BackupFixtureIds) -> BTreeSet<String> {
@@ -2412,6 +2513,7 @@ mod writer_tests {
             .find(|row| row_id_is(row, "post_id", &ids.public_post.to_string()))
             .expect("seeded current Post");
         assert_eq!(current["timezone"], "Europe/London");
+        assert_eq!(current["published_at"], "2026-04-29T12:34:56.789012000Z");
         let revisions = table_rows(rows, "post_revisions");
         assert_eq!(revisions.len(), 1);
         assert!(row_id_is(

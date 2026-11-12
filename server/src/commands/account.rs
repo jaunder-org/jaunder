@@ -229,12 +229,9 @@ pub async fn cmd_user_invite(
     // The 1..=336 bound lives in `InviteTtlHours` (clap rejects an out-of-range
     // `--expires-in` at parse). A timestamp beyond Jiff's supported range is
     // reported to the operator instead of issuing an invitation that cannot expire.
-    let expires_at = UtcInstant::from(
-        UtcInstant::now()
-            .value()
-            .checked_add(expires_in.unwrap_or_default().value().hours())
-            .context("invite expiry is outside Jiff's supported timestamp range")?,
-    );
+    let expires_at = UtcInstant::now()
+        .checked_add(expires_in.unwrap_or_default().value().hours())
+        .context("invite expiry is outside application UTC bounds")?;
 
     let outcome = write_scope
         .run(move |transaction| {

@@ -22,7 +22,8 @@ pub use orchestration::restore_backup_paused_after_import;
 pub use orchestration::{BackupExportOptions, BackupRestoreOptions, export_backup, restore_backup};
 pub(crate) use restore_bind::{
     BINARY_WIRE_KEY, RestoreBinary, RestoreBindValue, RestoreBoolean, RestoreInteger, RestoreJson,
-    RestoreReal, RestoreText, is_binary_column, restore_bind_value,
+    RestoreReal, RestoreText, comparable_instant_nullability, is_binary_column,
+    restore_table_bind_value as restore_bind_value, validate_restore_row_columns,
 };
 
 #[cfg(test)]
@@ -32,8 +33,8 @@ pub use restore_validation::{
 };
 
 pub(crate) use catalog::{
-    BackupRowJson, CatalogColumnName, CatalogDefinition, CatalogNullability, CatalogTableName,
-    CatalogTypeName, MigrationVersion,
+    BackupRowJson, CatalogColumnName, CatalogConstraintValidated, CatalogDefinition,
+    CatalogNullability, CatalogTableName, CatalogTypeName, MigrationVersion,
 };
 pub(crate) use format::{
     ColumnInfo, LEGACY_BACKUP_FORMAT_VERSION, build_manifest, ensure_schema_version,

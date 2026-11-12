@@ -72,12 +72,13 @@ async fn feed_events_marks_run(#[case] backend: Backend) {
     let feed_events_for_failure = env.feed_events();
     let ids_for_failure = ids.clone();
     let failure_reason = "boom";
-    let retry_at = UtcInstant::from(
+    let retry_at = UtcInstant::try_from(
         UtcInstant::now()
             .value()
             .checked_add(1.minute())
             .expect("fixture is within Timestamp range"),
-    );
+    )
+    .expect("test instant is within application bounds");
     env.write_scope()
         .run(move |transaction| {
             Box::pin(async move {
@@ -124,12 +125,13 @@ async fn stale_generation_restarts_with_fresh_regeneration_budget(#[case] backen
         "enqueue acknowledgement",
     );
     let event_ids = vec![event_id];
-    let retry_at = UtcInstant::from(
+    let retry_at = UtcInstant::try_from(
         UtcInstant::now()
             .value()
             .checked_add(1.hour())
             .expect("fixture is within Timestamp range"),
-    );
+    )
+    .expect("test instant is within application bounds");
 
     let feed_events = env.feed_events();
     let ids = event_ids.clone();

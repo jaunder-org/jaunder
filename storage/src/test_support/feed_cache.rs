@@ -136,10 +136,11 @@ impl SeedFeedCache {
     }
 }
 fn storage_instant(instant: UtcInstant) -> UtcInstant {
-    UtcInstant::from(
+    UtcInstant::try_from(
         Timestamp::from_microsecond(instant.value().as_microsecond())
             .expect("truncated microseconds are valid"),
     )
+    .expect("test instant is within application bounds")
 }
 
 fn default_body(format: common::feed::FeedFormat) -> String {

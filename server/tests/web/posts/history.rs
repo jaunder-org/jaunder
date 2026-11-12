@@ -94,7 +94,7 @@ async fn publication_timezone_history_and_scheduled_wire_projections(#[case] bac
     assert_eq!(history["current"]["timezone"], "Europe/London");
     assert_eq!(
         history["current"]["published_at"],
-        "2024-07-01T02:30:00.123456Z"
+        "2024-07-01T02:30:00.123456000Z"
     );
     let revision_id = history["revisions"]["revisions"][0]["revision_id"]
         .as_i64()
@@ -104,7 +104,7 @@ async fn publication_timezone_history_and_scheduled_wire_projections(#[case] bac
     assert_eq!(status, StatusCode::OK, "{body}");
     let detail: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(detail["timezone"], "US/Eastern");
-    assert_eq!(detail["published_at"], "2024-07-01T02:30:00.123456Z");
+    assert_eq!(detail["published_at"], "2024-07-01T02:30:00.123456000Z");
     input.publish_at = Some("2037-07-01T02:30:00Z".parse().unwrap());
     let (status, body) = update_post_json(app.clone(), id, input, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "{body}");

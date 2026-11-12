@@ -320,16 +320,17 @@ async fn media_row_with_an_invalid_source_url_fails_to_decode(#[case] backend: B
     let insert = storage::with_closeable_pool!(env.base.pool(), pool, {
         query(
             "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes, \
-             source_url) VALUES ($1, \
+             source_url, created_at) VALUES ($1, \
              'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 'c.png', \
-             'cached', 'image/png', 10, 'not a url')",
+             'cached', 'image/png', 10, 'not a url', $2)",
         )
         .bind_storage(user_id)
+        .bind_storage(UtcInstant::now())
         .execute(pool)
         .await
         .map(|_| ())
     });
-    insert.expect("raw insert should succeed — the database has no opinion on the text");
+    insert.expect("canonical timestamp admits the raw invalid source_url fixture");
 
     let fetched = env
         .media()
@@ -363,14 +364,16 @@ async fn list_media_skips_rows_that_fail_to_decode(#[case] backend: Backend) {
     // A row whose `filename` column is a non-canonical value, inserted directly to
     // bypass the validating `create_media` (the `Filename` type makes an un-sanitized
     // name unconstructible in Rust). `media_record_from_row` fails to decode it.
-    // created_at/source_url are omitted so both backends' column defaults apply.
+    // Supply a typed clock so timestamp admission does not mask the deliberately
+    // invalid filename; the unrelated nullable source_url still uses its default.
     let insert = storage::with_closeable_pool!(env.base.pool(), pool, {
         query(
-            "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
+            "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes, created_at) \
              VALUES ($1, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', \
-             '../escape', 'upload', 'image/png', 10)",
+             '../escape', 'upload', 'image/png', 10, $2)",
         )
         .bind_storage(user_id)
+        .bind_storage(UtcInstant::now())
         .execute(pool)
         .await
         .map(|_| ())

@@ -103,9 +103,14 @@ impl FeedCacheRow {
         let whole_seconds = representation_modified_at.value().as_second();
         // An existing timestamp's whole-second component is representable.
         let representation_modified_at =
-            UtcInstant::from(Timestamp::from_second(whole_seconds).unwrap_or_else(|_| {
+            UtcInstant::try_from(Timestamp::from_second(whole_seconds).unwrap_or_else(|_| {
                 unreachable!("existing timestamp whole seconds are representable")
-            }));
+            }))
+            .unwrap_or_else(|_| {
+                unreachable!(
+                    "truncating an admissible instant to whole seconds preserves application bounds"
+                )
+            });
         Ok(Self {
             feed_path,
             representation,
@@ -423,12 +428,13 @@ mod tests {
     #[test]
     fn timestamp_role_wrappers_preserve_distinct_instants() {
         let updated_at = UtcInstant::now();
-        let generated_at = UtcInstant::from(
+        let generated_at = UtcInstant::try_from(
             updated_at
                 .value()
                 .checked_add(std::time::Duration::from_secs(5))
                 .expect("test instant remains representable"),
-        );
+        )
+        .expect("test instant is within application bounds");
 
         assert_eq!(
             FeedCacheRepresentationModifiedAt(updated_at).value(),
@@ -452,12 +458,13 @@ mod tests {
             representation,
             parse_etag("\"sha256-deadbeef\""),
             updated_at,
-            UtcInstant::from(
+            UtcInstant::try_from(
                 updated_at
                     .value()
                     .checked_add(std::time::Duration::from_secs(5))
                     .expect("test instant remains representable"),
-            ),
+            )
+            .expect("test instant is within application bounds"),
             "0000000000000000000000000000000000000000000000000000000000000000"
                 .parse()
                 .expect("valid fingerprint"),
@@ -530,12 +537,15 @@ mod tests {
             .body("<rss>discarded</rss>".to_owned())
             .etag(parse_etag("\"sha256-rejected-candidate\""))
             .representation_modified_at(row.representation_modified_at)
-            .generated_at(UtcInstant::from(
-                row.generated_at
-                    .value()
-                    .checked_add(std::time::Duration::from_secs(1))
-                    .expect("test instant remains representable"),
-            ))
+            .generated_at(
+                UtcInstant::try_from(
+                    row.generated_at
+                        .value()
+                        .checked_add(std::time::Duration::from_secs(1))
+                        .expect("test instant remains representable"),
+                )
+                .expect("test instant is within application bounds"),
+            )
             .build();
         upsert_confirmed(
             env.feed_cache().clone(),

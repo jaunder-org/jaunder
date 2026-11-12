@@ -1095,7 +1095,10 @@ async fn unpublish_post_returns_the_draft_permalink(#[case] backend: Backend) {
         draft.post_id,
         PostInputs {
             publish: Some(true),
-            publish_at: Some(common::time::UtcInstant::from(backdated)),
+            publish_at: Some(
+                common::time::UtcInstant::try_from(backdated)
+                    .expect("test instant is within application bounds"),
+            ),
             ..PostInputs::new(parse_post_body(body_text), PostFormat::Markdown)
         },
         Some(&cookie),

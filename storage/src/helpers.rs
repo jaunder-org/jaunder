@@ -604,7 +604,10 @@ mod tests {
 
         match backend {
             Backend::Sqlite => {
-                assert_eq!(decoded.unwrap().to_string(), "-004713-11-24T12:00:00Z");
+                assert!(
+                    decoded.is_err(),
+                    "Julian zero remains BCE, outside application bounds"
+                );
             }
             Backend::Postgres => assert!(decoded.is_err()),
         }
@@ -664,19 +667,19 @@ mod tests {
         assert_eq!(read_supported, supported);
 
         for (id, (instant, sqlite_bytes)) in (3_i64..).zip([
-            ("2026-08-26T12:34:56Z", "2026-08-26T12:34:56+00:00"),
-            ("2026-08-26T12:34:56.100Z", "2026-08-26T12:34:56.100+00:00"),
+            ("2026-08-26T12:34:56Z", "2026-08-26T12:34:56.000000000Z"),
+            ("2026-08-26T12:34:56.100Z", "2026-08-26T12:34:56.100000000Z"),
             (
                 "2026-08-26T12:34:56.123400Z",
-                "2026-08-26T12:34:56.123400+00:00",
+                "2026-08-26T12:34:56.123400000Z",
             ),
             (
                 "2026-08-26T12:34:56.123456Z",
-                "2026-08-26T12:34:56.123456+00:00",
+                "2026-08-26T12:34:56.123456000Z",
             ),
             (
                 "2026-08-26T12:34:56.123456700Z",
-                "2026-08-26T12:34:56.123456700+00:00",
+                "2026-08-26T12:34:56.123456700Z",
             ),
         ]) {
             let stored = instant.parse::<UtcInstant>().unwrap();
@@ -725,6 +728,79 @@ mod tests {
         assert_eq!(still_readable, supported);
     }
 
+    #[apply(backends)]
+    #[tokio::test]
+    async fn utc_instant_checked_native_decoders_preserve_legacy_meaning_and_bounds(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let (valid, invalid): (&[(&str, &str)], &[&str]) = match backend {
+            Backend::Sqlite => (
+                &[
+                    ("SELECT 2440587.5", "1970-01-01T00:00:00.000000000Z"),
+                    (
+                        "SELECT '1969-12-31 23:59:59.123456789'",
+                        "1969-12-31T23:59:59.123456789Z",
+                    ),
+                    (
+                        "SELECT '0001-01-01T00:00:00.000000000Z'",
+                        "0001-01-01T00:00:00.000000000Z",
+                    ),
+                    (
+                        "SELECT '9999-12-30T22:00:00.999999999Z'",
+                        "9999-12-30T22:00:00.999999999Z",
+                    ),
+                ],
+                &[
+                    "SELECT 0",
+                    "SELECT x'00'",
+                    "SELECT '0000-12-31 23:59:59'",
+                    "SELECT '0001-01-01T00:00:00+00:01'",
+                    "SELECT '2025-02-29T00:00:00Z'",
+                ],
+            ),
+            Backend::Postgres => (
+                &[
+                    (
+                        "SELECT '0001-01-01T00:00:00Z'::timestamptz",
+                        "0001-01-01T00:00:00.000000000Z",
+                    ),
+                    (
+                        "SELECT '9999-12-30T22:00:00.999999Z'::timestamptz",
+                        "9999-12-30T22:00:00.999999000Z",
+                    ),
+                    (
+                        "SELECT '1999-12-31T23:59:59.123457Z'::timestamptz",
+                        "1999-12-31T23:59:59.123457000Z",
+                    ),
+                ],
+                &[
+                    "SELECT 'infinity'::timestamptz",
+                    "SELECT '-infinity'::timestamptz",
+                    "SELECT '0001-01-01T00:00:00Z'::timestamptz - INTERVAL '1 microsecond'",
+                    "SELECT '9999-12-30T22:00:01Z'::timestamptz",
+                ],
+            ),
+        };
+        for (sql, expected) in valid {
+            let value = crate::with_closeable_pool!(env.base.pool(), pool, {
+                sqlx::query_scalar::<_, UtcInstant>(*sql)
+                    .fetch_one(pool)
+                    .await
+                    .unwrap()
+            });
+            assert_eq!(value.to_string(), *expected);
+        }
+        for sql in invalid {
+            let value = crate::with_closeable_pool!(env.base.pool(), pool, {
+                sqlx::query_scalar::<_, UtcInstant>(*sql)
+                    .fetch_one(pool)
+                    .await
+            });
+            assert!(value.is_err(), "public decode admitted {sql}");
+        }
+    }
+
     #[test]
     fn test_build_user_record() {
         let now = UtcInstant::now();
@@ -748,11 +824,12 @@ mod tests {
     #[test]
     fn test_build_session_record() {
         let now = UtcInstant::now();
-        let later = UtcInstant::from(
+        let later = UtcInstant::try_from(
             now.value()
                 .checked_add(5.seconds())
                 .expect("fixture is within Timestamp range"),
-        );
+        )
+        .expect("test instant is within application bounds");
         let record = build_session_record(SessionRecordParts {
             token_hash: parse_token_hash("hash"),
             user_id: UserId::from(1),
@@ -918,11 +995,12 @@ mod tests {
     #[test]
     fn session_row_helper_round_trips() {
         let now = UtcInstant::now();
-        let last_used_at = UtcInstant::from(
+        let last_used_at = UtcInstant::try_from(
             now.value()
                 .checked_add(5.seconds())
                 .expect("fixture is within Timestamp range"),
-        );
+        )
+        .expect("test instant is within application bounds");
         let session = SessionRow {
             token_hash: parse_token_hash("tokenhash"),
             user_id: UserId::from(1),
