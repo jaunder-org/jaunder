@@ -1,6 +1,6 @@
-# ADR-DRAFT: Simplify Residual Tooling Capabilities and Retire Obsolete Endpoints
+# ADR-0246: Simplify Residual Tooling Capabilities and Retire Obsolete Endpoints
 
-- Status: proposed
+- Status: accepted
 - Issue: [#1898](https://github.com/jaunder-org/jaunder/issues/1898)
 
 ## Context

@@ -274,6 +274,7 @@ convention). See the Status column below for each ADR's current status.
 | [0243](adr/0243-post-publication-timezone.md)                            | A Post's publication instant is displayed in its latest editing timezone                                     | accepted   |
 | [0244](adr/0244-standalone-ux-sandbox-lifecycle.md)                      | A focused standalone host UX sandbox owner                                                                   | accepted   |
 | [0245](adr/0245-canonical-comparable-instants.md)                        | Canonical comparable instants belong to the existing time wrapper                                            | accepted   |
+| [0246](adr/0246-retire-xtask-devtool-endpoints.md)                       | Simplify Residual Tooling Capabilities and Retire Obsolete Endpoints                                         | accepted   |
 
 <!-- adr-table:end -->
 
