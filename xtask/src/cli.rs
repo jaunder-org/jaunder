@@ -209,17 +209,6 @@ pub enum Command {
     /// Validate completed mutation producer evidence without running mutations.
     #[command(subcommand)]
     Mutants(MutantsCommand),
-    /// Internal Just adapter: no inputs means mutable smoke; harness alone
-    /// selects local styling; product inputs select discovery or acceptance.
-    #[command(hide = true)]
-    QualificationLeaf {
-        #[arg(long)]
-        expected_harness: Option<String>,
-        #[arg(long, requires = "expected_harness")]
-        source: Option<String>,
-        #[arg(long, requires = "source")]
-        target: Option<String>,
-    },
 }
 
 #[derive(Subcommand)]
@@ -418,7 +407,6 @@ impl Cli {
             Command::ServerFnCoverage(ServerFnCoverageCommand::Verify(_)) => {
                 "server-fn-coverage-verify"
             }
-            Command::QualificationLeaf { .. } => "qualification-leaf",
             Command::Mutants(MutantsCommand::VerifyEvidence { .. }) => "mutants-verify-evidence",
         }
     }
@@ -433,8 +421,7 @@ impl Command {
     pub fn produces_json_payload(&self) -> bool {
         !matches!(
             self,
-            Command::QualificationLeaf { .. }
-                | Command::CheckLeaf { .. }
+            Command::CheckLeaf { .. }
                 | Command::Traces(
                     TracesCommand::Analyze { .. }
                         | TracesCommand::Run { .. }
@@ -557,13 +544,6 @@ mod tests {
         ));
 
         assert!(Cli::try_parse_from(["xtask", "precommit-safety"]).is_err());
-    }
-
-    #[test]
-    fn qualification_leaf_requires_explicit_harness_for_product_inputs() {
-        assert!(Cli::try_parse_from(["xtask", "qualification-leaf", "--source", "HEAD"]).is_err());
-        assert!(Cli::try_parse_from(["xtask", "qualification-leaf", "--target", "HEAD"]).is_err());
-        assert!(Cli::try_parse_from(["xtask", "qualification-leaf"]).is_ok());
     }
 
     #[test]

@@ -5164,11 +5164,11 @@ placed by a single litmus test — _where must this code execute?_
   `nix build` and consumes/analyzes exfiltrated build artifacts (coverage gate,
   CRAP gate, reports). Retained public producer/diagnostic commands use
   `result::CommandResult::report` and its `.xtask/last-result.json` sidecar.
-  Plain check leaves, precommit safety, artifact verdicts and the Just-owned
-  qualification leaf bypass that reporting boundary. Each `result::StepResult`
-  records its name, outcome, duration, and optional `result::NixReport` for a
-  successful producer-owned Nix build (`installable`, optional evaluated
-  `derivation`, and conservative `realization`). It also prints an
+  Plain check leaves, precommit safety and artifact verdicts bypass that
+  reporting boundary. Each `result::StepResult` records its name, outcome,
+  duration, and optional `result::NixReport` for a successful producer-owned Nix
+  build (`installable`, optional evaluated `derivation`, and conservative
+  `realization`). It also prints an
   `xtask-done: command=… ok=… exit=… duration_ms=…` sentinel on stderr for
   generic result exits (and an error-form sentinel on generic failures), so a
   truncated log can still prove the process finished. Plain-status paths and
@@ -5269,17 +5269,21 @@ coverage/E2E dependencies and explicit host-unit-test authorities remain
 separate. Both development shells supply a thin `cargo-xtask` transport that
 discovers the active checkout and executes its selected Nix output.
 
-`packages.qualification-harness` joins the existing tool, browser, test-support,
-Node and VM input owners. Ordinary and styling qualification admit the actual
-executing tool and helper overrides against selected store outputs before leases
-or VM effects. Browser source is copied into invocation-owned writable state;
-the pinned runner executes that copy's CLI and imports, and the seed bridge uses
-the admitted Node interpreter. VM construction asserts the same admitted harness
-output. Standard derivation, output and NAR identities appear in evidence and
-remain rooted during execution. Git still identifies clean source/product
-revisions and rejects checkout drift, not content-equivalent tool revisions.
-Runtime checkout discovery and Nix-owned untracked-input admission complete the
-boundary; no custom fingerprint or identity ledger is introduced.
+`packages.qualification-host` is the auxiliary `tools/qualification` package's
+single host-run executable, built from its own Cargo closure with its store
+output compiled in; the four `production-baseline-*` Just recipes run it with
+`nix run` and it never executes inside a derivation.
+`packages.qualification-harness` joins that tool with the existing browser,
+test-support, Node and VM input owners. Ordinary and styling qualification admit
+the actual executing tool and helper overrides against selected store outputs
+before leases or VM effects. Browser source is copied into invocation-owned
+writable state; the pinned runner executes that copy's CLI and imports, and the
+seed bridge uses the admitted Node interpreter. VM construction asserts the same
+admitted harness output. Standard derivation, output and NAR identities appear
+in evidence and remain rooted during execution. Git still identifies clean
+source/product revisions and rejects checkout drift, not content-equivalent tool
+revisions. Runtime checkout discovery and Nix-owned untracked-input admission
+complete the boundary; no custom fingerprint or identity ledger is introduced.
 
 **Workspace layering.** The root workspace's shared crates are target-scoped
 ([ADR-0058](adr/0058-host-crate-layering.md),

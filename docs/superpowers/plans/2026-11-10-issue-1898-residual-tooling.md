@@ -105,8 +105,15 @@ staged design bytes/index and shared stashes remain untouched now.
     backend/browser evidence only after input/consumer equivalence check;
     execute changed seams, not full family audits by default.
 
-- [ ] 4. Qualification uses selected concern executable without changing
+- [x] 4. Qualification uses selected concern executable without changing
       evidence meaning.
+  - Delivered: `tools/qualification` (lib + `qualification-host`) owns the moved
+    algorithms unchanged; `packages.qualification-host` builds it from its own
+    closure with its output compiled in, the harness links
+    `bin/qualification-host`, and the four Just recipes `nix run` it.
+    `cargo xtask qualification-leaf` is retired. Proven: all 63 moved unit tests
+    plus binary-boundary refusals, embedded-output/harness linkage and pre-Nix
+    dirty refusal. Not run: a full VM qualification.
   - Contract: qualification-host behind four existing recipes preserves harness/
     source/target preflight, exact compiled-output/helper admission, lease/root/
     VM custody and ordinary/styling/no-evidence distinctions. Separate system-

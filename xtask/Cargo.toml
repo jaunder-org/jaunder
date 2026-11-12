@@ -25,13 +25,11 @@ serde_json = "1.0.151"
 jiff = { version = "0.2.35", default-features = false, features = ["std"] }
 anyhow = "1.0.104"
 regex = "1.12.3"
-jsonschema = { version = "0.40", default-features = false }
 flate2 = "1.1.10"
 tar = "0.4.46"
 coverage = { path = "../tools/coverage" }
 repository-policy = { path = "../tools/repository-policy" }
 host = { path = "../host" }
-common = { path = "../common" }
 doctests = { path = "../tools/doctests" }
 tabled = "0.22.0"
 tracing = "0.1.44"
@@ -52,7 +50,6 @@ sha2 = "0.11.0"
 # `e2e-local` bridges processkit's async supervision into xtask's synchronous
 # command runner; a background worker keeps process I/O pumps live between calls.
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "signal", "time"] }
-base64 = "0.22.1"
 # The standalone host adapter inherits version requirements, but not the root
 # workspace's patches. Keep the required forks at the exact root revisions.
 [patch.crates-io]

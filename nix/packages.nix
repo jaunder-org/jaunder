@@ -411,6 +411,9 @@ let
       # Repository policy is native tooling; retain its manifest, not implementation.
       && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/repository-policy/" path
         && path != "${toString (craneLib.path ../.)}/tools/repository-policy/Cargo.toml")
+      # Qualification is host-run tooling; retain its manifest, not implementation.
+      && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/qualification/" path
+        && path != "${toString (craneLib.path ../.)}/tools/qualification/Cargo.toml")
       && (
         (pkgs.lib.hasSuffix ".sql" path)
         || (pkgs.lib.hasSuffix ".css" path)
@@ -478,6 +481,18 @@ let
       toolchain
       cargoPackageClosure
       cargoMemberSource
+      workspaceMembers
+      withWorkspacePlaceholders
+      vendorPinnedFork
+      sqlxSqlitePatchSource
+      ;
+  };
+  qualificationHostBin = import ./qualification.nix {
+    inherit
+      pkgs
+      craneLib
+      cargoMemberSource
+      cargoPackageClosure
       workspaceMembers
       withWorkspacePlaceholders
       vendorPinnedFork
@@ -741,6 +756,7 @@ let
     || (
       pkgs.lib.hasPrefix "tools/" relative
       && !(pkgs.lib.hasPrefix "tools/repository-policy/" relative && relative != "tools/repository-policy/Cargo.toml")
+      && !(pkgs.lib.hasPrefix "tools/qualification/" relative && relative != "tools/qualification/Cargo.toml")
       && craneLib.filterCargoSources path type
     );
   csrSourceAdmits =
@@ -798,6 +814,7 @@ let
         "test-support"
         "web"
         "tools/repository-policy"
+        "tools/qualification"
       ];
   toolsBaseArgs = {
     src = toolsSrc;
@@ -1422,6 +1439,7 @@ in
         ;
     };
     repository-policy = repositoryPolicyBin;
+    qualification-host = qualificationHostBin;
     adr-promoter = adrPromoter;
     # The out-of-process e2e seed helper (ADR-0046). Exposed so it is
     # directly buildable/verifiable; it is placed only on the e2e VM PATH,
@@ -1431,14 +1449,14 @@ in
   // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
     qualification-harness = import ./qualification-harness.nix {
       inherit pkgs;
-      xtask = xtaskBin;
+      qualificationHost = qualificationHostBin;
       testSupport = testSupportBin;
       browser = e2ePackage;
     };
     qualification-harness-legacy-1419 = import ./qualification-harness.nix {
       inherit pkgs;
       name = "jaunder-qualification-harness-legacy-1419";
-      xtask = xtaskBin;
+      qualificationHost = qualificationHostBin;
       # Keep the accepted fixture's complete historical dependency graph.
       testSupport =
         (builtins.getFlake "github:jaunder-org/jaunder/78d201e6969ed17b8a54b87d3de24be6afa1f5ee")

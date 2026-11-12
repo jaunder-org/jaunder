@@ -68,7 +68,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
-        Command::QualificationLeaf { .. } | Command::CheckLeaf { .. } => {
+        Command::CheckLeaf { .. } => {
             anyhow::bail!(
                 "internal leaf and precommit safety commands use the plain process boundary"
             )

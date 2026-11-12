@@ -1135,9 +1135,10 @@ fn publish_with_workspace_cleanup(
 }
 
 fn validate_serialized_evidence(json: &str) -> Result<()> {
-    let schema: serde_json::Value =
-        serde_json::from_str(include_str!("../../docs/production-baseline.schema.json"))
-            .context("parsing committed production-baseline schema")?;
+    let schema: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../docs/production-baseline.schema.json"
+    ))
+    .context("parsing committed production-baseline schema")?;
     let evidence: serde_json::Value =
         serde_json::from_str(json).context("parsing serialized evidence")?;
     jsonschema::draft202012::validate(&schema, &evidence).map_err(|error| {
@@ -1898,7 +1899,7 @@ mod tests {
         git(root, &["config", "user.email", "test@example.test"]);
         git(root, &["config", "user.name", "Test"]);
         for relative in [
-            "xtask/src/main.rs",
+            "tools/qualification/src/main.rs",
             "test-support/src/lib.rs",
             "end2end/tests/production-baseline.ts",
         ] {
@@ -1937,7 +1938,11 @@ mod tests {
         let r = GitRepository::new(repo.path().to_path_buf());
         let binaries = binaries(repo.path());
         assert!(validate_harness(&r, &binaries).is_ok());
-        fs::write(repo.path().join("xtask/src/main.rs"), "dirty\n").unwrap();
+        fs::write(
+            repo.path().join("tools/qualification/src/main.rs"),
+            "dirty\n",
+        )
+        .unwrap();
         assert!(validate_harness(&r, &binaries).is_err());
     }
 
@@ -1955,7 +1960,7 @@ mod tests {
         let repo = repo();
         fs::write(
             repo.path().join("test-support/src/lib.rs"),
-            include_bytes!("../../test-support/src/lib.rs"),
+            include_bytes!("../../../test-support/src/lib.rs"),
         )
         .unwrap();
         git(repo.path(), &["add", "test-support/src/lib.rs"]);
@@ -2058,7 +2063,7 @@ mod tests {
         let repo = repo();
         fs::write(
             repo.path().join(".gitignore"),
-            include_str!("../../.gitignore"),
+            include_str!("../../../.gitignore"),
         )
         .unwrap();
         let mut evidence = evidence();
@@ -2140,9 +2145,10 @@ mod tests {
     fn committed_schema_validates_serialized_evidence_and_names_fixed_checks() {
         let json = serde_json::to_string_pretty(&evidence()).unwrap();
         validate_serialized_evidence(&json).unwrap();
-        let schema: serde_json::Value =
-            serde_json::from_str(include_str!("../../docs/production-baseline.schema.json"))
-                .unwrap();
+        let schema: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../docs/production-baseline.schema.json"
+        ))
+        .unwrap();
         assert_eq!(schema["properties"]["schema_version"]["const"], 2);
         let check_ids = schema["$defs"]["check"]["allOf"][1]["properties"]["id"]["enum"]
             .as_array()

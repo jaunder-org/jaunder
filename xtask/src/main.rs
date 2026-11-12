@@ -40,23 +40,6 @@ fn main() {
     let json = cli.json;
     let command_name = cli.command_name();
     match cli.command {
-        Command::QualificationLeaf {
-            expected_harness,
-            source,
-            target,
-        } => {
-            match xtask::production_baseline::run_leaf(
-                expected_harness.as_deref(),
-                source.as_deref(),
-                target.as_deref(),
-            ) {
-                Ok(detail) => println!("{detail}"),
-                Err(error) => {
-                    eprintln!("qualification: {error:#}");
-                    std::process::exit(1);
-                }
-            }
-        }
         Command::CheckLeaf { name } => {
             if json {
                 eprintln!("xtask: --json is not supported for `check-leaf`");

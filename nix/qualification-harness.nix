@@ -2,7 +2,7 @@
 # existing owners without introducing an input to any application/check producer.
 {
   pkgs,
-  xtask,
+  qualificationHost,
   testSupport,
   browser,
   name ? "jaunder-qualification-harness",
@@ -17,7 +17,7 @@ let
   };
 in
 (pkgs.linkFarm name [
-  { name = "bin/xtask"; path = "${xtask}/bin/xtask"; }
+  { name = "bin/qualification-host"; path = "${qualificationHost}/bin/qualification-host"; }
   { name = "bin/test-support"; path = "${testSupport}/bin/test-support"; }
   { name = "bin/node"; path = "${pkgs.nodejs}/bin/node"; }
   { name = "bin/playwright"; path = "${browserRunner}/bin/qualification-playwright"; }

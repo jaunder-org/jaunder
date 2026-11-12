@@ -112,10 +112,10 @@ pub(crate) fn admit_harness(
     gc_root: &Path,
     fixture: OrdinaryFixture,
 ) -> Result<crate::production_baseline_lifecycle::StoreArtifactIdentity> {
-    let compiled = env!("JAUNDER_XTASK_NIX_OUTPUT");
+    let compiled = env!("JAUNDER_QUALIFICATION_NIX_OUTPUT");
     if compiled.is_empty() {
         bail!(
-            "qualification requires Nix-built tooling provenance; invoke cargo xtask from the devShell"
+            "qualification requires Nix-built tooling provenance; invoke through the production-baseline Just recipes"
         );
     }
     let installable = format!("{}#{}", source.locked_ref(), fixture.graph());
@@ -142,7 +142,7 @@ pub(crate) fn admit_harness(
         .context("Nix harness omitted its out output")?
         .to_owned();
     verify_selected_tool(
-        &Path::new(&output_path).join("bin/xtask"),
+        &Path::new(&output_path).join("bin/qualification-host"),
         &std::env::current_exe().context("resolving executing qualification tool")?,
         Some(Path::new(compiled)),
     )?;

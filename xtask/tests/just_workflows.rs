@@ -152,7 +152,7 @@ fn qualification_just_preflight_fetches_complete_distinct_set_once() {
             "git rev-parse --verify --end-of-options target^{commit}",
             "git remote get-url origin",
             "git fetch --quiet --no-write-fetch-head --refetch origin aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb cccccccccccccccccccccccccccccccccccccccc",
-            "cargo xtask qualification-leaf --expected-harness aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --source bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --target cccccccccccccccccccccccccccccccccccccccc",
+            "nix run .#qualification-host -- --expected-harness aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --source bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --target cccccccccccccccccccccccccccccccccccccccc",
         ])
     );
 }
@@ -169,7 +169,7 @@ fn acceptance_refuses_empty_target_before_fetch_or_host_invocation() {
         ),
         "{stderr}"
     );
-    assert!(!actual.iter().any(|command| command[0] == "cargo"));
+    assert!(!actual.iter().any(|command| command[0] == "nix"));
     assert!(
         !actual
             .iter()
@@ -184,7 +184,7 @@ fn qualification_preflight_refuses_before_host_invocation() {
         fs::write(workflow.root.path().join(marker), "refuse").unwrap();
         let (ok, actual, stderr) = workflow.run(&["production-baseline-discover", "source"], "");
         assert!(!ok, "{marker}: {stderr}");
-        assert!(!actual.iter().any(|command| command[0] == "cargo"));
+        assert!(!actual.iter().any(|command| command[0] == "nix"));
         assert!(
             !actual
                 .iter()
@@ -196,10 +196,10 @@ fn qualification_preflight_refuses_before_host_invocation() {
         workflow.run(&["production-baseline-accept", "source", "source"], "");
     assert!(!ok, "{stderr}");
     assert!(stderr.contains("distinct resolved"), "{stderr}");
-    assert!(!actual.iter().any(|command| command[0] == "cargo"));
+    assert!(!actual.iter().any(|command| command[0] == "nix"));
     let (ok, actual, stderr) = workflow.run(&["production-baseline-discover", "source"], "git fetch --quiet --no-write-fetch-head --refetch origin aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
     assert!(!ok, "{stderr}");
-    assert!(!actual.iter().any(|command| command[0] == "cargo"));
+    assert!(!actual.iter().any(|command| command[0] == "nix"));
 }
 
 #[test]
@@ -219,12 +219,12 @@ fn discovery_deduplicates_harness_and_styling_and_smoke_stay_local() {
         commands(&[
             "git status --porcelain --untracked-files=all",
             "git rev-parse --verify HEAD^{commit}",
-            "cargo xtask qualification-leaf --expected-harness aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "nix run .#qualification-host -- --expected-harness aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         ])
     );
     let (ok, actual, stderr) = workflow.run(&["production-baseline-smoke"], "");
     assert!(ok, "{stderr}");
-    assert_eq!(actual, commands(&["cargo xtask qualification-leaf"]));
+    assert_eq!(actual, commands(&["nix run .#qualification-host"]));
 }
 
 #[test]
@@ -271,7 +271,7 @@ fn real_git_refuses_unpushed_harness_and_resolves_product_aliases() {
             "git",
             "#!/usr/bin/env bash\nargs=(\"$@\")\nif [[ ${args[0]} == fetch ]]; then\n  for i in \"${!args[@]}\"; do\n    [[ ${args[$i]} != origin ]] || args[$i]=$UPSTREAM\n  done\nfi\nexec \"$REAL_GIT\" \"${args[@]}\"\n",
         ),
-        ("cargo", "#!/bin/sh\nprintf '%s\\n' \"$@\"\n"),
+        ("nix", "#!/bin/sh\nprintf '%s\\n' \"$@\"\n"),
     ] {
         let path = tools.path().join(name);
         fs::write(&path, text).unwrap();
@@ -312,7 +312,7 @@ fn real_git_refuses_unpushed_harness_and_resolves_product_aliases() {
             !refused.status.success(),
             "protocol={protocol}: {refused:?}"
         );
-        assert!(!String::from_utf8_lossy(&refused.stdout).contains("qualification-leaf"));
+        assert!(!String::from_utf8_lossy(&refused.stdout).contains("qualification-host"));
     }
     git(&["push", upstream.to_str().unwrap(), "HEAD:refs/heads/main"]);
     fs::write(root.path().join(".git/FETCH_HEAD"), "preserve fetch head\n").unwrap();
@@ -321,7 +321,7 @@ fn real_git_refuses_unpushed_harness_and_resolves_product_aliases() {
     assert_eq!(
         String::from_utf8(admitted.stdout).unwrap(),
         format!(
-            "xtask\nqualification-leaf\n--expected-harness\n{harness}\n--source\n{source}\n--target\n{target}\n"
+            "run\n.#qualification-host\n--\n--expected-harness\n{harness}\n--source\n{source}\n--target\n{target}\n"
         )
     );
     assert_eq!(
@@ -358,7 +358,7 @@ fn real_git_refuses_unpushed_harness_and_resolves_product_aliases() {
                 !refused.status.success(),
                 "protocol={protocol}: {refused:?}"
             );
-            assert!(!String::from_utf8_lossy(&refused.stdout).contains("qualification-leaf"));
+            assert!(!String::from_utf8_lossy(&refused.stdout).contains("qualification-host"));
         }
     }
     git(&["remote", "remove", "origin"]);
