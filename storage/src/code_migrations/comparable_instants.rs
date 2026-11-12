@@ -33,13 +33,11 @@ async fn read_legacy_instant_cells(
                 let raw = row.try_get_raw(index + 1)?;
                 let class =
                     sqlx::TypeInfo::name(sqlx::ValueRef::type_info(&raw).as_ref()).to_owned();
-                let result = if sqlx::ValueRef::is_null(&raw) {
-                    if *nullable {
-                        Ok(None)
-                    } else {
-                        Err(sqlx::Error::Protocol("required instant is NULL".into()))
-                    }
-                } else if matches!(class.as_str(), "TEXT" | "INTEGER" | "REAL") {
+                let result = if sqlx::ValueRef::is_null(&raw) && *nullable {
+                    Ok(None)
+                } else if sqlx::ValueRef::is_null(&raw)
+                    || matches!(class.as_str(), "TEXT" | "INTEGER" | "REAL")
+                {
                     // Public decode retains the established civil-UTC / Julian-day
                     // interpretation. Identity has already been obtained above.
                     row.try_get_unchecked::<UtcInstant, _>(index + 1).map(Some)

@@ -442,6 +442,53 @@ mod tests {
         );
     }
 
+    #[apply(backends)]
+    #[tokio::test]
+    async fn canonical_instants_legacy_restore_backfills_distinct_passkey_handles(
+        #[case] backend: Backend,
+    ) {
+        let source = MigrationDatabase::new(backend).await;
+        source.migrate_current().await.unwrap();
+        source.drain_pending_code_migrations().await;
+        source.pool.execute("INSERT INTO users (username, password_hash, created_at) VALUES ('legacy-one', 'hash', CURRENT_TIMESTAMP), ('legacy-two', 'hash', CURRENT_TIMESTAMP)").await.unwrap();
+        crate::with_closeable_pool!(&source.pool, pool, {
+            crate::instance_identity::ensure(pool).await.unwrap();
+        });
+        let backup = TempDir::new().unwrap();
+        std::fs::create_dir(backup.path().join("db")).unwrap();
+        let mut manifest = source.export_fixture(backup.path()).await;
+        manifest.format_version = crate::backup::LEGACY_BACKUP_FORMAT_VERSION;
+        manifest
+            .tables
+            .retain(|table| table != "passkey_user_handles");
+        let target = MigrationDatabase::new(backend).await;
+        target.migrate_current().await.unwrap();
+        target.drain_pending_code_migrations().await;
+        let report = target
+            .restore_fixture(backup.path(), &manifest)
+            .await
+            .unwrap();
+        assert!(report.is_empty());
+        let users = crate::with_closeable_pool!(&target.pool, pool, {
+            sqlx::query_scalar::<_, common::ids::UserId>(
+                "SELECT user_id FROM users ORDER BY user_id",
+            )
+            .fetch_all(pool)
+            .await
+            .unwrap()
+        });
+        assert_eq!(users.len(), 2);
+        let factory = match &target.pool {
+            CloseablePool::Sqlite(pool) => crate::StorageFactory::sqlite(pool.clone()),
+            CloseablePool::Postgres(pool) => crate::StorageFactory::postgres(pool.clone()),
+        };
+        let passkeys = factory.passkeys();
+        let first = passkeys.user_handle(users[0]).await.unwrap().unwrap();
+        let second = passkeys.user_handle(users[1]).await.unwrap().unwrap();
+        assert_ne!(first, second);
+        assert_eq!(passkeys.user_handle(users[0]).await.unwrap(), Some(first));
+    }
+
     #[apply(backends_matrix)]
     #[case::same_backend_pending_absent(false, false)]
     #[case::same_backend_pending_full(false, true)]
@@ -764,6 +811,21 @@ mod tests {
         };
         db.pool.execute(drop_trigger).await.unwrap();
         db.drain_pending_code_migrations().await;
+        db.reopen_durability_pool().await;
+        db.assert_normalization_durable_state(true).await;
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn canonical_instants_commit_acknowledgment_returns_completed_state(
+        #[case] backend: Backend,
+    ) {
+        let mut db = MigrationDatabase::normalization_durability_fixture(backend).await;
+        let pause = code_migrations::CommitPause::new(true);
+        let task = db.spawn_paused_drain(std::sync::Arc::clone(&pause));
+        pause.reached.notified().await;
+        pause.resume.notify_one();
+        task.await.unwrap().unwrap();
         db.reopen_durability_pool().await;
         db.assert_normalization_durable_state(true).await;
     }

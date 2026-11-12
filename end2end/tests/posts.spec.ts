@@ -3728,7 +3728,7 @@ test.describe("scheduled editor local time", () => {
       "Post scheduled.",
     );
     expect((await created).Confirmed.post.published_at).toBe(
-      "2999-01-01T14:00:00Z",
+      "2999-01-01T14:00:00.000000000Z",
     );
 
     await page.fill(SEL.postBody, "# New York Backdate\n\nbackdated body");

@@ -185,7 +185,11 @@ impl UtcInstant {
     /// Panics if the system clock is outside the application bounds.
     #[must_use]
     pub fn now() -> Self {
-        match Self::from_timestamp(Timestamp::now()) {
+        Self::from_clock(Timestamp::now())
+    }
+
+    fn from_clock(timestamp: Timestamp) -> Self {
+        match Self::from_timestamp(timestamp) {
             Ok(instant) => instant,
             Err(error) => panic!(
                 "system clock invariant: current UTC instant is outside application bounds: {error:?}"
@@ -679,6 +683,14 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(
+        expected = "system clock invariant: current UTC instant is outside application bounds"
+    )]
+    fn out_of_domain_clock_panics_instead_of_clamping() {
+        UtcInstant::from_clock(Timestamp::MIN);
+    }
+
+    #[test]
     fn now_is_an_instant_between_adjacent_clock_reads() {
         let before = Timestamp::now();
         let instant = UtcInstant::now().value();
@@ -735,80 +747,89 @@ mod tests {
     fn civil_conversion_public_seams_enforce_normalized_application_bounds() {
         const CHILD: &str = "JAUNDER_TEST_CIVIL_BOUNDS_CHILD";
         if std::env::var_os(CHILD).is_none() {
-            // System-zone entrypoints remain the seam. Isolated child TZ input
-            // avoids mutating the parent process environment or adding a clock API.
-            for zone in ["UTC", "Etc/GMT-1", "Etc/GMT+1"] {
+            // Send each zone together with its declared expectations. The child
+            // exercises system-zone entrypoints without a second fixture selector.
+            for (zone, cases) in [
+                (
+                    "UTC",
+                    vec![
+                        ("0000-12-31T23:59:59", None),
+                        (
+                            "0001-01-01T00:00:00",
+                            Some("0001-01-01T00:00:00.000000000Z"),
+                        ),
+                        (
+                            "9999-12-30T22:00:00",
+                            Some("9999-12-30T22:00:00.000000000Z"),
+                        ),
+                        ("9999-12-30T22:00:01", None),
+                    ],
+                ),
+                (
+                    "Etc/GMT-1",
+                    vec![
+                        ("0000-12-31T23:59:59", None),
+                        ("0001-01-01T00:59:59", None),
+                        (
+                            "0001-01-01T01:00:00",
+                            Some("0001-01-01T00:00:00.000000000Z"),
+                        ),
+                        (
+                            "0001-01-01T01:00:01",
+                            Some("0001-01-01T00:00:01.000000000Z"),
+                        ),
+                        (
+                            "9999-12-30T23:00:00",
+                            Some("9999-12-30T22:00:00.000000000Z"),
+                        ),
+                        ("9999-12-30T23:00:01", None),
+                    ],
+                ),
+                (
+                    "Etc/GMT+1",
+                    vec![
+                        ("0000-12-31T22:59:59", None),
+                        (
+                            "0000-12-31T23:00:00",
+                            Some("0001-01-01T00:00:00.000000000Z"),
+                        ),
+                        (
+                            "0001-01-01T00:00:00",
+                            Some("0001-01-01T01:00:00.000000000Z"),
+                        ),
+                        (
+                            "9999-12-30T21:00:00",
+                            Some("9999-12-30T22:00:00.000000000Z"),
+                        ),
+                        ("9999-12-30T21:00:01", None),
+                    ],
+                ),
+            ] {
                 let output = std::process::Command::new(std::env::current_exe().unwrap())
                     .args(["--exact", "time::tests::civil_conversion_public_seams_enforce_normalized_application_bounds", "--nocapture"])
-                    .env(CHILD, "1").env("TZ", zone).output().unwrap();
+                    .env(CHILD, serde_json::to_string(&cases).unwrap())
+                    .env("TZ", zone).output().unwrap();
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
                 assert!(
                     output.status.success()
-                        && String::from_utf8_lossy(&output.stdout)
-                            .contains("civil-boundary public assertions complete"),
-                    "{zone}: {}{}",
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr)
+                        && stdout.contains("civil-boundary public assertions complete"),
+                    "{zone}: {stdout}{stderr}"
                 );
             }
             return;
         }
-        let cases: &[(&str, Option<&str>)] = match std::env::var("TZ").unwrap().as_str() {
-            "UTC" => &[
-                ("0000-12-31T23:59:59", None),
-                (
-                    "0001-01-01T00:00:00",
-                    Some("0001-01-01T00:00:00.000000000Z"),
-                ),
-                (
-                    "9999-12-30T22:00:00",
-                    Some("9999-12-30T22:00:00.000000000Z"),
-                ),
-                ("9999-12-30T22:00:01", None),
-            ],
-            "Etc/GMT-1" => &[
-                ("0000-12-31T23:59:59", None),
-                ("0001-01-01T00:59:59", None),
-                (
-                    "0001-01-01T01:00:00",
-                    Some("0001-01-01T00:00:00.000000000Z"),
-                ),
-                (
-                    "0001-01-01T01:00:01",
-                    Some("0001-01-01T00:00:01.000000000Z"),
-                ),
-                (
-                    "9999-12-30T23:00:00",
-                    Some("9999-12-30T22:00:00.000000000Z"),
-                ),
-                ("9999-12-30T23:00:01", None),
-            ],
-            "Etc/GMT+1" => &[
-                ("0000-12-31T22:59:59", None),
-                (
-                    "0000-12-31T23:00:00",
-                    Some("0001-01-01T00:00:00.000000000Z"),
-                ),
-                (
-                    "0001-01-01T00:00:00",
-                    Some("0001-01-01T01:00:00.000000000Z"),
-                ),
-                (
-                    "9999-12-30T21:00:00",
-                    Some("9999-12-30T22:00:00.000000000Z"),
-                ),
-                ("9999-12-30T21:00:01", None),
-            ],
-            other => panic!("unexpected fixture timezone {other}"),
-        };
+        let cases: Vec<(String, Option<String>)> =
+            serde_json::from_str(&std::env::var(CHILD).unwrap()).unwrap();
         for (local, expected) in cases {
             let expected = expected.map(|text| text.parse::<UtcInstant>().unwrap());
             assert_eq!(
-                utc_instant_from_local(local),
+                utc_instant_from_local(&local),
                 expected,
                 "compatible {local}"
             );
             assert_eq!(
-                strict_utc_instant_from_local(local),
+                strict_utc_instant_from_local(&local),
                 expected,
                 "strict {local}"
             );

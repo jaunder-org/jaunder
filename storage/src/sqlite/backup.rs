@@ -324,11 +324,9 @@ async fn import_table(
                 let Some(column) = columns.iter().find(|column| column.name == *column_name) else {
                     unreachable!("restore column names are selected from the catalog")
                 };
-                let value = row.get(column_name).ok_or_else(|| {
-                    BackupError::InvalidBackup(format!(
-                        "table {table} row is missing column {column_name}"
-                    ))
-                })?;
+                // The first row selects these names and equal key sets were
+                // validated above, so no later row can lack a selected cell.
+                let value = &row[column_name];
                 backup::restore_bind_value(table, column, value)
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -514,6 +512,78 @@ mod tests {
     use crate::test_support::{Backend, CloseablePool, sqlite_only};
     use rstest::*;
     use rstest_reuse::*;
+
+    // reason: SQLite text can be rewritten by a target trigger after checked
+    // binding. Final population validation must reject it before restore commits.
+    #[apply(sqlite_only)]
+    #[tokio::test]
+    async fn canonical_instants_verification_rejects_trigger_rewritten_cells(
+        #[case] backend: Backend,
+    ) {
+        let source = backend.setup().await;
+        let CloseablePool::Sqlite(source_pool) = source.base.pool() else {
+            unreachable!("sqlite_only supplies a SQLite pool")
+        };
+        sqlx::query("INSERT INTO feed_events (feed_url, next_attempt_at, created_at) VALUES ('/feed.atom', '2005-01-02T01:59:00.000000000Z', '2005-01-02T01:59:00.000000000Z')")
+            .execute(source_pool).await.unwrap();
+        sqlx::query("INSERT INTO pending_code_migrations (operation) VALUES ('normalize_comparable_instants_v1')")
+            .execute(source_pool).await.unwrap();
+        let backup = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir(backup.path().join("db")).unwrap();
+        let manifest = export_database(source_pool, backup.path(), BackupMode::Directory)
+            .await
+            .unwrap();
+        let target = backend.setup().await;
+        let CloseablePool::Sqlite(pool) = target.base.pool() else {
+            unreachable!("sqlite_only supplies a SQLite pool")
+        };
+        // A pending, uninstalled enforcement set is a supported restore target.
+        sqlx::query("INSERT INTO pending_code_migrations (operation) VALUES ('normalize_comparable_instants_v1')")
+            .execute(pool).await.unwrap();
+        let drops = sqlx::query_scalar::<_, crate::backup::CatalogDefinition>(
+            "SELECT 'DROP TRIGGER \"' || name || '\"' FROM sqlite_master WHERE type = 'trigger' AND name GLOB 'canonical_instants_v1_*'"
+        ).fetch_all(pool).await.unwrap();
+        for ddl in drops {
+            sqlx::query(sqlx::AssertSqlSafe(ddl.into_inner()))
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("CREATE TRIGGER rewrite_imported_instant AFTER INSERT ON feed_events BEGIN UPDATE feed_events SET created_at = '2005-01-02T01:59:00Z' WHERE id = NEW.id; END")
+            .execute(pool).await.unwrap();
+        let error = restore_database(pool, backup.path(), &manifest)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("noncanonical comparable instant in feed_events rowid="),
+            "{error}"
+        );
+        let (remaining,): (crate::sql::RowCount,) =
+            sqlx::query_as("SELECT COUNT(*) FROM feed_events")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            remaining.into_u64(),
+            0,
+            "failed validation rolls back imported cells"
+        );
+        sqlx::query("DROP TRIGGER rewrite_imported_instant")
+            .execute(pool)
+            .await
+            .unwrap();
+        restore_database(pool, backup.path(), &manifest)
+            .await
+            .unwrap();
+        let (remaining,): (crate::sql::RowCount,) =
+            sqlx::query_as("SELECT COUNT(*) FROM feed_events")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(remaining.into_u64(), 1);
+    }
 
     fn primary_io_error() -> BackupError {
         BackupError::Io(std::io::Error::new(

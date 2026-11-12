@@ -312,12 +312,9 @@ async fn import_table(
         let values = column_names
             .iter()
             .map(|column| {
-                let value = row.get(&column.name).ok_or_else(|| {
-                    BackupError::InvalidBackup(format!(
-                        "table {table} row is missing column {}",
-                        column.name
-                    ))
-                })?;
+                // The first row selects these names and equal key sets were
+                // validated above, so no later row can lack a selected cell.
+                let value = &row[&column.name];
                 backup::restore_bind_value(table, column, value)
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -481,16 +478,14 @@ async fn export_table(
             serde_json::from_slice(json.as_bytes())?;
         for (column, value) in &mut cells {
             if backup::comparable_instant_nullability(table, column).is_some() && !value.is_null() {
-                let text = value.as_str().ok_or_else(|| {
-                    BackupError::InvalidBackup(format!(
-                        "native timestamp cell is not text: {table}.{column}"
-                    ))
-                })?;
-                let instant: common::time::UtcInstant = text.parse().map_err(|_| {
-                    BackupError::InvalidBackup(format!(
-                        "native timestamp is outside application bounds: {table}.{column}"
-                    ))
-                })?;
+                // UtcInstant's checked serde boundary validates both the JSON
+                // representation and bounds; native timestamps need no second parser.
+                let instant: common::time::UtcInstant = serde::Deserialize::deserialize(&*value)
+                    .map_err(|_| {
+                        BackupError::InvalidBackup(format!(
+                            "native timestamp is outside application bounds: {table}.{column}"
+                        ))
+                    })?;
                 *value = serde_json::Value::String(instant.to_string());
             }
         }
@@ -569,6 +564,38 @@ mod tests {
     use crate::test_support::{Backend, CloseablePool, SeedUser, postgres_only};
     use rstest::*;
     use rstest_reuse::*;
+
+    // reason: native PostgreSQL infinity is representable before the offline
+    // bounds transition; the export boundary must reject it without rewriting it.
+    #[apply(postgres_only)]
+    #[tokio::test]
+    async fn canonical_instants_export_rejects_native_infinity(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let CloseablePool::Postgres(pool) = env.base.pool() else {
+            unreachable!("postgres_only supplies a PostgreSQL pool")
+        };
+        sqlx::query("ALTER TABLE feed_events DROP CONSTRAINT canonical_instants_v1_feed_events")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO feed_events (feed_url, next_attempt_at, created_at) VALUES ('/feed.atom', 'infinity', CURRENT_TIMESTAMP)")
+            .execute(pool).await.unwrap();
+        let backup = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir(backup.path().join("db")).unwrap();
+        let error = export_database(pool, backup.path(), BackupMode::Directory)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, BackupError::InvalidBackup(ref message) if message == "native timestamp is outside application bounds: feed_events.next_attempt_at"),
+            "{error}"
+        );
+        let (remaining,): (crate::sql::RowCount,) =
+            sqlx::query_as("SELECT COUNT(*) FROM feed_events WHERE next_attempt_at = 'infinity'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(remaining.into_u64(), 1);
+    }
 
     fn primary_io_error() -> BackupError {
         BackupError::Io(std::io::Error::new(

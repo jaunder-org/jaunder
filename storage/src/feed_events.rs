@@ -1348,6 +1348,36 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn unrepresentable_lease_rejects_claim_without_consuming_pending_events(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let feeds = env.feed_events();
+        let id = enqueue(&env.write_scope(), Arc::clone(&feeds), fp("/feed.rss")).await;
+        assert!(matches!(
+            feeds.claimable_count(Duration::MAX).await,
+            Err(FeedEventError::Db(sqlx::Error::Decode(_)))
+        ));
+        let for_claim = Arc::clone(&feeds);
+        assert!(
+            env.write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        for_claim
+                            .claim_pending_batch(transaction, 1, Duration::MAX)
+                            .await
+                    })
+                })
+                .await
+                .is_err()
+        );
+        let rows = claim(&env.write_scope(), feeds, 1, Duration::from_mins(5)).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, id);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn enqueue_many_creates_pending_rows_in_one_batch(#[case] backend: Backend) {
         let env = backend.setup().await;
         let paths = vec![
