@@ -18,7 +18,8 @@ pub const RSS_SERIALIZER_REVISION: u16 = 3;
 /// Atom serializer wire-layout revision. Increment when Atom bytes can change.
 pub const ATOM_SERIALIZER_REVISION: u16 = 3;
 /// JSON Feed serializer wire-layout revision. Increment when JSON Feed bytes can change.
-pub const JSON_SERIALIZER_REVISION: u16 = 3;
+// Fixed-nine UtcInstant output changes JSON dates, not Atom/RSS wire bytes.
+pub const JSON_SERIALIZER_REVISION: u16 = 4;
 
 /// A validated, persisted digest of a Syndication Feed's semantic serializer inputs.
 ///

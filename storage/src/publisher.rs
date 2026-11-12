@@ -529,6 +529,141 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn canonical_json_instants_replace_revision_three_cache(#[case] backend: Backend) {
+        use common::{
+            content_license::ContentLicense,
+            copyright_declaration::{CopyrightAuthor, CopyrightDeclaration},
+            feed::FeedFormat,
+            ids::PostId,
+            test_support::{parse_display_name, parse_utc_instant, rendered_html},
+        };
+        use host::{
+            etag::{feed_etag, feed_semantic_fingerprint},
+            feed::{FeedItem, FeedMetadata, render_json},
+        };
+
+        let env = backend.setup().await;
+        let old_time = parse_utc_instant("2026-01-01T00:00:00Z");
+        let replacement_time = parse_utc_instant("2026-01-03T00:00:00Z");
+        let metadata = FeedMetadata {
+            title: "Site".parse().unwrap(),
+            description: None,
+            canonical_url: parse_url("https://example.com/"),
+            self_url: parse_url("https://example.com/feed.json"),
+            hub_url: None,
+            representation_modified_at: old_time,
+        };
+        let item_time = parse_utc_instant("2026-01-02T03:04:05Z");
+        let items = [FeedItem {
+            id: PostId::from(7),
+            copyright_declaration: CopyrightDeclaration::from_resolved(
+                2024,
+                CopyrightAuthor::DisplayName(parse_display_name("Ada <&>")),
+                ContentLicense::CcBy4_0,
+            ),
+            rendered_title: None,
+            visible_title: None,
+            permalink: parse_url("https://example.com/~ada/posts/7"),
+            summary: None,
+            content_html: rendered_html("<p>Hi</p>"),
+            published_at: item_time,
+            updated_at: item_time,
+            tags: vec![],
+        }];
+        let canonical = render_json(&metadata, &items);
+        let old_body = canonical
+            .body()
+            .replace("2026-01-02T03:04:05.000000000Z", "2026-01-02T03:04:05Z");
+        assert_ne!(canonical.body(), old_body);
+        // Frozen revision-3 identity for these exact inputs. Numeric instants
+        // did not change: only a serializer revision can distinguish the bytes.
+        let old_fingerprint = "3f03bd389942e22720723cc55a83f53d0183cf5df9a11f8cd55debfe5db1fd92"
+            .parse()
+            .unwrap();
+        let old_etag = feed_etag(&old_fingerprint, old_time);
+        seed_cache(
+            env.feed_cache(),
+            env.write_scope(),
+            FeedCacheRow::new(
+                fp("/feed.json"),
+                SyndicationFeedRepresentation::try_from_stored(
+                    FeedFormat::Json,
+                    FeedFormat::Json.content_type(),
+                    old_body.clone(),
+                )
+                .unwrap(),
+                old_etag.clone(),
+                old_time,
+                old_time,
+                old_fingerprint.clone(),
+            )
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            env.feed_cache()
+                .get(&fp("/feed.json"))
+                .await
+                .unwrap()
+                .unwrap()
+                .representation()
+                .body(),
+            old_body
+        );
+        let current = feed_semantic_fingerprint(FeedFormat::Json, &metadata, &items);
+        let generation = env.publisher().snapshot().await.unwrap().generation;
+        // The first commit must replace the old body/validators. The second,
+        // same-input regeneration must retain that new identity and edit time.
+        for generated_at in [replacement_time, parse_utc_instant("2026-01-04T00:00:00Z")] {
+            let candidate = FeedCacheRow::new(
+                fp("/feed.json"),
+                canonical.clone(),
+                feed_etag(&current, generated_at),
+                generated_at,
+                generated_at,
+                current.clone(),
+            )
+            .unwrap();
+            let publisher = env.publisher();
+            let outcome = confirmed(
+                env.write_scope()
+                    .run(move |transaction| {
+                        Box::pin(async move {
+                            publisher
+                                .commit_cache(transaction, generation, candidate)
+                                .await
+                        })
+                    })
+                    .await
+                    .unwrap(),
+            );
+            let CacheCommitOutcome::Committed(row) = outcome else {
+                panic!("unchanged publisher generation");
+            };
+            assert_eq!(
+                row.representation(),
+                &canonical,
+                "revision-3 bytes must not survive canonical regeneration"
+            );
+            assert_eq!(row.semantic_fingerprint(), &current);
+            assert_eq!(row.etag, feed_etag(&current, replacement_time));
+            assert_eq!(row.representation_modified_at, replacement_time);
+            assert_eq!(row.generated_at, generated_at);
+            assert_eq!(
+                env.feed_cache().get(&fp("/feed.json")).await.unwrap(),
+                Some(row)
+            );
+        }
+        assert_ne!(current, old_fingerprint);
+        assert_ne!(
+            feed_etag(&current, old_time),
+            old_etag,
+            "even same-second regeneration cannot falsely validate old JSON bytes"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn normalized_hub_noop_preserves_generation(#[case] backend: Backend) {
         let env = backend.setup().await;
         let hub: HubUrl = parse_url("https://hub.example.test/");
