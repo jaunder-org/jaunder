@@ -242,7 +242,7 @@ pool; uncertain acknowledgment is reconciled from durable
 cells/queue/enforcement. Pending work permits absent or identical complete
 enforcement; partial/different sets fail. Completed work requires the exact full
 set, including on restore
-([Canonical comparable instants](adr/drafts/canonical-comparable-instants.md)).
+([Canonical comparable instants](adr/0245-canonical-comparable-instants.md)).
 The `0047` enqueues `rebuild_rendered_posts` again for the new syntax rules;
 `0048` re-enqueues it for Org footnotes, including databases that already
 drained `0047`; `0049` only enqueues it again for catalog-wide token quality
@@ -483,7 +483,7 @@ or consumes work. Exact-schema compatibility, closed restore-cell roles and
 existing database/media/Theme ownership remain. Both-direction same-schema
 restore retains the existing ns/micros precision limitation, without a
 cross-schema legacy-backup framework
-([Canonical comparable instants](adr/drafts/canonical-comparable-instants.md)).
+([Canonical comparable instants](adr/0245-canonical-comparable-instants.md)).
 
 Restore is authoritative and order-independent: both backends clear every target
 table in a first pass, then load all rows in a second, with FK enforcement
@@ -3945,7 +3945,7 @@ storage-wide `UtcInstant` seam established by
 Storage records and traits, private rows/cursors/inputs/dialects,
 `BackupManifest`, and storage fixtures carry `UtcInstant`; existing
 role-specific wrappers over it remain intact. The approved
-[canonical comparable-instant decision](adr/drafts/canonical-comparable-instants.md)
+[canonical comparable-instant decision](adr/0245-canonical-comparable-instants.md)
 supersedes only ADR-0153/0182's conflicting physical-byte/schema, unchecked
 inbound conversion, native instant range and arithmetic restrictions. The
 explicit comparison/Revision/lifecycle population in that decision uses lossless

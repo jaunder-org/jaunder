@@ -1,6 +1,6 @@
-# ADR-DRAFT: Canonical comparable instants belong to the existing time wrapper
+# ADR-0245: Canonical comparable instants belong to the existing time wrapper
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-11
 - Issue: [#1940](https://github.com/jaunder-org/jaunder/issues/1940)
 
@@ -110,15 +110,15 @@ alias and DST-fold identity; do not create artificial edits/checkpoints.
 
 This supersedes only the physical-byte/schema-preservation, unchecked inbound
 conversion, unrestricted instant range and arithmetic-restriction portions of
-[ADR-0153](../0153-storage-owned-instants.md) and
-[ADR-0182](../0182-jiff-time-model.md) needed for this transition. Their shared
+[ADR-0153](0153-storage-owned-instants.md) and
+[ADR-0182](0182-jiff-time-model.md) needed for this transition. Their shared
 domain type, Jiff ownership, precision and timezone contracts remain. Extend
-[ADR-0226](../0226-offline-code-migration-queue.md)'s narrow offline exception
-to the selected population and handler-owned enforcement DDL, atomic with queue
+[ADR-0226](0226-offline-code-migration-queue.md)'s narrow offline exception to
+the selected population and handler-owned enforcement DDL, atomic with queue
 completion. Preserve its locking, order and fail-closed startup semantics.
-[ADR-0169](../0169-typed-storage-bind-admission.md)'s typed binds and closed
+[ADR-0169](0169-typed-storage-bind-admission.md)'s typed binds and closed
 restore roles remain;
-[ADR-0174](../0174-backup-format-and-schema-compatibility.md)'s exact-schema
+[ADR-0174](0174-backup-format-and-schema-compatibility.md)'s exact-schema
 compatibility remains. Strict timestamp admission is a precommit DB invariant,
 not a replacement for other post-restore domain diagnostics.
 
