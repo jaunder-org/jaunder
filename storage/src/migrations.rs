@@ -1412,6 +1412,330 @@ mod tests {
         }
     }
 
+    // Ordered independently of SQL, with three genuinely equal instants at
+    // both ends in different legacy spellings. Ties cross pages 1/2 in either
+    // direction, alongside the interior zero/1/999ns and year/day boundaries.
+    const CURSOR_LEGACY_TIMES: [&str; 13] = [
+        "2019-12-31T23:59:59.999999Z",
+        "2019-12-31T23:59:59.999999000+00:00",
+        "2020-01-01T00:59:59.999999+01:00",
+        "2020-01-01T00:00:00Z",
+        "2020-01-01T01:00:00+01:00",
+        "2020-01-01T00:00:00.000000000Z",
+        "2020-01-01T00:00:00.000000001Z",
+        "2020-01-01T00:00:00.000000999Z",
+        "2020-01-01T00:00:00.000001Z",
+        "2020-01-01T00:00:01Z",
+        "2020-01-02T00:00:00Z",
+        "2020-01-02T00:00:00.0+00:00",
+        "2020-01-02T01:00:00+01:00",
+    ];
+
+    #[apply(backends_matrix)]
+    #[case::site("site")]
+    #[case::user("user")]
+    #[case::tag("tag")]
+    #[case::user_tag("user-tag")]
+    #[tokio::test]
+    async fn canonical_instants_upgraded_published_cursors_are_complete(
+        backend: Backend,
+        #[case] consumer: &str,
+    ) {
+        use crate::posts::{PostCursor, PublishedPageRequest};
+        use common::{pagination::RowLimit, seed::TimelineOrder, visibility::ViewerIdentity};
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(db.latest_migration_version() - 1)
+            .await
+            .unwrap();
+        let (published, _) = db.seed_legacy_cursor_posts().await;
+        db.migrate_current().await.unwrap();
+        db.drain_pending_code_migrations().await;
+        let factory = match &db.pool {
+            CloseablePool::Sqlite(pool) => crate::StorageFactory::sqlite(pool.clone()),
+            CloseablePool::Postgres(pool) => crate::StorageFactory::postgres(pool.clone()),
+        };
+        let posts = factory.posts();
+        let username = "cursor-owner".parse().unwrap();
+        let tag = "cursor".parse().unwrap();
+        let now = "2021-01-01T00:00:00Z".parse().unwrap();
+        for order in [TimelineOrder::Oldest, TimelineOrder::Newest] {
+            for size in [1, 2] {
+                let mut expected = published.clone();
+                if order == TimelineOrder::Newest {
+                    expected.reverse();
+                }
+                let mut cursor = None;
+                let mut actual = Vec::new();
+                loop {
+                    let request = cursor.as_ref().map_or_else(
+                        || PublishedPageRequest::first(order, RowLimit::at_most(size)),
+                        |cursor| PublishedPageRequest::after(cursor, RowLimit::at_most(size)),
+                    );
+                    let page = match consumer {
+                        "site" => posts
+                            .list_published(request, &ViewerIdentity::Anonymous, now)
+                            .await
+                            .unwrap(),
+                        "user" => posts
+                            .list_published_by_user(
+                                &username,
+                                request,
+                                &ViewerIdentity::Anonymous,
+                                now,
+                            )
+                            .await
+                            .unwrap(),
+                        "tag" => posts
+                            .list_posts_by_tag(&tag, request, &ViewerIdentity::Anonymous, now)
+                            .await
+                            .unwrap(),
+                        "user-tag" => posts
+                            .list_user_posts_by_tag(
+                                1.into(),
+                                &tag,
+                                request,
+                                &ViewerIdentity::Anonymous,
+                                now,
+                            )
+                            .await
+                            .unwrap(),
+                        _ => unreachable!("bounded consumer cases"),
+                    };
+                    if page.is_empty() {
+                        break;
+                    }
+                    assert!(
+                        actual.len() < expected.len(),
+                        "cursor must reach an empty page"
+                    );
+                    let last = page.last().unwrap();
+                    cursor = Some(PostCursor {
+                        published_at: last.published_at.unwrap(),
+                        post_id: last.post_id,
+                        order,
+                    });
+                    actual.extend(page.iter().map(|post| post.post_id));
+                }
+                assert_eq!(actual, expected, "{consumer}, {order:?}, size {size}");
+            }
+        }
+    }
+
+    #[apply(backends_matrix)]
+    #[case::drafts("drafts")]
+    #[case::scheduled("scheduled")]
+    #[case::collection("collection")]
+    #[case::management("management")]
+    #[tokio::test]
+    async fn canonical_instants_upgraded_owner_cursors_are_complete(
+        backend: Backend,
+        #[case] consumer: &str,
+    ) {
+        use crate::posts::{
+            CollectionCursor, DraftPostCursor, PostManagementAudienceFilter, PostManagementRequest,
+            PostManagementStateFilter, ScheduledPostCursor,
+        };
+        use common::pagination::{PageSize, RowLimit};
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(db.latest_migration_version() - 1)
+            .await
+            .unwrap();
+        let (published, drafts) = db.seed_legacy_cursor_posts().await;
+        db.migrate_current().await.unwrap();
+        db.drain_pending_code_migrations().await;
+        let submicros = crate::with_closeable_pool!(&db.pool, pool, {
+            sqlx::query_scalar::<_, common::time::UtcInstant>("SELECT updated_at FROM posts WHERE slug IN ('cursor-published-6', 'cursor-published-7') ORDER BY post_id").fetch_all(pool).await.unwrap()
+        });
+        let expected_submicros = match backend {
+            Backend::Sqlite => [
+                "2020-01-01T00:00:00.000000001Z",
+                "2020-01-01T00:00:00.000000999Z",
+            ],
+            // Native PG literal admission rounds to micros, unlike the typed
+            // encoder's post-2000 truncation covered by Deliverable A.
+            Backend::Postgres => [
+                "2020-01-01T00:00:00.000000000Z",
+                "2020-01-01T00:00:00.000001000Z",
+            ],
+        }
+        .map(|text| text.parse().unwrap());
+        assert_eq!(submicros, expected_submicros);
+        let factory = match &db.pool {
+            CloseablePool::Sqlite(pool) => crate::StorageFactory::sqlite(pool.clone()),
+            CloseablePool::Postgres(pool) => crate::StorageFactory::postgres(pool.clone()),
+        };
+        let posts = factory.posts();
+        let mut expected = match consumer {
+            "drafts" => drafts.clone(),
+            "scheduled" => published.clone(),
+            _ => published
+                .iter()
+                .zip(&drafts)
+                .flat_map(|(a, b)| [*a, *b])
+                .collect(),
+        };
+        if consumer != "scheduled" {
+            expected.reverse();
+        }
+        for size in [1, 2] {
+            let mut cursor: Option<CollectionCursor> = None;
+            let mut actual = Vec::new();
+            loop {
+                let draft = cursor.map(|c| DraftPostCursor {
+                    created_at: c.updated_at,
+                    post_id: c.post_id,
+                });
+                let scheduled = cursor.map(|c| ScheduledPostCursor {
+                    published_at: c.updated_at,
+                    post_id: c.post_id,
+                });
+                let rows = match consumer {
+                    "drafts" => posts
+                        .list_drafts_by_user(
+                            1.into(),
+                            draft.as_ref(),
+                            RowLimit::at_most(size),
+                            "2021-01-01T00:00:00Z".parse().unwrap(),
+                        )
+                        .await
+                        .unwrap(),
+                    "scheduled" => posts
+                        .list_scheduled_by_user(
+                            1.into(),
+                            scheduled.as_ref(),
+                            RowLimit::at_most(size),
+                            "2019-01-01T00:00:00Z".parse().unwrap(),
+                        )
+                        .await
+                        .unwrap(),
+                    "collection" => posts
+                        .list_collection_by_user(1.into(), cursor.as_ref(), RowLimit::at_most(size))
+                        .await
+                        .unwrap(),
+                    "management" => {
+                        let request = PostManagementRequest::new(
+                            PostManagementStateFilter::All,
+                            PostManagementAudienceFilter::All,
+                            "",
+                            cursor,
+                            PageSize::try_from(u32::try_from(size).unwrap()).unwrap(),
+                            "2021-01-01T00:00:00Z".parse().unwrap(),
+                        );
+                        let page = posts.list_managed_posts(1.into(), &request).await.unwrap();
+                        if page.posts.is_empty() {
+                            break;
+                        }
+                        assert!(
+                            actual.len() < expected.len(),
+                            "management cursor must terminate"
+                        );
+                        let last = page.posts.last().unwrap();
+                        cursor = Some(CollectionCursor {
+                            updated_at: last.updated_at,
+                            post_id: last.post_id,
+                        });
+                        if let Some(next) = page.next_cursor {
+                            assert_eq!(
+                                (next.updated_at, next.post_id),
+                                (last.updated_at, last.post_id)
+                            );
+                        }
+                        actual.extend(page.posts.iter().map(|post| post.post_id));
+                        continue;
+                    }
+                    _ => unreachable!("bounded consumer cases"),
+                };
+                if rows.is_empty() {
+                    break;
+                }
+                assert!(
+                    actual.len() < expected.len(),
+                    "cursor must reach an empty page"
+                );
+                let last = rows.last().unwrap();
+                let at = match consumer {
+                    "drafts" => last.created_at,
+                    "scheduled" => last.published_at.unwrap(),
+                    _ => last.updated_at,
+                };
+                cursor = Some(CollectionCursor {
+                    updated_at: at,
+                    post_id: last.post_id,
+                });
+                actual.extend(rows.iter().map(|post| post.post_id));
+            }
+            assert_eq!(actual, expected, "{consumer}, size {size}");
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn canonical_instants_upgraded_dead_letter_cursors_are_complete(
+        #[case] backend: Backend,
+    ) {
+        use crate::feed_events::FeedEventDeadLetterCursor;
+        use common::{ids::FeedEventId, pagination::PageSize};
+        use host::feed::FeedEventPhase;
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(db.latest_migration_version() - 1)
+            .await
+            .unwrap();
+        let mut expected = Vec::new();
+        for phase in ["regeneration", "publication"] {
+            let mut ids = Vec::new();
+            for (index, time) in CURSOR_LEGACY_TIMES.iter().enumerate() {
+                let sql = format!(
+                    "INSERT INTO feed_events (feed_url, status, phase, terminal_at, next_attempt_at, created_at) VALUES ('/~cursor-{phase}-{index}/feed.atom', 'failed', '{phase}', '{time}', '{time}', '{time}') RETURNING id"
+                );
+                let id: FeedEventId = crate::with_closeable_pool!(&db.pool, pool, {
+                    sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+                        .fetch_one(pool)
+                        .await
+                        .unwrap()
+                });
+                ids.push(id);
+            }
+            ids.reverse();
+            expected.push(ids);
+        }
+        db.migrate_current().await.unwrap();
+        db.drain_pending_code_migrations().await;
+        let factory = match &db.pool {
+            CloseablePool::Sqlite(pool) => crate::StorageFactory::sqlite(pool.clone()),
+            CloseablePool::Postgres(pool) => crate::StorageFactory::postgres(pool.clone()),
+        };
+        for (phase, expected) in [FeedEventPhase::Regeneration, FeedEventPhase::Publication]
+            .into_iter()
+            .zip(expected)
+        {
+            for size in [1, 2] {
+                let mut cursor = None;
+                let mut actual = Vec::new();
+                loop {
+                    let page = factory
+                        .feed_events()
+                        .dead_letters(phase, cursor, PageSize::try_from(size).unwrap())
+                        .await
+                        .unwrap();
+                    if page.events.is_empty() {
+                        break;
+                    }
+                    assert!(
+                        actual.len() < expected.len(),
+                        "dead-letter cursor must terminate"
+                    );
+                    let last = page.events.last().unwrap();
+                    cursor = Some(FeedEventDeadLetterCursor {
+                        terminal_at: last.terminal_at,
+                        id: last.id,
+                    });
+                    actual.extend(page.events.iter().map(|event| event.id));
+                }
+                assert_eq!(actual, expected, "{phase:?}, size {size}");
+            }
+        }
+    }
+
     fn migrator_through(source: &Migrator, version: i64) -> Migrator {
         Migrator {
             migrations: Cow::Owned(
@@ -1479,6 +1803,42 @@ mod tests {
                     }
                 }
             }
+        }
+
+        async fn seed_legacy_cursor_posts(&self) -> (Vec<PostId>, Vec<PostId>) {
+            self.pool.execute("INSERT INTO users (username, password_hash, created_at) VALUES ('cursor-owner', 'hash', CURRENT_TIMESTAMP)").await.unwrap();
+            self.pool
+                .execute("INSERT INTO tags (tag_slug) VALUES ('cursor')")
+                .await
+                .unwrap();
+            let mut published = Vec::new();
+            let mut drafts = Vec::new();
+            for (index, time) in CURSOR_LEGACY_TIMES.iter().enumerate() {
+                for (state, ids) in [("published", &mut published), ("draft", &mut drafts)] {
+                    let publication = if state == "published" {
+                        format!("'{time}'")
+                    } else {
+                        "NULL".to_owned()
+                    };
+                    let sql = format!(
+                        "INSERT INTO posts (user_id, slug, body, format, rendered_html, created_at, updated_at, published_at) VALUES (1, 'cursor-{state}-{index}', 'body', 'markdown', '<p>body</p>', '{time}', '{time}', {publication}) RETURNING post_id"
+                    );
+                    let id: PostId = crate::with_closeable_pool!(&self.pool, pool, {
+                        sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+                            .fetch_one(pool)
+                            .await
+                            .unwrap()
+                    });
+                    ids.push(id);
+                    crate::with_closeable_pool!(&self.pool, pool, {
+                        sqlx::query("INSERT INTO post_audiences (post_id, target_kind_id, audience_id) SELECT $1, kind_id, NULL FROM target_kinds WHERE name = 'public'").bind_storage(id).execute(pool).await.unwrap();
+                        sqlx::query("INSERT INTO post_tags (post_id, tag_id, tag_display) SELECT $1, tag_id, 'Cursor' FROM tags WHERE tag_slug = 'cursor'").bind_storage(id).execute(pool).await.unwrap();
+                    });
+                }
+            }
+            // Native PG literal admission quantizes to micros. The adjacent
+            // values remain ordered, including the larger native tie groups.
+            (published, drafts)
         }
 
         async fn migrate_to(&self, version: i64) -> Result<(), MigrateError> {

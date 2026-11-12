@@ -40,6 +40,15 @@ async fn create_draft(app: Router, cookie: &str, title: &str) -> PostId {
 }
 
 async fn list_managed(app: Router, cookie: Option<&str>, limit: u32) -> (StatusCode, String) {
+    list_managed_after(app, cookie, limit, None).await
+}
+
+async fn list_managed_after(
+    app: Router,
+    cookie: Option<&str>,
+    limit: u32,
+    cursor: Option<web::posts::ManagePostsCursor>,
+) -> (StatusCode, String) {
     post_json(
         app,
         <web::posts::ListManagedPosts as ServerFn>::PATH,
@@ -47,7 +56,7 @@ async fn list_managed(app: Router, cookie: Option<&str>, limit: u32) -> (StatusC
             state: ManagePublicationState::All,
             audience: ManageAudienceFilter::All,
             search: String::new(),
-            cursor: None,
+            cursor,
             limit: Some(limit.to_string().parse().expect("valid page size")),
         })
         .unwrap(),
@@ -100,6 +109,20 @@ async fn manage_posts_http_is_owner_scoped_bounded_and_snapshots_all_matches(
     let foreign_cookie = foreign.cookie();
     let first = create_draft(app.clone(), &owner_cookie, "First").await;
     let second = create_draft(app.clone(), &owner_cookie, "Second").await;
+    let third = create_draft(app.clone(), &owner_cookie, "Third").await;
+    // Three equal update keys force the returned HTTP cursor to carry the ID
+    // tiebreaker. This does not rely on the creation clock being coarse.
+    let tied: common::time::UtcInstant = "2020-01-01T00:00:00.000000000Z".parse().unwrap();
+    storage::with_closeable_pool!(env.base.pool(), pool, {
+        sqlx::query("UPDATE posts SET updated_at = $1 WHERE post_id IN ($2, $3, $4)")
+            .bind(tied)
+            .bind(first)
+            .bind(second)
+            .bind(third)
+            .execute(pool)
+            .await
+            .unwrap();
+    });
     let deleted = create_draft(app.clone(), &owner_cookie, "Deleted").await;
     let foreign_post = create_draft(app.clone(), &foreign_cookie, "Foreign").await;
     let (status, body) = post_form(
@@ -111,24 +134,47 @@ async fn manage_posts_http_is_owner_scoped_bounded_and_snapshots_all_matches(
     .await;
     assert_eq!(status, StatusCode::OK, "delete body: {body}");
 
-    let (status, body) = list_managed(app.clone(), Some(&owner_cookie), 1).await;
+    let mut cursor = None;
+    let mut actual = Vec::new();
+    let mut terminal = None;
+    loop {
+        let (status, body) = list_managed_after(app.clone(), Some(&owner_cookie), 2, cursor).await;
+        assert_eq!(status, StatusCode::OK, "body: {body}");
+        let page: ManagePostsPage = serde_json::from_str(&body).unwrap();
+        assert_eq!(page.has_more, page.next_cursor.is_some());
+        assert!(page.posts.len() <= 2);
+        actual.extend(page.posts.iter().map(|post| post.post_id));
+        assert!(actual.len() <= 3, "returned cursor must not repeat IDs");
+        if let Some(last) = page.posts.last() {
+            terminal = Some(web::posts::ManagePostsCursor {
+                updated_at: last.updated_at,
+                post_id: last.post_id,
+            });
+        }
+        let Some(next) = page.next_cursor else {
+            break;
+        };
+        cursor = Some(next);
+    }
+    assert_eq!(actual, [third, second, first]);
+    let (status, body) = list_managed_after(app.clone(), Some(&owner_cookie), 2, terminal).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let page: ManagePostsPage = serde_json::from_str(&body).unwrap();
-    assert_eq!(page.posts.len(), 1);
-    assert!(page.has_more);
-    assert!(page.posts[0].post_id == first || page.posts[0].post_id == second);
+    let empty: ManagePostsPage = serde_json::from_str(&body).unwrap();
+    assert!(empty.posts.is_empty());
+    assert!(!empty.has_more);
+    assert!(empty.next_cursor.is_none());
 
     let (status, body) = resolve(
         app.clone(),
         &owner_cookie,
         ManageSelectionIntent::Explicit {
-            post_ids: vec![first, second],
+            post_ids: vec![first, second, third],
         },
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let explicit: ManagementSelectionSnapshot = serde_json::from_str(&body).unwrap();
-    assert_eq!(explicit.selected_count, 2, "explicit IDs span list pages");
+    assert_eq!(explicit.selected_count, 3, "explicit IDs span list pages");
 
     let (status, body) = resolve(
         app.clone(),
@@ -142,14 +188,14 @@ async fn manage_posts_http_is_owner_scoped_bounded_and_snapshots_all_matches(
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let snapshot: ManagementSelectionSnapshot = serde_json::from_str(&body).unwrap();
-    assert_eq!(snapshot.selected_count, 2);
+    assert_eq!(snapshot.selected_count, 3);
     assert_eq!(
         snapshot
             .targets
             .iter()
             .map(|target| target.post_id)
             .collect::<Vec<_>>(),
-        vec![first, second]
+        vec![first, second, third]
     );
     assert!(
         !snapshot

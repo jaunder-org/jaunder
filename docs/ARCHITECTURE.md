@@ -230,15 +230,15 @@ pending work remains allowed. Offline queue transactions alone may perform
 unbounded rendering inside SQLite's write lock; request-time work still follows
 ADR-0092's bounded occupancy rule
 ([Offline code migrations](adr/0226-offline-code-migration-queue.md)). The
-approved #1940 transition, recorded before implementation, extends this
-exception to explicit comparable-instant normalization and handler-owned
-enforcement DDL. Its SQL migrations only enqueue work; existing ascending queue
-order lets earlier rendering/outbox work complete before enforcement. One queue
-transaction reads identities/raw cells, normalizes the entire selected
-population, verifies, creates SQLite rejection triggers (PG finite-bound
-constraints), deletes the row and commits. Failures block open; earlier
-SQL/queue commits remain. Rejected COMMIT must not return a still-transactional
-connection to the pool; uncertain acknowledgment is reconciled from durable
+implemented #1940 transition extends this exception to explicit
+comparable-instant normalization and handler-owned enforcement DDL. Its SQL
+migrations only enqueue work; existing ascending queue order lets earlier
+rendering/outbox work complete before enforcement. One queue transaction reads
+identities/raw cells, normalizes the entire selected population, verifies,
+creates SQLite rejection triggers (PG finite-bound constraints), deletes the row
+and commits. Failures block open; earlier SQL/queue commits remain. Rejected
+COMMIT discards a still-transactional connection rather than returning it to the
+pool; uncertain acknowledgment is reconciled from durable
 cells/queue/enforcement. Pending work permits absent or identical complete
 enforcement; partial/different sets fail. Completed work requires the exact full
 set, including on restore
@@ -473,16 +473,16 @@ and exact-schema authorities match. An unsupported format or schema mismatch is
 a typed incompatibility that fails before database or media mutation, distinct
 from malformed backup content and relational constraint failure. Typed-domain
 invariant violations instead retain #725's restore-and-report behavior: data and
-media restore, then the command reports current-domain violations. The approved
-#1940 timestamp transition is a stricter database-admission rule, recorded
-before implementation: selected PG export timestamps use UtcInstant's canonical
-fixed-nine UTC output, preserving stored micros and NULLs. Restore validates
-canonical selected cells before native PG binding and validates the entire
-selected population before commit even with pending work and no triggers; queue
-import never bypasses validation or consumes work. Exact-schema compatibility,
-closed restore-cell roles and existing database/media/Theme ownership remain.
-Both-direction same-schema restore retains the existing ns/micros precision
-limitation, without a cross-schema legacy-backup framework
+media restore, then the command reports current-domain violations. The #1940
+timestamp transition enforces a stricter database-admission rule: selected PG
+export timestamps use UtcInstant's canonical fixed-nine UTC output, preserving
+stored micros and NULLs. Restore validates canonical selected cells before
+native PG binding and validates the entire selected population before commit
+even with pending work and no triggers; queue import never bypasses validation
+or consumes work. Exact-schema compatibility, closed restore-cell roles and
+existing database/media/Theme ownership remain. Both-direction same-schema
+restore retains the existing ns/micros precision limitation, without a
+cross-schema legacy-backup framework
 ([Canonical comparable instants](adr/drafts/canonical-comparable-instants.md)).
 
 Restore is authoritative and order-independent: both backends clear every target
@@ -3948,22 +3948,22 @@ role-specific wrappers over it remain intact. The approved
 [canonical comparable-instant decision](adr/drafts/canonical-comparable-instants.md)
 supersedes only ADR-0153/0182's conflicting physical-byte/schema, unchecked
 inbound conversion, native instant range and arithmetic restrictions. The
-explicit comparison/Revision/lifecycle population in that decision gains
-lossless fixed-nine SQLite text and calendar/type/NULL/range rejection;
-descriptive timestamps, queue metadata, private SQLx history and numeric theme
-retention are excluded. Typed writers replace selected incompatible default
-omissions; raw required omissions reject. Encoding, writers, normalization,
-enforcement and portable restore/export ship as one coherent production commit.
-PostgreSQL remains native microseconds with finite application bounds and
-infinity rejection, not nanosecond parity. Exact instants, IDs, semantic edit
-times, mutation versions, nulls and publication timezone/fold remain unchanged.
-Org owned-UTC emission stays in jaunder-datetime, with historical valid sync
-markers readable and local DATE/zone semantics intact. Public-read APIs likewise
-take an explicit `UtcInstant` `now`, preserving ADR-0027's visibility behavior.
-Direct first-party Chrono and chrono-tz dependencies and uses are removed.
-Chrono may remain transitively through unavoidable third-party implementation
-dependencies, including the current non-protocol roots `axum-embed`, `croner`,
-and `tokio-cron-scheduler` ([Jiff time model](adr/0182-jiff-time-model.md)).
+explicit comparison/Revision/lifecycle population in that decision uses lossless
+fixed-nine SQLite text and calendar/type/NULL/range rejection; descriptive
+timestamps, queue metadata, private SQLx history and numeric theme retention are
+excluded. Typed writers replace selected incompatible default omissions; raw
+required omissions reject. Encoding, writers, normalization, enforcement and
+portable restore/export form one coherent release. PostgreSQL remains native
+microseconds with finite application bounds and infinity rejection, not
+nanosecond parity. Exact instants, IDs, semantic edit times, mutation versions,
+nulls and publication timezone/fold remain unchanged. Org owned-UTC emission
+stays in jaunder-datetime, with historical valid sync markers readable and local
+DATE/zone semantics intact. Public-read APIs likewise take an explicit
+`UtcInstant` `now`, preserving ADR-0027's visibility behavior. Direct
+first-party Chrono and chrono-tz dependencies and uses are removed. Chrono may
+remain transitively through unavoidable third-party implementation dependencies,
+including the current non-protocol roots `axum-embed`, `croner`, and
+`tokio-cron-scheduler` ([Jiff time model](adr/0182-jiff-time-model.md)).
 
 **URLs.** The `url` crate is the sanctioned absolute-URL parser and normalizer,
 and it is a direct dependency of `common` (`common/Cargo.toml:24`) — which means

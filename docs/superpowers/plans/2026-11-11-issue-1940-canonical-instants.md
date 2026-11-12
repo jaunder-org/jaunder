@@ -25,7 +25,7 @@ spec-before-active-outline.
 
 ## Task outline
 
-- [ ] Prerequisite: approved contracts and architectural decisions precede
+- [x] Prerequisite: approved contracts and architectural decisions precede
       source work.
   - Contract: obtain spec approval, then reconcile/review and separately approve
     the outline. Commit approved contracts plus numberless ADR draft and its
@@ -37,7 +37,7 @@ spec-before-active-outline.
   - Verification: Lead accepts exact documentary tree and approval provenance;
     intended-tree hook checks follow existing commit policy, not this prep task.
 
-- [ ] Deliverable A feasibility proof: earlier legacy work reaches
+- [x] Deliverable A feasibility proof: earlier legacy work reaches
       normalization.
   - Contract: use existing MigrationDatabase in storage/src/migrations.rs and
     Member/Collection/storage seams with human Post 5/266 values. SQL migrations
@@ -52,7 +52,7 @@ spec-before-active-outline.
     includes Post 5. This tests the highest-risk sequence; do not ship it as
     partial enforcement.
 
-- [ ] Deliverable A coherent release: closed wrapper, writers and atomic
+- [x] Deliverable A coherent release: closed wrapper, writers and atomic
       transition.
   - Contract: checked constructor/TryFrom, parsing, serde, both SQLx decoders,
     civil conversion/clock and checked arithmetic use existing UtcInstant; one
@@ -81,7 +81,7 @@ spec-before-active-outline.
     nulls, exact SQLite ns and Revision/timezone state. Test all selected
     normal/raw/default/batch writers and trigger states.
 
-- [ ] Deliverable A portable backup/restore: strict admission without backend
+- [x] Deliverable A portable backup/restore: strict admission without backend
       breakage.
   - Contract: at the existing PG export seam, selected native timestamps pass
     through UtcInstant canonical output rather than raw to_jsonb timestamp text;
@@ -99,7 +99,7 @@ spec-before-active-outline.
     explicitly. Retain database rollback, FK checks and existing media/Theme
     failure ownership.
 
-- [ ] Deliverable A durability proof: failure, cancellation and uncertain
+- [x] Deliverable A durability proof: failure, cancellation and uncertain
       acknowledgment.
   - Contract: extend only the bounded MigrationDatabase fixture and a test-only
     pause immediately before/after the existing COMMIT in
@@ -118,7 +118,7 @@ spec-before-active-outline.
     pending state; account separately for earlier committed SQL migrations/queue
     operations.
 
-- [ ] Deliverable B: Org owned-UTC emission and historical sync reads agree.
+- [x] Deliverable B: Org owned-UTC emission and historical sync reads agree.
   - Contract: datetime module owns canonical output; publish/pull/reconcile
     reuse it. Accept historical valid sync spellings; preserve exact publication
     ns, local DATE, zone/alias and fold. Failed/uncertain writes do not
@@ -127,7 +127,7 @@ spec-before-active-outline.
     markers; publication precision/fold round trips through existing
     entrypoints.
 
-- [ ] Deliverable C: integrated acceptance, conformance and enduring
+- [x] Deliverable C: integrated acceptance, conformance and enduring
       documentation.
   - Contract: every timestamp cursor named in the spec walks ties/small pages
     without missing/duplicate IDs; PostgreSQL micros remain an explicit

@@ -13,9 +13,10 @@ repair SQL ordering. Existing SQL defaults, Revision copies and raw restore can
 retain mixed spellings; changing only the encoder is insufficient.
 
 The human approved the spec and separate storage outline through Manager. This
-draft records that decision before source/test implementation; its `proposed`
-status follows the numberless-draft promotion lifecycle, not an outstanding
-human design gate. It does not claim implementation or production migration.
+draft records the delivered Rust/storage and Emacs implementation; its
+`proposed` status follows the numberless-draft promotion lifecycle, not an
+outstanding human design gate. Implementation does not establish production
+migration: offline cutover and production validation remain operator-owned.
 
 ## Decision
 
@@ -139,15 +140,15 @@ after which the operator may retire old backups. Agents receive no
 production/database/server/ credential access or backup-deletion authority from
 this decision.
 
-Acceptance requires the production cursor reproducer, every timestamp cursor's
-ties/small pages, all ingress/range/arithmetic cases, genuine earlier changed
-rendering/outbox upgrade, malformed/failure/cancellation/reopen proof,
-raw/default writes, strict absent-trigger restore, actual same-schema restores
-both directions, PG infinity/endpoints/precision and historical Org
+Regression coverage includes the synthetic human-cursor reproducer and every
+timestamp cursor's ties/small pages, all ingress/range/arithmetic cases, genuine
+earlier changed rendering/outbox upgrade, malformed/failure/cancellation/reopen
+proof, raw/default writes, strict absent-trigger restore, actual same-schema
+restores both directions, PG infinity/endpoints/precision and historical Org
 marker/publication round trips.
 
 <!--
 Shipping an ADR includes updating docs/ARCHITECTURE.md (and CONTEXT.md when
-the ubiquitous language changes) in the same change. This draft records an
-approved transition before implementation; reconcile its projection at conformance.
+the ubiquitous language changes) in the same change. The architecture projection
+records the delivered system; final conformance and operator cutover are separate.
 -->
