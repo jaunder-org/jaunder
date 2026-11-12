@@ -8,7 +8,6 @@ use std::path::PathBuf;
 
 use ::coverage::workers::{ExperimentStrategy, WorkerConcurrencyPolicy};
 use anyhow::Result;
-use check::CheckGroup;
 use clap::{Parser, Subcommand};
 
 mod check;
@@ -49,7 +48,7 @@ enum Command {
     /// Ephemeral PostgreSQL subcommands.
     #[command(subcommand)]
     Pg(PgCmd),
-    /// Run the migrated static checks (#188/#276): one by name, or `--all`.
+    /// Observe the retained fixed ERT request.
     Check(CheckArgs),
     /// Compile and stage the closed system-theme inventory independently of CSR output.
     #[cfg(feature = "system-artifacts")]
@@ -66,20 +65,11 @@ enum Command {
 
 #[derive(clap::Args)]
 struct CheckArgs {
-    /// Which check to run (omit and pass `--group` or `--all` to select a set).
-    name: Option<String>,
-    /// Run one stable static check group.
-    #[arg(long, conflicts_with_all = ["name", "all"])]
-    group: Option<CheckGroup>,
-    /// Run all migrated static checks.
-    #[arg(long, conflicts_with = "name")]
-    all: bool,
+    /// Retained timing consumer: `ert`.
+    name: String,
     /// Auto-fix (the formatters) instead of verifying.
     #[arg(long)]
     fix: bool,
-    /// Run Cargo-backed checks with workspace-specific offline Cargo config.
-    #[arg(long)]
-    sandbox_cargo: bool,
 }
 
 #[cfg(feature = "system-artifacts")]
@@ -383,13 +373,7 @@ fn main() -> Result<()> {
         }
         Command::Doctests(DoctestsCmd::Emit { out }) => doctests::emit::run(&out),
         Command::Pg(PgCmd::Run { cmd }) => pg::run_command(&cmd),
-        Command::Check(args) => check::run(
-            args.name.as_deref(),
-            args.group,
-            args.all,
-            args.fix,
-            args.sandbox_cargo,
-        ),
+        Command::Check(args) => check::run(&args.name, args.fix),
         #[cfg(feature = "system-artifacts")]
         Command::SystemArtifacts(args) => {
             #[cfg(feature = "qualification")]
@@ -455,23 +439,6 @@ mod tests {
             ])
             .is_ok()
         );
-    }
-
-    #[test]
-    fn check_groups_are_closed_and_mutually_exclusive_selectors() {
-        assert!(Cli::try_parse_from(["devtool", "check", "--group", "docs"]).is_err());
-        let code = Cli::try_parse_from(["devtool", "check", "--group", "code"])
-            .expect("code group parses");
-        assert!(matches!(
-            code.command,
-            Command::Check(CheckArgs {
-                group: Some(CheckGroup::Code),
-                ..
-            })
-        ));
-        assert!(Cli::try_parse_from(["devtool", "check", "fmt", "--group", "code"]).is_err());
-        assert!(Cli::try_parse_from(["devtool", "check", "--group", "code", "--all"]).is_err());
-        assert!(Cli::try_parse_from(["devtool", "check", "--group", "unknown"]).is_err());
     }
 
     #[test]

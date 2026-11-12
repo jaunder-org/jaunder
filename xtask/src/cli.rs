@@ -81,27 +81,12 @@ impl E2eLocalBrowser {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Read explicit local Org originals into a timezone evidence manifest (JSON).
-    OrgTimezoneManifest {
-        /// Explicit UTF-8 Org files; no recursive discovery or server access.
-        #[arg(required = true, num_args = 1..)]
-        files: Vec<PathBuf>,
-    },
     /// Invoke one existing check/safety adapter from Just; hidden from the workflow list.
     #[command(hide = true)]
     CheckLeaf {
         #[arg(value_parser = nonempty)]
         name: String,
     },
-    /// Run Just's selected precommit host recipe inside the Git/index safety boundary.
-    #[command(hide = true)]
-    PrecommitSafety,
-    /// Produce a host-side repository census for manual maintenance audits. The
-    /// report is informational: candidates are neither findings nor gate failures.
-    #[command(after_help = "EXAMPLES:\n  \
-        cargo xtask census\n  \
-        cargo xtask census --json")]
-    Census,
     /// Measure the frontend WASM/JS bundle size — raw, gzip, and brotli.
     ///
     /// Reports the manifest-selected identity assets from deterministic
@@ -412,9 +397,6 @@ impl Cli {
     pub fn command_name(&self) -> &'static str {
         match self.command {
             Command::CheckLeaf { .. } => "check-leaf",
-            Command::PrecommitSafety => "precommit-safety",
-            Command::OrgTimezoneManifest { .. } => "org-timezone-manifest",
-            Command::Census => "census",
             Command::AuditWasm { .. } => "audit-wasm",
             Command::E2eVerify { .. } => "e2e-verify",
             Command::E2eReconcile { .. } => "e2e-reconcile",
@@ -453,7 +435,6 @@ impl Command {
             self,
             Command::QualificationLeaf { .. }
                 | Command::CheckLeaf { .. }
-                | Command::PrecommitSafety
                 | Command::Traces(
                     TracesCommand::Analyze { .. }
                         | TracesCommand::Run { .. }
@@ -566,7 +547,7 @@ mod tests {
     }
 
     #[test]
-    fn just_leaf_and_precommit_safety_commands_are_hidden_process_boundaries() {
+    fn just_leaf_is_hidden_and_precommit_safety_alias_is_retired() {
         let leaf = Cli::try_parse_from(["xtask", "check-leaf", "doc-links"]).unwrap();
         assert_eq!(leaf.command_name(), "check-leaf");
         assert!(!leaf.command.produces_json_payload());
@@ -575,10 +556,7 @@ mod tests {
             Command::CheckLeaf { name } if name == "doc-links"
         ));
 
-        let safety = Cli::try_parse_from(["xtask", "precommit-safety"]).unwrap();
-        assert_eq!(safety.command_name(), "precommit-safety");
-        assert!(!safety.command.produces_json_payload());
-        assert!(matches!(safety.command, Command::PrecommitSafety));
+        assert!(Cli::try_parse_from(["xtask", "precommit-safety"]).is_err());
     }
 
     #[test]
@@ -586,14 +564,6 @@ mod tests {
         assert!(Cli::try_parse_from(["xtask", "qualification-leaf", "--source", "HEAD"]).is_err());
         assert!(Cli::try_parse_from(["xtask", "qualification-leaf", "--target", "HEAD"]).is_err());
         assert!(Cli::try_parse_from(["xtask", "qualification-leaf"]).is_ok());
-    }
-
-    #[test]
-    fn census_parses_with_json_and_has_a_stable_command_name() {
-        let cli = Cli::try_parse_from(["xtask", "census", "--json"]).unwrap();
-        assert!(cli.json);
-        assert_eq!(cli.command_name(), "census");
-        assert!(matches!(cli.command, Command::Census));
     }
 
     #[test]

@@ -26,17 +26,6 @@ fn main() {
     }
     // Artifact verdicts are deliberately plain commands: no build hook, lifecycle
     // sidecar, StepResult, or presentation wrapper can select their evidence.
-    if let Command::OrgTimezoneManifest { files } = &cli.command {
-        let report = xtask::org_timezone_manifest::extract(files);
-        match serde_json::to_string_pretty(&report) {
-            Ok(json) => println!("{json}"),
-            Err(error) => {
-                eprintln!("org-timezone-manifest: {error}");
-                std::process::exit(2);
-            }
-        }
-        std::process::exit(i32::from(!report.diagnostics.is_empty()));
-    }
     let artifact = xtask::artifact_verdict(&cli.command);
     if let Some(verdict) = artifact {
         match verdict {
@@ -81,20 +70,6 @@ fn main() {
                 }
             };
             std::process::exit(exit_code);
-        }
-        Command::PrecommitSafety => {
-            if json {
-                eprintln!("xtask: --json is not supported for `precommit-safety`");
-                std::process::exit(2);
-            }
-            match xtask::run_precommit_safety_process() {
-                Ok(()) => println!("[ ok ] precommit-safety"),
-                Err(error) => {
-                    eprintln!("[FAIL] precommit-safety — {error}");
-                    std::process::exit(1);
-                }
-            }
-            std::process::exit(0);
         }
         command => {
             let cli = Cli { json, command };

@@ -1,10 +1,9 @@
-use std::path::Path;
 use std::time::Instant;
 
 use xshell::Shell;
 
 use crate::{
-    audit_wasm, cache_safety, census,
+    audit_wasm, cache_safety,
     cli::{
         CacheSafetyCommand, Cli, Command, CoverageCommand, MutantsCommand, NixCommand,
         TracesCommand, WasmCoverageCommand,
@@ -69,32 +68,10 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }
-        Command::OrgTimezoneManifest { .. }
-        | Command::QualificationLeaf { .. }
-        | Command::CheckLeaf { .. }
-        | Command::PrecommitSafety => {
+        Command::QualificationLeaf { .. } | Command::CheckLeaf { .. } => {
             anyhow::bail!(
                 "internal leaf and precommit safety commands use the plain process boundary"
             )
-        }
-        Command::Census => {
-            let start = Instant::now();
-            let mut result = CommandResult::new("census");
-            let report = census::collect(Path::new("."), census::catalog())?;
-            let failed = report.has_failed_cells();
-            let cells = report.cell_count();
-            result.census = Some(report);
-            result.push(
-                if failed {
-                    StepResult::fail("census")
-                        .detail(format!("{cells} cell(s); one or more collectors failed"))
-                } else {
-                    StepResult::ok("census").detail(format!("{cells} cell(s)"))
-                }
-                .with_duration(start.elapsed()),
-            );
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
         }
         Command::AuditWasm {
             site_path,

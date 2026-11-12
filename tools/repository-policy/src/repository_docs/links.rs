@@ -1,0 +1,730 @@
+//! Markdown link scanning — the single home of "what is a link, and where does it
+//! point" for repository documentation policies (#682).
+//!
+//! The read-only `doc-links` gate retains its existing scanner. Python promotion
+//! uses Marko source positions, including its approved parser eligibility changes.
+
+use std::collections::BTreeSet;
+use std::path::{Component, Path};
+
+use anyhow::{Context, Result};
+
+/// In-flight specs and plans may link files they only propose to create.
+const EXCLUDED: &[&str] = &["docs/superpowers/"];
+
+/// An inline Markdown link found outside code spans and fenced blocks. Carries a
+/// byte range rather than a line number so the scanner computes only what its
+/// callers read.
+pub struct Link {
+    /// Byte range of the *target* within the source — the text between `](` and the
+    /// closing `)` (or the whitespace that starts a link title).
+    pub span: std::ops::Range<usize>,
+    /// The target text.
+    pub target: String,
+}
+
+/// Blank out fenced blocks and inline code spans, replacing every non-newline byte
+/// with a space. Length- and line-preserving, so byte offsets computed on the mask
+/// are valid in the original.
+///
+/// UTF-8 safety: the only bytes inspected are backtick, `~`, space, tab and `\n`,
+/// none of which can occur inside a multi-byte character (lead and continuation
+/// bytes are all >= 0x80). So byte-wise scanning never lands mid-character, and the
+/// `from_utf8` below cannot fail.
+///
+/// Fences and inline spans are matched by backtick-RUN length, not by a fixed
+/// three-character marker: a closer must use the opener's character and be at least
+/// as long, and an inline run of N pairs with the next run of exactly N. Both rules
+/// exist to keep the block that wraps other fenced blocks (a 4-backtick fence) from
+/// being closed by the 3-backtick fences inside it.
+///
+/// An unclosed fence masks to end of file. That yields false negatives (links after
+/// it go unchecked), never false positives — the safe direction for a gate. Only
+/// inline `](target)` links are scanned at all, so reference-style definitions
+/// (`[x]: ./a.md`) go unchecked for the same benign reason.
+fn mask_code(body: &str) -> String {
+    /// Blank a whole line, keeping its newline.
+    fn blank(out: &mut [u8], at: usize, line: &str) {
+        for (k, b) in line.bytes().enumerate() {
+            if b != b'\n' {
+                out[at + k] = b' ';
+            }
+        }
+    }
+    /// The fence character and run length this line opens or closes with, if any.
+    /// Leading whitespace is trimmed first — a fence may be indented inside a list
+    /// item. CommonMark requires a run of at least three `` ` `` or `~`.
+    fn fence_run(line: &str) -> Option<(u8, usize)> {
+        let bytes = line.trim_start().as_bytes();
+        let ch = *bytes.first()?;
+        if ch != b'`' && ch != b'~' {
+            return None;
+        }
+        let run = bytes.iter().take_while(|&&b| b == ch).count();
+        (run >= 3).then_some((ch, run))
+    }
+
+    /// Blank paired backtick spans within a single line. A run of N backticks pairs
+    /// with the next run of EXACTLY N — which is how a literal backtick is written
+    /// inline (``` ``a ` b`` ```). Matching a run of 1 against any later backtick
+    /// would end that span early and leave its tail live.
+    fn blank_spans(out: &mut [u8], at: usize, line: &str) {
+        let b = line.as_bytes();
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] != b'`' {
+                i += 1;
+                continue;
+            }
+            let open = b[i..].iter().take_while(|&&x| x == b'`').count();
+            let mut j = i + open;
+            let closed = loop {
+                while j < b.len() && b[j] != b'`' {
+                    j += 1;
+                }
+                if j >= b.len() {
+                    break None;
+                }
+                let run = b[j..].iter().take_while(|&&x| x == b'`').count();
+                if run == open {
+                    break Some(j + run);
+                }
+                j += run;
+            };
+            match closed {
+                Some(end) => {
+                    for slot in out.iter_mut().take(at + end).skip(at + i) {
+                        *slot = b' ';
+                    }
+                    i = end;
+                }
+                // Unterminated on this line: leave it live rather than masking the
+                // rest of the line on the strength of one stray backtick.
+                None => i += open,
+            }
+        }
+    }
+
+    let mut out: Vec<u8> = body.bytes().collect();
+    let mut fence: Option<(u8, usize)> = None;
+    let mut at = 0usize;
+    for line in body.split_inclusive('\n') {
+        match (fence, fence_run(line)) {
+            (None, Some(open)) => {
+                fence = Some(open);
+                blank(&mut out, at, line);
+            }
+            // A closer must use the same character and be AT LEAST as long as the
+            // opener. Equality would let the 3-backtick fences inside a 4-backtick
+            // block close it, leaving the block's own prose live.
+            (Some((open_ch, open_run)), Some((ch, run))) if ch == open_ch && run >= open_run => {
+                fence = None;
+                blank(&mut out, at, line);
+            }
+            (Some(_), _) => blank(&mut out, at, line),
+            (None, None) => blank_spans(&mut out, at, line),
+        }
+        at += line.len();
+    }
+    String::from_utf8(out).expect("masking preserves UTF-8 boundaries")
+}
+
+/// Every inline `](target)` link in `body`, skipping fenced code blocks and inline
+/// code spans.
+pub fn links_in(body: &str) -> Vec<Link> {
+    let masked = mask_code(body);
+    let bytes = masked.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b']' && bytes[i + 1] == b'(' {
+            let start = i + 2;
+            // The target ends at the closing paren, or at the whitespace that
+            // introduces an optional link title.
+            let mut end = start;
+            while end < bytes.len() && !matches!(bytes[end], b')' | b'\n' | b' ' | b'\t') {
+                end += 1;
+            }
+            // The link is only well-formed if a closing paren follows on this line.
+            let mut close = end;
+            while close < bytes.len() && bytes[close] != b')' && bytes[close] != b'\n' {
+                close += 1;
+            }
+            if end > start && close < bytes.len() && bytes[close] == b')' {
+                out.push(Link {
+                    span: start..end,
+                    target: body[start..end].to_string(),
+                });
+                i = close + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// True when `target` is a relative path worth resolving — i.e. not a
+/// `http:`/`https:`/`mailto:` URL and not a bare `#anchor`.
+pub fn is_relative_target(target: &str) -> bool {
+    !target.starts_with('#')
+        && !target.starts_with("http://")
+        && !target.starts_with("https://")
+        && !target.starts_with("mailto:")
+}
+
+/// 1-based line containing byte `offset`.
+fn line_at(body: &str, offset: usize) -> usize {
+    body[..offset].matches('\n').count() + 1
+}
+
+/// A dead relative link in one file.
+pub struct DeadLink {
+    pub line: usize,
+    pub target: String,
+}
+
+/// Gate-only resolution against tracked paths, dropping unvalidated fragments.
+/// Directory targets require at least one tracked path below them.
+fn dead_links_in_with_tracked(
+    repo: &Path,
+    rel: &str,
+    tracked: &BTreeSet<String>,
+) -> Result<Vec<DeadLink>> {
+    let path = repo.join(rel);
+    let body = std::fs::read_to_string(&path).with_context(|| format!("reading {rel}"))?;
+    let dir = Path::new(rel).parent().unwrap_or_else(|| Path::new(""));
+    Ok(links_in(&body)
+        .into_iter()
+        .filter(|link| is_relative_target(&link.target))
+        .filter(|link| {
+            let bare = link.target.split('#').next().unwrap_or_default();
+            !bare.is_empty() && !tracked_target_is_live(tracked, dir, bare)
+        })
+        .map(|link| DeadLink {
+            line: line_at(&body, link.span.start),
+            target: link.target,
+        })
+        .collect())
+}
+
+fn tracked_paths(repo: &Path) -> Result<BTreeSet<String>> {
+    Ok(crate::git::lines(repo, &["ls-files"])?
+        .into_iter()
+        .collect())
+}
+
+fn tracked_target_is_live(tracked: &BTreeSet<String>, dir: &Path, bare: &str) -> bool {
+    let Some(target) = normalize_repo_rel(&dir.join(bare)) else {
+        return false;
+    };
+    if !bare.ends_with('/') && tracked.contains(&target) {
+        return true;
+    }
+
+    let prefix = format!("{target}/");
+    tracked
+        .range(prefix.clone()..)
+        .next()
+        .is_some_and(|path| path.starts_with(&prefix))
+}
+
+fn normalize_repo_rel(path: &Path) -> Option<String> {
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => parts.push(part.to_str()?.to_owned()),
+            Component::ParentDir => {
+                parts.pop()?;
+            }
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    Some(parts.join("/"))
+}
+
+/// Tracked `*.md` under `repo`, including tracked ADR drafts, minus [`EXCLUDED`]
+/// and minus tracked-but-absent paths.
+///
+/// An untracked scratch file is nobody's contract and stays invisible to the
+/// gate. Absent paths are dropped so a staged deletion fails at its `git rm`, not
+/// here.
+fn gated_files(repo: &Path) -> Result<Vec<String>> {
+    Ok(crate::git::ls_files_md(repo)?
+        .into_iter()
+        .filter(|rel| !EXCLUDED.iter().any(|tree| rel.starts_with(tree)))
+        .filter(|rel| repo.join(rel).exists())
+        .collect())
+}
+
+/// Match the promoter's immediate regular Markdown drafts, not its README.
+fn relocating_draft(repo: &Path, rel: &str) -> bool {
+    let path = Path::new(rel);
+    path.parent() == Some(Path::new("docs/adr/drafts"))
+        && path.extension().is_some_and(|ext| ext == "md")
+        && path.file_name().is_some_and(|name| name != "README.md")
+        && std::fs::symlink_metadata(repo.join(path))
+            .is_ok_and(|metadata| metadata.file_type().is_file())
+}
+
+/// Every dead or promotion-unsafe link across [`gated_files`].
+/// Dead links retain the format `<file>:<line> -> <target>`.
+pub fn problems(repo: &Path) -> Result<Vec<String>> {
+    let tracked = tracked_paths(repo)?;
+    let mut out = Vec::new();
+    for rel in gated_files(repo)? {
+        for dead in dead_links_in_with_tracked(repo, &rel, &tracked)? {
+            out.push(format!("{rel}:{} -> {}", dead.line, dead.target));
+        }
+        // This is a source-time gate only. Keep the promoter's shared dead-link
+        // resolver and successful-warning behavior strictly existence-based.
+        if !relocating_draft(repo, &rel) {
+            continue;
+        }
+        let body =
+            std::fs::read_to_string(repo.join(&rel)).with_context(|| format!("reading {rel}"))?;
+        for link in links_in(&body)
+            .into_iter()
+            .filter(|link| is_relative_target(&link.target))
+        {
+            let bare = link.target.split('#').next().unwrap_or_default();
+            let sibling = bare.strip_prefix("./").unwrap_or(bare);
+            if sibling.is_empty() || sibling.contains('/') {
+                continue;
+            }
+            let Some(target) = normalize_repo_rel(&Path::new("docs/adr/drafts").join(bare)) else {
+                continue;
+            };
+            if tracked.contains(&target) && relocating_draft(repo, &target) {
+                let fragment = &link.target[bare.len()..];
+                out.push(format!(
+                    "{rel}:{} -> {} (use ../drafts/{sibling}{fragment} to survive ADR promotion)",
+                    line_at(&body, link.span.start),
+                    link.target
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dead_links_in(repo: &Path, rel: &str) -> Result<Vec<DeadLink>> {
+        dead_links_in_with_tracked(repo, rel, &tracked_paths(repo)?)
+    }
+    use crate::concern_test_support::{commit, write};
+
+    fn repo(tag: &str) -> crate::concern_test_support::TestRepo {
+        crate::concern_test_support::temp_repo("links", tag)
+    }
+
+    // --- links_in: what counts as a link ---
+
+    #[test]
+    fn finds_a_plain_inline_link() {
+        let ls = links_in("see [x](a.md) here");
+        assert_eq!(ls.len(), 1);
+        assert_eq!(ls[0].target, "a.md");
+    }
+
+    #[test]
+    fn finds_multiple_links_on_one_line() {
+        let ls = links_in("[a](x.md) and [b](y.md)");
+        assert_eq!(ls.len(), 2);
+        assert_eq!(ls[1].target, "y.md");
+    }
+
+    #[test]
+    fn span_covers_exactly_the_target() {
+        let body = "see [x](a.md)";
+        let l = &links_in(body)[0];
+        assert_eq!(&body[l.span.clone()], "a.md");
+    }
+
+    #[test]
+    fn skips_links_inside_a_fenced_block() {
+        assert!(links_in("before\n```\n[x](a.md)\n```\nafter").is_empty());
+    }
+
+    #[test]
+    fn skips_links_inside_a_tilde_fenced_block() {
+        assert!(links_in("~~~\n[x](a.md)\n~~~\n").is_empty());
+    }
+
+    #[test]
+    fn skips_links_inside_an_indented_fenced_block() {
+        // CONTRIBUTING.md fences code inside list items; a column-0-only check
+        // would leave those blocks live.
+        assert!(links_in("- item:\n\n  ```\n  [x](a.md)\n  ```\n").is_empty());
+    }
+
+    #[test]
+    fn skips_links_inside_an_inline_code_span() {
+        assert!(links_in("write `[x](a.md)` like so").is_empty());
+    }
+
+    #[test]
+    fn finds_a_link_after_a_fenced_block_closes() {
+        let ls = links_in("```\n[a](x.md)\n```\n[b](y.md)");
+        assert_eq!(ls.len(), 1);
+        assert_eq!(ls[0].target, "y.md");
+    }
+
+    #[test]
+    fn a_longer_fence_is_not_closed_by_a_shorter_one() {
+        // The idiom for showing a fenced block inside a fenced block: a 4-backtick
+        // outer fence wrapping 3-backtick inner ones. Treating the opener as exactly
+        // "```" ends the block at the first inner fence, leaving the text between the
+        // inner fences live — a false POSITIVE, the direction this module's own doc
+        // comment promises never to produce.
+        //
+        // The link sits between the inner fences on purpose: put it after them and a
+        // buggy scanner re-opens on the second inner fence and masks it anyway, so
+        // the test would pass while the bug stood.
+        let body = "````markdown\n```\nSee [x](gone.md).\n```\n````\n";
+        assert!(links_in(body).is_empty(), "found {}", links_in(body).len());
+    }
+
+    #[test]
+    fn a_closing_fence_may_be_longer_than_its_opener() {
+        // CommonMark: the closer must be at LEAST as long as the opener. Guards the
+        // above fix against over-tightening into an equality check.
+        let ls = links_in("```\ncode\n`````\n[y](b.md)\n");
+        assert_eq!(ls.len(), 1);
+        assert_eq!(ls[0].target, "b.md");
+    }
+
+    #[test]
+    fn a_double_backtick_span_containing_a_backtick_is_masked() {
+        // The way you write a literal backtick inline. Pairing single backticks ends
+        // the span at the inner one and leaves the link live.
+        assert!(links_in("write ``[x](a.md) ` here`` ok").is_empty());
+    }
+
+    // --- is_relative_target ---
+
+    #[test]
+    fn urls_and_anchors_are_not_relative_targets() {
+        for t in ["https://e.com", "http://e.com", "mailto:a@b.c", "#section"] {
+            assert!(!is_relative_target(t), "{t}");
+        }
+    }
+
+    #[test]
+    fn paths_are_relative_targets() {
+        for t in ["a.md", "../a.md", "adr/", "a.md#frag"] {
+            assert!(is_relative_target(t), "{t}");
+        }
+    }
+
+    // --- line_at ---
+
+    #[test]
+    fn line_at_is_one_based() {
+        assert_eq!(line_at("a\nb\nc", 0), 1);
+        assert_eq!(line_at("a\nb\nc", 2), 2);
+        assert_eq!(line_at("a\nb\nc", 4), 3);
+    }
+
+    // --- dead_links_in ---
+
+    #[test]
+    fn tracked_file_target_is_not_dead() {
+        let d = repo("alive");
+        commit(&d, "docs/b.md", "hi\n");
+        write(&d, "docs/a.md", "[x](b.md)\n");
+        assert!(dead_links_in(&d, "docs/a.md").unwrap().is_empty());
+    }
+
+    #[test]
+    fn missing_target_is_dead_with_line_and_target() {
+        let d = repo("dead");
+        write(&d, "docs/a.md", "one\n[x](gone.md)\n");
+        let found = dead_links_in(&d, "docs/a.md").unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].line, 2);
+        assert_eq!(found[0].target, "gone.md");
+    }
+
+    #[test]
+    fn untracked_existing_file_target_is_dead() {
+        let d = repo("untracked-target");
+        commit(&d, "docs/a.md", "[x](b.md)\n");
+        write(&d, "docs/b.md", "hi\n");
+        let found = dead_links_in(&d, "docs/a.md").unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].target, "b.md");
+    }
+
+    #[test]
+    fn gitignored_existing_file_target_is_dead() {
+        let d = repo("ignored-target");
+        commit(&d, ".gitignore", "docs/ignored.md\n");
+        commit(&d, "docs/a.md", "[x](ignored.md)\n");
+        write(&d, "docs/ignored.md", "hi\n");
+        let found = dead_links_in(&d, "docs/a.md").unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].target, "ignored.md");
+    }
+
+    #[test]
+    fn directory_target_with_tracked_child_resolves() {
+        let d = repo("dir");
+        commit(&d, "docs/adr/one.md", "hi\n");
+        write(&d, "docs/a.md", "[x](adr/)\n");
+        assert!(dead_links_in(&d, "docs/a.md").unwrap().is_empty());
+    }
+
+    #[test]
+    fn directory_target_with_only_untracked_content_is_dead() {
+        let d = repo("untracked-dir");
+        commit(&d, "docs/a.md", "[x](adr/)\n");
+        write(&d, "docs/adr/one.md", "hi\n");
+        let found = dead_links_in(&d, "docs/a.md").unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].target, "adr/");
+    }
+
+    #[test]
+    fn directory_target_does_not_resolve_to_tracked_file() {
+        let d = repo("dir-not-file");
+        commit(&d, "docs/adr", "hi\n");
+        write(&d, "docs/a.md", "[x](adr/)\n");
+        let found = dead_links_in(&d, "docs/a.md").unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].target, "adr/");
+    }
+
+    #[test]
+    fn fragment_is_stripped_before_resolving() {
+        let d = repo("frag");
+        commit(&d, "docs/b.md", "hi\n");
+        write(&d, "docs/a.md", "[x](b.md#sec)\n");
+        assert!(dead_links_in(&d, "docs/a.md").unwrap().is_empty());
+    }
+
+    #[test]
+    fn urls_and_anchors_are_ignored() {
+        let d = repo("urls");
+        write(
+            &d,
+            "docs/a.md",
+            "[x](https://e.com) [y](#s) [z](mailto:a@b.c)\n",
+        );
+        assert!(dead_links_in(&d, "docs/a.md").unwrap().is_empty());
+    }
+
+    #[test]
+    fn dead_link_inside_a_fenced_block_is_ignored() {
+        let d = repo("code-fence");
+        write(&d, "docs/a.md", "```\n[y](gone.md)\n```\n");
+        assert!(dead_links_in(&d, "docs/a.md").unwrap().is_empty());
+    }
+
+    #[test]
+    fn dead_link_inside_an_inline_code_span_is_ignored() {
+        let d = repo("code-span");
+        write(&d, "docs/a.md", "`[x](gone.md)`\n");
+        assert!(dead_links_in(&d, "docs/a.md").unwrap().is_empty());
+    }
+
+    // --- gated_files + problems ---
+
+    #[test]
+    fn gate_reports_a_dead_link_in_tracked_markdown() {
+        let d = repo("gate");
+        commit(&d, "docs/a.md", "[x](gone.md)\n");
+        assert_eq!(
+            problems(&d).unwrap(),
+            vec!["docs/a.md:1 -> gone.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn gate_checks_tracked_adr_drafts() {
+        let d = repo("tracked-draft-dead");
+        commit(
+            &d,
+            "docs/adr/drafts/decision.md",
+            "# ADR-DRAFT: Decision\n\n[missing](../missing.md)\n",
+        );
+        assert_eq!(
+            problems(&d).unwrap(),
+            vec!["docs/adr/drafts/decision.md:3 -> ../missing.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn promotion_safe_links_in_tracked_drafts_pass_the_gate() {
+        let d = repo("tracked-draft-links");
+        commit(&d, "docs/adr/0001-base.md", "# ADR-0001: Base\n");
+        commit(
+            &d,
+            "docs/adr/drafts/aaa.md",
+            "# ADR-DRAFT: Aaa\n\n[base](../0001-base.md)\n",
+        );
+        commit(
+            &d,
+            "docs/adr/drafts/bbb.md",
+            "# ADR-DRAFT: Bbb\n\n[base](../0001-base.md) [aaa](../drafts/aaa.md#fragment)\n",
+        );
+
+        assert!(problems(&d).unwrap().is_empty());
+    }
+
+    #[test]
+    fn gate_rejects_relocating_draft_sibling_links_with_a_canonical_remedy() {
+        let d = repo("draft-siblings");
+        commit(&d, "docs/adr/drafts/sibling.md", "# ADR-DRAFT: Sibling\n");
+        for (target, remedy) in [
+            ("sibling.md", "../drafts/sibling.md"),
+            ("./sibling.md", "../drafts/sibling.md"),
+            ("sibling.md#fragment", "../drafts/sibling.md#fragment"),
+            ("./sibling.md#fragment", "../drafts/sibling.md#fragment"),
+        ] {
+            commit(
+                &d,
+                "docs/adr/drafts/source.md",
+                &format!("# ADR-DRAFT: Source\n\n[sibling]({target})\n"),
+            );
+            assert_eq!(
+                problems(&d).unwrap(),
+                vec![format!(
+                    "docs/adr/drafts/source.md:3 -> {target} (use {remedy} to survive ADR promotion)"
+                )],
+                "target: {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn nonrelocating_sources_and_targets_keep_existence_validation() {
+        let d = repo("draft-exclusions");
+        commit(&d, "docs/adr/drafts/sibling.md", "# ADR-DRAFT: Sibling\n");
+        commit(
+            &d,
+            "docs/adr/drafts/README.md",
+            "[sibling](sibling.md#fragment) [dot](./sibling.md)\n",
+        );
+        commit(&d, "docs/adr/drafts/notes.txt", "notes\n");
+        commit(&d, "docs/adr/drafts/nested/sibling.md", "nested\n");
+        commit(
+            &d,
+            "docs/adr/drafts/nested/source.md",
+            "[sibling](sibling.md)\n",
+        );
+        commit(
+            &d,
+            "docs/adr/drafts/source.md",
+            "[readme](README.md#fragment) [dot](./README.md) [notes](notes.txt) [nested](nested/sibling.md)\n",
+        );
+        commit(&d, "docs/ordinary/sibling.md", "ordinary\n");
+        commit(
+            &d,
+            "docs/ordinary/source.md",
+            "[sibling](./sibling.md#fragment)\n",
+        );
+        assert!(problems(&d).unwrap().is_empty());
+
+        write(
+            &d,
+            "docs/adr/drafts/README.md",
+            "[missing](missing.md#fragment)\n",
+        );
+        write(&d, "docs/ordinary/source.md", "[missing](missing.md)\n");
+        assert_eq!(
+            problems(&d).unwrap(),
+            vec![
+                "docs/adr/drafts/README.md:1 -> missing.md#fragment",
+                "docs/ordinary/source.md:1 -> missing.md",
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_draft_source_keeps_existence_validation() {
+        let d = repo("symlink-draft-source");
+        commit(&d, "docs/adr/drafts/sibling.md", "# ADR-DRAFT: Sibling\n");
+        commit(
+            &d,
+            "docs/adr/source.txt",
+            "[sibling](./sibling.md#fragment)\n",
+        );
+        std::os::unix::fs::symlink("../source.txt", d.join("docs/adr/drafts/source.md")).unwrap();
+        crate::concern_test_support::git_ok(&d, &["add", "docs/adr/drafts/source.md"]);
+        assert!(problems(&d).unwrap().is_empty());
+
+        write(
+            &d,
+            "docs/adr/source.txt",
+            "[missing](missing.md#fragment)\n",
+        );
+        assert_eq!(
+            problems(&d).unwrap(),
+            vec!["docs/adr/drafts/source.md:1 -> missing.md#fragment"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_draft_target_keeps_existence_validation() {
+        let d = repo("symlink-draft-target");
+        commit(&d, "docs/adr/sibling.txt", "sibling\n");
+        commit(
+            &d,
+            "docs/adr/drafts/source.md",
+            "[sibling](sibling.md#fragment)\n",
+        );
+        std::os::unix::fs::symlink("../sibling.txt", d.join("docs/adr/drafts/sibling.md")).unwrap();
+        crate::concern_test_support::git_ok(&d, &["add", "docs/adr/drafts/sibling.md"]);
+        assert!(problems(&d).unwrap().is_empty());
+
+        write(&d, "docs/adr/drafts/source.md", "[missing](missing.md)\n");
+        assert_eq!(
+            problems(&d).unwrap(),
+            vec!["docs/adr/drafts/source.md:1 -> missing.md"]
+        );
+    }
+
+    #[test]
+    fn arbitrary_document_directories_receive_link_checks() {
+        let d = repo("ordinary-docs");
+        commit(&d, "docs/history/old.md", "[x](gone.md)\n");
+        assert_eq!(problems(&d).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn gate_skips_the_superpowers_tree() {
+        let d = repo("excluded-superpowers");
+        commit(&d, "docs/superpowers/plan.md", "[x](gone.md)\n");
+        assert!(problems(&d).unwrap().is_empty());
+    }
+
+    #[test]
+    fn gate_skips_untracked_files() {
+        let d = repo("untracked");
+        write(&d, "docs/loose.md", "[x](gone.md)\n"); // never `git add`ed
+        assert!(problems(&d).unwrap().is_empty());
+    }
+
+    #[test]
+    fn gate_skips_tracked_but_deleted_files() {
+        let d = repo("deleted");
+        commit(&d, "docs/a.md", "[x](gone.md)\n");
+        std::fs::remove_file(d.join("docs/a.md")).unwrap();
+        assert!(problems(&d).unwrap().is_empty());
+    }
+
+    #[test]
+    fn gate_is_clean_when_every_link_resolves() {
+        let d = repo("clean");
+        commit(&d, "docs/b.md", "hi\n");
+        commit(&d, "docs/a.md", "[x](b.md)\n");
+        assert!(problems(&d).unwrap().is_empty());
+    }
+}

@@ -5,12 +5,15 @@ use std::process::{Command, Output};
 
 fn recipe_fixture(root: &Path, recorder: &str) -> PathBuf {
     let source = include_str!("../../../Justfile");
-    assert!(source.contains("devtool := \"cargo run --locked --quiet --manifest-path tools/Cargo.toml -p devtool --bin devtool --\""));
+    assert!(
+        source.contains("static := \"just --justfile recipes/static.just --working-directory .\"")
+    );
+    assert!(source.contains("{{static}} tsc {{quote(mode)}}"));
     let recipe = source
         .split_once("tsc mode=\"verify\":")
         .unwrap()
         .1
-        .split_once("\n# Verify workflows")
+        .split_once("\n# The host builds the adapter")
         .unwrap()
         .0;
     let setup = root.join("setup");
@@ -49,7 +52,7 @@ exit "$REQUEST_CODE"
     std::fs::write(
         &file,
         format!(
-            "devtool := \"bash '{}'\"\ntsc mode=\"verify\":{recipe}",
+            "static := \"bash '{}'\"\ntsc mode=\"verify\":{recipe}",
             request.display()
         ),
     )
@@ -115,9 +118,9 @@ fn public_just_owner_records_before_setup_and_preserves_mode_arguments_streams_a
             assert_eq!(
                 order,
                 if mode == "fix" {
-                    "setup types-pin playwright-pin\nrequest check tsc --fix\n"
+                    "setup types-pin playwright-pin\nrequest tsc fix\n"
                 } else {
-                    "setup types-pin playwright-pin\nrequest check tsc\n"
+                    "setup types-pin playwright-pin\nrequest tsc verify\n"
                 }
             );
             assert_eq!(output.stdout, b"setup-out\nrequest-out\n");
@@ -168,7 +171,7 @@ fn recorder_unavailable_or_failed_never_gates_work_or_replaces_its_saved_result(
             assert_eq!(output.status.code(), Some(status), "{failure}: {output:?}");
             assert_eq!(
                 std::fs::read_to_string(root.path().join("order")).unwrap(),
-                "setup types-pin playwright-pin\nrequest check tsc\n"
+                "setup types-pin playwright-pin\nrequest tsc verify\n"
             );
             assert_eq!(output.stdout, b"setup-out\nrequest-out\n");
         }

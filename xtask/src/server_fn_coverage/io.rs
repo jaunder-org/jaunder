@@ -11,38 +11,12 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use super::{Coverage, Snapshot, extract, render};
-use crate::files;
-use crate::server_fns::{ServerFn, module_path_of, server_fns_in};
+use crate::server_fns::ServerFn;
 use crate::traces::parse::{Filters, parse_spans};
 
-/// The `web` crate source root, scanned for the `#[macros::server]` inventory.
-pub const WEB_SRC: &str = "web/src";
-/// The committed, generated coverage snapshot — the byte-compared artifact.
-pub const SNAPSHOT_PATH: &str = "docs/coverage/server-fns.json";
-
-/// Every `#[macros::server]` fn under `web/src`, sorted by qualified name. A file
-/// that cannot be enumerated is a hard error: a file we cannot read could hide a fn,
-/// and an under-counted inventory is exactly a false pass.
-pub fn inventory(root: &Path) -> Result<Vec<ServerFn>> {
-    let files = files::with_extension(root, "rs")
-        .with_context(|| format!("scanning {} for #[macros::server] fns", root.display()))?;
-
-    let mut out = Vec::new();
-    for path in &files {
-        let src =
-            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        let rel = path.strip_prefix(root).unwrap_or(path);
-        match server_fns_in(&src, &module_path_of(rel)) {
-            Ok(fns) => out.extend(fns),
-            Err(msg) => bail!("{}: {msg}", path.display()),
-        }
-    }
-    // By the coverage key, not the ident: idents collide across verticals (#684),
-    // so an ident sort leaves the order of a collision set up to directory walk
-    // order.
-    out.sort_by_key(ServerFn::qualified);
-    Ok(out)
-}
+#[cfg(test)]
+pub use repository_policy::source_inventory::read_snapshot;
+pub use repository_policy::source_inventory::{SNAPSHOT_PATH, WEB_SRC, inventory};
 
 /// Derive coverage from raw OTLP JSONL. Empty or unparseable content is an error,
 /// not an empty [`Coverage`].
@@ -74,21 +48,6 @@ pub fn coverage_from_capture(tarball: &Path, inventory: &[ServerFn]) -> Result<C
         .with_context(|| format!("extracting the otel trace from {}", tarball.display()))?;
     let jsonl = std::fs::read_to_string(&dest).context("reading the extracted otel trace")?;
     coverage_from_jsonl(&jsonl, inventory)
-}
-
-/// Read the generated coverage snapshot or fail naming the remedy.
-///
-/// Missing or unparseable input is an error, never an empty value: static
-/// verification must fail closed when the sole artifact is absent or malformed.
-pub fn read_snapshot(path: &Path) -> Result<Snapshot> {
-    let raw = std::fs::read_to_string(path).with_context(|| {
-        format!(
-            "reading {} — if it does not exist yet, generate it with `{}`",
-            path.display(),
-            super::REGENERATE_CMD
-        )
-    })?;
-    serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
 }
 
 /// Render and write the generated coverage snapshot, creating

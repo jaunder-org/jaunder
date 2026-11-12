@@ -408,6 +408,9 @@ let
       # Never retain the filtered empty directory that crane would otherwise admit.
       && !(pkgs.lib.hasSuffix "/.git" path || pkgs.lib.hasInfix "/.git/" path)
       && (!pkgs.lib.hasInfix "/xtask/" path)
+      # Repository policy is native tooling; retain its manifest, not implementation.
+      && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/repository-policy/" path
+        && path != "${toString (craneLib.path ../.)}/tools/repository-policy/Cargo.toml")
       && (
         (pkgs.lib.hasSuffix ".sql" path)
         || (pkgs.lib.hasSuffix ".css" path)
@@ -480,6 +483,9 @@ let
       vendorPinnedFork
       sqlxSqlitePatchSource
       ;
+  };
+  repositoryPolicyBin = import ./repository-policy.nix {
+    inherit pkgs craneLib cargoMemberSource cargoPackageClosure workspaceMembers withWorkspacePlaceholders vendorPinnedFork;
   };
   cargoVendorDir = craneLib.vendorCargoDeps {
     inherit src;
@@ -732,7 +738,11 @@ let
     || sqlxSqlitePatchSource path
     || cargoMemberSource [ "common" "host" "macros" "storage" ] path type
     || pkgs.lib.hasPrefix "tools/doctests/testdata/" relative
-    || (pkgs.lib.hasPrefix "tools/" relative && craneLib.filterCargoSources path type);
+    || (
+      pkgs.lib.hasPrefix "tools/" relative
+      && !(pkgs.lib.hasPrefix "tools/repository-policy/" relative && relative != "tools/repository-policy/Cargo.toml")
+      && craneLib.filterCargoSources path type
+    );
   csrSourceAdmits =
     relative: type:
     let
@@ -787,6 +797,7 @@ let
         "server"
         "test-support"
         "web"
+        "tools/repository-policy"
       ];
   toolsBaseArgs = {
     src = toolsSrc;
@@ -1410,6 +1421,7 @@ in
         sqlxSqlitePatchSource
         ;
     };
+    repository-policy = repositoryPolicyBin;
     adr-promoter = adrPromoter;
     # The out-of-process e2e seed helper (ADR-0046). Exposed so it is
     # directly buildable/verifiable; it is placed only on the e2e VM PATH,

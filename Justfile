@@ -16,6 +16,8 @@ export SCCACHE_BASEDIRS := ```
 
 devtool := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p devtool --bin devtool --"
 prettier := "just --justfile recipes/prettier.just --working-directory ."
+static := "just --justfile recipes/static.just --working-directory ."
+repository_policy := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin"
 
 # Setup follows the current checkout even after cd in an existing devShell.
 tsc mode="verify":
@@ -26,7 +28,7 @@ tsc mode="verify":
     status=$?
     boundary=setup
     if [ "$status" -eq 0 ]; then
-      {{devtool}} check tsc {{if mode == "fix" { "--fix" } else { "" }}}
+      {{static}} tsc {{quote(mode)}}
       status=$?
       boundary=request
     fi
@@ -35,6 +37,16 @@ tsc mode="verify":
       traced-run record-finish "$handle" "$status" "$boundary" || :
     fi
     exit "$status"
+
+# The host builds the adapter from this checkout; sandbox callers receive its Nix binary.
+leptosfmt mode="verify":
+    cargo build --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin scoped-leptosfmt --target-dir tools/target
+    PATH="$PWD/tools/target/debug:$PATH" {{static}} leptosfmt {{quote(mode)}}
+
+# Standalone former --all population, with current-checkout timing/scoping owners.
+static-all mode="verify":
+    cargo build --locked --quiet --manifest-path tools/Cargo.toml -p devtool -p repository-policy --bin devtool --bin scoped-leptosfmt --target-dir tools/target
+    PATH="$PWD/tools/target/debug:$PATH" {{static}} all {{quote(mode)}}
 
 # Keep caller text in argv: Just interpolation would reparse shell metacharacters.
 [positional-arguments]
@@ -132,7 +144,20 @@ check-no-test: (_host "fix" "host") _host-tests
 check: check-no-test _product-tests _wasm-tests doctests-workflow
 
 precommit:
-    cargo xtask precommit-safety
+    {{repository_policy}} git-index-safety -- precommit
+
+adr-format:
+    {{repository_policy}} repository-docs -- adr-format
+
+# Informational census: fixed domain command, not a validation workflow.
+[positional-arguments]
+census *args:
+    {{repository_policy}} source-contracts -- census "$@"
+
+# Explicit local originals only: no checkout admission or hook bootstrap.
+[positional-arguments]
+org-timezone-manifest +files:
+    {{repository_policy}} org-timezone-manifest -- -- "$@"
 
 # Called only by the focused Git/index safety owner, never by public precommit.
 precommit-markdown-host: (_markdown "fix") _docs-shape
@@ -163,58 +188,58 @@ _markdown mode:
 
 [private]
 _docs-shape:
-    cargo xtask check-leaf sequence-check
-    cargo xtask check-leaf adr-format
-    cargo xtask check-leaf adr-readme-parity
-    cargo xtask check-leaf adr-view-parity
-    cargo xtask check-leaf doc-links
-    cargo xtask check-leaf flow-docs
+    {{repository_policy}} repository-docs -- sequence-check
+    just adr-format
+    {{repository_policy}} repository-docs -- adr-readme-parity
+    {{repository_policy}} repository-docs -- adr-view-parity
+    {{repository_policy}} repository-docs -- doc-links
+    {{repository_policy}} repository-docs -- flow-docs
 
 [private]
 _host mode docs:
-    {{devtool}} check fmt {{if mode == "fix" { "--fix" } else { "" }}}
-    {{devtool}} check leptosfmt {{if mode == "fix" { "--fix" } else { "" }}}
-    {{if docs + "-" + os() + "-" + arch() == "prepush-linux-x86_64" { "cargo xtask check-leaf prepush-docs" } else { prettier + " prettier-markdown " + mode }}}
+    {{static}} fmt {{mode}}
+    just leptosfmt {{mode}}
+    {{if docs + "-" + os() + "-" + arch() == "prepush-linux-x86_64" { repository_policy + " git-index-safety -- prepush-docs" } else { prettier + " prettier-markdown " + mode }}}
     {{prettier}} prettier-end2end {{mode}}
     {{prettier}} prettier-css {{mode}}
-    {{devtool}} check elisp-fmt {{if mode == "fix" { "--fix" } else { "" }}}
-    {{devtool}} check tools-fmt {{if mode == "fix" { "--fix" } else { "" }}}
-    {{devtool}} check ast-grep-tests {{if mode == "fix" { "--fix" } else { "" }}}
-    {{devtool}} check no-full-reload {{if mode == "fix" { "--fix" } else { "" }}}
+    {{static}} elisp-fmt {{mode}}
+    {{static}} tools-fmt {{mode}}
+    {{static}} ast-grep-tests
+    {{static}} no-full-reload
     cargo fmt --manifest-path xtask/Cargo.toml {{if mode == "fix" { "" } else { "--check" }}}
     just _docs-shape
-    cargo xtask check-leaf test-patterns
-    cargo xtask check-leaf server-fn-registrar
-    cargo xtask check-leaf server-fn-tracing
-    cargo xtask check-leaf server-fn-coverage
-    cargo xtask check-leaf server-fn-wire-arg-error
-    cargo xtask check-leaf traced-context
-    cargo xtask check-leaf e2e-telemetry-boundary
-    cargo xtask check-leaf e2e-collector-config
-    cargo xtask check-leaf proffered-secret
-    cargo xtask check-leaf e2e-goto-wrapper
-    cargo xtask check-leaf e2e-server-fn-endpoints
-    cargo xtask check-leaf target-arch-placement
-    cargo xtask check-leaf write-transaction-contract
-    cargo xtask check-leaf common-host-target-closure
-    cargo xtask check-leaf lint-suppression
-    cargo xtask check-leaf thin-components
-    cargo xtask check-leaf sqlx-newtype-bind
-    cargo xtask check-leaf sqlx-newtype-decode
+    {{repository_policy}} source-contracts -- test-patterns
+    {{repository_policy}} source-contracts -- server-fn-registrar
+    {{repository_policy}} source-contracts -- server-fn-tracing
+    {{repository_policy}} source-contracts -- server-fn-coverage
+    {{repository_policy}} source-contracts -- server-fn-wire-arg-error
+    {{repository_policy}} source-contracts -- traced-context
+    {{repository_policy}} source-contracts -- e2e-telemetry-boundary
+    {{repository_policy}} source-contracts -- e2e-collector-config
+    {{repository_policy}} source-contracts -- proffered-secret
+    {{repository_policy}} source-contracts -- e2e-goto-wrapper
+    {{repository_policy}} source-contracts -- e2e-server-fn-endpoints
+    {{repository_policy}} source-contracts -- target-arch-placement
+    {{repository_policy}} source-contracts -- write-transaction-contract
+    {{repository_policy}} source-contracts -- common-host-target-closure
+    {{repository_policy}} source-contracts -- lint-suppression
+    {{repository_policy}} source-contracts -- thin-components
+    {{repository_policy}} source-contracts -- sqlx-newtype-bind
+    {{repository_policy}} source-contracts -- sqlx-newtype-decode
     cargo xtask check-leaf doctest-fences
-    cargo xtask check-leaf raw-html-door
-    cargo xtask check-leaf html-sink
-    cargo xtask check-leaf e2e-scaffold
-    cargo xtask check-leaf xlang-literal
-    {{devtool}} check byte-compile {{if mode == "fix" { "--fix" } else { "" }}}
+    {{repository_policy}} source-contracts -- raw-html-door
+    {{repository_policy}} source-contracts -- html-sink
+    {{repository_policy}} source-contracts -- e2e-scaffold
+    {{repository_policy}} source-contracts -- xlang-literal
+    {{static}} byte-compile
     just tsc {{mode}}
-    {{devtool}} check cargo-deny {{if mode == "fix" { "--fix" } else { "" }}}
-    {{devtool}} check product-core-clippy {{if mode == "fix" { "--fix" } else { "" }}}
-    {{devtool}} check web-server-clippy {{if mode == "fix" { "--fix" } else { "" }}}
-    {{devtool}} check web-no-server-clippy {{if mode == "fix" { "--fix" } else { "" }}}
-    {{devtool}} check client-host-clippy {{if mode == "fix" { "--fix" } else { "" }}}
-    {{devtool}} check wasm-clippy {{if mode == "fix" { "--fix" } else { "" }}}
-    {{devtool}} check tools-clippy {{if mode == "fix" { "--fix" } else { "" }}}
+    {{static}} cargo-deny {{mode}}
+    {{static}} product-core-clippy {{mode}}
+    {{static}} web-server-clippy {{mode}}
+    {{static}} web-no-server-clippy {{mode}}
+    {{static}} client-host-clippy {{mode}}
+    {{static}} wasm-clippy {{mode}}
+    {{static}} tools-clippy {{mode}}
     cargo clippy --manifest-path xtask/Cargo.toml --all-targets -- -D warnings
     {{devtool}} check ert {{if mode == "fix" { "--fix" } else { "" }}}
 

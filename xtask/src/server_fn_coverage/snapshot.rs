@@ -14,47 +14,10 @@
 //! forever. Every collection is `BTreeMap`/`BTreeSet` and rendering is stable,
 //! so an unchanged run is byte-identical and drift comparison can be total.
 
-use std::collections::{BTreeMap, BTreeSet};
-
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
 
 use super::Coverage;
-use crate::server_fns::ServerFn;
-
-/// The regenerate command named in every failure message, so an author who hits
-/// the gate needs no external context.
-pub const REGENERATE_CMD: &str = "just e2e-regenerate-coverage";
-
-/// Which server fns a real browser session drove, as committed to
-/// `docs/coverage/server-fns.json`. **This is the byte-compared artifact.**
-///
-/// Named by [`ServerFn::qualified`] — `<vertical>::<ident>` — so the artifact
-/// and inventory name a fn the same way.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Snapshot {
-    /// The `<vertical>::<ident>` names driven by at least one e2e flow.
-    ///
-    /// A *set*, not a map to test titles, because the set is what [`verdict`]
-    /// asserts and the set is what reproduces.
-    ///
-    /// `BTreeSet` rather than `Vec` so sortedness and uniqueness are properties
-    /// of the type rather than of every construction site — it serializes to the
-    /// same JSON array, and the artifact is byte-compared, so an unsorted or
-    /// duplicated `Vec` would have been a drift failure diagnosed as coverage
-    /// drift.
-    pub covered: BTreeSet<String>,
-    /// `<vertical>::<ident>` → the distinct reasons its unattributed hits ended
-    /// with. Reported, not failed: a non-empty bucket means the harness stopped
-    /// attributing somewhere, which is worth seeing — and the reason is what makes
-    /// it diagnosable rather than merely visible (spec AC5).
-    ///
-    /// Deliberately not counts: a count tracks how many tests ran, so it would make
-    /// this byte-compared artifact churn every time anyone adds an e2e test. See
-    /// `Coverage::orphans`.
-    #[serde(default)]
-    pub orphans: BTreeMap<String, BTreeSet<String>>,
-}
+pub use repository_policy::source_inventory::{REGENERATE_CMD, Snapshot};
 
 impl Coverage {
     /// Project trace-derived coverage into the sole committed artifact.
@@ -88,78 +51,11 @@ pub fn render(snapshot: &Snapshot) -> Result<String> {
     Ok(out)
 }
 
-/// Every reason the gate should fail, one message per violation, sorted. Empty
-/// means the gate passes. Pure given its inputs, so it is unit-tested directly.
-pub fn verdict(inventory: &[ServerFn], snapshot: &Snapshot) -> Vec<String> {
-    let mut out = Vec::new();
-    // Every name the gate speaks is qualified (`<vertical>::<ident>`): fifteen fns
-    // share six idents across verticals since #684, so an ident-keyed set would
-    // treat `audiences::create` as accounted for by `posts::create`.
-    let inventory_names: BTreeSet<String> = inventory.iter().map(ServerFn::qualified).collect();
-
-    for f in inventory {
-        let qualified = f.qualified();
-        // There is deliberately no endpoint-drift check here — a comparison of a
-        // computed value against itself would pass for the wrong reason; the seed
-        // cross-check verifies the endpoint against real traffic instead
-        // (docs/adr/0120-no-endpoint-drift-check.md).
-        if !snapshot.covered.contains(&qualified) {
-            out.push(format!(
-                "{qualified}: no e2e flow drives this server fn. Add a browser flow and \
-                 regenerate (`{REGENERATE_CMD}`)"
-            ));
-        }
-    }
-
-    // A snapshot naming something the inventory does not is stale.
-    for name in &snapshot.covered {
-        if !inventory_names.contains(name) {
-            out.push(format!(
-                "{name}: present in the snapshot but is not a #[server] fn — regenerate \
-                 (`{REGENERATE_CMD}`)"
-            ));
-        }
-    }
-
-    out.sort();
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The vertical the helpers below write their fns in. Everything the gate
-    /// names is qualified by it: the key is `<vertical>::<ident>` and the derived
-    /// endpoint `<vertical>/<ident>`.
-    const V: &str = "posts";
-
-    /// A fn in [`V`] whose declared endpoint matches what the gate derives, so a
-    /// test that is not about endpoint drift does not trip over it.
-    fn fnf(ident: &str) -> ServerFn {
-        ServerFn {
-            ident: ident.to_string(),
-            endpoint: Some(format!("{V}/{ident}")),
-            module: format!("{V}::api"),
-            line: 1,
-        }
-    }
-
-    /// The coverage key of an ident written in [`V`].
-    fn qual(ident: &str) -> String {
-        format!("{V}::{ident}")
-    }
-
-    fn inv(idents: &[&str]) -> Vec<ServerFn> {
-        idents.iter().map(|i| fnf(i)).collect()
-    }
-
-    fn covered_with(idents: &[&str]) -> Snapshot {
-        Snapshot {
-            covered: idents.iter().map(|i| qual(i)).collect(),
-            orphans: BTreeMap::new(),
-        }
-    }
+    use serde::Deserialize;
+    use std::collections::{BTreeMap, BTreeSet};
 
     /// A [`Coverage`] over `(qualified name, test titles)` pairs.
     fn coverage_of(pairs: &[(&str, &[&str])]) -> Coverage {
@@ -298,82 +194,5 @@ mod tests {
         let round_trip: Snapshot =
             serde_json::from_str(&render(&snapshot).expect("renders")).expect("round-trips");
         assert_eq!(snapshot, round_trip);
-    }
-
-    #[test]
-    fn a_fully_covered_inventory_passes() {
-        let v = verdict(&inv(&["create_post"]), &covered_with(&["create_post"]));
-        assert!(v.is_empty(), "{v:?}");
-    }
-
-    #[test]
-    fn uncovered_fn_is_a_violation() {
-        let v = verdict(&inv(&["delete_media"]), &Snapshot::default());
-        assert_eq!(v.len(), 1);
-        assert!(v[0].contains("delete_media"));
-        assert!(v[0].contains(REGENERATE_CMD), "names the remedy: {}", v[0]);
-        assert!(
-            !v[0].contains("allowlist"),
-            "does not name an exemption path: {}",
-            v[0]
-        );
-    }
-
-    /// The two endpoint-drift tests that stood here were deleted with the check
-    /// they covered (#714). They built a `ServerFn` by hand with a deliberately
-    /// wrong `endpoint`, which no enumeration can now produce — the inventory
-    /// derives that field. Keeping them would have meant asserting that a
-    /// hand-corrupted value is reported, while the real code path could not reach
-    /// the branch: a green test proving nothing about the tree.
-    #[test]
-    fn snapshot_entry_for_an_unknown_fn_is_stale() {
-        let v = verdict(&inv(&["a"]), &covered_with(&["a", "ghost"]));
-        assert!(v.iter().any(|m| m.contains("ghost")), "{v:?}");
-    }
-
-    #[test]
-    fn gate_bites_on_a_newly_added_uncovered_fn() {
-        // The enforcement proof lives in the repo, not in PR prose: a new
-        // #[server] fn that no e2e flow drives must redden the build.
-        let inventory = inv(&["create_post", "brand_new_uncovered_fn"]);
-        let v = verdict(&inventory, &covered_with(&["create_post"]));
-        assert!(
-            v.iter().any(|m| m.contains("brand_new_uncovered_fn")),
-            "{v:?}"
-        );
-    }
-
-    #[test]
-    fn covering_one_verticals_fn_leaves_another_verticals_same_named_fn_uncovered() {
-        // The #684 collision, at the layer that decides red or green: three
-        // verticals declare `create`, and an ident-keyed gate would have passed all
-        // three on the strength of one covered flow.
-        let one_create_per_vertical: Vec<ServerFn> = ["posts", "audiences", "invites"]
-            .iter()
-            .map(|v| ServerFn {
-                ident: "create".to_string(),
-                endpoint: Some(format!("{v}/create")),
-                module: format!("{v}::api"),
-                line: 1,
-            })
-            .collect();
-        let snapshot = Snapshot {
-            covered: BTreeSet::from(["posts::create".to_string()]),
-            orphans: BTreeMap::new(),
-        };
-
-        let v = verdict(&one_create_per_vertical, &snapshot);
-        assert!(
-            v.iter().any(|m| m.starts_with("audiences::create:")),
-            "audiences::create is undriven and must be reported: {v:?}"
-        );
-        assert!(
-            v.iter().any(|m| m.starts_with("invites::create:")),
-            "invites::create is undriven and must be reported: {v:?}"
-        );
-        assert!(
-            !v.iter().any(|m| m.starts_with("posts::create:")),
-            "posts::create IS covered and must not be reported: {v:?}"
-        );
     }
 }

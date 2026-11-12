@@ -1,0 +1,35 @@
+[package]
+name = "repository-policy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0"
+common = { path = "../../common" }
+glob = "=0.3.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+syn = { version = "2", features = ["full", "visit", "extra-traits"] }
+proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
+quote = "1.0.47"
+oxc_allocator = "0.149.0"
+oxc_ast = "0.149.0"
+oxc_ast_visit = "0.149.0"
+oxc_parser = "0.149.0"
+oxc_syntax = "0.149.0"
+oxc_span = "0.149.0"
+# Maintained YAML-org successor; preserve the moved Serde/Value consumer (#1939).
+serde_yaml = { package = "yaml_serde", version = "0.10.7" }
+xshell = "0.2.7"
+url = "2"
+sha2 = "0.10"
+tempfile = "3"
+
+[[bin]]
+name = "repository-docs"
+path = "src/bin/repository-docs.rs"

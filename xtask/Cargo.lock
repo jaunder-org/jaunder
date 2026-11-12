@@ -1340,6 +1340,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "glob"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2fabcfbdc87f4758337ca535fb41a6d701b65693ce38287d856d1674551ec9b"
+
+[[package]]
 name = "h2"
 version = "0.4.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3380,6 +3386,31 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "repository-policy"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "common",
+ "glob",
+ "oxc_allocator",
+ "oxc_ast",
+ "oxc_ast_visit",
+ "oxc_parser",
+ "oxc_span",
+ "oxc_syntax",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "syn 2.0.119",
+ "tempfile",
+ "url",
+ "xshell",
+ "yaml_serde",
+]
 
 [[package]]
 name = "reqwest"
@@ -5504,16 +5535,10 @@ dependencies = [
  "host",
  "jiff",
  "jsonschema",
- "oxc_allocator",
- "oxc_ast",
- "oxc_ast_visit",
- "oxc_parser",
- "oxc_span",
- "oxc_syntax",
  "proc-macro2",
  "processkit",
- "quote",
  "regex",
+ "repository-policy",
  "rustc-demangle",
  "rustix",
  "serde",

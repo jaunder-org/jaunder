@@ -309,10 +309,6 @@ pub struct CommandResult {
     /// and never Some on a `--json` run).
     #[serde(skip)]
     pub traces: Option<String>,
-    /// The manual repository-census payload. It remains informational unless a
-    /// collector itself failed, in which case its completed cells are retained.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub census: Option<crate::census::CensusReport>,
     /// The versioned reconciliation payload emitted by `wasm-coverage probe`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wasm_coverage: Option<crate::wasm_coverage::Aggregate>,
@@ -434,7 +430,6 @@ impl CommandResult {
             audit: None,
             breakdown: None,
             traces: None,
-            census: None,
             wasm_coverage: None,
             phases: PhaseName::ALL
                 .map(|name| {
@@ -541,9 +536,6 @@ impl CommandResult {
             print!("{traces}");
         }
         // The event log already streamed to stderr; this is the stable summary seam.
-        if let Some(census) = &self.census {
-            print!("{}", crate::census::render_human(census));
-        }
         let verdict = if self.ok { "PASSED" } else { "FAILED" };
         println!(
             "xtask {} {verdict} in {} ms",
@@ -624,30 +616,6 @@ mod tests {
             "/nix/store/x-jaunder-csr-wasm-bundle"
         );
         assert_eq!(v["audit"]["artifacts"][0]["raw_bytes"], 2 * 1024 * 1024);
-    }
-
-    #[test]
-    fn failed_census_cell_is_retained_in_the_failing_result_envelope() {
-        use crate::census::{CellReport, CellState, Language, SignalFamily};
-
-        let mut cell = CellReport::unavailable(
-            SignalFamily::DependencyStructure,
-            Language::Rust,
-            "fixture analyzer",
-        );
-        cell.state = CellState::Failed {
-            error: "malformed output".into(),
-        };
-        let census = crate::census::CensusReport::from_cells(vec![cell]);
-        let mut result = CommandResult::new("census");
-        result.census = Some(census);
-        result.push(StepResult::fail("census"));
-        assert_eq!(result.exit_code(), 1);
-        let value = serde_json::to_value(&result).unwrap();
-        assert_eq!(
-            value["census"]["sections"][0]["cells"][0]["state"],
-            "failed"
-        );
     }
 
     #[test]

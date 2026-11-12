@@ -35,7 +35,7 @@ pub fn step_with_env(
     }
     let result = match cmd.output() {
         Ok(output) => {
-            let phases = matches!(name, "ert" | "tsc").then(|| {
+            let phases = (name == "ert").then(|| {
                 // Check uniqueness across both completion outcomes first. Only
                 // the sole event may then be matched to the devtool status.
                 let phase = child_phase(&output.stderr, name);
@@ -71,7 +71,7 @@ pub fn step_with_env(
             step.phases(phases)
         }
         Err(err) => {
-            let phases = matches!(name, "ert" | "tsc").then(|| child_phase(&[], name));
+            let phases = (name == "ert").then(|| child_phase(&[], name));
             StepResult::fail(name)
                 .detail(err.to_string())
                 .phases(phases)
@@ -86,7 +86,7 @@ pub fn step_with_env(
     }
 }
 
-/// Only the current devtool subprocess's captured stderr is eligible. Do not
+/// Only the current ERT devtool subprocess's captured stderr is eligible. Do not
 /// use retained diagnostic logs or Nix realization as child timing evidence.
 pub(crate) fn child_phase(stderr: &[u8], check: &str) -> PhaseRecord {
     match child_timing_evidence(stderr, check) {
@@ -111,6 +111,8 @@ pub(crate) fn child_timing_evidence(stderr: &[u8], check: &str) -> ChildTimingEv
     struct Event {
         event: String,
         schema_version: u8,
+        #[serde(default)]
+        timing_scope: Option<String>,
         check: String,
         duration_ms: u64,
         outcome: String,
@@ -140,7 +142,9 @@ pub(crate) fn child_timing_evidence(stderr: &[u8], check: &str) -> ChildTimingEv
             return unavailable();
         };
         if event.event != "devtool-check-timing"
-            || event.schema_version != 1
+            || check != "ert"
+            || event.schema_version != 2
+            || event.timing_scope.as_deref() != Some("request")
             || event.check != check
             || !matches!(event.outcome.as_str(), "success" | "failure")
             || observed.is_some()
@@ -160,7 +164,9 @@ pub(crate) fn child_timing_evidence(stderr: &[u8], check: &str) -> ChildTimingEv
         } else {
             PhaseOutcome::Failed
         },
-        detail: format!("{check}: current devtool child (monotonic interval)"),
+        detail:
+            "ert: current Just request duration including startup/evaluation (monotonic interval)"
+                .into(),
         nix: None,
     })
 }
@@ -171,12 +177,12 @@ mod tests {
     use crate::result::{PhaseName, PhaseOutcome};
 
     #[test]
-    fn current_tsc_child_event_becomes_execution_phase() {
+    fn current_ert_request_event_becomes_execution_phase() {
         let sh = Shell::new().unwrap();
-        let event = r#"{"event":"devtool-check-timing","schema_version":1,"check":"tsc","duration_ms":37,"outcome":"success"}"#;
+        let event = r#"{"event":"devtool-check-timing","schema_version":2,"timing_scope":"request","check":"ert","duration_ms":37,"outcome":"success"}"#;
         let result = step(
             &sh,
-            "tsc",
+            "ert",
             "sh",
             &["-c", "printf '%s' \"$1\" >&2", "child", event],
         );
@@ -186,13 +192,13 @@ mod tests {
     }
 
     #[test]
-    fn failed_current_tsc_child_preserves_verdict_diagnostics_and_event_outcome() {
+    fn failed_current_ert_request_preserves_verdict_diagnostics_and_event_outcome() {
         let sh = Shell::new().unwrap();
-        let event = r#"{"event":"devtool-check-timing","schema_version":1,"check":"tsc","duration_ms":29,"outcome":"failure"}"#;
+        let event = r#"{"event":"devtool-check-timing","schema_version":2,"timing_scope":"request","check":"ert","duration_ms":29,"outcome":"failure"}"#;
         let stderr = format!("compiler diagnostic\n{event}");
         let result = step(
             &sh,
-            "tsc",
+            "ert",
             "sh",
             &["-c", "printf '%s' \"$1\" >&2; exit 23", "child", &stderr],
         );
@@ -204,11 +210,11 @@ mod tests {
 
     #[test]
     fn invalid_timing_candidate_beside_valid_marker_is_unavailable() {
-        let valid = r#"{"event":"devtool-check-timing","schema_version":1,"check":"tsc","duration_ms":37,"outcome":"success"}"#;
+        let valid = r#"{"event":"devtool-check-timing","schema_version":2,"timing_scope":"request","check":"ert","duration_ms":37,"outcome":"success"}"#;
         let sh = Shell::new().unwrap();
         for candidate in [
-            valid.replace("\"schema_version\":1", "\"schema_version\":2"),
-            r#"{"event":"devtool-check-timing","schema_version":1,"check":"tsc","duration_ms":"#
+            valid.replace("\"schema_version\":2", "\"schema_version\":1"),
+            r#"{"event":"devtool-check-timing","schema_version":2,"timing_scope":"request","check":"ert","duration_ms":"#
                 .into(),
             format!("{valid}{}", " ".repeat(1024)),
             valid.replace("success", "failure"),
@@ -222,7 +228,7 @@ mod tests {
                     let stderr = format!("compiler diagnostic\n{markers}\nlast diagnostic");
                     let result = step(
                         &sh,
-                        "tsc",
+                        "ert",
                         "sh",
                         &[
                             "-c",
@@ -248,7 +254,7 @@ mod tests {
         assert_eq!(
             child_phase(
                 format!("ordinary diagnostic\n{valid}\nmore diagnostics").as_bytes(),
-                "tsc"
+                "ert"
             )
             .duration_ms,
             Some(37)
@@ -257,7 +263,7 @@ mod tests {
 
     #[test]
     fn mixed_completion_outcomes_are_unavailable_without_changing_verdict_or_diagnostics() {
-        let success = r#"{"event":"devtool-check-timing","schema_version":1,"check":"tsc","duration_ms":37,"outcome":"success"}"#;
+        let success = r#"{"event":"devtool-check-timing","schema_version":2,"timing_scope":"request","check":"ert","duration_ms":37,"outcome":"success"}"#;
         let failure = success.replace("success", "failure");
         let sh = Shell::new().unwrap();
         for markers in [
@@ -268,7 +274,7 @@ mod tests {
             for exit in ["0", "23"] {
                 let result = step(
                     &sh,
-                    "tsc",
+                    "ert",
                     "sh",
                     &[
                         "-c",
@@ -291,14 +297,14 @@ mod tests {
 
     #[test]
     fn absent_or_invalid_timing_never_changes_current_child_verdict() {
-        let event = r#"{"event":"devtool-check-timing","schema_version":1,"check":"tsc","duration_ms":37,"outcome":"success"}"#;
+        let event = r#"{"event":"devtool-check-timing","schema_version":2,"timing_scope":"request","check":"ert","duration_ms":37,"outcome":"success"}"#;
         let sh = Shell::new().unwrap();
         for stderr in [
             String::new(),
             "compiler diagnostics\n{malformed json".into(),
             event.replace("devtool-check-timing", "other-event"),
-            event.replace("\"schema_version\":1", "\"schema_version\":2"),
-            event.replace("\"check\":\"tsc\"", "\"check\":\"ert\""),
+            event.replace("\"schema_version\":2", "\"schema_version\":1"),
+            event.replace("\"check\":\"ert\"", "\"check\":\"tsc\""),
             event.replace("\"duration_ms\":37", "\"duration_ms\":-1"),
             event.replace("\"duration_ms\":37", "\"duration_ms\":1.5"),
             event.replace("\"duration_ms\":37", "\"duration_ms\":\"37\""),
@@ -309,7 +315,7 @@ mod tests {
             for exit in ["0", "23"] {
                 let result = step(
                     &sh,
-                    "tsc",
+                    "ert",
                     "sh",
                     &[
                         "-c",
@@ -332,13 +338,13 @@ mod tests {
     #[test]
     fn only_current_named_child_stderr_is_timing_evidence() {
         let sh = Shell::new().unwrap();
-        let event = r#"{"event":"devtool-check-timing","schema_version":1,"check":"tsc","duration_ms":37,"outcome":"success"}"#;
+        let event = r#"{"event":"devtool-check-timing","schema_version":2,"timing_scope":"request","check":"ert","duration_ms":37,"outcome":"success"}"#;
         let retained = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(retained.path(), event).unwrap();
         for (name, script) in [
-            ("tsc", "exit 0"),
-            ("tsc", "printf '%s' \"$1\""),
-            ("tsc", "printf '%s' \"$1\" >&2; exit 23"),
+            ("ert", "exit 0"),
+            ("ert", "printf '%s' \"$1\""),
+            ("ert", "printf '%s' \"$1\" >&2; exit 23"),
         ] {
             let result = step(&sh, name, "sh", &["-c", script, "child", event]);
             assert_eq!(result.phases[0].outcome, PhaseOutcome::Unavailable);
@@ -351,7 +357,7 @@ mod tests {
         );
         assert!(wrong_child.ok);
         assert!(wrong_child.phases.is_empty());
-        let not_spawned = step(&sh, "tsc", "/nonexistent/issue-1864-tsc", &[]);
+        let not_spawned = step(&sh, "ert", "/nonexistent/ert-request", &[]);
         assert!(!not_spawned.ok);
         assert_eq!(not_spawned.phases[0].outcome, PhaseOutcome::Unavailable);
     }
@@ -360,14 +366,19 @@ mod tests {
         child_phase(stderr, "ert")
     }
 
-    const EVENT: &str = r#"{"event":"devtool-check-timing","schema_version":1,"check":"ert","duration_ms":31,"outcome":"success"}"#;
+    const EVENT: &str = r#"{"event":"devtool-check-timing","schema_version":2,"timing_scope":"request","check":"ert","duration_ms":31,"outcome":"success"}"#;
 
     #[test]
-    fn ert_current_child_event_is_bounded_unique_and_versioned() {
+    fn ert_current_request_event_is_bounded_unique_and_versioned() {
         let phase = ert_child_phase(EVENT.as_bytes());
         assert_eq!(phase.name, PhaseName::GateExecution);
         assert_eq!(phase.duration_ms, Some(31));
         assert_eq!(phase.outcome, PhaseOutcome::Success);
+        assert!(
+            phase
+                .detail
+                .contains("request duration including startup/evaluation")
+        );
         assert_eq!(
             ert_child_phase(format!("Emacs output{EVENT}").as_bytes()).duration_ms,
             Some(31)
@@ -380,7 +391,8 @@ mod tests {
         for missing in [
             String::new(),
             "not json".into(),
-            EVENT.replace("schema_version\":1", "schema_version\":2"),
+            EVENT.replace("schema_version\":2", "schema_version\":1"),
+            EVENT.replace("request", "child"),
             EVENT.replace("ert", "tsc"),
             EVENT.replace("31", "-1"),
             EVENT.replace("success", "unknown"),
@@ -400,7 +412,7 @@ mod tests {
     fn ert_candidate_errors_cannot_hide_beside_a_valid_completion() {
         let sh = Shell::new().unwrap();
         for invalid in [
-            EVENT.replace("schema_version\":1", "schema_version\":2"),
+            EVENT.replace("schema_version\":2", "schema_version\":1"),
             EVENT.replace("duration_ms\":31", "duration_ms\":\"31\""),
             EVENT.trim_end_matches('}').to_string(),
             format!("{EVENT}{}", " ".repeat(256)),
