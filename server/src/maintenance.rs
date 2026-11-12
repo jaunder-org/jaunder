@@ -320,7 +320,7 @@ mod tests {
         env.base
             .pool()
             .execute(
-                "UPDATE idempotency_keys SET created_at = '2000-01-01 00:00:00+00' \
+                "UPDATE idempotency_keys SET created_at = '2000-01-01T00:00:00.000000000Z' \
                  WHERE key = 'maintenance-survival-key'",
             )
             .await
@@ -507,7 +507,7 @@ mod tests {
         .await;
         env.base
             .pool()
-            .execute("UPDATE sessions SET last_used_at = '2026-01-01 00:00:00+00'")
+            .execute("UPDATE sessions SET last_used_at = '2026-01-01T00:00:00.000000000Z'")
             .await
             .unwrap();
         if matches!(backend, Backend::Postgres) {

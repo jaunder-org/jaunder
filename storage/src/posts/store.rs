@@ -2928,9 +2928,9 @@ mod tests {
             .pool()
             .execute(
                 "UPDATE posts SET
-                   created_at = '2026-04-10T01:02:03.123456Z',
-                   updated_at = '2026-04-11T04:05:06.654321Z',
-                   deleted_at = '2026-04-13T07:08:09.999999Z'",
+                   created_at = '2026-04-10T01:02:03.123456000Z',
+                   updated_at = '2026-04-11T04:05:06.654321000Z',
+                   deleted_at = '2026-04-13T07:08:09.999999000Z'",
             )
             .await
             .unwrap();

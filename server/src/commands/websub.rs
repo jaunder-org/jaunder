@@ -182,10 +182,23 @@ mod tests {
             next_cursor: Some(FeedEventDeadLetterCursor { terminal_at, id }),
         };
 
+        let output = format_dead_letter_page(&page).unwrap();
         assert_eq!(
-            format_dead_letter_page(&page).unwrap(),
-            r#"{"events":[{"id":42,"feed_path":"/~operator/feed.rss","phase":"publication","attempts":10,"terminal_at":"2026-09-03T12:00:00Z","diagnostic":"hub returned 410"}],"next_cursor":"2026-09-03T12:00:00Z,42"}"#,
+            output,
+            r#"{"events":[{"id":42,"feed_path":"/~operator/feed.rss","phase":"publication","attempts":10,"terminal_at":"2026-09-03T12:00:00.000000000Z","diagnostic":"hub returned 410"}],"next_cursor":"2026-09-03T12:00:00.000000000Z,42"}"#,
         );
+        // Canonical output must preserve the instant and the cursor's ID, not
+        // just give both independently serialized fields the same spelling.
+        let decoded: serde_json::Value = serde_json::from_str(&output).unwrap();
+        let event_time = decoded["events"][0]["terminal_at"].as_str().unwrap();
+        assert_eq!(event_time.parse::<UtcInstant>().unwrap(), terminal_at);
+        let (cursor_time, cursor_id) = decoded["next_cursor"]
+            .as_str()
+            .unwrap()
+            .split_once(',')
+            .unwrap();
+        assert_eq!(cursor_time.parse::<UtcInstant>().unwrap(), terminal_at);
+        assert_eq!(cursor_id, "42");
     }
 
     #[apply(backends)]

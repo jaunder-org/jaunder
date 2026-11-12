@@ -1510,7 +1510,7 @@ mod tests {
         let json = serde_json::to_string(&page).unwrap();
         assert_eq!(
             json,
-            r#"{"posts":[{"post":{"timezone":"UTC","post_id":1,"slug":"hello","published_at":"2099-01-01T00:00:00Z","permalink":"/~alice/2099/01/01/hello"},"title":null,"fallback_label":{"kind":"summary","value":"fallback label"},"edit_url":"/posts/1/edit"}],"next_cursor":{"created_at":"2026-01-01T00:00:00Z","post_id":1},"has_more":true}"#
+            r#"{"posts":[{"post":{"timezone":"UTC","post_id":1,"slug":"hello","published_at":"2099-01-01T00:00:00.000000000Z","permalink":"/~alice/2099/01/01/hello"},"title":null,"fallback_label":{"kind":"summary","value":"fallback label"},"edit_url":"/posts/1/edit"}],"next_cursor":{"created_at":"2026-01-01T00:00:00.000000000Z","post_id":1},"has_more":true}"#
         );
         assert_eq!(
             serde_json::from_str::<Page<UnpublishedPost>>(&json).unwrap(),

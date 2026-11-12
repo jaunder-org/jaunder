@@ -156,7 +156,7 @@ async fn create_with_old_idempotency_key_replays_the_original(#[case] backend: B
     base.pool()
         .execute(
             "UPDATE idempotency_keys \
-             SET created_at = '2000-01-01 00:00:00+00' \
+             SET created_at = '2000-01-01T00:00:00.000000000Z' \
              WHERE key = 'expired-key'",
         )
         .await
