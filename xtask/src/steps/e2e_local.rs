@@ -1,7 +1,7 @@
 //! Host e2e loop driver (#249): `cargo xtask e2e-local` OWNS the whole loop —
 //! select immutable server/seed artifacts, start `jaunder serve` on an ephemeral port with
 //! the VM's capture env, discover the port from the canonical
-//! `<storage>/runtime.json`, seed via the shared `devtool seed-e2e`, run
+//! `<storage>/runtime.json`, seed via the shared `test-support seed-e2e`, run
 //! Playwright against the discovered URL, and tear
 //! the server down on every exit path. Each run gets a fresh temp storage dir + DB
 //! (distinct ephemeral port + DB ⇒ concurrent runs don't collide at the server/DB
@@ -584,34 +584,19 @@ fn finish_lifecycle(
     }
 }
 
-fn devtool_seed_args(tools: &Path) -> [String; 10] {
-    [
-        "run".to_owned(),
-        "--locked".to_owned(),
-        "--manifest-path".to_owned(),
-        tools.display().to_string(),
-        "-p".to_owned(),
-        "devtool".to_owned(),
-        "--bin".to_owned(),
-        "devtool".to_owned(),
-        "--".to_owned(),
-        "seed-e2e".to_owned(),
-    ]
-}
-
-fn devtool_seed_command<'a>(
+fn seed_command<'a>(
     sh: &'a Shell,
-    tools: &Path,
     db: &str,
     test_support: &str,
     jaunder: &Path,
     capture: &str,
     endpoint: &str,
 ) -> xshell::Cmd<'a> {
-    let devtool_args = devtool_seed_args(tools);
+    // The already-selected immutable test-support artifact owns the canonical
+    // seed list and runs its own user/mail steps; no tools-workspace build.
     cmd!(
         sh,
-        "cargo {devtool_args...} --db {db} --test-support-bin {test_support} --jaunder-bin {jaunder}"
+        "{test_support} seed-e2e --db {db} --test-support-bin {test_support} --jaunder-bin {jaunder}"
     )
     .env("JAUNDER_CAPTURE_DIR", capture)
     .env("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT", endpoint)
@@ -801,13 +786,11 @@ fn run_lifecycle(
         test_support: &test_support,
     };
 
-    let tools = root.join("tools/Cargo.toml");
     let jaunder = &artifacts.jaunder;
     let seed_start = std::time::Instant::now();
     if run_consumer(
-        devtool_seed_command(
+        seed_command(
             sh,
-            &tools,
             &db,
             &test_support,
             jaunder,
@@ -821,7 +804,7 @@ fn run_lifecycle(
     {
         result.push(
             StepResult::fail(&seed_step)
-                .detail("devtool seed-e2e failed".to_owned())
+                .detail("test-support seed-e2e failed".to_owned())
                 .with_duration(seed_start.elapsed()),
         );
         finish_lifecycle(
@@ -1157,20 +1140,28 @@ while :; do :; done"#;
     }
 
     #[test]
-    fn seed_launch_locks_the_tools_workspace_and_selects_devtool() {
+    fn seed_launch_runs_the_selected_test_support_artifact() {
+        let sh = Shell::new().expect("test shell");
+        let command: std::process::Command = seed_command(
+            &sh,
+            "sqlite:/tmp/local.db",
+            "/repo/target/debug/test-support",
+            Path::new("/repo/target/debug/jaunder"),
+            "/tmp/local/capture",
+            "http://127.0.0.1:54317",
+        )
+        .into();
+        assert_eq!(command.get_program(), "/repo/target/debug/test-support");
         assert_eq!(
-            devtool_seed_args(Path::new("/repo/tools/Cargo.toml")).as_slice(),
+            command.get_args().collect::<Vec<_>>(),
             [
-                "run",
-                "--locked",
-                "--manifest-path",
-                "/repo/tools/Cargo.toml",
-                "-p",
-                "devtool",
-                "--bin",
-                "devtool",
-                "--",
                 "seed-e2e",
+                "--db",
+                "sqlite:/tmp/local.db",
+                "--test-support-bin",
+                "/repo/target/debug/test-support",
+                "--jaunder-bin",
+                "/repo/target/debug/jaunder",
             ]
         );
     }
@@ -1178,9 +1169,8 @@ while :; do :; done"#;
     #[test]
     fn local_seed_receives_owned_collector_endpoint() {
         let sh = Shell::new().expect("test shell");
-        let command: std::process::Command = devtool_seed_command(
+        let command: std::process::Command = seed_command(
             &sh,
-            Path::new("/repo/tools/Cargo.toml"),
             "sqlite:/tmp/local.db",
             "/repo/target/debug/test-support",
             Path::new("/repo/target/debug/jaunder"),

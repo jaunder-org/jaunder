@@ -80,6 +80,10 @@ let
     assert !(wasmTestTargetSource "tools/doctests/Cargo.toml");
     assert !(wasmTestTargetSource "tools/diagnostic-coverage-runtime/Cargo.toml");
     assert !(wasmTestTargetSource "xtask/Cargo.toml");
+    # Ephemeral PostgreSQL custody is auxiliary coverage tooling, never product,
+    # CSR or WASM-test source.
+    assert !(siteTargetSource "tools/coverage/src/ephemeral_postgres.rs");
+    assert !(wasmTestTargetSource "tools/coverage/src/ephemeral_postgres.rs");
     true;
 
   # Coverage source remains bounded to Cargo-recognized package inputs plus the
@@ -127,6 +131,7 @@ let
     assert (cargoMemberSource coverageMembers (cargoSourcePath "ux-sandbox/tests/public_command.rs") "regular");
     assert !(builtins.elem "xtask" coverageMembers);
     assert !(builtins.elem "tools/devtool" coverageMembers);
+    assert !(builtins.elem "tools/coverage" coverageMembers);
     assert !(builtins.elem "tools/doctests" coverageMembers);
     assert !(builtins.elem "tools/diagnostic-coverage-runtime" coverageMembers);
     pkgs.lib.cleanSourceWith {
@@ -760,9 +765,8 @@ mkE2eCheck =
       ++ backendPolicy.seedComments
       ++ [
         "  machine.succeed("
-        "    \"JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 devtool seed-e2e\""
+        "    \"JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 test-support seed-e2e\""
         "    + \" --db ${backendPolicy.jaunderDb}\""
-        "    + \" --test-support-bin test-support\""
         "    + \" --jaunder-bin jaunder\""
         "  )"
         "  assert_seed_storage_spans()"
@@ -812,14 +816,16 @@ mkE2eCheck =
           backendPolicy.package
           pkgs.opentelemetry-collector-contrib
           testSupportBin
-          devtoolBin
           # Theme-package export assertions use this pinned ZIP reader in the VM.
           pkgs.unzip
           # Independent TEST-only image metadata observations, not a runtime editor.
           pkgs.exiftool
           # `jaunder site-config set` seed steps resolve bare `jaunder` here.
           jaunderBin
-        ];
+        ]
+        # Only performance producers run devtool in the guest; ordinary e2e
+        # lanes seed through test-support, so their guests do not install it.
+        ++ lib.optional (producer != null) devtoolBin;
         environment.etc."jaunder-otel-collector.yaml".source = ../end2end/otel-collector.yaml;
         environment.etc."jaunder-otel-processors.yaml".source = ./otel-processors.yaml;
 
@@ -2724,7 +2730,7 @@ mkWasmCoverageMeasurementProducer =
           # The sandbox admission regression evaluates an isolated local flake.
           pkgs.nix
           # devtool runs the whole test suite under an ephemeral
-          # PostgreSQL (via devtool pg) so
+          # PostgreSQL (coverage's ephemeral-postgres custody) so
           # storage/src/postgres/* gets instrumented coverage. The
           # throwaway cluster needs initdb/pg_ctl/psql available inside
           # the build sandbox.

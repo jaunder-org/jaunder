@@ -1,12 +1,12 @@
-//! `devtool seed-e2e` — the canonical e2e fixture seed (site-config + users +
+//! `test-support seed-e2e` — the canonical e2e fixture seed (site-config + users +
 //! mail-reset) applied by BOTH the host loop (`cargo xtask e2e-local`) and the
-//! flake VM `seed_db()` — one list, applied by both callers. Shells each step
-//! out to its target
-//! binary (devtool can't link the main-workspace crates): the `site_config`
-//! steps go through the shipped `jaunder` binary (`jaunder site-config set`),
-//! the rest through `test-support`. Every step is fatal: both callers guarantee
-//! a fresh / truncated DB before seeding, so a failure is a real error, not an
-//! expected re-run collision. See issues #249 and #8.
+//! flake VM `seed_db()` — one list, applied by both callers. Each step runs as
+//! its own child process so every write keeps its seed-process telemetry
+//! identity: the `site_config` steps go through the shipped `jaunder` binary
+//! (`jaunder site-config set`), the rest through this `test-support` binary.
+//! Every step is fatal: both callers guarantee a fresh / truncated DB before
+//! seeding, so a failure is a real error, not an expected re-run collision. See
+//! issues #249 and #8.
 use std::ffi::OsStr;
 use std::path::Path;
 use std::process::Command;
@@ -22,8 +22,8 @@ enum SeedBin {
     Jaunder,
 }
 
-pub(crate) const OTLP_ENDPOINT_ENV: &str = "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT";
-pub(crate) const SEED_OTLP_ENDPOINT: &str = "http://127.0.0.1:4317";
+pub const OTLP_ENDPOINT_ENV: &str = "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT";
+pub const SEED_OTLP_ENDPOINT: &str = "http://127.0.0.1:4317";
 const SEED_PROCESS_ENV: &str = "JAUNDER_E2E_SEED_PROCESS";
 const JAUNDER_SEED_PROCESS: &str = "e2e.seed.jaunder";
 const TEST_SUPPORT_SEED_PROCESS: &str = "e2e.seed.test-support";

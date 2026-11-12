@@ -152,7 +152,7 @@ pub enum Command {
     ///
     /// Owns each host lifecycle: build the CSR bundle +
     /// server, start `jaunder serve` on an ephemeral port with the VM's capture
-    /// env + a per-run temp DB, seed via the shared `devtool seed-e2e`, run
+    /// env + a per-run temp DB, seed via the shared `test-support seed-e2e`, run
     /// Playwright against the discovered URL, and tear the server down on every
     /// exit path. Normal mode runs the selected ordinary browser project; visual
     /// update mode builds release CSR and updates Chromium and Firefox baselines in

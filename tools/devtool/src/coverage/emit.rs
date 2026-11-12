@@ -16,7 +16,7 @@ use coverage::workers::{
 };
 use serde_json::Value;
 
-use crate::pg;
+use coverage::ephemeral_postgres;
 
 const JUNIT_PATH: &str = "/tmp/jaunder-coverage-junit.xml";
 const LLVM_COV_ENVIRONMENT_SCRIPT: &str = r#"environment="$(cargo llvm-cov show-env --export-prefix)" || exit; eval "$environment" || exit; exec "$@""#;
@@ -446,7 +446,7 @@ fn run_instrumented_tests(run: &CommandSpec, diag: &Path) -> Result<CapturedComm
         return Ok(build);
     }
     let executable = instrumented_executable(&build.stdout)?;
-    pg::with_ephemeral(|env| {
+    ephemeral_postgres::with_ephemeral(|env| {
         let mut command = Command::new(run.program);
         command
             .args(&run.arguments)
@@ -1316,7 +1316,7 @@ pub fn run_experiment(
     );
 
     let run_started = Instant::now();
-    let records = pg::with_ephemeral(|env| {
+    let records = ephemeral_postgres::with_ephemeral(|env| {
         let mut handles = Vec::with_capacity(workers.len());
         let mut records = Vec::new();
         for worker in workers.iter().cloned() {
@@ -1517,7 +1517,7 @@ pub fn run_experiment_worker(
     extract_experiment_archive(&archive, &std::env::current_dir()?)?;
     create_experiment_inputs(std::slice::from_ref(&worker))?;
     let mut command = worker_command(&worker);
-    let evidence = match pg::with_ephemeral(|env| {
+    let evidence = match ephemeral_postgres::with_ephemeral(|env| {
         env.configure_command(&mut command);
         Ok(run_worker(command, worker.clone(), diagnostics.clone()))
     }) {

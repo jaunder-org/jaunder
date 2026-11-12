@@ -1,6 +1,9 @@
 //! `test-support` — out-of-process test/e2e helpers that link jaunder's real
 //! crates (see `lib.rs`). Never shipped in the `jaunder` production binary.
 
+mod seed_e2e;
+
+use anyhow::Context as _;
 use clap::{Parser, Subcommand, ValueEnum};
 use common::display_name::DisplayName;
 use host::{capture, config_key::SiteConfigKey, feed::FeedEventPhase};
@@ -28,6 +31,23 @@ struct Cli {
 enum Commands {
     /// Print the full Git commit embedded when this binary was built.
     BuildCommit,
+
+    /// Seed the canonical e2e fixtures (site-config + users + mail-reset). The
+    /// single fixture list shared by the host loop and the flake VM `seed_db()`
+    /// (#249); each step runs as a separate child process.
+    SeedE2e {
+        /// Target database URL (passed to each step as `JAUNDER_DB`).
+        #[arg(long)]
+        db: String,
+        /// Path to the real `jaunder` binary (runs the `site-config set` steps).
+        /// Bare `jaunder` on the VM guest, the built `target/debug/jaunder` on the
+        /// host. Must be a non-cheap-kdf build.
+        #[arg(long)]
+        jaunder_bin: std::path::PathBuf,
+        /// Binary for the user/mail steps; defaults to this `test-support`.
+        #[arg(long)]
+        test_support_bin: Option<std::path::PathBuf>,
+    },
 
     /// Seed N posts for a user through the real storage path.
     SeedPosts {
@@ -318,6 +338,23 @@ async fn main() -> anyhow::Result<()> {
         );
         return Ok(());
     }
+    if let Commands::SeedE2e {
+        db,
+        jaunder_bin,
+        test_support_bin,
+    } = &cli.command
+    {
+        // Orchestration only: the seed children own telemetry, so the parent
+        // starts no exporter of its own. Preserve raw configured input; the
+        // children own endpoint trimming and invalid-value diagnostics.
+        let test_support_bin = match test_support_bin {
+            Some(path) => path.clone(),
+            None => std::env::current_exe().context("resolving test-support executable")?,
+        };
+        let endpoint = std::env::var_os(seed_e2e::OTLP_ENDPOINT_ENV)
+            .unwrap_or_else(|| seed_e2e::SEED_OTLP_ENDPOINT.into());
+        return seed_e2e::run(db, &test_support_bin, jaunder_bin, &endpoint);
+    }
     run(cli).await
 }
 
@@ -329,6 +366,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
     let _telemetry = host::telemetry::init_tracing(&telemetry);
     match cli.command {
         Commands::BuildCommit => unreachable!("build-commit returns before telemetry setup"),
+        Commands::SeedE2e { .. } => unreachable!("seed-e2e returns before telemetry setup"),
         Commands::SeedPosts {
             db,
             username,

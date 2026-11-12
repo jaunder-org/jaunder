@@ -79,7 +79,14 @@ staged design bytes/index and shared stashes remain untouched now.
     library engine/parser test duplication. Coordinate TSC interface with #1933
     BEFORE touching its exact recipe; do not wait for unrelated telemetry scope.
 
-- [ ] 3. Coverage/evidence and PG custody move once to actual concern owners.
+- [x] 3. Coverage/evidence and PG custody move once to actual concern owners.
+  - Delivered (human lifted pause 2026-11-12): PG custody is coverage's
+    nondefault `ephemeral-postgres` module, consumed by devtool's coverage
+    producer and the `pg run` frontdoor (host-proof takes the frontdoor in
+    Task5). Canonical seed is `test-support seed-e2e`; e2e-local runs the
+    selected test-support artifact instead of building devtool, and ordinary e2e
+    guests no longer install devtool. Coverage/WASM/budget/Elisp/mutation/
+    doctest/performance status interfaces unchanged.
   - Contract: coverage owns nondefault ephemeral-postgres module scoped closure;
     host-proof pg-run consumes coverage, never reverse. No PG product-host
     feature or new ProcessKit/Tokio dependency. Existing

@@ -16,14 +16,14 @@ use anyhow::{Context, Result, bail};
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 
-pub(crate) const HOST: &str = "127.0.0.1";
+const HOST: &str = "127.0.0.1";
 const START_ATTEMPTS: usize = 8;
 
 const BOOTSTRAP_SQL: &str =
     "CREATE ROLE jaunder LOGIN CREATEDB;\nCREATE DATABASE jaunder OWNER jaunder;\n";
 
 /// Marker implemented by the zero-sized roles a generated `PostgreSQL` URL may carry.
-pub(crate) trait PgUrlRole {
+trait PgUrlRole {
     const USER: &'static str;
     const DATABASE: &'static str;
 }
@@ -33,26 +33,26 @@ pub(crate) trait PgUrlRole {
 /// This is structured host/port data rather than a string-backed domain newtype:
 /// the role supplies the fixed user and database when the environment value is
 /// rendered, so no parser or string-newtype trailer is part of its interface.
-pub(crate) struct PgUrl<Role: PgUrlRole> {
+struct PgUrl<Role: PgUrlRole> {
     host: &'static str,
     port: u16,
     role: PhantomData<fn() -> Role>,
 }
 
-pub(crate) struct TestDatabase;
+struct TestDatabase;
 impl PgUrlRole for TestDatabase {
     const USER: &'static str = "jaunder";
     const DATABASE: &'static str = "jaunder";
 }
 
-pub(crate) struct BootstrapDatabase;
+struct BootstrapDatabase;
 impl PgUrlRole for BootstrapDatabase {
     const USER: &'static str = "postgres";
     const DATABASE: &'static str = "postgres";
 }
 
-pub(crate) type TestPgUrl = PgUrl<TestDatabase>;
-pub(crate) type BootstrapPgUrl = PgUrl<BootstrapDatabase>;
+type TestPgUrl = PgUrl<TestDatabase>;
+type BootstrapPgUrl = PgUrl<BootstrapDatabase>;
 
 impl<Role: PgUrlRole> PgUrl<Role> {
     fn generated(host: &'static str, port: u16) -> Self {

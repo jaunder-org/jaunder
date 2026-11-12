@@ -1,8 +1,7 @@
 //! Internal in-sandbox dev tool. Runs inside the Nix coverage/e2e build
 //! sandboxes where `xtask` (host-only) is unavailable. Subcommand tree is
-//! deliberately extensible: `coverage emit`, `wasm-coverage`, diagnostic build,
-//! and `seed-e2e` exist today; `pg`-migration of the remaining shell scripts is
-//! tracked separately.
+//! deliberately extensible: `coverage emit`, `wasm-coverage`, diagnostic build
+//! and the `pg run` frontdoor over coverage's ephemeral PostgreSQL custody.
 
 use std::path::PathBuf;
 
@@ -17,8 +16,6 @@ mod digest;
 mod doctests;
 #[cfg(feature = "performance")]
 mod performance;
-mod pg;
-mod seed_e2e;
 #[cfg(feature = "system-artifacts")]
 mod system_artifacts;
 mod vite_manifest;
@@ -53,10 +50,6 @@ enum Command {
     /// Compile and stage the closed system-theme inventory independently of CSR output.
     #[cfg(feature = "system-artifacts")]
     SystemArtifacts(SystemArtifactsArgs),
-    /// Seed the canonical e2e fixtures (users + site-config + mail-reset) by
-    /// shelling out to `test-support`. The single fixture list shared by the
-    /// host loop and the flake VM `seed_db()` (#249).
-    SeedE2e(SeedE2eArgs),
     #[cfg(feature = "performance")]
     /// Versioned performance fragment producers and validators.
     #[command(subcommand)]
@@ -82,22 +75,6 @@ struct SystemArtifactsArgs {
     #[cfg(feature = "qualification")]
     #[arg(long)]
     fixture: Option<String>,
-}
-
-#[derive(clap::Args)]
-struct SeedE2eArgs {
-    /// Target database URL (passed to test-support as JAUNDER_DB).
-    #[arg(long)]
-    db: String,
-    /// Path to the `test-support` binary — the on-PATH name on the VM guest, the
-    /// built `target/debug/test-support` on the host.
-    #[arg(long)]
-    test_support_bin: PathBuf,
-    /// Path to the real `jaunder` binary (runs the `site-config set` steps). Bare
-    /// `jaunder` on the VM guest (systemPackages), the built
-    /// `target/debug/jaunder` on the host. Must be a non-cheap-kdf build.
-    #[arg(long)]
-    jaunder_bin: PathBuf,
 }
 
 #[derive(Subcommand)]
@@ -372,7 +349,7 @@ fn main() -> Result<()> {
             diagnostic_build::write_baseline_status(&status)
         }
         Command::Doctests(DoctestsCmd::Emit { out }) => doctests::emit::run(&out),
-        Command::Pg(PgCmd::Run { cmd }) => pg::run_command(&cmd),
+        Command::Pg(PgCmd::Run { cmd }) => ::coverage::ephemeral_postgres::run_command(&cmd),
         Command::Check(args) => check::run(&args.name, args.fix),
         #[cfg(feature = "system-artifacts")]
         Command::SystemArtifacts(args) => {
@@ -381,18 +358,6 @@ fn main() -> Result<()> {
             #[cfg(not(feature = "qualification"))]
             let fixture = None;
             system_artifacts::run(&args.out, fixture)
-        }
-        Command::SeedE2e(args) => {
-            // Preserve raw configured input: the seed children own telemetry
-            // trimming and invalid-value diagnostics, including non-Unicode.
-            let endpoint = std::env::var_os(seed_e2e::OTLP_ENDPOINT_ENV)
-                .unwrap_or_else(|| seed_e2e::SEED_OTLP_ENDPOINT.into());
-            seed_e2e::run(
-                &args.db,
-                &args.test_support_bin,
-                &args.jaunder_bin,
-                &endpoint,
-            )
         }
         #[cfg(feature = "performance")]
         Command::Performance(command) => performance::run(*command),
