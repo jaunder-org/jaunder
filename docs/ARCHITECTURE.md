@@ -5470,7 +5470,7 @@ xtask unchanged; shared evidence types/classification stay reusable.
 
 ### Proposed direction: simplify residual capabilities and retire obsolete tooling endpoints
 
-The proposed [endpoint decision](adr/drafts/retire-xtask-devtool-endpoints.md)
+The proposed [endpoint decision](adr/0246-retire-xtask-devtool-endpoints.md)
 records a finite simplification, not current implementation. Useful
 development/CI capabilities retain named real consumers and convenient
 single-command workflows. Just owns local composition and shared named static
