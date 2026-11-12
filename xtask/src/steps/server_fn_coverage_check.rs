@@ -1,53 +1,14 @@
-//! Independent static inventory and explicit producer-artifact flow verification.
+//! Explicit producer-artifact flow verification; static inventory lives in repository-policy.
 //! The workflow, never this consumer, selects/builds the authoritative output.
 
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use crate::result::{CommandResult, StepResult};
 use crate::server_fn_coverage::io::{
-    SNAPSHOT_PATH, WEB_SRC, coverage_from_capture, inventory, read_snapshot, write_snapshot,
+    SNAPSHOT_PATH, WEB_SRC, coverage_from_capture, inventory, write_snapshot,
 };
-use crate::server_fn_coverage::{REGENERATE_CMD, Snapshot, render, verdict};
-
-/// The static lane's step name.
-const STATIC_STEP: &str = "server-fn-coverage";
-/// The static-lane check, over explicit paths so it is testable without the repo.
-///
-/// A missing snapshot, an unscannable `web/src`, or an unparseable snapshot is a
-/// **failure**, never a pass: the failure mode this gate guards against and the
-/// failure mode of its own plumbing would otherwise look identical.
-fn check(web_src: &Path, snapshot_path: &Path) -> StepResult {
-    let (inventory, snapshot) = match (inventory(web_src), read_snapshot(snapshot_path)) {
-        (Ok(inventory), Ok(snapshot)) => (inventory, snapshot),
-        (inventory, snapshot) => {
-            let detail = [inventory.err(), snapshot.err()]
-                .into_iter()
-                .flatten()
-                .map(|e| format!("{e:#}"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            return StepResult::fail(STATIC_STEP).detail(detail);
-        }
-    };
-
-    let violations = verdict(&inventory, &snapshot);
-    if violations.is_empty() {
-        return StepResult::ok(STATIC_STEP).detail(format!(
-            "{} server fn(s) accounted for ({} covered)",
-            inventory.len(),
-            snapshot.covered.len()
-        ));
-    }
-    StepResult::fail(STATIC_STEP).detail(violations.join("\n"))
-}
-
-/// The static lane over the repo's real snapshot. Runs in `check` and
-/// `just validate-no-e2e`.
-pub fn run(result: &mut CommandResult) {
-    result.push(check(Path::new(WEB_SRC), Path::new(SNAPSHOT_PATH)));
-}
+use crate::server_fn_coverage::{REGENERATE_CMD, Snapshot, render};
 
 /// The e2e lane's core, over explicit paths so it is testable without the repo.
 ///
@@ -152,6 +113,7 @@ fn validate_selected_capture(capture: &Path, output: &Path, lane: &str) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server_fn_coverage::io::read_snapshot;
     use crate::test_support::retired_server_fn;
 
     /// The vertical the fixture tree writes its fns in.
@@ -174,86 +136,6 @@ mod tests {
 
     fn write_json(path: &Path, json: &str) {
         std::fs::write(path, json).expect("write json");
-    }
-
-    #[test]
-    fn static_lane_passes_when_every_fn_is_covered() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        web_src_with(tmp.path(), &["create_post"]);
-        let snapshot = tmp.path().join("snap.json");
-        write_json(
-            &snapshot,
-            r#"{"covered":["posts::create_post"],"orphans":{}}"#,
-        );
-
-        let step = check(tmp.path(), &snapshot);
-        assert!(step.ok, "{:?}", step.detail);
-        assert!(step.detail.unwrap_or_default().contains("1 server fn"));
-    }
-
-    #[test]
-    fn static_lane_bites_on_an_uncovered_fn() {
-        // `verdict`'s own bite test proves the rule; this proves the lane applies
-        // it to the real snapshot and source-derived inventory.
-        let tmp = tempfile::tempdir().expect("tempdir");
-        web_src_with(tmp.path(), &["create_post", "brand_new_uncovered_fn"]);
-        let snapshot = tmp.path().join("snap.json");
-        write_json(
-            &snapshot,
-            r#"{"covered":["posts::create_post"],"orphans":{}}"#,
-        );
-
-        let step = check(tmp.path(), &snapshot);
-        assert!(!step.ok);
-        let detail = step.detail.unwrap_or_default();
-        assert!(detail.contains("brand_new_uncovered_fn"), "{detail}");
-    }
-
-    #[test]
-    fn static_lane_ignores_the_retired_evidence_path() {
-        // Issue #757 removed this input. A malformed file at the retired path
-        // must be inert, so a future evidence read cannot slip back into the
-        // static verdict unnoticed.
-        let tmp = tempfile::tempdir().expect("tempdir");
-        web_src_with(tmp.path(), &["create_post"]);
-        let snapshot = tmp.path().join("snap.json");
-        write_json(
-            &snapshot,
-            r#"{"covered":["posts::create_post"],"orphans":{}}"#,
-        );
-        write_json(
-            &tmp.path().join("server-fns-evidence.json"),
-            "{ definitely not json",
-        );
-
-        let step = check(tmp.path(), &snapshot);
-        assert!(step.ok, "{:?}", step.detail);
-    }
-
-    #[test]
-    fn static_lane_fails_closed_on_a_missing_snapshot() {
-        // The plumbing's own failure must not look like "nothing uncovered".
-        let tmp = tempfile::tempdir().expect("tempdir");
-        web_src_with(tmp.path(), &["create_post"]);
-
-        let step = check(tmp.path(), &tmp.path().join("absent-snapshot.json"));
-        assert!(!step.ok);
-        let detail = step.detail.unwrap_or_default();
-        assert!(
-            detail.contains(REGENERATE_CMD),
-            "names the remedy: {detail}"
-        );
-    }
-
-    #[test]
-    fn static_lane_fails_closed_on_an_unparseable_snapshot() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        web_src_with(tmp.path(), &["create_post"]);
-        let snapshot = tmp.path().join("snap.json");
-        write_json(&snapshot, "{not json");
-
-        let step = check(tmp.path(), &snapshot);
-        assert!(!step.ok);
     }
 
     #[test]

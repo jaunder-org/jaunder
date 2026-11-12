@@ -221,17 +221,30 @@ Markdown Verify. Bypass with `SKIP_PRE_PUSH=1 git push` for WIP.
 
 Run `just tsc` for the single-command TypeScript workflow, including after `cd`
 to another worktree in an existing devShell. Nix's shared setup executable links
-the pinned dependencies before the unchanged `devtool check tsc` definition;
-direct `devtool check tsc` assumes dependencies are already available. Shell
-entry uses the same setup for IDEs. Setup refreshes current visible packages and
-the browser-matched Playwright override, preserves unrelated directory entries,
-and unlinks a stale destination symlink without touching its referent.
+the pinned dependencies before the shared named `tsc` leaf in
+`recipes/static.just`; direct leaf invocation assumes dependencies are already
+available. Shell entry uses the same setup for IDEs. Setup refreshes current
+visible packages and the browser-matched Playwright override, preserves
+unrelated directory entries, and unlinks a stale destination symlink without
+touching its referent.
 
-Host Just recipes launch static `devtool` checks from the current checkout with
-`cargo run --locked --quiet --manifest-path tools/Cargo.toml -p devtool --bin devtool --`,
-not the shell's prebuilt `devtool`. Source edits therefore take effect without
-re-entering the shell. Prettier is composed directly from
-`recipes/prettier.just` in both host and hermetic callers. Just exports the host
+Host and hermetic callers use the named definitions in `recipes/static.just` for
+formatting, ast-grep, byte-compilation, cargo-deny and the six Clippy units.
+Invoke a leaf directly with
+`just --justfile recipes/static.just --working-directory . <name>`; formatting
+accepts `fix` or `verify`, and Cargo leaves additionally accept `host` or
+`sandbox`. `just leptosfmt` builds its narrow adapter from the current checkout
+before invoking the shared definition. `code` and `rust-format` are fixed
+compositions in that file; `just static-all [fix|verify]` builds the current
+checkout's devtool/adapter before invoking the independent ordered `all`
+composition (dependencies must already be available, as for the former
+`devtool check --all`). Sandbox callers supply their pinned binaries and both
+offline homes before any work. TSC's shared leaf preserves its compiler argv;
+the public owner retains passive request observation around setup and that leaf.
+Only ERT retains a devtool timing consumer, launched with locked Cargo from the
+checkout, not the shell's prebuilt devtool, and invoking only the fixed Just
+`ert` leaf. Other devtool capabilities remain; this is not full devtool
+retirement. Prettier retains `recipes/prettier.just`. Just exports the host
 Cargo compile-cache policy (`RUSTC_WRAPPER=sccache`, `CARGO_INCREMENTAL=0`, and
 sorted, canonical Git worktree roots in `SCCACHE_BASEDIRS`, including the
 current root). Discovery failure retains the current root and Git's diagnostic.
@@ -279,8 +292,8 @@ remain authoritative; local fail-fast behavior does not weaken their verdicts.
 
 ### Read-only Org timezone evidence
 
-Run `traced-run -- cargo xtask org-timezone-manifest -- /path/a.org /path/b.org`
-with explicit local UTF-8 Org files (shell globs are also accepted). There is no
+Run `traced-run -- just org-timezone-manifest /path/a.org /path/b.org` with
+explicit local UTF-8 Org files (shell globs are also accepted). There is no
 recursive discovery, inventory option, database connection, server access, or
 import. The extractor only reads originals; normal command acquisition/build
 artifacts remain outside them.
@@ -1040,14 +1053,14 @@ and the
 [retained distributed topology](docs/adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md).
 
 - `cargo fmt --check` checks Rust formatting.
-- `devtool check leptosfmt` invokes the pinned formatter on only `web/src` and
-  `csr/src` (the same roots in Fix and Verify). It retains the default full
-  macro paths `view` and `leptos::view`. Checked glob enumeration and UTF-8
-  reads fail closed; the adapter also promotes the pin's per-file error marker
-  even when its exit status is zero. Empty scoped populations are a no-op, not
-  an implicit repository scan. A future frontend root requires an explicit
-  scope, Nix-input and documentation update; this is not a syntax-placement
-  policy. Rustfmt continues to cover Rust outside these roots.
+- `just leptosfmt` invokes the pinned formatter on only `web/src` and `csr/src`
+  (the same roots in Fix and Verify). It retains the default full macro paths
+  `view` and `leptos::view`. Checked glob enumeration and UTF-8 reads fail
+  closed; the adapter also promotes the pin's per-file error marker even when
+  its exit status is zero. Empty scoped populations are a no-op, not an implicit
+  repository scan. A future frontend root requires an explicit scope, Nix-input
+  and documentation update; this is not a syntax-placement policy. Rustfmt
+  continues to cover Rust outside these roots.
 - `prettier --check end2end`, `prettier --check '**/*.md'`, and
   `prettier --check '**/*.css'` check Playwright/frontend test assets, all
   tracked Markdown, and all tracked CSS respectively (`proseWrap: always`;
@@ -1077,21 +1090,22 @@ and the
 - `elisp-fmt`, `ert`, and `byte-compile` run the elisp subproject's formatter,
   ERT suite, and warnings-as-errors byte-compilation under `emacs --batch` (see
   the Elisp subproject section below).
-- Six discrete Clippy checks run through `devtool check <name>` from the host
-  ladder: `product-core-clippy`, `web-server-clippy`, `web-no-server-clippy`,
-  `client-host-clippy`, `wasm-clippy`, and `tools-clippy`. They use host-local
-  Cargo with the devshell toolchain and compile-cache environment; hermetic Nix
-  exposes one terminal derivation per unit and a narrow aggregate. Product core
-  excludes web, client, and csr as selected lint roots; their applicable server,
-  featureless, host-CSR, and wasm targets are checked separately. `wasm-clippy`
-  deliberately excludes `--all-targets`, because web's host-oriented test
-  dependencies cannot compile for `wasm32-unknown-unknown`. Root and tools
-  workspaces retain separate lock/test contexts (including `csr_bundle` and
-  `performance` in tools). The former combined root web(server+CSR)
-  configuration is intentionally not retained under approved request
-  `2f0929a1-ebbd-4735-9a6c-b53e99a7a141`; `xtask-clippy` remains required in the
-  host surface and also has an independent raw Nix verdict selected by hermetic
-  validation. The derivation runs Cargo Clippy, never xtask.
+- Six discrete Clippy checks run through the named shared Just leaves from the
+  host ladder: `product-core-clippy`, `web-server-clippy`,
+  `web-no-server-clippy`, `client-host-clippy`, `wasm-clippy`, and
+  `tools-clippy`. They use host-local Cargo with the devshell toolchain and
+  compile-cache environment; hermetic Nix exposes one terminal derivation per
+  unit and a narrow aggregate. Product core excludes web, client, and csr as
+  selected lint roots; their applicable server, featureless, host-CSR, and wasm
+  targets are checked separately. `wasm-clippy` deliberately excludes
+  `--all-targets`, because web's host-oriented test dependencies cannot compile
+  for `wasm32-unknown-unknown`. Root and tools workspaces retain separate
+  lock/test contexts (including `csr_bundle` and `performance` in tools). The
+  former combined root web(server+CSR) configuration is intentionally not
+  retained under approved request `2f0929a1-ebbd-4735-9a6c-b53e99a7a141`;
+  `xtask-clippy` remains required in the host surface and also has an
+  independent raw Nix verdict selected by hermetic validation. The derivation
+  runs Cargo Clippy, never xtask.
 - `cargo nextest run` runs the default Rust unit and integration test suite.
 - Whole-test budgets are **ambient** — an auto fixture gives every test a scaled
   `DEFAULT_TEST_BUDGET_MS`, which covers the entire suite (#270). Don't set one
@@ -1108,11 +1122,12 @@ The Emacs client lives in `elisp/` (see [`elisp/README.md`](elisp/README.md)).
 Its ERT suite, formatter, and byte-compilation run in the verify ladder: `ert`,
 `elisp-fmt`, and `byte-compile` (which byte-compiles the package modules with
 warnings promoted to errors) are `just check`/`just validate` steps that run
-through `devtool check` — the same implementations the `static-ert` (pure ERT)
-and `static-elisp` (formatting/byte-compilation) Nix derivations run, so
-`nix flake check` covers them too, with no duplicated sibling to drift (#188).
-prettier cannot format Emacs Lisp, so `elisp-fmt` uses built-in
-`emacs-lisp-mode` indentation (auto-fix under `check`, verify under `validate`).
+through shared Just definitions for formatting/compilation and the retained
+monotonic devtool timing owner for ERT — the same implementations the
+`static-ert` and `static-elisp` Nix derivations run, so `nix flake check` covers
+them too, with no duplicated sibling to drift (#188). prettier cannot format
+Emacs Lisp, so `elisp-fmt` uses built-in `emacs-lisp-mode` indentation (auto-fix
+under `check`, verify under `validate`).
 
 `just validate-no-e2e` builds `elisp-coverage-producer`, which runs the pure and
 self-booting live ERT populations once in a hermetic VM. Its fixed
@@ -1137,6 +1152,77 @@ does not rerun live ERT.
 
 Jaunder uses OpenTelemetry for deep performance analysis (see
 [ADR-0011](docs/adr/0011-unified-observability.md)).
+
+#### Surviving workflow observations
+
+Ordinary `just tsc` (including `just tsc fix`) best-effort records the
+recipe-owned request under `.xtask/run/<handle>.trace.d/` and, after completion,
+`<handle>.trace.json`. Its envelope begins at the passive recorder's monotonic
+start, before dependency setup, and ends when the owner publishes its saved
+setup/request result. It includes the shared Just request's startup/evaluation
+and recorder handoff overhead; outer Just evaluation and other pre-entry work
+are outside the envelope and unknown. This is request duration, not compiler
+execution time. The recipe runs setup and the fixed shared Just leaf directly
+with inherited streams, skips the request after setup failure, and returns its
+immediately saved status. Recorder refusal, absence or write failure is
+diagnostic only. There are no observation traps, workload supervision or
+competing signal/cleanup owners.
+
+Records contain bounded verify/fix mode, monotonic timing and observed
+success/failure boundary/status. Source and compiler/tool identities currently
+remain explicitly `unknown`; the recorder's package version is not compiler
+identity or dirty-input provenance. Linux correlates the host clock with its
+boot UUID; macOS reads the fixed `/usr/sbin/sysctl -n kern.bootsessionuuid`
+metadata utility. Unavailable/malformed metadata or a mismatched boot/origin is
+refused, not replaced with fabricated elapsed time. A missing finish retains
+useful start context with outcome/boundary unknown: it does not imply success, a
+signal or cleanup. **Raw output not archived:** original compiler diagnostics
+remain on inherited stdout/stderr; these passive records promise no later
+retrieval. Explicit outer `traced-run -- just tsc` capture is separate,
+user-selected output capture, not automatic compiler-output archival.
+
+The native **Validation hermetic** CI job remains the owner of job/step timing,
+status, source context and logs. Its optional `always()` diagnostic upload keeps
+available complete/partial `.xtask/diagnostics/` and `.xtask/run/` evidence,
+including hidden paths, for **14 days**. Missing files and upload failure warn
+visibly without changing the workload verdict. Required producer evidence and
+aggregate checks remain authoritative; optional diagnostics do not certify
+completeness. Native CI logs retain their existing 14-day policy. Neither local
+request latency nor CI duration proves a fresh cache, substitution or newly
+executed Nix builder work. Nested/overlapping intervals are not additive CPU or
+human effort and must not be summed as such.
+
+Checkout-local runner stdout/stderr, named trace fragments and completed traces
+are not count-pruned: they remain for the worktree lifetime, with growing disk
+usage accepted. Monitor storage explicitly; capture/storage failures are
+incidents, not successful observations. No collector, expiry service or implicit
+removal is provided.
+
+For consumer-selected export, choose a fresh absolute destination and explicitly
+select the available files of the intended handle. For example, with a completed
+observation, run these existing coreutils commands from the checkout in Bash:
+
+```bash
+handle='<selected-handle>'
+destination='/absolute/consumer-selected/export'
+mkdir -- "$destination"
+cd .xtask/run
+files=("$handle.trace.d/start.jsonl" "$handle.trace.d/finish.jsonl" "$handle.trace.json")
+sha256sum -- "${files[@]}" > "$destination/selected.sha256"
+cp --parents -- "${files[@]}" "$destination/"
+sha256sum --check "$destination/selected.sha256"
+(cd "$destination" && sha256sum --check selected.sha256)
+```
+
+For a partial observation, select only its available fragments (at minimum
+`<handle>.trace.d/start.jsonl`), not an invented final trace. Check every
+command's exit status before proceeding. The manifest preserves selected
+relative handle identities and byte hashes; rechecking both source and export
+detects missing, changed or incorrectly selected bytes, not workload
+completeness or provenance. A failed copy/hash check is an export incident: keep
+source evidence, report the failure and do not infer removal or workload-rerun
+authority. Successful export also leaves source intact. Any removal requires
+separate explicit authorization; these commands and the observation grant none.
 
 #### Repeatable performance harness
 
@@ -2052,47 +2138,46 @@ server-function coverage verification to `just validate-no-e2e`.
 - `checks.x86_64-linux.static-docs` — the shared `recipes/prettier.just`
   Markdown leaf, with pinned Just/Prettier and admitted Markdown, formatter
   configuration and recipe inputs; no Rust docs tool.
-- `checks.x86_64-linux.static-typescript` — the unchanged named
-  `devtool check tsc`, with its own validation verdict and pinned type
-  dependencies. Its narrow direct TypeScript/config/manifest filter still has
-  the accepted whole-end2end transitive coupling through `e2ePackage`. The leaf
-  is non-substitutable, but valid local outputs can be reused.
+- `checks.x86_64-linux.static-typescript` — the shared named `tsc` leaf in
+  `recipes/static.just`, with pinned Just and compiler, its own validation
+  verdict, and explicit dependency setup. The recipe is admitted alongside the
+  narrow direct TypeScript/config/manifest population, which still has the
+  accepted whole-end2end transitive coupling through `e2ePackage`. The leaf is
+  non-substitutable, but valid local outputs can be reused.
 - `checks.x86_64-linux.rust-format` —
-  `devtool check --group rust-format --sandbox-cargo`: product `fmt`, scoped
-  `leptosfmt`, then `tools-fmt --all`. Product/tools Cargo populations overlap,
-  so these share one verdict. Flake checks select it, and hermetic validation
-  requests it between `static-typescript` and residual `static-code`. Direct
-  inputs include non-xtask Rust sources, Cargo manifests/locks/build
-  configuration, Rust toolchain and formatter configuration. Its real closure
-  also includes compiled `devtoolBin`, both workspace offline Cargo homes and
-  the pinned toolchain/formatter, with their transitive sources, embedded assets
-  and vendor inputs. Thus a CSS or migration change admitted by devtool can
-  invalidate this leaf even when its direct filter excludes that file. Valid
-  local-store outputs may be reused; request duration is not evidence of current
-  formatter execution, and no speedup or narrow-cache claim follows.
+  `just --justfile recipes/static.just --working-directory . rust-format verify sandbox`:
+  product `fmt`, scoped `leptosfmt`, then `tools-fmt --all`. Product/tools Cargo
+  populations overlap, so these share one verdict. Flake checks select it, and
+  hermetic validation requests it between `static-typescript` and residual
+  `static-code`. Direct inputs include non-xtask Rust sources, Cargo
+  manifests/locks/build configuration, Rust toolchain and formatter
+  configuration. Its real closure also includes compiled `repository-policy` for
+  the narrow formatter adapter, both workspace offline Cargo homes and the
+  pinned toolchain/formatter, with their transitive sources and vendor inputs.
+  The adapter package also admits common/macros for the Org extractor; sharing a
+  package is a real invalidation and dependency cost, not source isolation
+  between its binaries. Valid local-store outputs may be reused; request
+  duration is not evidence of current formatter execution, and no speedup or
+  narrow-cache claim follows.
 - `checks.x86_64-linux.static-code` — residual non-Clippy shared static
   definitions outside TypeScript, Rust formatting, standalone ERT, the census
   verdict and Elisp formatting/byte-compilation (including end-to-end
   formatting, cargo-deny, and repository scanners), executed with existing
   offline Cargo homes. It requests the narrow Clippy aggregate once; that
   aggregate depends on six independently buildable terminal verdicts and
-  executes no lint itself. `devtool check --all` is the ordered, duplicate-free
-  union of `typescript`, `rust-format`, `code`, and `ert`, including the six
-  Clippy units in the code group; Prettier is outside this inventory and called
+  executes no lint itself. `just static-all` preserves the ordered,
+  duplicate-free union of TypeScript, Rust-format, code, and ERT, including the
+  six Clippy units in code; Prettier is outside this inventory and called
   directly by Just/Nix. Just also runs the separate host `xtask-clippy` step;
   hermetic validation requests its independent raw Nix verdict alongside the
   six-unit aggregate, not as part of that aggregate's population.
-- `checks.x86_64-linux.static-elisp` — the existing `devtool check elisp-fmt`
-  verify command followed by `devtool check byte-compile`, over the complete
-  non-Markdown Elisp source tree in a writable copy. Direct inputs include that
-  source, pinned `emacsForCi`, and `TZDIR`; compiled `devtoolBin` brings its
-  actual transitive tooling source/dependency closure. The commands need no
-  offline Cargo home, Node/Playwright, or Git; those build inputs, if needed,
-  enter only through `devtoolBin`. Elisp-source changes affect this leaf and
-  also change `static-code`'s observed identity through an existing transitive
-  input, despite exclusion from its direct source filter. Devtool/tool-lock
-  changes may invalidate this leaf through `devtoolBin`. The verdict is
-  non-substitutable, but valid local output reuse remains possible.
+- `checks.x86_64-linux.static-elisp` — shared `elisp-fmt` Verify followed by
+  shared `byte-compile`, over the complete non-Markdown Elisp source tree in a
+  writable copy. Its admitted recipe and pinned Just, `emacsForCi`, and `TZDIR`
+  replace the former devtool build dependency. It needs no offline Cargo home,
+  Node/Playwright, or Git. The verdict is non-substitutable, but valid local
+  output reuse remains possible. This selected change does not certify every
+  family coupling or discharge the separately recorded invalidation deferrals.
 - `checks.x86_64-linux.static-e2e-census` — Nix's `setup-e2e-node-modules`
   followed by `node end2end/e2eCensusContract.ts`, preserving the existing
   census population independently of `tsc`. Its direct sources are the
@@ -2101,23 +2186,23 @@ server-function coverage verification to `just validate-no-e2e`.
   `e2ePackage` supplies the transitive pinned npm closure, which is broader than
   the direct census filter and may invalidate the leaf. It is non-substitutable,
   may reuse a valid local output, and is requested once by hermetic static
-  validation; host `devtool check --all` remains unchanged.
-- `checks.x86_64-linux.static-ert` — `devtool check --group ert`, the standalone
-  pure runner over the complete non-Markdown Elisp tree, in a writable copy,
-  with existing `emacsForCi`, Git and timezone inputs. The separate combined
-  pure/live coverage producer below is unchanged. Hermetic validation requests
-  `static-docs`, `static-typescript`, `rust-format`, `static-code`,
-  `static-elisp`, `static-e2e-census`, `static-ert`, `xtask-format`, and
-  `xtask-clippy`, in that order. The ERT leaf is non-substitutable but may reuse
-  a valid local output. Child timing is separate from request duration: host
-  xtask accepts only current captured devtool stderr through one
-  check-parameterized bounded parser. Both tsc and ERT use the same child timing
-  producer. Their Nix requests share current live `internal-json` local-builder
-  activity correlation parameterized by selected derivation and check, verified
-  with Nix 2.34.9: exact selected derivation, active activity-ID-linked child
-  event and matching stop. Reuse or missing/malformed/ambiguous/unsupported
-  evidence leaves execution timing unavailable; retained logs are never timing
-  inputs. Request duration and reuse classification remain separate.
+  validation; the standalone host `just static-all` population is unchanged.
+- `checks.x86_64-linux.static-ert` — `devtool check ert`, the standalone pure
+  runner over the complete non-Markdown Elisp tree, in a writable copy, with
+  pinned Just, admitted `recipes/static.just`, existing `emacsForCi`, Git and
+  timezone inputs. The separate combined pure/live coverage producer below is
+  unchanged. Hermetic validation requests `static-docs`, `static-typescript`,
+  `rust-format`, `static-code`, `static-elisp`, `static-e2e-census`,
+  `static-ert`, `xtask-format`, and `xtask-clippy`, in that order. The ERT leaf
+  is non-substitutable but may reuse a valid local output. ERT's schema-2
+  `timing_scope=request` event measures the fixed Just request, including
+  startup/evaluation, not exact Emacs execution. The retained host utility
+  parser admits only current captured ERT stderr; missing/malformed/ambiguous
+  evidence stays unavailable and never changes workload status. TSC's old
+  devtool child event is retired; its public owner uses the passive request
+  observation above. No passive-trace ingestion or new Nix child-timing
+  collector is introduced. Retained logs are never timing inputs; Nix request
+  duration and output reuse do not prove fresh builder execution.
 - `checks.x86_64-linux.xtask-format` — pinned raw
   `cargo fmt --manifest-path xtask/Cargo.toml --check`, without `--all`. Its
   bounded source includes xtask Rust targets and required Cargo/configuration

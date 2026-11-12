@@ -26,17 +26,6 @@ fn main() {
     }
     // Artifact verdicts are deliberately plain commands: no build hook, lifecycle
     // sidecar, StepResult, or presentation wrapper can select their evidence.
-    if let Command::OrgTimezoneManifest { files } = &cli.command {
-        let report = xtask::org_timezone_manifest::extract(files);
-        match serde_json::to_string_pretty(&report) {
-            Ok(json) => println!("{json}"),
-            Err(error) => {
-                eprintln!("org-timezone-manifest: {error}");
-                std::process::exit(2);
-            }
-        }
-        std::process::exit(i32::from(!report.diagnostics.is_empty()));
-    }
     let artifact = xtask::artifact_verdict(&cli.command);
     if let Some(verdict) = artifact {
         match verdict {

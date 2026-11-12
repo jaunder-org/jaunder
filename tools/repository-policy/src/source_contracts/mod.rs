@@ -1,0 +1,26 @@
+//! Fixed source-contract policies with shared private parsing support.
+mod common_host_target_closure;
+mod e2e_collector_config_check;
+mod e2e_goto_wrapper_check;
+mod e2e_scaffold_check;
+mod e2e_server_fn_endpoint_check;
+mod e2e_telemetry_boundary_check;
+mod html_sink_check;
+mod ident_gate;
+mod lint_suppression_check;
+mod operations;
+mod proffered_secret_check;
+mod raw_html_door_check;
+mod scan;
+mod server_fn_registrar_check;
+mod server_fn_tracing_check;
+mod server_fn_wire_arg_error_check;
+mod sqlx_newtype_bind_check;
+mod sqlx_newtype_decode_check;
+mod target_arch_placement_check;
+mod test_pattern_check;
+mod thin_components;
+mod traced_context_check;
+mod write_transaction_contract_check;
+mod xlang_literal_check;
+pub use operations::Operation;

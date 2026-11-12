@@ -14,11 +14,11 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::runtime::{Builder, Runtime};
 
+mod recorder;
 #[cfg(unix)]
 mod terminal;
 
 const RUN_DIR: &str = ".xtask/run";
-const RUN_HISTORY_LIMIT: usize = 50;
 const TRACE_ENV: &str = "JAUNDER_TRACED_RUN_CONTEXT";
 static NEXT_RUN: AtomicU64 = AtomicU64::new(1);
 
@@ -70,87 +70,6 @@ fn alloc_id() -> String {
         std::process::id(),
         NEXT_RUN.fetch_add(1, Ordering::Relaxed)
     )
-}
-
-/// Keep only the newest history files. Enumeration/stat/removal failures are
-/// aggregated into one stderr warning and never change the child result.
-fn prune(dir: &Path) {
-    prune_with(dir, |path| fs::remove_file(path), &mut std::io::stderr());
-}
-
-fn prune_with(
-    dir: &Path,
-    mut remove: impl FnMut(&Path) -> std::io::Result<()>,
-    stderr: &mut impl Write,
-) {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(_) => {
-            report_cleanup_failure(true, "devtool.run.history_prune", stderr);
-            return;
-        }
-    };
-    let population = entries.filter_map(|entry| match entry {
-        Ok(entry) => {
-            let path = entry.path();
-            if !matches!(
-                path.extension().and_then(|extension| extension.to_str()),
-                Some("out" | "err")
-            ) {
-                return None;
-            }
-            let modified = entry.metadata().and_then(|metadata| metadata.modified());
-            Some(Ok((path, modified)))
-        }
-        Err(error) => Some(Err(error)),
-    });
-    prune_entries_with(population, &mut remove, stderr);
-}
-
-fn prune_entries_with(
-    entries: impl IntoIterator<
-        Item = std::io::Result<(PathBuf, std::io::Result<std::time::SystemTime>)>,
-    >,
-    mut remove: impl FnMut(&Path) -> std::io::Result<()>,
-    stderr: &mut impl Write,
-) {
-    let mut failed = false;
-    let mut files = Vec::new();
-    for entry in entries {
-        let (path, modified) = match entry {
-            Ok(entry) => entry,
-            Err(_) => {
-                failed = true;
-                continue;
-            }
-        };
-        match modified {
-            Ok(modified)
-                if matches!(
-                    path.extension().and_then(|extension| extension.to_str()),
-                    Some("out" | "err")
-                ) =>
-            {
-                files.push((modified, path))
-            }
-            Ok(_) => continue,
-            Err(_) => failed = true,
-        }
-    }
-    files.sort_by_key(|file| std::cmp::Reverse(file.0));
-    for (_, path) in files.into_iter().skip(RUN_HISTORY_LIMIT) {
-        failed |= remove(&path).is_err();
-    }
-    report_cleanup_failure(failed, "devtool.run.history_prune", stderr);
-}
-
-fn report_cleanup_failure(failed: bool, key: &str, stderr: &mut impl Write) {
-    if failed {
-        let _ = writeln!(
-            stderr,
-            "devtool: warning: {key}: ignored failure during runner cleanup"
-        );
-    }
 }
 
 /// Count `\n` bytes (wc -l semantics) by streaming, so a huge output file never
@@ -385,7 +304,6 @@ fn execute_with_trace(
     let err_path = dir.join(format!("{id}.err"));
 
     let cap = exec_capture(argv, cwd, timeout, &out_path, &err_path, trace_context)?;
-    prune(&dir);
 
     let process_code = if cap.timed_out {
         124
@@ -877,41 +795,6 @@ fn alloc_flow_id() -> u64 {
         | (NEXT_FLOW.fetch_add(1, Ordering::Relaxed) & u64::from(u32::MAX))
 }
 
-fn prune_traces(dir: &Path) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        eprintln!("traced-run: warning: trace pruning unavailable");
-        return;
-    };
-    let mut completed = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.ends_with(".trace.json"))
-            && let Ok(modified) = entry.metadata().and_then(|metadata| metadata.modified())
-        {
-            completed.push((modified, path));
-        }
-    }
-    completed.sort_by_key(|entry| std::cmp::Reverse(entry.0));
-    for (_, trace) in completed.into_iter().skip(RUN_HISTORY_LIMIT) {
-        let stem = trace
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default()
-            .trim_end_matches(".trace.json");
-        if fs::remove_file(&trace).is_err() {
-            eprintln!("traced-run: warning: completed trace pruning failed");
-            continue;
-        }
-        let records = dir.join(format!("{stem}.trace.d"));
-        if records.exists() && fs::remove_dir_all(records).is_err() {
-            eprintln!("traced-run: warning: completed trace record pruning failed");
-        }
-    }
-}
-
 impl TraceSpan {
     fn start(name: &str, cwd: &Path) -> Result<Self, RunError> {
         if name.is_empty()
@@ -1050,76 +933,69 @@ impl TraceSpan {
                 b"participant registration could not be cleared\n",
             );
         }
-        if self.root {
-            self.publish_root(&dir);
-        }
-    }
-
-    fn publish_root(&self, dir: &Path) {
-        let mut events = Vec::new();
-        if dir.join("incomplete").exists()
-            || fs::read_dir(dir).is_ok_and(|entries| {
-                entries
-                    .flatten()
-                    .any(|entry| entry.file_name().to_string_lossy().starts_with("active-"))
-            })
+        if self.root
+            && let Err(error) = publish_trace_records(&dir)
         {
-            eprintln!(
-                "traced-run: warning: incomplete span records or unfinished participants; merged trace withheld"
-            );
-            return;
-        }
-        let Ok(entries) = fs::read_dir(dir) else {
-            eprintln!("traced-run: warning: trace records unavailable");
-            return;
-        };
-        let mut complete = true;
-        for entry in entries {
-            let Ok(entry) = entry else {
-                complete = false;
-                continue;
-            };
-            if entry
-                .path()
-                .extension()
-                .is_some_and(|extension| extension == "jsonl")
-            {
-                let Ok(bytes) = fs::read(entry.path()) else {
-                    complete = false;
-                    continue;
-                };
-                for line in bytes
-                    .split(|byte| *byte == b'\n')
-                    .filter(|line| !line.is_empty())
-                {
-                    match serde_json::from_slice::<serde_json::Value>(line) {
-                        Ok(event) => events.push(event),
-                        Err(_) => complete = false,
-                    }
-                }
-            }
-        }
-        if !complete {
-            eprintln!(
-                "traced-run: warning: span records could not be fully read; merged trace withheld"
-            );
-            return;
-        }
-        present_xtask_workflow(&mut events);
-        let destination = dir.with_extension("json");
-        let temporary = destination.with_extension("tmp");
-        let document = serde_json::json!({"traceEvents":events,"displayTimeUnit":"ms"});
-        if fs::write(&temporary, document.to_string()).is_err()
-            || fs::rename(&temporary, &destination).is_err()
-        {
-            eprintln!("traced-run: warning: final trace could not be published");
-        } else {
-            prune_traces(dir.parent().unwrap_or(dir));
+            eprintln!("traced-run: warning: {error}");
         }
     }
 }
 
+// Shared publication for named execution spans and passive observations. Link is
+// atomic and refuses an existing destination; retained fragments remain private.
+fn publish_trace_records(dir: &Path) -> std::io::Result<()> {
+    let mut events = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name == "incomplete" || name.to_string_lossy().starts_with("active-") {
+            return Err(std::io::Error::other(
+                "incomplete span records or unfinished participants; merged trace withheld",
+            ));
+        }
+        if entry.path().extension().is_some_and(|ext| ext == "jsonl") {
+            for line in fs::read(entry.path())?
+                .split(|byte| *byte == b'\n')
+                .filter(|line| !line.is_empty())
+            {
+                events.push(serde_json::from_slice::<serde_json::Value>(line)?);
+            }
+        }
+    }
+    present_xtask_workflow(&mut events);
+    let destination = dir.with_extension("json");
+    let temporary = dir.join("merged.tmp");
+    let document = serde_json::json!({"traceEvents":events,"displayTimeUnit":"ms"});
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temporary)?;
+    file.write_all(document.to_string().as_bytes())?;
+    fs::hard_link(&temporary, &destination)?;
+    fs::remove_file(&temporary)?;
+    Ok(())
+}
+
 pub fn traced_cli(args: Vec<String>) -> ! {
+    if args
+        .first()
+        .is_some_and(|arg| matches!(arg.as_str(), "record-start" | "record-finish"))
+    {
+        let result = std::env::current_dir().and_then(|cwd| recorder::cli(&args, &cwd));
+        match result {
+            Ok(Some(handle)) => println!("{handle}"),
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("traced-run: recorder: {error}");
+                std::process::exit(64);
+            }
+        }
+        std::process::exit(0);
+    }
     #[cfg(unix)]
     if args.first().is_some_and(|arg| arg == terminal::REENTRY) {
         terminal::exec(&args[1..]);
@@ -1135,7 +1011,7 @@ pub fn traced_cli(args: Vec<String>) -> ! {
         match arg.as_str() {
             "--help" | "-h" => {
                 println!(
-                    "Usage: traced-run [--name LABEL] [--timeout SECONDS] [--launcher] -- PROGRAM [ARG ...]"
+                    "Usage: traced-run [--name LABEL] [--timeout SECONDS] [--launcher] -- PROGRAM [ARG ...]\n       traced-run record-start tsc-request verify|fix\n       traced-run record-finish HANDLE EXIT-CODE none|setup|request"
                 );
                 std::process::exit(0);
             }
@@ -1769,107 +1645,6 @@ mod tests {
         assert_eq!(code, 124);
         assert!(Path::new(&r.stdout.path).exists());
         assert!(Path::new(&r.stderr.path).exists());
-    }
-
-    // Set mtime without a dependency: `File::set_modified` is stable since 1.75.
-    fn set_mtime(p: &Path, t: std::time::SystemTime) {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(p)
-            .unwrap()
-            .set_modified(t)
-            .unwrap();
-    }
-
-    #[test]
-    fn prune_keeps_newest_limit() {
-        let fixture = tmp();
-        let dir = fixture.path();
-        for i in 0..(RUN_HISTORY_LIMIT + 10) {
-            let p = dir.join(format!("{i:04}.out"));
-            std::fs::write(&p, b"x").unwrap();
-            let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(i as u64);
-            set_mtime(&p, t);
-        }
-        prune(dir);
-        let remaining = std::fs::read_dir(dir).unwrap().count();
-        assert_eq!(remaining, RUN_HISTORY_LIMIT);
-        assert!(!dir.join("0000.out").exists(), "oldest should be pruned");
-        assert!(
-            dir.join(format!("{:04}.out", RUN_HISTORY_LIMIT + 9))
-                .exists(),
-            "newest should remain"
-        );
-    }
-
-    #[test]
-    fn ancillary_history_warning_preserves_primary_code() {
-        let fixture = tmp();
-        let dir = fixture.path();
-        for i in 0..=RUN_HISTORY_LIMIT {
-            let path = dir.join(format!("{i:04}.out"));
-            std::fs::write(&path, b"x").unwrap();
-            set_mtime(
-                &path,
-                std::time::UNIX_EPOCH + std::time::Duration::from_secs(i as u64),
-            );
-        }
-        let primary_code = 124;
-        let mut stderr = Vec::new();
-        prune_with(
-            dir,
-            |_| {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "sensitive",
-                ))
-            },
-            &mut stderr,
-        );
-        assert_eq!(primary_code, 124);
-        let warning = String::from_utf8(stderr).unwrap();
-        assert_eq!(warning.matches("devtool.run.history_prune").count(), 1);
-        assert_eq!(warning.lines().count(), 1);
-        assert!(!warning.contains("sensitive"));
-    }
-    #[test]
-    fn ancillary_warning_history_population_failures_warn_once_per_attempt() {
-        let fixture = tmp();
-        let missing = fixture.path().join("missing");
-        let mut stderr = Vec::new();
-        prune_with(
-            &missing,
-            |_| unreachable!("an unreadable population has no removal candidates"),
-            &mut stderr,
-        );
-        let warning = String::from_utf8(stderr).unwrap();
-        assert_eq!(warning.matches("devtool.run.history_prune").count(), 1);
-        assert_eq!(warning.lines().count(), 1);
-
-        for population in [
-            vec![Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "sensitive directory entry",
-            ))],
-            vec![Ok((
-                PathBuf::from("sensitive"),
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "sensitive metadata or modified time",
-                )),
-            ))],
-        ] {
-            let mut stderr = Vec::new();
-            prune_entries_with(
-                population,
-                |_| unreachable!("failed population members are never removed"),
-                &mut stderr,
-            );
-            let warning = String::from_utf8(stderr).unwrap();
-            assert_eq!(warning.matches("devtool.run.history_prune").count(), 1);
-            assert_eq!(warning.lines().count(), 1);
-            assert!(!warning.contains("sensitive"));
-        }
     }
 
     #[test]

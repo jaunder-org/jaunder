@@ -19,6 +19,11 @@ impl Workflow {
             root.path().join("recipes/prettier.just"),
         )
         .unwrap();
+        fs::copy(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../recipes/static.just"),
+            root.path().join("recipes/static.just"),
+        )
+        .unwrap();
         fs::create_dir(root.path().join("scripts")).unwrap();
         // Gate composition observes only the aggregate boundary. The actual helper's
         // settlement, artifact and failure behavior is exercised by e2e_workflow.
@@ -33,7 +38,17 @@ if [ "${FAIL_COMMAND:-}" = 'e2e-workflow all' ]; then exit 17; fi
         .unwrap();
         let bin = root.path().join("bin");
         fs::create_dir(&bin).unwrap();
-        for tool in ["cargo", "nix", "devtool", "prettier", "git"] {
+        for tool in [
+            "cargo",
+            "nix",
+            "devtool",
+            "prettier",
+            "git",
+            "scoped-leptosfmt",
+            "emacs",
+            "ast-grep",
+            "tsc",
+        ] {
             let path = bin.join(tool);
             fs::write(
                 &path,
@@ -370,6 +385,9 @@ fn broad(mode: &str, shared_docs: bool) -> Vec<Vec<String>> {
         if name == "prettier-markdown" && shared_docs {
             expected.extend(commands(&["cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin git-index-safety -- prepush-docs"]));
         } else {
+            if name == "leptosfmt" {
+                expected.extend(commands(&["cargo build --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin scoped-leptosfmt --target-dir tools/target"]));
+            }
             expected.push(devtool(name, mode));
         }
     }
@@ -410,8 +428,19 @@ fn broad(mode: &str, shared_docs: bool) -> Vec<Vec<String>> {
         "e2e-scaffold",
         "xlang-literal",
     ] {
-        if name == "adr-format" {
-            expected.extend(commands(&["cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin repository-docs -- adr-format"]));
+        if [
+            "sequence-check",
+            "adr-format",
+            "adr-readme-parity",
+            "adr-view-parity",
+            "doc-links",
+            "flow-docs",
+        ]
+        .contains(&name)
+        {
+            expected.extend(commands(&[&format!("cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin repository-docs -- {name}")]));
+        } else if name != "doctest-fences" {
+            expected.extend(commands(&[&format!("cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin source-contracts -- {name}")]));
         } else {
             expected.push(vec![
                 "cargo".into(),
@@ -455,14 +484,57 @@ fn devtool(name: &str, mode: &str) -> Vec<String> {
             .into(),
         ];
     }
-    let mut argv = commands(&[
-        "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p devtool --bin devtool -- check",
-    ])
-    .pop()
-    .unwrap();
-    argv.push(name.into());
-    if mode == "fix" {
-        argv.push("--fix".into());
+    let line = match name {
+        "fmt" => "cargo fmt",
+        "leptosfmt" => return vec!["scoped-leptosfmt".into(), mode.into()],
+        "tools-fmt" => "cargo fmt --manifest-path tools/Cargo.toml --all",
+        "elisp-fmt" => {
+            return commands(&[if mode == "fix" {
+                "emacs --batch -Q -l elisp/scripts/format.el -f jaunder-fmt-fix"
+            } else {
+                "emacs --batch -Q -l elisp/scripts/format.el -f jaunder-fmt-check"
+            }])
+            .pop()
+            .unwrap();
+        }
+        "ast-grep-tests" => "ast-grep test --config sgconfig.yml",
+        "no-full-reload" => {
+            "ast-grep scan --config sgconfig.yml --filter ^no-full-reload$ web/src client/src"
+        }
+        "byte-compile" => "emacs --batch -Q -l elisp/scripts/byte-compile.el",
+        "cargo-deny" => "cargo deny check",
+        "product-core-clippy" => {
+            "cargo clippy --workspace --exclude web --exclude client --exclude csr --all-targets -- -D warnings"
+        }
+        "web-server-clippy" => "cargo clippy -p web --features server --all-targets -- -D warnings",
+        "web-no-server-clippy" => {
+            "cargo clippy -p web --no-default-features --all-targets -- -D warnings"
+        }
+        "client-host-clippy" => {
+            "cargo clippy -p client --features csr --all-targets -- -D warnings"
+        }
+        "wasm-clippy" => {
+            "cargo clippy -p web -p client -p csr --features csr --target wasm32-unknown-unknown -- -D warnings"
+        }
+        "tools-clippy" => {
+            "cargo clippy --manifest-path tools/Cargo.toml --workspace --all-targets -- -D warnings"
+        }
+        "tsc" => "tsc --noEmit -p end2end/tsconfig.json",
+        "ert" => {
+            return {
+                let mut argv = commands(&["cargo run --locked --quiet --manifest-path tools/Cargo.toml -p devtool --bin devtool -- check"]).pop().unwrap();
+                argv.push(name.into());
+                if mode == "fix" {
+                    argv.push("--fix".into());
+                }
+                argv
+            };
+        }
+        _ => panic!("unexpected static leaf {name}"),
+    };
+    let mut argv = commands(&[line]).pop().unwrap();
+    if mode != "fix" && matches!(name, "fmt" | "tools-fmt") {
+        argv.push("--check".into());
     }
     argv
 }
@@ -934,7 +1006,22 @@ fn cargo_recipes_preserve_cache_environment_and_normalize_worktree_roots() {
 #[test]
 fn host_devtool_launch_reflects_source_edits_without_shell_reentry() {
     let workflow = Workflow::new();
-    // Use real Cargo on a tiny checkout-local devtool, not the PATH devtool stub.
+    // Exercise the maintained ERT launch, not the retired TSC devtool consumer.
+    // Only composition is reduced: the actual variable and request line stay intact.
+    let source = fs::read_to_string(workflow.root.path().join("Justfile")).unwrap();
+    let owner = source
+        .lines()
+        .find(|line| line.starts_with("devtool :="))
+        .unwrap();
+    let request = source
+        .lines()
+        .find(|line| line.contains("{{devtool}} check ert"))
+        .unwrap();
+    fs::write(
+        workflow.root.path().join("Justfile"),
+        format!("{owner}\nert mode=\"verify\":\n{request}\n"),
+    )
+    .unwrap();
     fs::remove_file(workflow.root.path().join("bin/cargo")).unwrap();
     let tools = workflow.root.path().join("tools");
     fs::create_dir_all(tools.join("src")).unwrap();
@@ -957,8 +1044,8 @@ fn host_devtool_launch_reflects_source_edits_without_shell_reentry() {
             ),
         )
         .unwrap();
-        let (ok, _, stderr) = workflow.run(&["_host", "verify", "host"], "");
-        assert!(!ok, "fixture must stop at its first devtool check");
+        let (ok, _, stderr) = workflow.run(&["ert", "verify"], "");
+        assert!(!ok, "fixture must return the retained ERT workload failure");
         assert!(stderr.contains("17"), "{stderr}");
         assert_eq!(
             fs::read_to_string(workflow.root.path().join("source-version")).unwrap(),
@@ -977,12 +1064,12 @@ fn markdown_host_runs_the_complete_narrow_fix_surface_in_order() {
         commands(&[
             "prettier -w **/*.md",
             "prettier -w end2end",
-            "cargo xtask check-leaf sequence-check",
+            "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin repository-docs -- sequence-check",
             "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin repository-docs -- adr-format",
-            "cargo xtask check-leaf adr-readme-parity",
-            "cargo xtask check-leaf adr-view-parity",
-            "cargo xtask check-leaf doc-links",
-            "cargo xtask check-leaf flow-docs",
+            "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin repository-docs -- adr-readme-parity",
+            "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin repository-docs -- adr-view-parity",
+            "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin repository-docs -- doc-links",
+            "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin repository-docs -- flow-docs",
         ])
     );
 }

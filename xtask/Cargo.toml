@@ -39,15 +39,6 @@ tracing-subscriber = "0.3.23"
 url = "2.5.8"
 syn = { version = "2", features = ["full", "visit", "extra-traits"] }
 proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
-# `ToTokens`, to render structurally found decode targets and diagnostics. Already in the tree
-# via `syn`.
-quote = "1.0.47"
-oxc_allocator = "0.149.0"
-oxc_ast = "0.149.0"
-oxc_ast_visit = "0.149.0"
-oxc_parser = "0.149.0"
-oxc_syntax = "0.149.0"
-oxc_span = "0.149.0"
 tempfile = "3.27.0"
 # Wasm bundle attribution (#836): section spans and the name section, so
 # `audit-wasm --breakdown` can say which crates the bytes belong to. Host-side
@@ -61,7 +52,6 @@ sha2 = "0.11.0"
 # `e2e-local` bridges processkit's async supervision into xtask's synchronous
 # command runner; a background worker keeps process I/O pumps live between calls.
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "signal", "time"] }
-serde_yaml = "0.9.34"
 base64 = "0.22.1"
 # The standalone host adapter inherits version requirements, but not the root
 # workspace's patches. Keep the required forks at the exact root revisions.
@@ -75,9 +65,11 @@ webauthn-rs-core = { git = "https://github.com/jaunder-org/webauthn-rs", rev = "
 [target.'cfg(unix)'.dependencies]
 # Safe OS-provided lease flags and effective UID, without numeric flag tables,
 # /proc parsing for user identity, or shelling out to id.
-rustix = { version = "1.1.4", features = ["fs", "process", "time"] }
+rustix = { version = "1.1.6", features = ["fs", "process", "time"] }
 
 [dev-dependencies]
+# Maintained YAML-org successor; preserve the existing Serde/Value API (#1939).
+serde_yaml = { package = "yaml_serde", version = "0.10.7" }
 # Closed synthetic releases are used only by canonical adapter unit fixtures.
 host = { path = "../host", features = ["qualification"] }
 # Synthesizes the fixture modules the attribution tests parse, so no binary wasm

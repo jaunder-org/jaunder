@@ -79,6 +79,8 @@ fn runtime_matrix_equals_enabled_catalog_and_reconciliation_waits_for_all_produc
     let ci: serde_yaml::Value =
         serde_yaml::from_slice(&std::fs::read(repo().join(".github/workflows/ci.yml")).unwrap())
             .unwrap();
+    // GitHub Actions uses the YAML 1.2 string key, not a YAML 1.1 boolean.
+    assert!(ci["on"].as_mapping().is_some());
     let jobs = &ci["jobs"];
     assert_eq!(
         jobs["e2e-firefox-reconcile"]["if"].as_str(),

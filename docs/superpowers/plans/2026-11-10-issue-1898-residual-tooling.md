@@ -15,6 +15,9 @@ duplicate landed families or adopt PR1932 receipts. Approved design is
 supporting finite map is ignored `surviving-owners.md`, not an enduring source
 catalog.
 
+The following paragraph records historical intake status. Current qualified
+Task2 acceptance is recorded below, without claiming the overall cost outcome.
+
 This file is an ignored PROPOSED outline, not permission to run its proof. A
 later maintained target may be
 `docs/superpowers/plans/YYYY-MM-DD-issue-1898-residual-tooling.md`. Original
@@ -55,8 +58,15 @@ staged design bytes/index and shared stashes remain untouched now.
     to design approval. Do not postpone this decision until final deletion or
     equate fewer Rust lines/one successful command with success.
 
-- [ ] 2. Shared static definitions and remaining repository policies preserve
+- [x] 2. Shared static definitions and remaining repository policies preserve
       verdicts.
+  - Qualified acceptance: human `1898-task2-maintenance-reconsideration-v1`,
+    background `8156ef02-d6ad-46ed-a2f9-587fa0160e77`, **Accept qualified
+    checkpoint** via Manager. This is a POSITIVE-COST INTERMEDIATE (+277
+    supplied snapshot), not demonstrated reduction; overall #1898 lower-total
+    remains binding. Approval-documentation costs are recounted separately.
+    Original contract and verification requirements below remain unchanged; this
+    acceptance authorizes no Tasks3–7 work.
   - Contract: each pinned invocation/argument set lives once in a named Just
     leaf used by host and hermetic consumer; retain Fix/Verify, offline homes,
     target/platform and cargo-deny differences. Preserve narrow Leptosfmt error/

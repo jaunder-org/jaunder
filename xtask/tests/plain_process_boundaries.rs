@@ -61,22 +61,6 @@ fn checkout() -> TempDir {
 }
 
 #[test]
-fn artifact_verdict_bypasses_checkout_bootstrap() {
-    let dir = tempfile::tempdir().unwrap();
-    let summary = dir.path().join("summary.md");
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
-        .args(["org-timezone-manifest", "missing.org"])
-        .current_dir(dir.path())
-        .env("GITHUB_STEP_SUMMARY", &summary)
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert!(!report["diagnostics"].as_array().unwrap().is_empty());
-    assert!(!summary.exists());
-    assert!(!dir.path().join(".xtask").exists());
-}
-#[test]
 fn qualification_leaf_rejects_json_before_admission_without_report_artifacts() {
     let harness = "1111111111111111111111111111111111111111";
     let source = "2222222222222222222222222222222222222222";
@@ -229,15 +213,14 @@ fn run_leaf(dir: &Path, leaf: &str, summary: &Path) -> Output {
 }
 
 #[test]
-fn check_leaf_process_emits_plain_diagnostic_without_result_artifacts() {
+fn migrated_policy_leaf_is_retired_without_a_compatibility_forwarder() {
     let dir = checkout();
     let summary = dir.path().join("github-summary.md");
     let output = run_leaf(dir.path(), "doc-links", &summary);
 
-    assert!(output.status.success(), "{output:?}");
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("[ ok ] doc-links"), "{stdout}");
-    assert!(!stdout.contains("xtask PASSED"), "{stdout}");
+    assert!(!output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unknown check leaf"));
+    assert!(output.stdout.is_empty());
     assert!(!dir.path().join(".xtask/last-result.json").exists());
     assert!(!summary.exists());
 }

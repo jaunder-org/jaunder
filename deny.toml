@@ -102,6 +102,8 @@ allow = [
     "GPL-3.0-or-later",
     "ISC",
     "MIT",
+    # MIT without attribution; borrow-or-share 0.2.4 text reviewed against SPDX (#1939).
+    "MIT-0",
     "MPL-2.0",
     "Unicode-3.0",
     "Zlib",

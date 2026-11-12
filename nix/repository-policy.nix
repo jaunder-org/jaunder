@@ -1,8 +1,10 @@
-# Native repository policy owns no product source or derivation-time execution.
+# Native repository policy admits only its real Cargo path closure (including
+# common/macros for Org parsing), never the product or other host tool owners.
 {
   pkgs,
   craneLib,
   cargoMemberSource,
+  cargoPackageClosure,
   workspaceMembers,
   withWorkspacePlaceholders,
   vendorPinnedFork,
@@ -13,10 +15,11 @@ let
   toolsMembers = map (name: "tools/${name}") (
     builtins.fromTOML (builtins.readFile ../tools/Cargo.toml)
   ).workspace.members;
-  placeholders = builtins.filter (name: name != member) (workspaceMembers ++ toolsMembers);
+  members = cargoPackageClosure [ member ];
+  placeholders = builtins.filter (name: !(builtins.elem name members)) (workspaceMembers ++ toolsMembers);
   cargoSourceAdmits = relative: type:
     type == "directory"
-    || cargoMemberSource [ member ] "${root}/${relative}" type
+    || cargoMemberSource members "${root}/${relative}" type
     || relative == "tools/Cargo.toml"
     || relative == "tools/Cargo.lock"
     || builtins.any (name: relative == "${name}/Cargo.toml") placeholders;
@@ -54,7 +57,7 @@ craneLib.buildPackage {
   doNotPostBuildInstallCargoBinaries = true;
   installPhase = ''
     mkdir -p "$out/bin"
-    cp tools/target/debug/repository-docs tools/target/debug/git-index-safety "$out/bin/"
+    cp tools/target/debug/{repository-docs,source-contracts,git-index-safety,org-timezone-manifest,scoped-leptosfmt} "$out/bin/"
   '';
   meta = {
     license = pkgs.lib.licenses.gpl3Plus;

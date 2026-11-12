@@ -43,6 +43,26 @@ fn docs(root: &Path) -> Output {
         .unwrap()
 }
 #[test]
+fn documentation_verdict_emits_plain_diagnostics_without_result_artifacts() {
+    let temp = checkout();
+    let summary = temp.path().join("summary.md");
+    let output = Command::new(env!("CARGO_BIN_EXE_repository-docs"))
+        .arg("doc-links")
+        .current_dir(temp.path())
+        .env("GITHUB_STEP_SUMMARY", &summary)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"[ ok ] doc-links\n");
+    assert!(!summary.exists());
+    assert!(!temp.path().join(".xtask/last-result.json").exists());
+}
+
+#[test]
 fn unreadable_checkout_admission_precedes_hooks_and_policy() {
     let temp = checkout();
     fs::remove_file(temp.path().join("tools/Cargo.toml")).unwrap();
@@ -558,6 +578,17 @@ fn selected_native_source_excludes_product_and_other_tool_implementations() {
         .unwrap();
     let expression = r#"let f = builtins.getFlake ("git+file://" + toString ./.); p = f.packages.${builtins.currentSystem}; tool = p.repository-policy;
       in {
+        task2Inputs = builtins.all (relative:
+          tool.cargoSourceAdmits relative "regular"
+          && builtins.pathExists (tool.src + "/${relative}")
+          && !(builtins.pathExists (p.devtool.src + "/${relative}"))
+          && !(builtins.pathExists (p.jaunder.src + "/${relative}"))
+          && !(builtins.pathExists (p.csrWasm.src + "/${relative}"))
+          && !(builtins.pathExists (f.checks.${builtins.currentSystem}.wasm-tests.src + "/${relative}"))
+        ) [ "tools/repository-policy/src/scoped_leptosfmt.rs" "tools/repository-policy/src/bin/scoped-leptosfmt.rs"
+            "tools/repository-policy/src/org_timezone_manifest.rs" "tools/repository-policy/src/bin/org-timezone-manifest.rs" ];
+        common = tool.cargoSourceAdmits "common/src/org.rs" "regular" && builtins.pathExists (tool.src + "/common/src/org.rs");
+        macros = tool.cargoSourceAdmits "macros/src/lib.rs" "regular" && builtins.pathExists (tool.src + "/macros/src/lib.rs");
         native = tool.sourceAdmits "tools/repository-policy/src/safety.rs" "regular";
         dependency = tool.sourceAdmits "tools/repository-policy/Cargo.toml" "regular";
         test = tool.sourceAdmits "tools/repository-policy/tests/native.rs" "regular";
@@ -594,7 +625,7 @@ fn selected_native_source_excludes_product_and_other_tool_implementations() {
     let actual: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         actual,
-        serde_json::json!({"native":true,"dependency":true,"test":true,"evaluation":true,"evaluationInCargo":false,"productInNative":false,"devtoolInNative":false,"csrInNative":false,"nativeInCsrAdmission":false,"nativeFile":true,"nativeInDevtool":false,"nativeInProduct":false,"nativeInCsr":false,"nativeInWasm":false})
+        serde_json::json!({"task2Inputs":true,"common":true,"macros":true,"native":true,"dependency":true,"test":true,"evaluation":true,"evaluationInCargo":false,"productInNative":false,"devtoolInNative":false,"csrInNative":false,"nativeInCsrAdmission":false,"nativeFile":true,"nativeInDevtool":false,"nativeInProduct":false,"nativeInCsr":false,"nativeInWasm":false})
     );
 }
 #[test]

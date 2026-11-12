@@ -11,6 +11,26 @@ success; no replacement omnibus or generic workflow/reporting engine is built.
 
 ## Authority and prior design
 
+### Qualified Task2 checkpoint acceptance
+
+Human decision `1898-task2-maintenance-reconsideration-v1`, background
+`8156ef02-d6ad-46ed-a2f9-587fa0160e77`, exact answer **Accept qualified
+checkpoint**, relayed by Manager, accepts Task2 as a **POSITIVE-COST
+INTERMEDIATE** at the supplied **+277** snapshot, not demonstrated maintenance
+reduction. The overall #1898 lower-total outcome and original acceptance
+criteria below remain binding; no future savings are promised or credited. Added
+approval-documentation costs are recounted separately from that approved
+snapshot.
+
+Selected-proof limits and eight historical missing streams remain qualified;
+acceptance does not reconstruct evidence or expand assurance. No Tasks3–7,
+workspace redesign, shipping or cleanup is authorized. A normal hook-backed
+commit requires Lead's immediate exact-tree approval. Earlier
+proposed/intake-only wording below is retained as historical status, not current
+Task2 authority.
+
+### Historical design intake
+
 PROPOSED amendment, not approved implementation. Human restart “Yes, please”,
 relayed by Manager, authorizes intake/design only. The rewritten #1898/#1859/M33
 scope supersedes old tracker pause wording for this assignment, not product
@@ -23,6 +43,26 @@ command dispositions, known operator/safety retention and explicit material-loss
 confirmation; one linked whole-endpoint ADR; “None known” external users is not
 absence proof and adds no compatibility facade. All13 historical prerequisites
 are accepted/closed; actual consumer applicability, not labels, gates removal.
+
+## Qualified ERT timing approval
+
+Human decision `1898-ert-timing-envelope-v1`, background
+`a8718c2c-09e5-4739-a79f-c388da8d7454`, answer **Accept honest request timing**,
+relayed by Manager, authorizes the existing Instant/completion-event owner to
+invoke only the fixed named Just ERT leaf. Emacs argv lives once in Just. ERT's
+monotonic interval is explicitly **request duration including Just startup and
+evaluation**, never exact Emacs-child execution. Preserve one bounded completion
+event for completed success/failure, no fabricated completion on spawn error,
+inherited streams, independent host/hermetic populations and verdicts. No new
+timer/wrapper/framework or #1933 expansion; lower-total-maintenance acceptance
+remains unchanged.
+
+Manager released the TSC hold after actual PR1937 merge
+`7d8850c455c061a06c2b275479acc25174dae86d` (tree
+`e12f7c17765c58a3b73490420b95bb4c361363d0`, combined-main run43121355416). Its
+landed passive public request owner remains intact while the unchanged TSC argv
+moves once into the shared named Just leaf. Retire the obsolete devtool TSC
+invocation/event without expanding observation scope or weakening its limits.
 
 ## Approach and tradeoffs
 

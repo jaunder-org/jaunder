@@ -485,7 +485,7 @@ let
       ;
   };
   repositoryPolicyBin = import ./repository-policy.nix {
-    inherit pkgs craneLib cargoMemberSource workspaceMembers withWorkspacePlaceholders vendorPinnedFork;
+    inherit pkgs craneLib cargoMemberSource cargoPackageClosure workspaceMembers withWorkspacePlaceholders vendorPinnedFork;
   };
   cargoVendorDir = craneLib.vendorCargoDeps {
     inherit src;

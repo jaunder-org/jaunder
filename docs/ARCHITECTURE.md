@@ -2253,7 +2253,7 @@ proxies, and validation expressions remain prohibited.
 
 Within a live SPA session there are **no full document loads**
 ([ADR-0076](adr/0076-no-full-load-spa-navigation.md)): navigation is
-`leptos_router` (`use_navigate()` / `<a>`). The `no-full-reload` `devtool check`
+`leptos_router` (`use_navigate()` / `<a>`). The shared Just `no-full-reload`
 definition runs an ast-grep rule from root `ast-grep/`, discovered by root
 `sgconfig.yml`, over Rust in exactly `web/src` and `client/src`. It rejects only
 the result of a `.location()` method call chained to `replace`, `assign`,
@@ -2261,9 +2261,9 @@ the result of a `.location()` method call chained to `replace`, `assign`,
 location-bearing diagnostic directs callers to `leptos_router`'s
 `use_navigate()` and [#592](https://github.com/jaunder-org/jaunder/issues/592).
 The companion `ast-grep-tests` definition runs the committed native fixtures.
-The host xtask static-check mechanism and Nix `static-code` derivation invoke
-both definitions (`devtool check --group code --sandbox-cargo` in Nix), rather
-than maintaining a host-only source scanner
+The host Just workflow and Nix `static-code` derivation invoke both named
+definitions from `recipes/static.just`, rather than maintaining a host-only
+source scanner
 ([proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
 The SPA user namespace is `~`-prefixed: the permalink route's leading segment is
 a custom `TildeUsername` route match (`web/src/route_segments.rs:13`, wired at
@@ -4416,8 +4416,9 @@ rather than failing the check, with the JSON report still recording it
 `elisp/` is a first-class, separately-tested subproject
 ([ADR-0031](adr/0031-elisp-separately-tested-subproject.md)): three elisp steps
 — `ert`, `elisp-fmt` and `byte-compile` — run in both `check` (Fix) and
-`validate` (Check), each as a `devtool check` step. Standalone pure `ert` runs
-in `static-ert`; `elisp-fmt` and `byte-compile` run in the separate
+`validate` (Check). Formatting and byte-compilation use shared Just definitions;
+ERT temporarily retains its devtool monotonic timing owner. Standalone pure
+`ert` runs in `static-ert`; `elisp-fmt` and `byte-compile` run in the separate
 `static-elisp` leaf ([ADR-0052](adr/0052-devtool-unifies-static-checks.md), the
 root `Justfile`); one `emacsForCi` toolchain (`nix/packages.nix:372-404`) serves
 both.
@@ -4472,21 +4473,36 @@ aliases are removed, not forwarded. Just dependencies own success ordering and
 fail-fast process status; there is no gate-wide JSON/last-result contract.
 Unrelated xtask commands retain their own result contracts.
 `recipes/prettier.just` owns the three shared Markdown, `end2end`, and CSS
-command definitions; the exclusive docsDevtoolBin pipeline is gone. Other
-devtool checks remain devtool-owned. See the
+command definitions; the exclusive docsDevtoolBin pipeline is gone.
+`recipes/static.just` now supplies formatting, ast-grep, byte-compilation,
+cargo-deny, TSC and the six Clippy definitions to host and hermetic consumers.
+TSC's public owner retains its landed passive request observation; ERT alone
+retains the existing devtool timer around its fixed Just leaf. The obsolete
+static catalog and duplicate Leptosfmt source are retired, not all devtool
+endpoints. See the
 [Just-owned gate workflow decision](adr/0237-just-owned-gate-workflows.md).
 
-The remaining callable boundary mixes substantive parsers/censuses (including
-Rust and TypeScript AST analysis), small textual/ADR policies, Git/index safety,
-and execution/consumer adapters. The shared `CommandResult` signatures are
-retained compatibility inside that boundary, not workflow reporting or proof of
-algorithmic necessity. Workspace/auxiliary doctest execution and Elisp artifact
-lifting remain residual choreography around real reconciliation/consumer logic;
-small policy extraction has no automatically assigned owner. The E2E workflow
-now owns authoritative output selection and trace/snapshot verification; its
-temporary `server-fn-flow` bridge is retired. The independent static coverage
-leaf and artifact verifier remain. These bounded deletions do not extract the
-remaining checks from the omnibus host executable.
+The auxiliary repository-policy package owns the fixed documentation policies
+(`repository-docs`), fixed Rust/TypeScript source contracts and informational
+17-cell census (`source-contracts`), and the single-process Git/index safety
+owner. Just retains their independent verdicts and order; the binaries do not
+select a workflow or emit an omnibus result envelope. Shared source inventory,
+marker and server-function contracts have one canonical home, reused by the
+remaining runtime coverage consumer rather than cloned. `just census [--json]`
+is informational: candidates and unavailable capabilities are not gate failures;
+failed collection remains nonzero with completed cells retained. The
+explicit-file `just org-timezone-manifest` artifact command reuses common
+Org/timezone types and bypasses checkout/hook bootstrap. The narrow
+scoped-Leptosfmt adapter is the formatter exception, not a general process
+runner.
+
+Workspace/auxiliary doctest execution and Elisp artifact lifting retain their
+existing residual check-leaf adapters. The E2E workflow owns authoritative
+output selection and trace/snapshot verification; its temporary `server-fn-flow`
+bridge is retired. Static server-function inventory is now a native source
+contract; runtime extraction, regeneration and producer-artifact verification
+remain in xtask. This does not migrate other runtime tooling or retire
+xtask/devtool.
 
 The explicit local workflows are:
 
@@ -4494,8 +4510,8 @@ The explicit local workflows are:
   repository-shape and type-safety checks, then auxiliary host tests.
   **`just check`** adds host-native `test-local`, Nix `wasm-tests`, and
   `doctests`/`doctests-gate`.
-- **`just precommit`** is the hook entrypoint, invoking only the focused
-  `cargo xtask precommit-safety` owner. Before gate work it classifies the
+- **`just precommit`** is the hook entrypoint, invoking only the focused native
+  `git-index-safety precommit` owner. Before gate work it classifies the
   complete pre-run dirty-tree snapshot. The narrow `staged-markdown-only` class
   requires a nonempty tree containing only staged-only, regular, case-sensitive
   `.md` additions or modifications; any unstaged, untracked, delete/rename,
@@ -4651,31 +4667,41 @@ checks (`byte-compile`, `tsc`, `cargo-deny`, `product-core-clippy`,
 Between source consistency and compilation, Just invokes the existing
 repository-shape checks in their established order. The same private host recipe
 serves Fix and Verify workflows. It calls the shared Prettier recipes directly
-and launches the other devtool checks with locked Cargo from the checkout. Just
-exports `RUSTC_WRAPPER=sccache`, `CARGO_INCREMENTAL=0`, and canonical worktree
-roots in `SCCACHE_BASEDIRS` for host Cargo compilation.
+and the shared static leaves directly. TSC uses the passive public request
+owner; ERT launches its retained timer with locked Cargo from the checkout. The
+scoped Leptos formatter adapter is built from the checkout before its host
+invocation. Just exports `RUSTC_WRAPPER=sccache`, `CARGO_INCREMENTAL=0`, and
+canonical worktree roots in `SCCACHE_BASEDIRS` for host Cargo compilation.
 
 The host _step_ above runs the listed sub-steps through host-local lanes. The
 hermetic shared static surface has `static-docs` running the shared
 `recipes/prettier.just` Markdown leaf over Markdown and formatter configuration,
-`static-typescript` runs the named `devtool check tsc`, `rust-format` runs
-`devtool check --group rust-format --sandbox-cargo`, and `static-code` runs the
-residual non-Clippy devtool checks outside TypeScript, Rust formatting and
-standalone ERT with workspace-specific offline Cargo homes. Static-code requests
-the narrow Clippy aggregate once; its six independently buildable terminal
-leaves run lint and the aggregate does not rerun it. `static-elisp` runs
-`devtool check elisp-fmt` in verify mode and `devtool check byte-compile` over
-the complete non-Markdown Elisp source tree in a writable copy. It has pinned
-`emacsForCi` and `TZDIR`, plus `devtoolBin` and its actual transitive tooling
-source/dependency closure. The commands need no offline Cargo home,
-Node/Playwright, or Git; any such build inputs enter only through `devtoolBin`.
-Elisp-source changes invalidate `static-elisp`; source-probe evaluation also
-shows `static-code`'s identity changing through an existing transitive input,
-despite Elisp's exclusion from its direct source filter. Shared devtool source
-or lock changes also invalidate this leaf through `devtoolBin`. The verdict is
-non-substitutable, while valid local output reuse remains possible. `static-ert`
-continues to run `devtool check --group ert` over its own complete population;
-the combined pure/live coverage producer is unchanged.
+`static-typescript` runs the shared named `tsc` leaf with pinned Just, after its
+existing dependency setup; `rust-format` runs the shared
+`rust-format verify sandbox` recipe, and `static-code` runs the residual
+non-Clippy shared Just leaves outside TypeScript, Rust formatting and standalone
+ERT with workspace-specific offline Cargo homes. Static-code requests the narrow
+Clippy aggregate once; its six independently buildable terminal leaves run lint
+and the aggregate does not rerun it. `static-elisp` runs the shared `elisp-fmt`
+Verify and `byte-compile` definitions over the complete non-Markdown Elisp
+source tree in a writable copy. Its pinned Just, `emacsForCi`, `TZDIR`, and
+admitted recipe replace its former devtool build input. It needs no offline
+Cargo home, Node/Playwright, or Git. The verdict is non-substitutable, while
+valid local output reuse remains possible. This selected change does not certify
+unrelated family coupling or discharge the recorded source-invalidation
+deferrals. `static-ert` runs `devtool check ert` over its own complete
+population, invoking only the fixed Just ERT leaf with pinned Just and admitted
+recipe bytes. Its existing monotonic observer emits one schema-2 request event,
+including Just startup/evaluation, not exact Emacs-child time. TSC's old devtool
+child event is retired. The public TSC owner preserves the landed recorder's
+setup/request boundary, immediate saved status, inherited streams and
+diagnostic-only refusal; raw compiler output is not automatically archived.
+Pre-entry work and source/tool identity remain unknown. The combined pure/live
+coverage producer is unchanged. The obsolete devtool static catalog, group/all
+selectors and duplicate Leptosfmt adapter are retired; fixed Just `code`,
+`rust-format` and independent `all` compositions preserve those populations.
+`just static-all` builds current-checkout timing/scoping owners before calling
+`all`; full devtool retirement remains separate.
 
 The independent `xtask-format` leaf runs pinned raw
 `cargo fmt --manifest-path xtask/Cargo.toml --check`, without `--all`, devtool,
@@ -4706,29 +4732,29 @@ Neither request duration, local validity, realization/reuse nor retained logs
 establish current execution. Existing standalone producer diagnostics are not a
 new gate report protocol.
 
-The Rust-format boundary runs
-`devtool check --group rust-format --sandbox-cargo` (`fmt`, scoped `leptosfmt`,
-`tools-fmt --all`) as one verdict because the two Cargo formatting populations
-overlap. `leptosfmt` uses only `web/src` and `csr/src`, retaining pinned
-defaults (`view` and `leptos::view`, full paths). Checked scoped glob
-enumeration/reads and per-file error promotion close the pin's silent-success
-failure paths without adding a Rust parser or a placement policy. Future
-frontend roots are maintained explicitly in scope, Nix inputs and docs. Host Fix
-and Git/index admission are unchanged.
+The Rust-format boundary runs the shared `rust-format verify sandbox` recipe
+(`fmt`, scoped `leptosfmt`, `tools-fmt --all`) as one verdict because the two
+Cargo formatting populations overlap. `leptosfmt` uses only `web/src` and
+`csr/src`, retaining pinned defaults (`view` and `leptos::view`, full paths).
+Checked scoped glob enumeration/reads and per-file error promotion close the
+pin's silent-success failure paths without adding a Rust parser or a placement
+policy. Future frontend roots are maintained explicitly in scope, Nix inputs and
+docs. Host Fix and Git/index admission are unchanged.
 
 `rust-format` directly admits non-xtask Rust sources and
-Cargo/toolchain/formatter configuration. Its full closure includes `devtoolBin`,
-both workspace offline Cargo homes, the pinned formatter/toolchain, and their
-transitive build, source/vendor and embedded inputs. Direct filtering is not
-full closure independence; valid local-store reuse is allowed and no speedup is
-claimed. `static-code` runs residual non-Clippy shared definitions outside
-TypeScript, Rust formatting, standalone ERT, Elisp verification and the census
-verdict, with workspace-specific offline Cargo homes. It requests the six-leaf
-Clippy aggregate once; the aggregate does not rerun lint. The separate
-`static-elisp` leaf owns Elisp formatting/byte-compilation.
-`just validate-no-e2e` requests the independent static checks before Nix test
-surfaces, with each shared definition consumed once. CI fails if a hermetic
-boundary drifts from the host definitions
+Cargo/toolchain/formatter configuration and the shared recipe. Its full closure
+includes the repository-policy adapter package (also admitting common/macros for
+the Org extractor), both workspace offline Cargo homes, the pinned
+formatter/toolchain, and their transitive build, source/vendor and embedded
+inputs. Direct filtering is not full closure independence; valid local-store
+reuse is allowed and no speedup is claimed. `static-code` runs residual
+non-Clippy shared definitions outside TypeScript, Rust formatting, standalone
+ERT, Elisp verification and the census verdict, with workspace-specific offline
+Cargo homes. It requests the six-leaf Clippy aggregate once; the aggregate does
+not rerun lint. The separate `static-elisp` leaf owns Elisp
+formatting/byte-compilation. `just validate-no-e2e` requests the independent
+static checks before Nix test surfaces, with each shared definition consumed
+once. CI fails if a hermetic boundary drifts from the host definitions
 ([hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md);
 [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
 
@@ -4738,24 +4764,25 @@ copied-source TypeScript and census leaves. Each caller supplies the same pinned
 `e2ePackage/node_modules` and Nix `@playwright/test` paths. Setup unlinks a
 stale destination symlink without touching its referent, refreshes visible
 current packages while preserving unrelated entries, skips dot entries, and
-overrides Playwright with the browser-matched pin. `devtool` retains the
-unchanged TSC command definition, not dependency setup.
+overrides Playwright with the browser-matched pin. `recipes/static.just` owns
+the unchanged compiler argv, not dependency setup.
 
-The TypeScript leaf sets up those dependencies before the unchanged named
-`devtool check tsc`. Its direct filter admits TypeScript sources,
-`tsconfig.json`, and dependency manifests, but the existing `e2ePackage` still
-makes all `end2end/` changes transitive inputs. It is non-substitutable, without
-forcing valid local outputs to rerun. `static-code` retains TypeScript
-formatting, but no longer owns the census command. `static-e2e-census` runs the
-same setup executable followed by `node end2end/e2eCensusContract.ts`, with a
-direct non-Markdown `end2end` source filter that includes Playwright
-configuration, selected tests, helpers, fixtures, and module-load assets. It is
-independently requested by hermetic validation; its existing `e2ePackage`
-dependency remains a broader transitive input, so its source/dependency changes
-may also invalidate the census leaf. The existing whole-end2end `e2ePackage`
-also remains a transitive input to TypeScript; no TypeScript input-isolation
-claim follows. The TypeScript and census leaves refine the historical partition
-without changing `devtool` command ownership
+The TypeScript leaf sets up those dependencies before the shared named `tsc`
+recipe with pinned Just and TypeScript. Its direct filter admits the shared
+recipe, TypeScript sources, `tsconfig.json`, and dependency manifests, but the
+existing `e2ePackage` still makes all `end2end/` changes transitive inputs. It
+is non-substitutable, without forcing valid local outputs to rerun.
+`static-code` retains TypeScript formatting, but no longer owns the census
+command. `static-e2e-census` runs the same setup executable followed by
+`node end2end/e2eCensusContract.ts`, with a direct non-Markdown `end2end` source
+filter that includes Playwright configuration, selected tests, helpers,
+fixtures, and module-load assets. It is independently requested by hermetic
+validation; its existing `e2ePackage` dependency remains a broader transitive
+input, so its source/dependency changes may also invalidate the census leaf. The
+existing whole-end2end `e2ePackage` also remains a transitive input to
+TypeScript; no TypeScript input-isolation claim follows. The TypeScript and
+census leaves refine the historical partition while preserving the population
+split recorded in
 ([ADR-0178](adr/0178-split-hermetic-static-check-boundaries.md)). The
 independently landed Rust-format and xtask-format boundaries remain intact; the
 splits do not equate distinct formatter or Clippy populations, permanently defer
@@ -4805,36 +4832,41 @@ the PR. Do not purge the store or run routine measurement campaigns.
 
 #### Sandboxed cargo-deny
 
-`cargo-deny` is part of `devtool check --group code --sandbox-cargo` under a
-documented sandbox policy: host mode keeps full `cargo deny check`, while
-sandbox mode skips `advisories` and checks only `bans`, `licenses`, and
-`sources`
+The shared `cargo-deny verify sandbox` leaf retains the documented sandbox
+policy: host mode keeps full `cargo deny check`, while sandbox mode skips
+`advisories` and checks only `bans`, `licenses`, and `sources`
 ([Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md)).
 
-#### Devtool-owned static-check definitions
+#### Shared static-check definitions
 
-The project/tool static checks live behind `devtool check` as a shared
-command-definition surface, while keeping separate host and sandbox execution
-lanes ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
+Named leaves in `recipes/static.just` own the migrated project/tool static
+invocations, with distinct host and sandbox execution lanes. TSC's public
+request owner preserves the landed passive recorder; its shared named leaf is
+also called by hermetic Nix. ERT's existing timing owner invokes only the fixed
+Just leaf and labels its interval as request duration including
+startup/evaluation. The obsolete catalog/group/all and duplicate Leptosfmt
+source are retired; fixed Just compositions preserve their populations. The
+previous ownership was recorded in
+[ADR-0052](adr/0052-devtool-unifies-static-checks.md),
 [devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md),
-[proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
-Alongside the compiling definitions, it owns the non-compiling ast-grep rule
-fixtures (`ast-grep-tests`) and `no-full-reload` repository scan. Six Clippy
-units preserve product core, web/server, web/featureless, client/host-CSR,
-CSR/wasm, and full tools workspace target configurations. Product core excludes
-`web`, `client`, and `csr` as selected lint roots; those packages may compile as
-dependencies. The wasm step deliberately omits `--all-targets`, because `web`
-test dependencies are host-oriented and cannot compile for
-`wasm32-unknown-unknown`. The former combined root web(server+CSR) configuration
-is intentionally removed under approved request
+[proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md).
+Alongside the compiling definitions, the shared Just file owns the non-compiling
+ast-grep rule fixtures (`ast-grep-tests`) and `no-full-reload` repository scan.
+Six Clippy units preserve product core, web/server, web/featureless,
+client/host-CSR, CSR/wasm, and full tools workspace target configurations.
+Product core excludes `web`, `client`, and `csr` as selected lint roots; those
+packages may compile as dependencies. The wasm step deliberately omits
+`--all-targets`, because `web` test dependencies are host-oriented and cannot
+compile for `wasm32-unknown-unknown`. The former combined root web(server+CSR)
+configuration is intentionally removed under approved request
 `2f0929a1-ebbd-4735-9a6c-b53e99a7a141`; root/tools lock and test contexts remain
-distinct. Host xtask lanes execute each definition through their existing
-static-check mechanism while retaining host-local Cargo artifacts and sccache
-for Rust-compiling checks. Nix has independent documentation, TypeScript,
-Rust-format, residual-code, Elisp-static, E2E-census, pure ERT, raw xtask-format
-and raw xtask-Clippy leaves; residual code requests the six-leaf Clippy
-aggregate once without rerunning lint. Native host formatting and Clippy remain
-required. The independent `xtask-clippy` verdict runs raw
+distinct. Host Just workflows execute each named definition while retaining
+host-local Cargo artifacts and sccache for Rust-compiling checks. Nix has
+independent documentation, TypeScript, Rust-format, residual-code, Elisp-static,
+E2E-census, pure ERT, raw xtask-format and raw xtask-Clippy leaves; residual
+code requests the six-leaf Clippy aggregate once without rerunning lint. Native
+host formatting and Clippy remain required. The independent `xtask-clippy`
+verdict runs raw
 `cargo clippy --manifest-path xtask/Cargo.toml --all-targets -- -D warnings`
 with the xtask package's pinned vendoring and native dependencies, separately
 from the six-unit aggregate. The independent `xtask-format` flake check runs
@@ -5112,10 +5144,10 @@ placed by a single litmus test — _where must this code execute?_
 The "devtool = in-sandbox, xtask = host" split is a litmus test about where code
 _must_ execute, not a ban on running devtool from a shell. ADR-0028's own
 Supplement (#158) originally extended `devtool run` to the host; #1858 moves
-that responsibility to standalone `traced-run`, while the host verify ladder's
-use of `devtool check <name>` remains ADR-0052's Decision. Following the
-confirmed coordinated routing cutover, `traced-run` is the sole command-capture
-interface; devtool has no `run` subcommand or runner dependency.
+that responsibility to standalone `traced-run`, while the host verify ladder now
+uses shared Just static definitions; only ERT retains its devtool request timer.
+Following the confirmed coordinated routing cutover, `traced-run` is the sole
+command-capture interface; devtool has no `run` subcommand or runner dependency.
 
 - **`traced-run [--name LABEL] [--timeout SECONDS] -- <cmd>`** is the standalone
   no-shell runner on the host/devShell path. `packages.traced-run` is an
@@ -5143,24 +5175,26 @@ interface; devtool has no `run` subcommand or runner dependency.
   context propagates independently, preserving one root for nested launches
   without stale-skipping later independent invocations. See
   [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md).
-- **`devtool check <name> | --group <typescript|rust-format|code|ert> | --all [--fix] [--sandbox-cargo]`**
-  is the single command-definition surface for the migrated static checks
-  (`fmt`, `leptosfmt`, `tsc`, `elisp-fmt`, `ert`, `byte-compile`, `cargo-deny`,
-  `product-core-clippy`, `web-server-clippy`, `web-no-server-clippy`,
-  `client-host-clippy`, wasm-target `wasm-clippy`, `tools-fmt`, tools workspace
-  `tools-clippy`, and ast-grep `ast-grep-tests` plus the `no-full-reload`
-  repository scan — `tools/devtool/src/check.rs`). The host verify ladder
-  delegates each relevant definition through its static-check mechanism,
-  preserving host-local Cargo artifacts and sccache for Rust-compiling checks.
-  Prettier is outside this inventory: host Just and Nix call the shared
-  `recipes/prettier.just` definitions directly. Nix `static-docs` runs Markdown;
-  `static-typescript`, `rust-format`, `static-code`, `static-elisp`, and
-  `static-ert` run named `tsc`, Rust-format, residual code (including end-to-end
-  and CSS Prettier), Elisp formatting/byte-compilation, and ERT respectively.
-  Static-code requests the six-leaf Clippy aggregate once; its own derivation
-  does not rerun those lints. Code retains workspace-specific offline Cargo
-  homes; Cargo-deny uses full `cargo deny check` on host and skips `advisories`
-  in sandbox mode ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
+- **`devtool check ert [--fix]`** retains only the fixed ERT request timing
+  consumer; it has no autofix. Static argv now lives in `recipes/static.just`,
+  including TSC's shared host/hermetic leaf. The public `just tsc` owner retains
+  passive request observation around setup and that leaf, not child supervision.
+  `rust-format` and `code` are fixed compositions there;
+  `just static-all [fix|verify]` builds the current checkout's timing/scoping
+  owners before invoking the independent ordered `all` composition. The obsolete
+  devtool group/all/sandbox selectors, Cargo builders and duplicate Leptosfmt
+  implementation are removed. The host verify ladder calls the shared Just
+  definitions, preserving host-local Cargo artifacts and sccache for
+  Rust-compiling checks. Prettier is outside this inventory: host Just and Nix
+  call the shared `recipes/prettier.just` definitions directly. Nix
+  `static-docs` runs Markdown; `static-typescript`, `rust-format`,
+  `static-code`, `static-elisp`, and `static-ert` run named `tsc`, Rust-format,
+  residual code (including end-to-end and CSS Prettier), Elisp
+  formatting/byte-compilation, and ERT respectively. Static-code requests the
+  six-leaf Clippy aggregate once; its own derivation does not rerun those lints.
+  Code retains workspace-specific offline Cargo homes; Cargo-deny uses full
+  `cargo deny check` on host and skips `advisories` in sandbox mode
+  ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
   [Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md),
   [devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md),
   [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md),

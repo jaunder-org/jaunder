@@ -145,12 +145,9 @@ fn selected_package_promotes_complete_documents_and_passes_read_only_gates() {
     );
     assert!(repository_policy::adr::format_problems(root).is_empty());
     for gate in ["adr-readme-parity", "adr-view-parity", "doc-links"] {
-        let output = checked(
-            command(env!("CARGO_BIN_EXE_xtask"), root)
-                .args(["check-leaf", gate])
-                .output()
-                .unwrap(),
-        );
-        assert!(String::from_utf8_lossy(&output).contains(&format!("[ ok ] {gate}")));
+        repository_policy::repository_docs::Operation::parse(gate)
+            .expect("fixed documentation operation")
+            .check(root)
+            .unwrap_or_else(|error| panic!("{gate}: {error}"));
     }
 }
