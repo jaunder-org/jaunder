@@ -185,7 +185,12 @@ staged design bytes/index and shared stashes remain untouched now.
     proof.
 
 - [ ] 7. Conformance, enduring docs and delivery close this implementation scope
-      honestly.
+  - Progress (2026-11-12): independent Standards and Spec reviews ran on the
+    whole branch; every finding was fixed or recorded (trace linkage restored,
+    report contract moved to tools/host-tool, refusal reports, mod.rs assembly,
+    host-only source exclusions, pg-run frontdoor, stale text). Enduring docs
+    and the draft ADR are projected. Remaining: PR, CI and exact-head merge
+    approval; spec/outline stay while R26 remains deferred. honestly.
   - Contract: independent whole-branch Standards/Spec review against approved
     amendment and outline; resolve findings, project enduring owner/interface
     decisions into docs/ADR, repair references and retire completed working
