@@ -8,7 +8,7 @@ use std::time::Duration;
 use crate::steps::process::Process;
 
 use anyhow::Context as _;
-use processkit::{Command, Outcome, StdioMode};
+use processkit::{Command, Outcome};
 
 const COLLECTOR_READINESS_TIMEOUT: Duration = Duration::from_secs(5);
 const PROCESS_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -66,7 +66,8 @@ impl CollectorGuard {
             .env("OTELCOL_HTTP_ENDPOINT", http_endpoint.to_string())
             .stdin(processkit::Stdin::empty())
             .env("JAUNDER_CAPTURE_DIR", capture_dir.path())
-            .stdout(StdioMode::Inherit)
+            // stdout carries only the JSON report; forward collector stdout.
+            .on_stdout_line(|line| eprintln!("{line}"))
             .stderr_raw_tee(tokio::fs::File::from_std(stderr))
             .on_stderr_line(|line| eprintln!("{line}"));
         let mut process = match Process::start(command)

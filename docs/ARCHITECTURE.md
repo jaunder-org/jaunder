@@ -4234,7 +4234,7 @@ timestamp is the sole dynamic mask.
 Normal host/VM differences are invocation flags set by the host driver —
 `--reporter=html,line`, `PLAYWRIGHT_HTML_OPEN=never`, and
 `JAUNDER_E2E_WORKERS=1` (the host serves a debug CSR build; the VM keeps the
-config default of 2). The host loop is `cargo xtask e2e-local`
+config default of 2). The host loop is `just e2e-local`
 (`xtask/src/steps/e2e_local.rs`), which owns build, spawn on an ephemeral port,
 seed, Playwright, stop/reap, and diagnostics verification. Its
 `--update-visual-snapshots` mode builds release CSR once, then gives Chromium
@@ -5160,12 +5160,12 @@ placed by a single litmus test — _where must this code execute?_
 ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)):
 
 - **`xtask`** — the host-side dev/CI driver
-  (`cargo xtask e2e | test-local | …`); Just owns gate composition. It invokes
-  `nix build` and consumes/analyzes exfiltrated build artifacts (coverage gate,
-  CRAP gate, reports). Retained public producer/diagnostic commands use
-  `result::CommandResult::report` and its `.xtask/last-result.json` sidecar.
-  Plain check leaves, precommit safety and artifact verdicts bypass that
-  reporting boundary. Each `result::StepResult` records its name, outcome,
+  (`cargo xtask e2e-verify | coverage-policy | …`); Just owns gate composition.
+  It invokes `nix build` and consumes/analyzes exfiltrated build artifacts
+  (coverage gate, CRAP gate, reports). Retained public producer/diagnostic
+  commands use `result::CommandResult::report` and its `.xtask/last-result.json`
+  sidecar. Plain check leaves, precommit safety and artifact verdicts bypass
+  that reporting boundary. Each `result::StepResult` records its name, outcome,
   duration, and optional `result::NixReport` for a successful producer-owned Nix
   build (`installable`, optional evaluated `derivation`, and conservative
   `realization`). It also prints an
@@ -5175,6 +5175,14 @@ placed by a single litmus test — _where must this code execute?_
   early CLI refusals do not emit that sentinel (`main::main`;
   [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md), with the
   [qualification carveout](adr/0239-qualification-workflow-ownership.md)).
+- **`tools/host-proof`** — focused host proof (ADR-0246): direct `test-local`,
+  `e2e-local` and `pg-run` executables behind
+  `just test-local`/`just e2e-local`. Each prints exactly one JSON report on
+  stdout (steps, outcomes, durations, details, verdict) and sends child output
+  to stderr; its exit status is the verdict. `scripts/step-report.jq` derives
+  the human step view; there is no sidecar, `--json` flag or completion
+  sentinel. `test-local` keeps its bounded invocation trace under the
+  `traced-run` launcher.
 - **`tools/devtool`** — the tool that must also run inside Nix build sandboxes,
   where `nix` and `xtask` are unavailable; `devtool coverage emit` produces
   coverage artifacts into `$out` for exfiltration

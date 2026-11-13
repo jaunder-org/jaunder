@@ -3,12 +3,7 @@ use crate::result::CommandResult;
 
 /// Best-effort hook preparation follows native checkout/source admission.
 pub fn ensure_hooks_installed() {
-    let phase =
-        crate::invocation_trace::active().then(|| crate::invocation_trace::phase("xtask.hooks"));
-    let ok = repository_policy::checkout::ensure_hooks_installed("xtask");
-    if let Some(phase) = phase {
-        phase.finish(ok);
-    }
+    repository_policy::checkout::ensure_hooks_installed("xtask");
 }
 
 pub(crate) fn finalize(result: &mut CommandResult, start: std::time::Instant) {

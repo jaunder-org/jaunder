@@ -1,4 +1,4 @@
-//! Host e2e loop driver (#249): `cargo xtask e2e-local` OWNS the whole loop —
+//! Host e2e loop driver (#249): `just e2e-local` OWNS the whole loop —
 //! select immutable server/seed artifacts, start `jaunder serve` on an ephemeral port with
 //! the VM's capture env, discover the port from the canonical
 //! `<storage>/runtime.json`, seed via the shared `test-support seed-e2e`, run
@@ -37,8 +37,25 @@ use self::process::{CollectorGuard, CollectorStartError};
 use anyhow::Context;
 use xshell::{Shell, cmd};
 
-use crate::cli::E2eLocalBrowser;
-use crate::result::{CommandResult, StepResult};
+use crate::report::{CommandResult, StepResult};
+
+/// Ordinary Playwright browser project selected for a focused run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum E2eLocalBrowser {
+    Chromium,
+    Firefox,
+    Webkit,
+}
+
+impl E2eLocalBrowser {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Chromium => "chromium",
+            Self::Firefox => "firefox",
+            Self::Webkit => "webkit",
+        }
+    }
+}
 use crate::steps::host_server::{
     HostArtifacts, HostServerSession, ServerSessionConfig, ServerStartPhase,
 };
@@ -978,7 +995,8 @@ pub(super) fn run_consumer(
     let mut owned = processkit::Command::new(command.get_program())
         .args(command.get_args())
         .inherit_stdin()
-        .stdout(processkit::StdioMode::Inherit)
+        // stdout carries only the JSON report; forward child stdout to stderr.
+        .on_stdout_line(|line| eprintln!("{line}"))
         .stderr(processkit::StdioMode::Inherit);
     if let Some(cwd) = command.get_current_dir() {
         owned = owned.current_dir(cwd);
@@ -1126,8 +1144,9 @@ while :; do :; done"#;
             Err(error) => panic!("occupying collector metrics port: {error}"),
         };
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("xtask manifest directory has a workspace parent");
+            .ancestors()
+            .nth(2)
+            .expect("host-proof lives at tools/host-proof in the checkout");
         let first_capture = tempfile::tempdir().expect("first collector capture directory");
         let mut first = start_collector(root, first_capture)
             .unwrap_or_else(|failure| panic!("starting first collector: {}", failure.error));

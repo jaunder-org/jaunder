@@ -29,11 +29,10 @@ flate2 = "1.1.10"
 tar = "0.4.46"
 coverage = { path = "../tools/coverage" }
 repository-policy = { path = "../tools/repository-policy" }
+host-proof = { path = "../tools/host-proof" }
 host = { path = "../host" }
 doctests = { path = "../tools/doctests" }
 tabled = "0.22.0"
-tracing = "0.1.44"
-tracing-subscriber = "0.3.23"
 url = "2.5.8"
 syn = { version = "2", features = ["full", "visit", "extra-traits"] }
 proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
@@ -45,11 +44,7 @@ wasmparser = "0.258.0"
 # Demangles Rust symbols so a function body's bytes can be charged to the crate
 # that emitted it.
 rustc-demangle = "0.1.28"
-processkit = "3.3.4"
 sha2 = "0.11.0"
-# `e2e-local` bridges processkit's async supervision into xtask's synchronous
-# command runner; a background worker keeps process I/O pumps live between calls.
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "signal", "time"] }
 # The standalone host adapter inherits version requirements, but not the root
 # workspace's patches. Keep the required forks at the exact root revisions.
 [patch.crates-io]
@@ -58,11 +53,6 @@ orgize = { git = "https://github.com/jaunder-org/orgize", rev = "17311ba02d43175
 atom_syndication = { git = "https://github.com/jaunder-org/atom", rev = "921118c311d2117956d86e25052918e7c549ef00" }
 webauthn-rs = { git = "https://github.com/jaunder-org/webauthn-rs", rev = "6d0acc73fbf4436b1ed853fa5c8a219dac304a8e" }
 webauthn-rs-core = { git = "https://github.com/jaunder-org/webauthn-rs", rev = "6d0acc73fbf4436b1ed853fa5c8a219dac304a8e" }
-
-[target.'cfg(unix)'.dependencies]
-# Safe OS-provided lease flags and effective UID, without numeric flag tables,
-# /proc parsing for user identity, or shelling out to id.
-rustix = { version = "1.1.6", features = ["fs", "process", "time"] }
 
 [dev-dependencies]
 # Maintained YAML-org successor; preserve the existing Serde/Value API (#1939).

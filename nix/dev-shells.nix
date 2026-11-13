@@ -58,7 +58,7 @@ let
       pkgs.exiftool
       leptosfmt
       # Rust's wasm32-unknown-unknown target invokes the generic `lld` driver on
-      # Darwin; `cargo xtask e2e-local` owns the CSR wasm build, so the shell it
+      # Darwin; `just e2e-local` owns the CSR wasm build, so the shell it
       # runs in must provide the linker instead of relying on a host install.
       pkgs.lld
       pkgs.nodejs
@@ -67,7 +67,7 @@ let
       pkgs.dav1d
       pkgs.playwright-test
       pkgs.postgresql_18
-      # `cargo xtask e2e-local` supervises this pinned collector for its
+      # `just e2e-local` supervises this pinned collector for its
       # shared VM/host JSONL trace pipeline.
       pkgs.opentelemetry-collector-contrib
       pkgs.prettier

@@ -199,37 +199,33 @@ impl Capture {
     }
 }
 
-/// Finalize capture and project timing before any result reporting or explicit exit.
-pub fn execute(cli: crate::Cli) -> anyhow::Result<crate::CommandResult> {
-    let command_args = match &cli.command {
-        crate::Command::TestLocal { nextest_args } => safe_test_local_args(nextest_args),
-        _ => serde_json::Map::new(),
-    };
-    let capture = matches!(&cli.command, crate::Command::TestLocal { .. })
-        .then(|| Capture::with_command_args(command_args));
+/// Run test-local inside its capture; finalize and project timing before the
+/// report is emitted.
+pub fn execute_test_local(nextest_args: &[String]) -> anyhow::Result<crate::report::CommandResult> {
+    let capture = Some(Capture::with_command_args(safe_test_local_args(
+        nextest_args,
+    )));
     let mut root = None;
-    let invoke = || {
+    let mut invoke = || {
         let outer = capture.as_ref().map(|_| phase("xtask.command"));
         eprintln!("xtask-start: checkout-prepare");
         let checkout = capture.as_ref().map(|_| phase("xtask.checkout"));
-        if capture.is_some() {
-            root = std::env::current_dir()
-                .ok()
-                .and_then(|cwd| crate::git::toplevel(&cwd).ok())
-                .map(PathBuf::from);
-        }
-        let prepared = crate::prepare_checkout();
+        root = std::env::current_dir()
+            .ok()
+            .and_then(|cwd| crate::git::toplevel(&cwd).ok())
+            .map(PathBuf::from);
+        let prepared = crate::checkout::prepare();
         if let Some(checkout) = checkout {
             checkout.finish(prepared.is_ok());
         }
-        let result = prepared.and_then(|()| {
+        let result = prepared.map(|()| {
             eprintln!("xtask-start: hook-setup");
-            crate::ensure_hooks_installed();
+            crate::checkout::ensure_hooks_installed();
             eprintln!("xtask-start: dispatch");
             let dispatch = capture.as_ref().map(|_| phase("xtask.dispatch"));
-            let result = crate::run(cli);
+            let result = crate::steps::test_local::command(nextest_args);
             if let Some(dispatch) = dispatch {
-                dispatch.finish(result.as_ref().is_ok_and(|result| result.ok));
+                dispatch.finish(result.ok);
             }
             result
         });
@@ -329,7 +325,7 @@ impl Trace {
             }
         }
     }
-    pub fn project(&self, result: &mut crate::CommandResult) {
+    pub fn project(&self, result: &mut crate::report::CommandResult) {
         result.duration_ms = self.duration("xtask.dispatch");
         for step in &mut result.steps {
             if matches!(
@@ -584,7 +580,7 @@ mod tests {
             .unwrap();
         assert_eq!(outcome["args"]["exit_code"], "37");
         assert_eq!(outcome["args"]["exit_override"], "Some(37)");
-        let mut result = crate::CommandResult::new("test-local");
+        let mut result = crate::report::CommandResult::new("test-local");
         result.ok = false;
         result.exit_override = Some(37);
         trace.project(&mut result);
@@ -617,8 +613,8 @@ mod tests {
             durations,
             origin_ns: monotonic_ns(),
         };
-        let mut result = crate::CommandResult::new("test-local");
-        result.push(crate::StepResult::ok("test-local"));
+        let mut result = crate::report::CommandResult::new("test-local");
+        result.push(crate::report::StepResult::ok("test-local"));
         trace.project(&mut result);
         assert_eq!(result.duration_ms, 1);
         assert_eq!(result.steps[0].duration_ms, 0);

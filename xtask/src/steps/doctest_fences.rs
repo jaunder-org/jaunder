@@ -22,8 +22,8 @@ use doctests::check::{self, ScannedFile};
 use doctests::roots;
 use xshell::Shell;
 
-use crate::compile_cache;
 use crate::result::{CommandResult, StepResult};
+use host_proof::compile_cache;
 
 /// A repo-relative path as the runner prints it for a `--manifest-path <root>` run:
 /// relative to the manifest's directory, so `xtask/src/steps/nix.rs` prints as

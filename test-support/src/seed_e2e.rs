@@ -1,5 +1,5 @@
 //! `test-support seed-e2e` — the canonical e2e fixture seed (site-config + users +
-//! mail-reset) applied by BOTH the host loop (`cargo xtask e2e-local`) and the
+//! mail-reset) applied by BOTH the host loop (`just e2e-local`) and the
 //! flake VM `seed_db()` — one list, applied by both callers. Each step runs as
 //! its own child process so every write keeps its seed-process telemetry
 //! identity: the `site_config` steps go through the shipped `jaunder` binary

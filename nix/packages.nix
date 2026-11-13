@@ -414,6 +414,8 @@ let
       # Qualification is host-run tooling; retain its manifest, not implementation.
       && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/qualification/" path
         && path != "${toString (craneLib.path ../.)}/tools/qualification/Cargo.toml")
+      && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/host-proof/" path
+        && path != "${toString (craneLib.path ../.)}/tools/host-proof/Cargo.toml")
       && (
         (pkgs.lib.hasSuffix ".sql" path)
         || (pkgs.lib.hasSuffix ".css" path)
@@ -757,6 +759,7 @@ let
       pkgs.lib.hasPrefix "tools/" relative
       && !(pkgs.lib.hasPrefix "tools/repository-policy/" relative && relative != "tools/repository-policy/Cargo.toml")
       && !(pkgs.lib.hasPrefix "tools/qualification/" relative && relative != "tools/qualification/Cargo.toml")
+      && !(pkgs.lib.hasPrefix "tools/host-proof/" relative && relative != "tools/host-proof/Cargo.toml")
       && craneLib.filterCargoSources path type
     );
   csrSourceAdmits =
@@ -815,6 +818,7 @@ let
         "web"
         "tools/repository-policy"
         "tools/qualification"
+        "tools/host-proof"
       ];
   toolsBaseArgs = {
     src = toolsSrc;

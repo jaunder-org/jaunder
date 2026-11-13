@@ -20,9 +20,9 @@ Collector endpoint. The end-to-end test runner also emits correlated traces.
     exporter)
   - lifted per lane inside `capture-<lane>.tar.gz` (the same bundle that carries
     `diag.log` and the mail/websub JSONL — see below)
-- `cargo xtask e2e-local` supervises the same collector pipeline on the host,
-  using per-lifecycle ephemeral OTLP receivers. After Jaunder and Playwright
-  finish, it flushes the collector, retains the complete capture at
+- `just e2e-local` supervises the same collector pipeline on the host, using
+  per-lifecycle ephemeral OTLP receivers. After Jaunder and Playwright finish,
+  it flushes the collector, retains the complete capture at
   `.xtask/e2e-local/<run-id>/<browser>/capture/`, and prints the exact
   `otel-traces.jsonl` path. These local artifacts contain correlated
   `e2e.test`/server `request` spans for iteration; the VM matrix remains the
@@ -305,11 +305,11 @@ traced-run -- otelcol-contrib validate --config end2end/otel-collector.yaml --co
 ```
 
 For a changed browser flow, use the supported focused SQLite loop, for example
-`traced-run -- cargo xtask e2e-local auth.spec.ts`. This builds and validates
-current CSR assets and exercises a real server/Collector/browser lifecycle; it
-is not PostgreSQL parity, complete CSR lint, authoritative source coverage or a
-full matrix. Use `traced-run -- just e2e-producer postgres-chromium-unsplit` for
-that backend's full hermetic Chromium lane. Firefox requires all three
+`traced-run -- just e2e-local auth.spec.ts`. This builds and validates current
+CSR assets and exercises a real server/Collector/browser lifecycle; it is not
+PostgreSQL parity, complete CSR lint, authoritative source coverage or a full
+matrix. Use `traced-run -- just e2e-producer postgres-chromium-unsplit` for that
+backend's full hermetic Chromium lane. Firefox requires all three
 `just e2e-producer` lanes and `just e2e-reconcile` per backend, not a
 serial-special result alone; `just e2e` owns the complete workflow. The complete
 commands and final validation ladder remain in

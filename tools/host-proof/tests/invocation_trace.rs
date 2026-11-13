@@ -3,7 +3,7 @@ use std::{fs, path::Path, process::Command};
 
 fn checkout(root: &Path, admitted: bool) {
     assert!(
-        xtask::git::at(root)
+        host_proof::git::at(root)
             .args(["init", "--quiet"])
             .status()
             .unwrap()
@@ -11,8 +11,8 @@ fn checkout(root: &Path, admitted: bool) {
     );
     if admitted {
         fs::write(root.join("flake.nix"), "{}").unwrap();
-        fs::create_dir(root.join("xtask")).unwrap();
-        fs::write(root.join("xtask/Cargo.toml"), "").unwrap();
+        fs::create_dir(root.join("tools")).unwrap();
+        fs::write(root.join("tools/Cargo.toml"), "").unwrap();
     }
 }
 
@@ -24,7 +24,7 @@ fn invoke_with_runner_context(
     root: &Path,
     context: Option<&serde_json::Value>,
 ) -> std::process::Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_test-local"));
     command
         .current_dir(root)
         // Temp roots may live inside the real checkout in CI. Keep discovery
@@ -40,14 +40,7 @@ fn invoke_with_runner_context(
             "JAUNDER_CSR_BUNDLE_DIR",
             root.join("private-missing-bundle"),
         )
-        .args([
-            "--json",
-            "test-local",
-            "--",
-            "-p",
-            "storage",
-            "private-filter",
-        ]);
+        .args(["--", "-p", "storage", "private-filter"]);
     if let Some(context) = context {
         command.env("JAUNDER_TRACED_RUN_CONTEXT", context.to_string());
     } else {
@@ -103,17 +96,14 @@ fn invocation_trace_early_error_closes_preparation_and_preserves_exit_two() {
 }
 
 #[test]
-fn invocation_trace_failed_phase_keeps_json_sidecar_and_trace_timing_identical() {
+fn invocation_trace_failed_phase_keeps_stdout_report_and_trace_timing_identical() {
     let temp = tempfile::tempdir().unwrap();
     checkout(temp.path(), true);
     let output = invoke(temp.path());
     assert_eq!(output.status.code(), Some(1));
     let events = trace(&output);
     let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let sidecar: serde_json::Value =
-        serde_json::from_slice(&fs::read(temp.path().join(".xtask/last-result.json")).unwrap())
-            .unwrap();
-    assert_eq!(result, sidecar);
+    assert!(!temp.path().join(".xtask/last-result.json").exists());
     assert_eq!(result["ok"], false);
     assert!(
         events
@@ -220,7 +210,8 @@ fn invocation_trace_with_runner_context_contributes_fragment_only() {
     assert_eq!(flows[1]["ph"], "f");
     assert_eq!(flows[1]["pid"], root["pid"]);
     assert!(!temp.path().join(".xtask/traces").exists());
-    assert!(temp.path().join(".xtask/last-result.json").is_file());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["command"], "test-local");
 }
 
 #[test]
@@ -237,5 +228,5 @@ fn invocation_trace_persistence_failure_does_not_replace_command_verdict_or_repo
     );
     let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(result["ok"], false);
-    assert!(temp.path().join(".xtask/last-result.json").is_file());
+    assert_eq!(result["command"], "test-local");
 }

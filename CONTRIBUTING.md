@@ -109,7 +109,7 @@ Safari; verify Safari-specific behavior in Safari itself and keep the remaining
 device-specific requirement in the issue evidence. Theme thumbnails, NixOS
 services/VM tests, diagnostic coverage producers, and canonical screenshot
 baseline updates remain Linux-only. Do not update canonical snapshots on macOS.
-For host PostgreSQL testing on macOS, use `cargo xtask test-local` or
+For host PostgreSQL testing on macOS, use `just test-local` or
 `devtool pg run -- <command>` rather than the NixOS testing VM below.
 
 Check platform output boundaries and native shell/package evaluation with:
@@ -593,9 +593,9 @@ The host and the CI VM load the **same** `end2end/playwright.config.ts`, keeping
 browser-flow definitions shared. A focused host pass does not establish the
 hermetic backend/browser matrix verdict; CI remains authoritative.
 
-- **Fast local loop** — `cargo xtask e2e-local` owns the whole loop: it resolves
-  the CSR bundle and builds the host server, starts its own `jaunder serve` and
-  OTLP collector on ephemeral ports with a fresh per-run SQLite temp DB, seeds
+- **Fast local loop** — `just e2e-local` owns the whole loop: it resolves the
+  CSR bundle and builds the host server, starts its own `jaunder serve` and OTLP
+  collector on ephemeral ports with a fresh per-run SQLite temp DB, seeds
   fixtures, and runs the local Chromium lifecycle, tearing both processes down
   after. The collector captures correlated browser and server spans, then the
   command retains the complete capture under
@@ -604,7 +604,7 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
   this while iterating on the web UI; it uses the HTML reporter for interactive
   debugging. For browser-specific investigation on macOS, select WebKit after
   provisioning browsers, for example
-  `cargo xtask e2e-local post-image-fit.spec.ts --browser webkit`; this proves
+  `just e2e-local post-image-fit.spec.ts --browser webkit`; this proves
   Playwright WebKit only, not actual Safari.
 
   Ordinary runs select `.#sandboxArtifacts`: one source-consistent immutable set
@@ -636,13 +636,13 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
   afterward. The standalone manual `just build-csr debug|release` workflow and
   its local `target/site` output remain unchanged.
 
-- **Focused browser-flow proof** — `cargo xtask e2e-local <spec-or-file:line>`
-  scopes the local loop to one Playwright positional filter when that spec or
-  line covers the changed behavior:
+- **Focused browser-flow proof** — `just e2e-local <spec-or-file:line>` scopes
+  the local loop to one Playwright positional filter when that spec or line
+  covers the changed behavior:
 
   ```bash
-  cargo xtask e2e-local auth.spec.ts
-  cargo xtask e2e-local auth.spec.ts:17
+  just e2e-local auth.spec.ts
+  just e2e-local auth.spec.ts:17
   ```
 
   This is the default proof for a changed browser flow before broader e2e gates.
@@ -761,19 +761,19 @@ not share a promised final test-verdict identity.
 The only supported baseline updater is:
 
 ```bash
-cargo xtask e2e-local --update-visual-snapshots
+just e2e-local --update-visual-snapshots
 ```
 
 It release-builds CSR and gives Chromium and Firefox separate fresh
 server/database lifecycles. **Never** hand-run Playwright's snapshot-update mode
 against an ambient server or database. Review every changed PNG, then run
-`cargo xtask e2e-local` without update mode before committing intentional
-baselines together with the rendering or test change.
+`just e2e-local` without update mode before committing intentional baselines
+together with the rendering or test change.
 
-`cargo xtask e2e-local <spec-or-file:line>` remains the targeted loop. It scopes
-both the visual prerequisite and the ordinary/admin invocation to that
-positional filter; an unrelated spec does not schedule all visual tests. Update
-mode intentionally rejects a positional filter.
+`just e2e-local <spec-or-file:line>` remains the targeted loop. It scopes both
+the visual prerequisite and the ordinary/admin invocation to that positional
+filter; an unrelated spec does not schedule all visual tests. Update mode
+intentionally rejects a positional filter.
 
 #### Accessibility workflow
 
@@ -896,9 +896,9 @@ gates when one Rust test, module, package, or subsystem can answer the current
 question:
 
 ```bash
-cargo xtask test-local -- -p storage site_config_primitives_round_trip
-cargo xtask test-local -- -p jaunder storage::posts::post_create_and_get_by_id_works
-cargo xtask test-local -- -p jaunder -E 'test(/^web::/)'
+just test-local -p storage site_config_primitives_round_trip
+just test-local -p jaunder storage::posts::post_create_and_get_by_id_works
+just test-local -p jaunder -E 'test(/^web::/)'
 ```
 
 After a targeted fix, rerun the same focused command first; it is the fastest
@@ -1011,8 +1011,8 @@ disposition. Status-as-data still requires its verdict gate; missing, malformed,
 incomplete or wrong-output evidence cannot pass. Output availability is not
 proof of fresh execution.
 
-Focused `cargo xtask test-local -- <nextest args>` and
-`cargo xtask e2e-local <spec-or-file:line>` are the default feedback paths while
+Focused `just test-local <nextest args>` and
+`just e2e-local <spec-or-file:line>` are the default feedback paths while
 editing. After a repair, rerun the same targeted proof before broadening the
 question. Do not run a broad gate as a routine per-helper or per-fix ritual.
 Normal pre-commit and pre-push hooks still enforce their documented boundaries;
@@ -1633,12 +1633,12 @@ Test paths follow the nested module path to the test name. A shallow file yields
 `misc::commands::…` is another nested example.
 
 - One subsystem through the focused local lane:
-  `cargo xtask test-local -- -p jaunder -E 'test(/^web::/)'` (or `atompub`,
-  `feed`, `misc`, `projector`, `storage`).
+  `just test-local -p jaunder -E 'test(/^web::/)'` (or `atompub`, `feed`,
+  `misc`, `projector`, `storage`).
 - One file, concern module, or test (substring match):
-  `cargo xtask test-local -- -p jaunder storage::posts::post_create_and_get_by_id_works`.
+  `just test-local -p jaunder storage::posts::post_create_and_get_by_id_works`.
 - One storage-crate test:
-  `cargo xtask test-local -- -p storage site_config_primitives_round_trip`.
+  `just test-local -p storage site_config_primitives_round_trip`.
 - Library/unit tests only, when PostgreSQL-backed integration setup is
   irrelevant: `cargo test -p jaunder --lib`.
 
@@ -1727,14 +1727,14 @@ does not bring them in. See
 [ADR-0124](docs/adr/0124-rstest-reuse-cross-module-templates.md).)
 
 The simplest way to run them against a throwaway PostgreSQL is
-`cargo xtask test-local`, which starts an ephemeral cluster through
-`devtool pg run`, exports the connection env, runs `cargo nextest run`, tears
-everything down, and applies the shared `sccache` environment:
+`just test-local`, which starts an ephemeral cluster through host-proof's
+`pg-run`, exports the connection env, runs `cargo nextest run`, tears everything
+down, and applies the shared `sccache` environment:
 
 ```bash
-cargo xtask test-local
-cargo xtask test-local -- -p jaunder
-cargo xtask test-local -- -p storage site_config_primitives_round_trip
+just test-local
+just test-local -p jaunder
+just test-local -p storage site_config_primitives_round_trip
 ```
 
 Before compiling or running product tests, `test-local` owns the checkout-local

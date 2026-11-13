@@ -367,7 +367,10 @@ mod tests {
 
     #[test]
     fn e2e_provenance_acquisition_failures_are_context_not_absence() {
-        let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .unwrap();
         let temporary_root = checkout.join(".xtask/tmp");
         std::fs::create_dir_all(&temporary_root).unwrap();
         let root = tempfile::tempdir_in(&temporary_root).unwrap();

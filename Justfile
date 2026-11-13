@@ -18,6 +18,7 @@ devtool := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p devto
 prettier := "just --justfile recipes/prettier.just --working-directory ."
 static := "just --justfile recipes/static.just --working-directory ."
 repository_policy := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin"
+host_proof := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p host-proof --bin"
 
 # Setup follows the current checkout even after cd in an existing devShell.
 tsc mode="verify":
@@ -250,8 +251,22 @@ _host-tests:
     cargo test --manifest-path tools/Cargo.toml --lib --bins --tests
 
 [private]
-_product-tests:
-    cargo xtask test-local
+_product-tests: test-local
+
+# Focused Rust proof with isolated PostgreSQL; args are nextest selectors (none = workspace).
+[positional-arguments]
+test-local *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # The launcher owns the runner timeline that test-local contributes its trace to.
+    traced-run --launcher --name test-local -- {{host_proof}} test-local -- "$@" | jq -r -f scripts/step-report.jq
+
+# Focused browser proof: [--browser B] [spec-or-file:line] or --update-visual-snapshots.
+[positional-arguments]
+e2e-local *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    {{host_proof}} e2e-local "$@" | jq -r -f scripts/step-report.jq
 
 [private]
 _workspace-doctests:

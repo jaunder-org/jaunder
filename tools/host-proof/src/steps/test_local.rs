@@ -1,10 +1,20 @@
 use xshell::Shell;
 
 use crate::compile_cache;
-use crate::result::{CommandResult, StepResult};
+use crate::report::{CommandResult, StepResult};
 use crate::sh::step_with_env;
 
-pub fn run(sh: &Shell, result: &mut CommandResult, nextest_args: &[String]) {
+/// Run focused host-native tests and return their report.
+pub fn command(nextest_args: &[String]) -> CommandResult {
+    let mut result = CommandResult::new("test-local");
+    match Shell::new() {
+        Ok(sh) => run(&sh, &mut result, nextest_args),
+        Err(error) => result.push(StepResult::fail("test-local").detail(error.to_string())),
+    }
+    result
+}
+
+fn run(sh: &Shell, result: &mut CommandResult, nextest_args: &[String]) {
     run_with_producer(
         sh,
         result,
@@ -17,7 +27,7 @@ pub fn run(sh: &Shell, result: &mut CommandResult, nextest_args: &[String]) {
             let resolve = || -> anyhow::Result<()> {
                 let admission =
                     traced.then(|| crate::invocation_trace::phase("xtask.csr-admission"));
-                let admitted = crate::host_tooling::admit_untracked_inputs(
+                let admitted = repository_policy::checkout::admit_untracked_inputs(
                     &sh.current_dir(),
                     ".#csrBundle.sourceAdmits",
                 );
@@ -160,10 +170,9 @@ pub fn args_for(nextest_args: &[String]) -> Vec<String> {
         "--manifest-path",
         "tools/Cargo.toml",
         "-p",
-        "devtool",
-        "--",
-        "pg",
-        "run",
+        "host-proof",
+        "--bin",
+        "pg-run",
         "--",
         "cargo",
         "nextest",
@@ -655,7 +664,7 @@ fi
     }
 
     #[test]
-    fn test_local_defaults_to_workspace_nextest_under_devtool_pg_run() {
+    fn test_local_defaults_to_workspace_nextest_under_pg_run() {
         assert_eq!(
             args_for(&[]),
             strings(&[
@@ -665,10 +674,9 @@ fi
                 "--manifest-path",
                 "tools/Cargo.toml",
                 "-p",
-                "devtool",
-                "--",
-                "pg",
-                "run",
+                "host-proof",
+                "--bin",
+                "pg-run",
                 "--",
                 "cargo",
                 "nextest",
@@ -693,10 +701,9 @@ fi
                 "--manifest-path",
                 "tools/Cargo.toml",
                 "-p",
-                "devtool",
-                "--",
-                "pg",
-                "run",
+                "host-proof",
+                "--bin",
+                "pg-run",
                 "--",
                 "cargo",
                 "nextest",

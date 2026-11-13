@@ -56,7 +56,13 @@ fn main() {
         }
         command => {
             let cli = Cli { json, command };
-            let result = xtask::invocation_trace::execute(cli);
+            eprintln!("xtask-start: checkout-prepare");
+            let result = xtask::prepare_checkout().and_then(|()| {
+                eprintln!("xtask-start: hook-setup");
+                xtask::ensure_hooks_installed();
+                eprintln!("xtask-start: dispatch");
+                xtask::run(cli)
+            });
             match result {
                 Ok(result) => {
                     result.report(json);

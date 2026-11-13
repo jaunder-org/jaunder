@@ -1576,6 +1576,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "host-proof"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "coverage",
+ "host",
+ "jiff",
+ "processkit",
+ "repository-policy",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "xshell",
+]
+
+[[package]]
 name = "html-escape"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -15,8 +15,8 @@ use anyhow::{Context, Result, ensure};
 use flate2::read::GzDecoder;
 use tempfile::TempDir;
 
-use crate::nix_build::build_out_path;
 use crate::{E2eBackend, E2eBrowser};
+use host_proof::nix_build::build_out_path;
 
 /// Both backends are always built, regardless of `--browser` (matches the script).
 const BACKENDS: [E2eBackend; 2] = [E2eBackend::Sqlite, E2eBackend::Postgres];

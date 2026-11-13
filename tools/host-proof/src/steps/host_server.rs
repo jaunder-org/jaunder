@@ -11,7 +11,7 @@ use processkit::Command;
 use xshell::{Shell, cmd};
 
 use crate::git;
-use crate::result::{CommandResult, StepResult};
+use crate::report::{CommandResult, StepResult};
 use crate::steps::process::Process;
 
 const RUNTIME_FILE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -54,7 +54,10 @@ impl HostArtifacts {
             } else {
                 "sandboxArtifacts"
             };
-            crate::host_tooling::admit_untracked_inputs(&root, &format!(".#{attr}.sourceAdmits"))?;
+            repository_policy::checkout::admit_untracked_inputs(
+                &root,
+                &format!(".#{attr}.sourceAdmits"),
+            )?;
             let gcroots = root.join(".xtask/gcroots");
             fs::create_dir_all(&gcroots)?;
             let retained = tempfile::Builder::new()

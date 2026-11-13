@@ -86,6 +86,8 @@ let
     assert !(wasmTestTargetSource "tools/coverage/src/ephemeral_postgres.rs");
     assert !(siteTargetSource "tools/qualification/src/lib.rs");
     assert !(wasmTestTargetSource "tools/qualification/src/lib.rs");
+    assert !(siteTargetSource "tools/host-proof/src/lib.rs");
+    assert !(wasmTestTargetSource "tools/host-proof/src/lib.rs");
     true;
 
   # Coverage source remains bounded to Cargo-recognized package inputs plus the
@@ -135,6 +137,7 @@ let
     assert !(builtins.elem "tools/devtool" coverageMembers);
     assert !(builtins.elem "tools/coverage" coverageMembers);
     assert !(builtins.elem "tools/qualification" coverageMembers);
+    assert !(builtins.elem "tools/host-proof" coverageMembers);
     assert !(builtins.elem "tools/doctests" coverageMembers);
     assert !(builtins.elem "tools/diagnostic-coverage-runtime" coverageMembers);
     pkgs.lib.cleanSourceWith {

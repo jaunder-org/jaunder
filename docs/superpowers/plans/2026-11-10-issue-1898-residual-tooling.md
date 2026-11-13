@@ -112,8 +112,9 @@ staged design bytes/index and shared stashes remain untouched now.
     closure with its output compiled in, the harness links
     `bin/qualification-host`, and the four Just recipes `nix run` it.
     `cargo xtask qualification-leaf` is retired. Proven: all 63 moved unit tests
-    plus binary-boundary refusals, embedded-output/harness linkage and pre-Nix
-    dirty refusal. Not run: a full VM qualification.
+    plus binary-boundary refusals, embedded-output/harness linkage, pre-Nix
+    dirty refusal, and a passing local
+    `just production-baseline-qualify-styling` VM run with published evidence.
   - Contract: qualification-host behind four existing recipes preserves harness/
     source/target preflight, exact compiled-output/helper admission, lease/root/
     VM custody and ordinary/styling/no-evidence distinctions. Separate system-
@@ -131,6 +132,11 @@ staged design bytes/index and shared stashes remain untouched now.
 
 - [ ] 5. Focused proof and manual diagnostics retain convenient bounded
       workflows.
+  - Progress: focused proof delivered. `tools/host-proof` owns `test-local`,
+    `e2e-local` and `pg-run`; `just test-local`/`just e2e-local` run them and
+    derive the human view from the single stdout JSON report (human decision
+    2026-11-12: JSON on stdout replaces the sidecar, `--json` and sentinel).
+    Remaining: trace-analysis/source/cache diagnostics and benchmark recipes.
   - Contract: direct test-local/e2e-local retain their DIFFERENT mutable-lock vs
     immutable-artifact/root, admission, worker/seed/environment,
     readiness/capture/ signal/cleanup/status contracts. Standalone sandbox stays

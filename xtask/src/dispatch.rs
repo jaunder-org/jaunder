@@ -1,7 +1,5 @@
 use std::time::Instant;
 
-use xshell::Shell;
-
 use crate::{
     audit_wasm, cache_safety,
     cli::{
@@ -221,34 +219,6 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                 Err(error) => StepResult::fail("wasm-coverage-measure").detail(format!("{error:#}")),
             }.with_duration(step_start.elapsed()));
             lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::E2eLocal {
-            browser,
-            test,
-            update_visual_snapshots,
-        } => {
-            let sh = Shell::new()?;
-            let start = Instant::now();
-            let mut result = CommandResult::new("e2e-local");
-            steps::e2e_local::run(
-                &sh,
-                &mut result,
-                browser,
-                test.as_deref(),
-                update_visual_snapshots,
-            );
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::TestLocal { nextest_args } => {
-            let sh = Shell::new()?;
-            let mut result = CommandResult::new("test-local");
-            steps::test_local::run(&sh, &mut result, &nextest_args);
-            result.finished_at_unix = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
             Ok(result)
         }
         Command::Traces(TracesCommand::Analyze {

@@ -65,10 +65,10 @@ pub(super) fn allocate_retained_capture(
 pub(super) fn finalize_capture(retained: &RetainedCapture, source: &Path) -> anyhow::Result<bool> {
     copy_capture_directory(source, &retained.capture_dir)?;
     if retained.trace_path.is_file() {
-        println!("e2e-local trace: {}", retained.trace_path.display());
+        eprintln!("e2e-local trace: {}", retained.trace_path.display());
         Ok(true)
     } else {
-        println!(
+        eprintln!(
             "e2e-local capture retained at {}; expected trace missing: {}",
             retained.run_dir.display(),
             retained.trace_path.display()

@@ -1,28 +1,23 @@
 mod audit_wasm;
 mod cache_safety;
 mod cli;
-mod compile_cache;
 pub mod coverage;
 mod digest;
 mod dispatch;
 pub use dispatch::artifact_verdict;
 pub mod e2e_evidence;
 pub mod e2e_ownership;
-mod e2e_provenance;
 pub mod elisp_coverage;
 pub mod git;
 mod host_tooling;
-pub mod invocation_trace;
 mod lifecycle;
 pub use repository_policy::markers;
 mod mutants;
-mod nix_build;
 mod nix_probe;
 mod playwright_report;
 mod result;
 mod server_fn_coverage;
 pub(crate) use repository_policy::server_fns;
-mod sh;
 #[cfg(test)]
 mod test_support;
 mod traces;
@@ -34,16 +29,10 @@ mod wasm_symbols;
 mod steps {
     pub mod boot_decomposition_coverage;
     pub mod check_leaf;
-    pub mod csr_prerequisite;
     pub mod doctest_fences;
     pub mod duration_budget;
-    pub mod e2e_local;
-    pub mod host_server;
-    mod host_signals;
     pub mod nix;
-    mod process;
     pub mod server_fn_coverage_check;
-    pub mod test_local;
     pub mod wasm_budget;
 }
 

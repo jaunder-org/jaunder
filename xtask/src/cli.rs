@@ -44,13 +44,6 @@ pub enum E2eBrowser {
     Firefox,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum E2eLocalBrowser {
-    Chromium,
-    Firefox,
-    Webkit,
-}
-
 impl E2eBackend {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
@@ -65,16 +58,6 @@ impl E2eBrowser {
         match self {
             E2eBrowser::Chromium => "chromium",
             E2eBrowser::Firefox => "firefox",
-        }
-    }
-}
-
-impl E2eLocalBrowser {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Chromium => "chromium",
-            Self::Firefox => "firefox",
-            Self::Webkit => "webkit",
         }
     }
 }
@@ -142,47 +125,6 @@ pub enum Command {
     CoveragePolicy {
         #[arg(long)]
         out: PathBuf,
-    },
-    /// Focused browser proof: use a spec or file:line selector while iterating.
-    ///
-    /// Rerun the same focused command after a fix. Use representative hermetic
-    /// `just e2e-producer <identity>` proof when backend/browser parity, release-build
-    /// behavior or the hermetic environment is load-bearing; local proof does not
-    /// replace CI/full validation.
-    ///
-    /// Owns each host lifecycle: build the CSR bundle +
-    /// server, start `jaunder serve` on an ephemeral port with the VM's capture
-    /// env + a per-run temp DB, seed via the shared `test-support seed-e2e`, run
-    /// Playwright against the discovered URL, and tear the server down on every
-    /// exit path. Normal mode runs the selected ordinary browser project; visual
-    /// update mode builds release CSR and updates Chromium and Firefox baselines in
-    /// separate fresh lifecycles. Self-contained — no pre-existing server and no
-    /// `:3000` conflict. Loads the same `playwright.config.ts` the CI VM loads.
-    /// Host only.
-    E2eLocal {
-        /// Run the selected ordinary Playwright browser project. Omit to preserve
-        /// the existing Chromium run.
-        #[arg(long, value_enum, conflicts_with = "update_visual_snapshots")]
-        browser: Option<E2eLocalBrowser>,
-        /// A spec path or `file:line` filter passed through to Playwright as a
-        /// positional arg (single-test runs).
-        test: Option<String>,
-        /// Update every Chromium and Firefox visual baseline using release CSR.
-        #[arg(long, conflicts_with = "test")]
-        update_visual_snapshots: bool,
-    },
-    /// Focused Rust proof: pass nextest selectors after `--` while iterating.
-    ///
-    /// Rerun the same focused command after a fix. This accelerates feedback;
-    /// normal commit/push hooks and CI retain their boundary authority.
-    /// Runs host-native tests with shared sccache and isolated PostgreSQL.
-    #[command(after_help = "EXAMPLES:\n  \
-        cargo xtask test-local\n  \
-        cargo xtask test-local -- -p storage site_config_primitives_round_trip")]
-    TestLocal {
-        /// Arguments forwarded to `cargo nextest run`.
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        nextest_args: Vec<String>,
     },
     /// OpenTelemetry trace analysis (host-side; ADR-0028).
     #[command(subcommand)]
@@ -389,8 +331,6 @@ impl Cli {
             Command::AuditWasm { .. } => "audit-wasm",
             Command::E2eVerify { .. } => "e2e-verify",
             Command::E2eReconcile { .. } => "e2e-reconcile",
-            Command::E2eLocal { .. } => "e2e-local",
-            Command::TestLocal { .. } => "test-local",
             Command::Traces(TracesCommand::Analyze { .. }) => "traces-analyze",
             Command::Traces(TracesCommand::Run { .. }) => "traces-run",
             Command::Traces(TracesCommand::BootPhases { .. }) => "traces-boot-phases",
@@ -443,55 +383,6 @@ mod tests {
     #[test]
     fn standalone_csr_build_has_no_xtask_command_alias() {
         assert!(Cli::try_parse_from(["xtask", "build-csr"]).is_err());
-    }
-
-    #[test]
-    fn feedback_help_distinguishes_focused_proof_from_boundary_gates() {
-        // Exercise Clap's public help paths, including the summaries callers see
-        // before choosing a command; source comments alone do not prove the guidance.
-        for flag in ["-h", "--help"] {
-            let error = Cli::try_parse_from(["xtask", flag]).err().unwrap();
-            assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
-            let help = error.to_string();
-            for role in ["Focused Rust proof", "Focused browser proof"] {
-                assert!(help.contains(role), "missing {role:?} in {flag}: {help}");
-            }
-            assert!(!help.contains("Inner loop"));
-        }
-    }
-
-    #[test]
-    fn feedback_command_help_redirects_iteration_without_replacing_gates() {
-        for (command, required) in [
-            (
-                "test-local",
-                &["Focused Rust proof", "same focused command", "hooks", "CI"][..],
-            ),
-            (
-                "e2e-local",
-                &[
-                    "Focused browser proof",
-                    "same focused command",
-                    "hermetic",
-                    "parity",
-                    "just e2e-producer",
-                ][..],
-            ),
-        ] {
-            for flag in ["-h", "--help"] {
-                let error = Cli::try_parse_from(["xtask", command, flag]).err().unwrap();
-                assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
-                let help = error.to_string();
-                assert!(help.contains(required[0]), "{command} {flag}: {help}");
-                if flag == "--help" {
-                    // Whitespace is presentation, not the cadence contract.
-                    let help = help.split_whitespace().collect::<Vec<_>>().join(" ");
-                    for phrase in required {
-                        assert!(help.contains(phrase), "missing {phrase:?}: {help}");
-                    }
-                }
-            }
-        }
     }
 
     #[test]
@@ -574,148 +465,6 @@ mod tests {
             "e2e-experimental",
         ] {
             assert!(Cli::try_parse_from(["xtask", command, "sqlite"]).is_err());
-        }
-    }
-
-    #[test]
-    fn e2e_local_parses_filter_or_visual_update_mode() {
-        let cli = Cli::try_parse_from(["xtask", "e2e-local"]).unwrap();
-        match cli.command {
-            Command::E2eLocal {
-                browser,
-                test,
-                update_visual_snapshots,
-            } => {
-                assert_eq!(browser, None);
-                assert_eq!(test, None);
-                assert!(!update_visual_snapshots);
-            }
-            _ => panic!("expected e2e-local"),
-        }
-
-        let cli = Cli::try_parse_from(["xtask", "e2e-local", "auth-flow.spec.ts"]).unwrap();
-        match cli.command {
-            Command::E2eLocal {
-                browser,
-                test,
-                update_visual_snapshots,
-            } => {
-                assert_eq!(browser, None);
-                assert_eq!(test.as_deref(), Some("auth-flow.spec.ts"));
-                assert!(!update_visual_snapshots);
-            }
-            _ => panic!("expected e2e-local with filter"),
-        }
-
-        let cli = Cli::try_parse_from(["xtask", "e2e-local", "--update-visual-snapshots"]).unwrap();
-        match cli.command {
-            Command::E2eLocal {
-                browser,
-                test,
-                update_visual_snapshots,
-            } => {
-                assert_eq!(browser, None);
-                assert_eq!(test, None);
-                assert!(update_visual_snapshots);
-            }
-            _ => panic!("expected e2e-local visual update mode"),
-        }
-    }
-
-    #[test]
-    fn e2e_local_parses_each_browser_selection() {
-        for (argument, browser) in [
-            ("chromium", E2eLocalBrowser::Chromium),
-            ("firefox", E2eLocalBrowser::Firefox),
-            ("webkit", E2eLocalBrowser::Webkit),
-        ] {
-            let cli = Cli::try_parse_from(["xtask", "e2e-local", "--browser", argument]).unwrap();
-            match cli.command {
-                Command::E2eLocal {
-                    browser: selected, ..
-                } => assert_eq!(selected, Some(browser)),
-                _ => panic!("expected e2e-local"),
-            }
-        }
-    }
-
-    #[test]
-    fn e2e_local_parses_firefox_admin_site_filter() {
-        let cli = Cli::try_parse_from([
-            "xtask",
-            "e2e-local",
-            "theme.spec.ts:63",
-            "--browser",
-            "firefox",
-        ])
-        .unwrap();
-        match cli.command {
-            Command::E2eLocal {
-                browser,
-                test,
-                update_visual_snapshots,
-            } => {
-                assert_eq!(browser, Some(E2eLocalBrowser::Firefox));
-                assert_eq!(test.as_deref(), Some("theme.spec.ts:63"));
-                assert!(!update_visual_snapshots);
-            }
-            _ => panic!("expected filtered Firefox e2e-local"),
-        }
-    }
-
-    #[test]
-    fn e2e_local_rejects_filter_with_visual_update_mode() {
-        assert!(
-            Cli::try_parse_from([
-                "xtask",
-                "e2e-local",
-                "--update-visual-snapshots",
-                "auth-flow.spec.ts",
-            ])
-            .is_err()
-        );
-
-        let Err(error) = Cli::try_parse_from([
-            "xtask",
-            "e2e-local",
-            "--update-visual-snapshots",
-            "--browser",
-            "webkit",
-        ]) else {
-            panic!("browser selection conflicts with visual snapshot updates");
-        };
-        assert!(error.to_string().contains("--browser"));
-        assert!(error.to_string().contains("--update-visual-snapshots"));
-    }
-
-    #[test]
-    fn parses_test_local_defaults_and_forwarded_nextest_args() {
-        let cli = Cli::try_parse_from(["xtask", "test-local"]).unwrap();
-        match cli.command {
-            Command::TestLocal { ref nextest_args } => {
-                assert!(nextest_args.is_empty());
-            }
-            _ => panic!("expected test-local"),
-        }
-        assert_eq!(cli.command_name(), "test-local");
-
-        let cli = Cli::try_parse_from([
-            "xtask",
-            "test-local",
-            "--",
-            "-p",
-            "storage",
-            "site_config_primitives_round_trip",
-        ])
-        .unwrap();
-        match cli.command {
-            Command::TestLocal { nextest_args } => {
-                assert_eq!(
-                    nextest_args,
-                    ["-p", "storage", "site_config_primitives_round_trip"]
-                );
-            }
-            _ => panic!("expected test-local with nextest args"),
         }
     }
 

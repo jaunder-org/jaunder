@@ -25,6 +25,11 @@ impl Workflow {
         )
         .unwrap();
         fs::create_dir(root.path().join("scripts")).unwrap();
+        fs::copy(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/step-report.jq"),
+            root.path().join("scripts/step-report.jq"),
+        )
+        .unwrap();
         // Gate composition observes only the aggregate boundary. The actual helper's
         // settlement, artifact and failure behavior is exercised by e2e_workflow.
         fs::write(
@@ -80,7 +85,7 @@ if [ "$name" = git ]; then
         if [ -f wrong-origin ]; then printf 'https://example.invalid/foreign\n'; else printf 'https://github.com/jaunder-org/jaunder.git\n'; fi ;;
     esac
 fi
-if [ "$name $*" = "cargo xtask test-local" ]; then
+if [ "$name $*" = "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p host-proof --bin test-local --" ]; then
     touch producer-resource
     trap 'rm producer-resource; printf "cleaned\n" >> producer-cleanup' EXIT
 fi
@@ -694,7 +699,7 @@ fn broad_fix_and_verify_preserve_the_actual_complete_success_order() {
         assert!(ok, "{recipe}: {stderr}");
         assert_eq!(actual, check, "{recipe}");
     }
-    check.extend(commands(&["cargo xtask test-local"]));
+    check.extend(commands(&["cargo run --locked --quiet --manifest-path tools/Cargo.toml -p host-proof --bin test-local --"]));
     check.push(nix("wasm-tests"));
     check.extend(doctests());
     let (ok, actual, stderr) = workflow.run(&["check"], "");
@@ -708,7 +713,7 @@ fn broad_fix_and_verify_preserve_the_actual_complete_success_order() {
     ));
     prepush.extend(host_tests());
     prepush.extend(commands(&[
-        "cargo xtask test-local",
+        "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p host-proof --bin test-local --",
         "cargo xtask check-leaf workspace-doctests",
     ]));
     let (ok, actual, stderr) = workflow.run(&["prepush"], "");
@@ -798,7 +803,10 @@ fn every_required_leaf_failure_is_nonzero_and_stops_subsequent_work() {
 
 #[test]
 fn synchronous_producer_cleanup_finishes_before_just_returns_success_or_failure() {
-    for failure in ["", "cargo xtask test-local"] {
+    for failure in [
+        "",
+        "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p host-proof --bin test-local --",
+    ] {
         let workflow = Workflow::new();
         let (ok, _, stderr) = workflow.run(&["check"], failure);
         assert_eq!(ok, failure.is_empty(), "{stderr}");
