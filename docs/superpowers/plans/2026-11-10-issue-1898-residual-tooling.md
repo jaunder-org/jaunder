@@ -136,7 +136,11 @@ staged design bytes/index and shared stashes remain untouched now.
     `e2e-local` and `pg-run`; `just test-local`/`just e2e-local` run them and
     derive the human view from the single stdout JSON report (human decision
     2026-11-12: JSON on stdout replaces the sidecar, `--json` and sentinel).
-    Remaining: trace-analysis/source/cache diagnostics and benchmark recipes.
+    Trace analysis delivered as host-proof `trace-analysis`
+    (`just trace-analysis analyze|run|boot-phases`); its rendered tables ride in
+    the report's `report` field. The source/cache probes, WASM coverage
+    probe/measure and benchmark-local share `steps::nix` and coverage-policy
+    evaluation with Task6 evidence families, so they move with those families.
   - Contract: direct test-local/e2e-local retain their DIFFERENT mutable-lock vs
     immutable-artifact/root, admission, worker/seed/environment,
     readiness/capture/ signal/cleanup/status contracts. Standalone sandbox stays

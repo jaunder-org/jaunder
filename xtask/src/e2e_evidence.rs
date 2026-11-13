@@ -348,7 +348,7 @@ pub(crate) mod tests {
     struct TestCatalog {
         lanes: Vec<super::ExpectedLane>,
     }
-    use crate::traces::run::TRACE_MEMBER;
+    use host_proof::traces::run::TRACE_MEMBER;
 
     const CENSUS: &str = include_str!("testdata/e2e-ownership/expected-census.json");
     const REPORTS: [&str; 3] = [

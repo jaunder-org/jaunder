@@ -12,7 +12,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::playwright_report::{PlaywrightReport, PlaywrightSpec, PlaywrightTest};
+use host_proof::playwright_report::{PlaywrightReport, PlaywrightSpec, PlaywrightTest};
 
 const SCHEMA_VERSION: u32 = 1;
 const PRESSURE_THRESHOLD: f64 = 0.80;

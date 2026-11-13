@@ -8,14 +8,14 @@ use serde::Deserialize;
 
 /// The root Playwright JSON report.
 #[derive(Debug, Deserialize)]
-pub(crate) struct PlaywrightReport {
+pub struct PlaywrightReport {
     #[serde(default)]
     pub suites: Vec<PlaywrightSuite>,
 }
 
 /// A recursively nested Playwright suite.
 #[derive(Debug, Deserialize)]
-pub(crate) struct PlaywrightSuite {
+pub struct PlaywrightSuite {
     #[serde(default)]
     pub suites: Vec<PlaywrightSuite>,
     pub specs: Vec<PlaywrightSpec>,
@@ -23,7 +23,7 @@ pub(crate) struct PlaywrightSuite {
 
 /// One selected Playwright spec.
 #[derive(Debug, Deserialize)]
-pub(crate) struct PlaywrightSpec {
+pub struct PlaywrightSpec {
     pub id: Option<String>,
     pub title: Option<String>,
     pub file: Option<String>,
@@ -33,7 +33,7 @@ pub(crate) struct PlaywrightSpec {
 
 /// One project's execution of a spec.
 #[derive(Debug, Deserialize)]
-pub(crate) struct PlaywrightTest {
+pub struct PlaywrightTest {
     #[serde(rename = "projectId")]
     pub project_id: Option<String>,
     #[serde(rename = "projectName")]
@@ -44,14 +44,14 @@ pub(crate) struct PlaywrightTest {
 
 /// One completed Playwright attempt.
 #[derive(Debug, Deserialize)]
-pub(crate) struct PlaywrightAttempt {
+pub struct PlaywrightAttempt {
     pub retry: Option<u32>,
     pub duration: Option<f64>,
 }
 
 impl PlaywrightReport {
     /// Visit every spec in reporter order, including nested suites.
-    pub(crate) fn visit_specs<'a>(&'a self, visit: &mut impl FnMut(&'a PlaywrightSpec)) {
+    pub fn visit_specs<'a>(&'a self, visit: &mut impl FnMut(&'a PlaywrightSpec)) {
         for suite in &self.suites {
             suite.visit_specs(visit);
         }

@@ -17,10 +17,10 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::playwright_report::PlaywrightReport;
-use crate::traces::run::read_trace_member;
+use host_proof::playwright_report::PlaywrightReport;
+use host_proof::traces::run::read_trace_member;
 
-use crate::traces::{
+use host_proof::traces::{
     boot_phases::{
         BootDecompositionOutcome, boot_decomposition_outcome, page_boot_decomposition_outcome,
     },
@@ -96,7 +96,7 @@ fn report_projects(report: &PlaywrightReport) -> Result<BTreeSet<String>, String
     Ok(projects)
 }
 
-fn trace_projects(spans: &[crate::traces::parse::Span]) -> Result<BTreeSet<String>, String> {
+fn trace_projects(spans: &[host_proof::traces::parse::Span]) -> Result<BTreeSet<String>, String> {
     let mut projects = BTreeSet::new();
     let mut mounted = BTreeMap::<String, usize>::new();
 
@@ -168,7 +168,7 @@ fn has_attribute(raw: &Value, key: &str) -> bool {
         })
 }
 
-fn validate_dropped(span: &crate::traces::parse::Span, project: &str) -> Result<(), String> {
+fn validate_dropped(span: &host_proof::traces::parse::Span, project: &str) -> Result<(), String> {
     if !has_attribute(&span.raw, "e2e.navigation_top_dropped") {
         return Err(format!(
             "project {project}: missing dropped-navigation count"
@@ -289,7 +289,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{validate_files, validate_json};
-    use crate::traces::run::TRACE_MEMBER;
+    use host_proof::traces::run::TRACE_MEMBER;
 
     fn report(projects: &[&str]) -> String {
         json!({

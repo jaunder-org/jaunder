@@ -934,7 +934,7 @@ mkE2eCheck =
   });
 
 # Cache-busting salt for e2e measurement runs (#792). Nix caches the e2e
-# check derivations, so a repeated `cargo xtask traces run` returns a
+# check derivations, so a repeated `just trace-analysis run` returns a
 # CACHED result rather than re-running the suite — silently handing back
 # traces from whenever it was last built, possibly on a CI runner under
 # unknown load. Set this to a distinct value per measurement run to force
@@ -1074,7 +1074,7 @@ e2eWorkers4ControlPackages = mkE2eControlPackages 4 6144 4;
 # name says so.
 #
 # NOT part of the gate — built on demand by
-# `cargo xtask traces run --single-worker` (see docs/observability.md).
+# `just trace-analysis run --single-worker` (see docs/observability.md).
 # They keep the default 2 GB VM, since one worker fits where two Firefox
 # workers would OOM it (#61). Note workers=1 also drops chromium's
 # whole-test scale to 1.0 from the gate's 1.5 (firefox takes

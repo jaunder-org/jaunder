@@ -383,10 +383,10 @@ mod tests {
 
     const SEED_FIXTURE: &str = "src/server_fn_coverage/testdata/otel-traces-seed.jsonl";
 
-    fn seed_spans() -> Vec<crate::traces::parse::Span> {
-        crate::traces::parse::read_spans(
+    fn seed_spans() -> Vec<host_proof::traces::parse::Span> {
+        host_proof::traces::parse::read_spans(
             &Path::new(env!("CARGO_MANIFEST_DIR")).join(SEED_FIXTURE),
-            &crate::traces::parse::Filters::default(),
+            &host_proof::traces::parse::Filters::default(),
         )
         .expect("the seed fixture parses")
     }
@@ -440,7 +440,7 @@ mod tests {
     fn the_derived_endpoint_matches_the_uri_a_real_run_requested() {
         let inv = inventory(&repo_root().join(WEB_SRC)).expect("inventory enumerates");
         let spans = seed_spans();
-        let by_id: std::collections::HashMap<&str, &crate::traces::parse::Span> =
+        let by_id: std::collections::HashMap<&str, &host_proof::traces::parse::Span> =
             spans.iter().map(|s| (s.span_id.as_str(), s)).collect();
 
         let mut matched = 0usize;
@@ -510,7 +510,7 @@ mod tests {
         );
     }
 
-    fn seed_spans_without_uris() -> Vec<crate::traces::parse::Span> {
+    fn seed_spans_without_uris() -> Vec<host_proof::traces::parse::Span> {
         let mut spans = seed_spans();
         for span in &mut spans {
             span.uri.clear();
@@ -522,7 +522,7 @@ mod tests {
     /// `extract` still finds got there by the `uri` signal alone. Renamed rather
     /// than dropped, for the same reason `seed_spans_without_uris` erases instead
     /// of removing: the spans are load-bearing links in the ancestor chains.
-    fn seed_spans_without_span_names() -> Vec<crate::traces::parse::Span> {
+    fn seed_spans_without_span_names() -> Vec<host_proof::traces::parse::Span> {
         let mut spans = seed_spans();
         for span in &mut spans {
             if span.name != "e2e.test" {

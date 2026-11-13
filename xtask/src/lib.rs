@@ -14,13 +14,11 @@ mod lifecycle;
 pub use repository_policy::markers;
 mod mutants;
 mod nix_probe;
-mod playwright_report;
 mod result;
 mod server_fn_coverage;
 pub(crate) use repository_policy::server_fns;
 #[cfg(test)]
 mod test_support;
-mod traces;
 mod wasm_budget;
 mod wasm_coverage;
 mod wasm_sections;
@@ -38,7 +36,7 @@ mod steps {
 
 pub use cli::{
     CacheSafetyCommand, Cli, Command, CoverageCommand, E2eBackend, E2eBrowser, MutantsCommand,
-    NixCommand, ServerFnCoverageCommand, TracesCommand, WasmCoverageCommand,
+    NixCommand, ServerFnCoverageCommand, WasmCoverageCommand,
 };
 pub use dispatch::run;
 pub use host_tooling::prepare_checkout;

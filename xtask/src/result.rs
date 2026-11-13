@@ -304,11 +304,6 @@ pub struct CommandResult {
     /// wasm — and merging them would invite comparing their totals.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub breakdown: Option<crate::audit_wasm::BreakdownReport>,
-    /// Pre-rendered `traces analyze` report text. Human-facing only — `traces
-    /// analyze` rejects `--json`, so this is never serialized (skipped when None,
-    /// and never Some on a `--json` run).
-    #[serde(skip)]
-    pub traces: Option<String>,
     /// The versioned reconciliation payload emitted by `wasm-coverage probe`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wasm_coverage: Option<crate::wasm_coverage::Aggregate>,
@@ -429,7 +424,6 @@ impl CommandResult {
             exit_override: None,
             audit: None,
             breakdown: None,
-            traces: None,
             wasm_coverage: None,
             phases: PhaseName::ALL
                 .map(|name| {
@@ -529,11 +523,6 @@ impl CommandResult {
         // `--breakdown`'s tables, same reasoning.
         if let Some(breakdown) = &self.breakdown {
             print!("{}", crate::audit_wasm::render_breakdown(breakdown));
-        }
-        // Same informational-payload treatment for `traces analyze`: the report
-        // tables are the point, not the pass/fail line.
-        if let Some(traces) = &self.traces {
-            print!("{traces}");
         }
         // The event log already streamed to stderr; this is the stable summary seam.
         let verdict = if self.ok { "PASSED" } else { "FAILED" };

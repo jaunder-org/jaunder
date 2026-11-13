@@ -261,6 +261,13 @@ test-local *args:
     # The launcher owns the runner timeline that test-local contributes its trace to.
     traced-run --launcher --name test-local -- {{host_proof}} test-local -- "$@" | jq -r -f scripts/step-report.jq
 
+# Manual OTel trace diagnostics: analyze <files> | run [--single-worker] | boot-phases <files>.
+[positional-arguments]
+trace-analysis *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    {{host_proof}} trace-analysis "$@" | jq -r -f scripts/step-report.jq
+
 # Focused browser proof: [--browser B] [spec-or-file:line] or --update-visual-snapshots.
 [positional-arguments]
 e2e-local *args:

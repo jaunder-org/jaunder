@@ -1,4 +1,4 @@
-//! `cargo xtask traces boot-phases` — median boot-phase decomposition per
+//! `just trace-analysis boot-phases` — median boot-phase decomposition per
 //! `(source, project, cacheWarmth)` (#818, spec D8/AC18).
 //!
 //! `analyze` computes maxima and means; AC13 is entirely medians, so this is its
@@ -35,7 +35,7 @@ const EXCLUSIVE_SEGMENTS: [(&str, &str); 2] = [
 /// The fewest finite `boot.*` intervals the document-frame decomposition itself
 /// uses. It is a floor so future instrumentation can add marks without becoming
 /// a coverage blackout.
-pub(crate) const MIN_BOOT_PHASES: usize = 3;
+pub const MIN_BOOT_PHASES: usize = 3;
 
 /// How far the segments may miss `mount_done.startTime` before the navigation is
 /// counted as a closure violation instead of a sample. The segments close
@@ -214,7 +214,7 @@ enum NavOutcome {
 ///
 /// The evaluator keeps this classification alongside the median renderer so
 /// both consumers apply the same schema and closure calculation.
-pub(crate) enum BootDecompositionOutcome {
+pub enum BootDecompositionOutcome {
     Incomplete,
     ClosureViolation,
     Complete,
@@ -341,16 +341,13 @@ fn decompose(nav: &Value, marks: &[Value], page_total: Option<f64>) -> NavOutcom
 }
 
 /// Classify test-span navigation evidence using mark-derived document closure.
-pub(crate) fn boot_decomposition_outcome(
-    navigation: &Value,
-    marks: &[Value],
-) -> BootDecompositionOutcome {
+pub fn boot_decomposition_outcome(navigation: &Value, marks: &[Value]) -> BootDecompositionOutcome {
     outcome(decompose(navigation, marks, None))
 }
 
 /// Classify page-span navigation evidence, which may carry its document total
 /// without the test span's boot-mark attribute.
-pub(crate) fn page_boot_decomposition_outcome(
+pub fn page_boot_decomposition_outcome(
     navigation: &Value,
     marks: &[Value],
 ) -> BootDecompositionOutcome {

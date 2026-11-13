@@ -1,4 +1,4 @@
-//! `cargo xtask traces run` — build the e2e VM checks and analyze their traces.
+//! `just trace-analysis run` — build the e2e VM checks and analyze their traces.
 //!
 //! Host orchestrator (ADR-0028): nix-builds the `{sqlite,postgres}×{chromium,firefox}`
 //! e2e checks (or their `-single-worker` package variants), extracts each combo's
@@ -15,8 +15,8 @@ use anyhow::{Context, Result, ensure};
 use flate2::read::GzDecoder;
 use tempfile::TempDir;
 
-use crate::{E2eBackend, E2eBrowser};
-use host_proof::nix_build::build_out_path;
+use crate::e2e::{E2eBackend, E2eBrowser};
+use crate::nix_build::build_out_path;
 
 /// Both backends are always built, regardless of `--browser` (matches the script).
 const BACKENDS: [E2eBackend; 2] = [E2eBackend::Sqlite, E2eBackend::Postgres];
@@ -24,7 +24,7 @@ const BACKENDS: [E2eBackend; 2] = [E2eBackend::Sqlite, E2eBackend::Postgres];
 /// The trace member inside every `capture-<backend>.tar.gz` — the collector writes
 /// `capture/otel-traces.jsonl` under the capture dir, and the tarball is rooted at the
 /// capture dir's parent (`tar … -C /var/lib/jaunder capture`).
-pub(crate) const TRACE_MEMBER: &str = "capture/otel-traces.jsonl";
+pub const TRACE_MEMBER: &str = "capture/otel-traces.jsonl";
 
 /// The flake attr for one e2e combo. `single_worker` → the `packages…-single-worker`
 /// variant, otherwise the gate check →
@@ -131,7 +131,7 @@ pub fn playwright_report_path(out: &str, backend: E2eBackend) -> PathBuf {
 ///
 /// Every archive consumer uses this seam so malformed evidence has the same
 /// missing, ambiguous, file-type, empty, and UTF-8 failure modes.
-pub(crate) fn read_trace_member(tarball: &Path) -> Result<String> {
+pub fn read_trace_member(tarball: &Path) -> Result<String> {
     let file =
         File::open(tarball).with_context(|| format!("opening capture {}", tarball.display()))?;
     let mut archive = tar::Archive::new(GzDecoder::new(file));
@@ -173,7 +173,7 @@ pub(crate) fn read_trace_member(tarball: &Path) -> Result<String> {
 ///
 /// `pub(crate)` for the flow-coverage gate (#681), which reads the same member out
 /// of the same bundle through [`read_trace_member`].
-pub(crate) fn extract_trace(tarball: &Path, dest: &Path) -> Result<()> {
+pub fn extract_trace(tarball: &Path, dest: &Path) -> Result<()> {
     let trace = read_trace_member(tarball)?;
     std::fs::write(dest, trace)
         .with_context(|| format!("writing extracted trace {}", dest.display()))

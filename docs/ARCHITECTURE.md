@@ -2507,7 +2507,7 @@ In the E2E VMs an otel-collector writes `otel-traces.jsonl` into the capture dir
 out `playwright-report-<lane>.json` (Playwright's `results.json`) and the
 service and system journals alongside the capture tarball, per
 [ADR-0037](adr/0037-e2e-failure-diagnostics-capture.md): artifacts are copied
-before the Playwright exit is asserted. `cargo xtask traces analyze` consumes
+before the Playwright exit is asserted. `just trace-analysis analyze` consumes
 the trace files offline (see the tooling section).
 
 For host-side gates that reconcile Playwright execution with trace evidence, the
@@ -5176,13 +5176,13 @@ placed by a single litmus test — _where must this code execute?_
   [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md), with the
   [qualification carveout](adr/0239-qualification-workflow-ownership.md)).
 - **`tools/host-proof`** — focused host proof (ADR-0246): direct `test-local`,
-  `e2e-local` and `pg-run` executables behind
-  `just test-local`/`just e2e-local`. Each prints exactly one JSON report on
-  stdout (steps, outcomes, durations, details, verdict) and sends child output
-  to stderr; its exit status is the verdict. `scripts/step-report.jq` derives
-  the human step view; there is no sidecar, `--json` flag or completion
-  sentinel. `test-local` keeps its bounded invocation trace under the
-  `traced-run` launcher.
+  `e2e-local`, `pg-run` and `trace-analysis` executables behind the matching
+  Just recipes; trace analysis carries its rendered tables in the report's
+  `report` field. Each prints exactly one JSON report on stdout (steps,
+  outcomes, durations, details, verdict) and sends child output to stderr; its
+  exit status is the verdict. `scripts/step-report.jq` derives the human step
+  view; there is no sidecar, `--json` flag or completion sentinel. `test-local`
+  keeps its bounded invocation trace under the `traced-run` launcher.
 - **`tools/devtool`** — the tool that must also run inside Nix build sandboxes,
   where `nix` and `xtask` are unavailable; `devtool coverage emit` produces
   coverage artifacts into `$out` for exfiltration

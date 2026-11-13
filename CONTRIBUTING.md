@@ -1353,16 +1353,16 @@ baseline.
   when it is worth timing or has its own failure mode. See
   [docs/adr/0147-decision-path-observability.md](docs/adr/0147-decision-path-observability.md).
 
-- **Trace Analysis**: Use `cargo xtask traces analyze` to process trace
+- **Trace Analysis**: Use `just trace-analysis analyze` to process trace
   artifacts (JSONL) from VM runs or local tests.
 
   ```bash
   # Local e2e-local capture; use the exact path printed by the command.
-  cargo xtask traces analyze \
+  just trace-analysis analyze \
     .xtask/e2e-local/<run-id>/chromium/capture/otel-traces.jsonl
 
   # VM captures are extracted from capture-<lane>.tar.gz; traces run does this.
-  cargo xtask traces analyze \
+  just trace-analysis analyze \
     /path/to/sqlite-otel-traces.jsonl \
     /path/to/postgres-otel-traces.jsonl
   ```
@@ -1407,8 +1407,8 @@ baseline.
   or `--site-path` to reuse a build. Run `cargo xtask audit-wasm --help` for
   details.
 
-- **Run & Analyze**: Use `cargo xtask traces run` to build the full VM e2e suite
-  and immediately analyze the results.
+- **Run & Analyze**: Use `just trace-analysis run` to build the full VM e2e
+  suite and immediately analyze the results.
   - Use `--single-worker` to build the workers=1 diagnostic packages instead of
     the gate checks, when the question is per-navigation cost rather than suite
     cost.
@@ -2250,7 +2250,7 @@ Additional Nix-backed checks available as packages (not run by default):
 - `packages.x86_64-linux.e2e-{sqlite,postgres}-{chromium,firefox}-single-worker`
   — the historical unsplit browser/backend diagnostic flows pinned to
   `JAUNDER_E2E_WORKERS=1`, so per-navigation timings carry no worker contention.
-  Built on demand by `cargo xtask traces run --single-worker`; not part of the
+  Built on demand by `just trace-analysis run --single-worker`; not part of the
   gate.
 
 The PostgreSQL-backed integration tests need no VM of their own: they run inside
@@ -2265,7 +2265,7 @@ measurement runs**, not for normal development. It is committed empty, which is
 a byte-exact no-op, and the `e2e-scaffold` static check fails the gate if it is
 left set.
 
-Nix caches the e2e check derivations, so re-running `cargo xtask traces run` on
+Nix caches the e2e check derivations, so re-running `just trace-analysis run` on
 an unchanged tree returns a **cached result and never runs the suite** —
 silently handing back traces from whenever that check was last built, quite
 possibly a CI runner under unknown load. Set the salt to a distinct value per

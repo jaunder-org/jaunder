@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use crate::playwright_report::PlaywrightReport;
+use host_proof::playwright_report::PlaywrightReport;
 use serde::Deserialize;
 
 /// Runtime expectations for artifact ownership, not a build/scheduling lane.

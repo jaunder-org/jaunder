@@ -4,16 +4,19 @@
 
 pub mod checkout;
 pub mod compile_cache;
+pub mod e2e;
 mod e2e_provenance;
 pub mod git {
     pub use repository_policy::git::{at, toplevel};
 }
 pub mod invocation_trace;
 pub mod nix_build;
+pub mod playwright_report;
 pub mod report;
 mod sh;
 #[cfg(test)]
 mod test_support;
+pub mod traces;
 
 pub mod steps {
     pub mod csr_prerequisite;

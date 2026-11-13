@@ -1,4 +1,4 @@
-//! JSONL parsing for the OTel trace analyzer (`cargo xtask traces analyze`).
+//! JSONL parsing for the OTel trace analyzer (`just trace-analysis analyze`).
 //!
 //! Reads the OpenTelemetry JSONL the e2e VM collector exports and flattens it to
 //! a `Vec<Span>`. Port of the parsing half of `scripts/analyze-otel-traces`:

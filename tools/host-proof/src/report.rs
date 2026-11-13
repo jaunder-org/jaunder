@@ -50,6 +50,9 @@ pub struct CommandResult {
     /// A supervised child's conventional status that must survive the report.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_override: Option<i32>,
+    /// A diagnostic's pre-rendered human report (trace tables), shown verbatim.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report: Option<String>,
 }
 
 impl CommandResult {
@@ -60,6 +63,7 @@ impl CommandResult {
             duration_ms: 0,
             steps: Vec::new(),
             exit_override: None,
+            report: None,
         }
     }
     pub fn push(&mut self, step: StepResult) {

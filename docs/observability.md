@@ -527,7 +527,7 @@ load total for an e2e trace corpus is therefore:
 sum(e2e.test.navigation_count) + sum(e2e.page.navigation_count)
 ```
 
-`cargo xtask traces analyze` treats `e2e.test` and `e2e.page` spans carrying
+`just trace-analysis analyze` treats `e2e.test` and `e2e.page` spans carrying
 `e2e.navigation_top_json` as navigation-bearing for URL/phase and boot-coverage
 reports. Sections that say `e2e.test` alone remain default-page-only.
 
@@ -565,7 +565,7 @@ and the test may end before `load`; asynchronous WASM boot also need not finish
 before `load`. Reconcile the complete executed population rather than trusting
 the presence of a few captured marks.
 
-Coverage is reported per `(source, project)` by `cargo xtask traces analyze` —
+Coverage is reported per `(source, project)` by `just trace-analysis analyze` —
 navigations, mounted, full mark sets, and dropped records — and the E2E VM gate
 now fails closed on every successful backend×browser combo when the report's
 executed project population and its trace evidence do not reconcile. The
@@ -860,15 +860,15 @@ installed its hook). See `docs/adr/` for the app-driven scoped-capture decision.
 
 ## Analysis
 
-Use `cargo xtask traces analyze` on one or more artifact files, for example:
+Use `just trace-analysis analyze` on one or more artifact files, for example:
 
 ```bash
 # Local e2e-local capture; use the exact path printed by the command.
-cargo xtask traces analyze \
+just trace-analysis analyze \
   .xtask/e2e-local/<run-id>/chromium/capture/otel-traces.jsonl
 
 # VM captures are extracted from capture-<lane>.tar.gz; traces run does this.
-cargo xtask traces analyze \
+just trace-analysis analyze \
   sqlite-otel-traces.jsonl \
   postgres-otel-traces.jsonl
 ```
@@ -981,7 +981,7 @@ sessions — was on the box.
 To build both e2e VM checks and immediately analyze the produced traces, use:
 
 ```bash
-cargo xtask traces run --top 25
+just trace-analysis run --top 25
 ```
 
 When the question is what a single navigation costs rather than what the suite
@@ -989,7 +989,7 @@ costs, use the single-worker packages — one worker, so no contention distorts
 the per-navigation numbers:
 
 ```bash
-cargo xtask traces run --single-worker --top 25
+just trace-analysis run --single-worker --top 25
 ```
 
 Optional filters:
@@ -1003,10 +1003,10 @@ Optional filters:
   left.
 - `--browser chromium|firefox` restricts the run to one browser (default: both).
   Use this (not `--project`) to focus one browser, e.g. when debugging Firefox
-  timeout pressure: `cargo xtask traces run --browser firefox`.
+  timeout pressure: `just trace-analysis run --browser firefox`.
 
-(`cargo xtask traces analyze` additionally accepts `--project NAME` to focus one
-browser/project when analyzing already-collected trace files directly.)
+(`just trace-analysis analyze` additionally accepts `--project NAME` to focus
+one browser/project when analyzing already-collected trace files directly.)
 
 ### Backend axis: suite wall-clock versus server cost
 
