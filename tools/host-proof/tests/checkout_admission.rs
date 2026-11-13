@@ -12,15 +12,21 @@ fn another_repository_is_refused_before_its_hook_configuration_changes() {
         vec!["init", "--quiet"],
         vec!["config", "core.hooksPath", "caller-owned-hooks"],
     ] {
-        assert!(xtask::git::at(&root).args(args).status().unwrap().success());
+        assert!(
+            repository_policy::git::at(&root)
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
     }
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
-        .args(["nix", "probe-source"])
+    let output = Command::new(env!("CARGO_BIN_EXE_source-diagnostics"))
+        .args(["nix-probe-source"])
         .current_dir(&root)
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
-    let hooks = xtask::git::at(&root)
+    let hooks = repository_policy::git::at(&root)
         .args(["config", "--get", "core.hooksPath"])
         .output()
         .unwrap();

@@ -16,8 +16,8 @@ use anyhow::{Context, Result, bail};
 use regex::Regex;
 use serde::Deserialize;
 
-use crate::git;
-use crate::result::StepResult;
+use crate::report::StepResult;
+use repository_policy::git;
 
 const POLICY_PATH: &str = "nix/cache-policy.json";
 const CI_SETUP_PATH: &str = ".github/actions/setup-ci/action.yml";

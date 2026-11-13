@@ -13,10 +13,10 @@ use std::process::Stdio;
 
 use anyhow::{Context, Result, bail};
 
-use crate::git;
-use crate::result::StepResult;
-use crate::steps::nix;
-use crate::steps::nix::SourceProbeDrvPaths;
+use crate::nix_eval as nix;
+use crate::nix_eval::SourceProbeDrvPaths;
+use crate::report::StepResult;
+use repository_policy::git;
 
 const WORKTREE_DIR: &str = ".xtask/nix-source-probe.worktree";
 
@@ -30,7 +30,7 @@ enum Boundary {
     StaticE2eCensus,
     Site,
     WasmTests,
-    Xtask,
+    HostProof,
     Devtool,
     ToolingDependencies,
     CsrDebugBundle,
@@ -44,7 +44,7 @@ impl Boundary {
         Self::StaticE2eCensus,
         Self::Site,
         Self::WasmTests,
-        Self::Xtask,
+        Self::HostProof,
         Self::Devtool,
         Self::ToolingDependencies,
         Self::CsrDebugBundle,
@@ -58,7 +58,7 @@ impl Boundary {
             Self::StaticE2eCensus => "static-e2e-census",
             Self::Site => "site",
             Self::WasmTests => "wasm-tests",
-            Self::Xtask => "xtask",
+            Self::HostProof => "host-proof",
             Self::Devtool => "devtool",
             Self::ToolingDependencies => "tooling-dependencies",
             Self::CsrDebugBundle => "csr-debug-bundle",
@@ -76,7 +76,6 @@ pub enum Arm {
     Performance,
     Tooling,
     SharedHost,
-    ToolLock,
     BuildConfig,
     LaneCatalog,
     QualificationSchema,
@@ -102,7 +101,7 @@ pub enum Arm {
 }
 
 impl Arm {
-    const ALL: [Self; 31] = [
+    const ALL: [Self; 30] = [
         Self::Docs,
         Self::Server,
         Self::Web,
@@ -111,7 +110,6 @@ impl Arm {
         Self::Performance,
         Self::Tooling,
         Self::SharedHost,
-        Self::ToolLock,
         Self::BuildConfig,
         Self::LaneCatalog,
         Self::QualificationSchema,
@@ -146,7 +144,6 @@ impl Arm {
             Self::Performance => "performance",
             Self::Tooling => "tooling",
             Self::SharedHost => "shared-host",
-            Self::ToolLock => "tool-lock",
             Self::BuildConfig => "build-config",
             Self::LaneCatalog => "lane-catalog",
             Self::QualificationSchema => "qualification-schema",
@@ -180,9 +177,8 @@ impl Arm {
             Self::Common => "common/src/__nix_source_probe.rs",
             Self::Macros => "macros/src/__nix_source_probe.rs",
             Self::Performance => "tools/performance/src/__nix_source_probe.rs",
-            Self::Tooling => "xtask/src/__nix_source_probe.rs",
+            Self::Tooling => "tools/host-proof/src/__nix_source_probe.rs",
             Self::SharedHost => "host/src/__nix_source_probe.rs",
-            Self::ToolLock => "xtask/Cargo.lock",
             Self::BuildConfig => ".cargo/config.toml",
             Self::LaneCatalog => "end2end/e2e-lanes.json",
             Self::QualificationSchema => "docs/production-baseline.schema.json",
@@ -209,7 +205,7 @@ impl Arm {
     }
 
     // Added cases guard relevant boundaries without changing the pre-existing
-    // product/wasm/xtask contract.
+    // product/wasm/tooling contract.
     fn boundaries(self) -> &'static [Boundary] {
         match self {
             Self::CsrSource
@@ -299,7 +295,7 @@ impl Arm {
                         | Boundary::StaticElisp
                         | Boundary::Site
                         | Boundary::WasmTests
-                        | Boundary::Xtask,
+                        | Boundary::HostProof,
                 )
                 | (
                     Self::Performance,
@@ -307,15 +303,15 @@ impl Arm {
                 )
                 | (
                     Self::SharedHost | Self::ThemeCss | Self::ApplicationCss,
-                    Boundary::StaticCode | Boundary::StaticElisp | Boundary::Site | Boundary::Xtask
+                    Boundary::StaticCode | Boundary::StaticElisp | Boundary::Site | Boundary::HostProof
                 )
                 | (
-                    Self::Tooling | Self::ToolLock | Self::QualificationSchema,
-                    Boundary::Xtask
+                    Self::Tooling,
+                    Boundary::HostProof
                 )
                 | (
                     Self::LaneCatalog,
-                    Boundary::StaticCode | Boundary::StaticE2eCensus | Boundary::Xtask
+                    Boundary::StaticCode | Boundary::StaticE2eCensus | Boundary::HostProof
                 )
                 | (
                     Self::Common
@@ -338,7 +334,7 @@ impl Arm {
                     Self::ToolsLock,
                     Boundary::StaticCode
                         | Boundary::Site
-                        | Boundary::Xtask
+                        | Boundary::HostProof
                         | Boundary::ToolingDependencies
                 )
                 | (Self::BuildConfig, Boundary::ToolingDependencies)
@@ -396,7 +392,7 @@ pub struct DrvPaths {
     static_e2e_census: String,
     site: String,
     wasm_tests: String,
-    xtask: String,
+    host_proof: String,
     devtool: String,
     tooling_dependencies: String,
     csr_debug_bundle: String,
@@ -411,7 +407,7 @@ impl DrvPaths {
             Boundary::StaticE2eCensus => &self.static_e2e_census,
             Boundary::Site => &self.site,
             Boundary::WasmTests => &self.wasm_tests,
-            Boundary::Xtask => &self.xtask,
+            Boundary::HostProof => &self.host_proof,
             Boundary::Devtool => &self.devtool,
             Boundary::ToolingDependencies => &self.tooling_dependencies,
             Boundary::CsrDebugBundle => &self.csr_debug_bundle,
@@ -514,7 +510,7 @@ fn eval_paths_with(evaluate: impl FnOnce() -> Result<SourceProbeDrvPaths>) -> Re
         )?,
         site: parse_drv_path(Boundary::Site.name(), &paths.site)?,
         wasm_tests: parse_drv_path(Boundary::WasmTests.name(), &paths.wasm_tests)?,
-        xtask: parse_drv_path(Boundary::Xtask.name(), &paths.xtask)?,
+        host_proof: parse_drv_path(Boundary::HostProof.name(), &paths.host_proof)?,
         devtool: parse_drv_path(Boundary::Devtool.name(), &paths.devtool)?,
         tooling_dependencies: parse_drv_path(
             Boundary::ToolingDependencies.name(),
@@ -545,7 +541,7 @@ impl Drop for WorktreeGuard<'_> {
             _ => {
                 let _ = writeln!(
                     self.stderr,
-                    "xtask: warning: xtask.nix.probe_worktree_cleanup: ignored failure while removing probe worktree"
+                    "source-diagnostics: warning: nix.probe_worktree_cleanup: ignored failure while removing probe worktree"
                 );
             }
         }
@@ -662,7 +658,7 @@ mod tests {
             static_e2e_census: "census".to_owned(),
             site: site.to_owned(),
             wasm_tests: wasm_tests.to_owned(),
-            xtask: "xtask".to_owned(),
+            host_proof: "host-proof".to_owned(),
             devtool: "devtool".to_owned(),
             tooling_dependencies: "tooling-dependencies".to_owned(),
             csr_debug_bundle: "csr-debug-bundle".to_owned(),
@@ -694,7 +690,7 @@ mod tests {
                 changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
             }
             if matches!(arm, Arm::Common | Arm::Macros) {
-                changed.xtask = "xtask-2".to_owned();
+                changed.host_proof = "host-proof-2".to_owned();
             }
             if matches!(arm, Arm::Common | Arm::Macros | Arm::Performance) {
                 changed.devtool = "devtool-2".to_owned();
@@ -705,7 +701,7 @@ mod tests {
     }
 
     #[test]
-    fn performance_source_preserves_other_fanout_without_xtask_dependency() {
+    fn performance_source_preserves_other_fanout_without_host_proof_dependency() {
         let affected = [
             Boundary::StaticCode,
             Boundary::StaticElisp,
@@ -761,7 +757,7 @@ mod tests {
     fn tooling_changes_only_invalidate_the_host_executable() {
         let base = paths("docs", "code", "site", "wasm");
         let mut changed = base.clone();
-        changed.xtask = "xtask-2".to_owned();
+        changed.host_proof = "host-proof-2".to_owned();
         assert_eq!(compare_arm(&base, Arm::Tooling, &changed), Ok(()));
         changed.site = "site-2".to_owned();
         assert!(matches!(
@@ -774,7 +770,7 @@ mod tests {
         assert!(matches!(
             compare_arm(&base, Arm::Tooling, &base),
             Err(ProbeError::MissingChange {
-                boundary: "xtask",
+                boundary: "host-proof",
                 ..
             })
         ));
@@ -785,20 +781,18 @@ mod tests {
         let base = paths("docs", "code", "site", "wasm");
         for (arm, mut changed) in [
             (Arm::SharedHost, paths("docs", "code-2", "site-2", "wasm")),
-            (Arm::ToolLock, base.clone()),
             (
                 Arm::BuildConfig,
                 paths("docs", "code-2", "site-2", "wasm-2"),
             ),
             (Arm::LaneCatalog, paths("docs", "code-2", "site", "wasm")),
-            (Arm::QualificationSchema, base.clone()),
             (Arm::ThemeCss, paths("docs", "code-2", "site-2", "wasm")),
             (
                 Arm::ApplicationCss,
                 paths("docs", "code-2", "site-2", "wasm"),
             ),
         ] {
-            changed.xtask = "xtask-2".to_owned();
+            changed.host_proof = "host-proof-2".to_owned();
             if matches!(
                 arm,
                 Arm::SharedHost | Arm::BuildConfig | Arm::ThemeCss | Arm::ApplicationCss
@@ -826,7 +820,7 @@ mod tests {
         let base = paths("docs", "code", "site", "wasm");
         let mut changed = base.clone();
         changed.static_code = "code-2".to_owned();
-        changed.xtask = "xtask-2".to_owned();
+        changed.host_proof = "host-proof-2".to_owned();
         assert!(matches!(
             compare_arm(&base, Arm::LaneCatalog, &changed),
             Err(ProbeError::MissingChange {
@@ -912,9 +906,9 @@ mod tests {
                 },
             ),
             (
-                "xtask",
+                "host-proof",
                 DrvPaths {
-                    xtask: "xtask-2".to_owned(),
+                    host_proof: "host-proof-2".to_owned(),
                     ..changed.clone()
                 },
             ),
@@ -938,7 +932,7 @@ mod tests {
         let base = paths("docs", "code", "site", "wasm");
         let mut changed = paths("docs", "code-2", "site-2", "wasm");
         changed.static_elisp = "elisp-2".to_owned();
-        changed.xtask = "xtask-2".to_owned();
+        changed.host_proof = "host-proof-2".to_owned();
         changed.devtool = "devtool-2".to_owned();
         changed.csr_debug_bundle = "csr-debug-bundle-2".to_owned();
         assert!(matches!(
@@ -982,9 +976,9 @@ mod tests {
                 },
             ),
             (
-                "xtask",
+                "host-proof",
                 DrvPaths {
-                    xtask: base.xtask.clone(),
+                    host_proof: base.host_proof.clone(),
                     ..changed.clone()
                 },
             ),
@@ -1080,27 +1074,27 @@ mod tests {
         for (arm, original, expected) in [
             (
                 Arm::RootManifest,
-                include_bytes!("../../Cargo.toml").as_slice(),
+                include_bytes!("../../../Cargo.toml").as_slice(),
                 "features = [\"test-utils\"]",
             ),
             (
                 Arm::ToolsManifest,
-                include_bytes!("../../tools/Cargo.toml").as_slice(),
+                include_bytes!("../../../tools/Cargo.toml").as_slice(),
                 "resolver = \"2\"",
             ),
             (
                 Arm::DevtoolManifest,
-                include_bytes!("../../tools/devtool/Cargo.toml").as_slice(),
+                include_bytes!("../../../tools/devtool/Cargo.toml").as_slice(),
                 "\"common/test-utils\"",
             ),
             (
                 Arm::SharedManifest,
-                include_bytes!("../../common/Cargo.toml").as_slice(),
+                include_bytes!("../../../common/Cargo.toml").as_slice(),
                 "test-utils = [\"test-support\"]",
             ),
             (
                 Arm::BuildConfig,
-                include_bytes!("../../.cargo/config.toml").as_slice(),
+                include_bytes!("../../../.cargo/config.toml").as_slice(),
                 "rustflags = [\"--cfg\", \"jaunder_source_probe\"]",
             ),
         ] {

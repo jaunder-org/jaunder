@@ -6,7 +6,7 @@
 use anyhow::Result;
 
 use crate::audit_wasm::{self, AuditReport};
-use crate::result::{CommandResult, StepResult};
+use crate::report::{CommandResult, StepResult};
 use crate::wasm_budget;
 
 pub fn run(result: &mut CommandResult) {
@@ -74,7 +74,7 @@ pub(crate) fn run_with(
 mod tests {
     use super::run_with;
     use crate::audit_wasm::{self, ArtifactMetrics, AuditReport};
-    use crate::result::CommandResult;
+    use crate::report::CommandResult;
     use crate::wasm_budget::WASM_RAW_CEILING_BYTES;
 
     fn report_with_wasm(raw_bytes: u64) -> AuditReport {
@@ -104,9 +104,7 @@ mod tests {
             let step = result.steps.last().expect("wasm budget step");
             assert_eq!(step.ok, bytes <= WASM_RAW_CEILING_BYTES);
             assert!(step.detail.as_ref().unwrap().contains(&bytes.to_string()));
-            assert!(step.nix.is_none());
-            assert!(step.phases.is_empty());
-            assert!(result.audit.is_none());
+            assert!(result.evidence.is_none());
         }
     }
 

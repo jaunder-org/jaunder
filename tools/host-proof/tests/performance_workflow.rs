@@ -1,11 +1,10 @@
 use anyhow::{Context, Result};
 use serde_yaml::Value;
-use std::process::Command;
 
 #[test]
 fn workflow_uses_native_just_and_github_failure_guards_for_evidence_retention() -> Result<()> {
     let workflow: Value =
-        serde_yaml::from_str(include_str!("../../.github/workflows/performance.yml"))?;
+        serde_yaml::from_str(include_str!("../../../.github/workflows/performance.yml"))?;
     let steps = workflow["jobs"]["performance"]["steps"]
         .as_sequence()
         .context("performance steps")?;
@@ -65,34 +64,6 @@ fn workflow_uses_native_just_and_github_failure_guards_for_evidence_retention() 
             assert!(!run.contains("cargo xtask perf"));
             assert!(!run.contains("perf-import-baseline"));
         }
-    }
-    Ok(())
-}
-
-#[test]
-fn retired_performance_commands_are_absent_from_the_compiled_xtask_frontdoor() -> Result<()> {
-    let help = Command::new(env!("CARGO_BIN_EXE_xtask"))
-        .arg("--help")
-        .output()?;
-    assert!(help.status.success());
-    let text = String::from_utf8(help.stdout)?;
-    assert!(
-        !text
-            .lines()
-            .any(|line| line.trim_start().starts_with("perf "))
-    );
-    for arguments in [
-        vec!["perf", "--help"],
-        vec!["perf", "small"],
-        vec!["perf", "compare", "--result", "result.json"],
-        vec!["perf", "import-baseline", "42"],
-        vec!["performance", "--help"],
-    ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
-            .args(arguments)
-            .output()?;
-        assert_eq!(output.status.code(), Some(2));
-        assert!(String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand"));
     }
     Ok(())
 }

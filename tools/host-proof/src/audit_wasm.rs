@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use host::vite_manifest::{CsrViteOutputs, csr_outputs};
 use serde::Serialize;
 
-use host_proof::nix_build;
+use crate::nix_build;
 
 #[derive(Debug, Serialize)]
 pub struct AuditReport {

@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 fn hooks() -> &'static BTreeMap<String, String> {
     static HOOKS: OnceLock<BTreeMap<String, String>> = OnceLock::new();
     HOOKS.get_or_init(|| {
-        let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2).unwrap();
         // Select the Git-backed flake so ignored build/test outputs are not
         // copied into Nix's source snapshot. Project only the runtime hooks,
         // without forcing the unrelated shell tool derivations.
@@ -33,7 +33,10 @@ fn hooks() -> &'static BTreeMap<String, String> {
 }
 
 fn owned_fixture() -> tempfile::TempDir {
-    let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap();
     let artifacts = checkout.join(".xtask/issue-1811");
     fs::create_dir_all(&artifacts).unwrap();
     tempfile::tempdir_in(artifacts).unwrap()
@@ -42,7 +45,7 @@ fn owned_fixture() -> tempfile::TempDir {
 fn repository(parent: &Path, name: &str) -> PathBuf {
     let root = parent.join(name);
     fs::create_dir(&root).unwrap();
-    let output = xtask::git::at(&root)
+    let output = repository_policy::git::at(&root)
         .args(["init", "--quiet"])
         .output()
         .unwrap();
@@ -86,7 +89,10 @@ fn enter(hook: &str, cwd: &Path, parent: &Path, record: &Path, body: &str) -> Ou
 
 #[test]
 fn ci_e2e_shell_environment_and_library_prepend_are_exact() {
-    let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap();
     let output = Command::new("nix")
         .args([
             "eval", "--impure", "--json", ".#devShells", "--apply",

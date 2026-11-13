@@ -49,7 +49,10 @@ fn selected_package_promotes_complete_documents_and_passes_read_only_gates() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, bytes).unwrap();
     }
-    let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap();
     let predicate = checkout.join("nix/adr-promoter-source.nix");
     std::fs::write(
         root.join("flake.nix"),

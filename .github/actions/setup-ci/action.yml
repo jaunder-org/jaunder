@@ -1,6 +1,6 @@
 name: Setup CI
 
-description: Install Nix, configure Cachix, and cache the xtask host build.
+description: Install Nix, configure Cachix, and cache the host tools build.
 
 inputs:
   github-token:
@@ -26,17 +26,17 @@ runs:
         # The structural probe proves which support outputs could be admitted;
         # the measured decision report records why the broad boundary remains.
         pushFilter: "jaunder-coverage|jaunder-e2e"
-    # xtask is host-only, so cachix can't cover it; cache its compiled deps
-    # between runs.
-    - name: Cache xtask host build
+    # Host tools run through `cargo run` from the tools workspace, so cachix
+    # can't cover them; cache their compiled deps between runs.
+    - name: Cache host tools build
       uses: actions/cache@v6
       with:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          xtask/target
+          tools/target
         key:
-          xtask-${{ runner.os }}-${{ hashFiles('xtask/Cargo.lock', 'flake.lock')
+          tools-${{ runner.os }}-${{ hashFiles('tools/Cargo.lock', 'flake.lock')
           }}
         restore-keys: |
-          xtask-${{ runner.os }}-
+          tools-${{ runner.os }}-

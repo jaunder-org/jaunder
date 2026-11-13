@@ -9,29 +9,29 @@ impl Workflow {
     fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
         fs::copy(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../Justfile"),
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../Justfile"),
             root.path().join("Justfile"),
         )
         .unwrap();
         fs::create_dir(root.path().join("recipes")).unwrap();
         fs::copy(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../recipes/prettier.just"),
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../recipes/prettier.just"),
             root.path().join("recipes/prettier.just"),
         )
         .unwrap();
         fs::copy(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../recipes/static.just"),
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../recipes/static.just"),
             root.path().join("recipes/static.just"),
         )
         .unwrap();
         fs::create_dir(root.path().join("scripts")).unwrap();
         fs::copy(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/step-report.jq"),
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/step-report.jq"),
             root.path().join("scripts/step-report.jq"),
         )
         .unwrap();
         fs::copy(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/run-report"),
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/run-report"),
             root.path().join("scripts/run-report"),
         )
         .unwrap();
@@ -243,7 +243,10 @@ fn real_git_refuses_unpushed_harness_and_resolves_product_aliases() {
     let tools = tempfile::tempdir().unwrap();
     let upstream = tools.path().join("upstream.git");
     let git = |args: &[&str]| {
-        let output = xtask::git::at(root.path()).args(args).output().unwrap();
+        let output = repository_policy::git::at(root.path())
+            .args(args)
+            .output()
+            .unwrap();
         assert!(output.status.success(), "{args:?}: {output:?}");
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
     };
@@ -251,7 +254,7 @@ fn real_git_refuses_unpushed_harness_and_resolves_product_aliases() {
     git(&["config", "user.name", "Fixture"]);
     git(&["config", "user.email", "fixture@example.invalid"]);
     fs::copy(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../Justfile"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../Justfile"),
         root.path().join("Justfile"),
     )
     .unwrap();
@@ -401,11 +404,6 @@ fn broad(mode: &str, shared_docs: bool) -> Vec<Vec<String>> {
             expected.push(devtool(name, mode));
         }
     }
-    expected.extend(commands(&[if mode == "fix" {
-        "cargo fmt --manifest-path xtask/Cargo.toml"
-    } else {
-        "cargo fmt --manifest-path xtask/Cargo.toml --check"
-    }]));
     // Literal required population from the existing gate, not Justfile introspection.
     for name in [
         "sequence-check",
@@ -468,9 +466,6 @@ fn broad(mode: &str, shared_docs: bool) -> Vec<Vec<String>> {
     ] {
         expected.push(devtool(name, mode));
     }
-    expected.extend(commands(&[
-        "cargo clippy --manifest-path xtask/Cargo.toml --all-targets -- -D warnings",
-    ]));
     expected.push(devtool("ert", mode));
     expected
 }
@@ -546,7 +541,6 @@ fn devtool(name: &str, mode: &str) -> Vec<String> {
 
 fn host_tests() -> Vec<Vec<String>> {
     commands(&[
-        "cargo test --manifest-path xtask/Cargo.toml --lib --bins --tests",
         "cargo test --manifest-path tools/Cargo.toml --lib --bins --tests --features doctests/host,coverage/host",
     ])
 }
@@ -582,8 +576,6 @@ fn static_checks() -> Vec<Vec<String>> {
         "static-elisp",
         "static-e2e-census",
         "static-ert",
-        "xtask-format",
-        "xtask-clippy",
     ]
     .map(nix)
     .to_vec()
@@ -728,7 +720,7 @@ fn validation_and_ci_lanes_preserve_required_populations_and_argument_boundaries
     let mut host = broad("verify", false);
     host.push(platform());
     let mut hermetic = static_checks();
-    hermetic.extend(commands(&["cargo xtask check-leaf wasm-budget"]));
+    hermetic.extend(commands(&["cargo run --locked --quiet --manifest-path tools/Cargo.toml -p host-proof --bin wasm-audit -- budget"]));
     let mut test_checks = vec![nix("wasm-tests")];
     test_checks.extend(doctests());
     test_checks.extend(elisp());
@@ -852,7 +844,7 @@ fn actual_just_parser_rejects_old_option_spellings_instead_of_silently_forwardin
 
 #[test]
 fn hooks_invoke_only_their_just_workflow_and_preserve_its_status() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     for (hook, recipe) in [("pre-commit", "precommit"), ("pre-push", "prepush")] {
         for status in [0, 17] {
             let fixture = tempfile::tempdir().unwrap();
@@ -889,7 +881,7 @@ fn hooks_invoke_only_their_just_workflow_and_preserve_its_status() {
 
 #[test]
 fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() {
-    let source = include_str!("../../.github/workflows/ci.yml");
+    let source = include_str!("../../../.github/workflows/ci.yml");
     let workflow: serde_yaml::Value = serde_yaml::from_str(source).unwrap();
     let jobs = &workflow["jobs"];
     for lane in ["host", "hermetic", "test-checks", "coverage"] {

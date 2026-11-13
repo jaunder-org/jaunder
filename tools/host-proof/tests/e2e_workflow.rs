@@ -37,6 +37,10 @@ impl Workflow {
             &root.path().join("bin/nix"),
             r##"#!/usr/bin/env bash
 set -eu
+if [[ $* == *".#host-proof"* ]]; then
+  printf '%s\n' "$EVIDENCE_OUT"
+  exit 0
+fi
 if [[ $1 == build ]]; then
   lane=${!#}; lane=${lane##*.e2e-}
   echo "producer $lane" >> "$EVENTS"
@@ -55,17 +59,14 @@ fi
 printf '%s' "$OUTPUT"
 "##,
         );
+        fs::create_dir_all(root.path().join("evidence-out/bin")).unwrap();
         executable(
-            &root.path().join("bin/cargo"),
+            &root.path().join("evidence-out/bin/e2e-evidence"),
             r##"#!/usr/bin/env bash
 set -eu
 echo "verifier $*" >> "$EVENTS"
-if [[ -e $EVENTS.fail-reconcile && $* == *"-- reconcile "* ]]; then exit 31; fi
-if [[ ${REAL_VERIFIER:-0} == 1 ]]; then
-  while [[ $1 != -- ]]; do shift; done
-  shift
-  exec "$EVIDENCE_BIN" "$@"
-fi
+if [[ -e $EVENTS.fail-reconcile && $1 == reconcile ]]; then exit 31; fi
+if [[ ${REAL_VERIFIER:-0} == 1 ]]; then exec "$EVIDENCE_BIN" "$@"; fi
 exit "${VERIFY_STATUS:-1}"
 "##,
         );
@@ -92,7 +93,8 @@ exit "${VERIFY_STATUS:-1}"
             .env("BUILD_STATUS", status)
             .env("VERIFY_STATUS", "0")
             .env("REAL_VERIFIER", if real_verifier { "1" } else { "0" })
-            .env("EVIDENCE_BIN", env!("CARGO_BIN_EXE_e2e-evidence"));
+            .env("EVIDENCE_BIN", env!("CARGO_BIN_EXE_e2e-evidence"))
+            .env("EVIDENCE_OUT", self.root.path().join("evidence-out"));
         if let Some(output) = output {
             command.env("OUTPUT", output);
         }
@@ -251,7 +253,7 @@ fn reconciliation_failure_is_blocking_even_when_all_producers_succeed() {
     assert_eq!(
         events
             .lines()
-            .filter(|line| line.contains("e2e-evidence -- reconcile"))
+            .filter(|line| line.contains("verifier reconcile"))
             .count(),
         2
     );
@@ -269,7 +271,7 @@ fn reconciliation_failure_is_blocking_even_when_all_producers_succeed() {
     assert_eq!(
         events
             .lines()
-            .filter(|line| line.contains("e2e-evidence -- verify"))
+            .filter(|line| line.contains("verifier verify"))
             .count(),
         7,
         "non-authoritative lane verification changed"
@@ -338,7 +340,7 @@ fn explicit_regeneration_requires_success_and_normal_authoritative_production_ve
         );
         let events = workflow.events();
         assert!(
-            !events.contains("e2e-evidence -- verify"),
+            !events.contains("verifier verify"),
             "authoritative lane checked twice: {events}"
         );
         if action.is_empty() {
@@ -670,7 +672,7 @@ fn missing_successful_evidence_fails_real_verifier_and_never_reuses_stale_captur
         let workflow = Workflow::new();
         let output = workflow.run(&args, Some(&selected), "0", true);
         assert!(!output.status.success());
-        assert!(!workflow.events().contains("e2e-evidence -- verify"));
+        assert!(!workflow.events().contains("verifier verify"));
         assert!(workflow.events().contains("server-fn-coverage"));
         assert!(String::from_utf8_lossy(&output.stdout).contains("reading report"));
         assert!(

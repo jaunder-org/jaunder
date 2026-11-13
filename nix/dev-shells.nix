@@ -19,20 +19,12 @@ let
     appOfflineCargoHome
     ;
 
-  # The shell caches only a thin transport, never a checkout's xtask executable.
-  xtaskLauncher = pkgs.writeShellApplication {
-    name = "cargo-xtask";
-    runtimeInputs = [ pkgs.git pkgs.nix pkgs.coreutils ];
-    text = builtins.readFile ../scripts/cargo-xtask;
-  };
-
   # Everything `just validate` needs on the host (toolchain + the
   # static-check tools) plus what the Nix checks pull anyway — so the CI
   # shell shares those store paths rather than adding cost.
   ciInputs =
     [
       toolchain
-      xtaskLauncher
       pkgs.ast-grep
       pkgs.cachix
       cargo-crap
@@ -89,9 +81,8 @@ let
       wasm-bindgen-cli
     ];
 
-  # Host-only E2E orchestration shell. Keep this separate from ciInputs:
-  # Cargo is only the external-subcommand dispatcher here; scripts/cargo-xtask
-  # builds its executable with Nix and runs that binary on the host. Guest/test
+  # Host-only E2E orchestration shell. Keep this separate from ciInputs: its
+  # verifier is the Nix-built host-proof output, run on the host. Guest/test
   # dependencies are declared by the Nix checks and are intentionally unaffected.
   ciE2eInputs = [
     pkgs.bash
@@ -100,7 +91,6 @@ let
     pkgs.just
     pkgs.nix
     pkgs.cargo
-    xtaskLauncher
     pkgs.git
     tracedRunBin
     pkgs.jq

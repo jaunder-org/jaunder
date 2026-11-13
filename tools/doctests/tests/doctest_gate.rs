@@ -18,7 +18,7 @@ fn gate() -> Gate {
             "eval", "--impure", "--json", ".#checks", "--apply",
             "all: let checks = all.${builtins.currentSystem}; in { script = checks.doctests-gate.buildCommand; producer = toString checks.doctests; }",
         ])
-        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap())
+        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2).unwrap())
         .output()
         .unwrap();
     assert!(

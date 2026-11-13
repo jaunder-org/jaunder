@@ -26,7 +26,6 @@ let
     jaunderBin
     testSupportBin
     devtoolBin
-    xtaskBin
     cargo-crap
     wasm-bindgen-cli
     wasmTestWebdriverConfig
@@ -75,11 +74,9 @@ let
     assert !(siteTargetSource "tools/devtool/Cargo.toml");
     assert !(siteTargetSource "tools/doctests/Cargo.toml");
     assert !(siteTargetSource "tools/diagnostic-coverage-runtime/Cargo.toml");
-    assert !(siteTargetSource "xtask/Cargo.toml");
     assert !(wasmTestTargetSource "tools/devtool/Cargo.toml");
     assert !(wasmTestTargetSource "tools/doctests/Cargo.toml");
     assert !(wasmTestTargetSource "tools/diagnostic-coverage-runtime/Cargo.toml");
-    assert !(wasmTestTargetSource "xtask/Cargo.toml");
     # Ephemeral PostgreSQL custody is auxiliary coverage tooling, never product,
     # CSR or WASM-test source.
     assert !(siteTargetSource "tools/coverage/src/ephemeral_postgres.rs");
@@ -133,7 +130,6 @@ let
     assert (builtins.elem "ux-sandbox" coverageMembers);
     assert (cargoMemberSource coverageMembers (cargoSourcePath "ux-sandbox/Cargo.toml") "regular");
     assert (cargoMemberSource coverageMembers (cargoSourcePath "ux-sandbox/tests/public_command.rs") "regular");
-    assert !(builtins.elem "xtask" coverageMembers);
     assert !(builtins.elem "tools/devtool" coverageMembers);
     assert !(builtins.elem "tools/coverage" coverageMembers);
     assert !(builtins.elem "tools/qualification" coverageMembers);
@@ -2818,11 +2814,11 @@ mkWasmCoverageMeasurementProducer =
   cacheSafetySourceFamilies = {
     coverage = {
       categories = [
-        { name = "cargo-workspace"; relevant = "server/src/lib.rs"; excluded = "xtask/src/main.rs"; }
+        { name = "cargo-workspace"; relevant = "server/src/lib.rs"; excluded = "tools/host-proof/src/lib.rs"; }
         { name = "nextest-profile"; relevant = ".config/nextest.toml"; excluded = "docs/README.md"; }
         { name = "csr-shell"; relevant = "csr/index.html"; excluded = "flake.nix"; }
         { name = "embedded-assets"; relevant = "server/assets/jaunder.css"; excluded = "end2end/tests/visual.css"; }
-        { name = "migrations"; relevant = "storage/migrations/sqlite/0001_create_site_config.sql"; excluded = "xtask/src/main.rs"; }
+        { name = "migrations"; relevant = "storage/migrations/sqlite/0001_create_site_config.sql"; excluded = "tools/host-proof/src/lib.rs"; }
         { name = "backup-corpus"; relevant = "server/tests/misc/backup_corpus/index.json"; excluded = "docs/README.md"; }
       ];
     };
@@ -2831,9 +2827,9 @@ mkWasmCoverageMeasurementProducer =
       # finite paths are regression arms, not a substitute for that input.
       categories = [
         { name = "npm-manifest"; relevant = "end2end/package.json"; excluded = "docs/README.md"; }
-        { name = "npm-lock"; relevant = "end2end/package-lock.json"; excluded = "xtask/src/main.rs"; }
+        { name = "npm-lock"; relevant = "end2end/package-lock.json"; excluded = "tools/host-proof/src/lib.rs"; }
         { name = "playwright-config"; relevant = "end2end/playwright.config.ts"; excluded = "docs/README.md"; }
-        { name = "playwright-tests"; relevant = "end2end/tests/fixtures.ts"; excluded = "xtask/src/main.rs"; }
+        { name = "playwright-tests"; relevant = "end2end/tests/fixtures.ts"; excluded = "tools/host-proof/src/lib.rs"; }
         { name = "otel-config"; relevant = "end2end/otel-collector.yaml"; excluded = "docs/README.md"; }
       ];
     };
@@ -2842,7 +2838,7 @@ mkWasmCoverageMeasurementProducer =
       # this NixOS test definition; all three are inputs to every driver.
       categories = [
         { name = "application"; relevant = "server/src/lib.rs"; excluded = "docs/README.md"; }
-        { name = "e2e-package"; relevant = "end2end/tests/fixtures.ts"; excluded = "xtask/src/main.rs"; }
+        { name = "e2e-package"; relevant = "end2end/tests/fixtures.ts"; excluded = "tools/host-proof/src/lib.rs"; }
         { name = "nix-test-definition"; relevant = "nix/checks.nix"; excluded = "docs/README.md"; }
         { name = "otel-privacy-policy"; relevant = "nix/otel-processors.yaml"; excluded = "docs/README.md"; }
       ];
@@ -2918,7 +2914,6 @@ mkWasmCoverageMeasurementProducer =
       assert !(clippySourceFilter "${toString ../.}/README.md" "regular");
       assert !(clippySourceFilter "${toString ../.}/docs/ARCHITECTURE.md" "regular");
       assert clippySourceFilter "${toString ../.}/docs/production-baseline.schema.json" "regular";
-      assert !(clippySourceFilter "${toString ../.}/xtask/src/lib.rs" "regular");
       assert builtins.all (relative: clippySourceFilter (cargoSourcePath relative) "directory") [
         "vendor" "${sqlxSqlitePatchRoot}" "${sqlxSqlitePatchRoot}/src" "${sqlxSqlitePatchRoot}/src/connection"
       ];
@@ -3580,70 +3575,6 @@ static-elisp =
       just --justfile recipes/static.just --working-directory . byte-compile
       touch $out
     '');
-# Cargo resolves dependency manifests even without `--all`; placeholders satisfy
-# that metadata walk without admitting or formatting dependency implementations.
-xtask-format =
-  let
-    members = cargoPackageClosure [ "xtask" ];
-    metadataMembers = builtins.filter (member: member != "xtask") members;
-    metadataInputs = [
-      "Cargo.toml"
-      "tools/Cargo.toml"
-      "xtask/Cargo.lock"
-      "rust-toolchain.toml"
-      ".rustfmt.toml"
-      ".cargo/config.toml"
-    ] ++ map (member: "${member}/Cargo.toml") members;
-    targetDirectories = map (directory: "xtask/${directory}") [ "src" "tests" "examples" "benches" ];
-    formatSourceFilter =
-      path: type:
-      let
-        relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
-      in
-      sqlxSqlitePatchSource path
-      || (type == "directory" && (relative == "vendor" || relative == sqlxSqlitePatchRoot || pkgs.lib.hasPrefix "${sqlxSqlitePatchRoot}/" relative))
-      || (if type == "directory" then
-        toString path == toString ../.
-        || builtins.any (input: pkgs.lib.hasPrefix "${relative}/" input) metadataInputs
-        || builtins.any (
-          directory: relative == directory || pkgs.lib.hasPrefix "${directory}/" relative
-        ) targetDirectories
-      else
-        builtins.elem relative metadataInputs
-        || (
-          pkgs.lib.hasSuffix ".rs" relative
-          && (
-            relative == "xtask/build.rs"
-            || builtins.any (directory: pkgs.lib.hasPrefix "${directory}/" relative) targetDirectories
-          )
-        ));
-    formatSource = pkgs.lib.cleanSourceWith {
-      src = craneLib.path ../.;
-      filter =
-        assert formatSourceFilter (cargoSourcePath "xtask/src/lib.rs") "regular";
-        assert formatSourceFilter (cargoSourcePath "xtask/tests/build_provenance.rs") "regular";
-        assert formatSourceFilter (cargoSourcePath "xtask/build.rs") "regular";
-        assert formatSourceFilter (cargoSourcePath "common/Cargo.toml") "regular";
-        assert !(formatSourceFilter (cargoSourcePath "common/src/lib.rs") "regular");
-        assert !(formatSourceFilter (cargoSourcePath "tools/devtool/src/main.rs") "regular");
-        assert !(formatSourceFilter (cargoSourcePath "xtask/notes.rs") "regular");
-        assert !(formatSourceFilter (cargoSourcePath "server") "directory");
-        formatSourceFilter;
-    };
-    formatSrc = withWorkspacePlaceholders "xtask-format-source" formatSource metadataMembers;
-  in
-  nonSubstitutable (pkgs.runCommand "xtask-format"
-    {
-      nativeBuildInputs = [ toolchain ];
-    }
-    ''
-      cp --no-preserve=mode -r ${formatSrc} src
-      cd src
-      export HOME="$TMPDIR/home"
-      mkdir -p "$HOME"
-      cargo fmt --manifest-path xtask/Cargo.toml --check
-      touch $out
-    '');
 # Cargo fmt's product/tools populations overlap. Keep their shared verdict and
 # the scoped Leptos formatter together, without compiling the residual checks.
 rust-format =
@@ -3693,7 +3624,6 @@ rust-format =
       just --justfile recipes/static.just --working-directory . rust-format verify sandbox
       touch $out
     '');
-xtask-clippy = xtaskBin.rawClippy;
 static-e2e-census =
   let
     censusSourceFilter = path: type:

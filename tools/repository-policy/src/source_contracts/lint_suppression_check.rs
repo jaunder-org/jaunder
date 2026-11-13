@@ -37,10 +37,15 @@ const POLICED_ROOTS: &[&str] = &[
     "tools/repository-policy/src",
     "tools/repository-policy/tests",
     "tools/coverage/src",
+    "tools/coverage/tests",
     "tools/devtool/src",
     "tools/devtool/tests",
     "tools/doctests/src",
-    "xtask/src",
+    "tools/doctests/tests",
+    "tools/host-proof/src",
+    "tools/host-proof/tests",
+    "tools/qualification/src",
+    "tools/qualification/tests",
 ];
 const POLICED_FILES: &[&str] = &["server/build.rs"];
 const STEP: &str = "lint-suppression";

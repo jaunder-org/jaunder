@@ -2,6 +2,8 @@
 //! executables and the private host lifecycle algorithms they share
 //! (ADR-0246). Each executable prints one JSON report on stdout.
 
+pub mod audit_wasm;
+pub mod cache_safety;
 pub mod checkout;
 pub use repository_policy::{compile_cache, report};
 pub mod e2e;
@@ -13,12 +15,17 @@ pub mod git {
 }
 pub mod invocation_trace;
 pub mod nix_build;
+mod nix_eval;
+pub mod nix_probe;
 pub mod playwright_report;
 mod server_fn_coverage;
 mod sh;
 #[cfg(test)]
 mod test_support;
 pub mod traces;
+mod wasm_budget;
+mod wasm_sections;
+mod wasm_symbols;
 
 pub mod steps {
     pub mod boot_decomposition_coverage;
@@ -30,4 +37,5 @@ pub mod steps {
     mod process;
     pub mod server_fn_coverage_check;
     pub mod test_local;
+    pub mod wasm_budget;
 }

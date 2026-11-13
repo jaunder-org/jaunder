@@ -3,7 +3,10 @@ use serde_json::Value;
 use std::{collections::BTreeSet, path::Path, process::Command};
 
 fn repo() -> &'static Path {
-    Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap()
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap()
 }
 fn project(catalog: &Value) -> std::process::Output {
     use std::io::Write;

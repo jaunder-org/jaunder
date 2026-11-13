@@ -1,5 +1,5 @@
 # Host Cargo compilation shares rustc artifacts across canonical worktree roots.
-# Git discovery failure retains the current root, as in xtask's cache policy.
+# Git discovery failure retains the current root, as in the compile-cache policy.
 export RUSTC_WRAPPER := "sccache"
 export CARGO_INCREMENTAL := "0"
 export SCCACHE_BASEDIRS := ```
@@ -210,7 +210,6 @@ _host mode docs:
     {{static}} tools-fmt {{mode}}
     {{static}} ast-grep-tests
     {{static}} no-full-reload
-    cargo fmt --manifest-path xtask/Cargo.toml {{if mode == "fix" { "" } else { "--check" }}}
     just _docs-shape
     {{repository_policy}} source-contracts -- test-patterns
     {{repository_policy}} source-contracts -- server-fn-registrar
@@ -244,12 +243,10 @@ _host mode docs:
     {{static}} client-host-clippy {{mode}}
     {{static}} wasm-clippy {{mode}}
     {{static}} tools-clippy {{mode}}
-    cargo clippy --manifest-path xtask/Cargo.toml --all-targets -- -D warnings
     {{devtool}} check ert {{if mode == "fix" { "--fix" } else { "" }}}
 
 [private]
 _host-tests:
-    cargo test --manifest-path xtask/Cargo.toml --lib --bins --tests
     cargo test --manifest-path tools/Cargo.toml --lib --bins --tests --features doctests/host,coverage/host
 
 [private]
@@ -267,6 +264,16 @@ test-local *args:
 [positional-arguments]
 coverage-check *args:
     scripts/run-report {{coverage_check}} "$@"
+
+# Bundle size diagnostics: report [--site-path P] [--breakdown [--wasm F]] | budget.
+[positional-arguments]
+wasm-audit *args:
+    scripts/run-report {{host_proof}} wasm-audit -- "$@"
+
+# Eval-only Nix guards: nix-probe-source | cache-safety-probe.
+[positional-arguments]
+source-diagnostics *args:
+    scripts/run-report {{host_proof}} source-diagnostics -- "$@"
 
 # Manual OTel trace diagnostics: analyze <files> | run [--single-worker] | boot-phases <files>.
 [positional-arguments]
@@ -291,11 +298,11 @@ _platform:
     nix eval --impure --expr 'import ./nix/platform-contract.nix { flake = builtins.getFlake (toString ./.); }'
 
 [private]
-_static: (_nix "static-docs") (_nix "static-typescript") (_nix "rust-format") (_nix "static-code") (_nix "static-elisp") (_nix "static-e2e-census") (_nix "static-ert") (_nix "xtask-format") (_nix "xtask-clippy")
+_static: (_nix "static-docs") (_nix "static-typescript") (_nix "rust-format") (_nix "static-code") (_nix "static-elisp") (_nix "static-e2e-census") (_nix "static-ert")
 
 [private]
 _wasm-budget:
-    cargo xtask check-leaf wasm-budget
+    scripts/run-report {{host_proof}} wasm-audit -- budget
 
 [private]
 _wasm-tests: (_nix "wasm-tests")
@@ -428,7 +435,8 @@ e2e-regenerate-coverage:
 e2e-reconcile backend artifacts=".xtask/diagnostics":
     #!/usr/bin/env bash
     set -euo pipefail
-    {{host_proof}} e2e-evidence -- reconcile {{quote(backend)}} --catalog end2end/e2e-lanes.json --diagnostics-root {{quote(artifacts)}} | jq -r -f scripts/step-report.jq
+    out=$(nix build --no-link --print-out-paths .#host-proof)
+    "$out/bin/e2e-evidence" reconcile {{quote(backend)}} --catalog end2end/e2e-lanes.json --diagnostics-root {{quote(artifacts)}} | jq -r -f scripts/step-report.jq
 
 # Exhaustive read-only milestone candidates; never claims or dispatches work.
 issue-discover milestone:

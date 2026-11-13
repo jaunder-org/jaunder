@@ -1,9 +1,8 @@
 //! Host doctest leaves (`doctest-check fences|workspace`). The `doctest-fences` gate: the half of the doctest population that lives
 //! outside every Nix check (#763).
 //!
-//! `xtask/` is excluded from the flake `src` filter (`nix/packages.nix`'s `cleanSourceWith`
-//! drops `/xtask/`) and `tools/` is a separate virtual workspace, so the `doctests`
-//! derivation's `cargo test --workspace --doc` reaches neither. This step runs each
+//! `tools/` is a separate virtual workspace, so the `doctests` derivation's
+//! `cargo test --workspace --doc` does not reach it. This step runs each
 //! one's doctests directly and reconciles them against the same scanner.
 //!
 //! `host_tests` covers the auxiliary workspaces' library, binary, and integration
@@ -360,16 +359,13 @@ mod tests {
         let details = reconcile_doctests(
             &[],
             Ok((workspace_entry("ok"), false)),
-            |error| format!("cannot run xtask doctests: {error}"),
-            || {
-                "xtask doctests exited non-zero without a reported failed doctest entry."
-                    .to_string()
-            },
+            |error| format!("cannot run host doctests: {error}"),
+            || "host doctests exited non-zero without a reported failed doctest entry.".to_string(),
         );
 
         assert_eq!(
             details,
-            ["xtask doctests exited non-zero without a reported failed doctest entry."]
+            ["host doctests exited non-zero without a reported failed doctest entry."]
         );
     }
 
@@ -569,26 +565,24 @@ mod tests {
     #[test]
     fn host_roots_are_absolute_when_invoked_beneath_the_repository_root() {
         let repo = temp_repo("doctest-fences", "outside-root");
-        commit(&repo, "xtask/Cargo.toml", "[workspace]\n");
-        commit(&repo, "xtask/src/lib.rs", "");
         commit(&repo, "tools/Cargo.toml", "[workspace]\n");
         commit(&repo, "tools/devtool/src/lib.rs", "");
 
-        let (top, roots) = host_roots(&repo.join("xtask/src")).expect("resolve fixture top");
+        let (top, roots) =
+            host_roots(&repo.join("tools/devtool/src")).expect("resolve fixture top");
 
         assert_eq!(
             std::fs::canonicalize(&top).expect("canonical top"),
             std::fs::canonicalize(&repo).expect("canonical fixture root")
         );
-        assert_eq!(roots.len(), 2);
+        assert_eq!(roots.len(), 1);
         assert_eq!(
-            std::fs::read_to_string(roots[0].source.join("src/lib.rs")).expect("absolute source"),
+            std::fs::read_to_string(roots[0].source.join("devtool/src/lib.rs"))
+                .expect("absolute source"),
             ""
         );
-        assert_eq!(roots[0].source, top.join("xtask"));
-        assert_eq!(roots[0].manifest, top.join("xtask/Cargo.toml"));
-        assert_eq!(roots[1].source, top.join("tools"));
-        assert_eq!(roots[1].manifest, top.join("tools/Cargo.toml"));
+        assert_eq!(roots[0].source, top.join("tools"));
+        assert_eq!(roots[0].manifest, top.join("tools/Cargo.toml"));
         assert!(roots.iter().all(|root| root.manifest.is_absolute()));
     }
 

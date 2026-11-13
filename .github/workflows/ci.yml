@@ -54,11 +54,11 @@ jobs:
             fi
           }
           probe timestamp date --utc +%FT%TZ
-          for path in . xtask/target tools/target /tmp /nix; do
+          for path in . tools/target /tmp /nix; do
             probe "filesystem bytes: $path" df -B1 --output=size,used,avail -- "$path"
             probe "filesystem inodes: $path" df --output=itotal,iused,iavail -- "$path"
           done
-          for path in xtask/target tools/target; do
+          for path in tools/target; do
             probe "native target allocated bytes: $path" du -s -B1 -- "$path"
           done
           probe "owned storage allocated bytes: target" timeout 30s du -s -x -B1 -- target

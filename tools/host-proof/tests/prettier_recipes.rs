@@ -3,7 +3,7 @@ use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf, process::Command};
 
 #[test]
 fn real_prettier_verify_refuses_without_mutating_then_fix_repairs() {
-    let recipe = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../recipes/prettier.just");
+    let recipe = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../recipes/prettier.just");
     for (name, file, unformatted) in [
         ("prettier-markdown", "guide.md", "#   Guide\n"),
         ("prettier-end2end", "end2end/example.ts", "const x={a:1};\n"),
@@ -47,7 +47,7 @@ fn shared_prettier_preserves_populations_modes_working_directory_and_failure() {
     fs::create_dir(root.path().join("nested")).unwrap();
     fs::write(root.path().join("nested/guide.md"), "# Guide\n").unwrap();
     fs::write(root.path().join("nested/style.css"), "a {}\n").unwrap();
-    let recipe = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../recipes/prettier.just");
+    let recipe = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../recipes/prettier.just");
     for (name, population) in [
         ("prettier-markdown", "**/*.md"),
         ("prettier-end2end", "end2end"),

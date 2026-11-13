@@ -476,20 +476,8 @@ let
       ''
     else
       drv;
-  xtaskBin = import ./xtask.nix {
-    inherit
-      pkgs
-      craneLib
-      toolchain
-      cargoPackageClosure
-      cargoMemberSource
-      workspaceMembers
-      withWorkspacePlaceholders
-      vendorPinnedFork
-      sqlxSqlitePatchSource
-      ;
-  };
-  qualificationHostBin = import ./qualification.nix {
+
+  mkHostTool = import ./host-tool.nix {
     inherit
       pkgs
       craneLib
@@ -501,6 +489,15 @@ let
       sqlxSqlitePatchSource
       ;
   };
+  qualificationHostBin = import ./qualification.nix { inherit mkHostTool; };
+  # Host-run focused proof, diagnostics and artifact-only e2e verdicts. CI's
+  # e2e shell runs this cached output instead of compiling the tools workspace.
+  hostProofBin = mkHostTool {
+    pname = "host-proof";
+    member = "tools/host-proof";
+    bins = [ "e2e-evidence" ];
+  };
+
   repositoryPolicyBin = import ./repository-policy.nix {
     inherit pkgs craneLib cargoMemberSource cargoPackageClosure workspaceMembers withWorkspacePlaceholders vendorPinnedFork;
   };
@@ -1416,7 +1413,7 @@ in
     jaunder = jaunderBin;
     site = site;
     # The pre-wasm-bindgen, unstripped wasm. Exposed so
-    # `cargo xtask audit-wasm --breakdown` has an artifact that still
+    # `just wasm-audit report --breakdown` has an artifact that still
     # carries a name section: `wasm-opt` strips names from the shipped
     # bundle, so the shipped file cannot be attributed to crates (#836).
     inherit csrWasm;
@@ -1428,7 +1425,6 @@ in
     traced-run = tracedRunBin;
     devtool = devtoolBin;
     node-modules-setup = nodeModulesSetup;
-    xtask = xtaskBin;
     ux-sandbox = import ./ux-sandbox.nix {
       inherit
         pkgs
@@ -1444,6 +1440,7 @@ in
     };
     repository-policy = repositoryPolicyBin;
     qualification-host = qualificationHostBin;
+    host-proof = hostProofBin;
     adr-promoter = adrPromoter;
     # The out-of-process e2e seed helper (ADR-0046). Exposed so it is
     # directly buildable/verifiable; it is placed only on the e2e VM PATH,
@@ -1512,7 +1509,6 @@ in
       testSupportBin
       devtoolBin
       tracedRunBin
-      xtaskBin
       cargo-crap
       wasm-bindgen-cli
       wasmTestWebdriverConfig

@@ -38,7 +38,7 @@ pub(crate) struct SourceProbeDrvPaths {
     pub(crate) static_e2e_census: String,
     pub(crate) site: String,
     pub(crate) wasm_tests: String,
-    pub(crate) xtask: String,
+    pub(crate) host_proof: String,
     pub(crate) devtool: String,
     pub(crate) tooling_dependencies: String,
     pub(crate) csr_debug_bundle: String,
@@ -62,7 +62,7 @@ pub(crate) fn eval_source_probe_drvpaths(flake_dir: &Path) -> Result<SourceProbe
         )?,
         site: nix_eval_raw(Some(flake_dir), ".#site.drvPath")?,
         wasm_tests: nix_eval_raw(Some(flake_dir), ".#checks.x86_64-linux.wasm-tests.drvPath")?,
-        xtask: nix_eval_raw(Some(flake_dir), ".#xtask.drvPath")?,
+        host_proof: nix_eval_raw(Some(flake_dir), ".#host-proof.drvPath")?,
         devtool: nix_eval_raw(Some(flake_dir), ".#devtool.drvPath")?,
         tooling_dependencies: nix_eval_raw(
             Some(flake_dir),
