@@ -64,15 +64,15 @@ speed it up.
 and reporting once, after producer termination, to:
 
 ```bash
-cargo xtask mutants verify-evidence --package <package> --file <file> --output <artifact-directory> --producer-status <status>
+coverage-check mutants-verify --package <package> --file <file> --output <artifact-directory> --producer-status <status>
 ```
 
 The output root contains `mutants.out/`. Native validation errors and launcher
-failures propagate as nonzero caller exits. Production uses the existing
-cargo-xtask/Nix launcher: new tooling inputs need normal Git source admission;
-cold realization/build and checkout preparation are real costs, while warm
-invocations reuse store outputs. Native regression tests prove behavior, not
-production Nix source admission.
+failures propagate as nonzero caller exits. `.mutants-loop/verify.sh` runs it
+with locked Cargo from the checkout
+(`cargo run --locked --manifest-path tools/Cargo.toml -p coverage --features host --bin coverage-check`)
+under `scripts/run-report`, which renders its single JSON report; cold builds
+are real costs, while warm invocations reuse existing Cargo build artifacts.
 
 ## Files here
 
@@ -139,10 +139,10 @@ not an error.
   is running. `MUTANTS_WITH_POSTGRES` is the one switch, and it moves **two**
   things together:
 
-  | `MUTANTS_WITH_POSTGRES`          | test filter                                | `storage/src/postgres` |
-  | -------------------------------- | ------------------------------------------ | ---------------------- |
-  | unset / `0` (a workstation)      | `not test(/(?i)postgres\|backup_interop/)` | excluded from mutation |
-  | `1` (CI, under `devtool pg run`) | `all()`                                    | mutated                |
+  | `MUTANTS_WITH_POSTGRES`             | test filter                                | `storage/src/postgres` |
+  | ----------------------------------- | ------------------------------------------ | ---------------------- |
+  | unset / `0` (a workstation)         | `not test(/(?i)postgres\|backup_interop/)` | excluded from mutation |
+  | `1` (CI, under host-proof `pg-run`) | `all()`                                    | mutated                |
 
   They move together because they are one decision. Filtering the postgres tests
   away while still mutating the code they cover reports every one of those
@@ -154,7 +154,7 @@ not an error.
   proving that the file is fixed. Work them under a cluster:
 
   ```bash
-  devtool pg run -- env MUTANTS_WITH_POSTGRES=1 .mutants-loop/verify.sh storage <file>
+  cargo run -q --manifest-path tools/Cargo.toml -p host-proof --bin pg-run -- env MUTANTS_WITH_POSTGRES=1 .mutants-loop/verify.sh storage <file>
   ```
 
   - **Keep the `(?i)`.** A plain `test(postgres)` matches `case_2_postgres` but
@@ -218,12 +218,11 @@ tool failure.
   to that owner and wait for direction rather than discarding work or advancing
   the loop.
 - **A red gate is not always your fault — check for contention first.** If the
-  gate fails a check you never touched (`tools-test`, `xtask-tests`, anything
-  outside the file you edited), see whether a local scan is running:
-  `pgrep -af cargo-mutants`. They compete for disk and CPU, and that has already
-  produced one false failure. Re-run the gate **before** reverting anything.
-  Reverting good work on a spurious failure is the most expensive mistake
-  available here.
+  gate fails a check you never touched (`tools-test`, anything outside the file
+  you edited), see whether a local scan is running: `pgrep -af cargo-mutants`.
+  They compete for disk and CPU, and that has already produced one false
+  failure. Re-run the gate **before** reverting anything. Reverting good work on
+  a spurious failure is the most expensive mistake available here.
 - **Three strikes.** If a mutant resists three attempts, skip it with a one-line
   reason.
 - **Only add tests.** Do not change production code to make a mutant die. If the

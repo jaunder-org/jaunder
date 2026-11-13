@@ -19,20 +19,12 @@ let
     appOfflineCargoHome
     ;
 
-  # The shell caches only a thin transport, never a checkout's xtask executable.
-  xtaskLauncher = pkgs.writeShellApplication {
-    name = "cargo-xtask";
-    runtimeInputs = [ pkgs.git pkgs.nix pkgs.coreutils ];
-    text = builtins.readFile ../scripts/cargo-xtask;
-  };
-
   # Everything `just validate` needs on the host (toolchain + the
   # static-check tools) plus what the Nix checks pull anyway — so the CI
   # shell shares those store paths rather than adding cost.
   ciInputs =
     [
       toolchain
-      xtaskLauncher
       pkgs.ast-grep
       pkgs.cachix
       cargo-crap
@@ -52,13 +44,13 @@ let
       nodeModulesSetup
       emacsForCi
       pkgs.jq
-      # Just producers invoke Nix directly, not through the xtask launcher.
+      # Just producers invoke Nix directly.
       pkgs.nix
       # Independent metadata reads in upload privacy tests, never a runtime editor.
       pkgs.exiftool
       leptosfmt
       # Rust's wasm32-unknown-unknown target invokes the generic `lld` driver on
-      # Darwin; `cargo xtask e2e-local` owns the CSR wasm build, so the shell it
+      # Darwin; `just e2e-local` owns the CSR wasm build, so the shell it
       # runs in must provide the linker instead of relying on a host install.
       pkgs.lld
       pkgs.nodejs
@@ -67,19 +59,19 @@ let
       pkgs.dav1d
       pkgs.playwright-test
       pkgs.postgresql_18
-      # `cargo xtask e2e-local` supervises this pinned collector for its
+      # `just e2e-local` supervises this pinned collector for its
       # shared VM/host JSONL trace pipeline.
       pkgs.opentelemetry-collector-contrib
       pkgs.prettier
-      # xtask's executable NixOS-test-script regressions run the generated
+      # host-proof's executable NixOS-test-script regressions run the generated
       # Python helper under the same pinned interpreter as CI and developers.
       pkgs.python3
       pkgs.sqlite
       pkgs.typescript
       # Theme-package export assertions use this pinned ZIP reader on the host.
       pkgs.unzip
-      # Host xtask steps opt Rust-compiling cargo invocations into
-      # `RUSTC_WRAPPER=sccache`; xtask maintains the multi-checkout
+      # Host tool steps opt Rust-compiling cargo invocations into
+      # `RUSTC_WRAPPER=sccache`; the compile-cache policy maintains the multi-checkout
       # `SCCACHE_BASEDIRS` registry at runtime.
       pkgs.sccache
       # `wasm-opt`, run by the shared locked Vite pipeline after `wasm-bindgen` (#836).
@@ -89,9 +81,8 @@ let
       wasm-bindgen-cli
     ];
 
-  # Host-only E2E orchestration shell. Keep this separate from ciInputs:
-  # Cargo is only the external-subcommand dispatcher here; scripts/cargo-xtask
-  # builds its executable with Nix and runs that binary on the host. Guest/test
+  # Host-only E2E orchestration shell. Keep this separate from ciInputs: its
+  # verifier is the Nix-built host-proof output, run on the host. Guest/test
   # dependencies are declared by the Nix checks and are intentionally unaffected.
   ciE2eInputs = [
     pkgs.bash
@@ -100,7 +91,6 @@ let
     pkgs.just
     pkgs.nix
     pkgs.cargo
-    xtaskLauncher
     pkgs.git
     tracedRunBin
     pkgs.jq
@@ -143,7 +133,7 @@ let
     RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
     LC_ALL = "C.UTF-8";
     TZ = "UTC";
-    # The host `ert` step (run via `nix develop .#ci -c cargo xtask …`)
+    # The host `ert` step (run via `nix develop .#ci -c just …`)
     # computes timezone->UTC from IANA zone names, which need a zone
     # database for `encode-time` to resolve. A clean CI runner has none
     # in this shell, so provide it deterministically rather than relying

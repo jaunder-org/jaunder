@@ -396,21 +396,25 @@ let
         )
       )
     else
-      # xtask/ is the host-only dev driver (a separate workspace these
-      # derivations never build). Excluding it keeps driver edits from
-      # busting the app caches AND guarantees a derivation can never run a
-      # stale xtask: it is not in the sandbox, so an accidental
-      # `cargo xtask` fails loudly rather than running stale. xtask runs
-      # only on the host (dev box / CI runner).
       # Nix assembly is not application source; exclude only its top-level root.
       !(type == "directory" && path == "${toString (craneLib.path ../.)}/nix")
       # Cargo build scripts treat a present `.git` as authoritative metadata.
       # Never retain the filtered empty directory that crane would otherwise admit.
       && !(pkgs.lib.hasSuffix "/.git" path || pkgs.lib.hasInfix "/.git/" path)
-      && (!pkgs.lib.hasInfix "/xtask/" path)
       # Repository policy is native tooling; retain its manifest, not implementation.
       && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/repository-policy/" path
         && path != "${toString (craneLib.path ../.)}/tools/repository-policy/Cargo.toml")
+      # Qualification is host-run tooling; retain its manifest, not implementation.
+      && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/qualification/" path
+        && path != "${toString (craneLib.path ../.)}/tools/qualification/Cargo.toml")
+      && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/host-proof/" path
+        && path != "${toString (craneLib.path ../.)}/tools/host-proof/Cargo.toml")
+      # Host-run evidence consumers behind nondefault `host` features: the
+      # sandboxed library builds never compile them, so they must not invalidate.
+      && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/coverage/src/host/" path)
+      && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/coverage/tests/" path)
+      && path != "${toString (craneLib.path ../.)}/tools/doctests/src/host.rs"
+      && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/doctests/tests/" path)
       && (
         (pkgs.lib.hasSuffix ".sql" path)
         || (pkgs.lib.hasSuffix ".css" path)
@@ -471,19 +475,28 @@ let
       ''
     else
       drv;
-  xtaskBin = import ./xtask.nix {
+
+  mkHostTool = import ./host-tool.nix {
     inherit
       pkgs
       craneLib
-      toolchain
-      cargoPackageClosure
       cargoMemberSource
+      cargoPackageClosure
       workspaceMembers
       withWorkspacePlaceholders
       vendorPinnedFork
       sqlxSqlitePatchSource
       ;
   };
+  qualificationHostBin = import ./qualification.nix { inherit mkHostTool; };
+  # The host-proof executables CI runs from a cached output instead of
+  # compiling the tools workspace: the e2e verifier and mutants' pg-run.
+  hostProofBin = mkHostTool {
+    pname = "host-proof";
+    member = "tools/host-proof";
+    bins = [ "e2e-evidence" "pg-run" ];
+  };
+
   repositoryPolicyBin = import ./repository-policy.nix {
     inherit pkgs craneLib cargoMemberSource cargoPackageClosure workspaceMembers withWorkspacePlaceholders vendorPinnedFork;
   };
@@ -719,7 +732,6 @@ let
   # The auxiliary tools workspace is separate from the product workspace
   # (ADR-0141): its lockfile and cargo artifacts stay independent, while the
   # performance producer links the selected typed product-storage closure.
-  # Keep `xtask/` absent; it is host-only under ADR-0028.
   # Share the producer's existing filter with live-checkout admission; do not
   # duplicate or narrow its broad tooling closure to manufacture cache hits.
   toolsSourceFilter =
@@ -741,6 +753,12 @@ let
     || (
       pkgs.lib.hasPrefix "tools/" relative
       && !(pkgs.lib.hasPrefix "tools/repository-policy/" relative && relative != "tools/repository-policy/Cargo.toml")
+      && !(pkgs.lib.hasPrefix "tools/qualification/" relative && relative != "tools/qualification/Cargo.toml")
+      && !(pkgs.lib.hasPrefix "tools/host-proof/" relative && relative != "tools/host-proof/Cargo.toml")
+      && !(pkgs.lib.hasPrefix "tools/coverage/src/host/" relative)
+      && !(pkgs.lib.hasPrefix "tools/coverage/tests/" relative)
+      && relative != "tools/doctests/src/host.rs"
+      && !(pkgs.lib.hasPrefix "tools/doctests/tests/" relative)
       && craneLib.filterCargoSources path type
     );
   csrSourceAdmits =
@@ -798,6 +816,8 @@ let
         "test-support"
         "web"
         "tools/repository-policy"
+        "tools/qualification"
+        "tools/host-proof"
       ];
   toolsBaseArgs = {
     src = toolsSrc;
@@ -1395,7 +1415,7 @@ in
     jaunder = jaunderBin;
     site = site;
     # The pre-wasm-bindgen, unstripped wasm. Exposed so
-    # `cargo xtask audit-wasm --breakdown` has an artifact that still
+    # `just wasm-audit report --breakdown` has an artifact that still
     # carries a name section: `wasm-opt` strips names from the shipped
     # bundle, so the shipped file cannot be attributed to crates (#836).
     inherit csrWasm;
@@ -1407,7 +1427,6 @@ in
     traced-run = tracedRunBin;
     devtool = devtoolBin;
     node-modules-setup = nodeModulesSetup;
-    xtask = xtaskBin;
     ux-sandbox = import ./ux-sandbox.nix {
       inherit
         pkgs
@@ -1422,6 +1441,8 @@ in
         ;
     };
     repository-policy = repositoryPolicyBin;
+    qualification-host = qualificationHostBin;
+    host-proof = hostProofBin;
     adr-promoter = adrPromoter;
     # The out-of-process e2e seed helper (ADR-0046). Exposed so it is
     # directly buildable/verifiable; it is placed only on the e2e VM PATH,
@@ -1431,14 +1452,14 @@ in
   // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
     qualification-harness = import ./qualification-harness.nix {
       inherit pkgs;
-      xtask = xtaskBin;
+      qualificationHost = qualificationHostBin;
       testSupport = testSupportBin;
       browser = e2ePackage;
     };
     qualification-harness-legacy-1419 = import ./qualification-harness.nix {
       inherit pkgs;
       name = "jaunder-qualification-harness-legacy-1419";
-      xtask = xtaskBin;
+      qualificationHost = qualificationHostBin;
       # Keep the accepted fixture's complete historical dependency graph.
       testSupport =
         (builtins.getFlake "github:jaunder-org/jaunder/78d201e6969ed17b8a54b87d3de24be6afa1f5ee")
@@ -1490,7 +1511,6 @@ in
       testSupportBin
       devtoolBin
       tracedRunBin
-      xtaskBin
       cargo-crap
       wasm-bindgen-cli
       wasmTestWebdriverConfig

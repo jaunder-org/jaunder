@@ -26,7 +26,6 @@ let
     jaunderBin
     testSupportBin
     devtoolBin
-    xtaskBin
     cargo-crap
     wasm-bindgen-cli
     wasmTestWebdriverConfig
@@ -75,11 +74,17 @@ let
     assert !(siteTargetSource "tools/devtool/Cargo.toml");
     assert !(siteTargetSource "tools/doctests/Cargo.toml");
     assert !(siteTargetSource "tools/diagnostic-coverage-runtime/Cargo.toml");
-    assert !(siteTargetSource "xtask/Cargo.toml");
     assert !(wasmTestTargetSource "tools/devtool/Cargo.toml");
     assert !(wasmTestTargetSource "tools/doctests/Cargo.toml");
     assert !(wasmTestTargetSource "tools/diagnostic-coverage-runtime/Cargo.toml");
-    assert !(wasmTestTargetSource "xtask/Cargo.toml");
+    # Ephemeral PostgreSQL custody is auxiliary coverage tooling, never product,
+    # CSR or WASM-test source.
+    assert !(siteTargetSource "tools/coverage/src/ephemeral_postgres.rs");
+    assert !(wasmTestTargetSource "tools/coverage/src/ephemeral_postgres.rs");
+    assert !(siteTargetSource "tools/qualification/src/lib.rs");
+    assert !(wasmTestTargetSource "tools/qualification/src/lib.rs");
+    assert !(siteTargetSource "tools/host-proof/src/lib.rs");
+    assert !(wasmTestTargetSource "tools/host-proof/src/lib.rs");
     true;
 
   # Coverage source remains bounded to Cargo-recognized package inputs plus the
@@ -125,8 +130,10 @@ let
     assert (builtins.elem "ux-sandbox" coverageMembers);
     assert (cargoMemberSource coverageMembers (cargoSourcePath "ux-sandbox/Cargo.toml") "regular");
     assert (cargoMemberSource coverageMembers (cargoSourcePath "ux-sandbox/tests/public_command.rs") "regular");
-    assert !(builtins.elem "xtask" coverageMembers);
     assert !(builtins.elem "tools/devtool" coverageMembers);
+    assert !(builtins.elem "tools/coverage" coverageMembers);
+    assert !(builtins.elem "tools/qualification" coverageMembers);
+    assert !(builtins.elem "tools/host-proof" coverageMembers);
     assert !(builtins.elem "tools/doctests" coverageMembers);
     assert !(builtins.elem "tools/diagnostic-coverage-runtime" coverageMembers);
     pkgs.lib.cleanSourceWith {
@@ -206,7 +213,7 @@ performanceGlobalTimeout = 6000;
 # would abort before we copy diagnostics), stream its line-reporter output
 # to the build log, copy ALL artifacts out of the VM unconditionally, then
 # fail the check only after the copies are safe. On success the copies land
-# in $out; on failure they live in the --keep-failed build dir for xtask's
+# in $out; on failure they live in the --keep-failed build dir for the host's
 # rescue_diagnostics to recover. Shared by both backends so they can't drift.
 # VM-local OTel test glue shared by both backends. A systemd unit becomes
 # active when the collector process is spawned, before its receivers are
@@ -760,9 +767,8 @@ mkE2eCheck =
       ++ backendPolicy.seedComments
       ++ [
         "  machine.succeed("
-        "    \"JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 devtool seed-e2e\""
+        "    \"JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 test-support seed-e2e\""
         "    + \" --db ${backendPolicy.jaunderDb}\""
-        "    + \" --test-support-bin test-support\""
         "    + \" --jaunder-bin jaunder\""
         "  )"
         "  assert_seed_storage_spans()"
@@ -812,14 +818,16 @@ mkE2eCheck =
           backendPolicy.package
           pkgs.opentelemetry-collector-contrib
           testSupportBin
-          devtoolBin
           # Theme-package export assertions use this pinned ZIP reader in the VM.
           pkgs.unzip
           # Independent TEST-only image metadata observations, not a runtime editor.
           pkgs.exiftool
           # `jaunder site-config set` seed steps resolve bare `jaunder` here.
           jaunderBin
-        ];
+        ]
+        # Only performance producers run devtool in the guest; ordinary e2e
+        # lanes seed through test-support, so their guests do not install it.
+        ++ lib.optional (producer != null) devtoolBin;
         environment.etc."jaunder-otel-collector.yaml".source = ../end2end/otel-collector.yaml;
         environment.etc."jaunder-otel-processors.yaml".source = ./otel-processors.yaml;
 
@@ -922,7 +930,7 @@ mkE2eCheck =
   });
 
 # Cache-busting salt for e2e measurement runs (#792). Nix caches the e2e
-# check derivations, so a repeated `cargo xtask traces run` returns a
+# check derivations, so a repeated `just trace-analysis run` returns a
 # CACHED result rather than re-running the suite — silently handing back
 # traces from whenever it was last built, possibly on a CI runner under
 # unknown load. Set this to a distinct value per measurement run to force
@@ -930,7 +938,7 @@ mkE2eCheck =
 # no-op: it must not change any e2e derivation hash.
 e2eSalt = "";
 
-# Enforced by xtask's `e2e-scaffold` static check: a committed non-empty
+# Enforced by repository-policy's `e2e-scaffold` source contract: a committed non-empty
 # salt costs every CI e2e job its cache, and the only symptom is "CI got
 # slow" — nothing fails on its own, which is exactly why the guard exists.
 
@@ -1062,7 +1070,7 @@ e2eWorkers4ControlPackages = mkE2eControlPackages 4 6144 4;
 # name says so.
 #
 # NOT part of the gate — built on demand by
-# `cargo xtask traces run --single-worker` (see docs/observability.md).
+# `just trace-analysis run --single-worker` (see docs/observability.md).
 # They keep the default 2 GB VM, since one worker fits where two Firefox
 # workers would OOM it (#61). Note workers=1 also drops chromium's
 # whole-test scale to 1.0 from the gate's 1.5 (firefox takes
@@ -2724,7 +2732,7 @@ mkWasmCoverageMeasurementProducer =
           # The sandbox admission regression evaluates an isolated local flake.
           pkgs.nix
           # devtool runs the whole test suite under an ephemeral
-          # PostgreSQL (via devtool pg) so
+          # PostgreSQL (coverage's ephemeral-postgres custody) so
           # storage/src/postgres/* gets instrumented coverage. The
           # throwaway cluster needs initdb/pg_ctl/psql available inside
           # the build sandbox.
@@ -2733,7 +2741,7 @@ mkWasmCoverageMeasurementProducer =
         buildPhaseCargoCommand = ''
           export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:''${LD_LIBRARY_PATH:-}"
           mkdir -p emit-out
-          # The producer emits checked stage evidence; the Nix gate and host xtask
+          # The producer emits checked stage evidence; the Nix gate and host coverage-check
           # consume its status and reports as separate authoritative boundaries.
           devtool coverage emit --out emit-out
         '';
@@ -2760,7 +2768,7 @@ mkWasmCoverageMeasurementProducer =
       }
     ));
     # Belt-and-suspenders: this sandbox consumer validates completed producer
-    # evidence through the shared Rust contract, while host xtask consumes its
+    # evidence through the shared Rust contract, while host coverage-check consumes its
     # reports separately. Its `jaunder-coverage-gate` name stays broad-filtered.
     coverage-gate = nonSubstitutable (pkgs.runCommand "jaunder-coverage-gate" { nativeBuildInputs = [ devtoolBin ]; } ''
       devtool coverage validate-status --status ${coverage}/status.json
@@ -2806,11 +2814,11 @@ mkWasmCoverageMeasurementProducer =
   cacheSafetySourceFamilies = {
     coverage = {
       categories = [
-        { name = "cargo-workspace"; relevant = "server/src/lib.rs"; excluded = "xtask/src/main.rs"; }
+        { name = "cargo-workspace"; relevant = "server/src/lib.rs"; excluded = "tools/host-proof/src/lib.rs"; }
         { name = "nextest-profile"; relevant = ".config/nextest.toml"; excluded = "docs/README.md"; }
         { name = "csr-shell"; relevant = "csr/index.html"; excluded = "flake.nix"; }
         { name = "embedded-assets"; relevant = "server/assets/jaunder.css"; excluded = "end2end/tests/visual.css"; }
-        { name = "migrations"; relevant = "storage/migrations/sqlite/0001_create_site_config.sql"; excluded = "xtask/src/main.rs"; }
+        { name = "migrations"; relevant = "storage/migrations/sqlite/0001_create_site_config.sql"; excluded = "tools/host-proof/src/lib.rs"; }
         { name = "backup-corpus"; relevant = "server/tests/misc/backup_corpus/index.json"; excluded = "docs/README.md"; }
       ];
     };
@@ -2819,9 +2827,9 @@ mkWasmCoverageMeasurementProducer =
       # finite paths are regression arms, not a substitute for that input.
       categories = [
         { name = "npm-manifest"; relevant = "end2end/package.json"; excluded = "docs/README.md"; }
-        { name = "npm-lock"; relevant = "end2end/package-lock.json"; excluded = "xtask/src/main.rs"; }
+        { name = "npm-lock"; relevant = "end2end/package-lock.json"; excluded = "tools/host-proof/src/lib.rs"; }
         { name = "playwright-config"; relevant = "end2end/playwright.config.ts"; excluded = "docs/README.md"; }
-        { name = "playwright-tests"; relevant = "end2end/tests/fixtures.ts"; excluded = "xtask/src/main.rs"; }
+        { name = "playwright-tests"; relevant = "end2end/tests/fixtures.ts"; excluded = "tools/host-proof/src/lib.rs"; }
         { name = "otel-config"; relevant = "end2end/otel-collector.yaml"; excluded = "docs/README.md"; }
       ];
     };
@@ -2830,7 +2838,7 @@ mkWasmCoverageMeasurementProducer =
       # this NixOS test definition; all three are inputs to every driver.
       categories = [
         { name = "application"; relevant = "server/src/lib.rs"; excluded = "docs/README.md"; }
-        { name = "e2e-package"; relevant = "end2end/tests/fixtures.ts"; excluded = "xtask/src/main.rs"; }
+        { name = "e2e-package"; relevant = "end2end/tests/fixtures.ts"; excluded = "tools/host-proof/src/lib.rs"; }
         { name = "nix-test-definition"; relevant = "nix/checks.nix"; excluded = "docs/README.md"; }
         { name = "otel-privacy-policy"; relevant = "nix/otel-processors.yaml"; excluded = "docs/README.md"; }
       ];
@@ -2853,7 +2861,12 @@ mkWasmCoverageMeasurementProducer =
     || type == "directory"
     # traced-run all-target tests embed these maintained workflow owners.
     || path == "${toString ../.}/Justfile"
+    # Qualification compiles in its evidence schema; its tests embed .gitignore.
+    || path == "${toString ../.}/docs/production-baseline.schema.json"
+    || path == "${toString ../.}/.gitignore"
     || path == "${toString ../.}/.github/workflows/ci.yml"
+    # host-proof's performance workflow contract test embeds this owner.
+    || path == "${toString ../.}/.github/workflows/performance.yml"
     || (
       !(pkgs.lib.hasSuffix ".md" path)
       && (
@@ -2895,6 +2908,7 @@ mkWasmCoverageMeasurementProducer =
       assert clippySourceFilter "${toString ../.}/tools/Cargo.lock" "regular";
       assert clippySourceFilter "${toString ../.}/Justfile" "regular";
       assert clippySourceFilter "${toString ../.}/.github/workflows/ci.yml" "regular";
+      assert clippySourceFilter "${toString ../.}/.github/workflows/performance.yml" "regular";
       assert clippySourceFilter "${toString ../.}/server/build.rs" "regular";
       assert clippySourceFilter "${toString ../.}/ux-sandbox/Cargo.toml" "regular";
       assert clippySourceFilter "${toString ../.}/ux-sandbox/src/main.rs" "regular";
@@ -2902,7 +2916,7 @@ mkWasmCoverageMeasurementProducer =
       assert clippySourceFilter "${toString ../.}/testdata/theme-repository/minimal/preview.png" "regular";
       assert !(clippySourceFilter "${toString ../.}/README.md" "regular");
       assert !(clippySourceFilter "${toString ../.}/docs/ARCHITECTURE.md" "regular");
-      assert !(clippySourceFilter "${toString ../.}/xtask/src/lib.rs" "regular");
+      assert clippySourceFilter "${toString ../.}/docs/production-baseline.schema.json" "regular";
       assert builtins.all (relative: clippySourceFilter (cargoSourcePath relative) "directory") [
         "vendor" "${sqlxSqlitePatchRoot}" "${sqlxSqlitePatchRoot}/src" "${sqlxSqlitePatchRoot}/src/connection"
       ];
@@ -3564,70 +3578,6 @@ static-elisp =
       just --justfile recipes/static.just --working-directory . byte-compile
       touch $out
     '');
-# Cargo resolves dependency manifests even without `--all`; placeholders satisfy
-# that metadata walk without admitting or formatting dependency implementations.
-xtask-format =
-  let
-    members = cargoPackageClosure [ "xtask" ];
-    metadataMembers = builtins.filter (member: member != "xtask") members;
-    metadataInputs = [
-      "Cargo.toml"
-      "tools/Cargo.toml"
-      "xtask/Cargo.lock"
-      "rust-toolchain.toml"
-      ".rustfmt.toml"
-      ".cargo/config.toml"
-    ] ++ map (member: "${member}/Cargo.toml") members;
-    targetDirectories = map (directory: "xtask/${directory}") [ "src" "tests" "examples" "benches" ];
-    formatSourceFilter =
-      path: type:
-      let
-        relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
-      in
-      sqlxSqlitePatchSource path
-      || (type == "directory" && (relative == "vendor" || relative == sqlxSqlitePatchRoot || pkgs.lib.hasPrefix "${sqlxSqlitePatchRoot}/" relative))
-      || (if type == "directory" then
-        toString path == toString ../.
-        || builtins.any (input: pkgs.lib.hasPrefix "${relative}/" input) metadataInputs
-        || builtins.any (
-          directory: relative == directory || pkgs.lib.hasPrefix "${directory}/" relative
-        ) targetDirectories
-      else
-        builtins.elem relative metadataInputs
-        || (
-          pkgs.lib.hasSuffix ".rs" relative
-          && (
-            relative == "xtask/build.rs"
-            || builtins.any (directory: pkgs.lib.hasPrefix "${directory}/" relative) targetDirectories
-          )
-        ));
-    formatSource = pkgs.lib.cleanSourceWith {
-      src = craneLib.path ../.;
-      filter =
-        assert formatSourceFilter (cargoSourcePath "xtask/src/lib.rs") "regular";
-        assert formatSourceFilter (cargoSourcePath "xtask/tests/build_provenance.rs") "regular";
-        assert formatSourceFilter (cargoSourcePath "xtask/build.rs") "regular";
-        assert formatSourceFilter (cargoSourcePath "common/Cargo.toml") "regular";
-        assert !(formatSourceFilter (cargoSourcePath "common/src/lib.rs") "regular");
-        assert !(formatSourceFilter (cargoSourcePath "tools/devtool/src/main.rs") "regular");
-        assert !(formatSourceFilter (cargoSourcePath "xtask/notes.rs") "regular");
-        assert !(formatSourceFilter (cargoSourcePath "server") "directory");
-        formatSourceFilter;
-    };
-    formatSrc = withWorkspacePlaceholders "xtask-format-source" formatSource metadataMembers;
-  in
-  nonSubstitutable (pkgs.runCommand "xtask-format"
-    {
-      nativeBuildInputs = [ toolchain ];
-    }
-    ''
-      cp --no-preserve=mode -r ${formatSrc} src
-      cd src
-      export HOME="$TMPDIR/home"
-      mkdir -p "$HOME"
-      cargo fmt --manifest-path xtask/Cargo.toml --check
-      touch $out
-    '');
 # Cargo fmt's product/tools populations overlap. Keep their shared verdict and
 # the scoped Leptos formatter together, without compiling the residual checks.
 rust-format =
@@ -3677,7 +3627,6 @@ rust-format =
       just --justfile recipes/static.just --working-directory . rust-format verify sandbox
       touch $out
     '');
-xtask-clippy = xtaskBin.rawClippy;
 static-e2e-census =
   let
     censusSourceFilter = path: type:

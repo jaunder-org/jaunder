@@ -16,8 +16,8 @@ passively continues across readiness while another actor may arm the merge.
 Neither mode authorizes or performs landing, queue re-enqueue, cleanup, or
 tracker changes.
 
-Stdout is one JSON observer report (not an xtask command envelope); stderr
-carries progress and diagnostics. `outcome` is authoritative:
+Stdout is one JSON observer report (not the shared host-tool step report);
+stderr carries progress and diagnostics. `outcome` is authoritative:
 
 - `ready-to-land` and `merged` exit 0. Readiness requires nonempty live-ruleset
   requirements, complete current-head evidence, and a landable GitHub state.
@@ -59,8 +59,8 @@ poller/classifier exist. Land exit 0 requires complete same-head merged
 evidence; arming/queueing is not merging. Native/preflight refusal may have no
 JSON.
 
-The ordinary xtask PR frontdoor/report envelope is retired. Only the privileged
-ADR promoter and its required mutation transport/predicate helpers remain there.
-Unmanaged cleanup is separate:
+The former xtask PR frontdoor/report envelope is retired with the xtask
+workspace. The privileged ADR promoter is the separate `tools/adr-promoter`
+package. Unmanaged cleanup is separate:
 `just pr-cleanup <PR> <exact-head-SHA> unmanaged`; never invoke for
 managed/uncertain ownership. See CONTRIBUTING for full guards.

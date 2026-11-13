@@ -1,5 +1,5 @@
 //! The scan roots, in one place because two crates consume them: `devtool` scans
-//! [`WORKSPACE`] inside the Nix producer, and `xtask` scans [`HOST`] and asserts
+//! [`WORKSPACE`] inside the Nix producer, and `doctest-check` scans [`HOST`] and asserts
 //! [`ALL`] covers every maintained `.rs` file. Imported dependency sources have
 //! separate ownership; Cargo's workspace doctest runs do not execute them.
 //!
@@ -10,7 +10,7 @@
 /// Root-workspace directories the `cargo test --workspace --doc` run covers.
 ///
 /// Explicit rather than "every `.rs` in the derivation source": the source also
-/// carries `tools/` (only `xtask/` is filtered out, `nix/packages.nix`), which the
+/// carries `tools/`, which the
 /// workspace run does not reach — scanning it there would manufacture `NotRun`
 /// violations for fences that are gated host-side instead.
 pub const WORKSPACE: &[&str] = &[
@@ -26,9 +26,8 @@ pub const WORKSPACE: &[&str] = &[
     "web",
 ];
 
-/// Roots no Nix check can see: `xtask/` is excluded from the flake `src` filter
-/// and `tools/` is a separate virtual workspace.
-pub const HOST: &[&str] = &["xtask", "tools"];
+/// Roots no Nix check can see: `tools/` is a separate virtual workspace.
+pub const HOST: &[&str] = &["tools"];
 
 /// Imported dependency source, not maintained workspace doctest targets.
 ///
@@ -50,7 +49,6 @@ pub const ALL: &[&str] = &[
     "test-support",
     "ux-sandbox",
     "web",
-    "xtask",
     "tools",
 ];
 

@@ -18,5 +18,19 @@ syn = { version = "2", features = ["full", "visit", "extra-traits"] }
 # `(line N)` collapses. Same reason `xtask` enables it.
 proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
 
+# Host-run leaves; the sandboxed devtool producer uses only the default library.
+clap = { version = "4.6.6", features = ["derive"], optional = true }
+host-tool = { path = "../host-tool", optional = true }
+repository-policy = { path = "../repository-policy", optional = true }
+xshell = { version = "0.2.7", optional = true }
+
+[features]
+host = ["dep:clap", "dep:host-tool", "dep:repository-policy", "dep:xshell"]
+
+[[bin]]
+name = "doctest-check"
+path = "src/bin/doctest-check.rs"
+required-features = ["host"]
+
 [dev-dependencies]
 tempfile = "3.27.0"

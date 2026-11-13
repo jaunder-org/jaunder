@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Run a host tool that prints one JSON report and show its human view; the
+# tool's exit status stays the verdict (an empty or broken report cannot pass).
+set -euo pipefail
+"$@" | jq -r -f "$(dirname -- "$0")/step-report.jq"

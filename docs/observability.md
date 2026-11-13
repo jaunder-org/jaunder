@@ -20,9 +20,9 @@ Collector endpoint. The end-to-end test runner also emits correlated traces.
     exporter)
   - lifted per lane inside `capture-<lane>.tar.gz` (the same bundle that carries
     `diag.log` and the mail/websub JSONL — see below)
-- `cargo xtask e2e-local` supervises the same collector pipeline on the host,
-  using per-lifecycle ephemeral OTLP receivers. After Jaunder and Playwright
-  finish, it flushes the collector, retains the complete capture at
+- `just e2e-local` supervises the same collector pipeline on the host, using
+  per-lifecycle ephemeral OTLP receivers. After Jaunder and Playwright finish,
+  it flushes the collector, retains the complete capture at
   `.xtask/e2e-local/<run-id>/<browser>/capture/`, and prints the exact
   `otel-traces.jsonl` path. These local artifacts contain correlated
   `e2e.test`/server `request` spans for iteration; the VM matrix remains the
@@ -305,11 +305,11 @@ traced-run -- otelcol-contrib validate --config end2end/otel-collector.yaml --co
 ```
 
 For a changed browser flow, use the supported focused SQLite loop, for example
-`traced-run -- cargo xtask e2e-local auth.spec.ts`. This builds and validates
-current CSR assets and exercises a real server/Collector/browser lifecycle; it
-is not PostgreSQL parity, complete CSR lint, authoritative source coverage or a
-full matrix. Use `traced-run -- just e2e-producer postgres-chromium-unsplit` for
-that backend's full hermetic Chromium lane. Firefox requires all three
+`traced-run -- just e2e-local auth.spec.ts`. This builds and validates current
+CSR assets and exercises a real server/Collector/browser lifecycle; it is not
+PostgreSQL parity, complete CSR lint, authoritative source coverage or a full
+matrix. Use `traced-run -- just e2e-producer postgres-chromium-unsplit` for that
+backend's full hermetic Chromium lane. Firefox requires all three
 `just e2e-producer` lanes and `just e2e-reconcile` per backend, not a
 serial-special result alone; `just e2e` owns the complete workflow. The complete
 commands and final validation ladder remain in
@@ -405,19 +405,19 @@ snapshot field, publishing no datapoint rather than zero or a partial value.
 `traced-run --name LABEL -- PROGRAM [ARG ...]` can emit a separate
 Perfetto-compatible Chrome Trace Event JSON artifact at
 `.xtask/run/<opaque-run-id>.trace.json`. Only explicitly named `traced-run`
-invocations and the guarded `scripts/cargo-xtask` launcher contribute spans;
-inherited context does not attribute arbitrary child processes. Their time is
-opaque within the nearest participating parent span. The artifact is process
-timing, not OpenTelemetry request attribution, and does not change
-`xtask.command`.
+invocations (including `traced-run --launcher --name test-local` around
+host-proof's `test-local`) contribute spans; inherited context does not
+attribute arbitrary child processes. Their time is opaque within the nearest
+participating parent span. The artifact is process timing, not OpenTelemetry
+request attribution, and does not change `xtask.command`.
 
-Direct `cargo xtask` launcher execution uses inherited stdout/stderr without
-wrapper JSON or output capture files. If a normal captured `traced-run` wraps
-the launcher, that outer runner owns parked output and the result summary;
-interactive streaming is not promised on that path. Trace finalization is
-best-effort: a hard kill before root finalization can leave per-writer records
-without a complete merged trace, and descendants that outlive the root are not
-collected. This trace is diagnostic evidence, not a performance claim.
+`--launcher` execution uses inherited stdout/stderr without wrapper JSON or
+output capture files. If a normal captured `traced-run` wraps a launcher, that
+outer runner owns parked output and the result summary; interactive streaming is
+not promised on that path. Trace finalization is best-effort: a hard kill before
+root finalization can leave per-writer records without a complete merged trace,
+and descendants that outlive the root are not collected. This trace is
+diagnostic evidence, not a performance claim.
 
 ### What is a span and what is an attribute (#794)
 
@@ -527,7 +527,7 @@ load total for an e2e trace corpus is therefore:
 sum(e2e.test.navigation_count) + sum(e2e.page.navigation_count)
 ```
 
-`cargo xtask traces analyze` treats `e2e.test` and `e2e.page` spans carrying
+`just trace-analysis analyze` treats `e2e.test` and `e2e.page` spans carrying
 `e2e.navigation_top_json` as navigation-bearing for URL/phase and boot-coverage
 reports. Sections that say `e2e.test` alone remain default-page-only.
 
@@ -565,7 +565,7 @@ and the test may end before `load`; asynchronous WASM boot also need not finish
 before `load`. Reconcile the complete executed population rather than trusting
 the presence of a few captured marks.
 
-Coverage is reported per `(source, project)` by `cargo xtask traces analyze` —
+Coverage is reported per `(source, project)` by `just trace-analysis analyze` —
 navigations, mounted, full mark sets, and dropped records — and the E2E VM gate
 now fails closed on every successful backend×browser combo when the report's
 executed project population and its trace evidence do not reconcile. The
@@ -669,7 +669,8 @@ producers settle. It consumes the independent unsharded census plus every
 lane-qualified report, manifest, phase sidecar, and capture; it rejects missing
 or duplicate source identities, swapped shard evidence, failed phases, partial
 traces, and incomplete retry/duration populations. The reconciliation artifact
-contains only `.xtask/last-result.json`: producer artifacts already retain the
+is only its verdict log (`.xtask/firefox-reconcile.log`, the human view of
+`e2e-evidence reconcile`'s JSON report): producer artifacts already retain the
 full diagnostics, so operators should inspect the named failed lane rather than
 a duplicated aggregate bundle.
 
@@ -792,15 +793,15 @@ empty one.
 **The seed capture is committed, reduced and re-runnable.** The allowlist claims
 each of its entries names a fn the real suite does not drive, so the capture
 that claim came from is checked in as
-`xtask/src/server_fn_coverage/testdata/otel-traces-seed.jsonl` — the extractor's
-unit tests run against it, rather than against hand-authored spans only. A 25 MB
-capture cannot be committed, so `testdata/reduce-otel-capture.mjs` cuts it to
-~610 KiB and is committed beside it: without the reduction in the repo, "the
-reduction preserved the hit set" is unfalsifiable, and an entry's absence from
-the hit set would be indistinguishable from the reduction having dropped it. The
-script's header states exactly what it keeps and why. It keys on each span's own
-`name`, `uri`, and `code.namespace` and never re-derives the `#[server]`
-inventory — an earlier version did, misread `upload_media`'s
+`tools/host-proof/src/server_fn_coverage/testdata/otel-traces-seed.jsonl` — the
+extractor's unit tests run against it, rather than against hand-authored spans
+only. A 25 MB capture cannot be committed, so `testdata/reduce-otel-capture.mjs`
+cuts it to ~610 KiB and is committed beside it: without the reduction in the
+repo, "the reduction preserved the hit set" is unfalsifiable, and an entry's
+absence from the hit set would be indistinguishable from the reduction having
+dropped it. The script's header states exactly what it keeps and why. It keys on
+each span's own `name`, `uri`, and `code.namespace` and never re-derives the
+`#[server]` inventory — an earlier version did, misread `upload_media`'s
 `#[server(input = MultipartFormData, endpoint = "/upload_media")]`, and silently
 dropped it while every test still passed.
 
@@ -860,15 +861,15 @@ installed its hook). See `docs/adr/` for the app-driven scoped-capture decision.
 
 ## Analysis
 
-Use `cargo xtask traces analyze` on one or more artifact files, for example:
+Use `just trace-analysis analyze` on one or more artifact files, for example:
 
 ```bash
 # Local e2e-local capture; use the exact path printed by the command.
-cargo xtask traces analyze \
+just trace-analysis analyze \
   .xtask/e2e-local/<run-id>/chromium/capture/otel-traces.jsonl
 
 # VM captures are extracted from capture-<lane>.tar.gz; traces run does this.
-cargo xtask traces analyze \
+just trace-analysis analyze \
   sqlite-otel-traces.jsonl \
   postgres-otel-traces.jsonl
 ```
@@ -981,7 +982,7 @@ sessions — was on the box.
 To build both e2e VM checks and immediately analyze the produced traces, use:
 
 ```bash
-cargo xtask traces run --top 25
+just trace-analysis run --top 25
 ```
 
 When the question is what a single navigation costs rather than what the suite
@@ -989,7 +990,7 @@ costs, use the single-worker packages — one worker, so no contention distorts
 the per-navigation numbers:
 
 ```bash
-cargo xtask traces run --single-worker --top 25
+just trace-analysis run --single-worker --top 25
 ```
 
 Optional filters:
@@ -1003,10 +1004,10 @@ Optional filters:
   left.
 - `--browser chromium|firefox` restricts the run to one browser (default: both).
   Use this (not `--project`) to focus one browser, e.g. when debugging Firefox
-  timeout pressure: `cargo xtask traces run --browser firefox`.
+  timeout pressure: `just trace-analysis run --browser firefox`.
 
-(`cargo xtask traces analyze` additionally accepts `--project NAME` to focus one
-browser/project when analyzing already-collected trace files directly.)
+(`just trace-analysis analyze` additionally accepts `--project NAME` to focus
+one browser/project when analyzing already-collected trace files directly.)
 
 ### Backend axis: suite wall-clock versus server cost
 
@@ -1074,23 +1075,24 @@ measurement; keep its cost separate when interpreting navigation traces.
 
 ## WASM Bundle Audit
 
-Use `cargo xtask audit-wasm` to measure frontend bundle size from the
-deterministic Nix `site` build output:
+Use `just wasm-audit report` to measure frontend bundle size from the
+deterministic Nix `.#csrBundle` build output:
 
 ```bash
-cargo xtask audit-wasm
+just wasm-audit report
 ```
 
-This reports raw, gzip, and brotli sizes for:
-
-- `pkg/jaunder.wasm`
-- `pkg/jaunder.js`
+This reports raw, gzip, and brotli sizes for the manifest-selected WASM and JS
+identity assets. Host-proof's `wasm-audit` prints one JSON report on stdout (the
+rendered table in `report`, measurements in `evidence`); the recipe derives the
+human view.
 
 Useful options:
 
-- `--json` for machine-readable output
-- `--site-path /nix/store/...-jaunder-site` to reuse a previously built site
-  output
+- `--site-path /nix/store/...-jaunder-csr-wasm-bundle` to reuse a previously
+  built bundle
+- `--breakdown [--wasm F]` for per-section and per-crate attribution of the
+  pre-wasm-bindgen `.#csrWasm` artifact
 
 The Jiff time-model migration (#1272, 2026-09-06) requires a bundled IANA TZDB
 for browser-local named-zone conversion. It increased the `-Oz` artifact to 3

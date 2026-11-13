@@ -82,7 +82,7 @@ mod unix {
             ),
             (
                 "tools-clippy",
-                "--offline\nclippy\n--manifest-path\ntools/Cargo.toml\n--workspace\n--all-targets\n--\n-D\nwarnings\n",
+                "--offline\nclippy\n--manifest-path\ntools/Cargo.toml\n--workspace\n--all-targets\n--features\ndoctests/host,coverage/host\n--\n-D\nwarnings\n",
             ),
             (
                 "cargo-deny",
@@ -148,7 +148,7 @@ mod unix {
             "#!/bin/sh\nprintf '%s %s\\n' \"${0##*/}\" \"$*\" >> \"$STATIC_LOG\"\n",
         );
         let code = "emacs --batch -Q -l elisp/scripts/format.el -f jaunder-fmt-fix\nast-grep test --config sgconfig.yml\nast-grep scan --config sgconfig.yml --filter ^no-full-reload$ web/src client/src\nemacs --batch -Q -l elisp/scripts/byte-compile.el\n";
-        let clippy = "cargo --offline deny check bans licenses sources\ncargo --offline clippy --workspace --exclude web --exclude client --exclude csr --all-targets -- -D warnings\ncargo --offline clippy -p web --features server --all-targets -- -D warnings\ncargo --offline clippy -p web --no-default-features --all-targets -- -D warnings\ncargo --offline clippy -p client --features csr --all-targets -- -D warnings\ncargo --offline clippy -p web -p client -p csr --features csr --target wasm32-unknown-unknown -- -D warnings\ncargo --offline clippy --manifest-path tools/Cargo.toml --workspace --all-targets -- -D warnings\n";
+        let clippy = "cargo --offline deny check bans licenses sources\ncargo --offline clippy --workspace --exclude web --exclude client --exclude csr --all-targets -- -D warnings\ncargo --offline clippy -p web --features server --all-targets -- -D warnings\ncargo --offline clippy -p web --no-default-features --all-targets -- -D warnings\ncargo --offline clippy -p client --features csr --all-targets -- -D warnings\ncargo --offline clippy -p web -p client -p csr --features csr --target wasm32-unknown-unknown -- -D warnings\ncargo --offline clippy --manifest-path tools/Cargo.toml --workspace --all-targets --features doctests/host,coverage/host -- -D warnings\n";
         for (group, expected) in [
             ("rust-format", "cargo --offline fmt\nscoped-leptosfmt fix\ncargo --offline fmt --manifest-path tools/Cargo.toml --all\n".to_owned()),
             ("code", format!("{code}{clippy}")),

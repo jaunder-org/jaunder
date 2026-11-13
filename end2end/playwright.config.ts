@@ -24,12 +24,12 @@ const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
 // Worker count is env-driven (#155), default 2: two browser instances per combo
 // stays robust on a small/loaded host and lets all four {backend×browser} combos
 // run concurrently, while still cutting the serial wall-clock. The host driver
-// (`cargo xtask e2e-local`) overrides this to 1 for its debug wasm build.
+// (`just e2e-local`) overrides this to 1 for its debug wasm build.
 // Rationale: docs/adr/0039-e2e-parallelism-via-per-test-identity-fixtures.md.
 const workers = parseInt(process.env.JAUNDER_E2E_WORKERS || "2", 10);
 
 // Automatic retry of a failed test, env-driven, default 0 (fail-fast — right for
-// local `cargo xtask e2e-local` debugging). The CI/`validate` warm gate sets
+// local `just e2e-local` debugging). The CI/`validate` warm gate sets
 // JAUNDER_E2E_RETRIES=1 (flake.nix), so a test that fails then passes is reported
 // `flaky` (exit 0) instead of failing the check: it contains the timeout
 // flakiness that otherwise reds an unrelated PR, while the JSON report still
@@ -100,7 +100,7 @@ export default defineConfig({
   retries,
   // CI default reporter: streamed line output for the build log + a machine-readable
   // report at the conventional name, inside the default outputDir. The host driver
-  // (cargo xtask e2e-local) overrides this with --reporter=html,line for interactive
+  // (just e2e-local) overrides this with --reporter=html,line for interactive
   // runs (#153).
   reporter: [
     ["line"],

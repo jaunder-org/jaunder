@@ -1,12 +1,9 @@
 //! Internal in-sandbox dev tool. Runs inside the Nix coverage/e2e build
 //! sandboxes where `xtask` (host-only) is unavailable. Subcommand tree is
-//! deliberately extensible: `coverage emit`, `wasm-coverage`, diagnostic build,
-//! and `seed-e2e` exist today; `pg`-migration of the remaining shell scripts is
-//! tracked separately.
+//! deliberately extensible: `coverage emit`, `wasm-coverage` and diagnostic build.
 
 use std::path::PathBuf;
 
-use ::coverage::workers::{ExperimentStrategy, WorkerConcurrencyPolicy};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
@@ -17,8 +14,6 @@ mod digest;
 mod doctests;
 #[cfg(feature = "performance")]
 mod performance;
-mod pg;
-mod seed_e2e;
 #[cfg(feature = "system-artifacts")]
 mod system_artifacts;
 mod vite_manifest;
@@ -45,18 +40,11 @@ enum Command {
     /// Doctest gate subcommands.
     #[command(subcommand)]
     Doctests(DoctestsCmd),
-    /// Ephemeral PostgreSQL subcommands.
-    #[command(subcommand)]
-    Pg(PgCmd),
     /// Observe the retained fixed ERT request.
     Check(CheckArgs),
     /// Compile and stage the closed system-theme inventory independently of CSR output.
     #[cfg(feature = "system-artifacts")]
     SystemArtifacts(SystemArtifactsArgs),
-    /// Seed the canonical e2e fixtures (users + site-config + mail-reset) by
-    /// shelling out to `test-support`. The single fixture list shared by the
-    /// host loop and the flake VM `seed_db()` (#249).
-    SeedE2e(SeedE2eArgs),
     #[cfg(feature = "performance")]
     /// Versioned performance fragment producers and validators.
     #[command(subcommand)]
@@ -84,22 +72,6 @@ struct SystemArtifactsArgs {
     fixture: Option<String>,
 }
 
-#[derive(clap::Args)]
-struct SeedE2eArgs {
-    /// Target database URL (passed to test-support as JAUNDER_DB).
-    #[arg(long)]
-    db: String,
-    /// Path to the `test-support` binary — the on-PATH name on the VM guest, the
-    /// built `target/debug/test-support` on the host.
-    #[arg(long)]
-    test_support_bin: PathBuf,
-    /// Path to the real `jaunder` binary (runs the `site-config set` steps). Bare
-    /// `jaunder` on the VM guest (systemPackages), the built
-    /// `target/debug/jaunder` on the host. Must be a non-cheap-kdf build.
-    #[arg(long)]
-    jaunder_bin: PathBuf,
-}
-
 #[derive(Subcommand)]
 enum CoverageCmd {
     /// Run the instrumented suite and emit reports + status + diagnostics.
@@ -107,41 +79,6 @@ enum CoverageCmd {
         /// Directory to write emitted artifacts into (defaults to CWD).
         #[arg(long, default_value = ".")]
         out: String,
-        /// Non-production two-worker coverage experiment to execute.
-        #[arg(long)]
-        experiment: Option<ExperimentStrategy>,
-        /// Worker concurrency policy for a two-worker experiment.
-        #[arg(long, default_value_t = WorkerConcurrencyPolicy::Independent)]
-        concurrency: WorkerConcurrencyPolicy,
-        /// Instrumented nextest archive shared read-only by experiment workers.
-        #[arg(long, requires = "experiment")]
-        archive_file: Option<PathBuf>,
-    },
-    /// Execute one selected non-production coverage worker and write its immutable bundle.
-    ExperimentWorker {
-        #[arg(long)]
-        out: String,
-        #[arg(long)]
-        strategy: ExperimentStrategy,
-        #[arg(long, value_parser = clap::value_parser!(u8).range(1..=2))]
-        worker: u8,
-        #[arg(long, default_value_t = WorkerConcurrencyPolicy::Independent)]
-        concurrency: WorkerConcurrencyPolicy,
-        #[arg(long)]
-        census: PathBuf,
-        #[arg(long)]
-        archive_file: PathBuf,
-    },
-    /// Consume exactly two worker bundles and emit the sole merged coverage verdict.
-    ExperimentAggregate {
-        #[arg(long)]
-        out: String,
-        #[arg(long)]
-        census: PathBuf,
-        #[arg(long)]
-        archive_file: PathBuf,
-        #[arg(long = "worker-bundle", required = true, num_args = 2)]
-        worker_bundles: Vec<PathBuf>,
     },
     /// Validate completed coverage producer evidence.
     ValidateStatus {
@@ -251,67 +188,10 @@ enum DoctestsCmd {
     },
 }
 
-#[derive(Subcommand)]
-enum PgCmd {
-    /// Run a command with a throwaway PostgreSQL 16 cluster.
-    Run {
-        /// Command (and its arguments) to run, after `--`.
-        #[arg(trailing_var_arg = true, required = true)]
-        cmd: Vec<String>,
-    },
-}
-
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Coverage(CoverageCmd::Emit {
-            out,
-            experiment: None,
-            archive_file: None,
-            ..
-        }) => coverage::emit::run(&out),
-        Command::Coverage(CoverageCmd::Emit {
-            out,
-            experiment: Some(experiment),
-            concurrency,
-            archive_file: Some(archive_file),
-        }) => coverage::emit::run_experiment(&out, experiment, concurrency, &archive_file),
-        Command::Coverage(CoverageCmd::Emit {
-            experiment: Some(_),
-            archive_file: None,
-            ..
-        }) => anyhow::bail!("coverage experiments require --archive-file"),
-        Command::Coverage(CoverageCmd::Emit {
-            experiment: None,
-            archive_file: Some(_),
-            ..
-        }) => anyhow::bail!("--archive-file requires --experiment"),
-        Command::Coverage(CoverageCmd::ExperimentWorker {
-            out,
-            strategy,
-            worker,
-            concurrency,
-            census,
-            archive_file,
-        }) => coverage::emit::run_experiment_worker(
-            &out,
-            strategy,
-            worker,
-            concurrency,
-            &census,
-            &archive_file,
-        ),
-        Command::Coverage(CoverageCmd::ExperimentAggregate {
-            out,
-            census,
-            archive_file,
-            worker_bundles,
-        }) => coverage::emit::aggregate_experiment_bundles(
-            &out,
-            &census,
-            &archive_file,
-            &worker_bundles,
-        ),
+        Command::Coverage(CoverageCmd::Emit { out }) => coverage::emit::run(&out),
         Command::Coverage(CoverageCmd::ValidateStatus { status }) => {
             coverage::validate_status::run(&status)
         }
@@ -372,7 +252,6 @@ fn main() -> Result<()> {
             diagnostic_build::write_baseline_status(&status)
         }
         Command::Doctests(DoctestsCmd::Emit { out }) => doctests::emit::run(&out),
-        Command::Pg(PgCmd::Run { cmd }) => pg::run_command(&cmd),
         Command::Check(args) => check::run(&args.name, args.fix),
         #[cfg(feature = "system-artifacts")]
         Command::SystemArtifacts(args) => {
@@ -381,18 +260,6 @@ fn main() -> Result<()> {
             #[cfg(not(feature = "qualification"))]
             let fixture = None;
             system_artifacts::run(&args.out, fixture)
-        }
-        Command::SeedE2e(args) => {
-            // Preserve raw configured input: the seed children own telemetry
-            // trimming and invalid-value diagnostics, including non-Unicode.
-            let endpoint = std::env::var_os(seed_e2e::OTLP_ENDPOINT_ENV)
-                .unwrap_or_else(|| seed_e2e::SEED_OTLP_ENDPOINT.into());
-            seed_e2e::run(
-                &args.db,
-                &args.test_support_bin,
-                &args.jaunder_bin,
-                &endpoint,
-            )
         }
         #[cfg(feature = "performance")]
         Command::Performance(command) => performance::run(*command),
@@ -458,100 +325,13 @@ mod tests {
         ));
     }
     #[test]
-    fn coverage_emit_keeps_default_producer_and_parses_experiments() {
-        let default_emit =
-            Cli::try_parse_from(["devtool", "coverage", "emit"]).expect("default coverage emit");
+    fn coverage_emit_parses_the_producer_output_directory() {
+        let emit = Cli::try_parse_from(["devtool", "coverage", "emit", "--out", "coverage"])
+            .expect("coverage emit");
         assert!(matches!(
-            default_emit.command,
-            Command::Coverage(CoverageCmd::Emit {
-                experiment: None,
-                concurrency: WorkerConcurrencyPolicy::Independent,
-                ..
-            })
+            emit.command,
+            Command::Coverage(CoverageCmd::Emit { out }) if out == "coverage"
         ));
-
-        let experiment = Cli::try_parse_from([
-            "devtool",
-            "coverage",
-            "emit",
-            "--experiment",
-            "slice",
-            "--concurrency",
-            "fixed",
-            "--archive-file",
-            "/tmp/instrumented-tests.tar.zst",
-        ])
-        .expect("experiment coverage emit");
-        assert!(matches!(
-            experiment.command,
-            Command::Coverage(CoverageCmd::Emit {
-                experiment: Some(ExperimentStrategy::Slice),
-                concurrency: WorkerConcurrencyPolicy::Fixed,
-                archive_file: Some(archive_file),
-                ..
-            }) if archive_file == Path::new("/tmp/instrumented-tests.tar.zst")
-        ));
-    }
-    #[test]
-    fn coverage_experiment_runner_commands_require_exact_worker_inputs() {
-        let worker = Cli::try_parse_from([
-            "devtool",
-            "coverage",
-            "experiment-worker",
-            "--out",
-            "bundle",
-            "--strategy",
-            "slice",
-            "--worker",
-            "2",
-            "--census",
-            "census.json",
-            "--archive-file",
-            "tests.tar.zst",
-        ])
-        .expect("worker command parses");
-        assert!(matches!(
-            worker.command,
-            Command::Coverage(CoverageCmd::ExperimentWorker {
-                worker: 2,
-                strategy: ExperimentStrategy::Slice,
-                ..
-            })
-        ));
-        let aggregate = Cli::try_parse_from([
-            "devtool",
-            "coverage",
-            "experiment-aggregate",
-            "--out",
-            "aggregate",
-            "--census",
-            "census.json",
-            "--archive-file",
-            "tests.tar.zst",
-            "--worker-bundle",
-            "one",
-            "two",
-        ])
-        .expect("aggregate command parses");
-        assert!(matches!(
-            aggregate.command,
-            Command::Coverage(CoverageCmd::ExperimentAggregate { worker_bundles, .. }) if worker_bundles.len() == 2
-        ));
-        assert!(
-            Cli::try_parse_from([
-                "devtool",
-                "coverage",
-                "experiment-aggregate",
-                "--out",
-                "aggregate",
-                "--census",
-                "census.json",
-                "--archive-file",
-                "tests.tar.zst",
-                "--worker-bundle",
-                "only-one",
-            ])
-            .is_err()
-        );
+        assert!(Cli::try_parse_from(["devtool", "coverage", "experiment-worker"]).is_err());
     }
 }

@@ -4,7 +4,7 @@
 { flake }:
 let
   systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
-  portable = [ "jaunder" "site" "csrWasm" "csrBundle" "devtool" "xtask" "test-support" ];
+  portable = [ "jaunder" "site" "csrWasm" "csrBundle" "devtool" "host-proof" "test-support" ];
   linuxOnly = [ "theme-thumbnail-environment" "wasm-coverage-csr" ];
   check = system:
     let

@@ -1,5 +1,5 @@
 # Host Cargo compilation shares rustc artifacts across canonical worktree roots.
-# Git discovery failure retains the current root, as in xtask's cache policy.
+# Git discovery failure retains the current root, as in the compile-cache policy.
 export RUSTC_WRAPPER := "sccache"
 export CARGO_INCREMENTAL := "0"
 export SCCACHE_BASEDIRS := ```
@@ -18,6 +18,9 @@ devtool := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p devto
 prettier := "just --justfile recipes/prettier.just --working-directory ."
 static := "just --justfile recipes/static.just --working-directory ."
 repository_policy := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin"
+host_proof := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p host-proof --bin"
+doctest_check := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p doctests --features host --bin doctest-check --"
+coverage_check := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p coverage --features host --bin coverage-check --"
 
 # Setup follows the current checkout even after cd in an existing devShell.
 tsc mode="verify":
@@ -71,8 +74,9 @@ _clean-tree:
       exit 1
     fi
 
-# Qualification's public catalog owns ordinary Git preflight; the host leaf
-# binds this HEAD to its clean SourcePin before selecting any Nix harness.
+# Qualification's public catalog owns ordinary Git preflight; qualification-host
+# binds this HEAD to its clean SourcePin before selecting any Nix harness. It runs
+# only as its own Nix output, which the selected harness must contain.
 production-baseline-discover revision: (_production-baseline revision "")
 
 # Only discovery may use the shared helper's empty-target sentinel.
@@ -83,11 +87,11 @@ production-baseline-qualify-styling: _clean-tree
     set -euo pipefail
     unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_NAMESPACE
     harness=$(git rev-parse --verify 'HEAD^{commit}')
-    cargo xtask qualification-leaf --expected-harness "$harness"
+    nix run .#qualification-host -- --expected-harness "$harness"
 
 # Mutable local lifecycle diagnostic; deliberately no qualification/evidence.
 production-baseline-smoke:
-    cargo xtask qualification-leaf
+    nix run .#qualification-host
 
 [private]
 _production-baseline source target: _clean-tree
@@ -119,7 +123,7 @@ _production-baseline source target: _clean-tree
     git fetch --quiet --no-write-fetch-head --refetch origin "${commits[@]}"
     args=(--expected-harness "$harness" --source "$source")
     [[ -z "$target" ]] || args+=(--target "$target")
-    cargo xtask qualification-leaf "${args[@]}"
+    nix run .#qualification-host -- "${args[@]}"
 
 # Internal implementations; Fix-mode check also uses doctests-workflow without
 # imposing the public doctests clean-tree admission.
@@ -128,7 +132,7 @@ coverage-workflow:
     mkdir -p .xtask/gcroots
     nix build --no-update-lock-file --no-write-lock-file -L .#checks.x86_64-linux.coverage --out-link .xtask/gcroots/coverage
     nix build --no-update-lock-file --no-write-lock-file -L .#checks.x86_64-linux.coverage-gate --no-link
-    cargo xtask coverage-policy --out .xtask/gcroots/coverage
+    scripts/run-report {{coverage_check}} policy --out .xtask/gcroots/coverage
 
 [private]
 doctests-workflow:
@@ -206,7 +210,6 @@ _host mode docs:
     {{static}} tools-fmt {{mode}}
     {{static}} ast-grep-tests
     {{static}} no-full-reload
-    cargo fmt --manifest-path xtask/Cargo.toml {{if mode == "fix" { "" } else { "--check" }}}
     just _docs-shape
     {{repository_policy}} source-contracts -- test-patterns
     {{repository_policy}} source-contracts -- server-fn-registrar
@@ -226,7 +229,7 @@ _host mode docs:
     {{repository_policy}} source-contracts -- thin-components
     {{repository_policy}} source-contracts -- sqlx-newtype-bind
     {{repository_policy}} source-contracts -- sqlx-newtype-decode
-    cargo xtask check-leaf doctest-fences
+    scripts/run-report {{doctest_check}} fences
     {{repository_policy}} source-contracts -- raw-html-door
     {{repository_policy}} source-contracts -- html-sink
     {{repository_policy}} source-contracts -- e2e-scaffold
@@ -240,39 +243,79 @@ _host mode docs:
     {{static}} client-host-clippy {{mode}}
     {{static}} wasm-clippy {{mode}}
     {{static}} tools-clippy {{mode}}
-    cargo clippy --manifest-path xtask/Cargo.toml --all-targets -- -D warnings
     {{devtool}} check ert {{if mode == "fix" { "--fix" } else { "" }}}
 
 [private]
 _host-tests:
-    cargo test --manifest-path xtask/Cargo.toml --lib --bins --tests
-    cargo test --manifest-path tools/Cargo.toml --lib --bins --tests
+    cargo test --manifest-path tools/Cargo.toml --lib --bins --tests --features doctests/host,coverage/host
 
 [private]
-_product-tests:
-    cargo xtask test-local
+_product-tests: test-local
+
+# Focused Rust proof with isolated PostgreSQL; args are nextest selectors (none = workspace).
+[positional-arguments]
+test-local *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # #1933's traced-run folds this exact launcher shape (a `cargo-xtask` root
+    # with an `xtask-execute` child) into the logical test-local workflow track.
+    traced-run --launcher --name cargo-xtask -- traced-run --launcher --name xtask-execute -- {{host_proof}} test-local -- "$@" | jq -r -f scripts/step-report.jq
+
+# Run a command against a throwaway PostgreSQL cluster (JAUNDER_PG_TEST_URL exported).
+[positional-arguments]
+pg-run *args:
+    {{host_proof}} pg-run -- "$@"
+
+# Manual coverage evidence tools: probe-source | wasm-probe | wasm-measure.
+[positional-arguments]
+coverage-check *args:
+    scripts/run-report {{coverage_check}} "$@"
+
+# Bundle size diagnostics: report [--site-path P] [--breakdown [--wasm F]] | budget.
+[positional-arguments]
+wasm-audit *args:
+    scripts/run-report {{host_proof}} wasm-audit -- "$@"
+
+# Eval-only Nix guards: nix-probe-source | cache-safety-probe.
+[positional-arguments]
+source-diagnostics *args:
+    scripts/run-report {{host_proof}} source-diagnostics -- "$@"
+
+# Manual OTel trace diagnostics: analyze <files> | run [--single-worker] | boot-phases <files>.
+[positional-arguments]
+trace-analysis *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    {{host_proof}} trace-analysis -- "$@" | jq -r -f scripts/step-report.jq
+
+# Focused browser proof: [--browser B] [spec-or-file:line] or --update-visual-snapshots.
+[positional-arguments]
+e2e-local *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    {{host_proof}} e2e-local -- "$@" | jq -r -f scripts/step-report.jq
 
 [private]
 _workspace-doctests:
-    cargo xtask check-leaf workspace-doctests
+    scripts/run-report {{doctest_check}} workspace
 
 [private]
 _platform:
     nix eval --impure --expr 'import ./nix/platform-contract.nix { flake = builtins.getFlake (toString ./.); }'
 
 [private]
-_static: (_nix "static-docs") (_nix "static-typescript") (_nix "rust-format") (_nix "static-code") (_nix "static-elisp") (_nix "static-e2e-census") (_nix "static-ert") (_nix "xtask-format") (_nix "xtask-clippy")
+_static: (_nix "static-docs") (_nix "static-typescript") (_nix "rust-format") (_nix "static-code") (_nix "static-elisp") (_nix "static-e2e-census") (_nix "static-ert")
 
 [private]
 _wasm-budget:
-    cargo xtask check-leaf wasm-budget
+    scripts/run-report {{host_proof}} wasm-audit -- budget
 
 [private]
 _wasm-tests: (_nix "wasm-tests")
 
 [private]
 _elisp-coverage: (_nix "elisp-coverage-producer")
-    cargo xtask check-leaf elisp-coverage-consume
+    scripts/run-report {{coverage_check}} elisp-consume
 
 [private]
 _nix check:
@@ -396,7 +439,10 @@ e2e-regenerate-coverage:
     bash scripts/e2e-workflow producer sqlite-chromium-unsplit regenerate
 
 e2e-reconcile backend artifacts=".xtask/diagnostics":
-    cargo xtask e2e-reconcile {{quote(backend)}} --catalog end2end/e2e-lanes.json --diagnostics-root {{quote(artifacts)}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out=$(nix build --no-link --print-out-paths .#host-proof)
+    "$out/bin/e2e-evidence" reconcile {{quote(backend)}} --catalog end2end/e2e-lanes.json --diagnostics-root {{quote(artifacts)}} | jq -r -f scripts/step-report.jq
 
 # Exhaustive read-only milestone candidates; never claims or dispatches work.
 issue-discover milestone:

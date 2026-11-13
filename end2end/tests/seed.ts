@@ -475,7 +475,7 @@ export async function restoreConfigViaTool(
 /**
  * Set a single site-config key/value via the shipped `jaunder site-config set`
  * subcommand (#8) — the same in-process storage write the canonical e2e seed
- * uses (`devtool seed-e2e` sets `site.registration_policy=open` this way). The
+ * uses (`test-support seed-e2e` sets `site.registration_policy=open` this way). The
  * running server reads site config live per request, so a test can flip
  * `site.registration_policy` to `operator_invites` (or set `site.base_url`) and the
  * next request observes it. There is no UI for the registration policy, so this
