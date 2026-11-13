@@ -21,8 +21,8 @@ use crate::check::{self, ScannedFile};
 use crate::roots;
 use xshell::Shell;
 
-use repository_policy::compile_cache;
-use repository_policy::report::{CommandResult, StepResult};
+use host_tool::compile_cache;
+use host_tool::report::{CommandResult, StepResult};
 
 /// A repo-relative path as the runner prints it for a `--manifest-path <root>` run:
 /// relative to the manifest's directory, so `xtask/src/steps/nix.rs` prints as

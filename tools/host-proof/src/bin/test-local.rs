@@ -23,8 +23,7 @@ fn main() {
     let code = match host_proof::invocation_trace::execute_test_local(&cli.nextest_args) {
         Ok(result) => result.emit(),
         Err(error) => {
-            eprintln!("test-local: {error:#}");
-            2
+            host_proof::report::CommandResult::refused("test-local", format!("{error:#}")).emit()
         }
     };
     std::process::exit(code);

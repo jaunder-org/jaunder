@@ -3,21 +3,11 @@
 //! probe, Emacs Lisp coverage reconciliation, Playwright/WASM coverage evidence
 //! and mutation-evidence verification. None of this runs inside Nix.
 
+mod digest;
 pub mod elisp;
 pub mod mutants;
 pub mod nix;
 pub mod policy;
 pub mod wasm_evidence;
 
-/// Encodes bytes as lowercase hexadecimal with exactly one allocation.
-#[must_use]
-pub(crate) fn lowercase_hex(bytes: impl AsRef<[u8]>) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let bytes = bytes.as_ref();
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for &byte in bytes {
-        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
-        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
-    }
-    encoded
-}
+pub(crate) use digest::lowercase_hex;

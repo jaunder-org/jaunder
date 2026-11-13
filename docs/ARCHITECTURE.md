@@ -5150,15 +5150,15 @@ this code execute?_ ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)):
 - **Host concern packages** — the host-side dev/CI commands, each owned by the
   concern it serves rather than one driver: `tools/repository-policy`
   (`repository-docs`, `source-contracts`, `git-index-safety`, and the shared
-  `repository_policy::report` contract), `tools/qualification`
-  (`qualification-host`), `tools/host-proof` (below), `tools/coverage` with its
-  nondefault `host` feature
+  `host_tool::report` contract), `tools/qualification` (`qualification-host`),
+  `tools/host-proof` (below), `tools/coverage` with its nondefault `host`
+  feature
   (`coverage-check policy | elisp-consume | mutants-verify | probe-source | benchmark-local | wasm-probe | wasm-measure`)
   and `tools/doctests` with its nondefault `host` feature
   (`doctest-check fences | workspace`). Just owns gate composition. These
   commands invoke `nix build` and consume/analyze exfiltrated build artifacts
   (coverage gate, CRAP gate, reports). Every host tool prints exactly one JSON
-  report on stdout (`repository_policy::report`: `command`, `ok`, `duration_ms`,
+  report on stdout (`host_tool::report`: `command`, `ok`, `duration_ms`,
   `steps[{name, ok, skipped, duration_ms, detail}]`, optional `exit_override`,
   optional rendered `report` text and optional structured `evidence`). The
   shared argument parser points fd 1 at stderr and reserves the real stdout for
@@ -5492,7 +5492,9 @@ checker registry, runner, supervisor or replacement omnibus:
 - `tools/repository-policy` — fixed repository-docs/source-contracts policy
   interfaces, the single-process `git-index-safety` owner, shared checkout
   admission and best-effort `core.hooksPath` preparation (every host tool calls
-  it before its workload), and the shared host-tool report contract.
+  it before its workload).
+- `tools/host-tool` — the shared host-tool report contract and compile-cache
+  environment.
 - `tools/qualification` — `qualification-host` behind the four
   `production-baseline-*` recipes.
 - `tools/host-proof` — focused proof (`test-local`, `e2e-local`, `pg-run`),

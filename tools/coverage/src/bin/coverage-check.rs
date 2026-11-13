@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use clap::{Parser, Subcommand};
 use coverage::host::{mutants, nix, policy, wasm_evidence};
-use repository_policy::report::{CommandResult, StepResult, parse_args};
+use host_tool::report::{CommandResult, StepResult, parse_args};
 
 #[derive(Parser)]
 #[command(name = "coverage-check")]
@@ -159,8 +159,7 @@ fn run(command: Command) -> CommandResult {
 fn main() {
     let cli = parse_args::<Cli>();
     if let Err(error) = repository_policy::checkout::prepare_checkout("tools/Cargo.toml", None) {
-        eprintln!("coverage-check: {error:#}");
-        std::process::exit(2);
+        std::process::exit(CommandResult::refused("coverage-check", format!("{error:#}")).emit());
     }
     repository_policy::checkout::ensure_hooks_installed("coverage-check");
     std::process::exit(run(cli.command).emit());

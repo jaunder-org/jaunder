@@ -25,8 +25,8 @@ use std::process::Stdio;
 use anyhow::{Context, Result};
 
 use crate::host::nix;
+use host_tool::report::StepResult;
 use repository_policy::git;
-use repository_policy::report::StepResult;
 
 /// The ways the coverage source closure or producer boundary can drift.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,7 +103,7 @@ impl fmt::Display for DriftError {
             }
             Self::AdmitsXtaskSource { base, xtask_source } => write!(
                 f,
-                "coverage source filter admits host-only xtask source ({base} -> {xtask_source})"
+                "coverage source filter admits host-only tool source ({base} -> {xtask_source})"
             ),
         }
     }
@@ -203,7 +203,7 @@ fn git_run(dir: &Path, args: &[&str]) -> Result<()> {
 pub fn probe_source() -> StepResult {
     match run_probe() {
         Ok(()) => StepResult::ok("coverage-probe-source").detail(
-            "coverage source filter contract holds (required Cargo inputs admitted, xtask excluded, build dependency absent from report)",
+            "coverage source filter contract holds (required Cargo inputs admitted, host tool source excluded, build dependency absent from report)",
         ),
         Err(e) => StepResult::fail("coverage-probe-source").detail(format!("{e:#}")),
     }

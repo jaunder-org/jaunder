@@ -257,8 +257,14 @@ _product-tests: test-local
 test-local *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    # The launcher owns the runner timeline that test-local contributes its trace to.
-    traced-run --launcher --name test-local -- {{host_proof}} test-local -- "$@" | jq -r -f scripts/step-report.jq
+    # #1933's traced-run folds this exact launcher shape (a `cargo-xtask` root
+    # with an `xtask-execute` child) into the logical test-local workflow track.
+    traced-run --launcher --name cargo-xtask -- traced-run --launcher --name xtask-execute -- {{host_proof}} test-local -- "$@" | jq -r -f scripts/step-report.jq
+
+# Run a command against a throwaway PostgreSQL cluster (JAUNDER_PG_TEST_URL exported).
+[positional-arguments]
+pg-run *args:
+    {{host_proof}} pg-run -- "$@"
 
 # Manual coverage evidence tools: probe-source | benchmark-local | wasm-probe | wasm-measure.
 [positional-arguments]

@@ -26,8 +26,9 @@ enum Command {
 fn main() {
     let cli = parse_args::<Cli>();
     if let Err(error) = host_proof::checkout::prepare() {
-        eprintln!("source-diagnostics: {error:#}");
-        std::process::exit(2);
+        std::process::exit(
+            CommandResult::refused("source-diagnostics", format!("{error:#}")).emit(),
+        );
     }
     host_proof::checkout::ensure_hooks_installed();
     let start = std::time::Instant::now();

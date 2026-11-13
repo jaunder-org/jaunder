@@ -1,4 +1,4 @@
-//! `cargo xtask audit-wasm` — measure frontend bundle download weight.
+//! `wasm-audit report` — measure frontend bundle download weight.
 //!
 //! Host-side analysis tool (ADR-0028): it shells out to `nix build .#csrBundle`
 //! and sizes the manifest-selected identity artifacts. Pure size/format helpers
@@ -192,7 +192,7 @@ pub fn render_breakdown(report: &BreakdownReport) -> String {
     s.push_str(&format!("artifact: {}\n", report.artifact));
     s.push_str(&format!(
         "total: {} — this is the unstripped pre-wasm-bindgen artifact, \
-         NOT the shipped bundle size (see `cargo xtask audit-wasm` for that)\n",
+         NOT the shipped bundle size (see `just wasm-audit report` for that)\n",
         format_bytes(report.total_bytes)
     ));
     s.push('\n');

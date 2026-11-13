@@ -99,8 +99,8 @@ fn main() {
     let code = match result {
         Ok(result) => result.emit(),
         Err(error) => {
-            eprintln!("trace-analysis: {error:#}");
-            2
+            host_proof::report::CommandResult::refused("trace-analysis", format!("{error:#}"))
+                .emit()
         }
     };
     std::process::exit(code);

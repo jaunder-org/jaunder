@@ -6,8 +6,8 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use super::{CoverageReport, crap, exempt, gate, report};
+use host_tool::report::StepResult;
 use repository_policy::git;
-use repository_policy::report::StepResult;
 
 /// Apply only host source policy to realized text + CRAP reports. The Just
 /// workflow must pass the hard Nix producer-status gate before invoking this leaf.

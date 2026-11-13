@@ -46,6 +46,7 @@ jiff = { version = "0.2.35", default-features = false, features = ["std"] }
 processkit = "3.3.4"
 regex = "1.12.3"
 repository-policy = { path = "../repository-policy" }
+host-tool = { path = "../host-tool" }
 # Wasm bundle attribution (#836): section spans, the name section and demangling.
 rustc-demangle = "0.1.28"
 serde = { version = "1.0.229", features = ["derive"] }

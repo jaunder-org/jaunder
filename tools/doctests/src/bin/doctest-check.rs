@@ -3,7 +3,7 @@
 //! auxiliary workspaces' doctests. Prints one JSON report on stdout.
 
 use clap::{Parser, Subcommand};
-use repository_policy::report::{CommandResult, parse_args};
+use host_tool::report::{CommandResult, parse_args};
 
 #[derive(Parser)]
 #[command(name = "doctest-check")]
@@ -16,7 +16,7 @@ struct Cli {
 enum Leaf {
     /// Enforce the closed fence vocabulary and companion rule on tracked sources.
     Fences,
-    /// Run and reconcile the xtask and tools workspaces' doctests.
+    /// Run and reconcile the tools workspace's doctests.
     Workspace,
 }
 
@@ -25,8 +25,7 @@ fn main() {
     let start = std::time::Instant::now();
     let mut result = CommandResult::new("doctest-check");
     if let Err(error) = repository_policy::checkout::prepare_checkout("tools/Cargo.toml", None) {
-        eprintln!("doctest-check: {error:#}");
-        std::process::exit(2);
+        std::process::exit(CommandResult::refused("doctest-check", format!("{error:#}")).emit());
     }
     repository_policy::checkout::ensure_hooks_installed("doctest-check");
     match cli.leaf {
@@ -34,8 +33,9 @@ fn main() {
         Leaf::Workspace => match xshell::Shell::new() {
             Ok(sh) => doctests::host::run_workspace(&sh, &mut result),
             Err(error) => {
-                eprintln!("doctest-check: {error:#}");
-                std::process::exit(2);
+                std::process::exit(
+                    CommandResult::refused("doctest-check", format!("{error:#}")).emit(),
+                );
             }
         },
     }

@@ -52,8 +52,8 @@ pub fn failure_message(v: &BudgetVerdict) -> String {
          This budget is on RAW bytes, not brotli: raw is what the wasm compiler \
          reads, and compile time is what dominates the boot gap (#818).\n\
          If the growth is intended, raise WASM_RAW_CEILING_BYTES in \
-         xtask/src/wasm_budget.rs deliberately, and say why in the commit. \
-         If it is not, `cargo xtask audit-wasm --breakdown` attributes the bytes \
+         tools/host-proof/src/wasm_budget.rs deliberately, and say why in the commit. \
+         If it is not, `just wasm-audit report --breakdown` attributes the bytes \
          to crates.",
         v.actual,
         v.ceiling,

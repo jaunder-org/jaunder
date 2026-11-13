@@ -409,6 +409,12 @@ let
         && path != "${toString (craneLib.path ../.)}/tools/qualification/Cargo.toml")
       && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/host-proof/" path
         && path != "${toString (craneLib.path ../.)}/tools/host-proof/Cargo.toml")
+      # Host-run evidence consumers behind nondefault `host` features: the
+      # sandboxed library builds never compile them, so they must not invalidate.
+      && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/coverage/src/host/" path)
+      && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/coverage/tests/" path)
+      && path != "${toString (craneLib.path ../.)}/tools/doctests/src/host.rs"
+      && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/doctests/tests/" path)
       && (
         (pkgs.lib.hasSuffix ".sql" path)
         || (pkgs.lib.hasSuffix ".css" path)
@@ -483,12 +489,12 @@ let
       ;
   };
   qualificationHostBin = import ./qualification.nix { inherit mkHostTool; };
-  # Host-run focused proof, diagnostics and artifact-only e2e verdicts. CI's
-  # e2e shell runs this cached output instead of compiling the tools workspace.
+  # The host-proof executables CI runs from a cached output instead of
+  # compiling the tools workspace: the e2e verifier and mutants' pg-run.
   hostProofBin = mkHostTool {
     pname = "host-proof";
     member = "tools/host-proof";
-    bins = [ "e2e-evidence" ];
+    bins = [ "e2e-evidence" "pg-run" ];
   };
 
   repositoryPolicyBin = import ./repository-policy.nix {
@@ -749,6 +755,10 @@ let
       && !(pkgs.lib.hasPrefix "tools/repository-policy/" relative && relative != "tools/repository-policy/Cargo.toml")
       && !(pkgs.lib.hasPrefix "tools/qualification/" relative && relative != "tools/qualification/Cargo.toml")
       && !(pkgs.lib.hasPrefix "tools/host-proof/" relative && relative != "tools/host-proof/Cargo.toml")
+      && !(pkgs.lib.hasPrefix "tools/coverage/src/host/" relative)
+      && !(pkgs.lib.hasPrefix "tools/coverage/tests/" relative)
+      && relative != "tools/doctests/src/host.rs"
+      && !(pkgs.lib.hasPrefix "tools/doctests/tests/" relative)
       && craneLib.filterCargoSources path type
     );
   csrSourceAdmits =

@@ -74,6 +74,14 @@ impl CommandResult {
             evidence: None,
         }
     }
+    /// A command that could not run: one failed step and status 2, so even a
+    /// refusal or top-level error is still exactly one report.
+    pub fn refused(command: &str, error: impl std::fmt::Display) -> Self {
+        let mut result = Self::new(command);
+        result.push(StepResult::fail(command).detail(error.to_string()));
+        result.exit_override = Some(2);
+        result
+    }
     pub fn push(&mut self, step: StepResult) {
         self.steps.push(step);
         self.ok = self.steps.iter().all(|s| s.ok || s.skipped);

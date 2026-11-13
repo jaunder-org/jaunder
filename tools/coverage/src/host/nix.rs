@@ -1,7 +1,7 @@
 use std::{fs, io, path::Path, process::Command};
 
 use anyhow::{Context, Result, bail};
-use repository_policy::report::{CommandResult, StepResult};
+use host_tool::report::{CommandResult, StepResult};
 
 /// The flake checks are Linux-only (`optionalAttrs isLinux` in `nix/checks.nix`);
 /// the project's CI host is x86_64-linux.

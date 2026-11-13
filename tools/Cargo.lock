@@ -617,6 +617,7 @@ dependencies = [
  "clap",
  "flate2",
  "host",
+ "host-tool",
  "jiff",
  "proc-macro2",
  "quick-xml 0.42.0",
@@ -1002,6 +1003,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "host-tool",
  "proc-macro2",
  "repository-policy",
  "serde",
@@ -1599,6 +1601,7 @@ dependencies = [
  "coverage",
  "flate2",
  "host",
+ "host-tool",
  "jiff",
  "processkit",
  "regex",
@@ -1619,6 +1622,17 @@ dependencies = [
  "wasmparser",
  "xshell",
  "yaml_serde",
+]
+
+[[package]]
+name = "host-tool"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -3545,7 +3559,6 @@ name = "repository-policy"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "clap",
  "common",
  "glob",
  "oxc_allocator",
@@ -3556,7 +3569,6 @@ dependencies = [
  "oxc_syntax",
  "proc-macro2",
  "quote",
- "rustix",
  "serde",
  "serde_json",
  "sha2 0.10.9",

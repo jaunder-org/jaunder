@@ -5,7 +5,7 @@
 pub mod audit_wasm;
 pub mod cache_safety;
 pub mod checkout;
-pub use repository_policy::{compile_cache, report};
+pub use host_tool::{compile_cache, report};
 pub mod e2e;
 pub mod e2e_evidence;
 mod e2e_ownership;

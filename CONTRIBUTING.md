@@ -108,8 +108,7 @@ device-specific requirement in the issue evidence. Theme thumbnails, NixOS
 services/VM tests, diagnostic coverage producers, and canonical screenshot
 baseline updates remain Linux-only. Do not update canonical snapshots on macOS.
 For host PostgreSQL testing on macOS, use `just test-local` or
-`cargo run -q --manifest-path tools/Cargo.toml -p host-proof --bin pg-run -- <command>`
-rather than the NixOS testing VM below.
+`just pg-run <command>` rather than the NixOS testing VM below.
 
 Check platform output boundaries and native shell/package evaluation with:
 
@@ -827,8 +826,8 @@ and the production-baseline workflows use their Nix outputs
 the host, never inside derivations. Runtime paths belong to the active checkout,
 not the tool's store build directory.
 
-Each host tool prints exactly one JSON report on stdout
-(`repository_policy::report`: `command`, `ok`, `duration_ms`,
+Each host tool prints exactly one JSON report on stdout (`host_tool::report`:
+`command`, `ok`, `duration_ms`,
 `steps[{name, ok, skipped, duration_ms, detail}]`, optional `exit_override`,
 optional rendered `report` text and optional structured `evidence`). The shared
 argument parser points fd 1 at stderr and reserves the real stdout for that

@@ -22,11 +22,12 @@ Every host-run tool executable that renders a verdict (`test-local`,
 `e2e-local`, `trace-analysis`, `e2e-evidence`, `wasm-audit`,
 `source-diagnostics`, `coverage-check`, `doctest-check`) prints **exactly one
 JSON report on stdout** and its **exit status is the verdict**. The report is
-the small `repository_policy::report` structure: `command`, `ok`, `duration_ms`,
+the small `host_tool::report` structure: `command`, `ok`, `duration_ms`,
 `steps[{name, ok, skipped, duration_ms, detail}]`, an optional `exit_override`,
 an optional `report` string for rendered tables, and an optional `evidence`
 value for a versioned machine payload. There is no sidecar, `--json` flag or
-completion sentinel.
+completion sentinel. A refusal or top-level error is still one report: a single
+failed step with status 2.
 
 The shared argument parser sends help and usage text to stderr and then points
 the process's stdout descriptor at stderr, reserving the real stdout for the
@@ -37,6 +38,10 @@ Human views are derived from the JSON, never rendered by the tools:
 `scripts/step-report.jq` prints the `report` text and one line per step, and
 `scripts/run-report` (or the equivalent inline bash under `pipefail`) applies it
 so the tool's status, not the filter's, remains the recipe's verdict.
+
+The contract lives in its own small `tools/host-tool` library (with the shared
+multi-checkout compile-cache environment), so repository-policy keeps owning no
+reports or process execution, as ADR-0246 requires.
 
 Concern owners for the residual executables: host-proof owns focused proof
 (`test-local`, `e2e-local`, and `pg-run`, which only propagates its wrapped
@@ -50,7 +55,7 @@ runs the Nix-built `packages.host-proof` verifier.
 
 ## Consequences
 
-- One small typed report shared through repository-policy replaces the generic
+- One small typed report shared through `tools/host-tool` replaces the generic
   envelope; a new tool adds no rendering code.
 - Machine consumers parse stdout directly; CI artifacts that need a file
   redirect it (or keep the human log, as the Firefox reconciliation does).
