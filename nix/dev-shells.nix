@@ -44,7 +44,7 @@ let
       nodeModulesSetup
       emacsForCi
       pkgs.jq
-      # Just producers invoke Nix directly, not through the xtask launcher.
+      # Just producers invoke Nix directly.
       pkgs.nix
       # Independent metadata reads in upload privacy tests, never a runtime editor.
       pkgs.exiftool
@@ -63,15 +63,15 @@ let
       # shared VM/host JSONL trace pipeline.
       pkgs.opentelemetry-collector-contrib
       pkgs.prettier
-      # xtask's executable NixOS-test-script regressions run the generated
+      # host-proof's executable NixOS-test-script regressions run the generated
       # Python helper under the same pinned interpreter as CI and developers.
       pkgs.python3
       pkgs.sqlite
       pkgs.typescript
       # Theme-package export assertions use this pinned ZIP reader on the host.
       pkgs.unzip
-      # Host xtask steps opt Rust-compiling cargo invocations into
-      # `RUSTC_WRAPPER=sccache`; xtask maintains the multi-checkout
+      # Host tool steps opt Rust-compiling cargo invocations into
+      # `RUSTC_WRAPPER=sccache`; the compile-cache policy maintains the multi-checkout
       # `SCCACHE_BASEDIRS` registry at runtime.
       pkgs.sccache
       # `wasm-opt`, run by the shared locked Vite pipeline after `wasm-bindgen` (#836).
@@ -133,7 +133,7 @@ let
     RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
     LC_ALL = "C.UTF-8";
     TZ = "UTC";
-    # The host `ert` step (run via `nix develop .#ci -c cargo xtask …`)
+    # The host `ert` step (run via `nix develop .#ci -c just …`)
     # computes timezone->UTC from IANA zone names, which need a zone
     # database for `encode-time` to resolve. A clean CI runner has none
     # in this shell, so provide it deterministically rather than relying

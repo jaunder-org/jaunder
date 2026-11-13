@@ -42,7 +42,7 @@ Cargo/data filters can admit them. If dependency preparation compiles SQLx
 macros, use Crane's existing `extraDummyScript` to restore that driver and its
 parent notices after stubbing, not the entire workspace. The separate
 `ux-sandbox` consumer owns applying this guidance when integrating the security
-repair; it is not part of these three workspace source closures.
+repair; it is not part of these two workspace source closures.
 
 ## Removal trigger
 
@@ -50,20 +50,20 @@ When adopting a compatible **published SQLx release**, first verify that its
 published SQLite driver's bound permits the fixed `libsqlite3-sys` version. Then
 remove together:
 
-- The path patches in root, `tools/`, and `xtask/` `Cargo.toml` files.
+- The path patches in the root and `tools/` `Cargo.toml` files.
 - The 54-file driver copy and the two ancillary notices under `vendor/`.
 - Their Nix admission exceptions/assertions and dummy-source restoration in
-  `nix/packages.nix`, `nix/xtask.nix`, and the Clippy/static-code/Cargo-format
-  source projections in `nix/checks.nix`.
+  `nix/packages.nix`, `nix/host-tool.nix`, and the
+  Clippy/static-code/Cargo-format source projections in `nix/checks.nix`.
 - The isolated metadata-root patch projection in
-  `xtask/src/steps/common_host_target_closure.rs` and its patch-specific
-  fixture.
+  `tools/repository-policy/src/source_contracts/common_host_target_closure.rs`
+  and its patch-specific fixture.
 - The exact imported-source ownership entry in `tools/doctests/src/roots.rs`.
   These upstream sources are dependency code, not maintained workspace doctest
   targets; the existing workspace/host scan roots remain unchanged.
 - This note and its manifest comment link.
 
-Update all three workspace lockfiles to the released registry driver; recheck
-package identities, unique SQLite native links, bundled SQLite, advisories, and
-offline Nix builds through existing proof lanes. Do not force an incompatible
-resolution or switch backend features to remove the patch.
+Update both workspace lockfiles to the released registry driver; recheck package
+identities, unique SQLite native links, bundled SQLite, advisories, and offline
+Nix builds through existing proof lanes. Do not force an incompatible resolution
+or switch backend features to remove the patch.

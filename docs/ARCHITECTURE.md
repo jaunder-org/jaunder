@@ -73,10 +73,11 @@ browser primitives run separately in headless Chromium through the Linux-only
 the host coverage denominator
 ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)).
 
-Two sibling trees are outside the root workspace, each its own cargo workspace:
-`xtask/` (the host-only dev/CI driver, also named in the root
-`exclude = ["xtask"]`) and `tools/` (members `devtool`, `coverage`,
-`diagnostic-coverage-runtime`, `doctests`, and `performance`). `performance` is
+One sibling tree is outside the root workspace as its own cargo workspace:
+`tools/` (members `coverage`, `devtool`, `diagnostic-coverage-runtime`,
+`doctests`, `host-proof`, `performance`, `pr-observer`, `qualification`,
+`repository-policy`, and `traced-run`). The host-side dev/CI commands live in
+its concern packages rather than a separate driver workspace. `performance` is
 the pure versioned dataset, producer-artifact, statistics, and comparison
 library shared by sandbox producers and host analysis under
 [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md). The same auxiliary package
@@ -98,8 +99,8 @@ Coverage then calls the host-only `coverage-check policy --out <output>` leaf:
 pinned LLVM line-table attribution, real-comment `cov:ignore` rules, fail-closed
 `unreachable!("msg")` AST spans with the A1 guard, and source-span `crap:allow`
 at the exclusive threshold 30. Output links stay under
-`.xtask/gcroots/{coverage,doctests}` without host copies. Nix never invokes host
-xtask; doctest fence reconciliation remains bidirectional and separate from
+`.xtask/gcroots/{coverage,doctests}` without host copies. Nix never invokes the
+host tools; doctest fence reconciliation remains bidirectional and separate from
 instrumented root-workspace SQLite/PostgreSQL coverage. Just owns validation and
 CI composition through the clean-gated public workflows; the Rust gate callers
 and CI catalog are retired. Fix-mode `just check` uses the existing internal
@@ -160,11 +161,10 @@ edition, and non-publish setting for `coverage`, `devtool`, and `doctests`;
 `diagnostic-coverage-runtime` repeats those values directly for the copied-crate
 constraint above. The tools workspace also owns the license inherited by
 `coverage`, `devtool`, and `doctests`; the other tools declare it directly.
-`xtask/` is a standalone single-package workspace, so its package metadata
-remains direct. Likewise, `test-support` keeps its release exception — direct
-`publish = false` — rather than inheriting the root's publish policy. These
-ownership points follow the three workspace roots; they are not one
-repository-wide metadata workspace.
+Likewise, `test-support` keeps its release exception — direct `publish = false`
+— rather than inheriting the root's publish policy. These ownership points
+follow the two workspace roots; they are not one repository-wide metadata
+workspace.
 
 Jaunder-owned code is GNU GPL version 3 or (at the recipient's option) any later
 version (`GPL-3.0-or-later`). The root README grants these terms; Cargo and
@@ -1767,8 +1767,8 @@ Mounted CSR journey ownership lives in
 [`docs/flows/README.md`](flows/README.md): it owns the only route graph. The
 reviewed Playwright evidence map stays in
 [`docs/coverage/csr-e2e-matrix.md`](coverage/csr-e2e-matrix.md), and the
-`flow-docs` xtask step checks the typed route, endpoint, and matrix references
-between those two documents without duplicating either artifact here.
+`repository-docs flow-docs` check verifies the typed route, endpoint, and matrix
+references between those two documents without duplicating either artifact here.
 
 ### Rendering model: projector + CSR client
 
@@ -2021,10 +2021,10 @@ explicitly enabled test surfaces. These checks do not certify the absence of
 the host producer, production Nix bundle, diagnostic coverage bundle, and
 coverage baseline share `scripts/build-csr-assets.sh` for wasm-bindgen,
 `wasm-opt -Oz`, and pinned Vite output. Nix derivations select and produce their
-own compiled WASM, system-artifact inventory, and diagnostic snapshots; xtask
-never runs in a derivation. Vite's native HTML build hook resolves the emitted
-WASM asset from its output bundle and the application stylesheet digest from the
-independent system-artifact inventory. The ordinary native manifest is
+own compiled WASM, system-artifact inventory, and diagnostic snapshots; host
+tools never run in a derivation. Vite's native HTML build hook resolves the
+emitted WASM asset from its output bundle and the application stylesheet digest
+from the independent system-artifact inventory. The ordinary native manifest is
 build-only and supplies output membership to actual consumers without a parallel
 role schema or custom graph/hash machinery. Content-sensitive names support
 cache invalidation but are not a cryptographic integrity promise
@@ -2044,9 +2044,9 @@ The WASM artifact carries a hard budget
 ([ADR-0106](adr/0106-wasm-raw-size-budget.md)): `just validate` resolves the
 Vite manifest's `csr_bg.wasm` source mapping to its emitted `.wasm` file and
 fails when its **raw** byte count exceeds `WASM_RAW_CEILING_BYTES` (5,000,000
-bytes: decimal 5 MB, not 5 MiB, in `xtask/src/wasm_budget.rs`). Raw, not
-compressed, because the artifact is a compiler input rather than a download. The
-#1750 amendment accepts additional feature headroom while preserving the
+bytes: decimal 5 MB, not 5 MiB, in `tools/host-proof/src/wasm_budget.rs`). Raw,
+not compressed, because the artifact is a compiler input rather than a download.
+The #1750 amendment accepts additional feature headroom while preserving the
 historical 4,009,656-byte achieved baseline for drift reporting. The historical
 weaker optimisation-level sizes now fit, so this size ceiling does not guarantee
 detection of an optimisation downgrade; production still uses `wasm-opt -Oz`.
@@ -2080,17 +2080,17 @@ by ADR-0056 before either):
 `server.rs`. The three without a `component.rs` — `error`, `reactive`, `taglist`
 — are a wire-type home, a primitive, and a pure-markup helper: none has UI, so
 the absence is structural, not lag. Two mechanisms enforce the layout. The
-`target-arch-placement` xtask check
-(`xtask/src/steps/target_arch_placement_check.rs`, policing `web/src`,
-`client/src` and `csr/src`) admits a `target_arch` gate in exactly two shapes:
-an inner `#![cfg(…)]` in a `lib.rs` — the whole-crate gate `client` and `csr`
-use — or an outer attribute on a `mod` **or `use`** item in a `mod.rs` or
-`lib.rs`. Anywhere else, including a `component.rs` file header, fails. The
-second mechanism is `#[macros::server]`, which hard-errors on any `#[server]` fn
-outside `web/src/<vertical>/api.rs` (`macros/src/server_fn.rs:22,69`). ADR-0070
-carries forward the two rules the earlier module-level split established: pure
-logic keeps a host-tested, coverage-measured home, and no fake-value host stubs,
-ever.
+`target-arch-placement` source contract
+(`tools/repository-policy/src/source_contracts/target_arch_placement_check.rs`,
+policing `web/src`, `client/src` and `csr/src`) admits a `target_arch` gate in
+exactly two shapes: an inner `#![cfg(…)]` in a `lib.rs` — the whole-crate gate
+`client` and `csr` use — or an outer attribute on a `mod` **or `use`** item in a
+`mod.rs` or `lib.rs`. Anywhere else, including a `component.rs` file header,
+fails. The second mechanism is `#[macros::server]`, which hard-errors on any
+`#[server]` fn outside `web/src/<vertical>/api.rs`
+(`macros/src/server_fn.rs:22,69`). ADR-0070 carries forward the two rules the
+earlier module-level split established: pure logic keeps a host-tested,
+coverage-measured home, and no fake-value host stubs, ever.
 
 ### Server-fn surface, DI, and errors
 
@@ -2538,9 +2538,10 @@ diagnostics, never added to that decomposition. The **Node frame** —
 `mountedMs`, and `commitToMountMs`. `commitToMountMs` is still reported as the
 bridge to suite wall-clock but is never decomposed; the difference
 `commitToMountMs - bootTotalMs` is reported separately as **frame skew** and
-charged to the harness (`frame_skew_ms` in `xtask/src/traces/boot_phases.rs`).
-The two frames differ by cross-process, plausibly engine-asymmetric lag, so
-mixing them would charge harness IPC to the app's boot phases.
+charged to the harness (`frame_skew_ms` in
+`tools/host-proof/src/traces/boot_phases.rs`). The two frames differ by
+cross-process, plausibly engine-asymmetric lag, so mixing them would charge
+harness IPC to the app's boot phases.
 
 ### Logs
 
@@ -3071,7 +3072,7 @@ Playwright WebKit and from mobile-device proof
 ([supported Nix platform and browser boundaries](adr/0234-supported-nix-platform-and-browser-boundaries.md)).
 `packages.jaunder` remains the deployable server-binary output. `packages.site`
 is **no longer a deployment artifact** — the binary embeds the bundle — and is
-retained only so `cargo xtask audit-wasm` can build `.#site` and inspect the
+retained only so `just wasm-audit report` can build `.#site` and inspect the
 bundle for size analysis (`nix/packages.nix:296-305`,
 [declarative NixOS deployment and package outputs](adr/0142-declarative-nixos-deployment-package-outputs.md)).
 The `services.jaunder` module (`nix/nixos.nix`) has the ADR-0142 operator
@@ -3206,12 +3207,12 @@ identities. The narrow host-only leaf retains source/drift checks, Nix output
 admission and GC roots, secure shared lease, restricted workspaces, VM/proxy/
 browser/backend lifecycle, fixture/protocol comparisons, canaries, cleanup,
 evidence validation/publication and failure attribution. These workflows return
-plain status and diagnostics, bypassing generic `CommandResult`/`StepResult`,
-invocation reporting, last-result sidecar and sentinel. Unrelated xtask
-reporting and Nix routes remain. xtask stays outside the product workspace and
-derivations. `productionBaselineVm` supplies immutable packages through an
-internal qualification VM module seam, not a supported `services.jaunder`
-option. It adds no lifecycle output to `checks`; Nix never invokes xtask.
+plain status and diagnostics rather than the shared host-tool JSON step report.
+The `qualification-host` executable (`tools/qualification`) stays outside the
+product workspace and derivations. `productionBaselineVm` supplies immutable
+packages through an internal qualification VM module seam, not a supported
+`services.jaunder` option. It adds no lifecycle output to `checks`; Nix never
+invokes `qualification-host`.
 
 Discovery and non-release acceptance use shared Chromium Playwright behavior on
 fresh SQLite and PostgreSQL deployments, including restart, reboot and all four
@@ -4030,10 +4031,10 @@ ban on `.ok()`, `unwrap_or`, `let _`, `Err(_)`, or `map_err`, each of which also
 expresses legitimate expected control flow
 ([ADR-0017](adr/0017-error-handling-and-the-public-boundary.md)).
 
-Short-lived `xtask`/`devtool` processes do not install the application OTel
-provider: a population/correctness failure fails the command, while a legitimate
-ancillary or cleanup failure preserves the primary result and writes its typed
-source with static context to stderr.
+Short-lived host-tool and `devtool` processes do not install the application
+OTel provider: a population/correctness failure fails the command, while a
+legitimate ancillary or cleanup failure preserves the primary result and writes
+its typed source with static context to stderr.
 
 Internal detail reaches a client only through the masking boundary (§2). The
 leaky public constructors `WebError::storage`/`WebError::server` are removed —
@@ -4105,9 +4106,10 @@ backend-exclusive syntax or introspection — Postgres `CREATE ROLE`, SQLite
 `PRAGMA`/`sqlite_master`. "Error path", "lazy/closed pool", and "the seed SQL is
 written in one dialect" are explicitly not decisive reasons.
 
-The `test-backend-pattern` guard (`xtask/src/steps/test_pattern_check.rs`)
-enforces this over **both** `storage/src/` and `server/tests/`: every
-`#[tokio::test]` must carry a backend template or one of two exemption markers,
+The `test-backend-pattern` guard
+(`tools/repository-policy/src/source_contracts/test_pattern_check.rs`) enforces
+this over **both** `storage/src/` and `server/tests/`: every `#[tokio::test]`
+must carry a backend template or one of two exemption markers,
 `// guard:no-backend` or `// guard:low-level-db`, each with a reason
 (`test_pattern_check.rs:83`). The second also exempts a low-level test from the
 dialect-homing rule. It also checks placement — a dual template inside a dialect
@@ -4234,14 +4236,14 @@ timestamp is the sole dynamic mask.
 Normal host/VM differences are invocation flags set by the host driver —
 `--reporter=html,line`, `PLAYWRIGHT_HTML_OPEN=never`, and
 `JAUNDER_E2E_WORKERS=1` (the host serves a debug CSR build; the VM keeps the
-config default of 2). The host loop is `just e2e-local`
-(`xtask/src/steps/e2e_local.rs`), which owns build, spawn on an ephemeral port,
-seed, Playwright, stop/reap, and diagnostics verification. Its
-`--update-visual-snapshots` mode builds release CSR once, then gives Chromium
-and Firefox separate complete server/database/capture lifecycles. Server stderr
-is streamed unchanged to the live terminal and a per-run file; stopping the
-child closes the pipe so the driver can drain that journal-equivalent input
-before invoking the shared zero-panic verifier.
+config default of 2). The host loop is `just e2e-local` (host-proof's
+`e2e-local`, `tools/host-proof/src/steps/e2e_local.rs`), which owns build, spawn
+on an ephemeral port, seed, Playwright, stop/reap, and diagnostics verification.
+Its `--update-visual-snapshots` mode builds release CSR once, then gives
+Chromium and Firefox separate complete server/database/capture lifecycles.
+Server stderr is streamed unchanged to the live terminal and a per-run file;
+stopping the child closes the pipe so the driver can drain that
+journal-equivalent input before invoking the shared zero-panic verifier.
 
 Ordinary host E2E selects `.#sandboxArtifacts`: a source-consistent immutable
 set with debug-profile server and seed executables and the selected debug CSR
@@ -4269,11 +4271,11 @@ daemon and shared store workers are not owned child processes.
 `just sandbox [NAME]` is the single public front door for interactive UX
 sandboxes. It builds the focused root-workspace `ux-sandbox` binary and forwards
 exact argv. One Tokio runtime directly owns async processkit children/groups;
-the helper has COTS-only dependencies, with no xtask, host or test-support Rust
-dependency and no shared-runtime crate. The xtask sandbox CLI, dispatch and
-result/report path are retired. The retained xtask `host_server`,
-`host_signals`, and `process` modules still serve `e2e-local`; they are not a
-shared sandbox runtime.
+the helper has COTS-only dependencies, with no host-tool, host or test-support
+Rust dependency and no shared-runtime crate. The former host-driver sandbox CLI,
+dispatch and result/report path are retired. Host-proof's `host_server`,
+`host_signals`, and `process` modules serve `e2e-local`; they are not a shared
+sandbox runtime.
 
 The helper builds current debug host artifacts, starts on an ephemeral loopback
 port, prints the discovered URL, and owns foreground signal handling. Omitted
@@ -4331,11 +4333,11 @@ feature remain in use. Profile seeding stays an out-of-process
 `test-support seed-sandbox-profile` operation under ADR-0046; its stdout is
 captured and withheld from operational command output while stderr and exact
 child status are retained. The helper owns its narrow runtime-info
-identity/address parser and HTTP readiness probe rather than exposing xtask's
-private session adapters. Once ready, it prints the URL and, for a nonempty
-profile (including a named resume's recorded profile), the seeded `user` and
-`operator` development credentials. Empty profiles do not print credential
-hints.
+identity/address parser and HTTP readiness probe rather than exposing the e2e
+host driver's private session adapters. Once ready, it prints the URL and, for a
+nonempty profile (including a named resume's recorded profile), the seeded
+`user` and `operator` development credentials. Empty profiles do not print
+credential hints.
 
 First SIGINT/SIGTERM initiates graceful drain; ProcessKit owns the ten-second
 automatic group-stop escalation. A subsequent SIGINT may force earlier; repeated
@@ -4367,13 +4369,14 @@ bootstrap now uses its Nix package, without changing application selection,
 persistence, profiles, reset/recovery, admission or application lock contracts.
 ADR-0058's host-floor boundary is unchanged.
 
-Removing the sandbox-specific xtask protocol and synchronous runtime bridges
-reduces ownership indirection and cross-package coupling. The focused package,
-manifest, separately filtered Nix helper bootstrap, application artifact
-composition and duplicate readiness adapter are retained costs. Lifecycle and
-storage responsibility stays in the helper; independent e2e orchestration stays
-in xtask. Neither responsibility is eliminated. This is a structural
-simplification, not a performance-improvement or cache-hit claim.
+Removing the sandbox-specific host-driver protocol and synchronous runtime
+bridges reduces ownership indirection and cross-package coupling. The focused
+package, manifest, separately filtered Nix helper bootstrap, application
+artifact composition and duplicate readiness adapter are retained costs.
+Lifecycle and storage responsibility stays in the helper; independent e2e
+orchestration stays in host-proof's `e2e-local`. Neither responsibility is
+eliminated. This is a structural simplification, not a performance-improvement
+or cache-hit claim.
 
 Ordinary specs are parallel-safe by construction, via per-test identity fixtures
 in `end2end/tests/provisioning.ts`, composed only by `end2end/tests/fixtures.ts`
@@ -4431,10 +4434,10 @@ Diagnostics are captured before the check is allowed to fail
 (`end2end/playwright.config.ts:62-63`), and the shared `e2eRunAndCapture` helper
 (`nix/checks.nix:116-185`) runs Playwright capturing its exit, streams the
 line-reporter output into `build.log`, copies every artifact out of the VM
-unconditionally, and only then asserts the exit. On a failed build xtask rescues
-the bundle from the `--keep-failed` outPath into `.xtask/diagnostics/<check>/`
-(`xtask/src/steps/nix.rs:421`), best-effort so a copy failure can never fail a
-gate.
+unconditionally, and only then asserts the exit. On a failed build
+`scripts/e2e-workflow` recovers the lane's diagnostics from the `--keep-failed`
+build directory its own build log names into `.xtask/diagnostics/<check>/`,
+best-effort so a copy failure can never fail a gate.
 
 Out-of-process state manipulation — seeding, fixture users, mail reset — goes
 through the dedicated `test-support` workspace binary, which links the real
@@ -4506,21 +4509,21 @@ boundary.
 #### Just-owned gate workflows
 
 The root `Justfile` owns developer, hook, local-validation and CI-lane workflow
-composition. Direct tools and existing producer APIs perform the work;
-`cargo xtask check-leaf <name>` exposes existing checks and safety/consumer
-adapters. This is not a blanket Rust-necessity or permanent-ownership claim. The
-Rust gate catalogs, phases, execution-policy switches and old cargo workflow
-aliases are removed, not forwarded. Just dependencies own success ordering and
-fail-fast process status; there is no gate-wide JSON/last-result contract.
-Unrelated xtask commands retain their own result contracts.
-`recipes/prettier.just` owns the three shared Markdown, `end2end`, and CSS
-command definitions; the exclusive docsDevtoolBin pipeline is gone.
-`recipes/static.just` now supplies formatting, ast-grep, byte-compilation,
-cargo-deny, TSC and the six Clippy definitions to host and hermetic consumers.
-TSC's public owner retains its landed passive request observation; ERT alone
-retains the existing devtool timer around its fixed Just leaf. The obsolete
-static catalog and duplicate Leptosfmt source are retired, not all devtool
-endpoints. See the
+composition. Direct tools and concern-owned host executables in the `tools`
+workspace (`repository-policy`, `host-proof`, `coverage-check`, `doctest-check`,
+`qualification-host`) perform the work. This is not a blanket Rust-necessity or
+permanent-ownership claim. The Rust gate catalogs, phases, execution-policy
+switches and old cargo workflow aliases are removed, not forwarded. Just
+dependencies own success ordering and fail-fast process status; there is no
+gate-wide result contract. Each host tool prints its own single JSON step report
+on stdout, and its exit status is the verdict. `recipes/prettier.just` owns the
+three shared Markdown, `end2end`, and CSS command definitions; the exclusive
+docsDevtoolBin pipeline is gone. `recipes/static.just` now supplies formatting,
+ast-grep, byte-compilation, cargo-deny, TSC and the six Clippy definitions to
+host and hermetic consumers. TSC's public owner retains its landed passive
+request observation; ERT alone retains the existing devtool timer around its
+fixed Just leaf. The obsolete static catalog and duplicate Leptosfmt source are
+retired, not all devtool endpoints. See the
 [Just-owned gate workflow decision](adr/0237-just-owned-gate-workflows.md).
 
 The auxiliary repository-policy package owns the fixed documentation policies
@@ -4537,13 +4540,13 @@ Org/timezone types and bypasses checkout/hook bootstrap. The narrow
 scoped-Leptosfmt adapter is the formatter exception, not a general process
 runner.
 
-Workspace/auxiliary doctest execution and Elisp artifact lifting retain their
-existing residual check-leaf adapters. The E2E workflow owns authoritative
-output selection and trace/snapshot verification; its temporary `server-fn-flow`
-bridge is retired. Static server-function inventory is now a native source
-contract; runtime extraction, regeneration and producer-artifact verification
-remain in xtask. This does not migrate other runtime tooling or retire
-xtask/devtool.
+Workspace/auxiliary doctest execution (`doctest-check workspace`) and Elisp
+artifact lifting (`coverage-check elisp-consume`) are concern-owned host
+commands. The E2E workflow owns authoritative output selection and
+trace/snapshot verification; its temporary `server-fn-flow` bridge is retired.
+Static server-function inventory is now a native source contract; runtime
+extraction, regeneration and producer-artifact verification are host-proof's
+`e2e-evidence` commands. Devtool keeps its in-sandbox commands.
 
 The explicit local workflows are:
 
@@ -4591,14 +4594,14 @@ The explicit local workflows are:
 
 - **`just prepush`** is the fast local push-hook entrypoint. It opens with the
   same clean-tree precheck as `validate`, then runs the verify-only host/static
-  surface, the auxiliary `xtask`/`tools` non-doc tests, the host-native
-  `test-local` product Rust suite, and `workspace-doctests` after the product
-  tests. On `x86_64-linux`, only host `prettier-markdown` Verify is replaced at
-  its current position by the same lock-write-disabled `static-docs` leaf.
-  Before requesting the leaf, prepush verifies raw/index identity for the
-  complete tracked Markdown and formatter-config input population; afterward it
-  checks Git state remained unchanged. All other phases remain ordered as
-  before. Other platforms retain host Markdown Verify.
+  surface, the auxiliary `tools` non-doc tests, the host-native `test-local`
+  product Rust suite, and `workspace-doctests` after the product tests. On
+  `x86_64-linux`, only host `prettier-markdown` Verify is replaced at its
+  current position by the same lock-write-disabled `static-docs` leaf. Before
+  requesting the leaf, prepush verifies raw/index identity for the complete
+  tracked Markdown and formatter-config input population; afterward it checks
+  Git state remained unchanged. All other phases remain ordered as before. Other
+  platforms retain host Markdown Verify.
 - **`just validate-no-e2e`** requires a clean tree, then runs Verify host/static
   checks, the platform contract, all nine Nix static checks, `wasm-budget`,
   auxiliary host tests, wasm tests, public `just coverage` and `just doctests`,
@@ -4638,11 +4641,9 @@ authoritative. The sole x86_64-linux host substitution is shared `static-docs`
 at prepush's Markdown Verify position.
 
 Enforcement is git-native ([ADR-0029](adr/0029-git-enforced-verify-gate.md)).
-`.githooks/pre-commit` calls `just precommit`; the development-shell
-`cargo-xtask` transport selects the active checkout's `.#xtask` package. Nix
-owns its locked, standalone Cargo build, so launcher realization cannot rewrite
-`xtask/Cargo.lock` before the precommit snapshot. Git/index reconciliation lives
-in Rust rather than the shell hook. `.githooks/pre-push` calls `just prepush`.
+`.githooks/pre-commit` calls `just precommit`, which runs repository-policy's
+`git-index-safety` owner with locked Cargo. Git/index reconciliation lives in
+Rust rather than the shell hook. `.githooks/pre-push` calls `just prepush`.
 Verify workflows share Just's direct `_clean-tree` Git-status admission and
 refuse dirty or unavailable state before expensive work. That simple check is
 not raw/index docs admission or precommit reconciliation, which remain in Rust.
@@ -4650,10 +4651,11 @@ There is no Just `--allow-dirty` option; `SKIP_PRE_PUSH=1` remains a deliberate
 hook escape. The hook proves the fast local lane ran on the committed tip with
 no uncommitted files hiding; CI remains the non-bypassable hermetic authority;
 prepush's shared `static-docs` leaf is the deliberate x86_64-linux exception to
-its otherwise host-only gate. Every `cargo xtask` run self-heals
-`core.hooksPath` to the tracked, relative `.githooks` (`xtask/src/git.rs`:
-`ensure_hooks_path`). `SKIP_PRE_COMMIT=1` / `SKIP_PRE_PUSH=1` are deliberate
-local escapes; CI is the non-bypassable authority.
+its otherwise host-only gate. Every host tool (and `just precommit` through
+`git-index-safety`) self-heals `core.hooksPath` to the tracked, relative
+`.githooks` before its workload (`tools/repository-policy/src/checkout.rs`:
+`ensure_hooks_installed`). `SKIP_PRE_COMMIT=1` / `SKIP_PRE_PUSH=1` are
+deliberate local escapes; CI is the non-bypassable authority.
 
 #### Prepush parity by failure surface
 
@@ -4664,7 +4666,7 @@ different environments. They have the following explicit authority split
 | `just validate-no-e2e` surface                           | `prepush` coverage                                                                                                 | Authority / rationale                                                                                                                                                              |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Verify-only host/static surface                          | Runs the same host surface except `x86_64-linux` replaces only `prettier-markdown` Verify with `static-docs`.      | Prepush provides the Markdown leaf verdict; other Nix static proof remains authoritative for the sandboxed offline environment.                                                    |
-| Auxiliary `xtask`/`tools` non-doc tests                  | Runs once.                                                                                                         | The host tests are the applicable verdict; they are outside the application coverage/Nix test gates.                                                                               |
+| Auxiliary `tools` non-doc tests                          | Runs once.                                                                                                         | The host tests are the applicable verdict; they are outside the application coverage/Nix test gates.                                                                               |
 | Host-native product Rust tests                           | Runs `test-local`.                                                                                                 | The host-native product verdict is cheap and cache-friendly.                                                                                                                       |
 | Root-workspace doctests and fence reconciliation         | Runs `workspace-doctests`: `cargo test --workspace --doc` plus the same bidirectional root-workspace fence census. | Prepush is authoritative for host-toolchain example execution and reconciliation; Nix `doctests`/`doctests-gate` remains authoritative for the pinned sandbox/offline environment. |
 | Nix static proof                                         | Only the shared `static-docs` leaf runs on `x86_64-linux`; other static derivations do not.                        | The leaf shares the docs formatting verdict; other static definitions still require the sandboxed offline environment.                                                             |
@@ -4681,38 +4683,38 @@ shrink it. Only the Nix path establishes the pinned sandbox/offline verdict.
 Just requests hermetic leaves directly with
 `nix build -L --accept-flake-config --out-link .xtask/gcroots/<check> .#checks.x86_64-linux.<check>`.
 Their named output links retain producer evidence as GC roots; failure stops the
-workflow. The `wasm-budget` adapter resolves `.#csrBundle`, preserves manifest,
-generated-shell and name-section verification, and applies the raw-size budget.
-It no longer observes unrelated `.#site` realization or constructs discarded
-Nix/phase/audit report metadata. The public coverage/doctest recipes retain
-clean-tree admission, producer then hard Nix status gate ordering, and output
-roots. Only after the coverage gate succeeds does `coverage-policy --out`
-consume reports and apply source-aware coverage/CRAP policy; it does not
-validate producer status or invoke Nix. No gate-wide report substitutes for
-producer status. The Elisp producer returns
+workflow. The `wasm-audit budget` adapter resolves `.#csrBundle`, preserves
+manifest, generated-shell and name-section verification, and applies the
+raw-size budget. It no longer observes unrelated `.#site` realization or
+constructs discarded Nix/phase/audit report metadata. The public
+coverage/doctest recipes retain clean-tree admission, producer then hard Nix
+status gate ordering, and output roots. Only after the coverage gate succeeds
+does `coverage-check policy --out` consume reports and apply source-aware
+coverage/CRAP policy; it does not validate producer status or invoke Nix. No
+gate-wide report substitutes for producer status. The Elisp producer returns
 `elisp-coverage/{lcov.info,summary.txt,status.json}` for controlled outcomes;
-the existing Rust consumer lifts these diagnostics and reconciles source,
+`coverage-check elisp-consume` lifts these diagnostics and reconciles source,
 census, LCOV and same-line ignore markers. Uncontrolled Nix/VM failures remain
-failures. Existing E2E APIs retain their own diagnostic lift and reconciliation.
-xtask remains host-only; Nix never invokes it back
+failures. The E2E workflow retains its own diagnostic lift and reconciliation.
+Host tools remain host-only; Nix never invokes them back
 ([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)).
 
 ### What the ladder actually runs
 
 The host recipe runs source consistency (`fmt`, `leptosfmt`,
 `prettier-markdown`, `prettier-end2end`, `prettier-css`, `elisp-fmt`,
-`tools-fmt`, `ast-grep-tests`, `no-full-reload`, `xtask-fmt`), compile/type
-checks (`byte-compile`, `tsc`, `cargo-deny`, `product-core-clippy`,
+`tools-fmt`, `ast-grep-tests`, `no-full-reload`), compile/type checks
+(`byte-compile`, `tsc`, `cargo-deny`, `product-core-clippy`,
 `web-server-clippy`, `web-no-server-clippy`, `client-host-clippy`,
-`wasm-clippy`, `tools-clippy`, `xtask-clippy`), then the `ert` runtime check.
-Between source consistency and compilation, Just invokes the existing
-repository-shape checks in their established order. The same private host recipe
-serves Fix and Verify workflows. It calls the shared Prettier recipes directly
-and the shared static leaves directly. TSC uses the passive public request
-owner; ERT launches its retained timer with locked Cargo from the checkout. The
-scoped Leptos formatter adapter is built from the checkout before its host
-invocation. Just exports `RUSTC_WRAPPER=sccache`, `CARGO_INCREMENTAL=0`, and
-canonical worktree roots in `SCCACHE_BASEDIRS` for host Cargo compilation.
+`wasm-clippy`, `tools-clippy`), then the `ert` runtime check. Between source
+consistency and compilation, Just invokes the existing repository-shape checks
+in their established order. The same private host recipe serves Fix and Verify
+workflows. It calls the shared Prettier recipes directly and the shared static
+leaves directly. TSC uses the passive public request owner; ERT launches its
+retained timer with locked Cargo from the checkout. The scoped Leptos formatter
+adapter is built from the checkout before its host invocation. Just exports
+`RUSTC_WRAPPER=sccache`, `CARGO_INCREMENTAL=0`, and canonical worktree roots in
+`SCCACHE_BASEDIRS` for host Cargo compilation.
 
 The host _step_ above runs the listed sub-steps through host-local lanes. The
 hermetic shared static surface has `static-docs` running the shared
@@ -4744,16 +4746,7 @@ selectors and duplicate Leptosfmt adapter are retired; fixed Just `code`,
 `just static-all` builds current-checkout timing/scoping owners before calling
 `all`; full devtool retirement remains separate.
 
-The independent `xtask-format` leaf runs pinned raw
-`cargo fmt --manifest-path xtask/Cargo.toml --check`, without `--all`, devtool,
-or offline Cargo homes. Its bounded direct filter admits xtask Rust targets and
-required Cargo manifests/configuration, with dependency target placeholders for
-metadata but no dependency implementation sources. It is required once by
-`nix flake check` and hermetic validation, and never executes xtask. This narrow
-source-admission exception preserves ADR-0028's host-only xtask execution
-boundary.
-
-`just validate-no-e2e` requests the nine independent static checks defined in
+`just validate-no-e2e` requests the seven independent static checks defined in
 the Justfile before the Nix test surfaces. ADR-0178 established the original
 two-group/two-leaf documentation split, not a generic extraction policy
 ([hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md)).
@@ -4763,9 +4756,8 @@ The concrete further ERT extraction was separately approved in the
 actually need an ADR for this, do we?”); no new ADR or generic policy is
 implied. The separately approved TypeScript extraction is now integrated. The
 shared groups and Nix leaves are ordered docs, typescript, rust-format, code,
-elisp, ert, followed by independent `xtask-format` in Nix validation. The
-complete `--all` inventory retains its established order and uniqueness, with
-tsc at its former position and ERT last.
+elisp, ert in Nix validation. The complete `--all` inventory retains its
+established order and uniqueness, with tsc at its former position and ERT last.
 
 tsc and ERT retain producer-owned, versioned stderr timing events around their
 children. Just consumes command exit status, not a gate-wide timing projection.
@@ -4782,20 +4774,20 @@ pin's silent-success failure paths without adding a Rust parser or a placement
 policy. Future frontend roots are maintained explicitly in scope, Nix inputs and
 docs. Host Fix and Git/index admission are unchanged.
 
-`rust-format` directly admits non-xtask Rust sources and
-Cargo/toolchain/formatter configuration and the shared recipe. Its full closure
-includes the repository-policy adapter package (also admitting common/macros for
-the Org extractor), both workspace offline Cargo homes, the pinned
-formatter/toolchain, and their transitive build, source/vendor and embedded
-inputs. Direct filtering is not full closure independence; valid local-store
-reuse is allowed and no speedup is claimed. `static-code` runs residual
-non-Clippy shared definitions outside TypeScript, Rust formatting, standalone
-ERT, Elisp verification and the census verdict, with workspace-specific offline
-Cargo homes. It requests the six-leaf Clippy aggregate once; the aggregate does
-not rerun lint. The separate `static-elisp` leaf owns Elisp
-formatting/byte-compilation. `just validate-no-e2e` requests the independent
-static checks before Nix test surfaces, with each shared definition consumed
-once. CI fails if a hermetic boundary drifts from the host definitions
+`rust-format` directly admits Rust sources and Cargo/toolchain/formatter
+configuration and the shared recipe. Its full closure includes the
+repository-policy adapter package (also admitting common/macros for the Org
+extractor), both workspace offline Cargo homes, the pinned formatter/toolchain,
+and their transitive build, source/vendor and embedded inputs. Direct filtering
+is not full closure independence; valid local-store reuse is allowed and no
+speedup is claimed. `static-code` runs residual non-Clippy shared definitions
+outside TypeScript, Rust formatting, standalone ERT, Elisp verification and the
+census verdict, with workspace-specific offline Cargo homes. It requests the
+six-leaf Clippy aggregate once; the aggregate does not rerun lint. The separate
+`static-elisp` leaf owns Elisp formatting/byte-compilation.
+`just validate-no-e2e` requests the independent static checks before Nix test
+surfaces, with each shared definition consumed once. CI fails if a hermetic
+boundary drifts from the host definitions
 ([hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md);
 [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
 
@@ -4825,9 +4817,9 @@ TypeScript; no TypeScript input-isolation claim follows. The TypeScript and
 census leaves refine the historical partition while preserving the population
 split recorded in
 ([ADR-0178](adr/0178-split-hermetic-static-check-boundaries.md)). The
-independently landed Rust-format and xtask-format boundaries remain intact; the
-splits do not equate distinct formatter or Clippy populations, permanently defer
-further design, or close the parent issue.
+independently landed Rust-format boundary remains intact; the splits do not
+equate distinct formatter or Clippy populations, permanently defer further
+design, or close the parent issue.
 
 The two CSR-facing source filters follow resolved target reachability rather
 than crate names. The `.#site`/CSR closure contains workspace manifests, the
@@ -4852,15 +4844,15 @@ artifact/source reuse, not a production dev/all-targets clippy preparation
 layer. Linux evidence does not establish Darwin execution or cross-platform
 artifact reuse.
 
-`cargo xtask nix probe-source` protects these boundaries by applying isolated
-tracked markers and evaluating `.drv` identities. It fails closed unless a docs
-marker changes only `static-docs`; a server marker changes `static-code` but
-neither wasm path; a web marker changes `static-code` and site but not wasm
-tests; and `common`/`macros` markers change every dependent final-consumer
-boundary. Tooling and shared implementation changes preserve compiled tooling
-dependency identity while invalidating their real consumer; tools
-lock/configuration changes invalidate the dependency graph. This drift probe
-runs only on request. It does not build application/check outputs, though
+`just source-diagnostics nix-probe-source` protects these boundaries by applying
+isolated tracked markers and evaluating `.drv` identities. It fails closed
+unless a docs marker changes only `static-docs`; a server marker changes
+`static-code` but neither wasm path; a web marker changes `static-code` and site
+but not wasm tests; and `common`/`macros` markers change every dependent
+final-consumer boundary. Tooling and shared implementation changes preserve
+compiled tooling dependency identity while invalidating their real consumer;
+tools lock/configuration changes invalidate the dependency graph. This drift
+probe runs only on request. It does not build application/check outputs, though
 evaluation can require declared source preparation. Identity stability alone is
 not local/remote cache or compiler freshness evidence.
 
@@ -4904,18 +4896,11 @@ configuration is intentionally removed under approved request
 distinct. Host Just workflows execute each named definition while retaining
 host-local Cargo artifacts and sccache for Rust-compiling checks. Nix has
 independent documentation, TypeScript, Rust-format, residual-code, Elisp-static,
-E2E-census, pure ERT, raw xtask-format and raw xtask-Clippy leaves; residual
-code requests the six-leaf Clippy aggregate once without rerunning lint. Native
-host formatting and Clippy remain required. The independent `xtask-clippy`
-verdict runs raw
-`cargo clippy --manifest-path xtask/Cargo.toml --all-targets -- -D warnings`
-with the xtask package's pinned vendoring and native dependencies, separately
-from the six-unit aggregate. The independent `xtask-format` flake check runs
-only pinned `cargo fmt --manifest-path xtask/Cargo.toml --check`, without
-`--all`, devtool, or offline Cargo homes. Its direct source filter admits xtask
-Rust targets, required manifests/configuration, and dependency metadata target
-placeholders, not dependency implementation sources. This narrow source
-exception preserves ADR-0028: Nix never executes xtask.
+E2E-census and pure ERT leaves; residual code requests the six-leaf Clippy
+aggregate once without rerunning lint. Native host formatting and Clippy remain
+required. The former standalone `xtask-format`/`xtask-clippy` leaves are retired
+with the xtask workspace; host tools are formatted and linted with the tools
+workspace (`tools-fmt`, `tools-clippy`), and Nix never executes them (ADR-0028).
 
 [Verification-family decisions](../CONTRIBUTING.md#prepush-parity-by-failure-surface)
 retain the bounded x86_64-linux Markdown shared verdict and full-local/CI E2E
@@ -4960,7 +4945,7 @@ availability or a cache attestation.
 | `doctest-fences`                           | the doctest population Nix cannot reach                                                                                                                          |
 | `raw-html-door`, `html-sink`               | the two XSS DOM doors                                                                                                                                            |
 | `xlang-literal`                            | Rust/TypeScript literal agreement                                                                                                                                |
-| `xtask-tests`, `tools-test`                | auxiliary workspace unit tests the application coverage/Nix test gates do not execute ([workspace boundaries](adr/0141-cargo-workspace-execution-boundaries.md)) |
+| `tools-test`                               | auxiliary workspace unit tests the application coverage/Nix test gates do not execute ([workspace boundaries](adr/0141-cargo-workspace-execution-boundaries.md)) |
 
 ### How a gate is built
 
@@ -4995,8 +4980,9 @@ read a path qualifier, a file's `use` bindings, or an enclosing `impl`'s
 self-type to identify the door it guards — provided a site it cannot resolve (a
 glob import, a generic parameter, a macro body) **stays in the population**.
 Obscuring a qualifier buys a gate failure, not an exemption. The three XSS gates
-share one traversal implementing this (`xtask/src/steps/ident_gate.rs`), so a
-fix cannot land in two copies out of three.
+share one traversal implementing this
+(`tools/repository-policy/src/source_contracts/ident_gate/`), so a fix cannot
+land in two copies out of three.
 
 **An exemption is a marker at the site.**
 [ADR-0094](adr/0094-gate-exemptions-in-source-markers.md): the form is
@@ -5027,15 +5013,15 @@ rather than skipped (`nix/checks.nix:643-729`). It writes a versioned status
 record validated by both the sandbox Nix gate and the host consumer; the host
 also rejects missing or empty text evidence and parsed reports with zero
 executable lines before ordinary line/CRAP policy. The host-side gate
-(`xtask/src/coverage/`) then applies:
+(`coverage-check policy`, `tools/coverage/src/host/policy/`) then applies:
 
 - **One structural exemption**: a literal `unreachable!("msg")` with a non-empty
   message. It needs no marker because it is self-re-flagging — reaching the line
   panics the test, so no report is produced — and recognition is fail-closed
   (`mac.path.is_ident("unreachable")`, so `std::unreachable!` and aliases stay
-  measured; `xtask/src/coverage/exempt.rs:57`). The `#[component]` exemption
-  this gate once carried was **retired** (#520): components now live in
-  wasm-only `component.rs` files
+  measured; `tools/coverage/src/host/policy/exempt.rs:56`). The `#[component]`
+  exemption this gate once carried was **retired** (#520): components now live
+  in wasm-only `component.rs` files
   ([ADR-0070](adr/0070-web-vertical-wasm-only-component-files.md)), so their
   lines never host-compile and never enter the denominator at all.
 - **A tripwire**: the gate fails if any _covered_ report line falls inside an
@@ -5055,10 +5041,10 @@ executable lines before ordinary line/CRAP policy. The host-side gate
   ([reason-bearing coverage exceptions](adr/0185-reason-bearing-coverage-exceptions.md)).
 - **A per-function CRAP threshold of 30**, exclusive, waived only by an
   in-source `crap:allow` within the function's span
-  (`xtask/src/coverage/crap.rs:32`).
+  (`tools/coverage/src/host/policy/crap.rs:32`).
 
 The coverage source is bounded to cargo sources, enforced by a `drvPath` probe
-(`xtask/src/coverage/probe.rs:148-155`,
+(`tools/coverage/src/host/policy/probe.rs`,
 [ADR-0116](adr/0116-coverage-probe-dirty-tree-workaround.md)): on a clean
 worktree nix's flake git-fetcher walks history for `revCount`, which fails on
 CI's shallow checkout of a merge commit whose parents are grafted away. A dirty
@@ -5082,10 +5068,9 @@ whose every line appears in a plain fence **in the same doc comment**; the run
 is `cargo test --workspace --doc`, never package-scoped. `workspace-doctests`
 runs and reconciles the root-workspace population during `prepush`; the Nix
 `doctests` producer/gate remains the sandbox/offline authority for that same
-population. The `doctest-fences` step covers `xtask/` and `tools`, which remain
-outside the root-workspace Nix doctest population
-(`xtask/src/steps/doctest_fences.rs`). The `xtask-format` source exception
-grants only raw formatting, not doctest execution. Doctests feed no coverage:
+population. The `doctest-fences` step (`doctest-check fences`) covers `tools`,
+which remains outside the root-workspace Nix doctest population
+(`tools/doctests/src/roots.rs`). Doctests feed no coverage:
 `llvm-cov --doctests` is unstable, so `--doc` runs outside instrumentation.
 
 ### Server-fn gates
@@ -5112,10 +5097,12 @@ the hit set is extracted from the OTLP traces a passing `sqlite × chromium` e2e
 run emits, matched forward from the inventory by `#[tracing::instrument]` span
 name plus `code.namespace`. A documentary convention was rejected precisely
 because a doc naming a spec that never touches the fn would stay green forever.
-The gate has two lanes (`xtask/src/steps/server_fn_coverage_check.rs`): a static
-lane in `just check`/`just validate-no-e2e` that reads the sole committed
-`docs/coverage/server-fns.json` snapshot plus the source-derived inventory, and
-an e2e lane (`server-fn-coverage-regenerate` / `-verify`) that recomputes that
+The gate has two lanes: a static `source-contracts -- server-fn-coverage` lane
+(repository-policy) in `just check`/`just validate-no-e2e` that reads the sole
+committed `docs/coverage/server-fns.json` snapshot plus the source-derived
+inventory, and an e2e lane (host-proof
+`e2e-evidence server-fn-coverage verify|regenerate`,
+`tools/host-proof/src/steps/server_fn_coverage_check.rs`) that recomputes that
 snapshot from the successful SQLite/Chromium output selected by
 `just e2e-producer sqlite-chromium-unsplit`, with explicit capture, output, lane
 and runtime catalog inputs. Static inventory checking remains independent of E2E
@@ -5129,8 +5116,9 @@ inventory now computes the endpoint with the very expression such a check would
 compare it to — a value against itself, which passes for the wrong reason. What
 verifies the computed endpoint instead is `server-fn-coverage`'s seed
 cross-check, which matches it against URIs observed in a real captured run
-(`xtask/src/steps/server_fn_coverage_check.rs:614`). Endpoint correctness is
-therefore asserted only where real traffic exists.
+(`the_derived_endpoint_matches_the_uri_a_real_run_requested` in
+`tools/host-proof/src/steps/server_fn_coverage_check.rs`). Endpoint correctness
+is therefore asserted only where real traffic exists.
 
 ### Component thinness and cross-language literals
 
@@ -5155,26 +5143,30 @@ green.
 
 ## Development tooling
 
-Development tooling is split across two binary crates plus a shared library,
-placed by a single litmus test — _where must this code execute?_
-([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)):
+Development tooling is split between in-sandbox `devtool` and host-run concern
+packages in the `tools` workspace, placed by a single litmus test — _where must
+this code execute?_ ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)):
 
-- **`xtask`** — the host-side dev/CI driver
-  (`coverage-check policy | audit-wasm | …`); Just owns gate composition. It
-  invokes `nix build` and consumes/analyzes exfiltrated build artifacts
-  (coverage gate, CRAP gate, reports). Retained public producer/diagnostic
-  commands use `result::CommandResult::report` and its `.xtask/last-result.json`
-  sidecar. Plain check leaves, precommit safety and artifact verdicts bypass
-  that reporting boundary. Each `result::StepResult` records its name, outcome,
-  duration, and optional `result::NixReport` for a successful producer-owned Nix
-  build (`installable`, optional evaluated `derivation`, and conservative
-  `realization`). It also prints an
-  `xtask-done: command=… ok=… exit=… duration_ms=…` sentinel on stderr for
-  generic result exits (and an error-form sentinel on generic failures), so a
-  truncated log can still prove the process finished. Plain-status paths and
-  early CLI refusals do not emit that sentinel (`main::main`;
-  [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md), with the
-  [qualification carveout](adr/0239-qualification-workflow-ownership.md)).
+- **Host concern packages** — the host-side dev/CI commands, each owned by the
+  concern it serves rather than one driver: `tools/repository-policy`
+  (`repository-docs`, `source-contracts`, `git-index-safety`, and the shared
+  `repository_policy::report` contract), `tools/qualification`
+  (`qualification-host`), `tools/host-proof` (below), `tools/coverage` with its
+  nondefault `host` feature
+  (`coverage-check policy | elisp-consume | mutants-verify | probe-source | benchmark-local | wasm-probe | wasm-measure`)
+  and `tools/doctests` with its nondefault `host` feature
+  (`doctest-check fences | workspace`). Just owns gate composition. These
+  commands invoke `nix build` and consume/analyze exfiltrated build artifacts
+  (coverage gate, CRAP gate, reports). Every host tool prints exactly one JSON
+  report on stdout (`repository_policy::report`: `command`, `ok`, `duration_ms`,
+  `steps[{name, ok, skipped, duration_ms, detail}]`, optional `exit_override`,
+  optional rendered `report` text and optional structured `evidence`). The
+  shared argument parser points fd 1 at stderr and reserves the real stdout for
+  that report, so child output goes to stderr; the exit status is the verdict.
+  `scripts/step-report.jq`, applied by `scripts/run-report` or inline in bash
+  recipes under `pipefail`, derives the human view. The production-baseline
+  workflows return plain status instead
+  ([qualification carveout](adr/0239-qualification-workflow-ownership.md)).
 - **`tools/host-proof`** — focused host proof (ADR-0246): direct `test-local`,
   `e2e-local`, `pg-run` and `trace-analysis` executables behind the matching
   Just recipes; trace analysis carries its rendered tables in the report's
@@ -5184,19 +5176,23 @@ placed by a single litmus test — _where must this code execute?_
   view; there is no sidecar, `--json` flag or completion sentinel. `test-local`
   keeps its bounded invocation trace under the `traced-run` launcher.
 - **`tools/devtool`** — the tool that must also run inside Nix build sandboxes,
-  where `nix` and `xtask` are unavailable; `devtool coverage emit` produces
-  coverage artifacts into `$out` for exfiltration
+  where `nix` and the host tools are unavailable; `devtool coverage emit`
+  produces coverage artifacts into `$out` for exfiltration
   ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)).
-- **`tools/coverage`** — a pure-logic library shared by both sides, with no I/O
-  policy of its own ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)).
+- **`tools/coverage`** — by default a pure-logic library shared by both sides,
+  with no I/O policy of its own
+  ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)); its nondefault `host`
+  feature adds the `coverage-check` consumer and its nondefault
+  `ephemeral-postgres` module owns PostgreSQL custody for `pg-run`.
 
-The "devtool = in-sandbox, xtask = host" split is a litmus test about where code
-_must_ execute, not a ban on running devtool from a shell. ADR-0028's own
-Supplement (#158) originally extended `devtool run` to the host; #1858 moves
-that responsibility to standalone `traced-run`, while the host verify ladder now
-uses shared Just static definitions; only ERT retains its devtool request timer.
-Following the confirmed coordinated routing cutover, `traced-run` is the sole
-command-capture interface; devtool has no `run` subcommand or runner dependency.
+The "devtool = in-sandbox, host concern packages = host" split is a litmus test
+about where code _must_ execute, not a ban on running devtool from a shell.
+ADR-0028's own Supplement (#158) originally extended `devtool run` to the host;
+#1858 moves that responsibility to standalone `traced-run`, while the host
+verify ladder now uses shared Just static definitions; only ERT retains its
+devtool request timer. Following the confirmed coordinated routing cutover,
+`traced-run` is the sole command-capture interface; devtool has no `run`
+subcommand or runner dependency.
 
 - **`traced-run [--name LABEL] [--timeout SECONDS] -- <cmd>`** is the standalone
   no-shell runner on the host/devShell path. `packages.traced-run` is an
@@ -5207,22 +5203,21 @@ command-capture interface; devtool has no `run` subcommand or runner dependency.
   lockfile, workspace manifests, configuration and toolchain remain inputs;
   changes to those may invalidate it, and the whole devShell still depends on
   devtool. This is not whole-shell invalidation immunity. Normal mode parks
-  stdout/stderr under `.xtask/run/`, returns the established JSON result and
-  exits with the child's code. With `--name`, it records participating process
-  spans as a Perfetto-compatible Chrome Trace Event JSON artifact. Complete
-  process spans remain on their actual tracks. Each recorded child participation
-  start is projected as a `recorded child entry` thread instant inside its
-  parent's track; a recognized Chrome flow links that instant to the child's
-  slice beginning at the same shared-clock timestamp. The marker carries parent
-  and child correlation IDs; it is not a measured parent action or OS spawn
+  stdout/stderr under `.xtask/run/`, returns its JSON result and exits with the
+  child's code. With `--name`, it records participating process spans as a
+  Perfetto-compatible Chrome Trace Event JSON artifact. Complete process spans
+  remain on their actual tracks. Each recorded child participation start is
+  projected as a `recorded child entry` thread instant inside its parent's
+  track; a recognized Chrome flow links that instant to the child's slice
+  beginning at the same shared-clock timestamp. The marker carries parent and
+  child correlation IDs; it is not a measured parent action or OS spawn
   timestamp. This avoids Perfetto's full-source-slice-end arrow anchor without
-  inventing durations or cross-process call-stack nesting. The instrumented
-  `cargo-xtask` launcher uses `--launcher` to preserve inherited stdout/stderr
-  without wrapper JSON or output capture files. Its private argv-only
-  `--inner xtask` reentry is cooperative, not authentication; no launcher
-  environment guard or runner basename coupling is needed. Recursive trace
-  context propagates independently, preserving one root for nested launches
-  without stale-skipping later independent invocations. See
+  inventing durations or cross-process call-stack nesting. `--launcher` (which
+  requires `--name`) preserves inherited stdout/stderr without wrapper JSON or
+  output capture files; `just test-local` runs host-proof's `test-local` under
+  `traced-run --launcher --name test-local`. Recursive trace context propagates
+  independently, preserving one root for nested launches without stale-skipping
+  later independent invocations. See
   [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md).
 - **`devtool check ert [--fix]`** retains only the fixed ERT request timing
   consumer; it has no autofix. Static argv now lives in `recipes/static.just`,
@@ -5249,33 +5244,33 @@ command-capture interface; devtool has no `run` subcommand or runner dependency.
   [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md),
   [hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md)).
 
-**xtask is host-only — an enforced invariant.** Nix derivations never invoke
-xtask; the flow is strictly one-directional (host `cargo xtask` → `nix build`).
-The independent raw `xtask-format` verdict admits xtask source only as
-Cargo/rustfmt input, never for execution. The application source filter excludes
-`xtask/` (`!hasInfix "/xtask/" path` in `nix/packages.nix:22-41`), so an
-accidental `cargo xtask` inside a derivation fails loudly rather than running a
-stale copy, and frequently-edited gate logic never busts the coverage/e2e cache
-([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)). xtask is also excluded from
-the root cargo workspace (`exclude = ["xtask"]`, with its own `[workspace]` in
-`xtask/Cargo.toml`), and `tools/` is a second standalone workspace (`coverage`,
-`devtool`, `doctests` — `tools/Cargo.toml:3`); explicit `xtask-tests` and
-`tools-test` steps compensate for the unit suites the application coverage/Nix
+**Host tools are host-only — an enforced invariant.** Nix derivations never
+invoke the host concern executables; the flow is strictly one-directional (host
+tool → `nix build`). The application source filter in `nix/packages.nix` keeps
+only the manifests of `tools/repository-policy`, `tools/qualification` and
+`tools/host-proof`, not their implementation, so an accidental host-tool
+invocation inside a derivation fails loudly rather than running a stale copy,
+and frequently-edited gate logic never busts the coverage/e2e cache
+([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)). `tools/` is a standalone
+workspace outside the root cargo workspace (`tools/Cargo.toml:3`); the explicit
+`tools-test` step compensates for the unit suites the application coverage/Nix
 test gates do not execute
 ([Cargo workspace execution boundaries](adr/0141-cargo-workspace-execution-boundaries.md)).
 [#1061](https://github.com/jaunder-org/jaunder/issues/1061) tracks the stale
 `host_tests` source comment that overstated the related `tools/` Nix-exclusion
-claim. All three manifests pin `resolver = "3"` explicitly, because the two
-virtual manifests would otherwise default to resolver 1
+claim. Both virtual manifests pin `resolver = "3"` explicitly, because they
+would otherwise default to resolver 1
 ([ADR-0104](adr/0104-edition-2024-unsafe-env-and-precise-capturing.md)).
 
 **Independent host-tool packaging.** The
 [Nix-cached tooling decision](adr/0225-nix-cached-host-tooling.md) distinguishes
 building a host executable from executing its orchestrator inside a derivation.
-`packages.xtask` compiles its standalone closure independently; application
-coverage/E2E dependencies and explicit host-unit-test authorities remain
-separate. Both development shells supply a thin `cargo-xtask` transport that
-discovers the active checkout and executes its selected Nix output.
+`packages.host-proof` and `packages.qualification-host` are built by one shared
+host-tool builder (`nix/host-tool.nix`) from each package's own Cargo path
+closure; application coverage/E2E dependencies and explicit host-unit-test
+authorities remain separate. CI's E2E verifier runs the cached
+`packages.host-proof` output; local Just recipes run the host tools with locked
+Cargo from the checkout.
 
 `packages.qualification-host` is the auxiliary `tools/qualification` package's
 single host-run executable, built from its own Cargo closure with its store
@@ -5352,8 +5347,8 @@ indistinguishable from the stock one by `--version`: only behaviour tells them
 apart, which is one more reason to invoke the devShell's binary rather than
 re-resolving one. Remove the override once a release later than 0.1.33 exists.
 
-**Rust edition and exception-free unsafe code.** Every package in the root,
-`tools/`, and `xtask/` workspaces uses edition 2024
+**Rust edition and exception-free unsafe code.** Every package in the root, and
+`tools/` workspaces uses edition 2024
 ([ADR-0104](adr/0104-edition-2024-unsafe-env-and-precise-capturing.md)). Two
 consequences are load-bearing for tooling:
 
@@ -5362,8 +5357,7 @@ consequences are load-bearing for tooling:
   or test-harness composition roots resolve inherited inputs into typed
   configuration, while child environments are configured before spawn through
   `std::process::Command`. Cargo lint configuration forbids unsafe Rust without
-  suppression at every package boundary in the root, `xtask`, and `tools`
-  workspaces
+  suppression at every package boundary in the root and `tools` workspaces
   ([peripheral process configuration](adr/0158-peripheral-process-configuration.md)).
 - Return-position `impl Trait` captures every in-scope lifetime (RFC 3498). View
   helpers that borrow a parameter return `impl IntoView + use<>` — precise
@@ -5396,8 +5390,8 @@ sequence validates repository/base/head/local divergence and shared-observer
 readiness before one `gh pr merge --auto --merge --match-head-commit` call. It
 verifies actual arm/queue/complete merged readback and observes the same head
 until merged. No-op or uncertain evidence never permits retry/rearming. Just
-cannot attest that human approval exists. This replaces ordinary xtask ownership
-under the
+cannot attest that human approval exists. This replaces the former xtask
+ownership under the
 [approved successor draft](adr/0240-just-frontdoors-host-pr-observer.md),
 preserving [ADR-0087](adr/0087-xtask-github-pr-observation.md)'s capability
 split. The observer's transport is `gh` (`tools/pr-observer/src/pr/gh.rs`), with
@@ -5426,11 +5420,11 @@ This classification contains no maintained job-name or matrix-value allowlist.
 Distinguishing outcomes — including `ready-to-land`, `ejected`, `dequeued`,
 `timed-out` ("GitHub never finished"), and `watcher-error` ("we could not tell")
 — live in root `.outcome` in direct observer JSON, with `.pr` (number),
-`.head_sha`, `.events`, and available phase/detail/log pointers. No ordinary PR
-xtask CLI/dispatch/result-envelope/sidecar consumer remains. Observer exit 0
-means ready OR merged, while land requires complete same-head merged evidence;
-arm/queue readback alone is not success. Setup/native failure may produce no
-report; honor process status.
+`.head_sha`, `.events`, and available phase/detail/log pointers. The former
+xtask PR CLI, dispatch and result envelope are retired with the xtask workspace.
+Observer exit 0 means ready OR merged, while land requires complete same-head
+merged evidence; arm/queue readback alone is not success. Setup/native failure
+may produce no report; honor process status.
 
 Positive live same-head queued action readback is carried ONLY as read-only
 `--observed-queued-head <SHA>`, requiring equality with `--expected-head`. It
@@ -5475,53 +5469,48 @@ through fetch, `origin/main` ancestry verification, detach, safe deletion of
 only the captured branch, and root cargo cleanup. Each ordered boundary stops on
 failure; a successful direct JSON result retains captured head/merge evidence.
 Cleanup neither approves nor revises the merge and never mutates tracker state,
-remote branches or local `main`. The ordinary xtask cleanup helper/dispatch is
-retired along with ordinary watch/land CLI, dispatch and report consumers. The
-privileged ADR promoter and its required transport/arming predicates remain in
-xtask unchanged; shared evidence types/classification stay reusable.
+remote branches or local `main`. The former xtask cleanup helper/dispatch is
+retired along with the watch/land CLI, dispatch and report consumers and the
+xtask workspace itself. The privileged ADR promoter is the separate
+`tools/adr-promoter` package (`.#adr-promoter`); shared evidence
+types/classification stay reusable.
 
-### Proposed direction: simplify residual capabilities and retire obsolete tooling endpoints
+### Residual tooling owners after xtask retirement
 
-The proposed [endpoint decision](adr/0246-retire-xtask-devtool-endpoints.md)
-records a finite simplification, not current implementation. Useful
-development/CI capabilities retain named real consumers and convenient
-single-command workflows. Just owns local composition and shared named static
-invocation definitions; Nix pins and admits tools/immutable inputs/outputs;
-native CI owns scheduling, artifacts and required aggregates. Shared definitions
-do not equate distinct host/hermetic verdicts, modes, populations or Git/index
-admission.
+The [endpoint decision](adr/0246-retire-xtask-devtool-endpoints.md) is
+implemented: the `xtask` workspace, its Nix package, launcher and lanes are
+retired, and each residual capability kept a named real consumer and a
+convenient single-command workflow. Just owns local composition and shared named
+static invocation definitions; Nix pins and admits tools/immutable
+inputs/outputs; native CI owns scheduling, artifacts and required aggregates.
+Shared definitions do not equate distinct host/hermetic verdicts, modes,
+populations or Git/index admission.
 
-The proposed residual homes are two fixed repository-policy concern interfaces,
-one selected qualification-host executable behind its existing four Just
-workflows, and direct focused Rust/browser proof entrypoints sharing only their
-private existing host-proof algorithms. They reuse current parsers/schema/domain
-libraries and ProcessKit application adapters, not a generic checker registry,
-runner, supervisor or replacement omnibus. Standalone sandbox, performance,
-coverage, seeding and other landed concern owners stay separate. Qualification
-source/tool/lease/publication and host-proof lock/root/capture/cleanup semantics
-remain attached to their consumers; metadata/command success is not a verifier.
-One focused single-process Git/index safety target retains
-admission/reconciliation and shared best-effort checkout/hook preparation.
-Org-timezone evidence reuses common parsing; existing
-coverage/doctest/performance packages, canonical test-support seeding and a
-coverage-owned nondefault PG-custody module provide named residual interfaces.
-Host-proof retains trace-analysis/source diagnostics rather than a generic
-workflow engine.
+The residual homes are concern packages in the `tools/` workspace, not a generic
+checker registry, runner, supervisor or replacement omnibus:
 
-Only after actual consumer preservation or explicit disposition can obsolete
-endpoints, launchers and exclusive workspace/build/vendor/catalog/report layers
-be retired. Experimental coverage endpoints are explicitly deferred, with their
-necessary devtool build/tests retained until #1898 Lead completes the bounded
-caller/operator disposition and approved preserve/retire/material-loss decision.
-Full devtool retirement cannot be claimed while they remain. Compare total code,
-binary, recipe, Nix, test and documentation maintenance rather than deletion of
-executable names. Preserve existing manual measurement/cache/trace capabilities;
-any material capability/safety loss needs human confirmation.
-No-known-external-consumer remains a bounded qualification. #1864's distinct
-verdicts and #1933's selected passive observations/retention remain separately
-owned; no rejected PR1932 receipt or retiring-xtask tracing integration is
-required. This proposed direction neither claims retirement complete nor
-authorizes implementation, outline, commit, merge or cleanup.
+- `tools/repository-policy` — fixed repository-docs/source-contracts policy
+  interfaces, the single-process `git-index-safety` owner, shared checkout
+  admission and best-effort `core.hooksPath` preparation (every host tool calls
+  it before its workload), and the shared host-tool report contract.
+- `tools/qualification` — `qualification-host` behind the four
+  `production-baseline-*` recipes.
+- `tools/host-proof` — focused proof (`test-local`, `e2e-local`, `pg-run`),
+  artifact-only e2e verdicts (`e2e-evidence`) and host diagnostics
+  (`trace-analysis`, `wasm-audit`, `source-diagnostics`).
+- `tools/coverage` (nondefault `host` feature) — `coverage-check` policy,
+  benchmark, source probe, Emacs Lisp, WASM coverage and mutation evidence; its
+  nondefault `ephemeral-postgres` module owns PostgreSQL custody.
+- `tools/doctests` (nondefault `host` feature) — `doctest-check`.
+- `test-support seed-e2e` — the canonical e2e seed.
+
+Each tool that renders a verdict prints one JSON report on stdout and derives
+its human view through `scripts/step-report.jq`
+([draft decision](adr/drafts/host-tool-json-report-contract.md)).
+Experiment-only devtool coverage endpoints remain deferred with their devtool
+build/tests until a bounded caller/operator disposition, so devtool itself is
+not retired. #1864's distinct verdicts and #1933's selected passive
+observations/retention remain separately owned.
 
 ## Documentation & decision process
 
@@ -5684,7 +5673,7 @@ numberless file in a subdirectory twice over. `doc-links` deliberately differs:
 it enumerates tracked Markdown, so it checks proposed drafts in feature PRs. The
 `doc-links` gate has no ADR of its own; its decision lives in issue
 [#682](https://github.com/jaunder-org/jaunder/issues/682), cited from
-`xtask/src/steps/doc_links.rs:1`.
+`tools/repository-policy/src/repository_docs/links.rs:2`.
 
 A draft path is live because the file is tracked, not merely because it exists
 in one working tree. Draft-internal links must use targets that resolve before
@@ -5735,11 +5724,11 @@ nix run --accept-flake-config --no-update-lock-file --no-write-lock-file .#adr-p
 Feature authors still must not promote. Rust keeps independent read-only
 `adr-format`, README/view parity, document-link and collision gates. Ordinary PR
 observation stays in `tools/pr-observer`. Integration with the base's
-performance workflow extraction leaves no xtask consumer of the old PR
-re-exports or GitHub transport facade, so those adapters and xtask's observer
-dependency are removed. The independent observer and performance implementation
-remain unchanged; no cross-project logic changes or dormant fallback are part of
-this extraction.
+performance workflow extraction left no xtask consumer of the old PR re-exports
+or GitHub transport facade, so those adapters and xtask's observer dependency
+were removed before the xtask workspace itself was retired. The independent
+observer and performance implementation remain unchanged; no cross-project logic
+changes or dormant fallback are part of this extraction.
 
 Trusted-main App permissions are unchanged. Open attempt heads/diffs remain
 immutable; generation and per-PR recovery coalesce separately without active

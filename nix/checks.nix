@@ -213,7 +213,7 @@ performanceGlobalTimeout = 6000;
 # would abort before we copy diagnostics), stream its line-reporter output
 # to the build log, copy ALL artifacts out of the VM unconditionally, then
 # fail the check only after the copies are safe. On success the copies land
-# in $out; on failure they live in the --keep-failed build dir for xtask's
+# in $out; on failure they live in the --keep-failed build dir for the host's
 # rescue_diagnostics to recover. Shared by both backends so they can't drift.
 # VM-local OTel test glue shared by both backends. A systemd unit becomes
 # active when the collector process is spawned, before its receivers are
@@ -938,7 +938,7 @@ mkE2eCheck =
 # no-op: it must not change any e2e derivation hash.
 e2eSalt = "";
 
-# Enforced by xtask's `e2e-scaffold` static check: a committed non-empty
+# Enforced by repository-policy's `e2e-scaffold` source contract: a committed non-empty
 # salt costs every CI e2e job its cache, and the only symptom is "CI got
 # slow" — nothing fails on its own, which is exactly why the guard exists.
 
@@ -2741,7 +2741,7 @@ mkWasmCoverageMeasurementProducer =
         buildPhaseCargoCommand = ''
           export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:''${LD_LIBRARY_PATH:-}"
           mkdir -p emit-out
-          # The producer emits checked stage evidence; the Nix gate and host xtask
+          # The producer emits checked stage evidence; the Nix gate and host coverage-check
           # consume its status and reports as separate authoritative boundaries.
           devtool coverage emit --out emit-out
         '';
@@ -2768,7 +2768,7 @@ mkWasmCoverageMeasurementProducer =
       }
     ));
     # Belt-and-suspenders: this sandbox consumer validates completed producer
-    # evidence through the shared Rust contract, while host xtask consumes its
+    # evidence through the shared Rust contract, while host coverage-check consumes its
     # reports separately. Its `jaunder-coverage-gate` name stays broad-filtered.
     coverage-gate = nonSubstitutable (pkgs.runCommand "jaunder-coverage-gate" { nativeBuildInputs = [ devtoolBin ]; } ''
       devtool coverage validate-status --status ${coverage}/status.json

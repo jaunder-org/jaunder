@@ -14,7 +14,7 @@ definitive working hub for humans and agents.
 | [DESIGN](DESIGN.md)                                           | High-level design / how an instance runs.                                          |
 | [codebase-audits](codebase-audits.md)                         | Method for finding and remediating accumulated design and maintenance cruft.       |
 | [ROADMAP](ROADMAP.md)                                         | Completed-milestone ledger and direction.                                          |
-| [invocation-traces](invocation-traces.md)                     | Capture and inspect local `cargo xtask` Perfetto traces.                           |
+| [invocation-traces](invocation-traces.md)                     | Capture and inspect local `test-local` Perfetto traces.                            |
 | [observability](observability.md)                             | OpenTelemetry tracing for backend + e2e.                                           |
 | [web-style-guide](web-style-guide.md)                         | Conventions for the `web/` Leptos components and widgets.                          |
 | [themes](themes.md)                                           | Create, test, modify, publish, and deploy custom public themes.                    |

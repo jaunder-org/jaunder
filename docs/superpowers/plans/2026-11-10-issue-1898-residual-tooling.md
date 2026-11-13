@@ -130,7 +130,7 @@ staged design bytes/index and shared stashes remain untouched now.
     end-to-end qualification proof if required, not a blanket four-workflow VM
     rebuild.
 
-- [ ] 5. Focused proof and manual diagnostics retain convenient bounded
+- [x] 5. Focused proof and manual diagnostics retain convenient bounded
       workflows.
   - Progress: focused proof delivered. `tools/host-proof` owns `test-local`,
     `e2e-local` and `pg-run`; `just test-local`/`just e2e-local` run them and
@@ -155,8 +155,20 @@ staged design bytes/index and shared stashes remain untouched now.
     backend/browser matrix. Keep existing timings/capture gaps honest; no new
     recorder/retention machinery.
 
-- [ ] 6. Resolve finite defer and retire only proven last-consumer
+- [x] 6. Resolve finite defer and retire only proven last-consumer
       infrastructure.
+  - Delivered: e2e evidence -> host-proof `e2e-evidence`; doctest leaves ->
+    doctests `doctest-check`; coverage policy/benchmark/probe, Elisp, WASM
+    coverage and mutants -> coverage `coverage-check`; audit-wasm/budget and
+    Nix/cache probes -> host-proof `wasm-audit`/`source-diagnostics`;
+    `devtool pg run` -> host-proof `pg-run`. With no consumers left, the xtask
+    workspace, Nix package, launcher, checks and lanes are retired; Just/CI
+    contract tests are rehomed. All on the JSON report contract
+    (docs/adr/drafts/host-tool-json-report-contract.md). Combined maintained
+    source vs main: about -2,250 lines (Rust -2,251, Nix -132) plus -5,387
+    lockfile lines. Still deferred, honestly: R26 experiment-only devtool
+    coverage endpoints remain with devtool (no operator readback performed), so
+    devtool is not retired.
   - Contract: R26 experimental coverage emit/worker/aggregate endpoints remain
     with required devtool build/tests. #1898 Lead owns fresh bounded
     caller/operator readback, then preserve/retire decision and explicit human

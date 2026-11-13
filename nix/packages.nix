@@ -396,18 +396,11 @@ let
         )
       )
     else
-      # xtask/ is the host-only dev driver (a separate workspace these
-      # derivations never build). Excluding it keeps driver edits from
-      # busting the app caches AND guarantees a derivation can never run a
-      # stale xtask: it is not in the sandbox, so an accidental
-      # `cargo xtask` fails loudly rather than running stale. xtask runs
-      # only on the host (dev box / CI runner).
       # Nix assembly is not application source; exclude only its top-level root.
       !(type == "directory" && path == "${toString (craneLib.path ../.)}/nix")
       # Cargo build scripts treat a present `.git` as authoritative metadata.
       # Never retain the filtered empty directory that crane would otherwise admit.
       && !(pkgs.lib.hasSuffix "/.git" path || pkgs.lib.hasInfix "/.git/" path)
-      && (!pkgs.lib.hasInfix "/xtask/" path)
       # Repository policy is native tooling; retain its manifest, not implementation.
       && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/repository-policy/" path
         && path != "${toString (craneLib.path ../.)}/tools/repository-policy/Cargo.toml")
@@ -733,7 +726,6 @@ let
   # The auxiliary tools workspace is separate from the product workspace
   # (ADR-0141): its lockfile and cargo artifacts stay independent, while the
   # performance producer links the selected typed product-storage closure.
-  # Keep `xtask/` absent; it is host-only under ADR-0028.
   # Share the producer's existing filter with live-checkout admission; do not
   # duplicate or narrow its broad tooling closure to manufacture cache hits.
   toolsSourceFilter =

@@ -166,10 +166,10 @@ claim**; the median differences are not evidence of either.
 ## Ownership, costs, and remaining risk
 
 Nix owns reproducible diagnostic/baseline artifact production and the browser
-execution. The host `xtask` owns artifact/status validation, source
-reconciliation, conditional count union, and measurement orchestration. This
-separation means host-side success is derived from retained evidence rather than
-from an unrecorded browser result.
+execution. The host `coverage-check` (`wasm-probe`, `wasm-measure`) owns
+artifact/status validation, source reconciliation, conditional count union, and
+measurement orchestration. This separation means host-side success is derived
+from retained evidence rather than from an unrecorded browser result.
 
 This allocation of responsibilities is consistent with Nix's [derivation
 model][nix-derivations] and its documented [`--impure` evaluation

@@ -68,11 +68,11 @@ coverage-check mutants-verify --package <package> --file <file> --output <artifa
 ```
 
 The output root contains `mutants.out/`. Native validation errors and launcher
-failures propagate as nonzero caller exits. Production uses the existing
-cargo-xtask/Nix launcher: new tooling inputs need normal Git source admission;
-cold realization/build and checkout preparation are real costs, while warm
-invocations reuse store outputs. Native regression tests prove behavior, not
-production Nix source admission.
+failures propagate as nonzero caller exits. `.mutants-loop/verify.sh` runs it
+with locked Cargo from the checkout
+(`cargo run --locked --manifest-path tools/Cargo.toml -p coverage --features host --bin coverage-check`)
+under `scripts/run-report`, which renders its single JSON report; cold builds
+are real costs, while warm invocations reuse existing Cargo build artifacts.
 
 ## Files here
 
@@ -218,12 +218,11 @@ tool failure.
   to that owner and wait for direction rather than discarding work or advancing
   the loop.
 - **A red gate is not always your fault — check for contention first.** If the
-  gate fails a check you never touched (`tools-test`, `xtask-tests`, anything
-  outside the file you edited), see whether a local scan is running:
-  `pgrep -af cargo-mutants`. They compete for disk and CPU, and that has already
-  produced one false failure. Re-run the gate **before** reverting anything.
-  Reverting good work on a spurious failure is the most expensive mistake
-  available here.
+  gate fails a check you never touched (`tools-test`, anything outside the file
+  you edited), see whether a local scan is running: `pgrep -af cargo-mutants`.
+  They compete for disk and CPU, and that has already produced one false
+  failure. Re-run the gate **before** reverting anything. Reverting good work on
+  a spurious failure is the most expensive mistake available here.
 - **Three strikes.** If a mutant resists three attempts, skip it with a one-line
   reason.
 - **Only add tests.** Do not change production code to make a mutant die. If the

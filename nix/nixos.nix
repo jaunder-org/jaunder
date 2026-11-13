@@ -5,7 +5,7 @@ let
   # Part of the canonical e2e-server env-var set that the VM systemd unit and
   # the host `just e2e-local` driver both source (names shared, values
   # per-environment). The full documented list lives in
-  # `xtask/src/steps/e2e_local.rs` (module docs). See issue #249.
+  # `tools/host-proof/src/steps/e2e_local.rs` (module docs). See issue #249.
   captureEnv = {
     # The single capture-dir contract (#227): the server writes mail.jsonl,
     # websub.jsonl, and diag.log into this dir, and the e2e otel-collector writes

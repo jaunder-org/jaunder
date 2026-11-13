@@ -33,11 +33,12 @@ need ordinary dependency downloads; local-only styling is not a promise that
 cold dependencies are already cached.
 
 Qualification selects its fixture-owned harness graph from the admitted source:
-the actual executing xtask must match its Nix output, and browser inputs, Node,
-test-support and VM construction are bound through the same graph. Identical
-outputs may be reused across unrelated Git commits; native Cargo builds and
-copied executables cannot claim Nix provenance. A `JAUNDER_TEST_SUPPORT_BIN`
-override is accepted only if it resolves to the graph's selected helper.
+the actual executing `qualification-host` must match its Nix output, and browser
+inputs, Node, test-support and VM construction are bound through the same graph.
+Identical outputs may be reused across unrelated Git commits; native Cargo
+builds and copied executables cannot claim Nix provenance. A
+`JAUNDER_TEST_SUPPORT_BIN` override is accepted only if it resolves to the
+graph's selected helper.
 
 The host needs Nix virtualization support and free local ports `8080` and
 `8443`. The graph supplies pinned Chromium/Playwright dependencies. Do not run
@@ -123,9 +124,10 @@ evidence. A successful smoke is a lifecycle diagnostic, not qualification.
 ## Topology and immutable identity
 
 Just/Git owns public workflow selection, ordinary input normalization and
-ordered fail-fast preflight. A focused host xtask leaf receives full immutable
-product IDs and the expected harness SHA, invokes Nix and manages the domain
-lifecycle. Nix compiles the host tool but never invokes its orchestrator.
+ordered fail-fast preflight. The focused host `qualification-host` executable
+(`tools/qualification`, run by `nix run .#qualification-host`) receives full
+immutable product IDs and the expected harness SHA, invokes Nix and manages the
+domain lifecycle. Nix compiles the host tool but never invokes its orchestrator.
 Qualification admits and roots the selected graph before lifecycle effects.
 Standard Nix GC roots protect that graph throughout execution and any retained
 lifecycle workspace; there is no checkout-local executable cache. Playwright
@@ -176,9 +178,8 @@ generated `summary.md`. JSON validates against `production-baseline.schema.json`
 and is authoritative; Markdown is mechanically derived and checked for parity.
 The workflows return ordinary process status and focused diagnostics, including
 the safe destination and identity/check counts. They do not support `--json` or
-produce the generic xtask report envelope, `.xtask/last-result.json`, or
-`xtask-done:` sentinel. Unrelated xtask commands retain their own reporting
-contracts. `traced-run` capture is separate from workflow evidence. These are
+emit the shared host-tool JSON step report that other host tools print on
+stdout. `traced-run` capture is separate from workflow evidence. These are
 ignored run artifacts, not source deliverables. Link the tested revisions,
 result and sanitized reports from the issue/PR when review needs them. Explicit
 release evidence belongs in a designated external artifact store with an owner
