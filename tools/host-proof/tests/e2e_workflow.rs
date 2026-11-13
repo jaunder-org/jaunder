@@ -16,7 +16,10 @@ struct Workflow {
 }
 impl Workflow {
     fn new() -> Self {
-        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .unwrap();
         let root = tempfile::tempdir().unwrap();
         for dir in ["scripts", "end2end", "bin"] {
             fs::create_dir(root.path().join(dir)).unwrap();
@@ -25,6 +28,7 @@ impl Workflow {
             "Justfile",
             "scripts/e2e-workflow",
             "scripts/e2e-matrix.jq",
+            "scripts/step-report.jq",
             "end2end/e2e-lanes.json",
         ] {
             fs::copy(repo.join(file), root.path().join(file)).unwrap();
@@ -56,8 +60,12 @@ printf '%s' "$OUTPUT"
             r##"#!/usr/bin/env bash
 set -eu
 echo "verifier $*" >> "$EVENTS"
-if [[ -e $EVENTS.fail-reconcile && $* == *e2e-reconcile* ]]; then exit 31; fi
-if [[ ${REAL_VERIFIER:-0} == 1 ]]; then shift; exec "$XTASK_BIN" "$@"; fi
+if [[ -e $EVENTS.fail-reconcile && $* == *"-- reconcile "* ]]; then exit 31; fi
+if [[ ${REAL_VERIFIER:-0} == 1 ]]; then
+  while [[ $1 != -- ]]; do shift; done
+  shift
+  exec "$EVIDENCE_BIN" "$@"
+fi
 exit "${VERIFY_STATUS:-1}"
 "##,
         );
@@ -84,7 +92,7 @@ exit "${VERIFY_STATUS:-1}"
             .env("BUILD_STATUS", status)
             .env("VERIFY_STATUS", "0")
             .env("REAL_VERIFIER", if real_verifier { "1" } else { "0" })
-            .env("XTASK_BIN", env!("CARGO_BIN_EXE_xtask"));
+            .env("EVIDENCE_BIN", env!("CARGO_BIN_EXE_e2e-evidence"));
         if let Some(output) = output {
             command.env("OUTPUT", output);
         }
@@ -243,7 +251,7 @@ fn reconciliation_failure_is_blocking_even_when_all_producers_succeed() {
     assert_eq!(
         events
             .lines()
-            .filter(|line| line.contains("e2e-reconcile"))
+            .filter(|line| line.contains("e2e-evidence -- reconcile"))
             .count(),
         2
     );
@@ -261,7 +269,7 @@ fn reconciliation_failure_is_blocking_even_when_all_producers_succeed() {
     assert_eq!(
         events
             .lines()
-            .filter(|line| line.contains("xtask e2e-verify"))
+            .filter(|line| line.contains("e2e-evidence -- verify"))
             .count(),
         7,
         "non-authoritative lane verification changed"
@@ -330,7 +338,7 @@ fn explicit_regeneration_requires_success_and_normal_authoritative_production_ve
         );
         let events = workflow.events();
         assert!(
-            !events.contains("xtask e2e-verify"),
+            !events.contains("e2e-evidence -- verify"),
             "authoritative lane checked twice: {events}"
         );
         if action.is_empty() {
@@ -616,9 +624,9 @@ fn absent_malformed_or_ambiguous_kept_paths_never_replace_failure_or_borrow_old_
 #[test]
 fn artifact_reconciliation_is_build_free_and_has_no_result_envelope() {
     let workflow = Workflow::new();
-    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    let output = Command::new(env!("CARGO_BIN_EXE_e2e-evidence"))
         .args([
-            "e2e-reconcile",
+            "reconcile",
             "sqlite",
             "--catalog",
             "end2end/e2e-lanes.json",
@@ -642,7 +650,14 @@ fn artifact_reconciliation_is_build_free_and_has_no_result_envelope() {
             .join(".xtask/last-result.json")
             .exists()
     );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("reading expected census"));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["ok"], false);
+    assert!(
+        report["steps"][0]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("reading expected census")
+    );
 }
 
 #[test]
@@ -655,9 +670,9 @@ fn missing_successful_evidence_fails_real_verifier_and_never_reuses_stale_captur
         let workflow = Workflow::new();
         let output = workflow.run(&args, Some(&selected), "0", true);
         assert!(!output.status.success());
-        assert!(!workflow.events().contains("xtask e2e-verify"));
+        assert!(!workflow.events().contains("e2e-evidence -- verify"));
         assert!(workflow.events().contains("server-fn-coverage"));
-        assert!(String::from_utf8_lossy(&output.stderr).contains("reading report"));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("reading report"));
         assert!(
             !workflow
                 .root

@@ -59,8 +59,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use crate::server_fns::ServerFn;
-use host_proof::traces::parse::Span;
+use crate::traces::parse::Span;
+use repository_policy::server_fns::ServerFn;
 
 /// The `#[server]` route prefix every server-fn request lands under.
 const API_PREFIX: &str = "/api/";
@@ -138,9 +138,9 @@ pub(crate) fn candidate_span_names(f: &ServerFn) -> [String; 3] {
 /// An empty current attribute is treated as absent so valid legacy captures remain
 /// usable. Callers still reject an empty result rather than guessing a module.
 pub(crate) fn span_module(span: &Span) -> String {
-    let module = host_proof::traces::parse::get_attr(&span.raw, CURRENT_MODULE_ATTR);
+    let module = crate::traces::parse::get_attr(&span.raw, CURRENT_MODULE_ATTR);
     if module.is_empty() {
-        host_proof::traces::parse::get_attr(&span.raw, LEGACY_MODULE_ATTR)
+        crate::traces::parse::get_attr(&span.raw, LEGACY_MODULE_ATTR)
     } else {
         module
     }
@@ -262,7 +262,7 @@ pub fn extract(spans: &[Span], inventory: &[ServerFn]) -> Coverage {
         .map(|s| {
             (
                 s.span_id.as_str(),
-                host_proof::traces::parse::get_attr(&s.raw, TEST_TITLE_ATTR),
+                crate::traces::parse::get_attr(&s.raw, TEST_TITLE_ATTR),
             )
         })
         .collect();
@@ -295,7 +295,7 @@ pub fn extract(spans: &[Span], inventory: &[ServerFn]) -> Coverage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use host_proof::traces::parse::{Filters, parse_spans};
+    use crate::traces::parse::{Filters, parse_spans};
 
     // The hand-authored fixture mirrors the span shapes a real capture contains —
     // notably `__server_<ident>` instrument spans, not bare idents (a bare form

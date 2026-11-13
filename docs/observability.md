@@ -669,7 +669,8 @@ producers settle. It consumes the independent unsharded census plus every
 lane-qualified report, manifest, phase sidecar, and capture; it rejects missing
 or duplicate source identities, swapped shard evidence, failed phases, partial
 traces, and incomplete retry/duration populations. The reconciliation artifact
-contains only `.xtask/last-result.json`: producer artifacts already retain the
+is only its verdict log (`.xtask/firefox-reconcile.log`, the human view of
+`e2e-evidence reconcile`'s JSON report): producer artifacts already retain the
 full diagnostics, so operators should inspect the named failed lane rather than
 a duplicated aggregate bundle.
 

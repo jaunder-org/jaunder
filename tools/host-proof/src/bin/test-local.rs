@@ -19,7 +19,7 @@ struct Cli {
 }
 
 fn main() {
-    let cli = Cli::parse();
+    let cli = host_proof::report::parse_args::<Cli>();
     let code = match host_proof::invocation_trace::execute_test_local(&cli.nextest_args) {
         Ok(result) => result.emit(),
         Err(error) => {

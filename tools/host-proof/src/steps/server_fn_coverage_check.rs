@@ -71,7 +71,7 @@ fn compare_rendered(
 /// Consume only the selected successful immutable producer output. Nix owns
 /// writer quiescence, retention and archive member hash/size checks; the existing
 /// population and trace verdicts corroborate the artifacts, not hidden omissions.
-pub fn from_producer(inputs: &crate::cli::ProducerCapture, regenerate: bool) -> Result<String> {
+pub fn from_producer(inputs: &crate::e2e::ProducerCapture, regenerate: bool) -> Result<String> {
     validate_selected_capture(&inputs.capture, &inputs.producer_output, &inputs.lane)?;
     crate::e2e_evidence::verify_lane(&inputs.lane, &inputs.catalog, &inputs.producer_output)
         .map_err(anyhow::Error::msg)?;
@@ -102,6 +102,8 @@ fn validate_selected_capture(capture: &Path, output: &Path, lane: &str) -> Resul
     let status = std::process::Command::new("nix")
         .args(["path-info", "--offline"])
         .arg(&output)
+        // Only validity matters; stdout carries this command's JSON report.
+        .stdout(std::process::Stdio::null())
         .status()
         .context("checking selected producer output validity")?;
     if !status.success() {
@@ -378,15 +380,15 @@ mod tests {
     /// xtask's tests run with the crate dir as cwd, so repo-relative artifact
     /// paths have to be resolved explicitly.
     fn repo_root() -> std::path::PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
     }
 
     const SEED_FIXTURE: &str = "src/server_fn_coverage/testdata/otel-traces-seed.jsonl";
 
-    fn seed_spans() -> Vec<host_proof::traces::parse::Span> {
-        host_proof::traces::parse::read_spans(
+    fn seed_spans() -> Vec<crate::traces::parse::Span> {
+        crate::traces::parse::read_spans(
             &Path::new(env!("CARGO_MANIFEST_DIR")).join(SEED_FIXTURE),
-            &host_proof::traces::parse::Filters::default(),
+            &crate::traces::parse::Filters::default(),
         )
         .expect("the seed fixture parses")
     }
@@ -440,7 +442,7 @@ mod tests {
     fn the_derived_endpoint_matches_the_uri_a_real_run_requested() {
         let inv = inventory(&repo_root().join(WEB_SRC)).expect("inventory enumerates");
         let spans = seed_spans();
-        let by_id: std::collections::HashMap<&str, &host_proof::traces::parse::Span> =
+        let by_id: std::collections::HashMap<&str, &crate::traces::parse::Span> =
             spans.iter().map(|s| (s.span_id.as_str(), s)).collect();
 
         let mut matched = 0usize;
@@ -510,7 +512,7 @@ mod tests {
         );
     }
 
-    fn seed_spans_without_uris() -> Vec<host_proof::traces::parse::Span> {
+    fn seed_spans_without_uris() -> Vec<crate::traces::parse::Span> {
         let mut spans = seed_spans();
         for span in &mut spans {
             span.uri.clear();
@@ -522,7 +524,7 @@ mod tests {
     /// `extract` still finds got there by the `uri` signal alone. Renamed rather
     /// than dropped, for the same reason `seed_spans_without_uris` erases instead
     /// of removing: the spans are load-bearing links in the ancestor chains.
-    fn seed_spans_without_span_names() -> Vec<host_proof::traces::parse::Span> {
+    fn seed_spans_without_span_names() -> Vec<crate::traces::parse::Span> {
         let mut spans = seed_spans();
         for span in &mut spans {
             if span.name != "e2e.test" {
@@ -589,7 +591,7 @@ mod tests {
         let inv = inventory(&repo_root().join(WEB_SRC)).expect("inventory enumerates");
         let verticals: std::collections::BTreeSet<&str> = inv
             .iter()
-            .map(crate::server_fns::ServerFn::vertical)
+            .map(repository_policy::server_fns::ServerFn::vertical)
             .collect();
         let mut checked = 0;
         for span in seed_spans().iter().filter(|s| {

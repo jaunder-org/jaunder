@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use host_proof::playwright_report::PlaywrightReport;
+use crate::playwright_report::PlaywrightReport;
 use serde::Deserialize;
 
 /// Runtime expectations for artifact ownership, not a build/scheduling lane.
@@ -333,7 +333,7 @@ mod tests {
     fn catalog() -> Vec<super::ExpectedLane> {
         read_catalog(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../end2end/e2e-lanes.json")
+                .join("../../end2end/e2e-lanes.json")
                 .as_path(),
         )
         .unwrap()

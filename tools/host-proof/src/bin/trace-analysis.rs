@@ -80,7 +80,7 @@ enum Command {
 }
 
 fn main() {
-    let result = match Cli::parse().command {
+    let result = match host_proof::report::parse_args::<Cli>().command {
         Command::Analyze {
             top,
             trace,

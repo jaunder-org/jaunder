@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn the_committed_snapshot_has_only_qualified_coverage_keys() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let snapshot = crate::server_fn_coverage::io::read_snapshot(
             &root.join(crate::server_fn_coverage::io::SNAPSHOT_PATH),
         )

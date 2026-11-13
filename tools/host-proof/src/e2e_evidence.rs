@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::e2e_ownership::ExpectedLane;
-use crate::result::{PhaseName, PhaseOutcome, PhaseRecord};
 
 #[derive(Clone)]
 pub struct LaneEvidence {
@@ -17,6 +16,36 @@ pub struct LaneEvidence {
     pub duration_manifest: PathBuf,
     pub capture: PathBuf,
     pub phase: PathBuf,
+}
+
+/// The VM sidecar's stable phase vocabulary (`nix/e2e_capture.py`).
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum PhaseName {
+    NixEvaluation,
+    NixSubstitution,
+    NixLocalBuild,
+    VmStartupReadiness,
+    GateExecution,
+    ResultLift,
+    PostGateChecks,
+}
+
+/// An unavailable phase is evidence of a missing boundary, not success.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum PhaseOutcome {
+    Success,
+    Failed,
+    Unavailable,
+}
+
+#[derive(Debug, Deserialize)]
+struct PhaseRecord {
+    name: PhaseName,
+    duration_ms: Option<u128>,
+    outcome: PhaseOutcome,
+    detail: String,
 }
 
 #[derive(Deserialize)]
@@ -341,14 +370,14 @@ pub(crate) mod tests {
     fn catalog() -> Result<TestCatalog, String> {
         Ok(TestCatalog {
             lanes: crate::e2e_ownership::read_catalog(
-                &Path::new(env!("CARGO_MANIFEST_DIR")).join("../end2end/e2e-lanes.json"),
+                &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../end2end/e2e-lanes.json"),
             )?,
         })
     }
     struct TestCatalog {
         lanes: Vec<super::ExpectedLane>,
     }
-    use host_proof::traces::run::TRACE_MEMBER;
+    use crate::traces::run::TRACE_MEMBER;
 
     const CENSUS: &str = include_str!("testdata/e2e-ownership/expected-census.json");
     const REPORTS: [&str; 3] = [

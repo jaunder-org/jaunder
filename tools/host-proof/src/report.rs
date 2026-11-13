@@ -86,6 +86,18 @@ impl CommandResult {
     }
 }
 
+/// Parse arguments, keeping stdout for the JSON report: help and version text
+/// go to stderr (exit 0) and usage errors keep clap's stderr/exit 2 contract.
+pub fn parse_args<C: clap::Parser>() -> C {
+    match C::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => {
+            eprint!("{}", error.render().ansi());
+            std::process::exit(if error.use_stderr() { 2 } else { 0 });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -8,39 +8,8 @@ use crate::{
     },
     coverage, lifecycle, nix_probe,
     result::{CommandResult, StepResult},
-    steps, wasm_coverage,
+    wasm_coverage,
 };
-
-/// Artifact-only commands bypass lifecycle reporting and all build hooks.
-pub fn artifact_verdict(command: &Command) -> Option<Result<String, String>> {
-    match command {
-        Command::E2eVerify {
-            lane,
-            catalog,
-            artifacts,
-        } => Some(crate::e2e_evidence::verify_lane(lane, catalog, artifacts)),
-        Command::E2eReconcile {
-            backend,
-            catalog,
-            diagnostics_root,
-        } => Some(crate::e2e_evidence::reconcile_files(
-            backend.as_str(),
-            catalog,
-            diagnostics_root,
-        )),
-        Command::ServerFnCoverage(command) => {
-            let (inputs, regenerate) = match command {
-                crate::cli::ServerFnCoverageCommand::Verify(inputs) => (inputs, false),
-                crate::cli::ServerFnCoverageCommand::Regenerate(inputs) => (inputs, true),
-            };
-            Some(
-                steps::server_fn_coverage_check::from_producer(inputs, regenerate)
-                    .map_err(|error| format!("{error:#}")),
-            )
-        }
-        _ => None,
-    }
-}
 
 pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
     // Reject --json for commands with no structured payload (the `traces` reporting
@@ -120,9 +89,6 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             }
             lifecycle::finalize(&mut result, start);
             Ok(result)
-        }
-        Command::E2eVerify { .. } | Command::E2eReconcile { .. } | Command::ServerFnCoverage(_) => {
-            anyhow::bail!("artifact-input commands execute directly, without a CommandResult")
         }
         Command::CacheSafety(CacheSafetyCommand::Probe) => {
             let start = Instant::now();

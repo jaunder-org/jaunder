@@ -38,7 +38,7 @@ nix build --accept-flake-config -L .#checks.x86_64-linux.e2e-sqlite-chromium
 nix build --rebuild --keep-failed --accept-flake-config -L .#checks.x86_64-linux.e2e-sqlite-chromium   # ×3
 # each run's <out>.check/capture-sqlite.tar.gz copied to
 # .xtask/diagnostics/e2e-sqlite-chromium/capture-sqlite.tar.gz, then:
-cargo xtask server-fn-coverage regenerate
+just e2e-regenerate-coverage
 ```
 
 Nix reported the derivation "may not be deterministic" on every `--rebuild`,

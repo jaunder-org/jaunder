@@ -5160,7 +5160,7 @@ placed by a single litmus test — _where must this code execute?_
 ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)):
 
 - **`xtask`** — the host-side dev/CI driver
-  (`cargo xtask e2e-verify | coverage-policy | …`); Just owns gate composition.
+  (`cargo xtask coverage-policy | audit-wasm | …`); Just owns gate composition.
   It invokes `nix build` and consumes/analyzes exfiltrated build artifacts
   (coverage gate, CRAP gate, reports). Retained public producer/diagnostic
   commands use `result::CommandResult::report` and its `.xtask/last-result.json`

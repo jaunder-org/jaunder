@@ -4,9 +4,6 @@ mod cli;
 pub mod coverage;
 mod digest;
 mod dispatch;
-pub use dispatch::artifact_verdict;
-pub mod e2e_evidence;
-pub mod e2e_ownership;
 pub mod elisp_coverage;
 pub mod git;
 mod host_tooling;
@@ -15,8 +12,6 @@ pub use repository_policy::markers;
 mod mutants;
 mod nix_probe;
 mod result;
-mod server_fn_coverage;
-pub(crate) use repository_policy::server_fns;
 #[cfg(test)]
 mod test_support;
 mod wasm_budget;
@@ -25,18 +20,15 @@ mod wasm_sections;
 mod wasm_symbols;
 
 mod steps {
-    pub mod boot_decomposition_coverage;
     pub mod check_leaf;
     pub mod doctest_fences;
-    pub mod duration_budget;
     pub mod nix;
-    pub mod server_fn_coverage_check;
     pub mod wasm_budget;
 }
 
 pub use cli::{
     CacheSafetyCommand, Cli, Command, CoverageCommand, E2eBackend, E2eBrowser, MutantsCommand,
-    NixCommand, ServerFnCoverageCommand, WasmCoverageCommand,
+    NixCommand, WasmCoverageCommand,
 };
 pub use dispatch::run;
 pub use host_tooling::prepare_checkout;

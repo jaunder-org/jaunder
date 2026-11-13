@@ -29,3 +29,16 @@ impl E2eBrowser {
         }
     }
 }
+
+/// Evidence selected by a successful producer's `nix build --json` invocation.
+#[derive(Debug, clap::Args)]
+pub struct ProducerCapture {
+    #[arg(long)]
+    pub capture: std::path::PathBuf,
+    #[arg(long)]
+    pub producer_output: std::path::PathBuf,
+    #[arg(long)]
+    pub lane: String,
+    #[arg(long)]
+    pub catalog: std::path::PathBuf,
+}

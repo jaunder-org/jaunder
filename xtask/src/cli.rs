@@ -74,25 +74,6 @@ pub enum Command {
         #[arg(long, requires = "breakdown")]
         wasm: Option<String>,
     },
-    /// Verify one lane's explicit artifacts without building a VM.
-    E2eVerify {
-        #[arg(long)]
-        lane: String,
-        #[arg(long)]
-        catalog: PathBuf,
-        #[arg(long)]
-        artifacts: PathBuf,
-    },
-    /// Reconcile one backend's already-lifted retained Firefox lane evidence
-    /// without invoking Nix. `diagnostics_root` contains `e2e-<lane>` directories.
-    E2eReconcile {
-        #[arg(value_enum)]
-        backend: E2eBackend,
-        #[arg(long)]
-        diagnostics_root: PathBuf,
-        #[arg(long)]
-        catalog: PathBuf,
-    },
     /// Apply source-aware coverage/CRAP policy to realized reports; never runs Nix.
     CoveragePolicy {
         #[arg(long)]
@@ -113,10 +94,6 @@ pub enum Command {
     /// coverage/e2e verdict, aggregate, and lifted equivalent.
     #[command(subcommand)]
     CacheSafety(CacheSafetyCommand),
-    /// Trace-derived `#[server]` fn flow coverage (#681): which server entry
-    /// points the e2e suite actually drives.
-    #[command(subcommand)]
-    ServerFnCoverage(ServerFnCoverageCommand),
     /// Validate completed mutation producer evidence without running mutations.
     #[command(subcommand)]
     Mutants(MutantsCommand),
@@ -136,28 +113,6 @@ pub enum MutantsCommand {
         #[arg(long, allow_hyphen_values = true)]
         producer_status: i32,
     },
-}
-
-/// `server-fn-coverage` subcommands (#681).
-#[derive(Subcommand)]
-pub enum ServerFnCoverageCommand {
-    /// Explicitly regenerate the committed snapshot from selected producer evidence.
-    Regenerate(ProducerCapture),
-    /// Compare selected producer evidence with the committed snapshot.
-    Verify(ProducerCapture),
-}
-
-/// Evidence selected by a successful producer's nix build --json invocation.
-#[derive(clap::Args)]
-pub struct ProducerCapture {
-    #[arg(long)]
-    pub capture: PathBuf,
-    #[arg(long)]
-    pub producer_output: PathBuf,
-    #[arg(long)]
-    pub lane: String,
-    #[arg(long)]
-    pub catalog: PathBuf,
 }
 
 /// `coverage` subcommands.
@@ -225,8 +180,6 @@ impl Cli {
         match self.command {
             Command::CheckLeaf { .. } => "check-leaf",
             Command::AuditWasm { .. } => "audit-wasm",
-            Command::E2eVerify { .. } => "e2e-verify",
-            Command::E2eReconcile { .. } => "e2e-reconcile",
             Command::CoveragePolicy { .. } => "coverage-policy",
             Command::Coverage(CoverageCommand::ProbeSource) => "coverage-probe-source",
             Command::Coverage(CoverageCommand::BenchmarkLocal { .. }) => "coverage-benchmark-local",
@@ -234,12 +187,6 @@ impl Cli {
             Command::WasmCoverage(WasmCoverageCommand::Measure { .. }) => "wasm-coverage-measure",
             Command::Nix(NixCommand::ProbeSource) => "nix-probe-source",
             Command::CacheSafety(CacheSafetyCommand::Probe) => "cache-safety-probe",
-            Command::ServerFnCoverage(ServerFnCoverageCommand::Regenerate(_)) => {
-                "server-fn-coverage-regenerate"
-            }
-            Command::ServerFnCoverage(ServerFnCoverageCommand::Verify(_)) => {
-                "server-fn-coverage-verify"
-            }
             Command::Mutants(MutantsCommand::VerifyEvidence { .. }) => "mutants-verify-evidence",
         }
     }
@@ -250,13 +197,7 @@ impl Command {
     /// Commands that answer `false` reject `--json` (there is nothing meaningful to
     /// serialize beyond the bare envelope). Defaults `true`.
     pub fn produces_json_payload(&self) -> bool {
-        !matches!(
-            self,
-            Command::CheckLeaf { .. }
-                | Command::E2eVerify { .. }
-                | Command::E2eReconcile { .. }
-                | Command::ServerFnCoverage(_)
-        )
+        !matches!(self, Command::CheckLeaf { .. })
     }
 }
 
@@ -290,23 +231,6 @@ mod tests {
                 "{arguments:?} must use Just, not an xtask alias"
             );
         }
-    }
-
-    #[test]
-    fn artifact_verification_requires_explicit_runtime_inputs() {
-        assert!(Cli::try_parse_from(["xtask", "e2e-verify"]).is_err());
-        let cli = Cli::try_parse_from([
-            "xtask",
-            "e2e-verify",
-            "--lane",
-            "sqlite-chromium-unsplit",
-            "--catalog",
-            "lanes.json",
-            "--artifacts",
-            "output",
-        ])
-        .unwrap();
-        assert_eq!(cli.command_name(), "e2e-verify");
     }
 
     #[test]
@@ -387,57 +311,6 @@ mod tests {
         for command in ["watch", "land", "cleanup"] {
             assert!(Cli::try_parse_from(["xtask", "pr", command, "731"]).is_err());
         }
-    }
-
-    #[test]
-    fn server_fn_coverage_parses_both_subcommands() {
-        // Both spellings appear verbatim in the gate's failure messages and in
-        // CONTRIBUTING, so a rename must break a test rather than a developer.
-        assert!(Cli::try_parse_from(["xtask", "server-fn-coverage", "regenerate"]).is_err());
-        let cli = Cli::try_parse_from([
-            "xtask",
-            "server-fn-coverage",
-            "regenerate",
-            "--capture",
-            "capture.tar.gz",
-            "--producer-output",
-            "/nix/store/selected",
-            "--lane",
-            "sqlite-chromium-unsplit",
-            "--catalog",
-            "lanes.json",
-        ])
-        .unwrap();
-        assert_eq!(cli.command_name(), "server-fn-coverage-regenerate");
-        assert!(matches!(
-            cli.command,
-            Command::ServerFnCoverage(ServerFnCoverageCommand::Regenerate(_))
-        ));
-
-        let cli = Cli::try_parse_from([
-            "xtask",
-            "server-fn-coverage",
-            "verify",
-            "--capture",
-            "capture.tar.gz",
-            "--producer-output",
-            "/nix/store/selected",
-            "--lane",
-            "sqlite-chromium-unsplit",
-            "--catalog",
-            "lanes.json",
-        ])
-        .unwrap();
-        assert_eq!(cli.command_name(), "server-fn-coverage-verify");
-        assert!(matches!(
-            cli.command,
-            Command::ServerFnCoverage(ServerFnCoverageCommand::Verify(_))
-        ));
-    }
-
-    #[test]
-    fn server_fn_coverage_requires_a_subcommand() {
-        assert!(Cli::try_parse_from(["xtask", "server-fn-coverage"]).is_err());
     }
 
     #[test]

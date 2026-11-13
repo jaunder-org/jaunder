@@ -3,6 +3,8 @@
 set -euo pipefail
 catalog=end2end/e2e-lanes.json
 root=.xtask/diagnostics
+# Artifact-only verdicts print one JSON report; jq derives the human view.
+evidence=(cargo run --locked --quiet --manifest-path tools/Cargo.toml -p host-proof --bin e2e-evidence --)
 jq -er -f scripts/e2e-matrix.jq "$catalog" >/dev/null
 
 if [[ ${1-} == all ]]; then
@@ -78,8 +80,9 @@ fi
 (( lift_status == 0 )) || exit 1
 if [[ $lane == sqlite-chromium-unsplit ]]; then
   # The coverage consumer owns lane verification before comparing or regenerating.
-  cargo xtask server-fn-coverage "$action" --capture "$output/capture-$lane.tar.gz" \
-    --producer-output "$output" --lane "$lane" --catalog "$catalog"
+  "${evidence[@]}" server-fn-coverage "$action" --capture "$output/capture-$lane.tar.gz" \
+    --producer-output "$output" --lane "$lane" --catalog "$catalog" | jq -r -f scripts/step-report.jq
 else
-  cargo xtask e2e-verify --lane "$lane" --catalog "$catalog" --artifacts "$output"
+  "${evidence[@]}" verify --lane "$lane" --catalog "$catalog" --artifacts "$output" \
+    | jq -r -f scripts/step-report.jq
 fi

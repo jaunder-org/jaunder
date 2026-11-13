@@ -24,19 +24,6 @@ fn main() {
         eprintln!("--json is not supported for `{}`", cli.command_name());
         std::process::exit(2);
     }
-    // Artifact verdicts are deliberately plain commands: no build hook, lifecycle
-    // sidecar, StepResult, or presentation wrapper can select their evidence.
-    let artifact = xtask::artifact_verdict(&cli.command);
-    if let Some(verdict) = artifact {
-        match verdict {
-            Ok(detail) => println!("{detail}"),
-            Err(error) => {
-                eprintln!("{error}");
-                std::process::exit(1);
-            }
-        }
-        return;
-    }
     let json = cli.json;
     let command_name = cli.command_name();
     match cli.command {

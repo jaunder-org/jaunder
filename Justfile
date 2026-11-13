@@ -266,14 +266,14 @@ test-local *args:
 trace-analysis *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    {{host_proof}} trace-analysis "$@" | jq -r -f scripts/step-report.jq
+    {{host_proof}} trace-analysis -- "$@" | jq -r -f scripts/step-report.jq
 
 # Focused browser proof: [--browser B] [spec-or-file:line] or --update-visual-snapshots.
 [positional-arguments]
 e2e-local *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    {{host_proof}} e2e-local "$@" | jq -r -f scripts/step-report.jq
+    {{host_proof}} e2e-local -- "$@" | jq -r -f scripts/step-report.jq
 
 [private]
 _workspace-doctests:
@@ -419,7 +419,9 @@ e2e-regenerate-coverage:
     bash scripts/e2e-workflow producer sqlite-chromium-unsplit regenerate
 
 e2e-reconcile backend artifacts=".xtask/diagnostics":
-    cargo xtask e2e-reconcile {{quote(backend)}} --catalog end2end/e2e-lanes.json --diagnostics-root {{quote(artifacts)}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    {{host_proof}} e2e-evidence -- reconcile {{quote(backend)}} --catalog end2end/e2e-lanes.json --diagnostics-root {{quote(artifacts)}} | jq -r -f scripts/step-report.jq
 
 # Exhaustive read-only milestone candidates; never claims or dispatches work.
 issue-discover milestone:

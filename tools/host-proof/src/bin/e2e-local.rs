@@ -34,7 +34,7 @@ struct Cli {
 }
 
 fn main() {
-    let cli = Cli::parse();
+    let cli = host_proof::report::parse_args::<Cli>();
     let start = std::time::Instant::now();
     let mut result = CommandResult::new("e2e-local");
     match host_proof::checkout::prepare().and_then(|()| Ok(xshell::Shell::new()?)) {

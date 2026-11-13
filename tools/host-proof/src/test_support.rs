@@ -45,3 +45,10 @@ pub fn commit(dir: &Path, rel: &str, body: &str) {
     git_ok(dir, &["add", rel]);
     git_ok(dir, &["commit", "-q", "-m", rel]);
 }
+
+/// A fn wearing the **retired** leptos `#[server]` spelling (#714). Assembled
+/// from pieces so a grep for the retired attribute at the start of a fixture
+/// literal stays a clean zero; this deliberate negative fixture lives here, named.
+pub fn retired_server_fn(attr_args: &str, item: &str) -> String {
+    format!("#[{}{attr_args}]\n{item}\n", "server")
+}

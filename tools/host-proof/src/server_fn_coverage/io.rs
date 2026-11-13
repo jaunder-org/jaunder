@@ -11,8 +11,8 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use super::{Coverage, Snapshot, extract, render};
-use crate::server_fns::ServerFn;
-use host_proof::traces::parse::{Filters, parse_spans};
+use crate::traces::parse::{Filters, parse_spans};
+use repository_policy::server_fns::ServerFn;
 
 #[cfg(test)]
 pub use repository_policy::source_inventory::read_snapshot;
@@ -44,7 +44,7 @@ pub fn coverage_from_capture(tarball: &Path, inventory: &[ServerFn]) -> Result<C
     }
     let tmp = tempfile::tempdir().context("creating a temp dir for the extracted trace")?;
     let dest = tmp.path().join("otel-traces.jsonl");
-    host_proof::traces::run::extract_trace(tarball, &dest)
+    crate::traces::run::extract_trace(tarball, &dest)
         .with_context(|| format!("extracting the otel trace from {}", tarball.display()))?;
     let jsonl = std::fs::read_to_string(&dest).context("reading the extracted otel trace")?;
     coverage_from_jsonl(&jsonl, inventory)

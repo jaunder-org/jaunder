@@ -21,6 +21,10 @@ name = "pg-run"
 path = "src/bin/pg-run.rs"
 
 [[bin]]
+name = "e2e-evidence"
+path = "src/bin/e2e-evidence.rs"
+
+[[bin]]
 name = "trace-analysis"
 path = "src/bin/trace-analysis.rs"
 
