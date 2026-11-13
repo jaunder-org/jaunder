@@ -614,10 +614,19 @@ name = "coverage"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
+ "flate2",
+ "host",
+ "jiff",
+ "proc-macro2",
  "quick-xml 0.42.0",
+ "repository-policy",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "signal-hook",
+ "syn 2.0.119",
+ "tar",
  "tempfile",
 ]
 

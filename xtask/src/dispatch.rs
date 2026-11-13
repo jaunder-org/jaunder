@@ -2,13 +2,9 @@ use std::time::Instant;
 
 use crate::{
     audit_wasm, cache_safety,
-    cli::{
-        CacheSafetyCommand, Cli, Command, CoverageCommand, MutantsCommand, NixCommand,
-        WasmCoverageCommand,
-    },
-    coverage, lifecycle, nix_probe,
+    cli::{CacheSafetyCommand, Cli, Command, NixCommand},
+    lifecycle, nix_probe,
     result::{CommandResult, StepResult},
-    wasm_coverage,
 };
 
 pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
@@ -21,20 +17,6 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         );
     }
     match cli.command {
-        Command::Mutants(MutantsCommand::VerifyEvidence {
-            package,
-            file,
-            output,
-            producer_status,
-        }) => {
-            let start = Instant::now();
-            let report = crate::mutants::verify_evidence(&package, &file, &output, producer_status)
-                .map_err(|error| error.context("verification failed"))?;
-            let mut result = CommandResult::new("mutants-verify-evidence");
-            result.push(StepResult::ok("mutants-verify-evidence").detail(report));
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
         Command::CheckLeaf { .. } => {
             anyhow::bail!(
                 "internal leaf and precommit safety commands use the plain process boundary"
@@ -103,87 +85,6 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let mut result = CommandResult::new("nix-probe-source");
             let step_start = Instant::now();
             result.push(nix_probe::probe_source().with_duration(step_start.elapsed()));
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::CoveragePolicy { out } => {
-            let start = Instant::now();
-            let mut result = CommandResult::new("coverage-policy");
-            result.push(coverage::run(&out).0.with_duration(start.elapsed()));
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::Coverage(CoverageCommand::ProbeSource) => {
-            let start = Instant::now();
-            let mut result = CommandResult::new("coverage-probe-source");
-            let step_start = Instant::now();
-            result.push(coverage::probe::probe_source().with_duration(step_start.elapsed()));
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::Coverage(CoverageCommand::BenchmarkLocal { unloaded_system }) => {
-            let start = Instant::now();
-            let mut result = CommandResult::new("coverage-benchmark-local");
-            let step_start = Instant::now();
-            result.push(
-                match coverage::benchmark::run(&unloaded_system) {
-                    Ok(manifest) => StepResult::ok("coverage-benchmark-local").detail(format!(
-                        "retained {} accepted observations at {}",
-                        manifest.observations.len(),
-                        coverage::benchmark::manifest_path(&manifest.revision).display()
-                    )),
-                    Err(error) => {
-                        StepResult::fail("coverage-benchmark-local").detail(format!("{error:#}"))
-                    }
-                }
-                .with_duration(step_start.elapsed()),
-            );
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::WasmCoverage(WasmCoverageCommand::Probe) => {
-            let start = Instant::now();
-            let mut result = CommandResult::new("wasm-coverage-probe");
-            let step_start = Instant::now();
-            match wasm_coverage::probe() {
-                Ok(aggregate) => {
-                    let ok = aggregate.verdict == wasm_coverage::Verdict::Passed;
-                    let detail = if ok {
-                        "both browser reports map executed original Rust lines; merged evidence retained".to_owned()
-                    } else {
-                        aggregate.blockers.join("; ")
-                    };
-                    result.wasm_coverage = Some(aggregate);
-                    result.push(
-                        if ok {
-                            StepResult::ok("wasm-coverage-probe")
-                        } else {
-                            StepResult::fail("wasm-coverage-probe")
-                        }
-                        .detail(detail)
-                        .with_duration(step_start.elapsed()),
-                    );
-                }
-                Err(error) => result.push(
-                    StepResult::fail("wasm-coverage-probe")
-                        .detail(format!("{error:#}"))
-                        .with_duration(step_start.elapsed()),
-                ),
-            }
-            lifecycle::finalize(&mut result, start);
-            Ok(result)
-        }
-        Command::WasmCoverage(WasmCoverageCommand::Measure { quiescent_window }) => {
-            let start = Instant::now();
-            let mut result = CommandResult::new("wasm-coverage-measure");
-            let step_start = Instant::now();
-            result.push(match wasm_coverage::measure(&quiescent_window) {
-                Ok(manifest) => StepResult::ok("wasm-coverage-measure").detail(format!(
-                    "retained {} reconciled runs at .xtask/wasm-coverage/measurement/manifest-v1.json",
-                    manifest.runs.len()
-                )),
-                Err(error) => StepResult::fail("wasm-coverage-measure").detail(format!("{error:#}")),
-            }.with_duration(step_start.elapsed()));
             lifecycle::finalize(&mut result, start);
             Ok(result)
         }

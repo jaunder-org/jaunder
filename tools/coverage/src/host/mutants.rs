@@ -116,7 +116,7 @@ impl Outcome {
 
 /// Return authoritative text only after every required artifact agrees. The
 /// shell owns producer execution; this seam never invokes or configures it.
-pub(crate) fn verify_evidence(
+pub fn verify_evidence(
     package: &str,
     file: &str,
     output: &Path,

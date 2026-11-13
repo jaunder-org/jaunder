@@ -1,4 +1,5 @@
 //! Exercise the real mutation consumer; only cargo-mutants is substituted.
+#![cfg(feature = "host")]
 
 use serde_json::{Value, json};
 use std::fs;
@@ -7,7 +8,11 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 fn verify(fixture: Option<&Path>, status: i32) -> Output {
-    verify_with_binary(fixture, status, Path::new(env!("CARGO_BIN_EXE_xtask")))
+    verify_with_binary(
+        fixture,
+        status,
+        Path::new(env!("CARGO_BIN_EXE_coverage-check")),
+    )
 }
 
 fn verify_with_binary(fixture: Option<&Path>, status: i32, binary: &Path) -> Output {
@@ -17,9 +22,10 @@ fn verify_with_binary(fixture: Option<&Path>, status: i32, binary: &Path) -> Out
         &cargo,
         r#"#!/usr/bin/env bash
 set -eu
-if [ "$1" = xtask ]; then
+if [ "$1" = run ]; then
+  while [ "$1" != -- ]; do shift; done
   shift
-  exec "$XTASK_BIN" "$@"
+  exec "$CHECK_BIN" "$@"
 fi
 [ "$1" = mutants ] || exit 64
 while [ "$#" -gt 0 ]; do
@@ -37,7 +43,10 @@ exit "$PRODUCER_STATUS"
     )
     .unwrap();
     fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap();
     let mut command = Command::new("bash");
     command
         .arg(root.join(".mutants-loop/verify.sh"))
@@ -54,8 +63,8 @@ exit "$PRODUCER_STATUS"
         .env("TMPDIR_MUTANTS", temp.path().join("scratch"))
         .env("FIXTURE", fixture.unwrap_or(Path::new("")))
         .env("PRODUCER_STATUS", status.to_string())
-        .env("XTASK_BIN", binary);
-    // Normal xtask startup touches Git hooks; never inherit a hook's index or
+        .env("CHECK_BIN", binary);
+    // Normal startup touches Git hooks; never inherit a hook's index or
     // repository redirection into that startup.
     for key in [
         "GIT_DIR",
@@ -77,7 +86,7 @@ fn assert_non_verification(output: Output) {
         !output.status.success(),
         "stdout: {stdout}\nstderr: {stderr}"
     );
-    assert!(stderr.contains("verification failed"), "{stderr}");
+    assert!(stdout.contains("verification failed"), "{stdout}\n{stderr}");
     for count in ["missed:", "caught:", "unviable:", "timeout:", "STILL ALIVE"] {
         assert!(!stdout.contains(count), "{stdout}");
     }
@@ -97,15 +106,9 @@ fn real_consumer_delegates_valid_and_invalid_evidence_to_native_command() {
         "{}",
         String::from_utf8_lossy(&valid.stderr)
     );
-    assert!(
-        String::from_utf8_lossy(&valid.stderr)
-            .contains("xtask-done: command=mutants-verify-evidence ok=true")
-    );
+    assert!(String::from_utf8_lossy(&valid.stdout).contains("[ ok ] mutants-verify-evidence"));
     let invalid = verify(None, 1);
-    assert!(
-        String::from_utf8_lossy(&invalid.stderr)
-            .contains("xtask-done: command=mutants-verify-evidence ok=false")
-    );
+    assert!(String::from_utf8_lossy(&invalid.stdout).contains("[FAIL] mutants-verify-evidence"));
     assert_non_verification(invalid);
 }
 
@@ -285,7 +288,7 @@ fn zero_applicable_mutants_and_timeout_holes_are_not_verification() {
     empty["caught"] = json!(0);
     let fixture = fixture(&empty);
     let output = verify(Some(fixture.path()), 0);
-    assert!(String::from_utf8_lossy(&output.stderr).contains("no applicable mutants"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("no applicable mutants"));
     assert_non_verification(output);
     let fixture = self::fixture(&evidence("Timeout"));
     for status in [0, 2, 3] {
@@ -310,7 +313,7 @@ fn native_launch_failure_propagates_without_counts() {
     let output = verify_with_binary(
         Some(fixture.path()),
         0,
-        &fixture.path().join("missing-xtask"),
+        &fixture.path().join("missing-coverage-check"),
     );
     assert_eq!(output.status.code(), Some(127));
     let stdout = String::from_utf8(output.stdout).unwrap();

@@ -418,7 +418,8 @@ fn source_reader_accepts_every_production_module() {
     // Intent: the host census validator must accept the exact source population
     // that the Emacs reader censused before instrumentation.
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
+        .ancestors()
+        .nth(2)
         .unwrap();
     for entry in fs::read_dir(repo.join("elisp")).unwrap() {
         let path = entry.unwrap().path();

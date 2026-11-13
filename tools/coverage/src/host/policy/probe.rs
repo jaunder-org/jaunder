@@ -24,9 +24,9 @@ use std::process::Stdio;
 
 use anyhow::{Context, Result};
 
-use crate::git;
-use crate::result::StepResult;
-use crate::steps::nix;
+use crate::host::nix;
+use repository_policy::git;
+use repository_policy::report::StepResult;
 
 /// The ways the coverage source closure or producer boundary can drift.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,7 +67,7 @@ const PROBE_ARMS: [ProbeArm; 5] = [
         required: true,
     },
     ProbeArm {
-        path: "xtask/src/main.rs",
+        path: "tools/host-proof/src/lib.rs",
         marker: "// coverage source-drift probe; never committed.",
         required: false,
     },

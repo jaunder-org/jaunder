@@ -54,6 +54,10 @@ pub struct CommandResult {
     /// A diagnostic's pre-rendered human report (trace tables), shown verbatim.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report: Option<String>,
+    /// A command's versioned machine-readable payload (e.g. the WASM coverage
+    /// aggregate), carried verbatim.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<serde_json::Value>,
 }
 
 impl CommandResult {
@@ -65,6 +69,7 @@ impl CommandResult {
             steps: Vec::new(),
             exit_override: None,
             report: None,
+            evidence: None,
         }
     }
     pub fn push(&mut self, step: StepResult) {

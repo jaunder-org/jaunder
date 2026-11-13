@@ -1,19 +1,14 @@
 mod audit_wasm;
 mod cache_safety;
 mod cli;
-pub mod coverage;
-mod digest;
 mod dispatch;
-pub mod elisp_coverage;
 pub mod git;
 mod host_tooling;
 mod lifecycle;
 pub use repository_policy::markers;
-mod mutants;
 mod nix_probe;
 mod result;
 mod wasm_budget;
-mod wasm_coverage;
 mod wasm_sections;
 mod wasm_symbols;
 
@@ -23,10 +18,7 @@ mod steps {
     pub mod wasm_budget;
 }
 
-pub use cli::{
-    CacheSafetyCommand, Cli, Command, CoverageCommand, E2eBackend, E2eBrowser, MutantsCommand,
-    NixCommand, WasmCoverageCommand,
-};
+pub use cli::{CacheSafetyCommand, Cli, Command, E2eBackend, E2eBrowser, NixCommand};
 pub use dispatch::run;
 pub use host_tooling::prepare_checkout;
 pub use lifecycle::ensure_hooks_installed;

@@ -113,19 +113,3 @@ fn migrated_policy_leaf_is_retired_without_a_compatibility_forwarder() {
     assert!(!dir.path().join(".xtask/last-result.json").exists());
     assert!(!summary.exists());
 }
-
-#[test]
-fn consumer_leaves_fail_closed_without_producer_evidence_or_report_artifacts() {
-    {
-        let leaf = "elisp-coverage-consume";
-        let dir = checkout();
-        let summary = dir.path().join("github-summary.md");
-        let index_before = git(dir.path(), &["write-tree"]).stdout;
-        let output = run_leaf(dir.path(), leaf, &summary);
-        assert_eq!(output.status.code(), Some(1), "{leaf}: {output:?}");
-        assert!(String::from_utf8_lossy(&output.stdout).contains("[FAIL]"));
-        assert!(!dir.path().join(".xtask/last-result.json").exists());
-        assert!(!summary.exists());
-        assert_eq!(git(dir.path(), &["write-tree"]).stdout, index_before);
-    }
-}

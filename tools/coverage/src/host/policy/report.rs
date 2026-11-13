@@ -1,6 +1,6 @@
-use crate::coverage::{FileCoverage, LineCov};
-use crate::markers;
+use crate::host::policy::{FileCoverage, LineCov};
 use anyhow::{Result, bail};
+use repository_policy::markers;
 
 /// Parse `cargo llvm-cov report --text` output. A line is executable iff its
 /// second pipe-delimited column is non-blank; covered iff that column is a

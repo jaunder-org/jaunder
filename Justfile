@@ -20,6 +20,7 @@ static := "just --justfile recipes/static.just --working-directory ."
 repository_policy := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin"
 host_proof := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p host-proof --bin"
 doctest_check := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p doctests --features host --bin doctest-check --"
+coverage_check := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p coverage --features host --bin coverage-check --"
 
 # Setup follows the current checkout even after cd in an existing devShell.
 tsc mode="verify":
@@ -131,7 +132,7 @@ coverage-workflow:
     mkdir -p .xtask/gcroots
     nix build --no-update-lock-file --no-write-lock-file -L .#checks.x86_64-linux.coverage --out-link .xtask/gcroots/coverage
     nix build --no-update-lock-file --no-write-lock-file -L .#checks.x86_64-linux.coverage-gate --no-link
-    cargo xtask coverage-policy --out .xtask/gcroots/coverage
+    scripts/run-report {{coverage_check}} policy --out .xtask/gcroots/coverage
 
 [private]
 doctests-workflow:
@@ -249,7 +250,7 @@ _host mode docs:
 [private]
 _host-tests:
     cargo test --manifest-path xtask/Cargo.toml --lib --bins --tests
-    cargo test --manifest-path tools/Cargo.toml --lib --bins --tests --features doctests/host
+    cargo test --manifest-path tools/Cargo.toml --lib --bins --tests --features doctests/host,coverage/host
 
 [private]
 _product-tests: test-local
@@ -261,6 +262,11 @@ test-local *args:
     set -euo pipefail
     # The launcher owns the runner timeline that test-local contributes its trace to.
     traced-run --launcher --name test-local -- {{host_proof}} test-local -- "$@" | jq -r -f scripts/step-report.jq
+
+# Manual coverage evidence tools: probe-source | benchmark-local | wasm-probe | wasm-measure.
+[positional-arguments]
+coverage-check *args:
+    scripts/run-report {{coverage_check}} "$@"
 
 # Manual OTel trace diagnostics: analyze <files> | run [--single-worker] | boot-phases <files>.
 [positional-arguments]
@@ -296,7 +302,7 @@ _wasm-tests: (_nix "wasm-tests")
 
 [private]
 _elisp-coverage: (_nix "elisp-coverage-producer")
-    cargo xtask check-leaf elisp-coverage-consume
+    scripts/run-report {{coverage_check}} elisp-consume
 
 [private]
 _nix check:

@@ -220,9 +220,6 @@ impl StepResult {
         }
     }
 
-    pub(crate) const fn is_blocking_failure(&self) -> bool {
-        !self.ok && !self.skipped
-    }
     pub fn detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = Some(detail.into());
         self
@@ -304,9 +301,6 @@ pub struct CommandResult {
     /// wasm — and merging them would invite comparing their totals.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub breakdown: Option<crate::audit_wasm::BreakdownReport>,
-    /// The versioned reconciliation payload emitted by `wasm-coverage probe`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub wasm_coverage: Option<crate::wasm_coverage::Aggregate>,
 }
 
 fn render_phase_table(phases: &[PhaseRecord]) -> String {
@@ -424,7 +418,6 @@ impl CommandResult {
             exit_override: None,
             audit: None,
             breakdown: None,
-            wasm_coverage: None,
             phases: PhaseName::ALL
                 .map(|name| {
                     PhaseRecord::unavailable(

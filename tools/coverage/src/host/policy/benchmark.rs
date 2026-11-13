@@ -10,16 +10,16 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
-use coverage::status::{CoverageStatus, StageResult};
-use coverage::workers::{
+use crate::status::{CoverageStatus, StageResult};
+use crate::workers::{
     AggregateEvidence, ExperimentStrategy, WorkerConcurrencyPolicy, WorkerEvidence,
 };
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::run as evaluate_coverage;
-use crate::git;
+use repository_policy::git;
 
 const MANIFEST_VERSION: &str = "coverage-local-benchmark-v6";
 const ROOT: &str = ".xtask/coverage/benchmark-local";
@@ -561,7 +561,7 @@ fn observe(root: &Path, tools: &ToolIdentity, observation: &mut Observation) {
         }
     };
     observation.coverage_verdict = coverage_verdict.map(|verdict| VerdictInputs {
-        gate_passed: !coverage_step.is_blocking_failure(),
+        gate_passed: coverage_step.ok || coverage_step.skipped,
         failures: verdict.failures,
         guard_violations: verdict.guard_violations,
         crap_fails: verdict.crap_fails,
@@ -656,7 +656,7 @@ fn semantic_lcov_sha256(path: &Path) -> Result<String> {
         digest.update(b"\n");
         line.clear();
     }
-    Ok(crate::digest::lowercase_hex(digest.finalize()))
+    Ok(crate::host::lowercase_hex(digest.finalize()))
 }
 
 fn semantic_lcov_line(line: &str) -> Result<String> {
@@ -715,7 +715,7 @@ fn sha256(path: &Path) -> Result<String> {
         }
         digest.update(&buffer[..read]);
     }
-    Ok(crate::digest::lowercase_hex(digest.finalize()))
+    Ok(crate::host::lowercase_hex(digest.finalize()))
 }
 
 fn validate_accepted_observation(observation: &Observation) -> Result<()> {
@@ -745,7 +745,7 @@ fn validate_accepted_observation(observation: &Observation) -> Result<()> {
         bail!("recorded producer stage timings do not match producer status")
     }
     status.validate().context("validating producer status")?;
-    if status.category != coverage::status::StatusCategory::TestsOk {
+    if status.category != crate::status::StatusCategory::TestsOk {
         bail!("producer status is not tests-ok")
     }
     let _verdict = observation
@@ -781,7 +781,7 @@ fn validate_accepted_observation(observation: &Observation) -> Result<()> {
             }
             if !matches!(
                 aggregate.reconciliation,
-                coverage::workers::Reconciliation::Reconciled
+                crate::workers::Reconciliation::Reconciled
             ) {
                 bail!("worker census did not reconcile completely")
             }
@@ -1021,7 +1021,7 @@ fn write_manifest(root: &Path, manifest: &Manifest) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use coverage::status::{
+    use crate::status::{
         COVERAGE_STATUS_VERSION, Population, ProcessOutcome, RequiredStage, StatusCategory,
     };
 

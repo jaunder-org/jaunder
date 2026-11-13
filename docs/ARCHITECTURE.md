@@ -94,10 +94,10 @@ from every Nix derivation
 
 **Coverage and doctests.** `just coverage` and `just doctests` require a clean
 checkout and directly run their Nix producer followed by its hard status gate.
-Coverage then calls the host-only `cargo xtask coverage-policy --out <output>`
-leaf: pinned LLVM line-table attribution, real-comment `cov:ignore` rules,
-fail-closed `unreachable!("msg")` AST spans with the A1 guard, and source-span
-`crap:allow` at the exclusive threshold 30. Output links stay under
+Coverage then calls the host-only `coverage-check policy --out <output>` leaf:
+pinned LLVM line-table attribution, real-comment `cov:ignore` rules, fail-closed
+`unreachable!("msg")` AST spans with the A1 guard, and source-span `crap:allow`
+at the exclusive threshold 30. Output links stay under
 `.xtask/gcroots/{coverage,doctests}` without host copies. Nix never invokes host
 xtask; doctest fence reconciliation remains bidirectional and separate from
 instrumented root-workspace SQLite/PostgreSQL coverage. Just owns validation and
@@ -5160,8 +5160,8 @@ placed by a single litmus test — _where must this code execute?_
 ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)):
 
 - **`xtask`** — the host-side dev/CI driver
-  (`cargo xtask coverage-policy | audit-wasm | …`); Just owns gate composition.
-  It invokes `nix build` and consumes/analyzes exfiltrated build artifacts
+  (`coverage-check policy | audit-wasm | …`); Just owns gate composition. It
+  invokes `nix build` and consumes/analyzes exfiltrated build artifacts
   (coverage gate, CRAP gate, reports). Retained public producer/diagnostic
   commands use `result::CommandResult::report` and its `.xtask/last-result.json`
   sidecar. Plain check leaves, precommit safety and artifact verdicts bypass

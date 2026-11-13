@@ -12,8 +12,8 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::wasm::{Artifact, BrowserStatus, Outcome, Stage};
 use anyhow::{Context, Result, bail};
-use coverage::wasm::{Artifact, BrowserStatus, Outcome, Stage};
 use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -285,7 +285,7 @@ fn sha256(path: &Path) -> Result<String> {
         }
         digest.update(&buffer[..read]);
     }
-    Ok(crate::digest::lowercase_hex(digest.finalize()))
+    Ok(crate::host::lowercase_hex(digest.finalize()))
 }
 
 /// The verdict is intentionally independent of runner/build mechanics: only the three
@@ -545,12 +545,12 @@ fn unpack_archive(archive: &Path, destination: &Path, layout: ArchiveLayout<'_>)
     }
     Ok(())
 }
-fn served_module_from_bundle(bundle_root: &Path) -> Result<coverage::wasm::ServedModule> {
+fn served_module_from_bundle(bundle_root: &Path) -> Result<crate::wasm::ServedModule> {
     let outputs = host::vite_manifest::csr_outputs(bundle_root)?;
     let bytes = fs::read(bundle_root.join(&outputs.wasm)).context("reading Vite WASM output")?;
-    Ok(coverage::wasm::ServedModule {
+    Ok(crate::wasm::ServedModule {
         path: outputs.wasm,
-        sha256: crate::digest::lowercase_hex(Sha256::digest(bytes)),
+        sha256: crate::host::lowercase_hex(Sha256::digest(bytes)),
     })
 }
 
@@ -1198,10 +1198,10 @@ mod tests {
         assert_eq!(module.path, "assets/client.wasm");
         assert_eq!(
             module.sha256,
-            crate::digest::lowercase_hex(Sha256::digest(wasm))
+            crate::host::lowercase_hex(Sha256::digest(wasm))
         );
     }
-    use coverage::wasm::ServedModule;
+    use crate::wasm::ServedModule;
     use tempfile::tempdir;
 
     fn status(browser: &str) -> BrowserStatus {

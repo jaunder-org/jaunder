@@ -1,10 +1,18 @@
-//! Allocation-conscious digest encoding shared by streaming hash consumers.
+//! Host-run coverage evidence consumers behind `coverage-check` (ADR-0246):
+//! the source-aware coverage/CRAP policy, its local benchmark and source-filter
+//! probe, Emacs Lisp coverage reconciliation, Playwright/WASM coverage evidence
+//! and mutation-evidence verification. None of this runs inside Nix.
+
+pub mod elisp;
+pub mod mutants;
+pub mod nix;
+pub mod policy;
+pub mod wasm_evidence;
 
 /// Encodes bytes as lowercase hexadecimal with exactly one allocation.
 #[must_use]
 pub(crate) fn lowercase_hex(bytes: impl AsRef<[u8]>) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
-
     let bytes = bytes.as_ref();
     let mut encoded = String::with_capacity(bytes.len() * 2);
     for &byte in bytes {

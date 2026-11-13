@@ -15,7 +15,7 @@ fn another_repository_is_refused_before_its_hook_configuration_changes() {
         assert!(xtask::git::at(&root).args(args).status().unwrap().success());
     }
     let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
-        .args(["coverage-policy", "--out", "absent"])
+        .args(["nix", "probe-source"])
         .current_dir(&root)
         .output()
         .unwrap();

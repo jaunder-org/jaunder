@@ -6,8 +6,8 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use super::{CoverageReport, crap, exempt, gate, report};
-use crate::git;
-use crate::result::StepResult;
+use repository_policy::git;
+use repository_policy::report::StepResult;
 
 /// Apply only host source policy to realized text + CRAP reports. The Just
 /// workflow must pass the hard Nix producer-status gate before invoking this leaf.
@@ -188,7 +188,7 @@ fn failure_report(verdict: &gate::Verdict, crap_fails: &[crap::CrapFail]) -> Str
 }
 
 fn exemption_population(
-    current: &[crate::coverage::FileCoverage],
+    current: &[crate::host::policy::FileCoverage],
     repo_root: &str,
     mut read_source: impl FnMut(&Path) -> std::io::Result<String>,
 ) -> Result<BTreeMap<String, std::collections::BTreeSet<u32>>> {
@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn fail_closed_population_unreadable_coverage_exemption_source() {
-        let current = vec![crate::coverage::FileCoverage {
+        let current = vec![crate::host::policy::FileCoverage {
             path: "secret.rs".to_owned(),
             lines: Vec::new(),
         }];
@@ -364,10 +364,10 @@ mod tests {
     #[test]
     fn run_rejects_zero_executable_lines_before_crap_evaluation() {
         let out = tempfile::tempdir().unwrap();
-        let repo_root = crate::git::toplevel(std::path::Path::new(".")).unwrap();
+        let repo_root = repository_policy::git::toplevel(std::path::Path::new(".")).unwrap();
         write_reports(
             out.path(),
-            &format!("{repo_root}/xtask/src/coverage/run.rs:\n"),
+            &format!("{repo_root}/tools/coverage/src/host/policy/run.rs:\n"),
             "not JSON",
         );
         let (step, _) = run(out.path());
@@ -447,11 +447,11 @@ mod tests {
     #[test]
     fn policy_leaf_accepts_complete_reports_without_producer_status() {
         let out = tempfile::tempdir().unwrap();
-        let repo_root = crate::git::toplevel(std::path::Path::new(".")).unwrap();
+        let repo_root = repository_policy::git::toplevel(std::path::Path::new(".")).unwrap();
         write_reports(
             out.path(),
             &format!(
-                "{repo_root}/xtask/src/coverage/run.rs:\n    1|     1|use std::collections::BTreeMap;\n"
+                "{repo_root}/tools/coverage/src/host/policy/run.rs:\n    1|     1|use std::collections::BTreeMap;\n"
             ),
             r#"{"entries":[]}"#,
         );

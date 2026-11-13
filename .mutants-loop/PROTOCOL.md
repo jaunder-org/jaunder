@@ -64,7 +64,7 @@ speed it up.
 and reporting once, after producer termination, to:
 
 ```bash
-cargo xtask mutants verify-evidence --package <package> --file <file> --output <artifact-directory> --producer-status <status>
+coverage-check mutants-verify --package <package> --file <file> --output <artifact-directory> --producer-status <status>
 ```
 
 The output root contains `mutants.out/`. Native validation errors and launcher

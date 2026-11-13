@@ -867,20 +867,19 @@ status checked; command output never turns a nonzero exit into success.
 Run `just coverage` or `just doctests` for the direct single-command hermetic
 workflows. Each first requires a clean checkout, then realizes its producer at
 `.xtask/gcroots/{coverage,doctests}` and runs the hard Nix status gate. Coverage
-then invokes the host-only
-`cargo xtask coverage-policy --out .xtask/gcroots/coverage` leaf to apply
-source-aware line and CRAP policy; that leaf does not orchestrate producers or
-validate producer status. The Nix gate rejects missing, invalid, or non-success
-status before policy runs. A missing, malformed, or empty text report, or a
-report with zero executable lines, is rejected rather than reported green.
-Validation and CI call these clean-gated public workflows. Fix-mode `just check`
-instead uses the existing internal `doctests-workflow`, preserving its
-dirty-tree formatting behavior and full doctest producer/gate population without
-applying public `just doctests` clean-tree admission. Doctests and the auxiliary
-`xtask`/`tools` workspaces retain their separate test authorities outside this
-root-workspace nextest population. The Rust gate aggregates are retired; the
-four `just ci-validate-*` recipes compose the public workflows while preserving
-independent lane verdicts.
+then invokes the host-only `coverage-check policy --out .xtask/gcroots/coverage`
+leaf to apply source-aware line and CRAP policy; that leaf does not orchestrate
+producers or validate producer status. The Nix gate rejects missing, invalid, or
+non-success status before policy runs. A missing, malformed, or empty text
+report, or a report with zero executable lines, is rejected rather than reported
+green. Validation and CI call these clean-gated public workflows. Fix-mode
+`just check` instead uses the existing internal `doctests-workflow`, preserving
+its dirty-tree formatting behavior and full doctest producer/gate population
+without applying public `just doctests` clean-tree admission. Doctests and the
+auxiliary `xtask`/`tools` workspaces retain their separate test authorities
+outside this root-workspace nextest population. The Rust gate aggregates are
+retired; the four `just ci-validate-*` recipes compose the public workflows
+while preserving independent lane verdicts.
 
 Within the host/local gate, health checks are ordered for fast, actionable
 feedback: clean/staged-tree preconditions first, source-format and generated-doc
@@ -2003,7 +2002,7 @@ force-fitted with artificial tests:
   (self-enforcing, no marker); migrating the existing markers is tracked in
   #245.
 
-**Source-filter drift guard (`cargo xtask coverage probe-source`).** The Nix
+**Source-filter drift guard (`just coverage-check probe-source`).** The Nix
 `coverage` derivation's `src` is filtered to cargo sources (plus an explicit
 `csr/index.html`), so untracked junk can't bust its hash (#37/#231). This
 on-demand probe guards that filter against silent drift: in an ephemeral
@@ -2017,7 +2016,7 @@ _new_ file must be `git add`-ed to be measured — nix ignores untracked files
 even on a dirty tree. The probe runs only on request, not automatically in CI;
 it is deliberately **not** part of `check`/`validate` (#241).
 
-**Playwright/WASM coverage evidence (`cargo xtask wasm-coverage probe`).** This
+**Playwright/WASM coverage evidence (`just coverage-check wasm-probe`).** This
 manual host command realizes the independent Chromium and Firefox diagnostic
 producers before deciding its outcome. It retains each unpacked producer root
 under `.xtask/wasm-coverage/`, validates the `v1` status documents and complete
@@ -2029,7 +2028,7 @@ identities; otherwise no merged evidence is produced. The command exits zero
 only for two source-mapped browser reports and a valid merged Rust-line report.
 
 **WASM coverage overhead measurement
-(`cargo xtask wasm-coverage measure --quiescent-window '<coordinated window acknowledgement>'`).**
+(`just coverage-check wasm-measure --quiescent-window '<coordinated window acknowledgement>'`).**
 This is a manual, coordinated-host command, never a gate. It refuses an empty
 acknowledgement, warms the same-pinned-nightly baseline and instrumented
 producer for each browser, then retains five alternating baseline/instrumented

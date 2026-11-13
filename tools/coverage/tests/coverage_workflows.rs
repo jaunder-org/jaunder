@@ -1,4 +1,5 @@
 //! Exercise the real Just entrypoints without realizing expensive Nix producers.
+#![cfg(feature = "host")]
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -12,19 +13,23 @@ struct Workflow {
 impl Workflow {
     fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
-        let git = xtask::git::at(root.path())
+        let git = repository_policy::git::at(root.path())
             .args(["init", "--quiet"])
             .output()
             .unwrap();
         assert!(git.status.success());
-        fs::copy(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../Justfile"),
-            root.path().join("Justfile"),
-        )
-        .unwrap();
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .unwrap();
+        fs::copy(repo.join("Justfile"), root.path().join("Justfile")).unwrap();
+        fs::create_dir(root.path().join("scripts")).unwrap();
+        for script in ["scripts/run-report", "scripts/step-report.jq"] {
+            fs::copy(repo.join(script), root.path().join(script)).unwrap();
+        }
         fs::write(
             root.path().join(".git/info/exclude"),
-            "Justfile\nbin/\nrecord\n.xtask/\n",
+            "Justfile\nbin/\nrecord\n.xtask/\nscripts/\n",
         )
         .unwrap();
         fs::create_dir(root.path().join("bin")).unwrap();
@@ -77,9 +82,9 @@ fn coverage_policy_cli_is_a_non_orchestrating_report_leaf() {
     let workflow = Workflow::new();
     // The native executable still admits a Jaunder checkout before dispatch.
     fs::write(workflow.root.path().join("flake.nix"), "fixture marker").unwrap();
-    fs::create_dir(workflow.root.path().join("xtask")).unwrap();
+    fs::create_dir(workflow.root.path().join("tools")).unwrap();
     fs::write(
-        workflow.root.path().join("xtask/Cargo.toml"),
+        workflow.root.path().join("tools/Cargo.toml"),
         "fixture marker",
     )
     .unwrap();
@@ -94,8 +99,8 @@ fn coverage_policy_cli_is_a_non_orchestrating_report_leaf() {
             format!("{}:\n1|{count}|fn sample() {{}}\n", source.display()),
         )
         .unwrap();
-        let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
-            .args(["coverage-policy", "--out"])
+        let output = Command::new(env!("CARGO_BIN_EXE_coverage-check"))
+            .args(["policy", "--out"])
             .arg(&out)
             .current_dir(workflow.root.path())
             .env("GIT_CONFIG_COUNT", "1")
@@ -130,7 +135,7 @@ fn workflows_stop_on_each_nonzero_boundary() {
     for (recipe, failure, expected_commands) in [
         ("coverage", "--out-link", 1),
         ("coverage", "coverage-gate", 2),
-        ("coverage", "coverage-policy", 3),
+        ("coverage", "coverage-check -- policy", 3),
         ("doctests", "--out-link", 1),
         ("doctests", "doctests-gate", 2),
     ] {
@@ -172,7 +177,7 @@ fn public_workflows_refuse_dirty_or_unavailable_git_status() {
             fs::write(workflow.root.path().join("dirty"), "changed").unwrap();
             if staged {
                 assert!(
-                    xtask::git::at(workflow.root.path())
+                    repository_policy::git::at(workflow.root.path())
                         .args(["add", "dirty"])
                         .status()
                         .unwrap()
@@ -205,7 +210,7 @@ fn coverage_runs_producer_then_gate_then_policy() {
         concat!(
             "nix build --no-update-lock-file --no-write-lock-file -L .#checks.x86_64-linux.coverage --out-link .xtask/gcroots/coverage\n",
             "nix build --no-update-lock-file --no-write-lock-file -L .#checks.x86_64-linux.coverage-gate --no-link\n",
-            "cargo xtask coverage-policy --out .xtask/gcroots/coverage\n",
+            "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p coverage --features host --bin coverage-check -- policy --out .xtask/gcroots/coverage\n",
         )
     );
 }

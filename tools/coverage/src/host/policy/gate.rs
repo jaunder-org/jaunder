@@ -14,7 +14,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::coverage::FileCoverage;
+use crate::host::policy::FileCoverage;
 
 /// The stateless gate's verdict: uncovered-and-unexempt `failures` plus
 /// covered-but-exempt `guard_violations` (the A1 tripwire).
@@ -67,7 +67,7 @@ pub fn evaluate(files: &[FileCoverage], exempt_of: impl Fn(&str) -> BTreeSet<u32
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::coverage::LineCov;
+    use crate::host::policy::LineCov;
     use std::collections::BTreeMap;
 
     fn fc(path: &str, lines: &[(u32, bool, &str)]) -> FileCoverage {

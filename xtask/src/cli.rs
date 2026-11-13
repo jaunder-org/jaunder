@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use clap::{Parser, Subcommand};
 
 const VERSION: &str = concat!(
@@ -74,19 +72,6 @@ pub enum Command {
         #[arg(long, requires = "breakdown")]
         wasm: Option<String>,
     },
-    /// Apply source-aware coverage/CRAP policy to realized reports; never runs Nix.
-    CoveragePolicy {
-        #[arg(long)]
-        out: PathBuf,
-    },
-    /// Coverage tooling — the source-filter drift probe (#241).
-    #[command(subcommand)]
-    Coverage(CoverageCommand),
-    /// Reconcile the independent Chromium and Firefox Playwright/WASM coverage
-    /// evidence. Both producers run before a verdict; raw profiles are merged only
-    /// when both retained status documents pass and identify the same module/toolchain.
-    #[command(subcommand)]
-    WasmCoverage(WasmCoverageCommand),
     /// Nix maintenance commands that evaluate repository derivation boundaries.
     #[command(subcommand)]
     Nix(NixCommand),
@@ -94,65 +79,6 @@ pub enum Command {
     /// coverage/e2e verdict, aggregate, and lifted equivalent.
     #[command(subcommand)]
     CacheSafety(CacheSafetyCommand),
-    /// Validate completed mutation producer evidence without running mutations.
-    #[command(subcommand)]
-    Mutants(MutantsCommand),
-}
-
-#[derive(Subcommand)]
-pub enum MutantsCommand {
-    /// Report counts only for completed, applicable and consistent evidence.
-    VerifyEvidence {
-        #[arg(long, value_parser = nonempty)]
-        package: String,
-        #[arg(long, value_parser = nonempty)]
-        file: String,
-        /// Producer output root containing mutants.out/.
-        #[arg(long)]
-        output: PathBuf,
-        #[arg(long, allow_hyphen_values = true)]
-        producer_status: i32,
-    },
-}
-
-/// `coverage` subcommands.
-#[derive(Subcommand)]
-pub enum CoverageCommand {
-    /// Guard the Nix coverage derivation's source filter against silent drift:
-    /// assert that staging an excluded file leaves `coverage.drvPath` unchanged and
-    /// staging an instrumented `.rs` changes it. Eval-only (no build); runs in CI and
-    /// on request, NOT in per-commit `check`/`validate` (#241, #37).
-    #[command(after_help = "EXAMPLES:\n  cargo xtask coverage probe-source")]
-    ProbeSource,
-    /// Measure the existing coverage producer under a declared unloaded host window.
-    /// This is an opt-in local experiment; it does not alter production coverage.
-    #[command(
-        after_help = "EXAMPLES:\n  cargo xtask coverage benchmark-local --unloaded-system 'operator confirms no competing host load'"
-    )]
-    BenchmarkLocal {
-        /// Operator assertion that the host has no competing workload.
-        #[arg(long, value_parser = nonempty)]
-        unloaded_system: String,
-    },
-}
-/// `wasm-coverage` subcommands.
-#[derive(Subcommand)]
-pub enum WasmCoverageCommand {
-    /// Realize each browser evidence producer, retain and validate its archive, then
-    /// conditionally count-sum their profiles with the matching pinned LLVM tools.
-    /// The aggregate is always written to `.xtask/wasm-coverage/status.json`.
-    #[command(after_help = "EXAMPLES:\n  cargo xtask wasm-coverage probe")]
-    Probe,
-    /// Measure the separately built baseline and instrumented diagnostic bundles during
-    /// a coordinated quiet host window. The acknowledgement is deliberately required:
-    /// these numbers are invalid when unrelated host work is competing for resources.
-    #[command(
-        after_help = "EXAMPLES:\n  cargo xtask wasm-coverage measure --quiescent-window '2026-09-06 coordinated window'"
-    )]
-    Measure {
-        #[arg(long, value_parser = nonempty)]
-        quiescent_window: String,
-    },
 }
 
 /// `cache-safety` subcommands.
@@ -180,14 +106,8 @@ impl Cli {
         match self.command {
             Command::CheckLeaf { .. } => "check-leaf",
             Command::AuditWasm { .. } => "audit-wasm",
-            Command::CoveragePolicy { .. } => "coverage-policy",
-            Command::Coverage(CoverageCommand::ProbeSource) => "coverage-probe-source",
-            Command::Coverage(CoverageCommand::BenchmarkLocal { .. }) => "coverage-benchmark-local",
-            Command::WasmCoverage(WasmCoverageCommand::Probe) => "wasm-coverage-probe",
-            Command::WasmCoverage(WasmCoverageCommand::Measure { .. }) => "wasm-coverage-measure",
             Command::Nix(NixCommand::ProbeSource) => "nix-probe-source",
             Command::CacheSafety(CacheSafetyCommand::Probe) => "cache-safety-probe",
-            Command::Mutants(MutantsCommand::VerifyEvidence { .. }) => "mutants-verify-evidence",
         }
     }
 }
@@ -338,34 +258,5 @@ mod tests {
             let error = Cli::try_parse_from(args).err().expect("retired route");
             assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
         }
-    }
-
-    #[test]
-    fn coverage_benchmark_local_requires_an_unloaded_system_assertion() {
-        assert!(Cli::try_parse_from(["xtask", "coverage", "benchmark-local"]).is_err());
-        let cli = Cli::try_parse_from([
-            "xtask",
-            "coverage",
-            "benchmark-local",
-            "--unloaded-system",
-            "operator confirms no competing host load",
-        ])
-        .unwrap();
-        assert_eq!(cli.command_name(), "coverage-benchmark-local");
-        assert!(matches!(
-            cli.command,
-            Command::Coverage(CoverageCommand::BenchmarkLocal { unloaded_system })
-                if unloaded_system == "operator confirms no competing host load"
-        ));
-    }
-
-    #[test]
-    fn wasm_coverage_probe_parses() {
-        let cli = Cli::try_parse_from(["xtask", "wasm-coverage", "probe"]).unwrap();
-        assert_eq!(cli.command_name(), "wasm-coverage-probe");
-        assert!(matches!(
-            cli.command,
-            Command::WasmCoverage(WasmCoverageCommand::Probe)
-        ));
     }
 }

@@ -522,7 +522,7 @@ fn devtool(name: &str, mode: &str) -> Vec<String> {
             "cargo clippy -p web -p client -p csr --features csr --target wasm32-unknown-unknown -- -D warnings"
         }
         "tools-clippy" => {
-            "cargo clippy --manifest-path tools/Cargo.toml --workspace --all-targets --features doctests/host -- -D warnings"
+            "cargo clippy --manifest-path tools/Cargo.toml --workspace --all-targets --features doctests/host,coverage/host -- -D warnings"
         }
         "tsc" => "tsc --noEmit -p end2end/tsconfig.json",
         "ert" => {
@@ -547,7 +547,7 @@ fn devtool(name: &str, mode: &str) -> Vec<String> {
 fn host_tests() -> Vec<Vec<String>> {
     commands(&[
         "cargo test --manifest-path xtask/Cargo.toml --lib --bins --tests",
-        "cargo test --manifest-path tools/Cargo.toml --lib --bins --tests --features doctests/host",
+        "cargo test --manifest-path tools/Cargo.toml --lib --bins --tests --features doctests/host,coverage/host",
     ])
 }
 
@@ -607,7 +607,7 @@ fn producer_and_gate(check: &str) -> Vec<Vec<String>> {
 fn coverage() -> Vec<Vec<String>> {
     let mut argv = producer_and_gate("coverage");
     argv.extend(commands(&[
-        "cargo xtask coverage-policy --out .xtask/gcroots/coverage",
+        "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p coverage --features host --bin coverage-check -- policy --out .xtask/gcroots/coverage",
     ]));
     argv
 }
@@ -617,7 +617,7 @@ fn doctests() -> Vec<Vec<String>> {
 }
 fn elisp() -> Vec<Vec<String>> {
     let mut argv = vec![nix("elisp-coverage-producer")];
-    argv.extend(commands(&["cargo xtask check-leaf elisp-coverage-consume"]));
+    argv.extend(commands(&["cargo run --locked --quiet --manifest-path tools/Cargo.toml -p coverage --features host --bin coverage-check -- elisp-consume"]));
     argv
 }
 
