@@ -275,6 +275,7 @@ convention). See the Status column below for each ADR's current status.
 | [0244](adr/0244-standalone-ux-sandbox-lifecycle.md)                      | A focused standalone host UX sandbox owner                                                                   | accepted   |
 | [0245](adr/0245-canonical-comparable-instants.md)                        | Canonical comparable instants belong to the existing time wrapper                                            | accepted   |
 | [0246](adr/0246-retire-xtask-devtool-endpoints.md)                       | Simplify Residual Tooling Capabilities and Retire Obsolete Endpoints                                         | accepted   |
+| [0247](adr/0247-host-tool-json-report-contract.md)                       | Host tools report one JSON document on stdout                                                                | accepted   |
 
 <!-- adr-table:end -->
 
