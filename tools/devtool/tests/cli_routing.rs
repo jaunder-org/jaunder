@@ -26,7 +26,6 @@ fn sandbox_tooling_routes_remain_available() {
         "wasm-coverage",
         "diagnostic-build",
         "doctests",
-        "pg",
         "check",
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_devtool"))

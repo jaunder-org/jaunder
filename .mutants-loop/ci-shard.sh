@@ -59,7 +59,7 @@ fi
 # nothing, and the run looks empty rather than broken. Ask now — one round trip —
 # rather than after forty minutes of build.
 if [ "${MUTANTS_WITH_POSTGRES:-0}" = "1" ]; then
-  if ! pg_isready -d "${JAUNDER_PG_TEST_URL:?MUTANTS_WITH_POSTGRES=1 but JAUNDER_PG_TEST_URL is unset — run this under \`devtool pg run\`}" >/dev/null; then
+  if ! pg_isready -d "${JAUNDER_PG_TEST_URL:?MUTANTS_WITH_POSTGRES=1 but JAUNDER_PG_TEST_URL is unset — run this under host-proof \`pg-run\`}" >/dev/null; then
     echo "::error::MUTANTS_WITH_POSTGRES=1 but no cluster answered at $JAUNDER_PG_TEST_URL"
     exit 1
   fi

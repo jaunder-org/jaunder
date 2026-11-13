@@ -110,7 +110,8 @@ device-specific requirement in the issue evidence. Theme thumbnails, NixOS
 services/VM tests, diagnostic coverage producers, and canonical screenshot
 baseline updates remain Linux-only. Do not update canonical snapshots on macOS.
 For host PostgreSQL testing on macOS, use `just test-local` or
-`devtool pg run -- <command>` rather than the NixOS testing VM below.
+`cargo run -q --manifest-path tools/Cargo.toml -p host-proof --bin pg-run -- <command>`
+rather than the NixOS testing VM below.
 
 Check platform output boundaries and native shell/package evaluation with:
 
@@ -2580,4 +2581,4 @@ installed for the `jaunder` user via `users.users.jaunder.packages`.
   `export JAUNDER_DB=postgres://jaunder@127.0.0.1:55432/jaunder`.
 - The PostgreSQL-backed tests each create their own database (template clones),
   so they run in parallel without interference; see "PostgreSQL-backed Rust
-  tests" above. For a self-contained run, prefer `devtool pg run`.
+  tests" above. For a self-contained run, prefer `pg-run` (host-proof).

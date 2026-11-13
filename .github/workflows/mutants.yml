@@ -228,13 +228,13 @@ jobs:
           # CI is the environment that CAN have PostgreSQL, so it is the one
           # place the postgres code gets mutated at all. A workstation scan
           # filters those tests out and excludes storage/src/postgres with them;
-          # here `devtool pg run` provisions a throwaway cluster and exports
+          # here host-proof's `pg-run` provisions a throwaway cluster and exports
           # JAUNDER_PG_TEST_URL, so both come back into scope. See
           # .mutants-loop/common.sh.
           MUTANTS_WITH_POSTGRES: "1"
         run: |
           nix develop .#mutants --accept-flake-config -c \
-            devtool pg run -- \
+            cargo run --locked --quiet --manifest-path tools/Cargo.toml -p host-proof --bin pg-run -- \
             .mutants-loop/ci-shard.sh \
             "${{ matrix.package }}" \
             "${{ matrix.shard }}" "${{ matrix.shards }}" \

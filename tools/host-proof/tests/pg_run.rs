@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-const EXE: &str = env!("CARGO_BIN_EXE_devtool");
+const EXE: &str = env!("CARGO_BIN_EXE_pg-run");
 const CHILD_RECORD: &str = "JAUNDER_PG_LONG_PATH_RECORD";
 
 fn sql(url: &str, query: &str) -> String {
@@ -91,7 +91,7 @@ fn pg_run_bootstraps_tcp_without_sockets_under_long_tmpdir() {
     // Only the child inherits the override. Cluster owns PGDATA cleanup; this
     // test owns the routing parent and must retain it until the command returns.
     let output = Command::new(EXE)
-        .args(["pg", "run", "--"])
+        .arg("--")
         .arg(std::env::current_exe().unwrap())
         .args([
             "--exact",

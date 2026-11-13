@@ -1,7 +1,6 @@
 //! Internal in-sandbox dev tool. Runs inside the Nix coverage/e2e build
 //! sandboxes where `xtask` (host-only) is unavailable. Subcommand tree is
-//! deliberately extensible: `coverage emit`, `wasm-coverage`, diagnostic build
-//! and the `pg run` frontdoor over coverage's ephemeral PostgreSQL custody.
+//! deliberately extensible: `coverage emit`, `wasm-coverage` and diagnostic build.
 
 use std::path::PathBuf;
 
@@ -42,9 +41,6 @@ enum Command {
     /// Doctest gate subcommands.
     #[command(subcommand)]
     Doctests(DoctestsCmd),
-    /// Ephemeral PostgreSQL subcommands.
-    #[command(subcommand)]
-    Pg(PgCmd),
     /// Observe the retained fixed ERT request.
     Check(CheckArgs),
     /// Compile and stage the closed system-theme inventory independently of CSR output.
@@ -228,16 +224,6 @@ enum DoctestsCmd {
     },
 }
 
-#[derive(Subcommand)]
-enum PgCmd {
-    /// Run a command with a throwaway PostgreSQL 16 cluster.
-    Run {
-        /// Command (and its arguments) to run, after `--`.
-        #[arg(trailing_var_arg = true, required = true)]
-        cmd: Vec<String>,
-    },
-}
-
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -349,7 +335,6 @@ fn main() -> Result<()> {
             diagnostic_build::write_baseline_status(&status)
         }
         Command::Doctests(DoctestsCmd::Emit { out }) => doctests::emit::run(&out),
-        Command::Pg(PgCmd::Run { cmd }) => ::coverage::ephemeral_postgres::run_command(&cmd),
         Command::Check(args) => check::run(&args.name, args.fix),
         #[cfg(feature = "system-artifacts")]
         Command::SystemArtifacts(args) => {

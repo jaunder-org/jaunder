@@ -139,10 +139,10 @@ not an error.
   is running. `MUTANTS_WITH_POSTGRES` is the one switch, and it moves **two**
   things together:
 
-  | `MUTANTS_WITH_POSTGRES`          | test filter                                | `storage/src/postgres` |
-  | -------------------------------- | ------------------------------------------ | ---------------------- |
-  | unset / `0` (a workstation)      | `not test(/(?i)postgres\|backup_interop/)` | excluded from mutation |
-  | `1` (CI, under `devtool pg run`) | `all()`                                    | mutated                |
+  | `MUTANTS_WITH_POSTGRES`             | test filter                                | `storage/src/postgres` |
+  | ----------------------------------- | ------------------------------------------ | ---------------------- |
+  | unset / `0` (a workstation)         | `not test(/(?i)postgres\|backup_interop/)` | excluded from mutation |
+  | `1` (CI, under host-proof `pg-run`) | `all()`                                    | mutated                |
 
   They move together because they are one decision. Filtering the postgres tests
   away while still mutating the code they cover reports every one of those
@@ -154,7 +154,7 @@ not an error.
   proving that the file is fixed. Work them under a cluster:
 
   ```bash
-  devtool pg run -- env MUTANTS_WITH_POSTGRES=1 .mutants-loop/verify.sh storage <file>
+  cargo run -q --manifest-path tools/Cargo.toml -p host-proof --bin pg-run -- env MUTANTS_WITH_POSTGRES=1 .mutants-loop/verify.sh storage <file>
   ```
 
   - **Keep the `(?i)`.** A plain `test(postgres)` matches `case_2_postgres` but

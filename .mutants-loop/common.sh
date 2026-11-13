@@ -20,7 +20,7 @@ mkdir -p "$TMPDIR"
 # thing that decides this, so it is a variable rather than a fact:
 #
 #   MUTANTS_WITH_POSTGRES=1  a cluster is provisioned (CI runs the shard under
-#                            `devtool pg run`, which exports JAUNDER_PG_TEST_URL
+#                            `pg-run` (host-proof), which exports JAUNDER_PG_TEST_URL
 #                            for a throwaway one). Every test counts, and
 #                            storage/src/postgres is mutated like any other code.
 #   unset / 0                a bare workstation. The postgres tests are filtered

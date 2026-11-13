@@ -2,6 +2,8 @@
 //! status as the verdict. Human views are derived from the JSON by callers
 //! (`scripts/step-report.jq`).
 
+use std::io::Write;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -79,29 +81,65 @@ impl CommandResult {
     pub fn exit_code(&self) -> i32 {
         self.exit_override.unwrap_or(if self.ok { 0 } else { 1 })
     }
-    /// Print the report as the single stdout document and return its status.
+    /// Write the report as the single stdout document and return its status.
     pub fn emit(&self) -> i32 {
-        match serde_json::to_string(self) {
-            Ok(json) => println!("{json}"),
+        let json = match serde_json::to_string(self) {
+            Ok(json) => json,
             Err(error) => {
                 eprintln!("{}: cannot serialize report: {error}", self.command);
                 return 2;
             }
+        };
+        let written = match RESERVED_STDOUT.get() {
+            Some(reserved) => match reserved.lock() {
+                Ok(mut stdout) => writeln!(stdout, "{json}").and_then(|()| stdout.flush()),
+                Err(_) => Err(std::io::Error::other("reserved stdout poisoned")),
+            },
+            None => writeln!(std::io::stdout(), "{json}"),
+        };
+        if let Err(error) = written {
+            eprintln!("{}: cannot write report: {error}", self.command);
+            return 2;
         }
         self.exit_code()
     }
 }
 
+/// The real stdout, reserved for the report once [`parse_args`] runs.
+static RESERVED_STDOUT: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
+
 /// Parse arguments, keeping stdout for the JSON report: help and version text
 /// go to stderr (exit 0) and usage errors keep clap's stderr/exit 2 contract.
+/// Afterwards the process's stdout descriptor points at stderr, so every child
+/// process and stray print lands there and only [`CommandResult::emit`] writes
+/// to the reserved real stdout.
 pub fn parse_args<C: clap::Parser>() -> C {
-    match C::try_parse() {
+    let cli = match C::try_parse() {
         Ok(cli) => cli,
         Err(error) => {
             eprint!("{}", error.render().ansi());
             std::process::exit(if error.use_stderr() { 2 } else { 0 });
         }
+    };
+    if let Err(error) = reserve_stdout() {
+        eprintln!("warning: cannot reserve stdout for the report: {error}");
     }
+    cli
+}
+
+#[cfg(unix)]
+fn reserve_stdout() -> std::io::Result<()> {
+    use std::os::fd::AsFd;
+    std::io::stdout().flush()?;
+    let saved = rustix::io::dup(std::io::stdout().as_fd())?;
+    rustix::stdio::dup2_stdout(std::io::stderr().as_fd())?;
+    let _ = RESERVED_STDOUT.set(Mutex::new(std::fs::File::from(saved)));
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn reserve_stdout() -> std::io::Result<()> {
+    Ok(())
 }
 
 #[cfg(test)]
