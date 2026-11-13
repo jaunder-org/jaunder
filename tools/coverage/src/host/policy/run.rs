@@ -5,23 +5,20 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use super::{CoverageReport, crap, exempt, gate, report};
+use super::{crap, exempt, gate, report};
 use host_tool::report::StepResult;
 use repository_policy::git;
 
 /// Apply only host source policy to realized text + CRAP reports. The Just
 /// workflow must pass the hard Nix producer-status gate before invoking this leaf.
-pub fn run(out_dir: &Path) -> (StepResult, Option<CoverageReport>) {
-    match run_inner(out_dir) {
-        Ok(pair) => pair,
-        Err(error) => (coverage_failure_step(error), None),
-    }
+pub fn run(out_dir: &Path) -> StepResult {
+    run_inner(out_dir).unwrap_or_else(coverage_failure_step)
 }
 fn coverage_failure_step(error: anyhow::Error) -> StepResult {
     StepResult::fail("coverage").detail(format!("{error:#}"))
 }
 
-fn run_inner(out_dir: &Path) -> Result<(StepResult, Option<CoverageReport>)> {
+fn run_inner(out_dir: &Path) -> Result<StepResult> {
     let report_path = out_dir.join("coverage-report.txt");
     let crap_path = out_dir.join("crap-report.json");
     let report = fs::read_to_string(&report_path)
@@ -66,11 +63,6 @@ fn run_inner(out_dir: &Path) -> Result<(StepResult, Option<CoverageReport>)> {
         || !verdict.guard_violations.is_empty()
         || !crap_fails.is_empty();
 
-    let report = CoverageReport {
-        failures: verdict.failures.len(),
-        guard_violations: verdict.guard_violations.len(),
-        crap_fails: crap_fails.len(),
-    };
     let step = if gate_fails {
         StepResult::fail("coverage").detail(failure_report(&verdict, &crap_fails))
     } else {
@@ -79,7 +71,7 @@ fn run_inner(out_dir: &Path) -> Result<(StepResult, Option<CoverageReport>)> {
         ))
     };
 
-    Ok((step, Some(report)))
+    Ok(step)
 }
 
 /// Dump the gate's full failures list. Diagnostic persistence is best-effort,
@@ -343,7 +335,7 @@ mod tests {
     #[test]
     fn run_rejects_missing_or_empty_text_evidence_before_crap_evaluation() {
         let missing = tempfile::tempdir().unwrap();
-        let (step, _) = run(missing.path());
+        let step = run(missing.path());
         assert!(!step.ok);
         assert!(
             step.detail.unwrap().contains("reading coverage report"),
@@ -352,7 +344,7 @@ mod tests {
 
         let empty = tempfile::tempdir().unwrap();
         write_reports(empty.path(), "", "not JSON");
-        let (step, _) = run(empty.path());
+        let step = run(empty.path());
         assert!(!step.ok);
         let detail = step.detail.unwrap();
         assert!(
@@ -370,7 +362,7 @@ mod tests {
             &format!("{repo_root}/tools/coverage/src/host/policy/run.rs:\n"),
             "not JSON",
         );
-        let (step, _) = run(out.path());
+        let step = run(out.path());
 
         assert!(!step.ok);
         let detail = step.detail.unwrap();
@@ -415,7 +407,7 @@ mod tests {
                 &format!("{}:\n    1|     1|fn sample() {{\n    2|{count}|{source}\n    3|     1|}}\n", path.display()),
                 &serde_json::json!({"entries": [{"file": path, "function": "sample", "line": 1, "crap": score}]}).to_string(),
             );
-            let (step, _) = run(out.path());
+            let step = run(out.path());
             assert_eq!(
                 step.ok, passes,
                 "{source} count={count} CRAP={score}: {:?}",
@@ -429,7 +421,7 @@ mod tests {
         for text in ["not a line table", "/repo/a.rs:\n1|bogus|uncovered()\n"] {
             let out = tempfile::tempdir().unwrap();
             write_reports(out.path(), text, r#"{"entries":[]}"#);
-            assert!(!run(out.path()).0.ok);
+            assert!(!run(out.path()).ok);
         }
         let out = tempfile::tempdir().unwrap();
         let path = out.path().join("sample.rs");
@@ -439,9 +431,9 @@ mod tests {
             format!("{}:\n1|1|fn sample() {{}}\n", path.display()),
         )
         .unwrap();
-        assert!(!run(out.path()).0.ok);
+        assert!(!run(out.path()).ok);
         fs::write(out.path().join("crap-report.json"), "not JSON").unwrap();
-        assert!(!run(out.path()).0.ok);
+        assert!(!run(out.path()).ok);
     }
 
     #[test]
@@ -455,8 +447,7 @@ mod tests {
             ),
             r#"{"entries":[]}"#,
         );
-        let (step, report) = run(out.path());
+        let step = run(out.path());
         assert!(step.ok, "{:?}", step.detail);
-        assert_eq!(report, Some(CoverageReport::default()));
     }
 }

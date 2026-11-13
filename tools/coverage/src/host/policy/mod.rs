@@ -9,7 +9,6 @@
 //! gated against a fixed threshold (see [`crap`]), minus in-source `crap:allow`
 //! overrides. There is no baseline, anchor, or manifest.
 
-pub mod benchmark;
 pub mod crap;
 pub mod exempt;
 pub mod gate;
@@ -19,5 +18,5 @@ pub mod report;
 mod model;
 mod run;
 
-pub use model::{CoverageReport, FileCoverage, LineCov};
+pub use model::{FileCoverage, LineCov};
 pub use run::run;

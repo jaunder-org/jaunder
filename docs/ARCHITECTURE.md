@@ -5153,7 +5153,7 @@ this code execute?_ ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)):
   `host_tool::report` contract), `tools/qualification` (`qualification-host`),
   `tools/host-proof` (below), `tools/coverage` with its nondefault `host`
   feature
-  (`coverage-check policy | elisp-consume | mutants-verify | probe-source | benchmark-local | wasm-probe | wasm-measure`)
+  (`coverage-check policy | elisp-consume | mutants-verify | probe-source | wasm-probe | wasm-measure`)
   and `tools/doctests` with its nondefault `host` feature
   (`doctest-check fences | workspace`). Just owns gate composition. These
   commands invoke `nix build` and consume/analyze exfiltrated build artifacts
@@ -5508,10 +5508,12 @@ checker registry, runner, supervisor or replacement omnibus:
 
 Each tool that renders a verdict prints one JSON report on stdout and derives
 its human view through `scripts/step-report.jq`
-([draft decision](adr/drafts/host-tool-json-report-contract.md)).
-Experiment-only devtool coverage endpoints remain deferred with their devtool
-build/tests until a bounded caller/operator disposition, so devtool itself is
-not retired. #1864's distinct verdicts and #1933's selected passive
+([draft decision](adr/drafts/host-tool-json-report-contract.md)). The
+experiment-only two-worker coverage endpoints (`coverage emit --experiment`,
+`experiment-worker`, `experiment-aggregate`) and their `benchmark-local`
+comparison harness are retired by operator decision; a future partitioning
+experiment rebuilds its own harness. devtool keeps only its production producer
+and build endpoints. #1864's distinct verdicts and #1933's selected passive
 observations/retention remain separately owned.
 
 ## Documentation & decision process

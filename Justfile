@@ -266,7 +266,7 @@ test-local *args:
 pg-run *args:
     {{host_proof}} pg-run -- "$@"
 
-# Manual coverage evidence tools: probe-source | benchmark-local | wasm-probe | wasm-measure.
+# Manual coverage evidence tools: probe-source | wasm-probe | wasm-measure.
 [positional-arguments]
 coverage-check *args:
     scripts/run-report {{coverage_check}} "$@"

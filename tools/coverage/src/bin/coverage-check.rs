@@ -34,16 +34,6 @@ enum Command {
     /// staging an excluded file leaves `coverage.drvPath` unchanged and staging an
     /// instrumented `.rs` changes it. Eval-only; runs in CI and on request (#241).
     ProbeSource,
-    /// Measure the coverage producer under a declared unloaded host window. An
-    /// opt-in local experiment; it does not alter production coverage.
-    #[command(
-        after_help = "EXAMPLES:\n  just coverage-check benchmark-local --unloaded-system 'operator confirms no competing host load'"
-    )]
-    BenchmarkLocal {
-        /// Operator assertion that the host has no competing workload.
-        #[arg(long, value_parser = nonempty)]
-        unloaded_system: String,
-    },
     /// Realize each browser WASM evidence producer, validate its archive, then
     /// conditionally count-sum their profiles with the pinned LLVM tools. The
     /// aggregate is written to `.xtask/wasm-coverage/status.json` and reported.
@@ -88,22 +78,11 @@ fn run(command: Command) -> CommandResult {
     match command {
         Command::Policy { out } => {
             result = CommandResult::new("coverage-policy");
-            result.push(policy::run(&out).0.with_duration(start.elapsed()));
+            result.push(policy::run(&out).with_duration(start.elapsed()));
         }
         Command::ProbeSource => {
             result = CommandResult::new("coverage-probe-source");
             result.push(policy::probe::probe_source().with_duration(start.elapsed()));
-        }
-        Command::BenchmarkLocal { unloaded_system } => {
-            result = CommandResult::new("coverage-benchmark-local");
-            let outcome = policy::benchmark::run(&unloaded_system).map(|manifest| {
-                format!(
-                    "retained {} accepted observations at {}",
-                    manifest.observations.len(),
-                    policy::benchmark::manifest_path(&manifest.revision).display()
-                )
-            });
-            result.push(step("coverage-benchmark-local", outcome, start));
         }
         Command::WasmProbe => {
             result = CommandResult::new("wasm-coverage-probe");
@@ -171,29 +150,8 @@ mod tests {
     use clap::Parser;
 
     #[test]
-    fn benchmark_requires_an_unloaded_system_assertion_and_wasm_probe_parses() {
+    fn wasm_probe_parses_and_retired_benchmark_is_refused() {
         assert!(Cli::try_parse_from(["coverage-check", "benchmark-local"]).is_err());
-        assert!(
-            Cli::try_parse_from([
-                "coverage-check",
-                "benchmark-local",
-                "--unloaded-system",
-                " "
-            ])
-            .is_err()
-        );
-        let cli = Cli::try_parse_from([
-            "coverage-check",
-            "benchmark-local",
-            "--unloaded-system",
-            "operator confirms no competing host load",
-        ])
-        .unwrap();
-        assert!(matches!(
-            cli.command,
-            Command::BenchmarkLocal { unloaded_system }
-                if unloaded_system == "operator confirms no competing host load"
-        ));
         assert!(matches!(
             Cli::try_parse_from(["coverage-check", "wasm-probe"])
                 .unwrap()
