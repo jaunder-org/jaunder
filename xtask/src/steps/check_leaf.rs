@@ -17,15 +17,11 @@ use crate::{result::CommandResult, steps};
 pub(crate) fn run(name: &str) -> Result<crate::result::StepResult> {
     let mut result = CommandResult::new("check-leaf");
     match name {
-        "workspace-doctests" => {
-            steps::doctest_fences::run_workspace(&xshell::Shell::new()?, &mut result);
-        }
         "wasm-budget" => steps::wasm_budget::run(&mut result),
         "elisp-coverage-consume" => {
             steps::nix::consume_elisp_coverage(&mut result);
             return consumer_result(name, result);
         }
-        "doctest-fences" => steps::doctest_fences::run(&mut result),
         _ => bail!("unknown check leaf `{name}`"),
     }
     ensure!(

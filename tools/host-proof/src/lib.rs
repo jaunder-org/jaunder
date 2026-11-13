@@ -3,7 +3,7 @@
 //! (ADR-0246). Each executable prints one JSON report on stdout.
 
 pub mod checkout;
-pub mod compile_cache;
+pub use repository_policy::{compile_cache, report};
 pub mod e2e;
 pub mod e2e_evidence;
 mod e2e_ownership;
@@ -14,7 +14,6 @@ pub mod git {
 pub mod invocation_trace;
 pub mod nix_build;
 pub mod playwright_report;
-pub mod report;
 mod server_fn_coverage;
 mod sh;
 #[cfg(test)]

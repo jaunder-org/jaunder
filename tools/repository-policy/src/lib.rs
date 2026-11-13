@@ -2,6 +2,7 @@
 pub mod adr;
 pub mod census;
 pub mod checkout;
+pub mod compile_cache;
 #[cfg(test)]
 mod concern_test_support;
 pub mod files;
@@ -9,6 +10,7 @@ pub mod git;
 pub mod ids;
 pub mod markers;
 pub mod org_timezone_manifest;
+pub mod report;
 pub mod repository_docs;
 pub mod safety;
 pub mod scoped_leptosfmt;

@@ -1,4 +1,4 @@
-//! The `doctest-fences` gate: the half of the doctest population that lives
+//! Host doctest leaves (`doctest-check fences|workspace`). The `doctest-fences` gate: the half of the doctest population that lives
 //! outside every Nix check (#763).
 //!
 //! `xtask/` is excluded from the flake `src` filter (`nix/packages.nix`'s `cleanSourceWith`
@@ -18,12 +18,12 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use doctests::check::{self, ScannedFile};
-use doctests::roots;
+use crate::check::{self, ScannedFile};
+use crate::roots;
 use xshell::Shell;
 
-use crate::result::{CommandResult, StepResult};
-use host_proof::compile_cache;
+use repository_policy::compile_cache;
+use repository_policy::report::{CommandResult, StepResult};
 
 /// A repo-relative path as the runner prints it for a `--manifest-path <root>` run:
 /// relative to the manifest's directory, so `xtask/src/steps/nix.rs` prints as
@@ -43,7 +43,7 @@ struct HostRoot {
 }
 
 fn host_roots(start: &Path) -> anyhow::Result<(PathBuf, Vec<HostRoot>)> {
-    let top = PathBuf::from(crate::git::toplevel(start)?);
+    let top = PathBuf::from(repository_policy::git::toplevel(start)?);
     let roots = roots::HOST
         .iter()
         .map(|&run_root| HostRoot {
@@ -136,7 +136,7 @@ fn reconcile_doctests(
     match command {
         Err(error) => vec![cannot_run(&error)],
         Ok((output, succeeded)) => {
-            let entries = doctests::libtest::run_entries(&output);
+            let entries = crate::libtest::run_entries(&output);
             let mut details = if !succeeded && !entries.iter().any(|entry| entry.failed) {
                 vec![no_failed_entry()]
             } else {
@@ -180,7 +180,7 @@ fn workspace_step(
 
 /// Run and reconcile doctests for exactly the root Cargo workspace.
 pub fn run_workspace(sh: &Shell, result: &mut CommandResult) {
-    let top = match crate::git::toplevel(Path::new(".")) {
+    let top = match repository_policy::git::toplevel(Path::new(".")) {
         Ok(top) => PathBuf::from(top),
         Err(error) => {
             result.push(
@@ -190,7 +190,7 @@ pub fn run_workspace(sh: &Shell, result: &mut CommandResult) {
             return;
         }
     };
-    let tracked = match crate::git::tracked_files(&top, "*.rs") {
+    let tracked = match repository_policy::git::tracked_files(&top, "*.rs") {
         Ok(tracked) => tracked,
         Err(error) => {
             result.push(
@@ -275,7 +275,7 @@ pub fn run(result: &mut CommandResult) {
             return;
         }
     };
-    let tracked = match crate::git::tracked_files(&top, "*.rs") {
+    let tracked = match repository_policy::git::tracked_files(&top, "*.rs") {
         Ok(tracked) => tracked,
         Err(error) => {
             result.push(
@@ -320,7 +320,7 @@ fn kind_str(kind: check::Kind) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{commit, temp_repo};
+    use test_support::{commit, temp_repo};
     fn workspace_file(source: &str) -> Vec<ScannedFile> {
         vec![ScannedFile {
             path: "common/src/example.rs".to_string(),
@@ -499,8 +499,9 @@ mod tests {
         // xtask/Cargo.toml` runs with `xtask/` as its cwd, and `ls-files` lists
         // only what is beneath it — so a cwd-relative query would have seen a
         // partial tree and reported every path as unrooted.
-        let root = crate::git::toplevel(Path::new(".")).expect("git rev-parse");
-        let tracked = crate::git::tracked_files(Path::new(&root), "*.rs").expect("git ls-files");
+        let root = repository_policy::git::toplevel(Path::new(".")).expect("git rev-parse");
+        let tracked =
+            repository_policy::git::tracked_files(Path::new(&root), "*.rs").expect("git ls-files");
         assert!(
             tracked.len() > 100,
             "only {} tracked .rs files — the query saw a partial tree",
@@ -593,13 +594,13 @@ mod tests {
 
     #[test]
     fn violation_detail_omits_missing_source_line() {
-        let numeric = doctests::check::Violation {
+        let numeric = crate::check::Violation {
             file: "tools/doctests/src/check.rs".to_string(),
             line: Some(56),
-            kind: doctests::check::Kind::NotRun,
+            kind: crate::check::Kind::NotRun,
             detail: "not evaluated".to_string(),
         };
-        let missing = doctests::check::Violation {
+        let missing = crate::check::Violation {
             line: None,
             ..numeric.clone()
         };
@@ -616,10 +617,61 @@ mod tests {
 
     #[test]
     fn kind_str_is_the_kebab_case_wire_spelling() {
-        assert_eq!(kind_str(doctests::check::Kind::NotRun), "not-run");
+        assert_eq!(kind_str(crate::check::Kind::NotRun), "not-run");
         assert_eq!(
-            kind_str(doctests::check::Kind::BannedAttribute),
+            kind_str(crate::check::Kind::BannedAttribute),
             "banned-attribute"
         );
+    }
+}
+
+#[cfg(test)]
+mod test_support {
+    use std::path::Path;
+
+    fn git_ok(dir: &Path, args: &[&str]) {
+        let status = repository_policy::git::at(dir).args(args).status().unwrap();
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    pub struct TestRepo(tempfile::TempDir);
+
+    impl std::ops::Deref for TestRepo {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            self.0.path()
+        }
+    }
+
+    impl AsRef<Path> for TestRepo {
+        fn as_ref(&self) -> &Path {
+            self.0.path()
+        }
+    }
+
+    pub fn temp_repo(prefix: &str, tag: &str) -> TestRepo {
+        let dir = tempfile::Builder::new()
+            .prefix(&format!("jaunder-{prefix}-{tag}-"))
+            .tempdir()
+            .unwrap();
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &["config", "user.email", "t@t"],
+            &["config", "user.name", "t"],
+            &["config", "commit.gpgsign", "false"],
+        ] {
+            git_ok(dir.path(), args);
+        }
+        TestRepo(dir)
+    }
+
+    pub fn commit(dir: &Path, rel: &str, body: &str) {
+        let path = dir.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, body).unwrap();
+        git_ok(dir, &["add", rel]);
+        git_ok(dir, &["commit", "-q", "-m", rel]);
     }
 }

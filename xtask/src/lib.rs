@@ -12,8 +12,6 @@ pub use repository_policy::markers;
 mod mutants;
 mod nix_probe;
 mod result;
-#[cfg(test)]
-mod test_support;
 mod wasm_budget;
 mod wasm_coverage;
 mod wasm_sections;
@@ -21,7 +19,6 @@ mod wasm_symbols;
 
 mod steps {
     pub mod check_leaf;
-    pub mod doctest_fences;
     pub mod nix;
     pub mod wasm_budget;
 }

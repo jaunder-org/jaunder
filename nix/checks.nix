@@ -2865,6 +2865,9 @@ mkWasmCoverageMeasurementProducer =
     || type == "directory"
     # traced-run all-target tests embed these maintained workflow owners.
     || path == "${toString ../.}/Justfile"
+    # Qualification compiles in its evidence schema; its tests embed .gitignore.
+    || path == "${toString ../.}/docs/production-baseline.schema.json"
+    || path == "${toString ../.}/.gitignore"
     || path == "${toString ../.}/.github/workflows/ci.yml"
     || (
       !(pkgs.lib.hasSuffix ".md" path)
@@ -2914,6 +2917,7 @@ mkWasmCoverageMeasurementProducer =
       assert clippySourceFilter "${toString ../.}/testdata/theme-repository/minimal/preview.png" "regular";
       assert !(clippySourceFilter "${toString ../.}/README.md" "regular");
       assert !(clippySourceFilter "${toString ../.}/docs/ARCHITECTURE.md" "regular");
+      assert clippySourceFilter "${toString ../.}/docs/production-baseline.schema.json" "regular";
       assert !(clippySourceFilter "${toString ../.}/xtask/src/lib.rs" "regular");
       assert builtins.all (relative: clippySourceFilter (cargoSourcePath relative) "directory") [
         "vendor" "${sqlxSqlitePatchRoot}" "${sqlxSqlitePatchRoot}/src" "${sqlxSqlitePatchRoot}/src/connection"

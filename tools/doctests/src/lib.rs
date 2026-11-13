@@ -30,6 +30,8 @@ pub mod check;
 pub mod fence;
 #[cfg(test)]
 mod harness;
+#[cfg(feature = "host")]
+pub mod host;
 pub mod libtest;
 pub mod roots;
 pub mod status;

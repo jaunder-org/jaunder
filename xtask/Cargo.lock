@@ -3257,6 +3257,7 @@ name = "repository-policy"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
  "common",
  "glob",
  "oxc_allocator",

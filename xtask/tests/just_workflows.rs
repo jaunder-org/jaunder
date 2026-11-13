@@ -30,6 +30,11 @@ impl Workflow {
             root.path().join("scripts/step-report.jq"),
         )
         .unwrap();
+        fs::copy(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/run-report"),
+            root.path().join("scripts/run-report"),
+        )
+        .unwrap();
         // Gate composition observes only the aggregate boundary. The actual helper's
         // settlement, artifact and failure behavior is exercised by e2e_workflow.
         fs::write(
@@ -447,12 +452,7 @@ fn broad(mode: &str, shared_docs: bool) -> Vec<Vec<String>> {
         } else if name != "doctest-fences" {
             expected.extend(commands(&[&format!("cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin source-contracts -- {name}")]));
         } else {
-            expected.push(vec![
-                "cargo".into(),
-                "xtask".into(),
-                "check-leaf".into(),
-                name.into(),
-            ]);
+            expected.extend(commands(&["cargo run --locked --quiet --manifest-path tools/Cargo.toml -p doctests --features host --bin doctest-check -- fences"]));
         }
     }
     for name in [
@@ -522,7 +522,7 @@ fn devtool(name: &str, mode: &str) -> Vec<String> {
             "cargo clippy -p web -p client -p csr --features csr --target wasm32-unknown-unknown -- -D warnings"
         }
         "tools-clippy" => {
-            "cargo clippy --manifest-path tools/Cargo.toml --workspace --all-targets -- -D warnings"
+            "cargo clippy --manifest-path tools/Cargo.toml --workspace --all-targets --features doctests/host -- -D warnings"
         }
         "tsc" => "tsc --noEmit -p end2end/tsconfig.json",
         "ert" => {
@@ -547,7 +547,7 @@ fn devtool(name: &str, mode: &str) -> Vec<String> {
 fn host_tests() -> Vec<Vec<String>> {
     commands(&[
         "cargo test --manifest-path xtask/Cargo.toml --lib --bins --tests",
-        "cargo test --manifest-path tools/Cargo.toml --lib --bins --tests",
+        "cargo test --manifest-path tools/Cargo.toml --lib --bins --tests --features doctests/host",
     ])
 }
 
@@ -714,7 +714,7 @@ fn broad_fix_and_verify_preserve_the_actual_complete_success_order() {
     prepush.extend(host_tests());
     prepush.extend(commands(&[
         "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p host-proof --bin test-local --",
-        "cargo xtask check-leaf workspace-doctests",
+        "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p doctests --features host --bin doctest-check -- workspace",
     ]));
     let (ok, actual, stderr) = workflow.run(&["prepush"], "");
     assert!(ok, "{stderr}");

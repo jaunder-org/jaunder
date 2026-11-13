@@ -1,5 +1,6 @@
-//! The focused-proof result contract: one JSON document on stdout, the process
-//! status as the verdict. Human views are derived from the JSON by callers.
+//! The host tool result contract: one JSON document on stdout, the process
+//! status as the verdict. Human views are derived from the JSON by callers
+//! (`scripts/step-report.jq`).
 
 use std::time::Duration;
 

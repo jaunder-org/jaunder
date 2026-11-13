@@ -73,4 +73,4 @@ wasm-clippy mode="verify" lane="host": (_admit (lane) (env_var_or_default("JAUND
     {{if lane == "sandbox" { product_sandbox } else { "" }}} cargo {{if lane == "sandbox" { "--offline" } else { "" }}} clippy -p web -p client -p csr --features csr --target wasm32-unknown-unknown -- -D warnings
 
 tools-clippy mode="verify" lane="host": (_admit (lane) (env_var_or_default("JAUNDER_DEVTOOL_TOOLS_CARGO_HOME", "")))
-    {{if lane == "sandbox" { tools_sandbox } else { "" }}} cargo {{if lane == "sandbox" { "--offline" } else { "" }}} clippy --manifest-path tools/Cargo.toml --workspace --all-targets -- -D warnings
+    {{if lane == "sandbox" { tools_sandbox } else { "" }}} cargo {{if lane == "sandbox" { "--offline" } else { "" }}} clippy --manifest-path tools/Cargo.toml --workspace --all-targets --features doctests/host -- -D warnings

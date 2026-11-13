@@ -19,6 +19,7 @@ prettier := "just --justfile recipes/prettier.just --working-directory ."
 static := "just --justfile recipes/static.just --working-directory ."
 repository_policy := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin"
 host_proof := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p host-proof --bin"
+doctest_check := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p doctests --features host --bin doctest-check --"
 
 # Setup follows the current checkout even after cd in an existing devShell.
 tsc mode="verify":
@@ -228,7 +229,7 @@ _host mode docs:
     {{repository_policy}} source-contracts -- thin-components
     {{repository_policy}} source-contracts -- sqlx-newtype-bind
     {{repository_policy}} source-contracts -- sqlx-newtype-decode
-    cargo xtask check-leaf doctest-fences
+    scripts/run-report {{doctest_check}} fences
     {{repository_policy}} source-contracts -- raw-html-door
     {{repository_policy}} source-contracts -- html-sink
     {{repository_policy}} source-contracts -- e2e-scaffold
@@ -248,7 +249,7 @@ _host mode docs:
 [private]
 _host-tests:
     cargo test --manifest-path xtask/Cargo.toml --lib --bins --tests
-    cargo test --manifest-path tools/Cargo.toml --lib --bins --tests
+    cargo test --manifest-path tools/Cargo.toml --lib --bins --tests --features doctests/host
 
 [private]
 _product-tests: test-local
@@ -277,7 +278,7 @@ e2e-local *args:
 
 [private]
 _workspace-doctests:
-    cargo xtask check-leaf workspace-doctests
+    scripts/run-report {{doctest_check}} workspace
 
 [private]
 _platform:
