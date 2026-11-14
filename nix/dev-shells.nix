@@ -113,10 +113,9 @@ let
     pkgs.gh
   ];
 
-  # Host-built Rust binaries load Nix OpenSSL/dav1d through this path. Replace
-  # rather than prepend: inherited host entries built against a different glibc
-  # break the pinned Playwright browsers (#1947), and prepending to an unset
-  # value leaves an empty entry that ld.so reads as the current directory.
+  # Host-built Rust binaries load Nix OpenSSL/dav1d through this path. It
+  # replaces the inherited value: host entries built for another glibc break
+  # the pinned Playwright browsers (#1947).
   linuxLibraryPathExport = ''
     export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}"
   '';

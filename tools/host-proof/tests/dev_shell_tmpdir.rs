@@ -174,6 +174,7 @@ fn ci_e2e_shell_environment_is_exact() {
 /// browsers (#1947), so Linux entry replaces the inherited value outright.
 #[test]
 fn shell_entry_replaces_inherited_library_path() {
+    const UNSET: &str = "<unset>";
     let owned = owned_fixture();
     let mut observed = Vec::new();
     for (name, hook) in hooks() {
@@ -186,7 +187,7 @@ fn shell_entry_replaces_inherited_library_path() {
                 owned.path(),
                 &record,
                 inherited,
-                "printf '%s\\n' \"${LD_LIBRARY_PATH-<unset>}\"",
+                &format!("printf '%s\\n' \"${{LD_LIBRARY_PATH-{UNSET}}}\""),
             );
             assert!(
                 output.status.success(),
@@ -197,15 +198,16 @@ fn shell_entry_replaces_inherited_library_path() {
             let value = value.strip_suffix('\n').unwrap().to_owned();
             if cfg!(target_os = "macos") {
                 // Darwin hooks never set the variable; entry passes it through.
-                assert_eq!(value, inherited.unwrap_or("<unset>"), "{name}");
+                assert_eq!(value, inherited.unwrap_or(UNSET), "{name}");
             } else {
                 observed.push((name.clone(), inherited, value));
             }
         }
     }
-    let Some((_, _, expected)) = observed.first() else {
+    if cfg!(target_os = "macos") {
         return;
-    };
+    }
+    let (_, _, expected) = observed.first().expect("Linux evaluates shell hooks");
     let entries: Vec<&str> = expected.split(':').collect();
     assert_eq!(entries.len(), 2, "exactly OpenSSL then dav1d: {expected}");
     assert!(entries[0].contains("-openssl-") && entries[0].ends_with("/lib"));
