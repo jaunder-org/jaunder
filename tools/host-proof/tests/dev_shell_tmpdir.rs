@@ -58,6 +58,19 @@ fn repository(parent: &Path, name: &str) -> PathBuf {
 }
 
 fn enter(hook: &str, cwd: &Path, parent: &Path, record: &Path, body: &str) -> Output {
+    enter_with_library_path(hook, cwd, parent, record, None, body)
+}
+
+/// Enter with an explicit inherited `LD_LIBRARY_PATH` (`None` leaves it unset),
+/// so the result never depends on the test runner's own shell.
+fn enter_with_library_path(
+    hook: &str,
+    cwd: &Path,
+    parent: &Path,
+    record: &Path,
+    library_path: Option<&str>,
+    body: &str,
+) -> Output {
     let script = format!(
         "setup-e2e-node-modules() {{ printf '%s\\n' \"$TMPDIR\" > \"$JAUNDER_TEST_PROVISION_RECORD\"; }}\n\
          eval \"$JAUNDER_TEST_SHELL_HOOK\"\n{body}"
@@ -75,6 +88,10 @@ fn enter(hook: &str, cwd: &Path, parent: &Path, record: &Path, body: &str) -> Ou
     ] {
         command.env_remove(key);
     }
+    match library_path {
+        Some(value) => command.env("LD_LIBRARY_PATH", value),
+        None => command.env_remove("LD_LIBRARY_PATH"),
+    };
     command
         .args(["--noprofile", "--norc", "-c", &script])
         .current_dir(cwd)
@@ -88,7 +105,7 @@ fn enter(hook: &str, cwd: &Path, parent: &Path, record: &Path, body: &str) -> Ou
 }
 
 #[test]
-fn ci_e2e_shell_environment_and_library_prepend_are_exact() {
+fn ci_e2e_shell_environment_is_exact() {
     let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
@@ -96,7 +113,7 @@ fn ci_e2e_shell_environment_and_library_prepend_are_exact() {
     let output = Command::new("nix")
         .args([
             "eval", "--impure", "--json", ".#devShells", "--apply",
-            "all: let shells = all.${builtins.currentSystem}; toolchains = builtins.filter (path: builtins.match \".*-rust-[0-9].*\" path != null) (map toString shells.ci.buildInputs); in if builtins.hasAttr \"ci-e2e\" shells then let shell = shells.ci-e2e; omitted = [ \"PLAYWRIGHT_BROWSERS_PATH\" \"PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD\" \"FONTCONFIG_FILE\" \"RUST_SRC_PATH\" \"JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME\" \"E2E_TYPES_NODE_MODULES\" \"E2E_PLAYWRIGHT_TEST\" \"JAUNDER_THEME_THUMBNAIL_BROWSER\" ]; in { hook = shell.shellHook; inputs = map toString shell.buildInputs; ci_toolchains = toolchains; lc_all = shell.LC_ALL; tz = shell.TZ; tzdir = shell.TZDIR; omitted = builtins.listToAttrs (map (name: { inherit name; value = builtins.hasAttr name shell; }) omitted); } else null",
+            "all: let shells = all.${builtins.currentSystem}; toolchains = builtins.filter (path: builtins.match \".*-rust-[0-9].*\" path != null) (map toString shells.ci.buildInputs); in if builtins.hasAttr \"ci-e2e\" shells then let shell = shells.ci-e2e; omitted = [ \"PLAYWRIGHT_BROWSERS_PATH\" \"PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD\" \"FONTCONFIG_FILE\" \"RUST_SRC_PATH\" \"JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME\" \"E2E_TYPES_NODE_MODULES\" \"E2E_PLAYWRIGHT_TEST\" \"JAUNDER_THEME_THUMBNAIL_BROWSER\" ]; in { inputs = map toString shell.buildInputs; ci_toolchains = toolchains; lc_all = shell.LC_ALL; tz = shell.TZ; tzdir = shell.TZDIR; omitted = builtins.listToAttrs (map (name: { inherit name; value = builtins.hasAttr name shell; }) omitted); } else null",
         ])
         .current_dir(checkout)
         .output()
@@ -151,40 +168,53 @@ fn ci_e2e_shell_environment_and_library_prepend_are_exact() {
     for (name, present) in contract["omitted"].as_object().unwrap() {
         assert!(!present.as_bool().unwrap(), "{name} must not enter ci-e2e");
     }
+}
 
-    let hook = contract["hook"].as_str().unwrap();
-    let assignment = hook
-        .lines()
-        .find(|line| line.starts_with("export LD_LIBRARY_PATH=\""))
-        .expect("ci-e2e exports LD_LIBRARY_PATH");
-    let prefix = assignment
-        .strip_prefix("export LD_LIBRARY_PATH=\"")
-        .unwrap()
-        .strip_suffix(":$LD_LIBRARY_PATH\"")
-        .expect("prepend must preserve inherited LD_LIBRARY_PATH");
-    let openssl = prefix.find("-openssl-").expect("OpenSSL path is prepended");
-    let dav1d = prefix.find("-dav1d-").expect("dav1d path is prepended");
-    assert!(openssl < dav1d, "native library prepend order changed");
-
+/// Host library directories built against a different glibc break the pinned
+/// browsers (#1947), so Linux entry replaces the inherited value outright.
+#[test]
+fn shell_entry_replaces_inherited_library_path() {
+    const UNSET: &str = "<unset>";
     let owned = owned_fixture();
-    let root = repository(owned.path(), "ci-e2e environment");
-    let record = owned.path().join("library-path");
-    let output = enter(
-        hook,
-        &root,
-        owned.path(),
-        &record,
-        "export LD_LIBRARY_PATH=/inherited-sentinel; eval \"$JAUNDER_TEST_SHELL_HOOK\"; printf '%s\\n' \"$LD_LIBRARY_PATH\"",
-    );
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap(),
-        format!("{prefix}:/inherited-sentinel\n")
-    );
+    let mut observed = Vec::new();
+    for (name, hook) in hooks() {
+        let root = repository(owned.path(), &format!("{name} library path"));
+        let record = owned.path().join(format!("{name}-library-provision"));
+        for inherited in [Some("/inherited-sentinel"), None] {
+            let output = enter_with_library_path(
+                hook,
+                &root,
+                owned.path(),
+                &record,
+                inherited,
+                &format!("printf '%s\\n' \"${{LD_LIBRARY_PATH-{UNSET}}}\""),
+            );
+            assert!(
+                output.status.success(),
+                "{name}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let value = String::from_utf8(output.stdout).unwrap();
+            let value = value.strip_suffix('\n').unwrap().to_owned();
+            if cfg!(target_os = "macos") {
+                // Darwin hooks never set the variable; entry passes it through.
+                assert_eq!(value, inherited.unwrap_or(UNSET), "{name}");
+            } else {
+                observed.push((name.clone(), inherited, value));
+            }
+        }
+    }
+    if cfg!(target_os = "macos") {
+        return;
+    }
+    let (_, _, expected) = observed.first().expect("Linux evaluates shell hooks");
+    let entries: Vec<&str> = expected.split(':').collect();
+    assert_eq!(entries.len(), 2, "exactly OpenSSL then dav1d: {expected}");
+    assert!(entries[0].contains("-openssl-") && entries[0].ends_with("/lib"));
+    assert!(entries[1].contains("-dav1d-") && entries[1].ends_with("/lib"));
+    for (name, inherited, value) in &observed {
+        assert_eq!(value, expected, "{name} with inherited {inherited:?}");
+    }
 }
 
 #[test]
