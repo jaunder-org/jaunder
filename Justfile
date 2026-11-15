@@ -276,7 +276,7 @@ coverage-check *args:
 wasm-audit *args:
     scripts/run-report {{host_proof}} wasm-audit -- "$@"
 
-# Eval-only Nix guards: nix-probe-source | cache-safety-probe.
+# Eval-only Nix guard: cache-safety-probe.
 [positional-arguments]
 source-diagnostics *args:
     scripts/run-report {{host_proof}} source-diagnostics -- "$@"

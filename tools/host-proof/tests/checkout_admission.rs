@@ -21,7 +21,7 @@ fn another_repository_is_refused_before_its_hook_configuration_changes() {
         );
     }
     let output = Command::new(env!("CARGO_BIN_EXE_source-diagnostics"))
-        .args(["nix-probe-source"])
+        .args(["cache-safety-probe"])
         .current_dir(&root)
         .output()
         .unwrap();
