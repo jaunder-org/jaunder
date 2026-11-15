@@ -13,7 +13,7 @@ with a hand-written expectation table.
 but kept it as an on-demand diagnostic.
 
 Unrun through #1898's intentional boundary changes, it failed on `main`
-(e0382b474). A full run found four mismatch kinds across 20 arms, each a stale
+(e0382b474). A full run found four mismatch kinds across 19 arms, each a stale
 expectation rather than a source-filter defect. What only this probe detected
 was over-inclusion (needless rebuilds) and changed derivation wiring: cost
 diagnostics that intentional refactors trip. A missing compile/embed input
