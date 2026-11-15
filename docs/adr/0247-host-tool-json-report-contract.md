@@ -1,14 +1,14 @@
-# ADR-DRAFT: Host tools report one JSON document on stdout
+# ADR-0247: Host tools report one JSON document on stdout
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-12
 - Issue: [#1898](https://github.com/jaunder-org/jaunder/issues/1898)
 
 ## Context
 
-[ADR-0246](../0246-retire-xtask-devtool-endpoints.md) retired the `xtask`
-omnibus and moved its residual capabilities to concern owners. Every xtask
-command reported through one envelope: `[ ok ]`/`[FAIL]` step lines, a
+[ADR-0246](0246-retire-xtask-devtool-endpoints.md) retired the `xtask` omnibus
+and moved its residual capabilities to concern owners. Every xtask command
+reported through one envelope: `[ ok ]`/`[FAIL]` step lines, a
 `.xtask/last-result.json` sidecar, a `--json` flag and an `xtask-done:` stderr
 sentinel. Carrying that envelope into each new executable would have copied its
 rendering and sidecar machinery into every concern package — more code, not less
@@ -50,8 +50,8 @@ diagnostics (`trace-analysis`, `wasm-audit`, `source-diagnostics`);
 `tools/coverage` (nondefault `host` feature) owns `coverage-check`;
 `tools/doctests` (nondefault `host` feature) owns `doctest-check`;
 `tools/qualification` keeps `qualification-host` and its own plain detail output
-under [ADR-0239](../0239-qualification-workflow-ownership.md). CI's e2e shell
-runs the Nix-built `packages.host-proof` verifier.
+under [ADR-0239](0239-qualification-workflow-ownership.md). CI's e2e shell runs
+the Nix-built `packages.host-proof` verifier.
 
 ## Consequences
 

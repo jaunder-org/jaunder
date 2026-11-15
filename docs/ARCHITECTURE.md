@@ -5508,7 +5508,7 @@ checker registry, runner, supervisor or replacement omnibus:
 
 Each tool that renders a verdict prints one JSON report on stdout and derives
 its human view through `scripts/step-report.jq`
-([draft decision](adr/drafts/host-tool-json-report-contract.md)). The
+([draft decision](adr/0247-host-tool-json-report-contract.md)). The
 experiment-only two-worker coverage endpoints (`coverage emit --experiment`,
 `experiment-worker`, `experiment-aggregate`) and their `benchmark-local`
 comparison harness are retired by operator decision; a future partitioning
