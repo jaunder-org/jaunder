@@ -4846,8 +4846,8 @@ artifact/source reuse, not a production dev/all-targets clippy preparation
 layer. Linux evidence does not establish Darwin execution or cross-platform
 artifact reuse.
 
-These filters guard their membership with inline assertions; no tool watches
-derivation identities for over-inclusion or wiring drift
+The source filters above assert representative membership inline; no tool
+watches derivation identities for over-inclusion or wiring drift
 ([retired matrix probe](adr/drafts/retire-nix-source-invalidation-matrix-probe.md)).
 Identity stability alone is not local/remote cache or compiler freshness
 evidence.

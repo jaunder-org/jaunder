@@ -1,5 +1,5 @@
-//! `source-diagnostics` — eval-only Nix cache boundary guard; run in CI and on
-//! request, not per commit. Prints one JSON report on stdout.
+//! `source-diagnostics` — eval-only Nix cache boundary guard; run on request,
+//! not per commit. Prints one JSON report on stdout.
 
 use clap::{Parser, Subcommand};
 use host_proof::report::{CommandResult, parse_args};

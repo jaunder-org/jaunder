@@ -2099,11 +2099,11 @@ availability. Cache legitimate build inputs aggressively, but execute tests
 afresh; cached test verdicts are not execution evidence.
 
 Just gate workflows return process status and parked logs, not the historical
-JSON invalidation envelope. Source-boundary membership is asserted inline by the
-Nix filters (the coverage filter also has `just coverage-check probe-source`);
-do not infer execution from reused outputs. `just validate` adds all eight
-retained E2E lanes, Firefox reconciliation, and server-function coverage
-verification to `just validate-no-e2e`.
+JSON invalidation envelope. The Nix source filters assert representative
+membership inline (the coverage filter also has
+`just coverage-check probe-source`); do not infer execution from reused outputs.
+`just validate` adds all eight retained E2E lanes, Firefox reconciliation, and
+server-function coverage verification to `just validate-no-e2e`.
 
 ### Nix VM checks
 
