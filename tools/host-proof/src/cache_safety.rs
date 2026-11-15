@@ -159,23 +159,24 @@ fn reconcile(policy: &Policy, inventory: &NixInventory) -> Result<()> {
         .filter(|output| output.classification == Classification::Support)
         .map(|output| &output.attr)
         .collect::<BTreeSet<_>>();
-    let differences = [
+    let mut differences = Vec::new();
+    for (class, declared, generated) in [
         ("final", &policy_finals, &finals),
         ("support", &policy_supports, &supports),
-    ]
-    .into_iter()
-    .flat_map(|(class, declared, generated)| {
-        [
-            ("missing from", generated.difference(declared)),
-            ("extra in", declared.difference(generated)),
-        ]
-        .into_iter()
-        .filter_map(move |(relation, attrs)| {
-            let attrs = attrs.map(|attr| attr.as_str()).collect::<Vec<_>>();
-            (!attrs.is_empty()).then(|| format!("{class} {relation} policy: {}", attrs.join(", ")))
-        })
-    })
-    .collect::<Vec<_>>();
+    ] {
+        for (relation, from, to) in [
+            ("missing from", generated, declared),
+            ("extra in", declared, generated),
+        ] {
+            let attrs = from
+                .difference(to)
+                .map(|attr| attr.as_str())
+                .collect::<Vec<_>>();
+            if !attrs.is_empty() {
+                differences.push(format!("{class} {relation} policy: {}", attrs.join(", ")));
+            }
+        }
+    }
     if !differences.is_empty() {
         bail!(
             "cache policy classifications do not reconcile with generated Nix inventory; {}",
