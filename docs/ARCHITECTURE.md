@@ -4621,11 +4621,13 @@ CI invokes four independent recipes: `just ci-validate-host`,
 `just ci-validate-coverage`. `host` owns the verify-only host/static gate and
 auxiliary host tests; `hermetic` owns Nix static checks and the wasm budget;
 `test-checks` owns wasm tests, doctests, and Elisp coverage; and `coverage` owns
-Rust coverage plus its gate. Producer/consumer pairs never cross jobs.
-Source-invalidation probes remain manually callable diagnostics, not automatic
-CI steps
-([on-demand source probes](adr/0227-on-demand-source-invalidation-probes.md)). A
-result-only `Validate (no e2e)` job requires all four lanes, preserving the
+Rust coverage plus its gate. Producer/consumer pairs never cross jobs. The
+coverage source-filter probe remains a manually callable diagnostic, not an
+automatic CI step
+([on-demand source probes](adr/0227-on-demand-source-invalidation-probes.md));
+the Nix derivation-identity matrix probe is retired
+([retired matrix probe](adr/drafts/retire-nix-source-invalidation-matrix-probe.md)).
+A result-only `Validate (no e2e)` job requires all four lanes, preserving the
 stable branch-protection context. Local `just validate-no-e2e` composes the same
 required surfaces in success-path order
 ([split non-e2e validation lanes](adr/0192-split-ci-non-e2e-validation-lanes.md);
@@ -4844,24 +4846,18 @@ artifact/source reuse, not a production dev/all-targets clippy preparation
 layer. Linux evidence does not establish Darwin execution or cross-platform
 artifact reuse.
 
-`just source-diagnostics nix-probe-source` protects these boundaries by applying
-isolated tracked markers and evaluating `.drv` identities. It fails closed
-unless a docs marker changes only `static-docs`; a server marker changes
-`static-code` but neither wasm path; a web marker changes `static-code` and site
-but not wasm tests; and `common`/`macros` markers change every dependent
-final-consumer boundary. Tooling and shared implementation changes preserve
-compiled tooling dependency identity while invalidating their real consumer;
-tools lock/configuration changes invalidate the dependency graph. This drift
-probe runs only on request. It does not build application/check outputs, though
-evaluation can require declared source preparation. Identity stability alone is
-not local/remote cache or compiler freshness evidence.
+The source filters above assert representative membership inline; no tool
+watches derivation identities for over-inclusion or wiring drift
+([retired matrix probe](adr/drafts/retire-nix-source-invalidation-matrix-probe.md)).
+Identity stability alone is not local/remote cache or compiler freshness
+evidence.
 
 `just validate` composes `just validate-no-e2e` and the synchronous `just e2e`
 workflow, which settles all eight retained producers before both Firefox
 reconciliations and owns authoritative SQLite/Chromium flow verification.
-Gate-wide JSON invalidation reports are retired. Existing source-boundary probes
-remain optional, named diagnostics; evidence belongs in ignored run storage or
-the PR. Do not purge the store or run routine measurement campaigns.
+Gate-wide JSON invalidation reports are retired. The coverage source-filter
+probe remains an optional, named diagnostic; evidence belongs in ignored run
+storage or the PR. Do not purge the store or run routine measurement campaigns.
 
 #### Sandboxed cargo-deny
 

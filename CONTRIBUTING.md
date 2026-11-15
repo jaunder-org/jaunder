@@ -1050,8 +1050,9 @@ work between agents and checkouts.
 CI does **not** run `just validate` as a single job. It distributes the non-e2e
 surface across `just ci-validate-host`, `just ci-validate-hermetic`,
 `just ci-validate-test-checks`, and `just ci-validate-coverage`, and joins them
-under the stable `Validate (no e2e)` result-only job. Source-invalidation probes
-are on-demand diagnostics, not automatic CI steps.
+under the stable `Validate (no e2e)` result-only job. The coverage source-filter
+probe (`just coverage-check probe-source`) is an on-demand diagnostic, not an
+automatic CI step.
 
 E2E uses catalog-derived matrices for two unsplit Chromium producers and six
 isolated Firefox producers (`just e2e-producer <identity>`). An `always()`
@@ -2059,14 +2060,13 @@ nightly, source closure, bundling, service and browser flow, but necessarily
 omits instrumentation/minicov and diagnostic exports—the precisely measured
 differences.
 
-**Nix invalidation-boundary guard
-(`just source-diagnostics nix-probe-source`).** The hermetic static surface has
-separate semantic derivations, not a singular `static-checks`: `static-docs`
-owns Markdown formatting and its configuration; `static-typescript` owns the
-named `tsc` check; `rust-format` owns `fmt`, scoped `leptosfmt`, and
-`tools-fmt`; `static-ert` owns standalone pure ERT; `static-elisp` owns Elisp
-formatting and byte-compilation over its complete non-Markdown Elisp source
-filter; `static-e2e-census` owns the existing provision-and-census command; and
+**Static-check derivation split.** The hermetic static surface has separate
+semantic derivations, not a singular `static-checks`: `static-docs` owns
+Markdown formatting and its configuration; `static-typescript` owns the named
+`tsc` check; `rust-format` owns `fmt`, scoped `leptosfmt`, and `tools-fmt`;
+`static-ert` owns standalone pure ERT; `static-elisp` owns Elisp formatting and
+byte-compilation over its complete non-Markdown Elisp source filter;
+`static-e2e-census` owns the existing provision-and-census command; and
 `static-code` owns the remaining shared devtool definitions. TypeScript
 formatting remains in Code. The census leaf retains the existing Playwright
 listing configuration, test/helper/fixture files, including module-load assets,
@@ -2078,58 +2078,24 @@ transitively; compiled `devtoolBin` and its Rust tooling closure are no longer
 census inputs. This is documented coupling, not a claim of full source
 isolation. The TypeScript split changes neither the independently landed Rust
 formatting boundary nor distinct feature/target/tools Clippy commands, and makes
-no equivalence, permanent deferral or closure claim. The existing source drift
-probe covers its original boundaries plus `static-elisp` and
-`static-e2e-census`, not `static-typescript`, `rust-format`, or `static-ert`.
-The CSR/site source closure contains workspace manifests, the resolved `csr`
-target closure, its required shell inputs, and deterministic workspace
-placeholders. The client wasm-test closure analogously contains workspace
-manifests, the resolved `client` wasm-test target closure, and its required
-inputs/placeholders. `common` and `macros` remain wherever a resolved target
-reaches them; unrelated `server`, `storage`, and host-only sources are absent
-from both closures.
+no equivalence, permanent deferral or closure claim. The census source filter's
+inline assertions establish membership of the census script, Playwright
+configuration, helper/fixture/font and package manifest/lock inputs, plus
+exclusion of Markdown and unrelated server source. The CSR/site source closure
+contains workspace manifests, the resolved `csr` target closure, its required
+shell inputs, and deterministic workspace placeholders. The client wasm-test
+closure analogously contains workspace manifests, the resolved `client`
+wasm-test target closure, and its required inputs/placeholders. `common` and
+`macros` remain wherever a resolved target reaches them; unrelated `server`,
+`storage`, and host-only sources are absent from both closures.
 
-`just source-diagnostics nix-probe-source` (host-proof) creates isolated tracked
-marker perturbations and **evaluates** the flake `.drv` identities without
-realizing outputs. It fails closed unless docs changes affect only
-`static-docs`; server changes affect `static-code` but neither wasm path; web
-changes affect `static-code` and `.#site` but not `wasm-tests`; an end2end
-lane-catalog perturbation affects `static-code` (its formatter population) and
-`static-e2e-census`; Elisp-source changes affect `static-elisp` and also change
-`static-code`'s observed identity through an existing transitive input, despite
-exclusion from its direct Elisp source filter; and `common`, `macros`, and the
-shared performance contract affect `static-code`, `static-elisp`, site, and
-wasm-test boundaries without invalidating `static-docs`. `common` and `macros`
-also affect `.#host-proof`; performance source is outside host-proof's
-dependency closure. For the census boundary, source-filter assertions establish
-membership of the census script, Playwright configuration, helper/fixture/font
-and package manifest/lock inputs, plus exclusion of Markdown and unrelated
-server source. Runtime identity perturbations cover the lane catalog
-invalidation and stability under Rust tooling, manifest, embedded-input, and
-unrelated server-source changes. They do not separately perturb every census
-input category or prove that each has independent invalidation. It also protects
-`devtool` and its compiled tooling dependency boundary: devtool implementation
-edits invalidate the real tool, `static-code`, `static-elisp`, and site (through
-`csrWasmBundle`'s `devtoolBin` build input), but preserve `wasm-tests`,
-`host-proof`, and the compiled tooling dependency identity. `static-docs` now
-consumes the shared Prettier recipe directly, without a compiled Rust docs tool.
-The documentation and site source filters remain narrow; derivation identity
-includes transitive executable inputs as well as admitted sources.
-`tools/Cargo.lock` invalidates ordinary devtool, its dependency preparation,
-`static-code`, `static-elisp`, `host-proof`, and site through `csrWasmBundle`;
-`wasm-tests` remains stable. Root Cargo build configuration affects
-`static-code`, `static-elisp`, site, `wasm-tests`, `host-proof`, devtool and
-tooling dependencies. The four manifest arms (root, tools workspace, devtool and
-shared common manifest) and four embedded-input arms (server build script, CSR
-shell, Theme Package manifest and migration) assert the appropriate
-`static-code`, `static-elisp`, `devtool`, tooling-dependency and CSR-bundle
-fan-out for each input; unrelated boundaries remain stable. Tooling preparation
-uses generated dummy sources and a file-scoped lockfile, with repository-root
-target alignment and nonempty archive admission for ordinary and qualification
-consumers. Release artifacts are not assumed to seed dev-profile clippy. The
-identity drift probe runs only on request; it builds no application/check
-outputs, although evaluation can require declared source preparation. It never
-purges the store. Stable identity is not proof of compiler freshness or
+`static-docs` consumes the shared Prettier recipe directly, without a compiled
+Rust docs tool. The documentation and site source filters remain narrow;
+derivation identity includes transitive executable inputs as well as admitted
+sources. Tooling preparation uses generated dummy sources and a file-scoped
+lockfile, with repository-root target alignment and nonempty archive admission
+for ordinary and qualification consumers. Release artifacts are not assumed to
+seed dev-profile clippy. Stable identity is not proof of compiler freshness or
 local/remote realization reuse.
 
 Artifact compatibility includes compiler, target, profile, resolved features,
@@ -2141,8 +2107,9 @@ availability. Cache legitimate build inputs aggressively, but execute tests
 afresh; cached test verdicts are not execution evidence.
 
 Just gate workflows return process status and parked logs, not the historical
-JSON invalidation envelope. For a named source-boundary question, use the
-existing on-demand identity probes; do not infer execution from reused outputs.
+JSON invalidation envelope. The Nix source filters assert representative
+membership inline (the coverage filter also has
+`just coverage-check probe-source`); do not infer execution from reused outputs.
 `just validate` adds all eight retained E2E lanes, Firefox reconciliation, and
 server-function coverage verification to `just validate-no-e2e`.
 

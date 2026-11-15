@@ -15,8 +15,6 @@ pub mod git {
 }
 pub mod invocation_trace;
 pub mod nix_build;
-mod nix_eval;
-pub mod nix_probe;
 pub mod playwright_report;
 mod server_fn_coverage;
 mod sh;
