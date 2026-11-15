@@ -1,6 +1,6 @@
-# ADR-DRAFT: Retire the Nix source-invalidation matrix probe
+# ADR-0248: Retire the Nix source-invalidation matrix probe
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-15
 - Issue: [#1946](https://github.com/jaunder-org/jaunder/issues/1946)
 
@@ -9,8 +9,8 @@
 `just source-diagnostics nix-probe-source` evaluated ten derivation identities
 before and after each of 30 one-file perturbations and compared the changed set
 with a hand-written expectation table.
-[ADR-0227](../0227-on-demand-source-invalidation-probes.md) removed it from CI
-but kept it as an on-demand diagnostic.
+[ADR-0227](0227-on-demand-source-invalidation-probes.md) removed it from CI but
+kept it as an on-demand diagnostic.
 
 Unrun through #1898's intentional boundary changes, it failed on `main`
 (e0382b474). A full run found four mismatch kinds across 19 arms, each a stale

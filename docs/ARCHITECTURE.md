@@ -4626,7 +4626,7 @@ coverage source-filter probe remains a manually callable diagnostic, not an
 automatic CI step
 ([on-demand source probes](adr/0227-on-demand-source-invalidation-probes.md));
 the Nix derivation-identity matrix probe is retired
-([retired matrix probe](adr/drafts/retire-nix-source-invalidation-matrix-probe.md)).
+([retired matrix probe](adr/0248-retire-nix-source-invalidation-matrix-probe.md)).
 A result-only `Validate (no e2e)` job requires all four lanes, preserving the
 stable branch-protection context. Local `just validate-no-e2e` composes the same
 required surfaces in success-path order
@@ -4848,7 +4848,7 @@ artifact reuse.
 
 The source filters above assert representative membership inline; no tool
 watches derivation identities for over-inclusion or wiring drift
-([retired matrix probe](adr/drafts/retire-nix-source-invalidation-matrix-probe.md)).
+([retired matrix probe](adr/0248-retire-nix-source-invalidation-matrix-probe.md)).
 Identity stability alone is not local/remote cache or compiler freshness
 evidence.
 
