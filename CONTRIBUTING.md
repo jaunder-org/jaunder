@@ -78,9 +78,17 @@ This routes host-tool temporary files, not their ownership or cleanup. Ignored
 `.xtask/` storage preserves existing unique leaves and cleanup owners; it does
 not collect leftovers. Tools with explicit temporary/output paths (including
 browser profiles and Playwright outputs), Nix daemon/build processes, and
-sandbox storage are not universally redirected. The focused regression
+sandbox storage are not universally redirected.
+
+On Linux, entering any project shell (`ci-e2e` included) also sets
+`LD_LIBRARY_PATH` to exactly the Nix OpenSSL and dav1d library directories,
+replacing any inherited value. Host library directories built against a
+different glibc otherwise break the pinned Playwright browsers; re-export after
+entry if you deliberately need extra entries.
+
+The focused regression
 `cargo test --locked --manifest-path tools/Cargo.toml -p host-proof --test dev_shell_tmpdir`
-executes the evaluated hooks for all three shells in child Bash processes; it
+executes the evaluated hooks for all four shells in child Bash processes; it
 does not realize their complete tool environments.
 
 The default `.#default` and `.#ci` shells target `x86_64-linux`,

@@ -113,6 +113,13 @@ let
     pkgs.gh
   ];
 
+  # Host-built Rust binaries load Nix OpenSSL/dav1d through this path. It
+  # replaces the inherited value: host entries built for another glibc break
+  # the pinned Playwright browsers (#1947).
+  linuxLibraryPathExport = ''
+    export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}"
+  '';
+
   linuxBrowserEnv = {
     PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
@@ -168,9 +175,7 @@ let
       export TMPDIR="$jaunder_tmpdir"
       unset jaunder_checkout_root jaunder_tmpdir jaunder_tmp_probe
 
-      ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-        export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:$LD_LIBRARY_PATH"
-      ''}
+      ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux linuxLibraryPathExport}
       ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
         export PLAYWRIGHT_BROWSERS_PATH="''${XDG_CACHE_HOME:-$HOME/Library/Caches}/ms-playwright-jaunder/${pkgs.playwright-test.version}"
       ''}
@@ -216,7 +221,7 @@ in
       fi
       export TMPDIR="$jaunder_tmpdir"
       unset jaunder_checkout_root jaunder_tmpdir jaunder_tmp_probe
-      export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:$LD_LIBRARY_PATH"
+      ${linuxLibraryPathExport}
     '';
   };
   theme-thumbnail = pkgs.mkShell {
