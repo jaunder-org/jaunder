@@ -1472,7 +1472,8 @@ baseline.
   or `watcher-error`, plus `pending` when one-shot observation catches a PR
   mid-flight or pre-arm classification evidence is incomplete. They never
   collapse into one another: `dequeued` means an observed same-head queue entry
-  vanished without a failed current-head merge-group run; `timed-out` means
+  vanished without a failed job in a current-head merge-group run, which
+  `ejected` reports even while that run is still in progress; `timed-out` means
   GitHub never finished; `watcher-error` means the tooling could not establish a
   trustworthy verdict.
 

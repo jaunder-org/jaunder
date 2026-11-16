@@ -114,10 +114,16 @@ pub struct RunRef {
     pub id: u64,
     pub url: String,
     pub created_at: String,
-    pub conclusion: String,
-    /// The first job already concluded as a failure, observed only while the run
-    /// has no conclusion: the queue ejects on that job before the run finishes.
-    pub failed_job: Option<String>,
+    pub status: RunStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunStatus {
+    /// GitHub's conclusion, verbatim.
+    Completed { conclusion: String },
+    /// No conclusion yet. The queue ejects on a job's failure before the run
+    /// finishes, so the first such job is the evidence while slower jobs run.
+    InProgress { failed_job: Option<String> },
 }
 
 /// Required-context observations for one exact commit.
@@ -474,24 +480,48 @@ pub fn parse_required_checks(v: &Value) -> Result<RequiredChecks, ApiError> {
 /// `created_at`, and the failure/recency judgment left to `decide`.
 pub fn parse_ejection_run(v: &Value, pr: PrNumber) -> Result<Option<RunRef>, ApiError> {
     let prefix = format!("gh-readonly-queue/main/pr-{pr}-");
-    let Some(run) = v
-        .get("workflow_runs")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|r| str_at(r, &["head_branch"]).is_some_and(|b| b.starts_with(&prefix)))
-        .max_by_key(|r| owned(r, &["created_at"]).unwrap_or_default())
-    else {
-        return Ok(None);
+    let mut newest: Option<RunRef> = None;
+    for run in required_array(v, "workflow_runs")? {
+        if !str_at(run, &["head_branch"]).is_some_and(|b| b.starts_with(&prefix)) {
+            continue;
+        }
+        let run = parse_merge_group_run(run)?;
+        if newest
+            .as_ref()
+            .is_none_or(|newest| run.created_at > newest.created_at)
+        {
+            newest = Some(run);
+        }
+    }
+    Ok(newest)
+}
+
+/// Every field drives a verdict — the id addresses jobs, the URL is the pointer
+/// and acknowledgment key, the timestamp decides recency — so none is defaulted.
+fn parse_merge_group_run(run: &Value) -> Result<RunRef, ApiError> {
+    let created_at = required_string(run, "created_at")?;
+    if !is_canonical_rfc3339(&created_at) {
+        return Err(ApiError::Malformed(
+            "merge-group run has malformed created_at timestamp".into(),
+        ));
+    }
+    let status = match run.get("conclusion") {
+        Some(Value::Null) => RunStatus::InProgress { failed_job: None },
+        Some(Value::String(conclusion)) => RunStatus::Completed {
+            conclusion: conclusion.clone(),
+        },
+        _ => {
+            return Err(ApiError::Malformed(
+                "merge-group run omitted string-or-null conclusion".into(),
+            ));
+        }
     };
-    Ok(Some(RunRef {
-        // The id addresses the run's jobs, so a missing one cannot be defaulted.
+    Ok(RunRef {
         id: required_u64(run, "id")?,
-        url: owned(run, &["html_url"]).unwrap_or_default(),
-        created_at: owned(run, &["created_at"]).unwrap_or_default(),
-        conclusion: owned(run, &["conclusion"]).unwrap_or_default(),
-        failed_job: None,
-    }))
+        url: required_string(run, "html_url")?,
+        created_at,
+        status,
+    })
 }
 
 /// The newest merge-group run, plus — while it has no conclusion — the first job
@@ -505,11 +535,13 @@ fn ejection_run_with(
     let Some(mut run) = parse_ejection_run(&json(&["api", &runs_path])?, subject.number)? else {
         return Ok(None);
     };
-    if run.conclusion.is_empty() {
-        run.failed_job = first_failed_job(&run_jobs(&slug, run.id, &mut json)?)?;
+    if let RunStatus::InProgress { failed_job } = &mut run.status {
+        *failed_job = first_failed_job(&run_jobs(&slug, run.id, &mut json)?)?;
     }
     Ok(Some(run))
 }
+
+const JOBS_PER_PAGE: usize = 100;
 
 /// Every latest-attempt job of one workflow run, across all pages.
 fn run_jobs(
@@ -520,12 +552,12 @@ fn run_jobs(
     let mut jobs = Vec::new();
     for page in 1.. {
         let path = format!(
-            "/repos/{slug}/actions/runs/{run_id}/jobs?filter=latest&per_page=100&page={page}"
+            "/repos/{slug}/actions/runs/{run_id}/jobs?filter=latest&per_page={JOBS_PER_PAGE}&page={page}"
         );
         let value = json(&["api", &path])?;
         let page_jobs = required_array(&value, "jobs")?;
         jobs.extend(page_jobs.iter().cloned());
-        if page_jobs.len() < 100 {
+        if page_jobs.len() < JOBS_PER_PAGE {
             break;
         }
     }
@@ -1703,8 +1735,50 @@ mod tests {
         let picked = parse_ejection_run(&fixture!("runs-merge-group.json"), PrNumber(646))
             .unwrap()
             .unwrap();
-        assert_eq!(picked.conclusion, "success");
+        assert_eq!(
+            picked.status,
+            RunStatus::Completed {
+                conclusion: "success".into()
+            }
+        );
         assert!(picked.url.contains("/actions/runs/"));
+    }
+
+    #[test]
+    fn malformed_merge_group_runs_fail_instead_of_reading_as_no_ejection() {
+        let head_branch = "gh-readonly-queue/main/pr-646-base";
+        let well_formed = serde_json::json!({
+            "id": 88, "html_url": "run/88", "created_at": "2026-09-15T00:00:00Z",
+            "head_branch": head_branch, "conclusion": null
+        });
+        let mut payloads = vec![serde_json::json!({"total_count": 0})];
+        for (field, value) in [
+            ("id", Value::Null),
+            ("html_url", Value::Null),
+            ("created_at", Value::Null),
+            ("created_at", serde_json::json!("2026-09-15")),
+            ("conclusion", serde_json::json!(42)),
+        ] {
+            let mut run = well_formed.clone();
+            run[field] = value;
+            payloads.push(serde_json::json!({"workflow_runs": [run]}));
+        }
+        for payload in payloads {
+            assert!(
+                matches!(
+                    parse_ejection_run(&payload, PrNumber(646)),
+                    Err(ApiError::Malformed(_))
+                ),
+                "{payload}"
+            );
+        }
+    }
+
+    fn failed_job(run: Result<Option<RunRef>, ApiError>) -> Option<String> {
+        match run.unwrap().unwrap().status {
+            RunStatus::InProgress { failed_job } => failed_job,
+            other => panic!("expected an in-progress run, got {other:?}"),
+        }
     }
 
     /// Run the probe against scripted responses, returning its result and the
@@ -1736,8 +1810,12 @@ mod tests {
     #[test]
     fn completed_merge_group_run_needs_no_jobs_call() {
         let (run, requests) = probe(serde_json::json!("failure"), vec![]);
-        let run = run.unwrap().unwrap();
-        assert_eq!(run.failed_job, None);
+        assert_eq!(
+            run.unwrap().unwrap().status,
+            RunStatus::Completed {
+                conclusion: "failure".into()
+            }
+        );
         assert_eq!(requests.len(), 1, "{requests:?}");
     }
 
@@ -1759,7 +1837,7 @@ mod tests {
                 ]}))],
             );
             let expected = ejecting.then(|| "Validation host".to_owned());
-            assert_eq!(run.unwrap().unwrap().failed_job, expected, "{conclusion}");
+            assert_eq!(failed_job(run), expected, "{conclusion}");
             assert!(
                 requests[1].ends_with("/actions/runs/88/jobs?filter=latest&per_page=100&page=1"),
                 "{requests:?}"
@@ -1777,7 +1855,7 @@ mod tests {
                 Ok(serde_json::json!({"jobs": [job("late", serde_json::json!("failure"))]})),
             ],
         );
-        assert_eq!(run.unwrap().unwrap().failed_job.as_deref(), Some("late"));
+        assert_eq!(failed_job(run).as_deref(), Some("late"));
         assert!(requests[2].ends_with("&page=2"), "{requests:?}");
     }
 

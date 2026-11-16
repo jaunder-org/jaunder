@@ -28,7 +28,8 @@ stderr carries progress and diagnostics. `outcome` is authoritative:
   observation whose evidence or checks are still incomplete.
 - `blocked`, `conflicted`, `stale`, and `closed-unmerged` preserve GitHub's
   adverse state. `dequeued` means an observed same-head queue entry vanished;
-  `ejected` identifies a failed current-head merge-group run.
+  `ejected` identifies a failed current-head merge-group run, or one still in
+  progress that already has a failed job.
 
 All adverse/pending outcomes exit 1; invalid arguments or failure to establish a
 subject exit 2. The report includes the exact head and available log pointers.

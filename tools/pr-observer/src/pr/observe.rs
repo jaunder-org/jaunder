@@ -538,7 +538,8 @@ mod tests {
         assert_eq!(report.outcome, Outcome::Ejected);
         assert_eq!(report.pointer.as_deref(), Some(fresh.url.as_str()));
         assert_eq!(
-            historical.conclusion, "failure",
+            historical,
+            ejection("2026-07-30T14:30:00Z"),
             "acknowledgment never rewrites verdict"
         );
 
@@ -564,12 +565,8 @@ mod tests {
 
     #[test]
     fn acknowledged_in_progress_run_with_a_failed_job_is_not_a_fresh_ejection() {
-        use crate::pr::test_support::ejection;
-        let acknowledged = crate::pr::snapshot::RunRef {
-            conclusion: String::new(),
-            failed_job: Some("Validation host".into()),
-            ..ejection("2026-07-30T14:30:00Z")
-        };
+        use crate::pr::test_support::in_progress_run;
+        let acknowledged = in_progress_run("2026-07-30T14:30:00Z", Some("Validation host"));
         let source = FakeSource::new(vec![Ok(open(green())), Ok(open(green()))], queue_rules())
             .with_ejection(Some(acknowledged.clone()));
         let mut continued = continuation(Some("abc"), Some(&acknowledged.url));

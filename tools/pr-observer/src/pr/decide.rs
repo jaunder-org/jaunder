@@ -5,7 +5,7 @@
 
 use super::snapshot::{
     CheckEntry, CheckState, MergeStateStatus, Mergeable, PrSnapshot, PrState, RequiredChecks,
-    RunRef,
+    RunRef, RunStatus,
 };
 use super::{Outcome, SubjectFailure};
 
@@ -218,20 +218,23 @@ pub fn needs_ejection_probe(snap: &PrSnapshot, req: &RequiredChecks) -> bool {
 /// either side ever gains fractional seconds or a numeric offset, parse instead —
 /// this would go silently wrong rather than fail.
 ///
-/// The failure is either the run's conclusion or, while slower jobs keep that
-/// empty, a job that already failed: the queue ejects on the job (#1982).
+/// The failure is either the run's conclusion or, while slower jobs keep the run
+/// in progress, a job that already failed: the queue ejects on the job (#1982).
 fn ejection_detail(run: &RunRef, snap: &PrSnapshot) -> Option<String> {
     if run.created_at <= snap.head_committed_at {
         return None;
     }
-    if run.conclusion == "failure" {
-        return Some("the front-of-queue merge_group run failed".into());
-    }
-    run.failed_job.as_ref().map(|job| {
-        format!(
+    match &run.status {
+        RunStatus::Completed { conclusion } if conclusion == "failure" => {
+            Some("the front-of-queue merge_group run failed".into())
+        }
+        RunStatus::InProgress {
+            failed_job: Some(job),
+        } => Some(format!(
             "job '{job}' in the front-of-queue merge_group run failed; the run is still in progress"
-        )
-    })
+        )),
+        RunStatus::Completed { .. } | RunStatus::InProgress { failed_job: None } => None,
+    }
 }
 
 pub fn classify(
@@ -311,8 +314,8 @@ pub fn classify_with_failures(
             None,
         );
     }
-    if let Some((run, detail)) =
-        ejection.and_then(|run| ejection_detail(run, snap).map(|detail| (run, detail)))
+    if let Some(run) = ejection
+        && let Some(detail) = ejection_detail(run, snap)
     {
         return terminal(Outcome::Ejected, Some(detail), Some(run.url.clone()));
     }
@@ -769,7 +772,9 @@ mod tests {
     #[test]
     fn successful_merge_group_run_is_not_an_ejection() {
         let mut run = ejection("2026-07-30T14:30:00Z");
-        run.conclusion = "success".into();
+        run.status = RunStatus::Completed {
+            conclusion: "success".into(),
+        };
         assert!(matches!(
             classify(
                 &open(green()),
@@ -779,14 +784,6 @@ mod tests {
             ),
             Step::Ready
         ));
-    }
-
-    fn in_progress_run(created_at: &str, failed_job: Option<&str>) -> RunRef {
-        RunRef {
-            conclusion: String::new(),
-            failed_job: failed_job.map(Into::into),
-            ..ejection(created_at)
-        }
     }
 
     #[test]
@@ -835,6 +832,17 @@ mod tests {
         assert!(matches!(
             classify(&s, &queue_rules(), Some(&run), &Progress::default()),
             Step::Ready
+        ));
+        // The stale run cannot explain a same-head removal either.
+        let progress = Progress {
+            queued_head_sha: Some("abc".into()),
+        };
+        assert!(matches!(
+            classify(&s, &queue_rules(), Some(&run), &progress),
+            Step::Terminal {
+                outcome: Outcome::Dequeued,
+                ..
+            }
         ));
     }
 
