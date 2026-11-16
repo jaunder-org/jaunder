@@ -572,7 +572,7 @@ fn platform() -> Vec<String> {
         "eval".into(),
         "--impure".into(),
         "--expr".into(),
-        "import ./nix/platform-contract.nix { flake = builtins.getFlake (toString ./.); }".into(),
+        r#"import ./nix/platform-contract.nix { flake = builtins.getFlake ("git+file://" + toString ./.); }"#.into(),
     ]
 }
 

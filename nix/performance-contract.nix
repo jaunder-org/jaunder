@@ -1,6 +1,6 @@
 # Evaluate the real VM producers without realizing their measurement outputs.
 # Run with:
-# nix eval --impure --expr 'let flake = builtins.getFlake (toString ./.); in import ./nix/performance-contract.nix { inherit (flake.performanceLib.${builtins.currentSystem}) mkPerformanceProducer selectPerformanceProducers; }'
+# nix eval --impure --expr 'let flake = builtins.getFlake ("git+file://" + toString ./.); in import ./nix/performance-contract.nix { inherit (flake.performanceLib.${builtins.currentSystem}) mkPerformanceProducer selectPerformanceProducers; }'
 { mkPerformanceProducer, selectPerformanceProducers }:
 let
   selections = builtins.concatLists (map (backend:

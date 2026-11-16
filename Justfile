@@ -318,7 +318,7 @@ _workspace-doctests:
 
 [private]
 _platform:
-    nix eval --impure --expr 'import ./nix/platform-contract.nix { flake = builtins.getFlake (toString ./.); }'
+    nix eval --impure --expr 'import ./nix/platform-contract.nix { flake = builtins.getFlake ("git+file://" + toString ./.); }'
 
 [private]
 _static: (_nix "static-docs") (_nix "static-typescript") (_nix "rust-format") (_nix "static-code") (_nix "static-elisp") (_nix "static-e2e-census") (_nix "static-ert")
@@ -389,7 +389,7 @@ perf profile="medium" backends="sqlite,postgres" browsers="" workload="all" post
       --arg revisions {{ quote(revisions) }} \
       '{freshnessNonce: $freshnessNonce, profile: $profile, backends: $backends, browsers: $browsers, workload: $workload, posts: $posts, authors: $authors, revisions: $revisions}')
     JAUNDER_PERF_PARAMETERS="$parameters" nix eval --impure --json \
-      --expr 'let flake = builtins.getFlake (toString ./.); parameters = builtins.fromJSON (builtins.getEnv "JAUNDER_PERF_PARAMETERS"); in flake.performanceLib.${builtins.currentSystem}.selectPerformanceProducers parameters' \
+      --expr 'let flake = builtins.getFlake ("git+file://" + toString ./.); parameters = builtins.fromJSON (builtins.getEnv "JAUNDER_PERF_PARAMETERS"); in flake.performanceLib.${builtins.currentSystem}.selectPerformanceProducers parameters' \
       > "$run_root/selection.json"
     cargo run --locked --quiet --manifest-path tools/Cargo.toml -p performance --bin perf-data -- validate-selection --selection "$run_root/selection.json"
     jq -c '.producers[]' "$run_root/selection.json" > "$run_root/selected.ndjson"
