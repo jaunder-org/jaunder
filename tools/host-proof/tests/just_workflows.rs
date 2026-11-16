@@ -419,7 +419,7 @@ const SOURCE_CONTRACTS: [&str; 22] = [
 
 /// The whole `_host` surface: its groups in their composed order.
 fn broad(mode: &str, shared_docs: bool) -> Vec<Vec<String>> {
-    let mut expected = format(mode, shared_docs);
+    let mut expected = format_checks(mode, shared_docs);
     expected.extend(docs_shape());
     expected.extend(source_contracts());
     expected.extend(compile_checks(mode));
@@ -427,7 +427,7 @@ fn broad(mode: &str, shared_docs: bool) -> Vec<Vec<String>> {
     expected
 }
 
-fn format(mode: &str, shared_docs: bool) -> Vec<Vec<String>> {
+fn format_checks(mode: &str, shared_docs: bool) -> Vec<Vec<String>> {
     let mut expected = vec![devtool("fmt", mode)];
     expected.extend(commands(&["cargo build --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin scoped-leptosfmt --target-dir tools/target"]));
     expected.push(devtool("leptosfmt", mode));
@@ -476,7 +476,7 @@ fn compile_checks(mode: &str) -> Vec<Vec<String>> {
 }
 
 fn elisp_checks(mode: &str) -> Vec<Vec<String>> {
-    vec![devtool("byte-compile", mode), devtool("ert", mode)]
+    vec![devtool("byte-compile", ""), devtool("ert", mode)]
 }
 
 fn devtool(name: &str, mode: &str) -> Vec<String> {
@@ -1079,10 +1079,10 @@ fn markdown_host_runs_the_complete_narrow_fix_surface_in_order() {
 fn each_check_group_and_one_source_contract_run_alone() {
     let workflow = Workflow::new();
     let mut cases: Vec<(Vec<&str>, Vec<Vec<String>>)> = vec![
-        (vec!["format"], format("verify", false)),
+        (vec!["format"], format_checks("verify", false)),
         (
             vec!["format", "verify", "prepush"],
-            format(
+            format_checks(
                 "verify",
                 cfg!(all(target_os = "linux", target_arch = "x86_64")),
             ),
@@ -1097,7 +1097,7 @@ fn each_check_group_and_one_source_contract_run_alone() {
         ),
     ];
     for mode in ["fix", "verify"] {
-        cases.push((vec!["format", mode], format(mode, false)));
+        cases.push((vec!["format", mode], format_checks(mode, false)));
         cases.push((vec!["compile-checks", mode], compile_checks(mode)));
         cases.push((vec!["elisp-checks", mode], elisp_checks(mode)));
     }
@@ -1121,12 +1121,7 @@ fn markdown_slot_refuses_unknown_or_mutating_prepush_docs() {
         let (ok, actual, stderr) = workflow.run(&args, "");
         assert!(!ok, "{args:?} must refuse");
         assert!(stderr.contains(message), "{args:?}: {stderr}");
-        assert!(
-            !actual
-                .iter()
-                .any(|argv| argv.first().is_some_and(|name| name == "prettier")
-                    || argv.contains(&"git-index-safety".to_owned())),
-            "{args:?} ran a Markdown leaf: {actual:?}"
-        );
+        // Refusal lands exactly at the slot: fmt and leptosfmt ran, nothing after.
+        assert_eq!(actual, format_checks(args[1], false)[..3], "{args:?}");
     }
 }

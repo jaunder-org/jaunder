@@ -18,6 +18,7 @@ devtool := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p devto
 prettier := "just --justfile recipes/prettier.just --working-directory ."
 static := "just --justfile recipes/static.just --working-directory ."
 repository_policy := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin"
+source_contract := repository_policy + " source-contracts --"
 host_proof := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p host-proof --bin"
 doctest_check := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p doctests --features host --bin doctest-check --"
 coverage_check := "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p coverage --features host --bin coverage-check --"
@@ -156,7 +157,7 @@ adr-format:
 # Informational census: fixed domain command, not a validation workflow.
 [positional-arguments]
 census *args:
-    {{repository_policy}} source-contracts -- census "$@"
+    {{source_contract}} census "$@"
 
 # Explicit local originals only: no checkout admission or hook bootstrap.
 [positional-arguments]
@@ -201,7 +202,7 @@ format mode="verify" docs="host":
 # Prepush on x86_64-linux replaces host Prettier Markdown with clean-index static-docs.
 [private]
 _markdown mode docs="host":
-    {{ if docs == "host" { prettier + " prettier-markdown " + quote(mode) } else if docs != "prepush" { error("expected host or prepush docs") } else if mode != "verify" { error("prepush docs require verify") } else if os() + "-" + arch() == "linux-x86_64" { repository_policy + " git-index-safety -- prepush-docs" } else { prettier + " prettier-markdown verify" } }}
+    {{ if docs == "host" { prettier + " prettier-markdown " + quote(mode) } else if docs != "prepush" { error("expected host or prepush docs") } else if mode != "verify" { error("prepush docs require verify") } else if os() + "-" + arch() == "linux-x86_64" { repository_policy + " git-index-safety -- prepush-docs" } else { prettier + " prettier-markdown " + quote(mode) } }}
     {{prettier}} prettier-end2end {{quote(mode)}}
 
 # Documentation shape: sequence, ADR format and parity, links and flow docs.
@@ -217,33 +218,33 @@ docs-shape:
 source-contracts:
     {{static}} ast-grep-tests
     {{static}} no-full-reload
-    {{repository_policy}} source-contracts -- test-patterns
-    {{repository_policy}} source-contracts -- server-fn-registrar
-    {{repository_policy}} source-contracts -- server-fn-tracing
-    {{repository_policy}} source-contracts -- server-fn-coverage
-    {{repository_policy}} source-contracts -- server-fn-wire-arg-error
-    {{repository_policy}} source-contracts -- traced-context
-    {{repository_policy}} source-contracts -- e2e-telemetry-boundary
-    {{repository_policy}} source-contracts -- e2e-collector-config
-    {{repository_policy}} source-contracts -- proffered-secret
-    {{repository_policy}} source-contracts -- e2e-goto-wrapper
-    {{repository_policy}} source-contracts -- e2e-server-fn-endpoints
-    {{repository_policy}} source-contracts -- target-arch-placement
-    {{repository_policy}} source-contracts -- write-transaction-contract
-    {{repository_policy}} source-contracts -- common-host-target-closure
-    {{repository_policy}} source-contracts -- lint-suppression
-    {{repository_policy}} source-contracts -- thin-components
-    {{repository_policy}} source-contracts -- sqlx-newtype-bind
-    {{repository_policy}} source-contracts -- sqlx-newtype-decode
-    {{repository_policy}} source-contracts -- raw-html-door
-    {{repository_policy}} source-contracts -- html-sink
-    {{repository_policy}} source-contracts -- e2e-scaffold
-    {{repository_policy}} source-contracts -- xlang-literal
+    {{source_contract}} test-patterns
+    {{source_contract}} server-fn-registrar
+    {{source_contract}} server-fn-tracing
+    {{source_contract}} server-fn-coverage
+    {{source_contract}} server-fn-wire-arg-error
+    {{source_contract}} traced-context
+    {{source_contract}} e2e-telemetry-boundary
+    {{source_contract}} e2e-collector-config
+    {{source_contract}} proffered-secret
+    {{source_contract}} e2e-goto-wrapper
+    {{source_contract}} e2e-server-fn-endpoints
+    {{source_contract}} target-arch-placement
+    {{source_contract}} write-transaction-contract
+    {{source_contract}} common-host-target-closure
+    {{source_contract}} lint-suppression
+    {{source_contract}} thin-components
+    {{source_contract}} sqlx-newtype-bind
+    {{source_contract}} sqlx-newtype-decode
+    {{source_contract}} raw-html-door
+    {{source_contract}} html-sink
+    {{source_contract}} e2e-scaffold
+    {{source_contract}} xlang-literal
     scripts/run-report {{doctest_check}} fences
 
 # One repository source-contract policy by name, e.g. html-sink.
 source-contract name:
-    {{repository_policy}} source-contracts -- {{quote(name)}}
+    {{source_contract}} {{quote(name)}}
 
 # Compile-time static checks: TypeScript, cargo-deny and the Clippy units.
 compile-checks mode="verify":

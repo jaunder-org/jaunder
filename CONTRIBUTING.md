@@ -262,7 +262,8 @@ Precommit still performs its after-snapshot and conservative staging
 reconciliation after the gate stops; safe formatter/check changes can be
 restaged, while mixed or unsafe Git/index state still fails closed. Work not
 reached is not reported as successful. Apart from precommit's selected routing
-surface, the workflows remain broad and preserve success-path order and
+surface, the workflows remain broad, run the host check groups in their
+documented order (see [Local checks: Just](#local-checks-just)), and preserve
 clean-tree/staged-subset authority. Independent CI lanes and required aggregates
 remain authoritative; local fail-fast behavior does not weaken their verdicts.
 
