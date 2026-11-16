@@ -159,8 +159,29 @@ fn reconcile(policy: &Policy, inventory: &NixInventory) -> Result<()> {
         .filter(|output| output.classification == Classification::Support)
         .map(|output| &output.attr)
         .collect::<BTreeSet<_>>();
-    if policy_finals != finals || policy_supports != supports {
-        bail!("cache policy classifications do not reconcile with generated Nix inventory");
+    let mut differences = Vec::new();
+    for (class, declared, generated) in [
+        ("final", &policy_finals, &finals),
+        ("support", &policy_supports, &supports),
+    ] {
+        for (relation, from, to) in [
+            ("missing from", generated, declared),
+            ("extra in", declared, generated),
+        ] {
+            let attrs = from
+                .difference(to)
+                .map(|attr| attr.as_str())
+                .collect::<Vec<_>>();
+            if !attrs.is_empty() {
+                differences.push(format!("{class} {relation} policy: {}", attrs.join(", ")));
+            }
+        }
+    }
+    if !differences.is_empty() {
+        bail!(
+            "cache policy classifications do not reconcile with generated Nix inventory; {}",
+            differences.join("; ")
+        );
     }
     let generated_families = inventory
         .support_families
@@ -841,17 +862,34 @@ mod tests {
     }
 
     #[test]
-    fn rejects_generated_classification_mismatch() {
-        let policy = policy(&[("verdict", Classification::Final)]);
-        let inventory = inventory(&[], &["verdict"]);
-        assert!(reconcile(&policy, &inventory).is_err());
+    fn rejects_generated_classification_mismatch_naming_differing_attrs() {
+        let policy = policy(&[
+            ("final", Classification::Final),
+            ("retired", Classification::Final),
+            ("support", Classification::Support),
+        ]);
+        let inventory = inventory(&["final", "renamed"], &["support"]);
+        let error = reconcile(&policy, &inventory).unwrap_err().to_string();
+        assert!(
+            error.contains("final missing from policy: renamed"),
+            "{error}"
+        );
+        assert!(error.contains("final extra in policy: retired"), "{error}");
+        assert!(!error.contains("support"), "{error}");
     }
 
     #[test]
     fn rejects_incomplete_inventory() {
-        let policy = policy(&[("support", Classification::Support)]);
-        let inventory = inventory(&[], &["support", "unclassified"]);
-        assert!(reconcile(&policy, &inventory).is_err());
+        let policy = policy(&[
+            ("final", Classification::Final),
+            ("support", Classification::Support),
+        ]);
+        let inventory = inventory(&["final"], &["support", "unclassified"]);
+        let error = reconcile(&policy, &inventory).unwrap_err().to_string();
+        assert!(
+            error.contains("support missing from policy: unclassified"),
+            "{error}"
+        );
     }
 
     #[test]
