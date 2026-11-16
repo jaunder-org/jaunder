@@ -164,7 +164,7 @@ org-timezone-manifest +files:
     {{repository_policy}} org-timezone-manifest -- -- "$@"
 
 # Called only by the focused Git/index safety owner, never by public precommit.
-precommit-markdown-host: (_markdown "fix") _docs-shape
+precommit-markdown-host: (_markdown "fix") docs-shape
 
 precommit-broad-host: check-no-test
 
@@ -185,13 +185,27 @@ ci-validate-test-checks: _clean-tree _wasm-tests doctests _elisp-coverage
 
 ci-validate-coverage: coverage
 
+# The host check surface: its named groups in fail-fast order.
 [private]
-_markdown mode:
-    {{prettier}} prettier-markdown {{mode}}
-    {{prettier}} prettier-end2end {{mode}}
+_host mode docs: (format mode docs) docs-shape source-contracts (compile-checks mode) (elisp-checks mode)
 
+# Formatters (Fix or Verify); docs=prepush takes the shared Markdown verdict.
+format mode="verify" docs="host":
+    {{static}} fmt {{quote(mode)}}
+    just leptosfmt {{quote(mode)}}
+    just _markdown {{quote(mode)}} {{quote(docs)}}
+    {{prettier}} prettier-css {{quote(mode)}}
+    {{static}} elisp-fmt {{quote(mode)}}
+    {{static}} tools-fmt {{quote(mode)}}
+
+# Prepush on x86_64-linux replaces host Prettier Markdown with clean-index static-docs.
 [private]
-_docs-shape:
+_markdown mode docs="host":
+    {{ if docs == "host" { prettier + " prettier-markdown " + quote(mode) } else if docs != "prepush" { error("expected host or prepush docs") } else if mode != "verify" { error("prepush docs require verify") } else if os() + "-" + arch() == "linux-x86_64" { repository_policy + " git-index-safety -- prepush-docs" } else { prettier + " prettier-markdown verify" } }}
+    {{prettier}} prettier-end2end {{quote(mode)}}
+
+# Documentation shape: sequence, ADR format and parity, links and flow docs.
+docs-shape:
     {{repository_policy}} repository-docs -- sequence-check
     just adr-format
     {{repository_policy}} repository-docs -- adr-readme-parity
@@ -199,18 +213,10 @@ _docs-shape:
     {{repository_policy}} repository-docs -- doc-links
     {{repository_policy}} repository-docs -- flow-docs
 
-[private]
-_host mode docs:
-    {{static}} fmt {{mode}}
-    just leptosfmt {{mode}}
-    {{if docs + "-" + os() + "-" + arch() == "prepush-linux-x86_64" { repository_policy + " git-index-safety -- prepush-docs" } else { prettier + " prettier-markdown " + mode }}}
-    {{prettier}} prettier-end2end {{mode}}
-    {{prettier}} prettier-css {{mode}}
-    {{static}} elisp-fmt {{mode}}
-    {{static}} tools-fmt {{mode}}
+# Source rules: ast-grep, every repository source-contract policy, doctest fences.
+source-contracts:
     {{static}} ast-grep-tests
     {{static}} no-full-reload
-    just _docs-shape
     {{repository_policy}} source-contracts -- test-patterns
     {{repository_policy}} source-contracts -- server-fn-registrar
     {{repository_policy}} source-contracts -- server-fn-tracing
@@ -229,20 +235,30 @@ _host mode docs:
     {{repository_policy}} source-contracts -- thin-components
     {{repository_policy}} source-contracts -- sqlx-newtype-bind
     {{repository_policy}} source-contracts -- sqlx-newtype-decode
-    scripts/run-report {{doctest_check}} fences
     {{repository_policy}} source-contracts -- raw-html-door
     {{repository_policy}} source-contracts -- html-sink
     {{repository_policy}} source-contracts -- e2e-scaffold
     {{repository_policy}} source-contracts -- xlang-literal
+    scripts/run-report {{doctest_check}} fences
+
+# One repository source-contract policy by name, e.g. html-sink.
+source-contract name:
+    {{repository_policy}} source-contracts -- {{quote(name)}}
+
+# Compile-time static checks: TypeScript, cargo-deny and the Clippy units.
+compile-checks mode="verify":
+    just tsc {{quote(mode)}}
+    {{static}} cargo-deny {{quote(mode)}}
+    {{static}} product-core-clippy {{quote(mode)}}
+    {{static}} web-server-clippy {{quote(mode)}}
+    {{static}} web-no-server-clippy {{quote(mode)}}
+    {{static}} client-host-clippy {{quote(mode)}}
+    {{static}} wasm-clippy {{quote(mode)}}
+    {{static}} tools-clippy {{quote(mode)}}
+
+# Elisp byte-compilation and ERT.
+elisp-checks mode="verify":
     {{static}} byte-compile
-    just tsc {{mode}}
-    {{static}} cargo-deny {{mode}}
-    {{static}} product-core-clippy {{mode}}
-    {{static}} web-server-clippy {{mode}}
-    {{static}} web-no-server-clippy {{mode}}
-    {{static}} client-host-clippy {{mode}}
-    {{static}} wasm-clippy {{mode}}
-    {{static}} tools-clippy {{mode}}
     {{devtool}} check ert {{if mode == "fix" { "--fix" } else { "" }}}
 
 [private]

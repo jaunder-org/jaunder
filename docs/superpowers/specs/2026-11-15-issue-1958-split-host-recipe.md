@@ -62,8 +62,9 @@ failure:
   run. Prepush's `prepush-docs` slot keeps its current assertion.
 - The existing every-leaf fault-injection test still passes, so each leaf's
   failure still stops later work.
-- An invalid `docs` value, or `docs=prepush` combined with `fix`, fails before
-  any leaf runs.
+- An invalid `docs` value, or `docs=prepush` combined with `fix`, fails at the
+  Markdown slot before any Markdown leaf runs. Just evaluates each body line
+  just before running it, so the earlier formatters have already run.
 - No recipe body in the gate graph exceeds 30 lines (`source-contracts`, the
   largest, has 25).
 - CONTRIBUTING's `check-no-test` row and the surrounding text name the five
