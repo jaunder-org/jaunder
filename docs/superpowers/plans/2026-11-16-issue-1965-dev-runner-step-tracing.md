@@ -153,7 +153,7 @@ join.
       span, and asserts the parent link
     - `cargo xtask test-local -- -p host-proof` passes
     - one real `dev test-local -- -p storage` run produces a nested `trace.json`
-- [ ] **Task 3: Nix cache classification.** The internal Nix-check step records
+- [x] **Task 3: Nix cache classification.** The internal Nix-check step records
       `jaunder.cache` and adds no public subcommand.
   - Contract: none new.
   - Verification: pytest with a fake `nix` covers `reused`, `built` and

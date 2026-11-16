@@ -5,18 +5,21 @@ child killed by signal n reports 128+n, as a shell would; Python reports such a
 child's return code as -n.
 """
 
+import contextlib
+import json
 import shlex
 import signal
 import subprocess
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from types import FrameType
+from typing import Any
 
 from opentelemetry.trace import Span
 
 from jaunder_dev import trace
-from jaunder_dev.spans import COMMAND_LINE, EXIT_CODE, STATUS
+from jaunder_dev.spans import CACHE, COMMAND_LINE, EXIT_CODE, STATUS
 
 
 class StepFailed(Exception):
@@ -98,6 +101,13 @@ def _supervise(argv: Sequence[str], capture: bool) -> tuple[int, bool, bytes]:
     return returncode, False, output
 
 
+@contextlib.contextmanager
+def _step(name: str, argv: Sequence[str]) -> Iterator[Span]:
+    with trace.tracer().start_as_current_span(name) as span:
+        span.set_attribute(COMMAND_LINE, trace.cap_command_line(shlex.join(argv)))
+        yield span
+
+
 def run(
     name: str, argv: Sequence[str], render: Callable[[bytes], str] | None = None
 ) -> None:
@@ -106,12 +116,87 @@ def run(
     With `render`, the step's stdout is shown as `render` presents it, whatever
     the step's status.
     """
-    with trace.tracer().start_as_current_span(name) as span:
-        span.set_attribute(COMMAND_LINE, trace.cap_command_line(shlex.join(argv)))
+    with _step(name, argv) as span:
         code, signalled, output = _supervise(argv, capture=render is not None)
         _record_outcome(span, code, signalled)
     if render is not None:
         sys.stdout.buffer.write(render(output).encode())
         sys.stdout.flush()
+    if code:
+        raise StepFailed(code, signalled)
+
+
+class _QueryFailed(Exception):
+    """A Nix query failed, so the step's cache source stays unrecorded."""
+
+
+def _query(*argv: str) -> bytes:
+    """A Nix query's stdout; its streams never reach the user."""
+    try:
+        done = subprocess.run(argv, capture_output=True, check=False)
+    except OSError as error:
+        raise _QueryFailed from error
+    if done.returncode:
+        raise _QueryFailed
+    return done.stdout
+
+
+def _store_entry(path: str) -> dict[str, Any] | None:
+    """`path`'s store metadata, or None while the path is not valid."""
+    try:
+        listed = json.loads(
+            _query("nix", "path-info", "--json", "--json-format", "1", "--", path)
+        )
+    except ValueError as error:
+        raise _QueryFailed from error
+    # An object keyed by store path; an invalid path maps to null.
+    entry: dict[str, Any] | None = listed.get(path)
+    return entry
+
+
+def _built_source(output: str) -> str:
+    """Where a freshly valid output came from: built here, or substituted."""
+    entry = _store_entry(output)
+    if entry is None:
+        raise _QueryFailed
+    return "built" if entry.get("ultimate") else "substituted"
+
+
+def nix_check(check: str) -> None:
+    """Builds one flake check, keeping its output as a GC root.
+
+    The step records `jaunder.cache` for the check's top-level output only:
+    `reused` if it was already valid, else `built` or `substituted`. A failed
+    query records nothing rather than guess, and never changes the step.
+    """
+    installable = f".#checks.x86_64-linux.{check}"
+    argv = [
+        "nix",
+        "build",
+        "-L",
+        "--accept-flake-config",
+        "--out-link",
+        f".xtask/gcroots/{check}",
+        installable,
+    ]
+    Path(".xtask/gcroots").mkdir(parents=True, exist_ok=True)
+    with _step(check, argv) as span:
+        output: str | None
+        try:
+            output = _query(
+                "nix",
+                "eval",
+                "--raw",
+                "--accept-flake-config",
+                f"{installable}.outPath",
+            ).decode()
+            reused = _store_entry(output) is not None
+        except _QueryFailed:
+            output, reused = None, False
+        code, signalled, _ = _supervise(argv, capture=False)
+        _record_outcome(span, code, signalled)
+        if code == 0 and output is not None:
+            with contextlib.suppress(_QueryFailed):
+                span.set_attribute(CACHE, "reused" if reused else _built_source(output))
     if code:
         raise StepFailed(code, signalled)
