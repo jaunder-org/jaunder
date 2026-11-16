@@ -11,6 +11,8 @@ let
     cargo-crap
     devtoolBin
     tracedRunBin
+    devShim
+    devPythonCheck
     emacsForCi
     leptosfmt
     wasm-bindgen-cli
@@ -42,6 +44,8 @@ let
       # independent in-sandbox commands.
       devtoolBin
       tracedRunBin
+      # The working tree's `dev` workflow runner.
+      devShim
       nodeModulesSetup
       # Throwaway PostgreSQL for `just pg-run`, test-local and mutants.
       pgRun
@@ -67,8 +71,10 @@ let
       pkgs.opentelemetry-collector-contrib
       pkgs.prettier
       # host-proof's executable NixOS-test-script regressions run the generated
-      # Python helper under the same pinned interpreter as CI and developers.
-      pkgs.python3
+      # Python helper under the same pinned interpreter as CI and developers;
+      # this environment of it also carries `dev`'s libraries and test tools.
+      devPythonCheck
+      pkgs.ruff
       pkgs.sqlite
       pkgs.typescript
       # Theme-package export assertions use this pinned ZIP reader on the host.
@@ -96,6 +102,7 @@ let
     pkgs.cargo
     pkgs.git
     tracedRunBin
+    devShim
     pkgs.jq
     pkgs.openssl
     pkgs.dav1d

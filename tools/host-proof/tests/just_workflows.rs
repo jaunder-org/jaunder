@@ -58,6 +58,9 @@ if [ "${FAIL_COMMAND:-}" = 'e2e-workflow all' ]; then exit 17; fi
             "emacs",
             "ast-grep",
             "tsc",
+            "ruff",
+            "mypy",
+            "pytest",
         ] {
             let path = bin.join(tool);
             fs::write(
@@ -551,6 +554,10 @@ fn devtool(name: &str, mode: &str) -> Vec<String> {
 fn host_tests() -> Vec<Vec<String>> {
     commands(&[
         "cargo test --manifest-path tools/Cargo.toml --lib --bins --tests --features doctests/host,coverage/host",
+        "ruff format --check tools/dev",
+        "ruff check tools/dev",
+        "mypy --strict tools/dev",
+        "pytest tools/dev",
     ])
 }
 
@@ -585,6 +592,7 @@ fn static_checks() -> Vec<Vec<String>> {
         "static-elisp",
         "static-e2e-census",
         "static-ert",
+        "dev-python",
     ]
     .map(nix)
     .to_vec()

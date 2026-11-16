@@ -21,6 +21,9 @@ test-results/
 end2end/playwright-report/
 playwright/.cache/
 
+# Python bytecode from running `dev` out of the checkout
+__pycache__/
+
 # Various bits of detritus
 /result
 /data/

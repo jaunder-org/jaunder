@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jaunder-dev"
+version = "0.1.0"
+description = "Jaunder developer, hook, CI and sandbox workflows with step tracing"
+requires-python = ">=3.14"
+# Versions come from the pinned nixpkgs (nix/packages.nix `devPythonDeps`).
+dependencies = ["click", "opentelemetry-api", "opentelemetry-sdk"]
+
+[project.scripts]
+dev = "jaunder_dev.__main__:main"
+
+[tool.setuptools]
+packages = ["jaunder_dev"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+# Keep host runs from leaving a cache directory in the checkout.
+addopts = ["-p", "no:cacheprovider"]
+
+# Ruff reads only a pyproject.toml with this table, which makes this directory
+# its project root wherever it runs, so first-party imports sort the same on
+# the host and in the Nix check.
+[tool.ruff]
+
+# The CLI tests drive `python -m jaunder_dev` as a real process, so coverage
+# follows them into subprocesses.
+[tool.coverage.run]
+branch = true
+source = ["jaunder_dev"]
+patch = ["subprocess"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true

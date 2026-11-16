@@ -265,6 +265,10 @@ elisp-checks mode="verify":
 [private]
 _host-tests:
     cargo test --manifest-path tools/Cargo.toml --lib --bins --tests --features doctests/host,coverage/host
+    ruff format --check tools/dev
+    ruff check tools/dev
+    mypy --strict tools/dev
+    pytest tools/dev
 
 [private]
 _product-tests: test-local
@@ -321,7 +325,7 @@ _platform:
     nix eval --impure --expr 'import ./nix/platform-contract.nix { flake = builtins.getFlake ("git+file://" + toString ./.); }'
 
 [private]
-_static: (_nix "static-docs") (_nix "static-typescript") (_nix "rust-format") (_nix "static-code") (_nix "static-elisp") (_nix "static-e2e-census") (_nix "static-ert")
+_static: (_nix "static-docs") (_nix "static-typescript") (_nix "rust-format") (_nix "static-code") (_nix "static-elisp") (_nix "static-e2e-census") (_nix "static-ert") (_nix "dev-python")
 
 [private]
 _wasm-budget:

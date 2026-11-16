@@ -729,6 +729,61 @@ let
     meta.mainProgram = "adr-promoter";
   };
 
+  # The `dev` workflow runner. The host shim and the sandbox package share one
+  # dependency list; its quality check adds only the test tools.
+  devPythonDeps = ps: [
+    ps.click
+    ps.opentelemetry-api
+    ps.opentelemetry-sdk
+  ];
+  devPython = pkgs.python3.withPackages devPythonDeps;
+  devPythonCheck = pkgs.python3.withPackages (
+    ps:
+    devPythonDeps ps
+    ++ [
+      ps.coverage
+      ps.mypy
+      ps.pytest
+    ]
+  );
+  devPackageFiles = pkgs.lib.fileset.unions [
+    ../tools/dev/pyproject.toml
+    (pkgs.lib.fileset.fileFilter (file: file.hasExt "py") ../tools/dev/jaunder_dev)
+  ];
+  devSrc = pkgs.lib.fileset.toSource {
+    root = ../tools/dev;
+    fileset = devPackageFiles;
+  };
+  devCheckSrc = pkgs.lib.fileset.toSource {
+    root = ../tools/dev;
+    fileset = pkgs.lib.fileset.unions [
+      devPackageFiles
+      (pkgs.lib.fileset.fileFilter (file: file.hasExt "py" || file.hasExt "jsonl") ../tools/dev/tests)
+    ];
+  };
+  # Sandbox callers run this build of `dev`; `checks.dev-python` runs its tests.
+  devBin = pkgs.python3Packages.buildPythonApplication {
+    pname = "jaunder-dev";
+    version = "0.1.0";
+    pyproject = true;
+    src = devSrc;
+    build-system = [ pkgs.python3Packages.setuptools ];
+    dependencies = devPythonDeps pkgs.python3Packages;
+    pythonImportsCheck = [ "jaunder_dev" ];
+    meta.mainProgram = "dev";
+  };
+  # Host callers run the working tree's `dev`, as hooks and gates must, with no
+  # package rebuild after an edit under tools/dev/.
+  devShim = pkgs.writeShellApplication {
+    name = "dev";
+    runtimeInputs = [ pkgs.git ];
+    text = ''
+      root=$(git rev-parse --show-toplevel)
+      export PYTHONPATH="$root/tools/dev''${PYTHONPATH:+:$PYTHONPATH}"
+      exec ${devPython}/bin/python -P -m jaunder_dev "$@"
+    '';
+  };
+
   # The auxiliary tools workspace is separate from the product workspace
   # (ADR-0141): its lockfile and cargo artifacts stay independent, while the
   # performance producer links the selected typed product-storage closure.
@@ -1457,6 +1512,7 @@ in
     qualification-host = qualificationHostBin;
     host-proof = hostProofBin;
     adr-promoter = adrPromoter;
+    dev = devBin;
     # The out-of-process e2e seed helper (ADR-0046). Exposed so it is
     # directly buildable/verifiable; it is placed only on the e2e VM PATH,
     # never in the prod artifact or the NixOS module.
@@ -1524,6 +1580,10 @@ in
       testSupportBin
       devtoolBin
       tracedRunBin
+      devBin
+      devShim
+      devPythonCheck
+      devCheckSrc
       cargo-crap
       wasm-bindgen-cli
       wasmTestWebdriverConfig

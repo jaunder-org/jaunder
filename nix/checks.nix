@@ -26,6 +26,9 @@ let
     jaunderBin
     testSupportBin
     devtoolBin
+    devBin
+    devPythonCheck
+    devCheckSrc
     cargo-crap
     wasm-bindgen-cli
     wasmTestWebdriverConfig
@@ -3455,7 +3458,6 @@ static-typescript =
         relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
       in
       type == "directory"
-      || relative == "recipes/static.just"
       || (
         pkgs.lib.hasPrefix "end2end/" relative
         && (
@@ -3471,7 +3473,6 @@ static-typescript =
     staticTypeScriptSrc = pkgs.lib.cleanSourceWith {
       src = craneLib.path ../.;
       filter =
-        assert staticTypeScriptSourceFilter "${toString ../.}/recipes/static.just" "regular";
         assert staticTypeScriptSourceFilter "${toString ../.}/end2end/tests/example.ts" "regular";
         assert staticTypeScriptSourceFilter "${toString ../.}/end2end/tests/example.tsx" "regular";
         assert staticTypeScriptSourceFilter "${toString ../.}/end2end/types/example.d.ts" "regular";
@@ -3486,8 +3487,9 @@ static-typescript =
   nonSubstitutable (
     pkgs.runCommand "static-typescript"
       {
+        # `dev` arrives as its own filtered build, so tools/dev/ edits rebuild this.
         nativeBuildInputs = [
-          pkgs.just
+          devBin
           pkgs.nodejs
           pkgs.typescript
         ];
@@ -3499,10 +3501,34 @@ static-typescript =
         cp --no-preserve=mode -r ${staticTypeScriptSrc} src
         cd src
         ${nodeModulesSetup}/bin/setup-e2e-node-modules "$E2E_TYPES_NODE_MODULES" "$E2E_PLAYWRIGHT_TEST"
-        just --justfile recipes/static.just --working-directory . tsc
+        dev static tsc --sandbox
         touch $out
       ''
   );
+# `dev`'s own quality gate: formatting, lint, strict types, and its tests at
+# 90% branch coverage, subprocesses included.
+dev-python = nonSubstitutable (
+  pkgs.runCommand "dev-python"
+    {
+      nativeBuildInputs = [
+        devPythonCheck
+        pkgs.ruff
+        # The CLI tests run `dev` inside throwaway Git checkouts.
+        pkgs.git
+      ];
+    }
+    ''
+      cp --no-preserve=mode -r ${devCheckSrc} src
+      cd src
+      ruff format --check .
+      ruff check .
+      mypy --strict .
+      coverage run -m pytest -q
+      coverage combine
+      coverage report
+      touch $out
+    ''
+);
 # Standalone pure ERT verdict. The combined pure/live coverage producer is separate.
 static-ert =
   let
