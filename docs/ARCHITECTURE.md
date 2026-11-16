@@ -5003,7 +5003,7 @@ test identities; terminal execution records must reconcile exactly as
 `expected = executed + ignored`. Every required producer subprocess has its exit
 status checked, so diagnostics can explain a failure but cannot classify a
 nonzero exit as success. The derivation runs the producer under `pg-run`
-([pg-run as a Python script over a Unix socket](adr/drafts/pg-run-python-unix-socket.md)),
+([pg-run as a Python script over a Unix socket](adr/0249-pg-run-python-unix-socket.md)),
 giving the whole suite a throwaway PostgreSQL alongside SQLite, so
 backend-common tests retain SQLite/PostgreSQL parity and
 `storage/src/postgres/*` is instrumented rather than skipped
@@ -5186,7 +5186,7 @@ this code execute?_ ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)):
   It listens only on a Unix socket in its own short directory, exports the
   `JAUNDER_PG_*` URLs, passes signals on to the command, and tears down on exit,
   SIGINT and SIGTERM
-  ([pg-run as a Python script over a Unix socket](adr/drafts/pg-run-python-unix-socket.md),
+  ([pg-run as a Python script over a Unix socket](adr/0249-pg-run-python-unix-socket.md),
   superseding ADR-0246's library placement).
 
 The "devtool = in-sandbox, host concern packages = host" split is a litmus test

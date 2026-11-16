@@ -1,6 +1,6 @@
-# ADR-DRAFT: Throwaway test PostgreSQL is a Python script over a Unix socket
+# ADR-0249: Throwaway test PostgreSQL is a Python script over a Unix socket
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-15
 - Issue: [#1976](https://github.com/jaunder-org/jaunder/issues/1976)
 
@@ -10,11 +10,11 @@
 tree is fixed: `initdb`, `pg_ctl start`, a `psql` bootstrap, the command, then
 `pg_ctl stop` and removal of the data directory. It began as a bash script and
 was ported to Rust when the scripts were moved uniformly, without re-checking
-each one ([ADR-0028](../0028-devtool-vs-xtask-boundary.md)).
-[ADR-0246](../0246-retire-xtask-devtool-endpoints.md) then placed it in
+each one ([ADR-0028](0028-devtool-vs-xtask-boundary.md)).
+[ADR-0246](0246-retire-xtask-devtool-endpoints.md) then placed it in
 `tools/coverage` as a nondefault `ephemeral-postgres` library module, shared by
 the in-sandbox coverage producer and a host-proof `pg-run` binary.
-[ADR-0247](../0247-host-tool-json-report-contract.md) listed that binary among
+[ADR-0247](0247-host-tool-json-report-contract.md) listed that binary among
 host-proof's executables.
 
 The Rust module was about 390 non-test lines. Much of that existed only because
