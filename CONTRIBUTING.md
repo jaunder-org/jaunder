@@ -28,7 +28,8 @@ workspace (`tools/`, `elisp/`, `end2end/`). The remaining top-level entries are:
 - `.github/`: CI workflows
 - `public/`: static assets (the favicon), staged into the embedded asset set by
   `server/build.rs`
-- `scripts/`: small shell helpers not part of any build
+- `scripts/`: small helper scripts; `pg-run.py` is packaged by Nix onto the
+  devShell PATH and into the coverage derivation
 
 ### `mod.rs` assembles the module surface
 
@@ -826,7 +827,7 @@ aliases and the `xtask` workspace are retired. Both development shells provide
 pinned Just; the Rust host commands are concern-owned executables in the `tools`
 workspace — `repository-policy` (`repository-docs`, `source-contracts`,
 `git-index-safety`), `host-proof` (`test-local`, `e2e-local`, `e2e-evidence`,
-`trace-analysis`, `wasm-audit`, `source-diagnostics`, `pg-run`), `coverage`
+`trace-analysis`, `wasm-audit`, `source-diagnostics`), `coverage`
 (`coverage-check`, nondefault `host` feature), `doctests` (`doctest-check`,
 nondefault `host` feature) and `qualification` (`qualification-host`). Just
 recipes run them with locked Cargo from the active checkout; CI's E2E verifier
@@ -1761,9 +1762,12 @@ does not bring them in. See
 [ADR-0124](docs/adr/0124-rstest-reuse-cross-module-templates.md).)
 
 The simplest way to run them against a throwaway PostgreSQL is
-`just test-local`, which starts an ephemeral cluster through host-proof's
-`pg-run`, exports the connection env, runs `cargo nextest run`, tears everything
-down, and applies the shared `sccache` environment:
+`just test-local`, which starts an ephemeral cluster through the devShell's
+`pg-run` script, exports the connection env, runs `cargo nextest run`, tears
+everything down, and applies the shared `sccache` environment. `pg-run` reaches
+the cluster over a Unix socket in a short per-run directory under
+`XDG_RUNTIME_DIR` (or `TMPDIR`); the exported URLs carry it as `?host=`
+([pg-run as a Python script over a Unix socket](docs/adr/drafts/pg-run-python-unix-socket.md)):
 
 ```bash
 just test-local
@@ -2564,4 +2568,4 @@ installed for the `jaunder` user via `users.users.jaunder.packages`.
   `export JAUNDER_DB=postgres://jaunder@127.0.0.1:55432/jaunder`.
 - The PostgreSQL-backed tests each create their own database (template clones),
   so they run in parallel without interference; see "PostgreSQL-backed Rust
-  tests" above. For a self-contained run, prefer `pg-run` (host-proof).
+  tests" above. For a self-contained run, prefer `just pg-run`.

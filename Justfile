@@ -281,7 +281,7 @@ test-local *args:
 # Run a command against a throwaway PostgreSQL cluster (JAUNDER_PG_TEST_URL exported).
 [positional-arguments]
 pg-run *args:
-    {{host_proof}} pg-run -- "$@"
+    pg-run "$@"
 
 # Manual coverage evidence tools: probe-source | wasm-probe | wasm-measure.
 [positional-arguments]

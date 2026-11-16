@@ -5002,14 +5002,16 @@ root-workspace nextest population. Its machine-readable census supplies expected
 test identities; terminal execution records must reconcile exactly as
 `expected = executed + ignored`. Every required producer subprocess has its exit
 status checked, so diagnostics can explain a failure but cannot classify a
-nonzero exit as success. The producer runs the whole suite under an ephemeral
-PostgreSQL via host-proof `pg-run`, alongside SQLite, so backend-common tests
-retain SQLite/PostgreSQL parity and `storage/src/postgres/*` is instrumented
-rather than skipped (`nix/checks.nix:643-729`). It writes a versioned status
-record validated by both the sandbox Nix gate and the host consumer; the host
-also rejects missing or empty text evidence and parsed reports with zero
-executable lines before ordinary line/CRAP policy. The host-side gate
-(`coverage-check policy`, `tools/coverage/src/host/policy/`) then applies:
+nonzero exit as success. The derivation runs the producer under `pg-run`
+([pg-run as a Python script over a Unix socket](adr/drafts/pg-run-python-unix-socket.md)),
+giving the whole suite a throwaway PostgreSQL alongside SQLite, so
+backend-common tests retain SQLite/PostgreSQL parity and
+`storage/src/postgres/*` is instrumented rather than skipped
+(`nix/checks.nix:643-729`). It writes a versioned status record validated by
+both the sandbox Nix gate and the host consumer; the host also rejects missing
+or empty text evidence and parsed reports with zero executable lines before
+ordinary line/CRAP policy. The host-side gate (`coverage-check policy`,
+`tools/coverage/src/host/policy/`) then applies:
 
 - **One structural exemption**: a literal `unreachable!("msg")` with a non-empty
   message. It needs no marker because it is self-re-flagging — reaching the line
@@ -5164,13 +5166,13 @@ this code execute?_ ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)):
   workflows return plain status instead
   ([qualification carveout](adr/0239-qualification-workflow-ownership.md)).
 - **`tools/host-proof`** — focused host proof (ADR-0246): direct `test-local`,
-  `e2e-local`, `pg-run` and `trace-analysis` executables behind the matching
-  Just recipes; trace analysis carries its rendered tables in the report's
-  `report` field. Each prints exactly one JSON report on stdout (steps,
-  outcomes, durations, details, verdict) and sends child output to stderr; its
-  exit status is the verdict. `scripts/step-report.jq` derives the human step
-  view; there is no sidecar, `--json` flag or completion sentinel. `test-local`
-  keeps its bounded invocation trace under the `traced-run` launcher.
+  `e2e-local` and `trace-analysis` executables behind the matching Just recipes;
+  trace analysis carries its rendered tables in the report's `report` field.
+  Each prints exactly one JSON report on stdout (steps, outcomes, durations,
+  details, verdict) and sends child output to stderr; its exit status is the
+  verdict. `scripts/step-report.jq` derives the human step view; there is no
+  sidecar, `--json` flag or completion sentinel. `test-local` keeps its bounded
+  invocation trace under the `traced-run` launcher.
 - **`tools/devtool`** — the tool that must also run inside Nix build sandboxes,
   where `nix` and the host tools are unavailable; `devtool coverage emit`
   produces coverage artifacts into `$out` for exfiltration
@@ -5178,8 +5180,14 @@ this code execute?_ ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)):
 - **`tools/coverage`** — by default a pure-logic library shared by both sides,
   with no I/O policy of its own
   ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)); its nondefault `host`
-  feature adds the `coverage-check` consumer and its nondefault
-  `ephemeral-postgres` module owns PostgreSQL custody for `pg-run`.
+  feature adds the `coverage-check` consumer.
+- **`scripts/pg-run.py`** — the single throwaway-PostgreSQL wrapper for host
+  workflows and the coverage derivation, packaged by Nix onto the devShell PATH.
+  It listens only on a Unix socket in its own short directory, exports the
+  `JAUNDER_PG_*` URLs, passes signals on to the command, and tears down on exit,
+  SIGINT and SIGTERM
+  ([pg-run as a Python script over a Unix socket](adr/drafts/pg-run-python-unix-socket.md),
+  superseding ADR-0246's library placement).
 
 The "devtool = in-sandbox, host concern packages = host" split is a litmus test
 about where code _must_ execute, not a ban on running devtool from a shell.
@@ -5493,12 +5501,12 @@ checker registry, runner, supervisor or replacement omnibus:
   environment.
 - `tools/qualification` — `qualification-host` behind the four
   `production-baseline-*` recipes.
-- `tools/host-proof` — focused proof (`test-local`, `e2e-local`, `pg-run`),
-  artifact-only e2e verdicts (`e2e-evidence`) and host diagnostics
-  (`trace-analysis`, `wasm-audit`, `source-diagnostics`).
+- `tools/host-proof` — focused proof (`test-local`, `e2e-local`), artifact-only
+  e2e verdicts (`e2e-evidence`) and host diagnostics (`trace-analysis`,
+  `wasm-audit`, `source-diagnostics`).
 - `tools/coverage` (nondefault `host` feature) — `coverage-check` policy,
-  benchmark, source probe, Emacs Lisp, WASM coverage and mutation evidence; its
-  nondefault `ephemeral-postgres` module owns PostgreSQL custody.
+  benchmark, source probe, Emacs Lisp, WASM coverage and mutation evidence.
+- `scripts/pg-run.py` (Nix package `pg-run`) — throwaway PostgreSQL.
 - `tools/doctests` (nondefault `host` feature) — `doctest-check`.
 - `test-support seed-e2e` — the canonical e2e seed.
 

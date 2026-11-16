@@ -1,5 +1,5 @@
-//! Focused host proof: the direct `test-local`, `e2e-local` and `pg-run`
-//! executables and the private host lifecycle algorithms they share
+//! Focused host proof: the direct `test-local` and `e2e-local` executables
+//! and the private host lifecycle algorithms they share
 //! (ADR-0246). Each executable prints one JSON report on stdout.
 
 pub mod audit_wasm;

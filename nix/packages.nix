@@ -489,12 +489,12 @@ let
       ;
   };
   qualificationHostBin = import ./qualification.nix { inherit mkHostTool; };
-  # The host-proof executables CI runs from a cached output instead of
-  # compiling the tools workspace: the e2e verifier and mutants' pg-run.
+  # The host-proof executable CI runs from a cached output instead of
+  # compiling the tools workspace: the e2e verifier.
   hostProofBin = mkHostTool {
     pname = "host-proof";
     member = "tools/host-proof";
-    bins = [ "e2e-evidence" "pg-run" ];
+    bins = [ "e2e-evidence" ];
   };
 
   repositoryPolicyBin = import ./repository-policy.nix {
@@ -1347,6 +1347,18 @@ let
 
   nodeModulesSetup = import ./node-modules-setup.nix { inherit pkgs; };
 
+  # The single throwaway-PostgreSQL wrapper for host workflows and the coverage
+  # sandbox. flake8 runs at build time. Only PostgreSQL is prefixed onto PATH,
+  # because the wrapped command inherits that PATH.
+  pgRun = pkgs.writers.writePython3Bin "pg-run" {
+    makeWrapperArgs = [
+      "--prefix"
+      "PATH"
+      ":"
+      (pkgs.lib.makeBinPath [ pkgs.postgresql_18 ])
+    ];
+  } (builtins.readFile ../scripts/pg-run.py);
+
   e2ePackage = pkgs.buildNpmPackage {
     name = "jaunder-e2e";
     src = ../end2end;
@@ -1427,6 +1439,7 @@ in
     traced-run = tracedRunBin;
     devtool = devtoolBin;
     node-modules-setup = nodeModulesSetup;
+    pg-run = pgRun;
     ux-sandbox = import ./ux-sandbox.nix {
       inherit
         pkgs
@@ -1518,6 +1531,7 @@ in
       csrWasmBundle
       e2ePackage
       nodeModulesSetup
+      pgRun
       emacsSrc
       emacsForCi
       ;

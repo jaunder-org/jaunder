@@ -17,10 +17,6 @@ name = "e2e-local"
 path = "src/bin/e2e-local.rs"
 
 [[bin]]
-name = "pg-run"
-path = "src/bin/pg-run.rs"
-
-[[bin]]
 name = "e2e-evidence"
 path = "src/bin/e2e-evidence.rs"
 
@@ -39,7 +35,6 @@ path = "src/bin/trace-analysis.rs"
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive"] }
-coverage = { path = "../coverage", features = ["ephemeral-postgres"] }
 flate2 = "1.1.10"
 host = { path = "../../host" }
 jiff = { version = "0.2.35", default-features = false, features = ["std"] }
