@@ -1767,7 +1767,7 @@ The simplest way to run them against a throwaway PostgreSQL is
 everything down, and applies the shared `sccache` environment. `pg-run` reaches
 the cluster over a Unix socket in a short per-run directory under
 `XDG_RUNTIME_DIR` (or `TMPDIR`); the exported URLs carry it as `?host=`
-([pg-run as a Python script over a Unix socket](docs/adr/drafts/pg-run-python-unix-socket.md)):
+([pg-run as a Python script over a Unix socket](docs/adr/0249-pg-run-python-unix-socket.md)):
 
 ```bash
 just test-local
