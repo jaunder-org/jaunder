@@ -11,8 +11,6 @@ use coverage::status::{
 };
 use serde_json::Value;
 
-use coverage::ephemeral_postgres;
-
 const JUNIT_PATH: &str = "/tmp/jaunder-coverage-junit.xml";
 const LLVM_COV_ENVIRONMENT_SCRIPT: &str = r#"environment="$(cargo llvm-cov show-env --export-prefix)" || exit; eval "$environment" || exit; exec "$@""#;
 
@@ -441,14 +439,12 @@ fn run_instrumented_tests(run: &CommandSpec, diag: &Path) -> Result<CapturedComm
         return Ok(build);
     }
     let executable = instrumented_executable(&build.stdout)?;
-    ephemeral_postgres::with_ephemeral(|env| {
-        let mut command = Command::new(run.program);
-        command
+    // The PostgreSQL URLs are inherited from the enclosing `pg-run`.
+    run_capture(
+        Command::new(run.program)
             .args(&run.arguments)
-            .env("JAUNDER_TEST_EXECUTABLE", &executable);
-        env.configure_command(&mut command);
-        run_capture(&mut command)
-    })
+            .env("JAUNDER_TEST_EXECUTABLE", &executable),
+    )
 }
 
 /// Run the instrumented suite and emit reports + status + diagnostics into `out`.

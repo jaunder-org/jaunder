@@ -69,20 +69,26 @@ impl PostgresTestConfig {
         &self.bootstrap_url
     }
 
-    /// The bootstrap connection's `host:port` authority.
+    /// The bootstrap connection re-addressed to `role` and `database`, keeping
+    /// its server and query, which carries the socket directory under `pg-run`.
     #[must_use]
-    pub fn bootstrap_authority(&self) -> String {
-        postgres_url_authority(&self.bootstrap_url)
+    pub fn bootstrap_url_as(&self, role: &str, database: &str) -> String {
+        readdress(&self.bootstrap_url, role, database)
     }
 }
 
 /// Pure core of [`PostgresTestConfig::from_env`]: the `explicit` bootstrap URL
-/// when set, else a `postgres` superuser URL on the same authority as `test_url`.
+/// when set, else a `postgres` superuser URL on the same server as `test_url`.
 fn bootstrap_url(explicit: Option<String>, test_url: &str) -> String {
-    explicit.unwrap_or_else(|| {
-        let authority = postgres_url_authority(test_url);
-        format!("postgres://postgres@{authority}/postgres")
-    })
+    explicit.unwrap_or_else(|| readdress(test_url, "postgres", "postgres"))
+}
+
+/// `url` with its role and database replaced, keeping its server authority and
+/// any `?query` (which carries the Unix socket directory under `pg-run`).
+fn readdress(url: &str, role: &str, database: &str) -> String {
+    let authority = postgres_url_authority(url);
+    let query = url.find('?').map_or("", |start| &url[start..]);
+    format!("postgres://{role}@{authority}/{database}{query}")
 }
 
 fn postgres_url_authority(url: &str) -> String {
@@ -400,7 +406,27 @@ mod tests {
             config.bootstrap_url(),
             "postgres://admin@bootstrap:5432/postgres"
         );
-        assert_eq!(config.bootstrap_authority(), "bootstrap:5432");
+        assert_eq!(
+            config.bootstrap_url_as("app", "appdb"),
+            "postgres://app@bootstrap:5432/appdb"
+        );
+    }
+
+    #[test]
+    fn derived_urls_keep_the_socket_directory_query() {
+        let config = PostgresTestConfig::from_raw(
+            "postgres://jaunder@localhost/jaunder?host=/run/pg".to_owned(),
+            None,
+        );
+
+        assert_eq!(
+            config.bootstrap_url(),
+            "postgres://postgres@localhost/postgres?host=/run/pg"
+        );
+        assert_eq!(
+            config.bootstrap_url_as("app", "appdb"),
+            "postgres://app@localhost/appdb?host=/run/pg"
+        );
     }
 
     #[test]

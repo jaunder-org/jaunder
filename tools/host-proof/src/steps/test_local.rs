@@ -135,7 +135,7 @@ fn run_with_producer(
     let _worker_env = sh.push_env("JAUNDER_TEST_EXECUTABLE", executable);
     let args = args_for(nextest_args);
     let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    let mut step = step_with_env(sh, "test-local", "cargo", &refs, &env);
+    let mut step = step_with_env(sh, "test-local", "pg-run", &refs, &env);
     if let Some(cache_detail) = cache_detail {
         step.detail = Some(match step.detail.take() {
             Some(command_detail) => format!("{command_detail}\n{cache_detail}"),
@@ -162,25 +162,12 @@ fn build_image_worker(
     )
 }
 
+/// The command `pg-run` wraps: nextest, defaulting to the whole workspace.
 pub fn args_for(nextest_args: &[String]) -> Vec<String> {
-    let mut args = [
-        "run",
-        "--locked",
-        "--quiet",
-        "--manifest-path",
-        "tools/Cargo.toml",
-        "-p",
-        "host-proof",
-        "--bin",
-        "pg-run",
-        "--",
-        "cargo",
-        "nextest",
-        "run",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect::<Vec<_>>();
+    let mut args = ["cargo", "nextest", "run"]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
     if nextest_args.is_empty() {
         args.push("--workspace".to_string());
     } else {
@@ -194,6 +181,9 @@ mod tests {
     use super::*;
 
     static ORCHESTRATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Stands in for the real `pg-run`, which these tests must never start.
+    const FAKE_PG_RUN: &str = "#!/bin/sh\nexec \"$@\"\n";
 
     #[test]
     #[cfg(unix)]
@@ -272,6 +262,7 @@ printf '/nix/store/fixture\n'
 printf 'consumer %s\n' "$1" >> "$CALLS"
 "#,
             ),
+            ("pg-run", FAKE_PG_RUN),
         ] {
             let path = temp.path().join(name);
             fs::write(&path, script).unwrap();
@@ -296,7 +287,7 @@ printf 'consumer %s\n' "$1" >> "$CALLS"
         let observed = fs::read_to_string(&calls).unwrap();
         assert!(observed.contains(".#csrBundle\n"), "{observed}");
         assert!(
-            observed.ends_with("consumer build\nconsumer run\n"),
+            observed.ends_with("consumer build\nconsumer nextest\n"),
             "{observed}"
         );
         assert!(!temp.path().join("target/site").exists());
@@ -492,6 +483,9 @@ fi
                     )
                     .unwrap();
                     fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+                    let pg_run = temp.path().join("pg-run");
+                    fs::write(&pg_run, FAKE_PG_RUN).unwrap();
+                    fs::set_permissions(&pg_run, fs::Permissions::from_mode(0o755)).unwrap();
                     let sh = Shell::new().unwrap();
                     sh.change_dir(temp.path());
                     sh.set_var(
@@ -563,9 +557,10 @@ fi
                         std::path::Path::new(lines[3]),
                         temp.path().join("target/debug/jaunder")
                     );
+                    // The fake pg-run execs its command, so cargo sees the rest.
                     assert_eq!(
                         &lines[4..],
-                        args_for(&args)
+                        args_for(&args)[1..]
                             .iter()
                             .map(String::as_str)
                             .collect::<Vec<_>>()
@@ -667,22 +662,7 @@ fi
     fn test_local_defaults_to_workspace_nextest_under_pg_run() {
         assert_eq!(
             args_for(&[]),
-            strings(&[
-                "run",
-                "--locked",
-                "--quiet",
-                "--manifest-path",
-                "tools/Cargo.toml",
-                "-p",
-                "host-proof",
-                "--bin",
-                "pg-run",
-                "--",
-                "cargo",
-                "nextest",
-                "run",
-                "--workspace",
-            ])
+            strings(&["cargo", "nextest", "run", "--workspace"])
         );
     }
 
@@ -695,16 +675,6 @@ fi
                 "site_config_primitives_round_trip",
             ])),
             strings(&[
-                "run",
-                "--locked",
-                "--quiet",
-                "--manifest-path",
-                "tools/Cargo.toml",
-                "-p",
-                "host-proof",
-                "--bin",
-                "pg-run",
-                "--",
                 "cargo",
                 "nextest",
                 "run",

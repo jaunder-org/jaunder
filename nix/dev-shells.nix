@@ -16,6 +16,7 @@ let
     wasm-bindgen-cli
     e2ePackage
     nodeModulesSetup
+    pgRun
     appOfflineCargoHome
     ;
 
@@ -42,6 +43,8 @@ let
       devtoolBin
       tracedRunBin
       nodeModulesSetup
+      # Throwaway PostgreSQL for `just pg-run`, test-local and mutants.
+      pgRun
       emacsForCi
       pkgs.jq
       # Just producers invoke Nix directly.

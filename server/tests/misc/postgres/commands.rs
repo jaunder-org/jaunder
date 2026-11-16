@@ -50,8 +50,7 @@ async fn cmd_create_pg_db_provisions_role_and_database() {
 
     let config = PostgresTestConfig::from_env();
     let bootstrap = config.bootstrap_url();
-    let authority = config.bootstrap_authority();
-    let app = format!("postgres://{role_name}@{authority}/{db_name}");
+    let app = config.bootstrap_url_as(&role_name, &db_name);
 
     let mut admin_conn = sqlx::PgConnection::connect(bootstrap).await.unwrap();
     sqlx::query(AssertSqlSafe(format!(
@@ -133,8 +132,7 @@ async fn cmd_create_pg_db_fails_if_role_already_exists() {
 
     let config = PostgresTestConfig::from_env();
     let bootstrap = config.bootstrap_url();
-    let authority = config.bootstrap_authority();
-    let app = format!("postgres://{role_name}@{authority}/{db_name}");
+    let app = config.bootstrap_url_as(&role_name, &db_name);
 
     let mut admin_conn = sqlx::PgConnection::connect(bootstrap).await.unwrap();
     sqlx::query(AssertSqlSafe(format!(

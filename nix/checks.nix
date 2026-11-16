@@ -33,6 +33,7 @@ let
     csrWasmBundle
     e2ePackage
     nodeModulesSetup
+    pgRun
     diagnosticJaunderBin
     diagnosticBaselineJaunderBin
     diagnosticCsrWasmBundle
@@ -77,10 +78,6 @@ let
     assert !(wasmTestTargetSource "tools/devtool/Cargo.toml");
     assert !(wasmTestTargetSource "tools/doctests/Cargo.toml");
     assert !(wasmTestTargetSource "tools/diagnostic-coverage-runtime/Cargo.toml");
-    # Ephemeral PostgreSQL custody is auxiliary coverage tooling, never product,
-    # CSR or WASM-test source.
-    assert !(siteTargetSource "tools/coverage/src/ephemeral_postgres.rs");
-    assert !(wasmTestTargetSource "tools/coverage/src/ephemeral_postgres.rs");
     assert !(siteTargetSource "tools/qualification/src/lib.rs");
     assert !(wasmTestTargetSource "tools/qualification/src/lib.rs");
     assert !(siteTargetSource "tools/host-proof/src/lib.rs");
@@ -2731,19 +2728,18 @@ mkWasmCoverageMeasurementProducer =
           pkgs.coreutils
           # The sandbox admission regression evaluates an isolated local flake.
           pkgs.nix
-          # devtool runs the whole test suite under an ephemeral
-          # PostgreSQL (coverage's ephemeral-postgres custody) so
-          # storage/src/postgres/* gets instrumented coverage. The
-          # throwaway cluster needs initdb/pg_ctl/psql available inside
-          # the build sandbox.
-          pkgs.postgresql_18
+          # The producer runs under pg-run so the whole test suite has a
+          # throwaway PostgreSQL and storage/src/postgres/* gets
+          # instrumented coverage. pg-run carries its own PostgreSQL.
+          pgRun
         ];
         buildPhaseCargoCommand = ''
           export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:''${LD_LIBRARY_PATH:-}"
           mkdir -p emit-out
           # The producer emits checked stage evidence; the Nix gate and host coverage-check
           # consume its status and reports as separate authoritative boundaries.
-          devtool coverage emit --out emit-out
+          # A PostgreSQL start failure fails this build before the producer runs.
+          pg-run devtool coverage emit --out emit-out
         '';
         installPhaseCommand = ''
           mkdir -p $out
