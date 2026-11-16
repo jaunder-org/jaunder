@@ -563,6 +563,22 @@ mod tests {
     }
 
     #[test]
+    fn acknowledged_in_progress_run_with_a_failed_job_is_not_a_fresh_ejection() {
+        use crate::pr::test_support::ejection;
+        let acknowledged = crate::pr::snapshot::RunRef {
+            conclusion: String::new(),
+            failed_job: Some("Validation host".into()),
+            ..ejection("2026-07-30T14:30:00Z")
+        };
+        let source = FakeSource::new(vec![Ok(open(green())), Ok(open(green()))], queue_rules())
+            .with_ejection(Some(acknowledged.clone()));
+        let mut continued = continuation(Some("abc"), Some(&acknowledged.url));
+        continued.progress.queued_head_sha = Some("abc".into());
+        let report = observe(&source, &clock(), Some(731), cfg(), continued, &mut |_| {}).unwrap();
+        assert_eq!(report.outcome, Outcome::Dequeued);
+    }
+
+    #[test]
     fn continuation_head_guard_outranks_even_merged_replacement_and_readiness() {
         use crate::pr::test_support::merged_snapshot;
         for mut replacement in [open(green()), merged_snapshot()] {

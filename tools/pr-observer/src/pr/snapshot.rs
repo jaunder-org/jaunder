@@ -111,9 +111,13 @@ pub struct RequiredChecks {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunRef {
+    pub id: u64,
     pub url: String,
     pub created_at: String,
     pub conclusion: String,
+    /// The first job already concluded as a failure, observed only while the run
+    /// has no conclusion: the queue ejects on that job before the run finishes.
+    pub failed_job: Option<String>,
 }
 
 /// Required-context observations for one exact commit.
@@ -468,18 +472,86 @@ pub fn parse_required_checks(v: &Value) -> Result<RequiredChecks, ApiError> {
 /// commit, not the PR head, so recency cannot be read off the name and `?branch=`
 /// (which needs an exact match) is unusable. Hence: prefix match, newest by
 /// `created_at`, and the failure/recency judgment left to `decide`.
-pub fn parse_ejection_run(v: &Value, pr: PrNumber) -> Option<RunRef> {
+pub fn parse_ejection_run(v: &Value, pr: PrNumber) -> Result<Option<RunRef>, ApiError> {
     let prefix = format!("gh-readonly-queue/main/pr-{pr}-");
-    v.get("workflow_runs")?
-        .as_array()?
-        .iter()
+    let Some(run) = v
+        .get("workflow_runs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
         .filter(|r| str_at(r, &["head_branch"]).is_some_and(|b| b.starts_with(&prefix)))
         .max_by_key(|r| owned(r, &["created_at"]).unwrap_or_default())
-        .map(|r| RunRef {
-            url: owned(r, &["html_url"]).unwrap_or_default(),
-            created_at: owned(r, &["created_at"]).unwrap_or_default(),
-            conclusion: owned(r, &["conclusion"]).unwrap_or_default(),
-        })
+    else {
+        return Ok(None);
+    };
+    Ok(Some(RunRef {
+        // The id addresses the run's jobs, so a missing one cannot be defaulted.
+        id: required_u64(run, "id")?,
+        url: owned(run, &["html_url"]).unwrap_or_default(),
+        created_at: owned(run, &["created_at"]).unwrap_or_default(),
+        conclusion: owned(run, &["conclusion"]).unwrap_or_default(),
+        failed_job: None,
+    }))
+}
+
+/// The newest merge-group run, plus — while it has no conclusion — the first job
+/// that has already failed. Transport is injected so request shape is testable.
+fn ejection_run_with(
+    subject: &Subject,
+    mut json: impl FnMut(&[&str]) -> Result<Value, ApiError>,
+) -> Result<Option<RunRef>, ApiError> {
+    let slug = format!("{}/{}", subject.owner, subject.repo);
+    let runs_path = format!("/repos/{slug}/actions/runs?event=merge_group&per_page=100");
+    let Some(mut run) = parse_ejection_run(&json(&["api", &runs_path])?, subject.number)? else {
+        return Ok(None);
+    };
+    if run.conclusion.is_empty() {
+        run.failed_job = first_failed_job(&run_jobs(&slug, run.id, &mut json)?)?;
+    }
+    Ok(Some(run))
+}
+
+/// Every latest-attempt job of one workflow run, across all pages.
+fn run_jobs(
+    slug: &str,
+    run_id: u64,
+    json: &mut impl FnMut(&[&str]) -> Result<Value, ApiError>,
+) -> Result<Vec<Value>, ApiError> {
+    let mut jobs = Vec::new();
+    for page in 1.. {
+        let path = format!(
+            "/repos/{slug}/actions/runs/{run_id}/jobs?filter=latest&per_page=100&page={page}"
+        );
+        let value = json(&["api", &path])?;
+        let page_jobs = required_array(&value, "jobs")?;
+        jobs.extend(page_jobs.iter().cloned());
+        if page_jobs.len() < 100 {
+            break;
+        }
+    }
+    Ok(jobs)
+}
+
+/// Conclusions that make a merge-group check fail and so eject the entry.
+/// `cancelled` is excluded: cancellation follows a removal rather than causing it.
+const EJECTING_CONCLUSIONS: [&str; 3] = ["failure", "timed_out", "startup_failure"];
+
+fn first_failed_job(jobs: &[Value]) -> Result<Option<String>, ApiError> {
+    for job in jobs {
+        let conclusion = match job.get("conclusion") {
+            Some(Value::Null) => continue,
+            Some(Value::String(conclusion)) => conclusion,
+            _ => {
+                return Err(ApiError::Malformed(
+                    "merge-group job omitted string-or-null conclusion".into(),
+                ));
+            }
+        };
+        if EJECTING_CONCLUSIONS.contains(&conclusion.as_str()) {
+            return required_string(job, "name").map(Some);
+        }
+    }
+    Ok(None)
 }
 
 /// Everything the watcher needs to read. Domain-shaped on purpose: a fake supplies
@@ -626,32 +698,12 @@ fn collect_shared_failure_evidence_with(
 ) -> Result<SharedFailureEvidence, ApiError> {
     deadline.check()?;
     let slug = format!("{}/{}", subject.owner, subject.repo);
-    let subject_jobs_path = format!(
-        "/repos/{slug}/actions/runs/{}/jobs?filter=latest&per_page=100",
-        failure.workflow_run_id
-    );
-    let mut subject_jobs = Vec::new();
-    let mut page = 1;
-    loop {
+    let mut json = |args: &[&str]| {
         deadline.check()?;
-        let path = format!("{subject_jobs_path}&page={page}");
-        let value = json(&["api", &path])?;
-        let jobs = required_array(&value, "jobs")?;
-        let complete = jobs.len() < 100;
-        subject_jobs.extend(jobs.iter().cloned());
-        if complete {
-            break;
-        }
-        page += 1;
-    }
-    let subject_job = find_job_for_check(
-        &Value::Object(serde_json::Map::from_iter([(
-            "jobs".to_owned(),
-            Value::Array(subject_jobs),
-        )])),
-        failure.check_run_id,
-        deadline,
-    )?;
+        json(args)
+    };
+    let subject_jobs = run_jobs(&slug, failure.workflow_run_id, &mut json)?;
+    let subject_job = find_job_for_check(&subject_jobs, failure.check_run_id, deadline)?;
     deadline.check()?;
     let subject_log_path = format!("/repos/{slug}/actions/jobs/{}/logs", subject_job.id);
     let mut log_bytes = 0;
@@ -707,24 +759,7 @@ fn collect_shared_failure_evidence_with(
     let mut jobs = Vec::with_capacity(selected_runs.len());
     for selected in &selected_runs {
         deadline.check()?;
-        let jobs_path = format!(
-            "/repos/{slug}/actions/runs/{}/jobs?filter=latest&per_page=100",
-            selected.run.id
-        );
-        let mut failed = Vec::new();
-        let mut page = 1;
-        loop {
-            deadline.check()?;
-            let path = format!("{jobs_path}&page={page}");
-            let value = json(&["api", &path])?;
-            let parsed = parse_failed_jobs(&value, deadline)?;
-            let complete = required_array(&value, "jobs")?.len() < 100;
-            failed.extend(parsed);
-            if complete {
-                break;
-            }
-            page += 1;
-        }
+        let failed = parse_failed_jobs(&run_jobs(&slug, selected.run.id, &mut json)?, deadline)?;
         deadline.check()?;
         let mut with_logs = Vec::with_capacity(failed.len());
         for job in failed {
@@ -837,11 +872,10 @@ fn parse_candidate_runs(
 }
 
 fn find_job_for_check(
-    value: &Value,
+    jobs: &[Value],
     check_run_id: u64,
     deadline: &gh::Deadline,
 ) -> Result<CandidateJob, ApiError> {
-    let jobs = required_array(value, "jobs")?;
     for job in jobs {
         deadline.check()?;
         if job
@@ -859,10 +893,9 @@ fn find_job_for_check(
     )))
 }
 fn parse_failed_jobs(
-    value: &Value,
+    jobs: &[Value],
     deadline: &gh::Deadline,
 ) -> Result<Vec<CandidateJob>, ApiError> {
-    let jobs = required_array(value, "jobs")?;
     let mut failed = Vec::new();
     for job in jobs {
         deadline.check()?;
@@ -1121,14 +1154,7 @@ impl PrSource for GhSource {
     }
 
     fn ejection_run(&self, subject: &Subject) -> Result<Option<RunRef>, ApiError> {
-        let path = format!(
-            "/repos/{}/{}/actions/runs?event=merge_group&per_page=100",
-            subject.owner, subject.repo
-        );
-        Ok(parse_ejection_run(
-            &gh::run_gh(&["api", &path])?,
-            subject.number,
-        ))
+        ejection_run_with(subject, gh::run_gh)
     }
 }
 
@@ -1558,12 +1584,20 @@ mod tests {
     fn ejection_run_matches_on_branch_prefix_not_exact_name() {
         // The branch suffix is the BASE sha, not the head, so only a prefix test can
         // match — `?branch=` needs an exact name and is unusable here.
-        assert!(parse_ejection_run(&fixture!("runs-merge-group.json"), PrNumber(727)).is_some());
+        assert!(
+            parse_ejection_run(&fixture!("runs-merge-group.json"), PrNumber(727))
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
     fn ejection_run_ignores_other_prs() {
-        assert!(parse_ejection_run(&fixture!("runs-merge-group.json"), PrNumber(999)).is_none());
+        assert!(
+            parse_ejection_run(&fixture!("runs-merge-group.json"), PrNumber(999))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1584,7 +1618,7 @@ mod tests {
             .map(|r| r["created_at"].as_str().unwrap().to_string())
             .max()
             .expect("fixture must retain the pr-646 runs");
-        let picked = parse_ejection_run(&all, PrNumber(646)).unwrap();
+        let picked = parse_ejection_run(&all, PrNumber(646)).unwrap().unwrap();
         assert_eq!(
             picked.created_at, newest,
             "must pick the newest, not the first"
@@ -1666,9 +1700,97 @@ mod tests {
     fn ejection_run_reports_conclusion_verbatim_without_judging_it() {
         // `decide` judges failure and recency; this layer only reports. PR 646's
         // newest run succeeded even though two older ones failed.
-        let picked = parse_ejection_run(&fixture!("runs-merge-group.json"), PrNumber(646)).unwrap();
+        let picked = parse_ejection_run(&fixture!("runs-merge-group.json"), PrNumber(646))
+            .unwrap()
+            .unwrap();
         assert_eq!(picked.conclusion, "success");
         assert!(picked.url.contains("/actions/runs/"));
+    }
+
+    /// Run the probe against scripted responses, returning its result and the
+    /// request paths it made.
+    fn probe(
+        conclusion: Value,
+        job_pages: Vec<Result<Value, ApiError>>,
+    ) -> (Result<Option<RunRef>, ApiError>, Vec<String>) {
+        let subject = crate::pr::test_support::subject();
+        let runs = serde_json::json!({"workflow_runs": [{
+            "id": 88, "html_url": "run/88", "created_at": "2026-09-15T00:00:00Z",
+            "head_branch": format!("gh-readonly-queue/main/pr-{}-base", subject.number),
+            "conclusion": conclusion
+        }]});
+        let mut responses = std::collections::VecDeque::from(job_pages);
+        responses.push_front(Ok(runs));
+        let mut requests = Vec::new();
+        let result = ejection_run_with(&subject, |args| {
+            requests.push(args[1].to_owned());
+            responses.pop_front().expect("scripted response")
+        });
+        (result, requests)
+    }
+
+    fn job(name: &str, conclusion: Value) -> Value {
+        serde_json::json!({"id": 1, "name": name, "conclusion": conclusion})
+    }
+
+    #[test]
+    fn completed_merge_group_run_needs_no_jobs_call() {
+        let (run, requests) = probe(serde_json::json!("failure"), vec![]);
+        let run = run.unwrap().unwrap();
+        assert_eq!(run.failed_job, None);
+        assert_eq!(requests.len(), 1, "{requests:?}");
+    }
+
+    #[test]
+    fn in_progress_merge_group_run_reports_its_first_ejecting_job() {
+        for (conclusion, ejecting) in [
+            (serde_json::json!("failure"), true),
+            (serde_json::json!("timed_out"), true),
+            (serde_json::json!("startup_failure"), true),
+            (Value::Null, false),
+            (serde_json::json!("success"), false),
+            (serde_json::json!("cancelled"), false),
+        ] {
+            let (run, requests) = probe(
+                Value::Null,
+                vec![Ok(serde_json::json!({"jobs": [
+                    job("Chromium E2E", Value::Null),
+                    job("Validation host", conclusion.clone()),
+                ]}))],
+            );
+            let expected = ejecting.then(|| "Validation host".to_owned());
+            assert_eq!(run.unwrap().unwrap().failed_job, expected, "{conclusion}");
+            assert!(
+                requests[1].ends_with("/actions/runs/88/jobs?filter=latest&per_page=100&page=1"),
+                "{requests:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn in_progress_jobs_are_read_across_pages() {
+        let full_page: Vec<Value> = (0..100).map(|_| job("pending", Value::Null)).collect();
+        let (run, requests) = probe(
+            Value::Null,
+            vec![
+                Ok(serde_json::json!({"jobs": full_page})),
+                Ok(serde_json::json!({"jobs": [job("late", serde_json::json!("failure"))]})),
+            ],
+        );
+        assert_eq!(run.unwrap().unwrap().failed_job.as_deref(), Some("late"));
+        assert!(requests[2].ends_with("&page=2"), "{requests:?}");
+    }
+
+    #[test]
+    fn in_progress_jobs_failures_propagate_instead_of_reading_as_no_ejection() {
+        for page in [
+            Err(ApiError::Transport("jobs down".into())),
+            Ok(serde_json::json!({"total_count": 0})),
+            Ok(serde_json::json!({"jobs": [job("odd", serde_json::json!(42))]})),
+        ] {
+            let (run, _) = probe(Value::Null, vec![page]);
+            assert!(run.is_err(), "{run:?}");
+        }
     }
 
     #[test]
@@ -1927,9 +2049,9 @@ mod tests {
         }
         assert!(matches!(
             parse_failed_jobs(
-                &serde_json::json!({"jobs": [{
+                &[serde_json::json!({
                     "id": 90, "name": "match", "html_url": "job/90", "conclusion": null
-                }]}),
+                })],
                 &deadline
             ),
             Err(ApiError::Malformed(_))

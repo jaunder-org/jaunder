@@ -63,7 +63,8 @@ still in progress.
   call; an in-progress run fetches jobs and reports a `failure` / `timed_out`
   job but not pending, `success` or `cancelled` ones; a jobs-call error or a
   payload without `jobs` propagates as an error.
-- Existing pr-observer tests pass (`cargo xtask test-local -- -p pr-observer`).
+- Existing pr-observer tests pass
+  (`cargo test --locked --manifest-path tools/Cargo.toml -p pr-observer`).
 
 ## Boundaries
 

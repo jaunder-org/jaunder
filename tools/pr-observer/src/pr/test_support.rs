@@ -185,9 +185,11 @@ pub fn queued_at(position: u64) -> PrSnapshot {
 
 pub fn ejection(created_at: &str) -> RunRef {
     RunRef {
+        id: 9,
         url: "https://github.com/o/r/actions/runs/9".into(),
         created_at: created_at.into(),
         conclusion: "failure".into(),
+        failed_job: None,
     }
 }
 
