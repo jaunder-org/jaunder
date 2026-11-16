@@ -1,15 +1,19 @@
-"""Issue front doors: explicit decisions in, verified tracker state out.
+"""Issue front doors: read-only discovery, and explicit decisions in, verified
+tracker state out.
 
 Native `gh` owns every mutation; each reply is checked before the next call,
 and the issue is read back in full before success is reported. Nothing is
-rolled back: any failure names the issue to inspect before retrying.
+rolled back: any failure of a mutating front door names the issue to inspect
+before retrying. Discovery never writes: it reports every open issue of a
+milestone as a candidate or as skipped, with the local evidence for resuming
+it.
 
-Each class of failure has its own exit status, the same as the matching check
-in `scripts/issue-metadata.sh` (which `scripts/issue-discover.sh` uses): a
-violated check exits 1, a malformed reply 5, a selection that yields nothing 4,
-unreadable JSON 2, and a failed `gh` its own status.
+Each class of failure has its own exit status: a violated check exits 1, a
+malformed, partial, ambiguous or unreadable reply 5, a selection that yields
+nothing 4, an unreadable body file 2, and a failed `gh` its own status.
 """
 
+import fnmatch
 import json
 import re
 import sys
@@ -19,6 +23,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from jaunder_dev import steps
+from jaunder_dev.checkout import traced_git
 
 REPO = "jaunder-org/jaunder"
 PROJECT = "PVT_kwDOECw7os4BblPP"
@@ -35,12 +40,17 @@ TITLE = re.compile(
 )
 POSITIVE = re.compile(r"[1-9][0-9]*")
 ISSUE_URL = f"https://github.com/{REPO}/issues/"
-PROJECT_ITEMS = (
-    'query=query($number:Int!){repository(owner:"jaunder-org",name:"jaunder"){'
-    "issue(number:$number){projectItems(first:100){nodes{id project{id} "
-    'priority:fieldValueByName(name:"Priority"){... on '
-    "ProjectV2ItemFieldSingleSelectValue{name}}} pageInfo{hasNextPage}}}}}"
-)
+
+
+def _project_items_query(field: str) -> str:
+    """An issue's project items, each with `field` under its lowercase name."""
+    return (
+        'query=query($number:Int!){repository(owner:"jaunder-org",name:"jaunder"){'
+        "issue(number:$number){projectItems(first:100){nodes{id project{id} "
+        f'{field.lower()}:fieldValueByName(name:"{field}"){{... on '
+        "ProjectV2ItemFieldSingleSelectValue{name}}} pageInfo{hasNextPage}}}}}"
+    )
+
 
 # Exit statuses by class of failure.
 VIOLATED = 1
@@ -66,7 +76,7 @@ class _Operation:
         try:
             return json.loads(reply)
         except ValueError:
-            self.fail(UNREADABLE, f"gh {args[0]} replied with unreadable JSON")
+            self.fail(ERROR, f"gh {args[0]} replied with unreadable JSON")
 
     def inventory(self, endpoint: str) -> list[dict[str, Any]]:
         """Every row of a paginated REST inventory, each row's number unique.
@@ -304,15 +314,21 @@ def _matches(readback: Any, number: Any, expected: dict[str, Any]) -> bool:
     )
 
 
-def _backlog(operation: _Operation, item_id: str, priority: str) -> Any:
-    """The issue's one Backlog item, which must carry the requested priority."""
+def _backlog_items(
+    operation: _Operation, number: str, field: str, purpose: str
+) -> list[dict[str, Any]]:
+    """Issue `number`'s Backlog project items, each carrying `field`.
+
+    Only a complete, well-formed listing is answered; `purpose` names what was
+    being read when it is not.
+    """
     project = operation.gh(
-        "api", "graphql", "-F", f"number={operation.number}", "-f", PROJECT_ITEMS
+        "api", "graphql", "-F", f"number={number}", "-f", _project_items_query(field)
     )
     items = _get(project, "data", "repository", "issue", "projectItems")
     nodes = _get(items, "nodes")
     if _get(project, "errors") or _get(items, "pageInfo", "hasNextPage") is not False:
-        operation.fail(ERROR, "incomplete project readback")
+        operation.fail(ERROR, f"incomplete project {purpose}")
     if not (
         isinstance(nodes, list)
         and all(
@@ -324,7 +340,12 @@ def _backlog(operation: _Operation, item_id: str, priority: str) -> Any:
         )
     ):
         operation.fail(ERROR, "malformed project item")
-    backlog = [node for node in nodes if node["project"]["id"] == PROJECT]
+    return [node for node in nodes if node["project"]["id"] == PROJECT]
+
+
+def _backlog(operation: _Operation, item_id: str, priority: str) -> Any:
+    """The issue's one Backlog item, which must carry the requested priority."""
+    backlog = _backlog_items(operation, operation.number, "Priority", "readback")
     if not (
         len(backlog) == 1
         and backlog[0]["id"] == item_id
@@ -397,3 +418,204 @@ def edit(number: str, decisions: Decisions, blockers: Sequence[str]) -> None:
         _finish(operation, request, mutated, blockers)
 
     _reporting(operation, body)
+
+
+def _status(operation: _Operation, number: str) -> str:
+    """The issue's Backlog Status, or "" when it has no item or no status."""
+    backlog = _backlog_items(operation, number, "Status", "inventory")
+    if not backlog:
+        return ""
+    if len(backlog) > 1:
+        operation.fail(ERROR, "ambiguous Backlog item")
+    if "status" not in backlog[0]:
+        operation.fail(ERROR, "missing status evidence")
+    if backlog[0]["status"] is None:
+        return ""
+    name = _get(backlog[0], "status", "name")
+    if not isinstance(name, str):
+        operation.fail(ERROR, "invalid status")
+    return name
+
+
+def _open_blockers(operation: _Operation, number: str) -> list[Any]:
+    """The numbers of the open issues blocking `number`, in order."""
+    blockers = []
+    for row in operation.inventory(
+        f"repos/{REPO}/issues/{number}/dependencies/blocked_by?per_page=100"
+    ):
+        if row.get("state") == "open":
+            blockers.append(row["number"])
+        elif row.get("state") != "closed":
+            operation.fail(ERROR, "invalid blocker state")
+    return sorted(blockers)
+
+
+def _issue_rows(operation: _Operation, milestone: Any) -> list[dict[str, Any]]:
+    """The milestone's open issues, pull requests left out."""
+    rows = []
+    for row in operation.inventory(
+        f"repos/{REPO}/issues?state=open&milestone={json.dumps(milestone)}&per_page=100"
+    ):
+        if "pull_request" in row:
+            if not isinstance(row["pull_request"], dict):
+                operation.fail(ERROR, "invalid PR discriminator")
+            continue
+        labels = row.get("labels")
+        if not (
+            isinstance(row.get("title"), str)
+            and isinstance(row.get("html_url"), str)
+            and isinstance(labels, list)
+            and all(isinstance(_get(label, "name"), str) for label in labels)
+        ):
+            operation.fail(ERROR, "malformed issue inventory")
+        rows.append(row)
+    return rows
+
+
+def _one(operation: _Operation, found: list[str], what: str) -> str | None:
+    """The single piece of resume evidence, if any: several are ambiguous."""
+    if len(found) > 1:
+        operation.fail(ERROR, f"ambiguous {what}")
+    return found[0] if found else None
+
+
+def _issue_docs(operation: _Operation, number: str, kind: str, label: str) -> list[str]:
+    """Regular files in docs/superpowers/`kind` named for issue `number`."""
+    directory = Path("docs/superpowers", kind)
+    if not directory.is_dir():
+        if directory.exists():
+            operation.fail(VIOLATED, f"{label} path is not a directory")
+        return []
+    return [
+        str(path)
+        for path in directory.iterdir()
+        if path.is_file()
+        and not path.is_symlink()
+        and any(
+            fnmatch.fnmatchcase(path.name, pattern)
+            for pattern in [f"*issue-{number}-*.md", f"*issue-{number}.md"]
+        )
+    ]
+
+
+def _plan_progress(plan: str) -> dict[str, int]:
+    """How many of the outline's checklist items are ticked."""
+    items = [
+        line
+        for line in Path(plan).read_text(errors="replace").split("\n")
+        if re.match(r"\s*- \[[ xX]\]", line)
+    ]
+    return {
+        "total": len(items),
+        "done": sum(bool(re.search(r"\[[xX]\]", line)) for line in items),
+    }
+
+
+def _open_pr(operation: _Operation, branch: str) -> Any:
+    """The branch's one open pull request, if any."""
+    prs = operation.gh(
+        "pr",
+        "list",
+        "--repo",
+        REPO,
+        "--head",
+        branch,
+        "--state",
+        "open",
+        "--limit",
+        "2",
+        "--json",
+        "number,url,state",
+    )
+    if not (
+        isinstance(prs, list)
+        and len(prs) <= 1
+        and all(
+            _number(_get(pr, "number"))
+            and isinstance(_get(pr, "url"), str)
+            and _get(pr, "state") == "OPEN"
+            for pr in prs
+        )
+    ):
+        operation.fail(ERROR, "ambiguous/malformed open PRs")
+    return prs[0] if prs else None
+
+
+def _number(value: Any) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+def _resume_evidence(operation: _Operation, number: str) -> dict[str, Any]:
+    """The issue's local branch, spec and outline, and the branch's open PR.
+
+    Ambiguous evidence is refused rather than resolved by picking one.
+    """
+    branches = traced_git(
+        "issue-branches",
+        "for-each-ref",
+        "--format=%(refname:short)",
+        f"refs/heads/issue-{number}-*",
+    )
+    branch = _one(operation, branches.splitlines(), "issue branches")
+    specs = _issue_docs(operation, number, "specs", "Specs")
+    plans = _issue_docs(operation, number, "plans", "Outlines")
+    spec = _one(operation, specs, "specs")
+    plan = _one(operation, plans, "outlines")
+    return {
+        "branch": branch,
+        "spec": spec,
+        "plan": plan,
+        "plan_progress": None if plan is None else _plan_progress(plan),
+        "open_pr": None if branch is None else _open_pr(operation, branch),
+    }
+
+
+def discover(milestone: str) -> None:
+    """Prints every open issue of `milestone` as a candidate or skipped.
+
+    An issue is skipped as claimed (In Progress), as lacking a Backlog status,
+    or as blocked by an open issue; every other issue is a candidate.
+    """
+    operation = _Operation("issue-discover")
+    number = operation.milestone(milestone)
+    candidates, skipped = [], []
+    for row in _issue_rows(operation, number):
+        issue = json.dumps(row["number"])
+        status = _status(operation, issue)
+        blockers = _open_blockers(operation, issue)
+        reason = (
+            "claimed"
+            if status == "In Progress"
+            else "missing-project-status"
+            if not status
+            else "blocked"
+            if blockers
+            else ""
+        )
+        if reason:
+            skipped.append(
+                {
+                    "number": row["number"],
+                    "title": row["title"],
+                    "reason": reason,
+                    "blocked_by": blockers,
+                }
+            )
+            continue
+        candidates.append(
+            {
+                "number": row["number"],
+                "title": row["title"],
+                "url": row["html_url"],
+                "labels": [label["name"] for label in row["labels"]],
+                "status": status,
+                "blocked_by": blockers,
+                "local": _resume_evidence(operation, issue),
+            }
+        )
+    report = {
+        "milestone": number,
+        "candidates": sorted(candidates, key=lambda row: row["number"]),
+        "skipped": sorted(skipped, key=lambda row: row["number"]),
+    }
+    print(json.dumps(report, indent=2, ensure_ascii=False))

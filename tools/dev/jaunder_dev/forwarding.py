@@ -52,11 +52,6 @@ def pr_watch(args: Sequence[str]) -> None:
     steps.run("pr-watch", [*CARGO_RUN, "-p", "pr-observer", "--", "watch", *args])
 
 
-def issue_discover(milestone: str) -> None:
-    """Exhaustive read-only milestone candidates; never claims or dispatches work."""
-    steps.run("issue-discover", ["bash", "scripts/issue-discover.sh", milestone])
-
-
 def pr_land(number: str, expected_head: str, mode: str) -> None:
     steps.run("pr-land", ["bash", "scripts/pr-land.sh", number, expected_head, mode])
 

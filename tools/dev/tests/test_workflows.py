@@ -158,10 +158,6 @@ FORWARDED: list[tuple[list[str], Commands]] = [
         ],
     ),
     (
-        ["issue-discover", SHELL_SYNTAX],
-        [["bash", "scripts/issue-discover.sh", SHELL_SYNTAX]],
-    ),
-    (
         ["pr-land", "731", "f" * 40],
         [["bash", "scripts/pr-land.sh", "731", "f" * 40, "ordinary"]],
     ),

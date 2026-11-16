@@ -239,6 +239,9 @@ Review deliverable C covers the switch, the removal and the proof.
       copies in `coverage_workflows.rs:27` and `e2e_workflow.rs:31`, and the
       reference in `host-tool/src/report.rs:3`
     - `scripts/run-report`, if no user remains after the port
+    - `scripts/issue-discover.sh` and `scripts/issue-metadata.sh`, replaced by
+      `dev issue-discover` and `dev issue-create`/`issue-edit` (owner decision
+      during deliverable B review)
   - Add the committed `rg` guard from Acceptance 7 as a repository-policy check.
   - Update CONTRIBUTING.md, covering:
     - the gate commands

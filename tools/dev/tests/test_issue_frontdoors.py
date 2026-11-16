@@ -1,18 +1,16 @@
 """Issue front doors through `dev`, against a fake gh: never a real tracker write.
 
-Discovery runs the repository's shell scripts and jq, so only the filtered
-`checks.dev-python` source may skip its tests; creation and editing run anywhere.
+Discovery's local resume evidence comes from a real Git checkout and files.
 """
 
 import json
-import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Any
 
 import pytest
-from conftest import Checkout, require
+from conftest import Checkout
 
 # Records each call and answers from the scripted replies in order. Inventory
 # replies model `gh --paginate --slurp`, never an unpaginated request.
@@ -37,10 +35,13 @@ replies = json.loads((fixture / "responses.json").read_text())
 if n >= len(replies):
     print("unexpected gh call", file=sys.stderr)
     sys.exit(5)
-print(json.dumps(replies[n].get("body"), separators=(",", ":")))
+if "raw" in replies[n]:
+    sys.stdout.write(replies[n]["raw"])
+else:
+    print(json.dumps(replies[n].get("body"), separators=(",", ":")))
 if replies[n].get("exit", 0):
     print("simulated gh failure", file=sys.stderr)
-    sys.exit(1)
+    sys.exit(replies[n]["exit"])
 """
 DECISIONS = ["fix(tooling): preserve metadata", "Task", "3", "P2", "tooling,dx"]
 BODY = "Keep <placeholder> exactly.\n"
@@ -75,8 +76,8 @@ class Tracker:
             **extra,
         )
 
-    def discover(self) -> subprocess.CompletedProcess[bytes]:
-        return self.dev("issue-discover", "3")
+    def discover(self, milestone: str = "3") -> subprocess.CompletedProcess[bytes]:
+        return self.dev("issue-discover", milestone)
 
     def calls(self) -> list[dict[str, Any]]:
         path = self.checkout.root.parent / "calls.jsonl"
@@ -90,15 +91,6 @@ def tracker(checkout: Checkout) -> Tracker:
     checkout.executable("gh", GH)
     (checkout.root.parent / "body.md").write_text(BODY)
     return Tracker(checkout)
-
-
-@pytest.fixture
-def discovery(tracker: Tracker) -> Tracker:
-    require(shutil.which("jq") is not None, "jq")
-    tracker.checkout.from_repository(
-        "scripts/issue-metadata.sh", "scripts/issue-discover.sh"
-    )
-    return tracker
 
 
 def readback() -> dict[str, Any]:
@@ -392,12 +384,14 @@ def test_a_body_whose_bytes_change_on_readback_is_refused(tracker: Tracker) -> N
     assert json.loads(tracker.calls()[1]["input"])["body"] == "Keep \ufffd\n"
 
 
-def test_unreadable_replies_and_body_files_fail_as_unreadable(
+def test_unreadable_replies_are_malformed_and_unreadable_body_files_unreadable(
     tracker: Tracker,
 ) -> None:
+    # As measured from the shell front doors: jq -e exits 5 on a reply it
+    # cannot parse, and 2 on a body file it cannot read.
     tracker.checkout.executable("gh", f"#!{sys.executable}\nprint('not json')\n")
     tracker.reply(responses())
-    assert tracker.mutate("issue-create").returncode == 2
+    assert tracker.mutate("issue-create").returncode == 5
     (tracker.checkout.root.parent / "body.md").unlink()
     tracker.checkout.executable("gh", GH)
     tracker.reply(responses())
@@ -430,9 +424,23 @@ def test_a_blocker_that_is_not_an_open_issue_or_not_recorded_fails(
     assert result.stdout == b""
 
 
-def status(name: str) -> dict[str, Any]:
+# Discovery. Expected outputs and statuses were measured from the shell
+# discovery this front door keeps the behaviour of: every malformed, partial or
+# ambiguous answer exits 5, a failed gh keeps its status, and a docs path that
+# is not a directory exits 1.
+STATUS_QUERY = (
+    'query=query($number:Int!){repository(owner:"jaunder-org",name:"jaunder"){'
+    "issue(number:$number){projectItems(first:100){nodes{id project{id} "
+    'status:fieldValueByName(name:"Status"){... on '
+    "ProjectV2ItemFieldSingleSelectValue{name}}} pageInfo{hasNextPage}}}}}"
+)
+MILESTONES = {"body": [[{"number": 3, "title": "Developer tooling & DX"}]]}
+
+
+def status(name: str | None) -> dict[str, Any]:
+    value = None if name is None else {"name": name}
     return project_items(
-        [{"id": "PVTI_1", "project": {"id": PROJECT}, "status": {"name": name}}]
+        [{"id": "PVTI_1", "project": {"id": PROJECT}, "status": value}]
     )
 
 
@@ -447,7 +455,7 @@ def issue(number: int, title: str, labels: list[Any]) -> dict[str, Any]:
 
 def discovery_responses() -> list[Any]:
     return [
-        {"body": [[{"number": 3, "title": "Developer tooling & DX"}]]},
+        MILESTONES,
         {
             "body": [
                 [
@@ -467,25 +475,93 @@ def discovery_responses() -> list[Any]:
     ]
 
 
-def test_discovery_is_read_only_and_skips_claimed_blocked_and_pull_requests(
-    discovery: Tracker,
-) -> None:
-    discovery.reply(discovery_responses())
-    result = discovery.discover()
-    assert result.returncode == 0, result
-    report = json.loads(result.stdout)
-    assert [candidate["number"] for candidate in report["candidates"]] == [731]
-    assert [skipped["reason"] for skipped in report["skipped"]] == [
-        "claimed",
-        "blocked",
+def one_issue(project: Any, dependencies: Any = None) -> list[Any]:
+    """Discovery of a milestone holding issue 731 alone."""
+    return [
+        MILESTONES,
+        {"body": [[issue(731, "available", [])]]},
+        project,
+        dependencies or {"body": [[]]},
     ]
-    for call in discovery.calls():
-        assert "--method" not in call["args"]
-        assert not any(arg.startswith("query=mutation") for arg in call["args"])
+
+
+DISCOVERED = """\
+{
+  "milestone": 3,
+  "candidates": [
+    {
+      "number": 731,
+      "title": "available",
+      "url": "https://github.com/jaunder-org/jaunder/issues/731",
+      "labels": [
+        "tooling"
+      ],
+      "status": "Todo",
+      "blocked_by": [],
+      "local": {
+        "branch": null,
+        "spec": null,
+        "plan": null,
+        "plan_progress": null,
+        "open_pr": null
+      }
+    }
+  ],
+  "skipped": [
+    {
+      "number": 732,
+      "title": "claimed",
+      "reason": "claimed",
+      "blocked_by": []
+    },
+    {
+      "number": 733,
+      "title": "blocked",
+      "reason": "blocked",
+      "blocked_by": [
+        42
+      ]
+    }
+  ]
+}
+"""
+
+
+def inventory(endpoint: str) -> list[str]:
+    return ["api", "--paginate", "--slurp", f"repos/jaunder-org/jaunder/{endpoint}"]
+
+
+def project(number: int) -> list[str]:
+    return ["api", "graphql", "-F", f"number={number}", "-f", STATUS_QUERY]
+
+
+@pytest.mark.parametrize("milestone", ["3", "Developer tooling & DX"])
+def test_discovery_is_read_only_and_skips_claimed_blocked_and_pull_requests(
+    tracker: Tracker, milestone: str
+) -> None:
+    tracker.reply(discovery_responses())
+    result = tracker.discover(milestone)
+    assert result.returncode == 0, result
+    assert result.stdout.decode() == DISCOVERED
+    assert [call["args"] for call in tracker.calls()] == [
+        inventory("milestones?state=open&per_page=100"),
+        inventory("issues?state=open&milestone=3&per_page=100"),
+        *(
+            call
+            for number in [731, 732, 733]
+            for call in [
+                project(number),
+                inventory(f"issues/{number}/dependencies/blocked_by?per_page=100"),
+            ]
+        ),
+    ]
+    # Every gh call is its own traced step.
+    gate = tracker.checkout.merged()["dev issue-discover"]["args"]
+    assert gate["jaunder.status"] == "ok"
 
 
 def test_discovery_consumes_every_page_before_filtering_closed_prerequisites(
-    discovery: Tracker,
+    tracker: Tracker,
 ) -> None:
     replies = discovery_responses()
     replies[0]["body"] = [
@@ -496,57 +572,358 @@ def test_discovery_consumes_every_page_before_filtering_closed_prerequisites(
     replies[1]["body"] = [[issues[0]], issues[1:]]
     replies[7]["body"] = [
         [{"number": 40, "state": "closed"}],
-        [{"number": 42, "state": "open"}],
+        [{"number": 43, "state": "open"}, {"number": 42, "state": "open"}],
     ]
-    discovery.reply(replies)
-    result = discovery.discover()
+    tracker.reply(replies)
+    result = tracker.discover()
     assert result.returncode == 0, result
     report = json.loads(result.stdout)
-    assert len(report["candidates"]) == 1
-    assert len(report["skipped"]) == 2
-    assert (report["skipped"][1]["number"], report["skipped"][1]["blocked_by"]) == (
-        733,
-        [42],
+    assert [candidate["number"] for candidate in report["candidates"]] == [731]
+    assert report["skipped"][1] == {
+        "number": 733,
+        "title": "blocked",
+        "reason": "blocked",
+        "blocked_by": [42, 43],
+    }
+
+
+@pytest.mark.parametrize(
+    "project",
+    [project_items([{"id": "A", "project": {"id": "OTHER"}}]), status(None)],
+)
+def test_an_issue_without_a_backlog_status_is_skipped(
+    tracker: Tracker, project: Any
+) -> None:
+    tracker.reply(one_issue(project))
+    result = tracker.discover()
+    assert result.returncode == 0, result
+    assert json.loads(result.stdout) == {
+        "milestone": 3,
+        "candidates": [],
+        "skipped": [
+            {
+                "number": 731,
+                "title": "available",
+                "reason": "missing-project-status",
+                "blocked_by": [],
+            }
+        ],
+    }
+
+
+def test_closed_blockers_do_not_block(tracker: Tracker) -> None:
+    tracker.reply(
+        one_issue(status("Todo"), {"body": [[{"number": 40, "state": "closed"}]]})
+    )
+    result = tracker.discover()
+    assert result.returncode == 0, result
+    report = json.loads(result.stdout)
+    assert [candidate["number"] for candidate in report["candidates"]] == [731]
+    assert report["skipped"] == []
+
+
+def test_an_empty_milestone_has_no_candidates(tracker: Tracker) -> None:
+    tracker.reply([MILESTONES, {"body": [[]]}])
+    result = tracker.discover()
+    assert result.returncode == 0, result
+    assert (
+        result.stdout
+        == b'{\n  "milestone": 3,\n  "candidates": [],\n  "skipped": []\n}\n'
     )
 
 
 @pytest.mark.parametrize(
-    ("index", "row"),
+    ("milestone", "reply", "code", "message"),
     [
-        (0, {"number": 3, "title": "Developer tooling & DX"}),
-        (1, issue(731, "available", [])),
-        (3, {"number": 42, "state": "closed"}),
+        # Only open milestones are listed, so a closed one is unknown too.
+        ("99", MILESTONES, 5, "milestone must match exactly one open title/number"),
+        ("Closed", MILESTONES, 5, "milestone must match exactly one open title/number"),
+        (
+            "3",
+            {"body": [[{"number": 3, "title": "x"}, {"number": 4, "title": "3"}]]},
+            5,
+            "milestone must match exactly one open title/number",
+        ),
+        ("3", {"body": [[{"number": 3, "title": ""}]]}, 5, "invalid milestone"),
+        ("3", {"body": {"message": "not pages"}}, 5, "invalid REST pages"),
+        ("3", {"body": []}, 5, "invalid REST pages"),
+        (
+            "3",
+            {"body": [[{"number": 3, "title": "a"}], [{"number": 3, "title": "a"}]]},
+            5,
+            "invalid/repeated issue identity",
+        ),
+        ("3", {"exit": 1, "body": [[]]}, 1, "simulated gh failure"),
+        ("3", {"exit": 4, "body": [[]]}, 4, "simulated gh failure"),
+        ("3", {"raw": "not json\n"}, 5, "unreadable JSON"),
     ],
 )
-def test_repeated_identities_across_pages_are_refused_before_filtering(
-    discovery: Tracker, index: int, row: dict[str, Any]
+def test_an_unknown_closed_ambiguous_or_unreadable_milestone_is_refused(
+    tracker: Tracker, milestone: str, reply: Any, code: int, message: str
 ) -> None:
-    replies = discovery_responses()
-    replies[index]["body"] = [[row], [row]]
-    discovery.reply(replies)
-    result = discovery.discover()
-    assert result.returncode != 0
+    tracker.reply([reply])
+    result = tracker.discover(milestone)
+    assert result.returncode == code
     assert result.stdout == b""
-    assert b"invalid/repeated issue identity" in result.stderr
+    assert message.encode() in result.stderr
+    assert len(tracker.calls()) == 1
+
+
+ITEM = {"id": "PVTI_1", "project": {"id": PROJECT}}
 
 
 @pytest.mark.parametrize(
-    ("index", "bad"),
+    ("replies", "code", "message"),
     [
-        (1, {"exit": 1, "body": [[]]}),
-        (1, {"body": [[], {"message": "bad later page"}]}),
-        (1, {"body": [[{"number": 731, "pull_request": None}]]}),
-        (2, project_items([], more=True)),
-        (2, project_items([{"id": "PVTI_1", "project": {"id": PROJECT}}])),
-        (3, {"body": [[{"number": 42, "state": "unknown"}]]}),
+        (
+            [MILESTONES, {"exit": 1, "body": [[]]}],
+            1,
+            "simulated gh failure",
+        ),
+        (
+            [MILESTONES, {"body": [[], {"message": "bad later page"}]}],
+            5,
+            "invalid REST pages",
+        ),
+        (
+            [MILESTONES, {"body": [[{"number": 731, "pull_request": None}]]}],
+            5,
+            "invalid PR discriminator",
+        ),
+        (
+            [MILESTONES, {"body": [[{"number": 731, "html_url": "u", "labels": []}]]}],
+            5,
+            "malformed issue inventory",
+        ),
+        (
+            [MILESTONES, {"body": [[issue(731, "t", [{"name": 1}])]]}],
+            5,
+            "malformed issue inventory",
+        ),
+        (
+            [MILESTONES, {"body": [[issue(731, "a", [])], [issue(731, "a", [])]]}],
+            5,
+            "invalid/repeated issue identity",
+        ),
+        (
+            one_issue({"body": {**project_items([])["body"], "errors": [{}]}}),
+            5,
+            "incomplete project inventory",
+        ),
+        (one_issue(project_items([], more=True)), 5, "incomplete project inventory"),
+        (
+            one_issue(project_items([{"id": "PVTI_1", "project": {}}])),
+            5,
+            "malformed project item",
+        ),
+        (one_issue({"raw": "garbage"}), 5, "unreadable JSON"),
+        (one_issue(project_items([ITEM])), 5, "missing status evidence"),
+        (
+            one_issue(project_items([ITEM | {"status": {"name": 5}}])),
+            5,
+            "invalid status",
+        ),
+        (
+            one_issue(
+                project_items(
+                    [ITEM | {"status": None}, ITEM | {"id": "B", "status": None}]
+                )
+            ),
+            5,
+            "ambiguous Backlog item",
+        ),
+        (
+            one_issue(status("Todo"), {"body": [[{"number": 42, "state": "unknown"}]]}),
+            5,
+            "invalid blocker state",
+        ),
     ],
 )
 def test_discovery_refuses_late_failures_and_incomplete_or_malformed_evidence(
-    discovery: Tracker, index: int, bad: Any
+    tracker: Tracker, replies: list[Any], code: int, message: str
 ) -> None:
-    replies = discovery_responses()
-    replies[index] = bad
-    discovery.reply(replies)
-    result = discovery.discover()
-    assert result.returncode != 0
+    tracker.reply(replies)
+    result = tracker.discover()
+    assert result.returncode == code
     assert result.stdout == b""
+    assert message.encode() in result.stderr
+
+
+PLAN = "# Plan\n- [x] one\n  - [ ] two\n- [X] three\nnot - [ ] item\n"
+OPEN_PR = {
+    "number": 900,
+    "url": "https://github.com/jaunder-org/jaunder/pull/900",
+    "state": "OPEN",
+}
+
+
+def local(
+    tracker: Tracker,
+    /,
+    branches: tuple[str, ...] = (),
+    specs: tuple[str, ...] = (),
+    plans: tuple[str, ...] = (),
+) -> None:
+    """Gives the checkout the issue branches and docs discovery reports."""
+    root = tracker.checkout.root
+    if branches:
+        subprocess.run(
+            ["git", "-C", str(root), "-c", "user.name=f", "-c", "user.email=f@f"]
+            + ["commit", "--quiet", "--allow-empty", "-m", "base"],
+            check=True,
+        )
+    for branch in branches:
+        subprocess.run(["git", "-C", str(root), "branch", branch], check=True)
+    for kind, names in [("specs", specs), ("plans", plans)]:
+        for name in names:
+            path = root / "docs" / "superpowers" / kind / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(PLAN)
+
+
+RESUMED = """\
+{
+  "milestone": 3,
+  "candidates": [
+    {
+      "number": 731,
+      "title": "available",
+      "url": "https://github.com/jaunder-org/jaunder/issues/731",
+      "labels": [],
+      "status": "Todo",
+      "blocked_by": [],
+      "local": {
+        "branch": "issue-731-example",
+        "spec": "docs/superpowers/specs/2026-01-01-issue-731-example.md",
+        "plan": "docs/superpowers/plans/2026-01-01-issue-731.md",
+        "plan_progress": {
+          "total": 3,
+          "done": 2
+        },
+        "open_pr": {
+          "number": 900,
+          "url": "https://github.com/jaunder-org/jaunder/pull/900",
+          "state": "OPEN"
+        }
+      }
+    }
+  ],
+  "skipped": []
+}
+"""
+PR_LIST = [
+    "pr",
+    "list",
+    "--repo",
+    "jaunder-org/jaunder",
+    "--head",
+    "issue-731-example",
+    "--state",
+    "open",
+    "--limit",
+    "2",
+    "--json",
+    "number,url,state",
+]
+
+
+def test_discovery_reports_branch_docs_outline_progress_and_open_pr(
+    tracker: Tracker,
+) -> None:
+    local(
+        tracker,
+        branches=("issue-731-example", "issue-7310-other"),
+        specs=("2026-01-01-issue-731-example.md", "2026-01-01-issue-7310.md"),
+        plans=("2026-01-01-issue-731.md",),
+    )
+    tracker.reply(one_issue(status("Todo")) + [{"body": [OPEN_PR]}])
+    result = tracker.discover()
+    assert result.returncode == 0, result
+    assert result.stdout.decode() == RESUMED
+    assert tracker.calls()[-1]["args"] == PR_LIST
+
+
+def test_a_branch_without_an_open_pr_reports_none(tracker: Tracker) -> None:
+    local(tracker, branches=("issue-731-example",))
+    tracker.reply(one_issue(status("Todo")) + [{"body": []}])
+    result = tracker.discover()
+    assert result.returncode == 0, result
+    candidate = json.loads(result.stdout)["candidates"][0]
+    assert candidate["local"] == {
+        "branch": "issue-731-example",
+        "spec": None,
+        "plan": None,
+        "plan_progress": None,
+        "open_pr": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("evidence", "pr", "code", "message"),
+    [
+        (
+            {"branches": ("issue-731-a", "issue-731-b")},
+            [],
+            5,
+            "ambiguous issue branches",
+        ),
+        ({"specs": ("a-issue-731.md", "b-issue-731-x.md")}, [], 5, "ambiguous specs"),
+        (
+            {"plans": ("a-issue-731.md", "b-issue-731-x.md")},
+            [],
+            5,
+            "ambiguous outlines",
+        ),
+        (
+            {"branches": ("issue-731-example",)},
+            [{"body": [OPEN_PR, OPEN_PR | {"number": 901}]}],
+            5,
+            "ambiguous/malformed open PRs",
+        ),
+        (
+            {"branches": ("issue-731-example",)},
+            [{"body": [OPEN_PR | {"state": "CLOSED"}]}],
+            5,
+            "ambiguous/malformed open PRs",
+        ),
+        (
+            {"branches": ("issue-731-example",)},
+            [{"exit": 1, "body": []}],
+            1,
+            "simulated gh failure",
+        ),
+    ],
+)
+def test_ambiguous_or_malformed_resume_evidence_is_refused(
+    tracker: Tracker,
+    evidence: dict[str, tuple[str, ...]],
+    pr: list[Any],
+    code: int,
+    message: str,
+) -> None:
+    local(tracker, **evidence)
+    tracker.reply(one_issue(status("Todo")) + pr)
+    result = tracker.discover()
+    assert result.returncode == code
+    assert result.stdout == b""
+    assert message.encode() in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("kind", "message"),
+    [
+        ("specs", "Specs path is not a directory"),
+        ("plans", "Outlines path is not a directory"),
+    ],
+)
+def test_a_docs_path_that_is_not_a_directory_is_refused(
+    tracker: Tracker, kind: str, message: str
+) -> None:
+    path = tracker.checkout.root / "docs" / "superpowers" / kind
+    path.parent.mkdir(parents=True)
+    path.write_text("")
+    tracker.reply(one_issue(status("Todo")))
+    result = tracker.discover()
+    assert result.returncode == 1
+    assert result.stdout == b""
+    assert message.encode() in result.stderr

@@ -377,7 +377,7 @@ def e2e_reconcile(backend: str, artifacts: str) -> None:
 @click.argument("milestone")
 def issue_discover(milestone: str) -> None:
     """Exhaustive read-only candidates in MILESTONE; never claims work."""
-    _gate(lambda: forwarding.issue_discover(milestone))
+    _gate(lambda: issues.discover(milestone))
 
 
 def _issue_decisions(command: Callable[..., None]) -> Callable[..., None]:
