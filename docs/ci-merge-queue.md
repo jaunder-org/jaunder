@@ -203,10 +203,9 @@ repairing the lane.
 
 **Observing queue state.** Ejection is silent — the queue entry vanishes while
 the PR stays `OPEN`, which looks identical to "still queued". Don't eyeball it:
-`just pr-watch <N>` reports `ejected` distinctly from `merged` and from
+`dev pr-watch <N>` reports `ejected` distinctly from `merged` and from
 still-queued, and points at the `gh-readonly-queue/main/pr-<N>-…` run that
-caused it. `just pr-watch <N> --once` answers the same question without
-blocking.
+caused it. `dev pr-watch <N> --once` answers the same question without blocking.
 
 ## ADR promoter queue boundary
 

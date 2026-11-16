@@ -23,6 +23,7 @@ pub enum Operation {
     XlangLiteralCheck,
     SqlxNewtypeDecode,
     ServerFnCoverage,
+    NoJustCheck,
 }
 impl Operation {
     /// Independent verdict identity, not a workflow or result envelope.
@@ -50,6 +51,7 @@ impl Operation {
             Self::E2eServerFnEndpointCheck => "e2e-server-fn-endpoints",
             Self::SqlxNewtypeDecode => "sqlx-newtype-decode",
             Self::ServerFnCoverage => "server-fn-coverage",
+            Self::NoJustCheck => "no-just",
         }
     }
     pub fn parse(name: &str) -> Option<Self> {
@@ -76,6 +78,7 @@ impl Operation {
             "e2e-server-fn-endpoints" => Some(Self::E2eServerFnEndpointCheck),
             "sqlx-newtype-decode" => Some(Self::SqlxNewtypeDecode),
             "server-fn-coverage" => Some(Self::ServerFnCoverage),
+            "no-just" => Some(Self::NoJustCheck),
             _ => None,
         }
     }
@@ -103,6 +106,7 @@ impl Operation {
             Self::XlangLiteralCheck => super::xlang_literal_check::run(),
             Self::SqlxNewtypeDecode => super::sqlx_newtype_decode_check::run(),
             Self::ServerFnCoverage => crate::source_inventory::run(),
+            Self::NoJustCheck => super::no_just_check::run(),
         }
     }
 }

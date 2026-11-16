@@ -34,8 +34,6 @@ fn native_hermetic_verdict_stays_required_while_full_partial_diagnostics_are_opt
     let workflow = include_str!("../../../.github/workflows/ci.yml");
     assert!(workflow.contains("hermetic=\"${{ needs.validate-hermetic.result }}\""));
     assert!(workflow.contains("test \"$hermetic\" = \"success\""));
-    assert!(!lane.contains("--launcher"));
-    assert!(!lane.contains("record-start"));
 }
 
 #[test]

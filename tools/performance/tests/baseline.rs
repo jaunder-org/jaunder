@@ -137,11 +137,6 @@ fi
 cp "$PERF_FIXTURE/result.json" "${!#}/performance-result-v1.json"
 "#,
         )?;
-        let cargo = fake_bin.join("cargo");
-        write_executable(
-            &cargo,
-            "#!/usr/bin/env bash\nset -euo pipefail\nwhile (($#)); do\n  if [[ $1 == -- ]]; then shift; exec \"$PERF_DATA_BIN\" \"$@\"; fi\n  shift\ndone\nexit 93\n",
-        )?;
         Ok(Self {
             directory,
             baseline,
@@ -166,26 +161,6 @@ cp "$PERF_FIXTURE/result.json" "${!#}/performance-result-v1.json"
     }
     fn import(&self) -> Result<Output> {
         Ok(self.command()?.args(["import-baseline", "42"]).output()?)
-    }
-    fn just(&self, recipe: &str, argument: &str) -> Result<Output> {
-        Ok(Command::new("just")
-            .arg("--justfile")
-            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Justfile"))
-            .arg("--working-directory")
-            .arg(self.directory.path())
-            .args([recipe, argument])
-            .env(
-                "PATH",
-                format!(
-                    "{}:{}",
-                    self.directory.path().join("bin").display(),
-                    env::var("PATH")?
-                ),
-            )
-            .env("PERF_FIXTURE", self.directory.path())
-            .env("PERF_DATA_BIN", env!("CARGO_BIN_EXE_perf-data"))
-            .env_remove("PERF_FAIL")
-            .output()?)
     }
     fn compare(&self) -> Result<Output> {
         Ok(self
@@ -704,36 +679,6 @@ fn comparison_rejects_malformed_incomplete_and_incompatible_evidence() -> Result
         change(&fixture.baseline, pointer, value)?;
         assert!(!fixture.compare()?.status.success());
     }
-    Ok(())
-}
-
-#[test]
-fn native_just_parameters_reach_the_real_compare_and_import_leaves() -> Result<()> {
-    let fixture = Fixture::new()?;
-    let spaced_path = fixture.directory.path().join("candidate evidence.json");
-    fs::copy(&fixture.run, &spaced_path)?;
-    let output = fixture.just(
-        "perf-compare",
-        spaced_path.to_str().context("fixture path")?,
-    )?;
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(String::from_utf8_lossy(&output.stdout).contains("advisory only"));
-    let before = fs::read(&fixture.baseline)?;
-    let output = fixture.just("perf-import-baseline", "0")?;
-    assert!(!output.status.success());
-    assert_eq!(fs::read(&fixture.baseline)?, before);
-    let output = fixture.just("perf-import-baseline", "42")?;
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let baseline: Baseline = serde_json::from_slice(&fs::read(&fixture.baseline)?)?;
-    assert_eq!(baseline.run, canonical_run()?);
     Ok(())
 }
 

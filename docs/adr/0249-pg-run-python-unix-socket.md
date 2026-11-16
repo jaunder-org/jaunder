@@ -34,7 +34,7 @@ that. No failure had actually been observed.
 library. Nix packages it with `writers.writePython3Bin` (flake8 at build time,
 PostgreSQL 18 prefixed onto PATH). It is on PATH in the shared devShells and in
 the coverage derivation. It is the only throwaway-PostgreSQL implementation for
-host workflows (`just pg-run`, `test-local`, mutants CI) and for the coverage
+host workflows (`dev pg-run`, `test-local`, mutants CI) and for the coverage
 producer. The coverage derivation runs `pg-run devtool coverage emit`, and
 devtool contains no PostgreSQL code.
 

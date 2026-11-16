@@ -7,8 +7,7 @@ from conftest import Checkout
 
 from jaunder_dev import report
 
-# Reports and their rendering by `jq -r -f scripts/step-report.jq`; the
-# rendering stays byte-identical to jq's.
+# Reports and their exact rendering.
 REPORT = {
     "command": "test-local",
     "ok": False,
@@ -125,7 +124,7 @@ def test_a_successful_step_without_a_report_fails_closed(
         f"sys.stdout.buffer.write({output!r}); print('progress', file=sys.stderr)",
     )
     result = checkout.dev("test-local")
-    # jq -r -f scripts/step-report.jq exits 5 for every nonempty such output.
+    # Every nonempty output that is not a report fails with status 5.
     assert result.returncode == 5, result
     assert result.stdout == output
     assert result.stderr == (

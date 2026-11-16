@@ -85,7 +85,7 @@ stable origin.
 From a clean checkout in the repository devShell:
 
 ```sh
-traced-run -- just production-baseline-qualify-styling
+traced-run -- dev production-baseline-qualify-styling
 ```
 
 This opt-in Just workflow is not a production operation or an automatic CI job.

@@ -85,8 +85,6 @@ let
       pkgs.sccache
       # `wasm-opt`, run by the shared locked Vite pipeline after `wasm-bindgen` (#836).
       pkgs.binaryen
-      # The standalone and host-server CSR build callers share this recipe.
-      pkgs.just
       wasm-bindgen-cli
     ];
 
@@ -97,7 +95,6 @@ let
     pkgs.bash
     pkgs.coreutils
     pkgs.findutils
-    pkgs.just
     pkgs.nix
     pkgs.cargo
     pkgs.git

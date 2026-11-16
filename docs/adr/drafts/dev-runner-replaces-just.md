@@ -67,4 +67,7 @@ ADR-0240, and the traced-run span-mechanism constraint in milestone 33.
 - Any edit to `tools/dev/` rebuilds the hermetic checks that run `dev`.
 - Behaviour tests that drove `just` with fake tools move to pytest against
   `dev`. Tests of Just itself and of Justfile text are deleted.
+- The `no-just` source contract fails if Just command text (an invocation, a
+  `Justfile` or `*.just` file name) reappears in `.githooks`, `.github`, `nix`,
+  `scripts` or the tools' sources.
 - Adding OTLP export later is a configuration choice, not a redesign.

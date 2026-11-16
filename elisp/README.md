@@ -68,7 +68,7 @@ emacs --batch -Q -l elisp/scripts/format.el -f jaunder-fmt-fix
 ```
 
 The pure suite and format steps run automatically as the `ert` and `elisp-fmt`
-steps in `just check` and `just validate` — both via `devtool check` — and,
+steps in `dev check` and `dev validate` — both via `devtool check` — and,
 through the same implementation, as part of the `static-checks` Nix check (so
 `nix flake check` covers them too).
 
@@ -372,7 +372,7 @@ JAUNDER_TEST_BINARY=target/debug/jaunder \
   emacs --batch -Q -l elisp/scripts/run-integration-tests.el
 ```
 
-The authoritative gate is `just validate-no-e2e`. It builds one hermetic
+The authoritative gate is `dev validate-no-e2e`. It builds one hermetic
 `elisp-coverage-producer` VM that runs the pure and live ERT populations once,
 then realizes `$out/elisp-coverage/{lcov.info,summary.txt,status.json}`. The
 host consumer reconciles its pre-test production module/form census against
@@ -388,8 +388,7 @@ initializers remain measurable or need a trailing same-line
 point or LCOV observation on a structural candidate is a guard violation.
 Controlled ERT, instrumentation, or invalid-report statuses and coverage
 findings fail the consumer; uncontrolled Nix or VM failures remain build
-failures. Full `just validate` inherits this verdict and does not rerun live
-ERT.
+failures. Full `dev validate` inherits this verdict and does not rerun live ERT.
 
 ## Pulled media
 

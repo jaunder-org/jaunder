@@ -116,8 +116,8 @@ Safari; verify Safari-specific behavior in Safari itself and keep the remaining
 device-specific requirement in the issue evidence. Theme thumbnails, NixOS
 services/VM tests, diagnostic coverage producers, and canonical screenshot
 baseline updates remain Linux-only. Do not update canonical snapshots on macOS.
-For host PostgreSQL testing on macOS, use `just test-local` or
-`just pg-run <command>` rather than the NixOS testing VM below.
+For host PostgreSQL testing on macOS, use `dev test-local` or
+`dev pg-run <command>` rather than the NixOS testing VM below.
 
 Check platform output boundaries and native shell/package evaluation with:
 
@@ -171,13 +171,13 @@ standards. Configure git to use them after cloning:
 git config core.hooksPath .githooks
 ```
 
-**`pre-commit`** runs **`just precommit`**. Before gate work, it classifies the
+**`pre-commit`** runs **`dev precommit`**. Before gate work, it classifies the
 complete pre-run dirty tree. `staged-markdown-only` is the sole narrow class: a
 nonempty tree containing only staged-only, regular, case-sensitive `.md`
 additions or modifications. Any unstaged, untracked, delete/rename,
 type-changing, non-Markdown, malformed, unparseable, or otherwise unsupported
 evidence uses the broad route. The safety owner classifies before selecting the
-host recipe as either
+host command as either
 `class=staged-markdown-only reason=isolated-staged-markdown` or
 `class=broad reason=<stable-kebab-case-reason>`; broad reason precedence is
 `uncertain-status`, `empty-state`, `untracked-path`, `unstaged-path`,
@@ -186,7 +186,7 @@ host recipe as either
 
 For `staged-markdown-only`, the fixed ordered Markdown-sensitive surface is
 Prettier, sequence/identifier collision checks, the ADR bundle, documentation
-links, and flow-document parity. It is a filter over the normal production Just
+links, and flow-document parity. It is a filter over the normal production `dev`
 workflows, not a per-path policy: Prettier formats global `end2end` plus
 `**/*.md`, ADRs project into `docs/README.md` and `docs/ARCHITECTURE.md`, and
 document links and flow documents use repository-wide relationships. Every other
@@ -203,16 +203,16 @@ while pre-existing delete/rename state and untracked files stay unstaged and
 tolerated. On `x86_64-linux`, successful narrow staged-Markdown checks and
 reconciliation are followed by admission (no remaining unstaged or nonignored
 untracked changes, and raw worktree/index blob identity for every tracked
-Markdown, `.prettierrc.json`, `.prettierignore`, and `recipes/prettier.just`
-input consumed by `static-docs`, excluding `.claude`) and then the ordinary
-Git-backed `.#checks.x86_64-linux.static-docs` request with lock update/write
-disabled. A post-request status/index check fails on tracked, staged, or
-nonignored untracked mutation without restaging. Admission or host/staging
-failure skips Nix; Nix failure remains the hook verdict and is preserved if the
-post-check also fails. Other platforms and the broad route retain host-only
-behavior. Bypass with `SKIP_PRE_COMMIT=1 git commit` for WIP.
+Markdown, `.prettierrc.json`, `.prettierignore`, and `tools/dev/` source input
+consumed by `static-docs`, excluding `.claude`) and then the ordinary Git-backed
+`.#checks.x86_64-linux.static-docs` request with lock update/write disabled. A
+post-request status/index check fails on tracked, staged, or nonignored
+untracked mutation without restaging. Admission or host/staging failure skips
+Nix; Nix failure remains the hook verdict and is preserved if the post-check
+also fails. Other platforms and the broad route retain host-only behavior.
+Bypass with `SKIP_PRE_COMMIT=1 git commit` for WIP.
 
-**`pre-push`** runs `just prepush`: the fast verify-only host/static surface,
+**`pre-push`** runs `dev prepush`: the fast verify-only host/static surface,
 existing auxiliary `tools` non-doc tests, host-native product Rust tests, and
 `workspace-doctests` after the product tests. `workspace-doctests` executes
 `cargo test --workspace --doc` and the same bidirectional root-workspace fence
@@ -225,48 +225,43 @@ population; afterward it verifies Git state stayed unchanged. Other checks
 retain their order, and other platforms keep host Markdown Verify. Bypass with
 `SKIP_PRE_PUSH=1 git push` for WIP.
 
-Run `just tsc` for the single-command TypeScript workflow, including after `cd`
+Run `dev tsc` for the single-command TypeScript workflow, including after `cd`
 to another worktree in an existing devShell. Nix's shared setup executable links
-the pinned dependencies before the shared named `tsc` leaf in
-`recipes/static.just`; direct leaf invocation assumes dependencies are already
-available. Shell entry uses the same setup for IDEs. Setup refreshes current
-visible packages and the browser-matched Playwright override, preserves
-unrelated directory entries, and unlinks a stale destination symlink without
-touching its referent.
+the pinned dependencies before the shared `tsc` check; `dev static tsc` alone
+assumes dependencies are already available. Shell entry uses the same setup for
+IDEs. Setup refreshes current visible packages and the browser-matched
+Playwright override, preserves unrelated directory entries, and unlinks a stale
+destination symlink without touching its referent.
 
-Host and hermetic callers use the named definitions in `recipes/static.just` for
-formatting, ast-grep, byte-compilation, cargo-deny and the six Clippy units.
-Invoke a leaf directly with
-`just --justfile recipes/static.just --working-directory . <name>`; formatting
-accepts `fix` or `verify`, and Cargo leaves additionally accept `host` or
-`sandbox`. `just leptosfmt` builds its narrow adapter from the current checkout
-before invoking the shared definition. `code` and `rust-format` are fixed
-compositions in that file; `just static-all [fix|verify]` builds the current
-checkout's devtool/adapter before invoking the independent ordered `all`
-composition (dependencies must already be available, as for the former
-`devtool check --all`). Sandbox callers supply their pinned binaries and both
-offline homes before any work. TSC's shared leaf preserves its compiler argv;
-the public owner retains passive request observation around setup and that leaf.
-Only ERT retains a devtool timing consumer, launched with locked Cargo from the
-checkout, not the shell's prebuilt devtool, and invoking only the fixed Just
-`ert` leaf. Other devtool capabilities remain; this is not full devtool
-retirement. Prettier retains `recipes/prettier.just`. Just exports the host
-Cargo compile-cache policy (`RUSTC_WRAPPER=sccache`, `CARGO_INCREMENTAL=0`, and
-sorted, canonical Git worktree roots in `SCCACHE_BASEDIRS`, including the
-current root). Discovery failure retains the current root and Git's diagnostic.
-This environment reaches the devtool bootstrap and its compiling children as
-well as direct Cargo recipes; it adds no resource limits.
+Host and hermetic callers use the named checks of `dev static` for formatting,
+Prettier, ast-grep, byte-compilation, cargo-deny and the six Clippy units.
+`dev static <name>` runs one check in Verify mode; `--fix` repairs where the
+check has an autofix, and `--sandbox` runs it in place, offline against the
+Cargo homes a Nix check provides, admitting every home before any work. `code`,
+`rust-format` and `all` are fixed groups of checks. `dev leptosfmt` builds its
+narrow adapter from the current checkout before running the `leptosfmt` check,
+and `dev static-all [fix|verify]` builds the current checkout's devtool and
+adapter before running the ordered `all` group (dependencies must already be
+available). Only ERT retains a devtool timing consumer, launched with locked
+Cargo from the checkout, not the shell's prebuilt devtool. Every `dev` call sets
+the host Cargo compile-cache policy (`RUSTC_WRAPPER=sccache`,
+`CARGO_INCREMENTAL=0`, and sorted, canonical Git worktree roots in
+`SCCACHE_BASEDIRS`, including the current root) and clears inherited `GIT_*`
+overrides before calling Git. Discovery failure retains the current root and
+Git's diagnostic. This environment reaches the devtool bootstrap and its
+compiling children as well as direct Cargo steps; it adds no resource limits.
 
-All Just gate workflows fail fast: the first failed required command stops later
-ordinary checks. Prepush's clean-tree refusal remains its first boundary.
-Precommit still performs its after-snapshot and conservative staging
-reconciliation after the gate stops; safe formatter/check changes can be
-restaged, while mixed or unsafe Git/index state still fails closed. Work not
-reached is not reported as successful. Apart from precommit's selected routing
-surface, the workflows remain broad, run the host check groups in their
-documented order (see [Local checks: Just](#local-checks-just)), and preserve
-clean-tree/staged-subset authority. Independent CI lanes and required aggregates
-remain authoritative; local fail-fast behavior does not weaken their verdicts.
+All `dev` gate workflows fail fast: the first failed required step stops later
+ordinary checks, and `dev` exits with that step's status. Prepush's clean-tree
+refusal remains its first boundary. Precommit still performs its after-snapshot
+and conservative staging reconciliation after the gate stops; safe
+formatter/check changes can be restaged, while mixed or unsafe Git/index state
+still fails closed. Work not reached is not reported as successful. Apart from
+precommit's selected routing surface, the workflows remain broad, run the host
+check groups in their documented order (see
+[Local checks: `dev`](#local-checks-dev)), and preserve clean-tree/staged-subset
+authority. Independent CI lanes and required aggregates remain authoritative;
+local fail-fast behavior does not weaken their verdicts.
 
 ## Development workflow
 
@@ -284,22 +279,22 @@ remain authoritative; local fail-fast behavior does not weaken their verdicts.
   `clippy::` lint or a rustc lint — requires **explicit user approval** before
   it lands; do not introduce one to make the gate pass on your own initiative
   (this is the actionable form of the "never suppress … linting without explicit
-  approval" rule under Testing). `just check` and `just validate` reject every
+  approval" rule under Testing). `dev check` and `dev validate` reject every
   `#[allow(...)]` and every `#[expect(...)]` without an immediately preceding,
   non-empty `// lint-suppression:allow <reason>` marker. After approval, add
   that reviewed marker in the same change; never use it to make an unapproved
   suppression pass.
 - **Review gates the merge, not the commit.** Agents commit on their own
   recognizance — history is meant to be built up in focused, atomic steps, and
-  the pre-commit hook already gates each one on the fast `just precommit`. What
+  the pre-commit hook already gates each one on the fast `dev precommit`. What
   requires explicit user approval is **landing** the work: merging a PR
-  (`just pr-land <PR> <approved-head-SHA>` requires previously obtained and
+  (`dev pr-land <PR> <approved-head-SHA>` requires previously obtained and
   recorded human approval for that exact PR/head). Ask for review before you
   merge, not before every commit.
 
 ### Read-only Org timezone evidence
 
-Run `traced-run -- just org-timezone-manifest /path/a.org /path/b.org` with
+Run `traced-run -- dev org-timezone-manifest /path/a.org /path/b.org` with
 explicit local UTF-8 Org files (shell globs are also accepted). There is no
 recursive discovery, inventory option, database connection, server access, or
 import. The extractor only reads originals; normal command acquisition/build
@@ -451,7 +446,7 @@ runner's Node default.
 
 Run these tests hermetically with
 `nix build -L --accept-flake-config .#checks.x86_64-linux.wasm-tests`, or
-through the normal test-enabled `just check`/`just validate` workflow. The
+through the normal test-enabled `dev check`/`dev validate` workflow. The
 dedicated check uses Nix-store Chromium and chromedriver paths; it executes
 browser behavior but does not contribute wasm lines to the host coverage
 denominator.
@@ -475,8 +470,8 @@ runs a hook it exports `GIT_DIR`/`GIT_INDEX_FILE` (and
 `GIT_WORK_TREE`/`GIT_OBJECT_DIRECTORY`/`GIT_COMMON_DIR`/`GIT_NAMESPACE`), and
 those **override `-C <dir>`**. So a test that builds a throwaway repo with
 `git -C <tmpdir> …` will, when run inside the pre-commit/pre-push hooks (which
-invoke `just precommit`/`just validate`, whose host tests then run that code),
-be redirected at the **real** repository — corrupting HEAD, the index, and the
+invoke `dev precommit`/`dev validate`, whose host tests then run that code), be
+redirected at the **real** repository — corrupting HEAD, the index, and the
 shared worktree config. Build every git command for such a test (and any
 production helper it calls) through a constructor that `env_remove`s those vars
 — see `git::at()` in `tools/repository-policy/src/git.rs`. Read-only production
@@ -485,18 +480,18 @@ don't mutate.
 
 ### Evaluating the web UX interactively
 
-Use `just sandbox` for a host-native browser session without the Playwright
+Use `dev sandbox` for a host-native browser session without the Playwright
 runner or telemetry collector:
 
 ```bash
 # Disposable empty instance; removed when the command exits.
-just sandbox
+dev sandbox
 
 # Persistent named instance with ordinary and operator accounts.
-just sandbox writing-flow --profile standard
+dev sandbox writing-flow --profile standard
 
 # Persistent instance with four accounts, local images, and rich Markdown/Org Posts.
-just sandbox timeline --profile demo
+dev sandbox timeline --profile demo
 ```
 
 The `standard` profile creates `user` and `operator`; `demo` also creates
@@ -505,9 +500,9 @@ The `standard` profile creates `user` and `operator`; `demo` also creates
 without a profile:
 
 ```bash
-just sandbox writing-flow
-just sandbox writing-flow --reset
-just sandbox writing-flow --reset --profile demo
+dev sandbox writing-flow
+dev sandbox writing-flow --reset
+dev sandbox writing-flow --reset --profile demo
 ```
 
 `--profile` applies only when creating or resetting a named workspace. `--reset`
@@ -530,9 +525,9 @@ Run one admitted operational Jaunder command against a named workspace after
 `--`:
 
 ```bash
-just sandbox writing-flow -- user-create --username reviewer
-just sandbox writing-flow -- site-config set site.title "Writing review"
-just sandbox writing-flow -- backup
+dev sandbox writing-flow -- user-create --username reviewer
+dev sandbox writing-flow -- site-config set site.title "Writing review"
+dev sandbox writing-flow -- backup
 ```
 
 Command mode pins the same workspace generation for the complete child lifetime
@@ -541,9 +536,9 @@ and returns the child's exact exit status. It accepts only `site-config`,
 `websub`; storage selectors and lifecycle commands remain owned by the sandbox
 supervisor.
 
-The public Just front door forwards literal argv from the active checkout with
-`exec nix run --no-update-lock-file --no-write-lock-file .#ux-sandbox -- "$@"`.
-The separately filtered `packages.ux-sandbox` builds only the helper and its
+`dev sandbox` forwards literal argv from the active checkout to
+`nix run --no-update-lock-file --no-write-lock-file .#ux-sandbox -- <args>`. The
+separately filtered `packages.ux-sandbox` builds only the helper and its
 required Cargo path-dependency closure at the dev profile. It retains required
 workspace manifests/configuration and the root lockfile, using placeholders for
 excluded workspace targets rather than their implementation or application
@@ -600,8 +595,8 @@ The host and the CI VM load the **same** `end2end/playwright.config.ts`, keeping
 browser-flow definitions shared. A focused host pass does not establish the
 hermetic backend/browser matrix verdict; CI remains authoritative.
 
-- **Fast local loop** — `just e2e-local` owns the whole loop: it resolves the
-  CSR bundle and builds the host server, starts its own `jaunder serve` and OTLP
+- **Fast local loop** — `dev e2e-local` owns the whole loop: it resolves the CSR
+  bundle and builds the host server, starts its own `jaunder serve` and OTLP
   collector on ephemeral ports with a fresh per-run SQLite temp DB, seeds
   fixtures, and runs the local Chromium lifecycle, tearing both processes down
   after. The collector captures correlated browser and server spans, then the
@@ -611,7 +606,7 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
   this while iterating on the web UI; it uses the HTML reporter for interactive
   debugging. For browser-specific investigation on macOS, select WebKit after
   provisioning browsers, for example
-  `just e2e-local post-image-fit.spec.ts --browser webkit`; this proves
+  `dev e2e-local post-image-fit.spec.ts --browser webkit`; this proves
   Playwright WebKit only, not actual Safari.
 
   Ordinary runs select `.#sandboxArtifacts`: one source-consistent immutable set
@@ -640,16 +635,16 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
   for Nix package builds and an explicit validated input for `test-local` and
   manual Cargo/Vite workflows. Handled SIGINT/SIGTERM stops owned foreground
   consumers before server/collector teardown and releases their unique Nix root
-  afterward. The standalone manual `just build-csr debug|release` workflow and
+  afterward. The standalone manual `dev build-csr debug|release` workflow and
   its local `target/site` output remain unchanged.
 
-- **Focused browser-flow proof** — `just e2e-local <spec-or-file:line>` scopes
+- **Focused browser-flow proof** — `dev e2e-local <spec-or-file:line>` scopes
   the local loop to one Playwright positional filter when that spec or line
   covers the changed behavior:
 
   ```bash
-  just e2e-local auth.spec.ts
-  just e2e-local auth.spec.ts:17
+  dev e2e-local auth.spec.ts
+  dev e2e-local auth.spec.ts:17
   ```
 
   This is the default proof for a changed browser flow before broader e2e gates.
@@ -664,14 +659,14 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
   gesture, losing the click. Keep destination-content assertions; do not repair
   this readiness gap with sleeps, larger timeouts or retries.
 
-- **The authoritative workflow** — `just e2e` attempts all eight enabled
-  hermetic Nix VM lanes, then reconciles both Firefox backends even after
-  producer failures. Any producer, reconciliation or applicable coverage failure
-  fails the workflow. Full `just validate` calls this same synchronous workflow
-  after its non-E2E surface. CI derives its matrices at runtime from
+- **The authoritative workflow** — `dev e2e` attempts all eight enabled hermetic
+  Nix VM lanes, then reconciles both Firefox backends even after producer
+  failures. Any producer, reconciliation or applicable coverage failure fails
+  the workflow. Full `dev validate` calls this same synchronous workflow after
+  its non-E2E surface. CI derives its matrices at runtime from
   `end2end/e2e-lanes.json`, using `scripts/e2e-matrix.jq`, and invokes
-  `just e2e-producer <identity>` per lane and
-  `just e2e-reconcile <backend> <artifact-root>` after the Firefox producers
+  `dev e2e-producer <identity>` per lane and
+  `dev e2e-reconcile <backend> <artifact-root>` after the Firefox producers
   settle. The artifact root contains `e2e-<identity>` directories. No Rust E2E
   scheduler or embedded lane catalog remains. Run representative hermetic proof
   when backend/browser parity, release behavior or the branch boundary matters;
@@ -706,11 +701,11 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
 
 #### Bounding full local E2E fan-out
 
-`just e2e <N>` bounds producer admission with ordinary `xargs -P`. Choose it
-from actual admitted CPU/RAM capacity. Omission uses the enabled lane count, not
-a host-capacity guarantee; larger bounds cannot start more work than there are
-enabled lanes. Invalid bounds fail before producers start. Full `just validate`
-uses the ordinary default; `just validate-no-e2e` omits E2E.
+`dev e2e <N>` bounds producer admission with ordinary `xargs -P`. Choose it from
+actual admitted CPU/RAM capacity. Omission uses the enabled lane count, not a
+host-capacity guarantee; larger bounds cannot start more work than there are
+enabled lanes. Invalid bounds fail before producers start. Full `dev validate`
+uses the ordinary default; `dev validate-no-e2e` omits E2E.
 
 A producer failure does not discard pending lanes. All producers settle before
 both Firefox reconciliations run. The helper normalizes producer failures for
@@ -768,16 +763,16 @@ not share a promised final test-verdict identity.
 The only supported baseline updater is:
 
 ```bash
-just e2e-local --update-visual-snapshots
+dev e2e-local --update-visual-snapshots
 ```
 
 It release-builds CSR and gives Chromium and Firefox separate fresh
 server/database lifecycles. **Never** hand-run Playwright's snapshot-update mode
 against an ambient server or database. Review every changed PNG, then run
-`just e2e-local` without update mode before committing intentional baselines
+`dev e2e-local` without update mode before committing intentional baselines
 together with the rendering or test change.
 
-`just e2e-local <spec-or-file:line>` remains the targeted loop. It scopes both
+`dev e2e-local <spec-or-file:line>` remains the targeted loop. It scopes both
 the visual prerequisite and the ordinary/admin invocation to that positional
 filter; an unrelated spec does not schedule all visual tests. Update mode
 intentionally rejects a positional filter.
@@ -817,40 +812,51 @@ The API is in `end2end/tests/helpers.ts` (its docblock is the usage rules):
 destination's cold render is the subject. A declared allowance that no load
 consumes fails the test.
 
-### Local checks: Just
+### Local checks: `dev`
 
-The root `Justfile` owns developer, hook, and CI gate workflows. It invokes the
-pinned tools and existing producer commands directly; Rust algorithms and
-Git/index safety remain callable leaves, not a workflow catalog. Gate recipes
-return process status and logs, not a gate-wide JSON report. The old cargo gate
-aliases and the `xtask` workspace are retired. Both development shells provide
-pinned Just; the Rust host commands are concern-owned executables in the `tools`
-workspace — `repository-policy` (`repository-docs`, `source-contracts`,
-`git-index-safety`), `host-proof` (`test-local`, `e2e-local`, `e2e-evidence`,
-`trace-analysis`, `wasm-audit`, `source-diagnostics`), `coverage`
-(`coverage-check`, nondefault `host` feature), `doctests` (`doctest-check`,
-nondefault `host` feature) and `qualification` (`qualification-host`). Just
-recipes run them with locked Cargo from the active checkout; CI's E2E verifier
-and the production-baseline workflows use their Nix outputs
-(`packages.host-proof`, `nix run .#qualification-host`). Host tools run only on
-the host, never inside derivations. Runtime paths belong to the active checkout,
-not the tool's store build directory.
+`dev`, the Python package in `tools/dev/`
+([Python `dev` runner](docs/adr/drafts/dev-runner-replaces-just.md)), owns
+developer, hook, CI and Nix-sandbox workflows. Each workflow is a `dev`
+subcommand (`dev check`, `dev test-local -- -p storage foo`,
+`dev ci-validate-host`, `dev static tsc --sandbox`). It invokes the pinned tools
+and existing producer commands directly, passing arguments as argv lists, never
+through a shell; Rust algorithms and Git/index safety remain callable leaves,
+not a workflow catalog. Gates return process status and logs, not a gate-wide
+JSON report. The old cargo gate aliases and the `xtask` workspace are retired.
+
+On the host, the `default`, `ci` and `ci-e2e` devShells put a `dev` shim on
+`PATH`. The shim finds the checkout with `git rev-parse --show-toplevel` and
+runs that checkout's `tools/dev/` with `python -P` under the pinned
+`python3.withPackages` interpreter, so hooks and gates always run the working
+tree's code with no virtualenv. Bytecode caching stays on; `__pycache__/` is
+ignored. Nix checks run a `dev` package built from a filtered `tools/dev/`
+source, so any edit there rebuilds them. The Rust host commands are
+concern-owned executables in the `tools` workspace — `repository-policy`
+(`repository-docs`, `source-contracts`, `git-index-safety`), `host-proof`
+(`test-local`, `e2e-local`, `e2e-evidence`, `trace-analysis`, `wasm-audit`,
+`source-diagnostics`), `coverage` (`coverage-check`, nondefault `host` feature),
+`doctests` (`doctest-check`, nondefault `host` feature) and `qualification`
+(`qualification-host`). `dev` runs them with locked Cargo from the active
+checkout; CI's E2E verifier and the production-baseline workflows use their Nix
+outputs (`packages.host-proof`, `nix run .#qualification-host`). Host tools run
+only on the host, never inside derivations. Runtime paths belong to the active
+checkout, not the tool's store build directory.
 
 Each host tool prints exactly one JSON report on stdout (`host_tool::report`:
 `command`, `ok`, `duration_ms`,
 `steps[{name, ok, skipped, duration_ms, detail}]`, optional `exit_override`,
 optional rendered `report` text and optional structured `evidence`). The shared
 argument parser points fd 1 at stderr and reserves the real stdout for that
-report, so child output goes to stderr; the exit status is the verdict.
-`scripts/step-report.jq` derives the human view, applied by `scripts/run-report`
-or inline in bash recipes under `pipefail`. There is no `--json` flag,
+report, so child output goes to stderr; the exit status is the verdict. `dev`
+renders the human view from that report (`tools/dev/jaunder_dev/report.py`);
+output that is not a report fails the step. There is no `--json` flag,
 `.xtask/last-result.json` sidecar or completion sentinel. Host doctest execution
 and Elisp artifact lifting remain alongside their substantive
 reconciliation/consumer algorithms (`doctest-check workspace`,
 `coverage-check elisp-consume`). The E2E workflow now owns authoritative output
 selection and trace/snapshot verification; the temporary `server-fn-flow` bridge
 is retired, while the independent static `server-fn-coverage` leaf remains.
-Verification's ordinary clean-tree admission is direct Just/Git; raw/index docs
+Verification's ordinary clean-tree admission is direct `dev`/Git; raw/index docs
 admission, post-request checks and precommit reconciliation remain distinct Rust
 safety operations.
 
@@ -866,7 +872,7 @@ evidence: that requires the Nix-selected executable and harness described in
 Host-side steps cover static checks, clippy, the standalone `tools` workspace,
 and day-to-day root-workspace Rust tests. `prepush` adds the host
 `workspace-doctests` verdict; it remains a fast local gate rather than an alias
-for hermetic `just validate-no-e2e`. Nix static proof, coverage/CRAP, wasm
+for hermetic `dev validate-no-e2e`. Nix static proof, coverage/CRAP, wasm
 browser tests, Elisp coverage, the wasm budget, and e2e retain their stated
 hermetic or full-validate authorities.
 
@@ -880,7 +886,7 @@ identities, and the terminal run records must reconcile exactly:
 `expected = executed + ignored`. Every required producer subprocess has its exit
 status checked; command output never turns a nonzero exit into success.
 
-Run `just coverage` or `just doctests` for the direct single-command hermetic
+Run `dev coverage` or `dev doctests` for the direct single-command hermetic
 workflows. Each first requires a clean checkout, then realizes its producer at
 `.xtask/gcroots/{coverage,doctests}` and runs the hard Nix status gate. Coverage
 then invokes the host-only `coverage-check policy --out .xtask/gcroots/coverage`
@@ -889,12 +895,12 @@ producers or validate producer status. The Nix gate rejects missing, invalid, or
 non-success status before policy runs. A missing, malformed, or empty text
 report, or a report with zero executable lines, is rejected rather than reported
 green. Validation and CI call these clean-gated public workflows. Fix-mode
-`just check` instead uses the existing internal `doctests-workflow`, preserving
+`dev check` instead uses the existing internal `doctests-workflow`, preserving
 its dirty-tree formatting behavior and full doctest producer/gate population
-without applying public `just doctests` clean-tree admission. Doctests and the
+without applying public `dev doctests` clean-tree admission. Doctests and the
 auxiliary `tools` workspace retain their separate test authorities outside this
 root-workspace nextest population. The Rust gate aggregates are retired; the
-four `just ci-validate-*` recipes compose the public workflows while preserving
+four `dev ci-validate-*` commands compose the public workflows while preserving
 independent lane verdicts.
 
 Within the host/local gate, health checks are ordered for fast, actionable
@@ -912,44 +918,44 @@ gates when one Rust test, module, package, or subsystem can answer the current
 question:
 
 ```bash
-just test-local -p storage site_config_primitives_round_trip
-just test-local -p jaunder storage::posts::post_create_and_get_by_id_works
-just test-local -p jaunder -E 'test(/^web::/)'
+dev test-local -p storage site_config_primitives_round_trip
+dev test-local -p jaunder storage::posts::post_create_and_get_by_id_works
+dev test-local -p jaunder -E 'test(/^web::/)'
 ```
 
 After a targeted fix, rerun the same focused command first; it is the fastest
 proof that the regression moved from red to green. Escalate only at boundaries:
-the enforced `pre-commit` hook runs `just precommit` when you stage the final
+the enforced `pre-commit` hook runs `dev precommit` when you stage the final
 intended tree and invoke `git commit`; inspect, re-stage, and retry after a hook
-failure or mutation. Use `just check-no-test` or `just check` as explicit broad
-diagnostic/integration commands, `just prepush` through the push hook, and
-CI/`just validate-no-e2e` when hermetic confidence is the question. Focused
+failure or mutation. Use `dev check-no-test` or `dev check` as explicit broad
+diagnostic/integration commands, `dev prepush` through the push hook, and
+CI/`dev validate-no-e2e` when hermetic confidence is the question. Focused
 `test-local` is an accelerator, not a certification gate.
 
-| Command                | Runs                                                                                                                                                | Formatting    |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| `just check-no-test`   | the host check groups (below) in Fix mode + auxiliary host tests                                                                                    | auto-fixes    |
-| `just check`           | adds `test-local`, Nix `wasm-tests` and `doctests`/`doctests-gate`                                                                                  | auto-fixes    |
-| `just precommit`       | focused Git/index safety owner selects Markdown or broad Fix checks, reconciles once, and conditionally verifies shared docs                        | auto-fixes    |
-| `just prepush`         | clean tree; Verify host/static + auxiliary tests + `test-local` + `workspace-doctests`; x86_64-linux uses shared `static-docs` at the Markdown slot | never mutates |
-| `just validate-no-e2e` | clean tree; Verify host/static, Nix static proof, wasm budget/tests, Rust coverage/CRAP, doctests, and authoritative Elisp producer/consumer        | never mutates |
-| `just validate`        | adds two Chromium and six Firefox E2E lanes, reconciliation, and final authoritative SQLite/Chromium server-function flow verification              | never mutates |
+| Command               | Runs                                                                                                                                                | Formatting    |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| `dev check-no-test`   | the host check groups (below) in Fix mode + auxiliary host tests                                                                                    | auto-fixes    |
+| `dev check`           | adds `test-local`, Nix `wasm-tests` and `doctests`/`doctests-gate`                                                                                  | auto-fixes    |
+| `dev precommit`       | focused Git/index safety owner selects Markdown or broad Fix checks, reconciles once, and conditionally verifies shared docs                        | auto-fixes    |
+| `dev prepush`         | clean tree; Verify host/static + auxiliary tests + `test-local` + `workspace-doctests`; x86_64-linux uses shared `static-docs` at the Markdown slot | never mutates |
+| `dev validate-no-e2e` | clean tree; Verify host/static, Nix static proof, wasm budget/tests, Rust coverage/CRAP, doctests, and authoritative Elisp producer/consumer        | never mutates |
+| `dev validate`        | adds two Chromium and six Firefox E2E lanes, reconciliation, and final authoritative SQLite/Chromium server-function flow verification              | never mutates |
 
 The host check surface that `check-no-test`, `prepush`, `validate-no-e2e` and
 `ci-validate-host` share is five public groups, run in this order and stopping
 at the first failure. Each can be run on its own to re-check one kind of
 failure; `mode` is `verify` (the default) or `fix`:
 
-| Group                        | Runs                                                                                                   |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `just format [mode]`         | Rust/tools `cargo fmt`, `leptosfmt`, Prettier Markdown/`end2end`/CSS, Elisp formatting                 |
-| `just docs-shape`            | documentation sequence, ADR format and README/view parity, doc links, flow docs                        |
-| `just source-contracts`      | ast-grep rule tests and `no-full-reload`, every repository source-contract policy, doctest fence check |
-| `just compile-checks [mode]` | `tsc`, `cargo-deny`, the six Clippy units                                                              |
-| `just elisp-checks [mode]`   | Elisp byte-compilation and ERT                                                                         |
+| Group                       | Runs                                                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `dev format [mode]`         | Rust/tools `cargo fmt`, `leptosfmt`, Prettier Markdown/`end2end`/CSS, Elisp formatting                 |
+| `dev docs-shape`            | documentation sequence, ADR format and README/view parity, doc links, flow docs                        |
+| `dev source-contracts`      | ast-grep rule tests and `no-full-reload`, every repository source-contract policy, doctest fence check |
+| `dev compile-checks [mode]` | `tsc`, `cargo-deny`, the six Clippy units                                                              |
+| `dev elisp-checks [mode]`   | Elisp byte-compilation and ERT                                                                         |
 
-`just source-contract <name>` runs one source-contract policy, such as
-`just source-contract html-sink`.
+`dev source-contract <name>` runs one source-contract policy, such as
+`dev source-contract html-sink`.
 
 The CI host lane captures filesystem capacity/inodes, memory/swap and allocated
 bytes for checkout-owned Cargo targets before validation. It does not traverse
@@ -957,20 +963,21 @@ the shared `/nix/store`: filesystem capacity comes from `df`, not a whole-store
 `du`. Resource diagnostics do not replace or weaken the validation verdict.
 
 Gate workflows have no gate-wide JSON report contract. Capture commands with
-`traced-run -- just <recipe>` and inspect its parked stdout/stderr separately.
-Keep producer-owned status, reports, GC roots and diagnostics; a missing
-required producer artifact is not success. For on-demand invalidation questions
-compare Nix derivation identities directly; store reuse and elapsed time alone
-do not attribute compilation versus substitution. Do not purge caches or run
-routine measurement campaigns.
+`traced-run -- dev <command>` and inspect its parked stdout/stderr separately;
+read step timing from the run's trace (see
+[Observation and traces](#observation-and-traces)). Keep producer-owned status,
+reports, GC roots and diagnostics; a missing required producer artifact is not
+success. For on-demand invalidation questions compare Nix derivation identities
+directly; store reuse and elapsed time alone do not attribute compilation versus
+substitution. Do not purge caches or run routine measurement campaigns.
 
 #### Prepush parity by failure surface
 
-The fast local lane and `just validate-no-e2e` do not run the same tests in
+The fast local lane and `dev validate-no-e2e` do not run the same tests in
 different environments. They have the following explicit authority split
 ([ADR-0029](docs/adr/0029-git-enforced-verify-gate.md), #1117 supplement):
 
-| `just validate-no-e2e` surface                           | `prepush` coverage                                                                                                 | Authority / rationale                                                                                                                                                              |
+| `dev validate-no-e2e` surface                            | `prepush` coverage                                                                                                 | Authority / rationale                                                                                                                                                              |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Verify-only host/static surface                          | Runs the same host surface except `x86_64-linux` replaces only `prettier-markdown` Verify with `static-docs`.      | Prepush provides the Markdown leaf verdict; other Nix static proof remains authoritative for the sandboxed offline environment.                                                    |
 | Auxiliary `tools` non-doc tests                          | Runs once.                                                                                                         | The host tests are the applicable verdict; they are outside the application coverage/Nix test gates.                                                                               |
@@ -981,7 +988,7 @@ different environments. They have the following explicit authority split
 | Wasm browser tests                                       | Does not run.                                                                                                      | The verdict exercises wasm browser primitives unavailable to a cheap host lane.                                                                                                    |
 | Elisp coverage                                           | Does not run.                                                                                                      | The coverage VM is the authoritative execution environment.                                                                                                                        |
 | Wasm budget                                              | Does not run.                                                                                                      | The verdict is defined by the Nix-built artifact's size semantics.                                                                                                                 |
-| Server-function flow verification (full `validate` only) | Does not run.                                                                                                      | This is an e2e/full-validate responsibility outside the `just validate-no-e2e` comparator.                                                                                         |
+| Server-function flow verification (full `validate` only) | Does not run.                                                                                                      | This is an e2e/full-validate responsibility outside the `dev validate-no-e2e` comparator.                                                                                          |
 
 `workspace-doctests` and the Nix doctest producer/gate reconcile the same
 root-workspace fence population in both directions; neither path may silently
@@ -1043,50 +1050,50 @@ disposition. Status-as-data still requires its verdict gate; missing, malformed,
 incomplete or wrong-output evidence cannot pass. Output availability is not
 proof of fresh execution.
 
-Focused `just test-local <nextest args>` and
-`just e2e-local <spec-or-file:line>` are the default feedback paths while
-editing. After a repair, rerun the same targeted proof before broadening the
-question. Do not run a broad gate as a routine per-helper or per-fix ritual.
-Normal pre-commit and pre-push hooks still enforce their documented boundaries;
-focused proof does not replace them, hermetic coverage/backend parity, or CI.
+Focused `dev test-local <nextest args>` and `dev e2e-local <spec-or-file:line>`
+are the default feedback paths while editing. After a repair, rerun the same
+targeted proof before broadening the question. Do not run a broad gate as a
+routine per-helper or per-fix ritual. Normal pre-commit and pre-push hooks still
+enforce their documented boundaries; focused proof does not replace them,
+hermetic coverage/backend parity, or CI.
 
-Choose `just check-no-test` or `just check` deliberately for a named broad
+Choose `dev check-no-test` or `dev check` deliberately for a named broad
 diagnostic/integration question: for example, whether a shared interface change
 breaks host/static integration, or whether a repair affects other product Rust
-tests and the wasm/doctest surfaces. Use explicit `just validate-no-e2e` for
-local non-e2e hermetic confidence and full `just validate` when the complete
+tests and the wasm/doctest surfaces. Use explicit `dev validate-no-e2e` for
+local non-e2e hermetic confidence and full `dev validate` when the complete
 local matrix is needed. CI remains the authoritative integration proof.
 
-`just check` auto-fixes **formatting**, and nothing else; `just validate` never
+`dev check` auto-fixes **formatting**, and nothing else; `dev validate` never
 mutates the tree. The coverage gate is stateless (ADR-0050), so there is no
-baseline to heal. Just returns nonzero on failure without a gate-wide result
+baseline to heal. `dev` returns nonzero on failure without a gate-wide result
 envelope. `check`'s product Rust tests use the same host-native lane as
 `test-local`, reusing the local target directory and shared `sccache` across
 worktrees. That lane sets `CARGO_INCREMENTAL=0` so `sccache` can share compiler
 work between agents and checkouts.
 
-CI does **not** run `just validate` as a single job. It distributes the non-e2e
-surface across `just ci-validate-host`, `just ci-validate-hermetic`,
-`just ci-validate-test-checks`, and `just ci-validate-coverage`, and joins them
+CI does **not** run `dev validate` as a single job. It distributes the non-e2e
+surface across `dev ci-validate-host`, `dev ci-validate-hermetic`,
+`dev ci-validate-test-checks`, and `dev ci-validate-coverage`, and joins them
 under the stable `Validate (no e2e)` result-only job. The coverage source-filter
-probe (`just coverage-check probe-source`) is an on-demand diagnostic, not an
+probe (`dev coverage-check probe-source`) is an on-demand diagnostic, not an
 automatic CI step.
 
 E2E uses catalog-derived matrices for two unsplit Chromium producers and six
-isolated Firefox producers (`just e2e-producer <identity>`). An `always()`
+isolated Firefox producers (`dev e2e-producer <identity>`). An `always()`
 reconciliation job per backend waits for the complete Firefox matrix, downloads
-its backend's three artifacts and runs `just e2e-reconcile` even if downloads
+its backend's three artifacts and runs `dev e2e-reconcile` even if downloads
 fail; stable `e2e gate` requires the catalog job, Chromium, every Firefox
 producer, and both reconciliations. Running independent surfaces across runners
-cuts workflow wall-clock; `just validate` remains the full local equivalent and
-`just validate-no-e2e` remains its serial non-e2e form. See
+cuts workflow wall-clock; `dev validate` remains the full local equivalent and
+`dev validate-no-e2e` remains its serial non-e2e form. See
 [ADR-0034](docs/adr/0034-ci-e2e-matrix-distribution.md), the
 [non-e2e validation lane decision](docs/adr/0192-split-ci-non-e2e-validation-lanes.md),
 and the
 [retained distributed topology](docs/adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md).
 
 - `cargo fmt --check` checks Rust formatting.
-- `just leptosfmt` invokes the pinned formatter on only `web/src` and `csr/src`
+- `dev leptosfmt` invokes the pinned formatter on only `web/src` and `csr/src`
   (the same roots in Fix and Verify). It retains the default full macro paths
   `view` and `leptos::view`. Checked glob enumeration and UTF-8 reads fail
   closed; the adapter also promotes the pin's per-file error marker even when
@@ -1123,8 +1130,8 @@ and the
 - `elisp-fmt`, `ert`, and `byte-compile` run the elisp subproject's formatter,
   ERT suite, and warnings-as-errors byte-compilation under `emacs --batch` (see
   the Elisp subproject section below).
-- Six discrete Clippy checks run through the named shared Just leaves from the
-  host ladder: `product-core-clippy`, `web-server-clippy`,
+- Six discrete Clippy checks run through the named shared `dev static` checks
+  from the host ladder: `product-core-clippy`, `web-server-clippy`,
   `web-no-server-clippy`, `client-host-clippy`, `wasm-clippy`, and
   `tools-clippy`. They use host-local Cargo with the devshell toolchain and
   compile-cache environment; hermetic Nix exposes one terminal derivation per
@@ -1153,15 +1160,15 @@ and the
 The Emacs client lives in `elisp/` (see [`elisp/README.md`](elisp/README.md)).
 Its ERT suite, formatter, and byte-compilation run in the verify ladder: `ert`,
 `elisp-fmt`, and `byte-compile` (which byte-compiles the package modules with
-warnings promoted to errors) are `just check`/`just validate` steps that run
-through shared Just definitions for formatting/compilation and the retained
+warnings promoted to errors) are `dev check`/`dev validate` steps that run
+through shared `dev static` checks for formatting/compilation and the retained
 monotonic devtool timing owner for ERT — the same implementations the
 `static-ert` and `static-elisp` Nix derivations run, so `nix flake check` covers
 them too, with no duplicated sibling to drift (#188). prettier cannot format
 Emacs Lisp, so `elisp-fmt` uses built-in `emacs-lisp-mode` indentation (auto-fix
 under `check`, verify under `validate`).
 
-`just validate-no-e2e` builds `elisp-coverage-producer`, which runs the pure and
+`dev validate-no-e2e` builds `elisp-coverage-producer`, which runs the pure and
 self-booting live ERT populations once in a hermetic VM. Its fixed
 `$out/elisp-coverage/{lcov.info,summary.txt,status.json}` artifact set is
 consumed on the host: the source-derived module/form census must reconcile with
@@ -1185,83 +1192,71 @@ does not rerun live ERT.
 Jaunder uses OpenTelemetry for deep performance analysis (see
 [ADR-0011](docs/adr/0011-unified-observability.md)).
 
-#### Surviving workflow observations
+#### Observation and traces
 
-Ordinary `just tsc` (including `just tsc fix`) best-effort records the
-recipe-owned request under `.xtask/run/<handle>.trace.d/` and, after completion,
-`<handle>.trace.json`. Its envelope begins at the passive recorder's monotonic
-start, before dependency setup, and ends when the owner publishes its saved
-setup/request result. It includes the shared Just request's startup/evaluation
-and recorder handoff overhead; outer Just evaluation and other pre-entry work
-are outside the envelope and unknown. This is request duration, not compiler
-execution time. The recipe runs setup and the fixed shared Just leaf directly
-with inherited streams, skips the request after setup failure, and returns its
-immediately saved status. Recorder refusal, absence or write failure is
-diagnostic only. There are no observation traps, workload supervision or
-competing signal/cleanup owners.
+Every `dev` command records a trace of its run
+([Python `dev` runner](docs/adr/drafts/dev-runner-replaces-just.md)). The gate
+is the root span and each step is a child span, nested as the gates compose.
+Child processes join through the OpenTelemetry environment carrier
+(`TRACEPARENT`/`TRACESTATE`) plus `JAUNDER_TRACE_DIR`, which names the run
+directory; the root is the `dev` process that finds `JAUNDER_TRACE_DIR` unset.
+host-proof writes its own spans into the same run. A step span records:
 
-Records contain bounded verify/fix mode, monotonic timing and observed
-success/failure boundary/status. Source and compiler/tool identities currently
-remain explicitly `unknown`; the recorder's package version is not compiler
-identity or dirty-input provenance. Linux correlates the host clock with its
-boot UUID; macOS reads the fixed `/usr/sbin/sysctl -n kern.bootsessionuuid`
-metadata utility. Unavailable/malformed metadata or a mismatched boot/origin is
-refused, not replaced with fabricated elapsed time. A missing finish retains
-useful start context with outcome/boundary unknown: it does not imply success, a
-signal or cleanup. **Raw output not archived:** original compiler diagnostics
-remain on inherited stdout/stderr; these passive records promise no later
-retrieval. Explicit outer `traced-run -- just tsc` capture is separate,
-user-selected output capture, not automatic compiler-output archival.
+- `jaunder.status`: `ok`, `failed`, `signalled`, or `incomplete` (set by the
+  merge for a span with no end record or no parent, as when a child is killed);
+- `process.exit.code` and `process.command_line`, capped at 1 KiB;
+- `jaunder.cache`, for Nix check steps only.
 
-The native **Validation hermetic** CI job remains the owner of job/step timing,
-status, source context and logs. Its optional `always()` diagnostic upload keeps
-available complete/partial `.xtask/diagnostics/` and `.xtask/run/` evidence,
-including hidden paths, for **14 days**. Missing files and upload failure warn
-visibly without changing the workload verdict. Required producer evidence and
-aggregate checks remain authoritative; optional diagnostics do not certify
-completeness. Native CI logs retain their existing 14-day policy. Neither local
-request latency nor CI duration proves a fresh cache, substitution or newly
-executed Nix builder work. Nested/overlapping intervals are not additive CPU or
-human effort and must not be summed as such.
+`jaunder.cache` describes only the check's top-level output path, evaluated
+before the build: `reused` if that path was already valid, otherwise `built` if
+`nix path-info` marks it `ultimate` afterwards and `substituted` if not. It says
+nothing about the output's dependencies, and no other step records a cache
+value. Neither elapsed time nor a missing `cache` attribute proves a fresh
+build, substitution or newly executed Nix builder work. Nested or overlapping
+spans are not additive CPU or human effort and must not be summed as such.
 
-Checkout-local runner stdout/stderr, named trace fragments and completed traces
-are not count-pruned: they remain for the worktree lifetime, with growing disk
-usage accepted. Monitor storage explicitly; capture/storage failures are
-incidents, not successful observations. No collector, expiry service or implicit
-removal is provided.
+Every process appends span start and end records, one JSON object per line, to
+its own `<pid>-<random>.jsonl` file in `.xtask/run/<run_id>.trace.d/`; the
+format is locked by `tools/dev/tests/golden/span-records.jsonl` for both the
+Python and the Rust writer. When the root ends, even after a failure, it merges
+the records into `.xtask/run/<run_id>.trace.json` (Chrome trace JSON) with span
+ids in `args` and overlapping siblings on separate tracks. Open that file at
+<https://ui.perfetto.dev>. `dev trace summary [PATH] [--markdown]` reads a run
+directory (the latest under `.xtask/run/` by default, or one downloaded from CI)
+and prints the slowest spans with depth, status, cache and each parent's
+untraced time; overlapping children are not summed. Spans go only to these
+files; `dev` exports nothing over OTLP. Inside a Nix check the trace lands in
+the build directory and is discarded; the host-side Nix step records the cache
+result.
 
-For consumer-selected export, choose a fresh absolute destination and explicitly
-select the available files of the intended handle. For example, with a completed
-observation, run these existing coreutils commands from the checkout in Bash:
+Tracing never changes a step's exit status, stdout or stderr. If the trace
+directory cannot be written, `dev` warns once on stderr and otherwise behaves
+the same. A gate stops at the first failing step and exits with that child's
+status; SIGTERM or SIGHUP sent to `dev` is forwarded to the running child, and a
+child killed by signal n closes its spans as `signalled` with exit status 128+n.
 
-```bash
-handle='<selected-handle>'
-destination='/absolute/consumer-selected/export'
-mkdir -- "$destination"
-cd .xtask/run
-files=("$handle.trace.d/start.jsonl" "$handle.trace.d/finish.jsonl" "$handle.trace.json")
-sha256sum -- "${files[@]}" > "$destination/selected.sha256"
-cp --parents -- "${files[@]}" "$destination/"
-sha256sum --check "$destination/selected.sha256"
-(cd "$destination" && sha256sum --check selected.sha256)
-```
+Every CI validation and E2E job uploads `.xtask/run/` with `if: always()`,
+hidden files included, for **14 days**, and appends
+`dev trace summary --markdown` to its step summary. The summary is diagnostic
+only and decides no job's result. Missing files and upload failure warn visibly
+without changing the workload verdict; required producer evidence and aggregate
+checks remain authoritative, and optional diagnostics do not certify
+completeness. Native CI logs keep their existing 14-day policy.
 
-For a partial observation, select only its available fragments (at minimum
-`<handle>.trace.d/start.jsonl`), not an invented final trace. Check every
-command's exit status before proceeding. The manifest preserves selected
-relative handle identities and byte hashes; rechecking both source and export
-detects missing, changed or incorrectly selected bytes, not workload
-completeness or provenance. A failed copy/hash check is an export incident: keep
-source evidence, report the failure and do not infer removal or workload-rerun
-authority. Successful export also leaves source intact. Any removal requires
-separate explicit authorization; these commands and the observation grant none.
+`traced-run -- PROGRAM` is a separate output-parking runner: it records no
+spans, parks stdout/stderr in `.xtask/run/<id>.{out,err}` and prints a JSON
+summary. Checkout-local parked output and traces are not pruned: they remain for
+the worktree lifetime, with growing disk usage accepted. Monitor storage
+explicitly. To keep a run beyond the worktree, copy its `<run_id>.trace.d/` and
+`<run_id>.trace.json` to a destination you choose; copying grants no authority
+to remove the source.
 
 #### Repeatable performance harness
 
-`just perf [profile] [backends] [browsers] [workload] [posts] [authors] [revisions]`
+`dev perf [profile] [backends] [browsers] [workload] [posts] [authors] [revisions]`
 produces fresh, versioned performance evidence. Defaults are `medium`,
 `sqlite,postgres`, an empty browser list, `all`, and unset counts. Nix selects
-producer descriptions from these native parameters and one fresh nonce; Just
+producer descriptions from these native parameters and one fresh nonce; `dev`
 builds and retains each producer serially, and the host-only `perf-data` command
 validates and assembles the retained evidence. Rust does not schedule producers.
 The default matrix for every profile is direct storage and browser work against
@@ -1270,7 +1265,7 @@ application artifacts and runs the selected workloads in order. The canonical
 comparison run is therefore:
 
 ```bash
-just perf medium
+dev perf medium
 ```
 
 `small` (100 Posts, 10 authors, 500 revisions) is the fast smoke profile.
@@ -1280,16 +1275,16 @@ authors, 250,000 revisions) is an intentional stress run, not a routine
 comparison:
 
 ```bash
-just perf small
-just perf medium
-just perf large
+dev perf small
+dev perf medium
+dev perf large
 ```
 
 Count overrides support deterministic dataset-shape exploration without changing
 the canonical profiles:
 
 ```bash
-just perf small sqlite,postgres "" all 1000 20 2000
+dev perf small sqlite,postgres "" all 1000 20 2000
 ```
 
 `posts`, `authors`, and `revisions` each take a positive `u64`; an empty value
@@ -1306,9 +1301,9 @@ An omitted browser list normalizes to Chromium only for browser work; an
 explicit browser with storage-only work is rejected:
 
 ```bash
-just perf small sqlite "" storage
-just perf small postgres chromium browser
-just perf medium sqlite,postgres firefox browser
+dev perf small sqlite "" storage
+dev perf small postgres chromium browser
+dev perf medium sqlite,postgres firefox browser
 ```
 
 Nondefault normalized selections and all count overrides are visibly
@@ -1335,8 +1330,8 @@ combined result. `selection.json` records Nix-selected identities and
 `invocation.json` records retained-root metadata; each
 `producers/<name>/performance/` tree retains `producer-status-v1.json`,
 fragments, per-sample navigation/Playwright traces, and the correlated
-server/storage `otel-traces.jsonl`. Just copies that complete tree before status
-validation and before starting the next producer. A later build or status
+server/storage `otel-traces.jsonl`. `dev` copies that complete tree before
+status validation and before starting the next producer. A later build or status
 failure stops later producers without deleting earlier evidence. The same
 validated result is atomically copied to
 `.xtask/performance/performance-result-v1.json` as the stable CI upload/import
@@ -1346,7 +1341,7 @@ including whatever evidence exists after a producer failure.
 When `tools/performance/baseline-v1.json` exists, compare a completed result:
 
 ```bash
-just perf-compare .xtask/performance/<nonce>/performance-result-v1.json
+dev perf-compare .xtask/performance/<nonce>/performance-result-v1.json
 ```
 
 Comparison prints absolute median/p95 values and each sample's
@@ -1360,7 +1355,7 @@ the first successful canonical `main` run. After a scheduled or manual
 **Performance** workflow run succeeds, a maintainer imports its run ID:
 
 ```bash
-just perf-import-baseline <positive-run-id>
+dev perf-import-baseline <positive-run-id>
 ```
 
 The importer fetches the `performance-result` artifact itself and accepts only a
@@ -1385,16 +1380,16 @@ baseline.
   when it is worth timing or has its own failure mode. See
   [docs/adr/0147-decision-path-observability.md](docs/adr/0147-decision-path-observability.md).
 
-- **Trace Analysis**: Use `just trace-analysis analyze` to process trace
+- **Trace Analysis**: Use `dev trace-analysis analyze` to process trace
   artifacts (JSONL) from VM runs or local tests.
 
   ```bash
   # Local e2e-local capture; use the exact path printed by the command.
-  just trace-analysis analyze \
+  dev trace-analysis analyze \
     .xtask/e2e-local/<run-id>/chromium/capture/otel-traces.jsonl
 
   # VM captures are extracted from capture-<lane>.tar.gz; traces run does this.
-  just trace-analysis analyze \
+  dev trace-analysis analyze \
     /path/to/sqlite-otel-traces.jsonl \
     /path/to/postgres-otel-traces.jsonl
   ```
@@ -1420,43 +1415,42 @@ baseline.
   captured as the last-resort fallback. See `docs/observability.md` for the
   JSONL shape.
 
-- **Failed Nix checks**: direct Just requests report through command output;
+- **Failed Nix checks**: direct `dev` requests report through command output;
   inspect the `traced-run` parked stderr/stdout or owning CI job log. Retained
   Rust producer APIs also write `.xtask/diagnostics/<check>/failure-excerpt.log`
   (#145): when present, read it before the accompanying `build.log`. It contains
   Nix's scoped `error:` block and de-interleaved failing-derivation tail. These
-  producer-owned files remain uploaded by their owning jobs; a direct Just
+  producer-owned files remain uploaded by their owning jobs; a direct `dev`
   request does not promise a gate-generated excerpt.
 
-- **WASM Audit**: Use `just wasm-audit report` to measure the size of the
+- **WASM Audit**: Use `dev wasm-audit report` to measure the size of the
   frontend WASM and JS bundles from the deterministic Nix build.
 
   ```bash
-  just wasm-audit report
+  dev wasm-audit report
   ```
 
   Useful options: `--site-path P` to reuse a built bundle, or
   `--breakdown [--wasm F]` for per-section/per-crate attribution. The underlying
   host-proof `wasm-audit` prints one JSON report on stdout (tables in `report`,
-  measurements in `evidence`); the recipe renders it through
-  `scripts/run-report`.
+  measurements in `evidence`); `dev` renders it.
 
-- **Run & Analyze**: Use `just trace-analysis run` to build the full VM e2e
-  suite and immediately analyze the results.
+- **Run & Analyze**: Use `dev trace-analysis run` to build the full VM e2e suite
+  and immediately analyze the results.
   - Use `--single-worker` to build the workers=1 diagnostic packages instead of
     the gate checks, when the question is per-navigation cost rather than suite
     cost.
   - Use `--browser chromium|firefox` to restrict the run to one browser
     (default: both).
 
-- **PR watching and approved land**: Use `just pr-watch [N]` to follow required
+- **PR watching and approved land**: Use `dev pr-watch [N]` to follow required
   checks until the next caller-actionable outcome. A green, landable PR returns
   `ready-to-land`; an already armed or queued PR continues through queue
   processing. Omit `N` to resolve the open PR for the current branch. The sole
   observer is the host-only `tools/pr-observer` binary; it never mutates. After
   obtaining and recording human approval for the exact PR/head/scope, use
-  `just pr-land <PR> <approved-head-SHA>`. Both identity arguments are required;
-  the SHA must be full lowercase 40-hex. Just cannot attest to human approval.
+  `dev pr-land <PR> <approved-head-SHA>`. Both identity arguments are required;
+  the SHA must be full lowercase 40-hex. `dev` cannot attest to human approval.
   The thin native `gh`/`git` frontdoor requires origin `jaunder-org/jaunder`,
   live base `main`, matching PR/head, no divergent local PR branch, and a
   one-snapshot `ready-to-land` verdict from the same observer before one
@@ -1478,11 +1472,11 @@ baseline.
   workflow jobs.
 
   ```bash
-  just pr-watch                             # wait for the next action
-  just pr-watch 731 --once                   # direct JSON, no --json flag
-  just pr-watch 731 --until merged           # passive external-approval watch
-  just pr-land 731 <approved-head-SHA>        # only after recorded human approval
-  just pr-land 731 <approved-head-SHA> --reenqueue # separately authorized recovery
+  dev pr-watch                             # wait for the next action
+  dev pr-watch 731 --once                   # direct JSON, no --json flag
+  dev pr-watch 731 --until merged           # passive external-approval watch
+  dev pr-land 731 <approved-head-SHA>        # only after recorded human approval
+  dev pr-land 731 <approved-head-SHA> --reenqueue # separately authorized recovery
   ```
 
   Outcomes are `ready-to-land`, `merged`, `checks-failed`, `ejected`,
@@ -1529,7 +1523,7 @@ baseline.
   authority assigned by governing owner policy (the Manager where that policy
   reserves the decision, otherwise the Lead within approved scope). Diagnosis
   alone does not authorize recovery. Use
-  `just pr-land <PR> <approved-head-SHA> --reenqueue` only after that
+  `dev pr-land <PR> <approved-head-SHA> --reenqueue` only after that
   authorization and exact-head merge approval. It refuses queued/armed PRs,
   captures the historical run URL from live `ejected` preflight, and requires
   another one-snapshot `ready-to-land` verdict from the SAME observer with only
@@ -1539,11 +1533,11 @@ baseline.
   `--expected-head <SHA> --acknowledged-ejection <URL>` backed by the same
   `WatchContinuation`. These read-only inputs neither mutate nor authorize
   recovery. Acknowledgment requires an expected head and a GitHub Actions run
-  URL; Just supplies the URL from preflight, not caller guesswork. The failed
-  verdict stays failed; delayed fresh visibility uses the normal deadline, and a
-  distinct fresh failure ends observation. Ordinary land refuses ejection;
-  neither mode retries a no-op. Existing head, check, queue and fail-closed
-  guards remain in force. See
+  URL; `dev pr-land` supplies the URL from preflight, not caller guesswork. The
+  failed verdict stays failed; delayed fresh visibility uses the normal
+  deadline, and a distinct fresh failure ends observation. Ordinary land refuses
+  ejection; neither mode retries a no-op. Existing head, check, queue and
+  fail-closed guards remain in force. See
   [explicit one-shot recovery](docs/adr/0220-explicit-one-shot-pr-reenqueue.md).
 
   **Post-merge ownership:** after `pr land` reports verified `merged`, choose
@@ -1552,7 +1546,7 @@ baseline.
 
   - **Manager-assigned work:** implementors and assigned Leads leave the
     semantic branch checked out and the checkout intact while the assignment is
-    active. Skip `just pr-cleanup` and equivalent detach/delete operations. Lead
+    active. Skip `dev pr-cleanup` and equivalent detach/delete operations. Lead
     inspects and accepts merge, validation, and preservation evidence, then
     hands it to Manager: exact branch/HEAD and commits, dirty/staged/untracked
     inventory (including empty results), proof and artifact references,
@@ -1570,11 +1564,11 @@ baseline.
 
   - **Unmanaged work:** first positively establish that no unresolved required
     work, competing writer, or owned operation will be stranded. From that PR's
-    checkout run `just pr-cleanup <PR> <exact-head-SHA> unmanaged`. Both
-    identity arguments are required; the ownership argument records the caller's
-    positive assertion, not runtime discovery or proof of assignment ownership.
-    Managed, unknown, or conflicting ownership means do not invoke it; those
-    argument values are refused as an additional guard.
+    checkout run `dev pr-cleanup <PR> <exact-head-SHA> unmanaged`. Both identity
+    arguments are required; the ownership argument records the caller's positive
+    assertion, not runtime discovery or proof of assignment ownership. Managed,
+    unknown, or conflicting ownership means do not invoke it; those argument
+    values are refused as an additional guard.
 
     Cleanup is explicit and local-only. It independently verifies complete
     merged PR evidence, target `main`, exact checked-out non-`main` branch/head
@@ -1602,7 +1596,7 @@ baseline.
 
 ### Discovering milestone issue candidates
 
-`just issue-discover <number-or-exact-title>` gathers open issues, Jaunder
+`dev issue-discover <number-or-exact-title>` gathers open issues, Jaunder
 Backlog claim status, open native prerequisites, and local resume artifacts.
 Discovery is read-only: it does not claim issues, acquire runtime ownership, or
 dispatch work. An open milestone must match exactly and unambiguously by number
@@ -1628,8 +1622,8 @@ not a host-tool step report.
 Use one explicit frontdoor per operation, from the devShell:
 
 ```sh
-just issue-create 'fix(tooling): preserve metadata' Task 3 P2 tooling,dx /path/body.md
-just issue-edit 731 'fix(tooling): preserve metadata' Task 3 P2 tooling,dx /path/body.md 42
+dev issue-create 'fix(tooling): preserve metadata' Task 3 P2 tooling,dx /path/body.md
+dev issue-edit 731 'fix(tooling): preserve metadata' Task 3 P2 tooling,dx /path/body.md 42
 ```
 
 Arguments are title, GitHub type (`Task`, `Bug`, or `Feature`), exact open
@@ -1653,9 +1647,9 @@ mutation semantics. A nonzero result can follow partial application: inspect the
 printed issue URL before retrying; no rollback or automatic duplicate issue
 creation is attempted. Invalid/partial/API responses cannot produce success.
 
-The three Just frontdoors replaced the former xtask issue dispatch/report
-helpers. Their small shell helpers compose native `gh`/`git` and `jq`; they do
-not add a general command runner or polling loop.
+The three `dev` frontdoors replaced the former xtask issue dispatch/report
+helpers. They compose native `gh`/`git` calls; they do not add a general command
+runner or polling loop.
 
 ### Targeted Rust tests
 
@@ -1668,12 +1662,12 @@ Test paths follow the nested module path to the test name. A shallow file yields
 `misc::commands::…` is another nested example.
 
 - One subsystem through the focused local lane:
-  `just test-local -p jaunder -E 'test(/^web::/)'` (or `atompub`, `feed`,
-  `misc`, `projector`, `storage`).
+  `dev test-local -p jaunder -E 'test(/^web::/)'` (or `atompub`, `feed`, `misc`,
+  `projector`, `storage`).
 - One file, concern module, or test (substring match):
-  `just test-local -p jaunder storage::posts::post_create_and_get_by_id_works`.
+  `dev test-local -p jaunder storage::posts::post_create_and_get_by_id_works`.
 - One storage-crate test:
-  `just test-local -p storage site_config_primitives_round_trip`.
+  `dev test-local -p storage site_config_primitives_round_trip`.
 - Library/unit tests only, when PostgreSQL-backed integration setup is
   irrelevant: `cargo test -p jaunder --lib`.
 
@@ -1761,18 +1755,18 @@ uses them needs its own `use rstest_reuse::*;` — a `use rstest::*;` glob alone
 does not bring them in. See
 [ADR-0124](docs/adr/0124-rstest-reuse-cross-module-templates.md).)
 
-The simplest way to run them against a throwaway PostgreSQL is
-`just test-local`, which starts an ephemeral cluster through the devShell's
-`pg-run` script, exports the connection env, runs `cargo nextest run`, tears
-everything down, and applies the shared `sccache` environment. `pg-run` reaches
-the cluster over a Unix socket in a short per-run directory under
-`XDG_RUNTIME_DIR` (or `TMPDIR`); the exported URLs carry it as `?host=`
+The simplest way to run them against a throwaway PostgreSQL is `dev test-local`,
+which starts an ephemeral cluster through the devShell's `pg-run` script,
+exports the connection env, runs `cargo nextest run`, tears everything down, and
+applies the shared `sccache` environment. `pg-run` reaches the cluster over a
+Unix socket in a short per-run directory under `XDG_RUNTIME_DIR` (or `TMPDIR`);
+the exported URLs carry it as `?host=`
 ([pg-run as a Python script over a Unix socket](docs/adr/0249-pg-run-python-unix-socket.md)):
 
 ```bash
-just test-local
-just test-local -p jaunder
-just test-local -p storage site_config_primitives_round_trip
+dev test-local
+dev test-local -p jaunder
+dev test-local -p storage site_config_primitives_round_trip
 ```
 
 Before compiling or running product tests, `test-local` owns the checkout-local
@@ -1840,8 +1834,8 @@ avoids the issue entirely by discarding the whole cluster.
 
 - Coverage is gated **host-side by `coverage-check policy`** (`tools/coverage`,
   nondefault `host` feature), which reads the Nix `coverage` check's report. It
-  is part of `just validate`, `just validate-no-e2e`, and CI, not `just check`
-  or `just prepush`. The local push hook stays fast while CI remains the
+  is part of `dev validate`, `dev validate-no-e2e`, and CI, not `dev check` or
+  `dev prepush`. The local push hook stays fast while CI remains the
   non-bypassable hermetic backstop.
 - `cargo deny check` verifies dependency policy, advisories, and licensing (run
   as one of the static checks).
@@ -1935,21 +1929,21 @@ cannot serve as durable flow proof. If request-to-test attribution is needed,
 inspect a fresh trace capture; do not infer it from the committed snapshot.
 
 **Adding a `#[server]` fn therefore requires an e2e flow that drives it**, or
-the fast lane reddens immediately — `server-fn-coverage` runs in `just check`
-and `just validate-no-e2e`, so you do not wait for the e2e matrix to find out:
+the fast lane reddens immediately — `server-fn-coverage` runs in `dev check` and
+`dev validate-no-e2e`, so you do not wait for the e2e matrix to find out:
 
-`just e2e` verifies coverage automatically; it never regenerates the snapshot.
+`dev e2e` verifies coverage automatically; it never regenerates the snapshot.
 For intentional regeneration, use the single explicit command:
 
 ```bash
-just e2e-regenerate-coverage
+dev e2e-regenerate-coverage
 ```
 
 It runs the authoritative producer, selects that successful invocation's
 immutable Nix output and checks the required artifacts before writing the
 snapshot. Producer or artifact failures remain failures; snapshot verification
 is deliberately replaced by regeneration only for this explicit action. Ordinary
-`just e2e` and `just e2e-producer` remain verification-only.
+`dev e2e` and `dev e2e-producer` remain verification-only.
 
 The artifact-input CLI remains explicit for programmatic consumers. It requires
 the authoritative lane, a registered immutable Nix output, exact capture
@@ -1993,12 +1987,12 @@ SQLite-backed and PostgreSQL-backed integration tests execute together (no
 instrumented coverage. Reported line coverage is the union of both backends.
 This — and thus backend parity — runs inside the Nix `coverage` check.
 
-`just check` runs in Fix mode and auto-formats (fmt/leptosfmt/prettier), but the
-pre-commit hook runs `just precommit` so formatter changes to already-staged
+`dev check` runs in Fix mode and auto-formats (fmt/leptosfmt/prettier), but the
+pre-commit hook runs `dev precommit` so formatter changes to already-staged
 clean tracked files are safely restaged. Fix mode no longer heals any coverage
 state — there is none to heal. Accepting a gap (`cov:ignore`) or waiving a CRAP
 score (`crap:allow`) is a manual source edit that lands as a reviewable diff;
-`just validate` is verify-only.
+`dev validate` is verify-only.
 
 **Protection tradeoffs (stated honestly — not "stricter").** The stateless gate
 dissolves a class of fragility — the verdict is identical at any checkout depth,
@@ -2042,7 +2036,7 @@ force-fitted with artificial tests:
   (self-enforcing, no marker); migrating the existing markers is tracked in
   #245.
 
-**Source-filter drift guard (`just coverage-check probe-source`).** The Nix
+**Source-filter drift guard (`dev coverage-check probe-source`).** The Nix
 `coverage` derivation's `src` is filtered to cargo sources (plus an explicit
 `csr/index.html`), so untracked junk can't bust its hash (#37/#231). This
 on-demand probe guards that filter against silent drift: in an ephemeral
@@ -2056,7 +2050,7 @@ _new_ file must be `git add`-ed to be measured — nix ignores untracked files
 even on a dirty tree. The probe runs only on request, not automatically in CI;
 it is deliberately **not** part of `check`/`validate` (#241).
 
-**Playwright/WASM coverage evidence (`just coverage-check wasm-probe`).** This
+**Playwright/WASM coverage evidence (`dev coverage-check wasm-probe`).** This
 manual host command realizes the independent Chromium and Firefox diagnostic
 producers before deciding its outcome. It retains each unpacked producer root
 under `.xtask/wasm-coverage/`, validates the `v1` status documents and complete
@@ -2068,7 +2062,7 @@ identities; otherwise no merged evidence is produced. The command exits zero
 only for two source-mapped browser reports and a valid merged Rust-line report.
 
 **WASM coverage overhead measurement
-(`just coverage-check wasm-measure --quiescent-window '<coordinated window acknowledgement>'`).**
+(`dev coverage-check wasm-measure --quiescent-window '<coordinated window acknowledgement>'`).**
 This is a manual, coordinated-host command, never a gate. It refuses an empty
 acknowledgement, warms the same-pinned-nightly baseline and instrumented
 producer for each browser, then retains five alternating baseline/instrumented
@@ -2111,14 +2105,14 @@ wasm-test target closure, and its required inputs/placeholders. `common` and
 `macros` remain wherever a resolved target reaches them; unrelated `server`,
 `storage`, and host-only sources are absent from both closures.
 
-`static-docs` consumes the shared Prettier recipe directly, without a compiled
-Rust docs tool. The documentation and site source filters remain narrow;
-derivation identity includes transitive executable inputs as well as admitted
-sources. Tooling preparation uses generated dummy sources and a file-scoped
-lockfile, with repository-root target alignment and nonempty archive admission
-for ordinary and qualification consumers. Release artifacts are not assumed to
-seed dev-profile clippy. Stable identity is not proof of compiler freshness or
-local/remote realization reuse.
+`static-docs` runs the shared `dev static prettier-markdown` check directly,
+without a compiled Rust docs tool. The documentation and site source filters
+remain narrow; derivation identity includes transitive executable inputs as well
+as admitted sources. Tooling preparation uses generated dummy sources and a
+file-scoped lockfile, with repository-root target alignment and nonempty archive
+admission for ordinary and qualification consumers. Release artifacts are not
+assumed to seed dev-profile clippy. Stable identity is not proof of compiler
+freshness or local/remote realization reuse.
 
 Artifact compatibility includes compiler, target, profile, resolved features,
 flags and native inputs; incompatible work must rebuild. Dependency preparations
@@ -2128,28 +2122,27 @@ CI must preserve actual executing-verdict evidence rather than infer it from
 availability. Cache legitimate build inputs aggressively, but execute tests
 afresh; cached test verdicts are not execution evidence.
 
-Just gate workflows return process status and parked logs, not the historical
+`dev` gate workflows return process status and parked logs, not the historical
 JSON invalidation envelope. The Nix source filters assert representative
 membership inline (the coverage filter also has
-`just coverage-check probe-source`); do not infer execution from reused outputs.
-`just validate` adds all eight retained E2E lanes, Firefox reconciliation, and
-server-function coverage verification to `just validate-no-e2e`.
+`dev coverage-check probe-source`); do not infer execution from reused outputs.
+`dev validate` adds all eight retained E2E lanes, Firefox reconciliation, and
+server-function coverage verification to `dev validate-no-e2e`.
 
 ### Nix VM checks
 
 `nix flake check` runs the full Nix-backed validation matrix, including:
 
-- `checks.x86_64-linux.static-docs` — the shared `recipes/prettier.just`
-  Markdown leaf, with pinned Just/Prettier and admitted Markdown, formatter
-  configuration and recipe inputs; no Rust docs tool.
-- `checks.x86_64-linux.static-typescript` — the shared named `tsc` leaf in
-  `recipes/static.just`, with pinned Just and compiler, its own validation
-  verdict, and explicit dependency setup. The recipe is admitted alongside the
-  narrow direct TypeScript/config/manifest population, which still has the
-  accepted whole-end2end transitive coupling through `e2ePackage`. The leaf is
-  non-substitutable, but valid local outputs can be reused.
-- `checks.x86_64-linux.rust-format` —
-  `just --justfile recipes/static.just --working-directory . rust-format verify sandbox`:
+- `checks.x86_64-linux.static-docs` — `dev static prettier-markdown --sandbox`,
+  with the sandbox `dev` package, pinned Prettier and admitted Markdown and
+  formatter configuration inputs; no Rust docs tool.
+- `checks.x86_64-linux.static-typescript` — `dev static tsc --sandbox`, with the
+  sandbox `dev` package and pinned compiler, its own validation verdict, and
+  explicit dependency setup. The filtered `tools/dev/` source is admitted
+  alongside the narrow direct TypeScript/config/manifest population, which still
+  has the accepted whole-end2end transitive coupling through `e2ePackage`. The
+  leaf is non-substitutable, but valid local outputs can be reused.
+- `checks.x86_64-linux.rust-format` — `dev static rust-format --sandbox`:
   product `fmt`, scoped `leptosfmt`, then `tools-fmt --all`. Product/tools Cargo
   populations overlap, so these share one verdict. Flake checks select it, and
   hermetic validation requests it between `static-typescript` and residual
@@ -2168,14 +2161,14 @@ server-function coverage verification to `just validate-no-e2e`.
   formatting, cargo-deny, and repository scanners), executed with existing
   offline Cargo homes. It requests the narrow Clippy aggregate once; that
   aggregate depends on six independently buildable terminal verdicts and
-  executes no lint itself. `just static-all` preserves the ordered,
+  executes no lint itself. `dev static-all` preserves the ordered,
   duplicate-free union of TypeScript, Rust-format, code, and ERT, including the
   six Clippy units in code; Prettier is outside this inventory and called
-  directly by Just/Nix.
+  directly by `dev`/Nix.
 - `checks.x86_64-linux.static-elisp` — shared `elisp-fmt` Verify followed by
   shared `byte-compile`, over the complete non-Markdown Elisp source tree in a
-  writable copy. Its admitted recipe and pinned Just, `emacsForCi`, and `TZDIR`
-  replace the former devtool build dependency. It needs no offline Cargo home,
+  writable copy. The sandbox `dev` package, `emacsForCi`, and `TZDIR` replace
+  the former devtool build dependency. It needs no offline Cargo home,
   Node/Playwright, or Git. The verdict is non-substitutable, but valid local
   output reuse remains possible. This selected change does not certify every
   family coupling or discharge the separately recorded invalidation deferrals.
@@ -2187,23 +2180,22 @@ server-function coverage verification to `just validate-no-e2e`.
   `e2ePackage` supplies the transitive pinned npm closure, which is broader than
   the direct census filter and may invalidate the leaf. It is non-substitutable,
   may reuse a valid local output, and is requested once by hermetic static
-  validation; the standalone host `just static-all` population is unchanged.
+  validation; the standalone host `dev static-all` population is unchanged.
 - `checks.x86_64-linux.static-ert` — `devtool check ert`, the standalone pure
-  runner over the complete non-Markdown Elisp tree, in a writable copy, with
-  pinned Just, admitted `recipes/static.just`, existing `emacsForCi`, Git and
-  timezone inputs. The separate combined pure/live coverage producer below is
-  unchanged. Hermetic validation requests `static-docs`, `static-typescript`,
-  `rust-format`, `static-code`, `static-elisp`, `static-e2e-census`, and
-  `static-ert`, in that order. The ERT leaf is non-substitutable but may reuse a
-  valid local output. ERT's schema-2 `timing_scope=request` event measures the
-  fixed Just request, including startup/evaluation, not exact Emacs execution.
-  The retained host utility parser admits only current captured ERT stderr;
+  runner over the complete non-Markdown Elisp tree, in a writable copy, with the
+  sandbox `dev` package, existing `emacsForCi`, Git and timezone inputs. The
+  separate combined pure/live coverage producer below is unchanged. Hermetic
+  validation requests `static-docs`, `static-typescript`, `rust-format`,
+  `static-code`, `static-elisp`, `static-e2e-census`, and `static-ert`, in that
+  order. The ERT leaf is non-substitutable but may reuse a valid local output.
+  ERT's schema-2 `timing_scope=request` event measures the fixed
+  `dev static ert` request, including startup, not exact Emacs execution. The
+  retained host utility parser admits only current captured ERT stderr;
   missing/malformed/ambiguous evidence stays unavailable and never changes
-  workload status. TSC's old devtool child event is retired; its public owner
-  uses the passive request observation above. No passive-trace ingestion or new
-  Nix child-timing collector is introduced. Retained logs are never timing
-  inputs; Nix request duration and output reuse do not prove fresh builder
-  execution.
+  workload status. TSC's old devtool child event is retired; `dev tsc` is traced
+  like every other `dev` step. No new Nix child-timing collector is introduced.
+  Retained logs are never timing inputs; Nix request duration and output reuse
+  do not prove fresh builder execution.
 - `checks.x86_64-linux.wasm-tests` — `wasm-bindgen-test` cases executed in
   headless Nix-store Chromium through the matching Nix-store chromedriver. This
   is behavioral pass/fail execution for irreducible browser code, not wasm line
@@ -2215,7 +2207,7 @@ server-function coverage verification to `just validate-no-e2e`.
 - `checks.x86_64-linux.elisp-coverage-producer` — one hermetic NixOS VM runs
   both ERT populations and realizes
   `$out/elisp-coverage/{lcov.info,summary.txt,status.json}` for controlled
-  outcomes. `just validate-no-e2e` lifts those artifacts and invokes the
+  outcomes. `dev validate-no-e2e` lifts those artifacts and invokes the
   authoritative host consumer, which reconciles the production module/form
   census with LCOV and accepts only trailing same-line `;; cov:ignore: <reason>`
   markers with non-empty trimmed reasons.
@@ -2228,7 +2220,7 @@ server-function coverage verification to `just validate-no-e2e`.
 - `checks.x86_64-linux.e2e-{sqlite,postgres}-firefox-serial-special` — one
   visual/global-configuration/invite Firefox lane per backend
 - `checks.x86_64-linux.e2e` — the existing browser-only Nix aggregate. Direct
-  realization does not perform the host artifact verdicts. `just e2e` (also
+  realization does not perform the host artifact verdicts. `dev e2e` (also
   called by full `validate`) realizes the individual lane outputs above and then
   performs both Firefox reconciliations.
 
@@ -2237,7 +2229,7 @@ Additional Nix-backed checks available as packages (not run by default):
 - `packages.x86_64-linux.e2e-{sqlite,postgres}-{chromium,firefox}-single-worker`
   — the historical unsplit browser/backend diagnostic flows pinned to
   `JAUNDER_E2E_WORKERS=1`, so per-navigation timings carry no worker contention.
-  Built on demand by `just trace-analysis run --single-worker`; not part of the
+  Built on demand by `dev trace-analysis run --single-worker`; not part of the
   gate.
 
 The PostgreSQL-backed integration tests need no VM of their own: they run inside
@@ -2252,7 +2244,7 @@ measurement runs**, not for normal development. It is committed empty, which is
 a byte-exact no-op, and the `e2e-scaffold` static check fails the gate if it is
 left set.
 
-Nix caches the e2e check derivations, so re-running `just trace-analysis run` on
+Nix caches the e2e check derivations, so re-running `dev trace-analysis run` on
 an unchanged tree returns a **cached result and never runs the suite** —
 silently handing back traces from whenever that check was last built, quite
 possibly a CI runner under unknown load. Set the salt to a distinct value per
@@ -2400,16 +2392,15 @@ nix build .#checks.x86_64-linux.elisp-coverage-producer
   subsystem. How the wiring is built is in
   [Dependency injection and composition roots](docs/ARCHITECTURE.md#dependency-injection-and-composition-roots).
 - The web framework is Leptos in CSR (client-side-rendering) mode (ADR-0040);
-  the wasm bundle is built by `just build-csr [debug|release]` (default: debug)
-  and served by `jaunder serve` (no cargo-leptos). Just runs from the selected
-  root-level Justfile's parent, including upward discovery from a nested
-  directory or an absolute `--justfile` without `--working-directory`. The
-  recipe inherits the caller's environment, including `GIT_*`. After a
-  successful locked wasm build, `rm -rf -- target/site` removes the fixed old
-  output, including regular files and dangling final symlinks, before invoking
-  checked-out `tools/devtool`. Final symlink referents are not removed; this is
-  ordinary recursive removal, not a physical-containment guarantee. Invalid
-  profiles fail before build or cleanup, and any failed stage stops the recipe.
+  the wasm bundle is built by `dev build-csr [debug|release]` (default: debug)
+  and served by `jaunder serve` (no cargo-leptos). `dev` runs it from the
+  checkout root that `git rev-parse --show-toplevel` finds, including from a
+  nested directory. After a successful locked wasm build, it recursively removes
+  the fixed old `target/site` output, including regular files and dangling final
+  symlinks, before invoking checked-out `tools/devtool`. Final symlink referents
+  are not removed; this is ordinary recursive removal, not a
+  physical-containment guarantee. Invalid profiles fail before build or cleanup,
+  and any failed stage stops the build.
 - Leptos components should only render data; business logic belongs in server
   functions or pure transformation functions.
 - API methods are automatically prefixed with `/api`.
@@ -2451,7 +2442,7 @@ nix build .#checks.x86_64-linux.elisp-coverage-producer
 
 ### The `test-backend-pattern` guard (enforced across `server/tests` and `storage/src`)
 
-The `just check`/`just validate` static pass runs a `test-backend-pattern` guard
+The `dev check`/`dev validate` static pass runs a `test-backend-pattern` guard
 that scans every file under `server/tests/` and `storage/src/` and fails if a
 `#[tokio::test]` (including parameterized `#[tokio::test(flavor = …)]` forms) is
 not declared backend-explicit. This covers both `server`'s integration tests and
@@ -2568,4 +2559,4 @@ installed for the `jaunder` user via `users.users.jaunder.packages`.
   `export JAUNDER_DB=postgres://jaunder@127.0.0.1:55432/jaunder`.
 - The PostgreSQL-backed tests each create their own database (template clones),
   so they run in parallel without interference; see "PostgreSQL-backed Rust
-  tests" above. For a self-contained run, prefer `just pg-run`.
+  tests" above. For a self-contained run, prefer `dev pg-run`.

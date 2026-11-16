@@ -8,6 +8,7 @@ mod e2e_telemetry_boundary_check;
 mod html_sink_check;
 mod ident_gate;
 mod lint_suppression_check;
+mod no_just_check;
 mod operations;
 mod proffered_secret_check;
 mod raw_html_door_check;

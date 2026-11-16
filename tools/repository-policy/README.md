@@ -2,16 +2,16 @@
 
 This auxiliary package currently owns the Task 1 boundaries of issue #1898:
 
-- `just adr-format` runs `repository-docs adr-format`, the independent read-only
+- `dev adr-format` runs `repository-docs adr-format`, the independent read-only
   numbered-ADR format verdict.
-- `just precommit` runs `git-index-safety precommit`. Just owns the named host
+- `dev precommit` runs `git-index-safety precommit`. `dev` owns the named host
   check populations and fail-fast order; the native process owns one Git/index
   reconciliation, including after a failed host check.
 - The x86_64-linux prepush Markdown slot runs `git-index-safety prepush-docs`,
   with clean/raw-index admission and a mandatory post-request check even after
   Nix failure.
 
-Just uses locked Cargo from the active checkout. The separate native Nix output
+`dev` uses locked Cargo from the active checkout. The separate native Nix output
 is `.#repository-policy`; it provides both binaries and never runs them during
 its derivation. Its Cargo source excludes product and other tools'
 implementations. Shared workspace manifests, locks, vendor patches and toolchain

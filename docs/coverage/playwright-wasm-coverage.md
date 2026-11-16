@@ -12,8 +12,8 @@ production artifact change.
 The successful executable commands were:
 
 ```bash
-just coverage-check wasm-probe
-just coverage-check wasm-measure --quiescent-window "2026-09-08 user-confirmed idle host"
+dev coverage-check wasm-probe
+dev coverage-check wasm-measure --quiescent-window "2026-09-08 user-confirmed idle host"
 ```
 
 The latter completed with exit 0 in 1,094,385 ms. The retained primary evidence

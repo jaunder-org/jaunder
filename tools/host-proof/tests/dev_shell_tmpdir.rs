@@ -138,7 +138,7 @@ fn ci_e2e_shell_environment_is_exact() {
         }),
         "ci-e2e must keep the Cargo subcommand dispatcher"
     );
-    for tool in ["-just-", "-nix-", "-findutils-", "-coreutils-", "-bash-"] {
+    for tool in ["-nix-", "-findutils-", "-coreutils-", "-bash-"] {
         assert!(
             inputs
                 .iter()

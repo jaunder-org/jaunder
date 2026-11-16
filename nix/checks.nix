@@ -94,8 +94,6 @@ let
   coverageAuxiliarySource =
     relative:
     relative == ".config/nextest.toml"
-    # Performance and sandbox regressions exercise the real production Just recipes.
-    || relative == "Justfile"
     || relative == "csr/index.html"
     || pkgs.lib.hasPrefix "server/assets/" relative
     || pkgs.lib.hasPrefix "storage/migrations/" relative
@@ -121,12 +119,10 @@ let
     assert (coverageAuxiliarySource "storage/migrations/sqlite/0001_create_site_config.sql");
     assert (coverageAuxiliarySource "server/assets/jaunder.css");
     assert (coverageAuxiliarySource "csr/index.html");
-    assert (coverageAuxiliarySource "Justfile");
     assert (coverageAuxiliarySource "host/system_theme_sources/studio/theme.json");
     assert (coverageAuxiliarySource "host/system_theme_sources/studio/style.css");
     assert (coverageAuxiliarySource "testdata/theme-repository/minimal/preview.png");
     assert !(coverageAuxiliarySource "testdata/unrelated.png");
-    assert (coverageAuxiliarySource "Justfile");
     assert (builtins.elem "ux-sandbox" coverageMembers);
     assert (cargoMemberSource coverageMembers (cargoSourcePath "ux-sandbox/Cargo.toml") "regular");
     assert (cargoMemberSource coverageMembers (cargoSourcePath "ux-sandbox/tests/public_command.rs") "regular");
@@ -2693,12 +2689,6 @@ mkWasmCoverageMeasurementProducer =
         src = coverageSrc;
         inherit cargoArtifacts;
         pname = "jaunder-coverage";
-        # Just's embedded recipe shebangs are not at the start of a shell file,
-        # so patchShebangs cannot make these production recipes sandbox-safe.
-        postPatch = (hostArgs.postPatch or "") + ''
-          substituteInPlace Justfile \
-            --replace-fail '#!/usr/bin/env bash' '#!${pkgs.bash}/bin/bash'
-        '';
         # Source-based coverage uses LLVM's embedded coverage map
         # (-Cinstrument-coverage), not DWARF, so dropping debuginfo
         # shrinks the instrumented test binaries dramatically with no
@@ -2722,10 +2712,8 @@ mkWasmCoverageMeasurementProducer =
           pkgs.cargo-llvm-cov
           pkgs.cargo-nextest
           pkgs.exiftool
-          # Performance fixtures need Git provenance and jq; sandbox fixtures
-          # exercise the public Just front door and its literal argv.
+          # Performance fixtures need Git provenance and jq.
           pkgs.git
-          pkgs.just
           pkgs.jq
           pkgs.bash
           pkgs.coreutils
@@ -2858,8 +2846,6 @@ mkWasmCoverageMeasurementProducer =
     else
     sqlxSqlitePatchSource path
     || type == "directory"
-    # traced-run all-target tests embed these maintained workflow owners.
-    || path == "${toString ../.}/Justfile"
     # Qualification compiles in its evidence schema; its tests embed .gitignore.
     || path == "${toString ../.}/docs/production-baseline.schema.json"
     || path == "${toString ../.}/.gitignore"
@@ -2903,7 +2889,6 @@ mkWasmCoverageMeasurementProducer =
     filter =
       assert clippySourceFilter "${toString ../.}/Cargo.toml" "regular";
       assert clippySourceFilter "${toString ../.}/tools/Cargo.lock" "regular";
-      assert clippySourceFilter "${toString ../.}/Justfile" "regular";
       assert clippySourceFilter "${toString ../.}/.github/workflows/ci.yml" "regular";
       assert clippySourceFilter "${toString ../.}/.github/workflows/performance.yml" "regular";
       assert clippySourceFilter "${toString ../.}/server/build.rs" "regular";

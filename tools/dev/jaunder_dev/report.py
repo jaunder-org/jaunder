@@ -9,7 +9,8 @@ from typing import Any
 
 
 def _jq_truthy(value: Any) -> bool:
-    # As in step-report.jq: an optional field counts unless null or false.
+    # jq truthiness, kept so reports render as they always have: an optional
+    # field counts unless it is null or false.
     return value is not None and value is not False
 
 
@@ -29,8 +30,8 @@ def _render(report: Any) -> str:
     return "".join(f"{line}\n" for line in lines)
 
 
-# jq's status for input step-report.jq cannot render: not JSON, or JSON
-# without a `steps` list. Output with no report at all fails with it too.
+# The status for input that is not a report: not JSON, or JSON without a
+# `steps` list. Output with no report at all fails with it too.
 NOT_A_REPORT = 5
 
 

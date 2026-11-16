@@ -46,7 +46,6 @@ status=$?
 
 # One native consumer owns all evidence policy and reporting. Propagate its
 # outcome, including launcher failures, rather than interpreting partial output.
-"$ROOT/scripts/run-report" cargo run --locked --quiet \
-  --manifest-path "$ROOT/tools/Cargo.toml" -p coverage --features host --bin coverage-check -- \
-  mutants-verify --package "$pkg" --file "$file" --output "$out" --producer-status "$status"
+dev coverage-check mutants-verify \
+  --package "$pkg" --file "$file" --output "$out" --producer-status "$status"
 exit $?
