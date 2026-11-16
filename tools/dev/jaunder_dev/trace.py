@@ -210,7 +210,9 @@ def run(root: Path, name: str) -> Iterator[ApiSpan]:
     finally:
         provider.shutdown()
         if merge is not None:
-            # The merged file is written even for a failed or partial run.
+            # The merged file is written even for a failed or partial run. The
+            # merge accepts any record content, so only I/O can fail it, and
+            # that only warns: tracing never changes the gate's outcome.
             try:
                 chrome.write(*merge)
             except OSError as error:

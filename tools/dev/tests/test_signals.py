@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 import pytest
-from conftest import Checkout
+from conftest import NIX_GATE, Checkout, launch
 
 # The fake check announces readiness, then waits to be signalled or released.
 WAIT = """\
@@ -61,18 +61,27 @@ def test_termination_sent_to_dev_alone_is_forwarded_and_exits_128_plus_n(
 
 
 def test_interrupt_sent_to_dev_alone_is_not_forwarded(checkout: Checkout) -> None:
-    checkout.tool("tsc", WAIT.format(handlers=DIE_FROM_SIGNAL))
+    # The child notes every signal it gets and leaves cleanly on SIGTERM.
+    note_all = (
+        "def leave(signum, _frame):\n"
+        "    note(signal.Signals(signum).name)\n"
+        "    if signum == signal.SIGTERM:\n"
+        "        sys.exit(0)\n"
+        "signal.signal(signal.SIGINT, leave)\n"
+        "signal.signal(signal.SIGTERM, leave)\n"
+    )
+    checkout.tool("tsc", WAIT.format(handlers=note_all))
     dev = checkout.popen("static", "tsc")
     wait_for(checkout.root / "ready")
+    # Pending signals are handled lowest number first, so `dev` has dealt with
+    # SIGINT before it forwards SIGTERM: a forwarded SIGINT would reach the
+    # child first. The forwarded SIGTERM is the handshake that proves it did not.
     dev.send_signal(signal.SIGINT)
-    # Give a wrongly forwarded interrupt time to arrive before releasing the child.
-    time.sleep(0.5)
-    (checkout.root / "release").touch()
+    dev.send_signal(signal.SIGTERM)
     dev.communicate(timeout=30)
 
-    assert dev.returncode == 0
-    assert signals(checkout) == ""
-    assert checkout.merged()["tsc"]["args"]["jaunder.status"] == "ok"
+    assert signals(checkout) == "SIGTERM\n"
+    assert dev.returncode == 128 + signal.SIGTERM
 
 
 def test_a_child_that_exits_cleanly_after_termination_still_stops_the_gate(
@@ -95,6 +104,31 @@ def test_a_child_that_exits_cleanly_after_termination_still_stops_the_gate(
     assert "tsc --noEmit" not in checkout.order()
     slices = checkout.merged()
     assert slices["setup-e2e-node-modules"]["args"]["jaunder.status"] == "signalled"
+
+
+@pytest.mark.parametrize("sent", [signal.SIGTERM, signal.SIGHUP, signal.SIGINT])
+def test_a_signal_while_no_step_runs_closes_the_gate_as_signalled(
+    checkout: Checkout, sent: signal.Signals
+) -> None:
+    # The Nix check's output probe, not a step, is running when `dev` is signalled.
+    checkout.tool(
+        "nix",
+        'if sys.argv[1] == "eval":\n'
+        '    pathlib.Path("ready").touch()\n'
+        "    time.sleep(30)\n",
+    )
+    dev = checkout.spawn(launch(NIX_GATE))
+    wait_for(checkout.root / "ready")
+    dev.send_signal(sent)
+    _, stderr = dev.communicate(timeout=30)
+
+    assert dev.returncode == 128 + sent
+    assert stderr == b""
+    assert "nix build" not in checkout.order()
+    slices = checkout.merged()
+    for name in ("dev nix", "demo"):
+        assert slices[name]["args"]["jaunder.status"] == "signalled"
+        assert slices[name]["args"]["process.exit.code"] == 128 + sent
 
 
 def test_a_child_killed_by_a_signal_exits_128_plus_n(checkout: Checkout) -> None:

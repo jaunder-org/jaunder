@@ -30,12 +30,14 @@ caller differently:
 
 - **On the host,** the devShell (`default`, `ci` and `ci-e2e`) puts `dev` on its
   PATH as a `writeShellApplication` shim. The shim finds the checkout with
-  `git rev-parse --show-toplevel` and runs `python -P -m jaunder_dev` from that
-  checkout's `tools/dev/`. The interpreter is a `python3.withPackages`
-  environment built from the same dependency list as the sandbox package, so
-  there's no virtualenv. Hooks and gates always run the working tree's code, the
-  way Just reads the Justfile today. Bytecode caching stays on, and
-  `__pycache__/` is added to `.gitignore`.
+  `git rev-parse --show-toplevel` and runs `dev` from that checkout's
+  `tools/dev/` with `python -P`. It adds `tools/dev/` to that one interpreter's
+  `sys.path`, not to `PYTHONPATH`, so steps inherit the caller's environment
+  unchanged. The interpreter is a `python3.withPackages` environment built from
+  the same dependency list as the sandbox package, so there's no virtualenv.
+  Hooks and gates always run the working tree's code, the way Just reads the
+  Justfile today. Bytecode caching stays on, and `__pycache__/` is added to
+  `.gitignore`.
   - **Why not `nix run .#dev`:** measured on Nix 2.34.8 with hyperfine:
     - Nothing changed since the last call: the shim took 92–98 ms in every case,
       and `nix run .#dev` took about 185 ms.

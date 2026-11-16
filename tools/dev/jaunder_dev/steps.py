@@ -3,6 +3,13 @@
 A gate stops at the first failing step and exits with that step's status. A
 child killed by signal n reports 128+n, as a shell would; Python reports such a
 child's return code as -n.
+
+Termination requests sent to `dev` alone are handled for the whole gate. While
+a step's child runs, SIGTERM and SIGHUP are forwarded to it and `dev` waits for
+it; a terminal's SIGINT already reaches the whole foreground process group, so
+`dev` only waits. At any other point (between steps, or while a Nix check
+probes its output) the gate stops at once. Either way the open spans close as
+`signalled`, the merged trace is written and `dev` exits with 128+n.
 """
 
 import contextlib
@@ -19,7 +26,9 @@ from typing import Any
 from opentelemetry.trace import Span
 
 from jaunder_dev import trace
-from jaunder_dev.spans import CACHE, COMMAND_LINE, EXIT_CODE, STATUS
+from jaunder_dev.spans import CACHE, COMMAND_LINE, EXIT_CODE, STATUS, Cache, Status
+
+_HANDLED = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
 
 
 class StepFailed(Exception):
@@ -29,52 +38,88 @@ class StepFailed(Exception):
         self.signalled = signalled
 
 
+class _Interrupted(StepFailed):
+    """A termination request that arrived while no step's child was running."""
+
+    def __init__(self, signum: int) -> None:
+        super().__init__(128 + signum, signalled=True)
+
+
+class _Signals:
+    """Where the running gate is, for its signal handler.
+
+    Outside the gate's body (opening the run, writing the merged trace) a
+    request is remembered and ends the gate once the trace is written.
+    """
+
+    def __init__(self) -> None:
+        self.armed = False
+        self.deferred: list[int] = []
+        # Set while a step's child is being started or waited for.
+        self.supervising = False
+        self.child: subprocess.Popen[bytes] | None = None
+        self.forwarded: list[int] = []
+        # Requests that arrived while the child was starting, relayed once it has.
+        self.pending: list[int] = []
+
+    def handle(self, signum: int, _frame: FrameType | None) -> None:
+        if self.supervising:
+            if signum == signal.SIGINT:
+                return
+            self.forwarded.append(signum)
+            if self.child is None:
+                self.pending.append(signum)
+            else:
+                self.child.send_signal(signum)
+        elif self.armed:
+            raise _Interrupted(signum)
+        else:
+            self.deferred.append(signum)
+
+
+_signals = _Signals()
+
+
 def _record_outcome(span: Span, code: int, signalled: bool) -> None:
     span.set_attribute(EXIT_CODE, code)
-    span.set_attribute(STATUS, "signalled" if signalled else "failed" if code else "ok")
+    status = Status.SIGNALLED if signalled else Status.FAILED if code else Status.OK
+    span.set_attribute(STATUS, status)
 
 
 def gate(root: Path, name: str, body: Callable[[], None]) -> int:
     """Runs `body`'s steps under the gate span `name`; returns the exit status."""
-    with trace.run(root, name) as span:
-        try:
-            body()
-        except StepFailed as failure:
-            _record_outcome(span, failure.code, failure.signalled)
-            return failure.code
-        _record_outcome(span, 0, False)
-        return 0
+    global _signals
+    _signals = _Signals()
+    previous = {number: signal.signal(number, _signals.handle) for number in _HANDLED}
+    try:
+        with trace.run(root, name) as span:
+            code, signalled = 0, False
+            try:
+                if _signals.deferred:
+                    raise _Interrupted(_signals.deferred[0])
+                _signals.armed = True
+                body()
+            except StepFailed as failure:
+                code, signalled = failure.code, failure.signalled
+            finally:
+                _signals.armed = False
+            _record_outcome(span, code, signalled)
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+    if not code and _signals.deferred:
+        return 128 + _signals.deferred[0]
+    return code
 
 
 def _supervise(argv: Sequence[str], capture: bool) -> tuple[int, bool, bytes]:
-    """Runs the child to completion, relaying a termination request to it.
+    """Runs the child to completion, relaying termination requests to it.
 
     With `capture`, the child's stdout is returned instead of passed through.
-
-    SIGTERM or SIGHUP sent to `dev` alone is forwarded. A terminal's SIGINT
-    already reaches the whole foreground process group, so `dev` only keeps
-    waiting for the child to finish. If the child still exits cleanly after a
-    forwarded signal, the gate stops anyway with that signal's status.
     """
-    child: subprocess.Popen[bytes] | None = None
-    received: list[int] = []
-
-    def forward(signum: int, _frame: FrameType | None) -> None:
-        received.append(signum)
-        if child is not None:
-            child.send_signal(signum)
-
-    def hold(_signum: int, _frame: FrameType | None) -> None:
-        pass
-
-    previous = {
-        number: signal.signal(number, handler)
-        for number, handler in (
-            (signal.SIGTERM, forward),
-            (signal.SIGHUP, forward),
-            (signal.SIGINT, hold),
-        )
-    }
+    _signals.supervising = True
+    _signals.forwarded = []
+    _signals.pending = []
     try:
         try:
             child = subprocess.Popen(
@@ -85,27 +130,37 @@ def _supervise(argv: Sequence[str], capture: bool) -> tuple[int, bool, bytes]:
         except FileNotFoundError as error:
             print(f"dev: {argv[0]}: {error.strerror}", file=sys.stderr, flush=True)
             return 127, False, b""
-        # A signal that arrived while the child was starting is relayed now.
-        for signum in received:
+        except OSError as error:
+            # Found but not runnable (not executable, bad interpreter): a
+            # shell's 126.
+            print(f"dev: {argv[0]}: {error.strerror}", file=sys.stderr, flush=True)
+            return 126, False, b""
+        _signals.child = child
+        for signum in _signals.pending:
             child.send_signal(signum)
         output, _ = child.communicate()
-        returncode = child.returncode
     finally:
-        for number, handler in previous.items():
-            signal.signal(number, handler)
+        _signals.supervising = False
+        _signals.child = None
     output = output or b""
-    if returncode < 0:
-        return 128 - returncode, True, output
-    if returncode == 0 and received:
-        return 128 + received[0], True, output
-    return returncode, False, output
+    if child.returncode < 0:
+        return 128 - child.returncode, True, output
+    if child.returncode == 0 and _signals.forwarded:
+        # The request was for the whole gate, not just this step: a child that
+        # handles it by exiting cleanly must not let the next step start.
+        return 128 + _signals.forwarded[0], True, output
+    return child.returncode, False, output
 
 
 @contextlib.contextmanager
 def _step(name: str, argv: Sequence[str]) -> Iterator[Span]:
     with trace.tracer().start_as_current_span(name) as span:
         span.set_attribute(COMMAND_LINE, trace.cap_command_line(shlex.join(argv)))
-        yield span
+        try:
+            yield span
+        except _Interrupted as interrupted:
+            _record_outcome(span, interrupted.code, True)
+            raise
 
 
 def run(
@@ -154,12 +209,12 @@ def _store_entry(path: str) -> dict[str, Any] | None:
     return entry
 
 
-def _built_source(output: str) -> str:
+def _built_source(output: str) -> Cache:
     """Where a freshly valid output came from: built here, or substituted."""
     entry = _store_entry(output)
     if entry is None:
         raise _QueryFailed
-    return "built" if entry.get("ultimate") else "substituted"
+    return Cache.BUILT if entry.get("ultimate") else Cache.SUBSTITUTED
 
 
 def nix_check(check: str) -> None:
@@ -197,6 +252,8 @@ def nix_check(check: str) -> None:
         _record_outcome(span, code, signalled)
         if code == 0 and output is not None:
             with contextlib.suppress(_QueryFailed):
-                span.set_attribute(CACHE, "reused" if reused else _built_source(output))
+                span.set_attribute(
+                    CACHE, Cache.REUSED if reused else _built_source(output)
+                )
     if code:
         raise StepFailed(code, signalled)

@@ -99,10 +99,20 @@ def test_report_renders_as_step_report_jq_does(
 
 
 @pytest.mark.parametrize(
-    ("output", "shown"), [(b"", ""), (b"not a report\n", "not a report\n")]
+    "output",
+    [
+        b"",
+        b"not a report\n",
+        b"1\n",
+        b'"text"\n',
+        b"[]\n",
+        b'{"command": "test-local"}\n',
+        b'{"steps": 5}\n',
+        b'{"steps": [{"name": "no outcome"}]}\n',
+    ],
 )
-def test_output_that_is_not_a_report_passes_through(output: bytes, shown: str) -> None:
-    assert report.render(output) == shown
+def test_output_that_is_not_a_report_passes_through(output: bytes) -> None:
+    assert report.render(output) == output.decode()
 
 
 @pytest.mark.parametrize("code", [0, 1, 2])

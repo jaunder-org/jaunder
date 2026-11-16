@@ -1,6 +1,6 @@
 """`dev trace summary`: a run's slowest spans, read from its span records."""
 
-from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,10 +50,7 @@ def _covered(parent: RunSpan, children: list[RunSpan]) -> int:
 def rows(directory: Path) -> list[Row]:
     run = spans.load(directory)
     known = {span.span_id: span for span in run}
-    children: dict[str, list[RunSpan]] = defaultdict(list)
-    for span in run:
-        if span.parent_id in known:
-            children[span.parent_id].append(span)
+    children = spans.children(run)
 
     def depth(span: RunSpan) -> int:
         parent = known.get(span.parent_id) if span.parent_id is not None else None
@@ -81,38 +78,49 @@ def _seconds(nanoseconds: int | None) -> str:
     return "" if nanoseconds is None else f"{nanoseconds / 1e9:.3f}s"
 
 
+@dataclass(frozen=True)
+class _Column:
+    heading: str
+    # Numbers align right, text left.
+    numeric: bool
+    cell: Callable[[Row], str]
+
+
+_COLUMNS = (
+    _Column("Duration", True, lambda row: _seconds(row.duration_ns)),
+    _Column("Untraced", True, lambda row: _seconds(row.untraced_ns)),
+    _Column("Depth", True, lambda row: str(row.depth)),
+    _Column("Status", False, lambda row: row.status),
+    _Column("Cache", False, lambda row: row.cache),
+    # Last, so a long span name needs no padding.
+    _Column("Span", False, lambda row: row.name),
+)
+
+
 def render(table: list[Row], markdown: bool) -> str:
-    header = ("Duration", "Untraced", "Depth", "Status", "Cache", "Span")
-    cells = [
-        (
-            _seconds(row.duration_ns),
-            _seconds(row.untraced_ns),
-            str(row.depth),
-            row.status,
-            row.cache,
-            row.name,
-        )
-        for row in table
+    grid = [
+        [column.heading for column in _COLUMNS],
+        *([column.cell(row) for column in _COLUMNS] for row in table),
     ]
     if markdown:
+        rule = ["---:" if column.numeric else "---" for column in _COLUMNS]
         lines = [
-            "| " + " | ".join(header) + " |",
-            "| ---: | ---: | ---: | --- | --- | --- |",
-            *(
-                "| " + " | ".join(cell.replace("|", "\\|") for cell in line) + " |"
-                for line in cells
-            ),
+            "| " + " | ".join(cell.replace("|", "\\|") for cell in line) + " |"
+            for line in [grid[0], rule, *grid[1:]]
         ]
     else:
-        widths = [max(len(line[i]) for line in [header, *cells]) for i in range(5)]
+        *padded, _span = _COLUMNS
+        widths = [max(len(cell) for cell in cells) for cells in zip(*grid)]
         lines = [
             "  ".join(
                 [
-                    *(line[i].rjust(widths[i]) for i in range(3)),
-                    *(line[i].ljust(widths[i]) for i in range(3, 5)),
-                    line[5],
+                    *(
+                        cell.rjust(width) if column.numeric else cell.ljust(width)
+                        for column, cell, width in zip(padded, line, widths)
+                    ),
+                    line[-1],
                 ]
             )
-            for line in [header, *cells]
+            for line in grid
         ]
     return "\n".join(lines) + "\n"

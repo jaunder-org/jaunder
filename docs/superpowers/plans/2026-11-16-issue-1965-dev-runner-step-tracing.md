@@ -140,7 +140,7 @@ join.
       shows host-proof's phase spans nested under the `dev` step.
   - Replaces `tools/host-proof/src/invocation_trace.rs` (used by
     `bin/test-local.rs:23`):
-    - a tracing-opentelemetry layer on the existing `opentelemetry` and
+    - an OpenTelemetry SDK span processor on the existing `opentelemetry` and
       `opentelemetry_sdk` 0.32 crates
     - a record writer for both start and end records
     - a `TRACEPARENT` extractor

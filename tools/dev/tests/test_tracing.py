@@ -226,6 +226,76 @@ def test_unwritable_trace_directory_leaves_output_and_status_unchanged(
         assert rest == traced[2]
 
 
+# Lines a run directory can hold that are not span records: other JSON, a record
+# missing fields or with a wrongly typed one, bytes that are not UTF-8, and a
+# multibyte character cut by a killed writer, each between valid neighbours.
+MALFORMED = (
+    b"1\n"
+    b'"text"\n'
+    b'{"kind":"start"}\n'
+    b'{"kind":"end","trace_id":"t","span_id":"x","parent_id":null,"name":"x",'
+    b'"time_ns":"late","attributes":{}}\n'
+    b"\xff\xfe\n"
+    b'{"kind":"start","trace_id":"t","span_id":"y","parent_id":null,"name":"\xc3\n'
+    # Two spans, finished and not, each naming the other as its parent.
+    b'{"kind":"start","trace_id":"t","span_id":"a","parent_id":"b","name":"a",'
+    b'"time_ns":1}\n'
+    b'{"kind":"start","trace_id":"t","span_id":"b","parent_id":"a","name":"b",'
+    b'"time_ns":2}\n'
+    b'{"kind":"end","trace_id":"t","span_id":"b","parent_id":"a","name":"b",'
+    b'"time_ns":3,"attributes":{}}\n'
+)
+# A step body that fails visibly after running `action` on the run directory.
+FAIL_AFTER = (
+    'run = pathlib.Path(os.environ["JAUNDER_TRACE_DIR"])\n'
+    "{action}\n"
+    'print("out"); print("err", file=sys.stderr); sys.exit(3)'
+)
+
+
+def test_malformed_records_change_neither_the_merge_nor_the_outcome(
+    checkout: Checkout,
+) -> None:
+    action = f'(run / "9-x.jsonl").write_bytes({MALFORMED!r})'
+    checkout.tool("tsc", FAIL_AFTER.format(action=action))
+    result = checkout.dev("static", "tsc")
+    assert outcome(result) == (3, b"out\n", b"err\n")
+    slices = checkout.merged()
+    assert set(slices) == {"dev static tsc", "tsc"}
+    assert slices["tsc"]["args"]["jaunder.status"] == "failed"
+
+    (run,) = checkout.runs()
+    summary = checkout.dev("trace", "summary", str(run))
+    assert summary.returncode == 0, summary
+    assert summary.stdout.decode().splitlines()[1].endswith("dev static tsc")
+
+
+def test_a_failed_merge_warns_once_and_changes_nothing_else(
+    checkout: Checkout,
+) -> None:
+    # The merged file's path is taken by a directory.
+    action = 'run.with_name(run.name.removesuffix(".d") + ".json").mkdir()'
+    checkout.tool("tsc", FAIL_AFTER.format(action=action))
+    code, stdout, stderr = outcome(checkout.dev("static", "tsc"))
+    assert (code, stdout) == (3, b"out\n")
+    rest, warning = stderr.split(b"\n", 1)
+    assert rest == b"err"
+    assert warning.startswith(b"dev: tracing disabled: ")
+    assert warning.count(b"\n") == 1
+
+
+def test_summary_of_an_unreadable_run_reports_without_a_traceback(
+    tmp_path: Path, checkout: Checkout
+) -> None:
+    run = tmp_path / "run.trace.d"
+    write_records(run, start("root", None, 0))
+    (run / "1-a.jsonl").chmod(0)
+    summary = checkout.dev("trace", "summary", str(run))
+    assert summary.returncode == 1
+    assert summary.stderr.startswith(b"Error: cannot summarise ")
+    assert b"Traceback" not in summary.stderr
+
+
 def test_a_run_whose_root_disabled_tracing_stays_silent(checkout: Checkout) -> None:
     checkout.tool(
         "tsc",

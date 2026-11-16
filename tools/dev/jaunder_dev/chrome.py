@@ -1,7 +1,6 @@
 """Merges a run directory into one Chrome trace JSON file for Perfetto."""
 
 import json
-from collections import defaultdict
 from pathlib import Path
 
 from jaunder_dev import spans
@@ -15,10 +14,7 @@ def tracks(run: list[RunSpan]) -> dict[str, int]:
     track only when it fits inside the parent and after its earlier siblings;
     an overlapping sibling, or one outside its parent, opens a new track.
     """
-    known = {span.span_id for span in run}
-    children: dict[str | None, list[RunSpan]] = defaultdict(list)
-    for span in run:
-        children[span.parent_id if span.parent_id in known else None].append(span)
+    children = spans.children(run)
     assigned: dict[str, int] = {}
     opened = 1
 

@@ -21,13 +21,7 @@ struct Cli {
 fn main() {
     let cli = host_proof::report::parse_args::<Cli>();
     let _run = host_proof::span_records::join_run();
-    let code = match host_proof::steps::test_local::execute(&cli.nextest_args) {
-        Ok(result) => result.emit(),
-        Err(error) => {
-            host_proof::report::CommandResult::refused("test-local", format!("{error:#}")).emit()
-        }
-    };
-    std::process::exit(code);
+    std::process::exit(host_proof::steps::test_local::execute(&cli.nextest_args).emit());
 }
 
 #[cfg(test)]

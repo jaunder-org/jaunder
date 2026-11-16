@@ -1,19 +1,10 @@
 """The internal Nix-check step: its build, status and `jaunder.cache` value."""
 
 import subprocess
-import sys
 
 import pytest
-from conftest import Checkout
+from conftest import NIX_GATE, Checkout, launch
 
-# No public command runs a Nix check yet, so a gate is driven from a separate
-# interpreter exactly as a `dev` subcommand would drive it.
-GATE = (
-    "import sys\n"
-    "from pathlib import Path\n"
-    "from jaunder_dev import steps\n"
-    'sys.exit(steps.gate(Path.cwd(), "dev nix", lambda: steps.nix_check("demo")))\n'
-)
 OUT = "/nix/store/0000-demo"
 EVAL = "nix eval --raw --accept-flake-config .#checks.x86_64-linux.demo.outPath\n"
 PATH_INFO = f"nix path-info --json --json-format 1 -- {OUT}\n"
@@ -55,14 +46,7 @@ else:
 
 def nix_check(checkout: Checkout, **extra: str) -> subprocess.CompletedProcess[bytes]:
     checkout.tool("nix", "import json\n" + FAKE_NIX)
-    return subprocess.run(
-        [sys.executable, "-P", "-c", GATE],
-        cwd=checkout.root,
-        env=checkout.environment(**extra),
-        capture_output=True,
-        check=False,
-        timeout=60,
-    )
+    return checkout.run(launch(NIX_GATE), checkout.environment(**extra))
 
 
 @pytest.mark.parametrize(

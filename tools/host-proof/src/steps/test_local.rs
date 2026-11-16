@@ -8,25 +8,28 @@ use crate::sh::step_with_env;
 use crate::span_records;
 
 /// Select the checkout, then run focused host-native tests, all under the
-/// `xtask.command` span; the error is a checkout that could not be selected.
-pub fn execute(nextest_args: &[String]) -> anyhow::Result<CommandResult> {
+/// `xtask.command` span; a checkout that could not be selected is refused.
+pub fn execute(nextest_args: &[String]) -> CommandResult {
     let span = span_records::phase("xtask.command");
     eprintln!("xtask-start: checkout-prepare");
     let checkout = span_records::phase("xtask.checkout");
     let prepared = crate::checkout::prepare();
     checkout.finish(prepared.is_ok());
-    let result = prepared.map(|()| {
-        eprintln!("xtask-start: hook-setup");
-        crate::checkout::ensure_hooks_installed();
-        eprintln!("xtask-start: dispatch");
-        let dispatch = span_records::phase("xtask.dispatch");
-        let started = Instant::now();
-        let mut result = command(nextest_args);
-        result.duration_ms = started.elapsed().as_millis();
-        dispatch.finish(result.ok);
-        result
-    });
-    span.exited(result.as_ref().map_or(2, CommandResult::exit_code));
+    let result = match prepared {
+        Ok(()) => {
+            eprintln!("xtask-start: hook-setup");
+            crate::checkout::ensure_hooks_installed();
+            eprintln!("xtask-start: dispatch");
+            let dispatch = span_records::phase("xtask.dispatch");
+            let started = Instant::now();
+            let mut result = command(nextest_args);
+            result.duration_ms = started.elapsed().as_millis();
+            dispatch.finish(result.ok);
+            result
+        }
+        Err(error) => CommandResult::refused("test-local", format!("{error:#}")),
+    };
+    span.exited(result.exit_code());
     result
 }
 

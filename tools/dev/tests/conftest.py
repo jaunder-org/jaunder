@@ -17,6 +17,21 @@ import os, pathlib, signal, subprocess, sys, time
 with open("order", "a") as order:
     order.write(" ".join([pathlib.Path(sys.argv[0]).name, *sys.argv[1:]]) + "\\n")
 """
+# How the devShim (nix/packages.nix) starts `dev`: the checkout's tools/dev
+# joins this interpreter's sys.path alone, never PYTHONPATH, so every step's
+# child inherits the caller's environment unchanged.
+LAUNCH = "import sys; sys.path.insert(0, sys.argv.pop(1)); "
+DEV = "from jaunder_dev.__main__ import main; main()"
+# No public command runs a Nix check yet, so a gate is driven exactly as a
+# `dev` subcommand would drive it.
+NIX_GATE = (
+    "from pathlib import Path; from jaunder_dev import steps; "
+    'sys.exit(steps.gate(Path.cwd(), "dev nix", lambda: steps.nix_check("demo")))'
+)
+
+
+def launch(code: str, *args: str) -> list[str]:
+    return [sys.executable, "-P", "-c", LAUNCH + code, str(PACKAGE), *args]
 
 
 @dataclass
@@ -40,36 +55,44 @@ class Checkout:
                 "TRACESTATE",
                 "E2E_TYPES_NODE_MODULES",
                 "E2E_PLAYWRIGHT_TEST",
+                "PYTHONPATH",
             )
         }
         environment["PATH"] = f"{self.bin}{os.pathsep}{environment['PATH']}"
-        environment["PYTHONPATH"] = str(PACKAGE)
         environment.update(extra)
         return environment
 
     def command(self, *args: str) -> list[str]:
-        return [sys.executable, "-P", "-m", "jaunder_dev", *args]
+        return launch(DEV, *args)
 
-    def dev(
-        self, *args: str, cwd: Path | None = None, **extra: str
+    def run(
+        self, argv: list[str], environment: dict[str, str], cwd: Path | None = None
     ) -> subprocess.CompletedProcess[bytes]:
         return subprocess.run(
-            self.command(*args),
+            argv,
             cwd=cwd or self.root,
-            env=self.environment(**extra),
+            env=environment,
             capture_output=True,
             check=False,
             timeout=60,
         )
 
-    def popen(self, *args: str, **extra: str) -> subprocess.Popen[bytes]:
+    def dev(
+        self, *args: str, cwd: Path | None = None, **extra: str
+    ) -> subprocess.CompletedProcess[bytes]:
+        return self.run(self.command(*args), self.environment(**extra), cwd)
+
+    def spawn(self, argv: list[str], **extra: str) -> subprocess.Popen[bytes]:
         return subprocess.Popen(
-            self.command(*args),
+            argv,
             cwd=self.root,
             env=self.environment(**extra),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
+
+    def popen(self, *args: str, **extra: str) -> subprocess.Popen[bytes]:
+        return self.spawn(self.command(*args), **extra)
 
     def order(self) -> str:
         path = self.root / "order"
@@ -88,15 +111,24 @@ class Checkout:
 
 
 @pytest.fixture(autouse=True)
-def isolated_from_the_callers_repository(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Drops inherited Git overrides before any test runs git or `dev`.
+def isolated_from_the_callers_git(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Keeps every git the tests run, directly or through `dev`, to the fixture.
 
     A Git hook exports GIT_DIR and friends. Left in place, `git init` on a
     throwaway checkout would reinitialise the caller's repository instead,
-    and `dev` would resolve its checkout root there.
+    and `dev` would resolve its checkout root there. The developer's own
+    configuration (templates, hooks, identity) stays out as well.
     """
     for key in [key for key in os.environ if key.startswith("GIT_")]:
         monkeypatch.delenv(key)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
 
 
 @pytest.fixture

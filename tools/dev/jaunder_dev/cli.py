@@ -172,4 +172,10 @@ def trace_summary(path: Path | None, markdown: bool) -> None:
     """Show a run's slowest spans; PATH is a run directory, default the latest."""
     if path is None:
         path = summary.latest(checkout_root() / ".xtask" / "run")
-    click.echo(summary.render(summary.rows(path), markdown), nl=False)
+    # Any record content loads; a run that cannot be read is reported, never
+    # a traceback.
+    try:
+        table = summary.rows(path)
+    except OSError as error:
+        raise click.ClickException(f"cannot summarise {path}: {error}") from error
+    click.echo(summary.render(table, markdown), nl=False)

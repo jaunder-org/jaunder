@@ -773,14 +773,16 @@ let
     meta.mainProgram = "dev";
   };
   # Host callers run the working tree's `dev`, as hooks and gates must, with no
-  # package rebuild after an edit under tools/dev/.
+  # package rebuild after an edit under tools/dev/. The checkout's tools/dev
+  # joins this interpreter's sys.path alone, not PYTHONPATH, so every step's
+  # child inherits the caller's environment unchanged (tools/dev/tests/conftest.py
+  # launches `dev` the same way).
   devShim = pkgs.writeShellApplication {
     name = "dev";
     runtimeInputs = [ pkgs.git ];
     text = ''
       root=$(git rev-parse --show-toplevel)
-      export PYTHONPATH="$root/tools/dev''${PYTHONPATH:+:$PYTHONPATH}"
-      exec ${devPython}/bin/python -P -m jaunder_dev "$@"
+      exec ${devPython}/bin/python -P -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from jaunder_dev.__main__ import main; main()' "$root/tools/dev" "$@"
     '';
   };
 

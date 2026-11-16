@@ -128,20 +128,29 @@ impl RecordProcessor {
         }
     }
 
-    fn write(&self, record: &Record<'_>) {
-        let Ok(mut file) = self.file.lock() else {
-            return;
+    /// Appends `record`; any failure, including a record that could not be
+    /// made, disables the writer after one warning.
+    fn write(&self, record: std::io::Result<Record<'_>>) {
+        // A writer that panicked mid-line may have left a partial record, so a
+        // poisoned lock stops tracing like any other failure.
+        let (mut file, poisoned) = match self.file.lock() {
+            Ok(file) => (file, false),
+            Err(poisoned) => (poisoned.into_inner(), true),
         };
         let Some(open) = file.as_mut() else {
             return;
         };
-        // One write per line, so a SIGKILL cuts at most the line being written.
-        let written = serde_json::to_vec(record)
-            .map_err(std::io::Error::from)
-            .and_then(|mut line| {
-                line.push(b'\n');
-                open.write_all(&line)
-            });
+        let written = if poisoned {
+            Err(std::io::Error::other("a span record write panicked"))
+        } else {
+            // One write per line, so a SIGKILL cuts at most the line being written.
+            record
+                .and_then(|record| serde_json::to_vec(&record).map_err(std::io::Error::from))
+                .and_then(|mut line| {
+                    line.push(b'\n');
+                    open.write_all(&line)
+                })
+        };
         if let Err(error) = written {
             *file = None;
             warn(&error);
@@ -152,12 +161,12 @@ impl RecordProcessor {
 impl SpanProcessor for RecordProcessor {
     fn on_start(&self, span: &mut Span, _context: &Context) {
         if let Some(data) = span.exported_data() {
-            self.write(&Record::new("start", &data, data.start_time, None));
+            self.write(Record::new("start", &data, data.start_time, None));
         }
     }
 
     fn on_end(&self, span: SpanData) {
-        self.write(&Record::new(
+        self.write(Record::new(
             "end",
             &span,
             span.end_time,
@@ -193,13 +202,20 @@ impl<'a> Record<'a> {
         span: &'a SpanData,
         time: SystemTime,
         attributes: Option<Attributes<'a>>,
-    ) -> Self {
+    ) -> std::io::Result<Self> {
+        // The record format has no value for a time it cannot hold; a guessed
+        // one would misplace the span, so the writer stops instead.
         let time_ns = time
             .duration_since(SystemTime::UNIX_EPOCH)
-            .map_or(0, |since| {
-                u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)
-            });
-        Self {
+            .ok()
+            .and_then(|since| u64::try_from(since.as_nanos()).ok())
+            .ok_or_else(|| {
+                std::io::Error::other(format!(
+                    "span {:?} time {time:?} is outside the record format's range",
+                    span.name
+                ))
+            })?;
+        Ok(Self {
             kind,
             trace_id: span.span_context.trace_id().to_string(),
             span_id: span.span_context.span_id().to_string(),
@@ -208,7 +224,7 @@ impl<'a> Record<'a> {
             name: &span.name,
             time_ns,
             attributes,
-        }
+        })
     }
 }
 
@@ -316,7 +332,7 @@ mod tests {
         let file = tempfile::NamedTempFile::new().unwrap();
         // A read-only handle makes every write fail.
         let processor = RecordProcessor::new(File::open(file.path()).unwrap());
-        processor.write(&Record {
+        processor.write(Ok(Record {
             kind: "start",
             trace_id: String::new(),
             span_id: String::new(),
@@ -324,7 +340,52 @@ mod tests {
             name: "phase",
             time_ns: 0,
             attributes: None,
-        });
+        }));
         assert!(processor.file.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn a_writer_poisoned_by_a_panic_is_disabled() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let processor = RecordProcessor::new(file.reopen().unwrap());
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let _held = processor.file.lock().unwrap();
+                    panic!("poison the writer");
+                })
+                .join()
+                .unwrap_err();
+        });
+        processor.write(Ok(Record {
+            kind: "start",
+            trace_id: String::new(),
+            span_id: String::new(),
+            parent_id: None,
+            name: "phase",
+            time_ns: 0,
+            attributes: None,
+        }));
+        let writer = processor
+            .file
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(writer.is_none());
+    }
+
+    #[test]
+    fn a_time_before_the_epoch_disables_the_writer() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let tracer = SdkTracerProvider::builder()
+            .with_span_processor(RecordProcessor::new(file.reopen().unwrap()))
+            .build()
+            .tracer("test");
+        tracer
+            .span_builder("early")
+            .with_start_time(SystemTime::UNIX_EPOCH - Duration::from_secs(1))
+            .start(&tracer)
+            .end();
+        tracer.start("later").end();
+        assert_eq!(std::fs::read_to_string(file.path()).unwrap(), "");
     }
 }

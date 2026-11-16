@@ -126,3 +126,27 @@ def test_missing_tool_fails_the_step_like_a_shell(checkout: Checkout) -> None:
     assert result.returncode == 127
     assert result.stderr.startswith(b"dev: tsc: ")
     assert checkout.merged()["tsc"]["args"]["process.exit.code"] == 127
+
+
+@pytest.mark.parametrize("inherited", [None, "/caller/site-packages"])
+def test_steps_inherit_the_callers_pythonpath_unchanged(
+    checkout: Checkout, inherited: str | None
+) -> None:
+    checkout.tool("tsc", 'print(os.environ.get("PYTHONPATH"))')
+    environment = checkout.environment()
+    if inherited is not None:
+        environment["PYTHONPATH"] = inherited
+    result = checkout.run(checkout.command("static", "tsc"), environment)
+    assert result.returncode == 0, result
+    assert result.stdout == f"{inherited}\n".encode()
+
+
+def test_tool_that_cannot_run_fails_the_step_like_a_shell(checkout: Checkout) -> None:
+    fake_tools(checkout)
+    (checkout.bin / "tsc").chmod(0o644)
+    result = checkout.dev("static", "tsc", "--sandbox", PATH=str(checkout.bin))
+    assert result.returncode == 126
+    assert result.stderr.startswith(b"dev: tsc: ")
+    assert b"Traceback" not in result.stderr
+    tsc = checkout.merged()["tsc"]["args"]
+    assert (tsc["jaunder.status"], tsc["process.exit.code"]) == ("failed", 126)
