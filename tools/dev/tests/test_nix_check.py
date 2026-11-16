@@ -3,7 +3,7 @@
 import subprocess
 
 import pytest
-from conftest import NIX_GATE, Checkout, launch
+from conftest import FAKE_NIX_STORE, NIX_GATE, Checkout, launch
 
 OUT = "/nix/store/0000-demo"
 EVAL = "nix eval --raw --accept-flake-config .#checks.x86_64-linux.demo.outPath\n"
@@ -13,39 +13,9 @@ BUILD = (
     " .#checks.x86_64-linux.demo\n"
 )
 
-# A fake `nix`: the output is valid once built, or from the start with
-# NIX_VALID.
-FAKE_NIX = """\
-command = sys.argv[1]
-env = os.environ.get
-if command == "eval":
-    if env("NIX_EVAL_FAIL"):
-        print("eval-err", file=sys.stderr)
-        sys.exit(1)
-    print("/nix/store/0000-demo", end="")
-elif command == "path-info":
-    if env("NIX_INFO_FAIL"):
-        print("info-err", file=sys.stderr)
-        sys.exit(1)
-    if env("NIX_INFO_GARBLED"):
-        print("not json")
-        sys.exit()
-    path = sys.argv[-1]
-    valid = bool(env("NIX_VALID")) or os.path.exists("built")
-    info = {"ultimate": bool(env("NIX_ULTIMATE")), "version": 1}
-    print(json.dumps({path: info if valid else None}))
-    print("info-warning", file=sys.stderr)
-else:
-    print("build-out"); print("build-err", file=sys.stderr)
-    code = int(env("NIX_BUILD_CODE", "0"))
-    if code == 0 and not env("NIX_LOST"):
-        open("built", "w").close()
-    sys.exit(code)
-"""
-
 
 def nix_check(checkout: Checkout, **extra: str) -> subprocess.CompletedProcess[bytes]:
-    checkout.tool("nix", "import json\n" + FAKE_NIX)
+    checkout.tool("nix", FAKE_NIX_STORE)
     return checkout.run(launch(NIX_GATE), checkout.environment(**extra))
 
 

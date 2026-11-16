@@ -1,7 +1,7 @@
 """Issue front doors through `dev`, against a fake gh: never a real tracker write.
 
-Discovery runs the repository's shell scripts and jq, so its tests are skipped
-in the filtered `checks.dev-python` source; creation and editing run anywhere.
+Discovery runs the repository's shell scripts and jq, so only the filtered
+`checks.dev-python` source may skip its tests; creation and editing run anywhere.
 """
 
 import json
@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
-from conftest import Checkout
+from conftest import Checkout, require
 
 # Records each call and answers from the scripted replies in order. Inventory
 # replies model `gh --paginate --slurp`, never an unpaginated request.
@@ -21,6 +21,8 @@ import fnmatch, json, os, pathlib, sys
 fixture = pathlib.Path(os.environ["FIXTURE"])
 args = sys.argv[1:]
 data = sys.stdin.read() if " --input - " in f" {{' '.join(args)}} " else ""
+if data and os.environ.get("MUTATION_REMOVES"):
+    pathlib.Path(os.environ["MUTATION_REMOVES"]).unlink()
 with (fixture / "calls.jsonl").open("a") as calls:
     calls.write(json.dumps({{"args": args, "input": data}}) + "\\n")
 inventories = ["repos/*/milestones[?]*", "repos/*/issues[?]*",
@@ -54,15 +56,23 @@ class Tracker:
         (fixture / "index").write_text("0")
         (fixture / "calls.jsonl").unlink(missing_ok=True)
 
-    def dev(self, *args: str) -> subprocess.CompletedProcess[bytes]:
-        return self.checkout.dev(*args, FIXTURE=str(self.checkout.root.parent))
+    def dev(self, *args: str, **extra: str) -> subprocess.CompletedProcess[bytes]:
+        fixture = {"FIXTURE": str(self.checkout.root.parent), **extra}
+        return self.checkout.run(
+            self.checkout.command(*args), self.checkout.environment(**fixture)
+        )
 
     def mutate(
-        self, command: str, number: str | None = None, *blockers: str
+        self, command: str, number: str | None = None, *blockers: str, **extra: str
     ) -> subprocess.CompletedProcess[bytes]:
         body = self.checkout.root.parent / "body.md"
         return self.dev(
-            command, *([number] if number else []), *DECISIONS, str(body), *blockers
+            command,
+            *([number] if number else []),
+            *DECISIONS,
+            str(body),
+            *blockers,
+            **extra,
         )
 
     def discover(self) -> subprocess.CompletedProcess[bytes]:
@@ -84,8 +94,7 @@ def tracker(checkout: Checkout) -> Tracker:
 
 @pytest.fixture
 def discovery(tracker: Tracker) -> Tracker:
-    if shutil.which("jq") is None:
-        pytest.skip("needs jq")
+    require(shutil.which("jq") is not None, "jq")
     tracker.checkout.from_repository(
         "scripts/issue-metadata.sh", "scripts/issue-discover.sh"
     )
@@ -161,8 +170,7 @@ def test_edit_replaces_explicit_metadata_without_changing_issue_identity(
     assert len(tracker.calls()) == 2, "do not file a different issue in Backlog"
 
 
-# Each bad reply, and the status each front door fails with (create, edit),
-# as the shell glue these replace exited.
+# Each bad reply, and the status each front door fails with (create, edit).
 BAD_STEPS: list[tuple[int, Any, int, int]] = [
     (
         0,
@@ -337,6 +345,39 @@ def test_an_invalid_number_or_blocker_is_refused_before_mutation(
         f"inspect jaunder-org/jaunder/issues/{number} before retrying "
         "(no rollback).\n".encode()
     )
+
+
+@pytest.mark.parametrize("command", ["issue-create", "issue-edit"])
+def test_the_body_file_is_read_once_before_the_mutation(
+    tracker: Tracker, command: str
+) -> None:
+    # The readback is checked against the bytes that were sent, so the file
+    # changing afterwards cannot fail an issue that was written as decided.
+    tracker.reply(responses())
+    body = tracker.checkout.root.parent / "body.md"
+    number = "731" if command == "issue-edit" else None
+    result = tracker.mutate(command, number, MUTATION_REMOVES=str(body))
+    assert result.returncode == 0, result
+    assert not body.exists()
+
+
+def test_an_unexpected_failure_after_the_mutation_names_the_issue_to_inspect(
+    tracker: Tracker,
+) -> None:
+    # A lone surrogate in a field nothing checks cannot be printed as UTF-8.
+    replies = responses()
+    replies[4] = {"body": readback() | {"note": "\ud800"}}
+    tracker.reply(replies)
+    result = tracker.mutate("issue-create")
+    assert result.returncode == 1
+    assert result.stdout == b""
+    assert b"UnicodeEncodeError" in result.stderr
+    assert (
+        b"inspect jaunder-org/jaunder/issues/731 before retrying (no rollback).\n"
+        in result.stderr
+    )
+    gate = tracker.checkout.merged()["dev issue-create"]["args"]
+    assert (gate["jaunder.status"], gate["process.exit.code"]) == ("failed", 1)
 
 
 def test_a_body_whose_bytes_change_on_readback_is_refused(tracker: Tracker) -> None:

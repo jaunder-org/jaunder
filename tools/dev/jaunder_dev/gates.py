@@ -8,53 +8,33 @@ verdict.
 
 import os
 import platform
+from enum import StrEnum
 from pathlib import Path
 
-from jaunder_dev import report, static, steps
+from jaunder_dev import e2e, report, static, steps
+from jaunder_dev.checkout import clean_tree
+from jaunder_dev.commands import (
+    COVERAGE_CHECK,
+    DEVTOOL,
+    DOCTEST_CHECK,
+    HOST_PROOF,
+    NIX_LOCK_FLAGS,
+    REPOSITORY_POLICY,
+    SOURCE_CONTRACT,
+)
+from jaunder_dev.static import Mode
 
-CARGO_RUN = (
-    "cargo",
-    "run",
-    "--locked",
-    "--quiet",
-    "--manifest-path",
-    "tools/Cargo.toml",
-)
-DEVTOOL = (*CARGO_RUN, "-p", "devtool", "--bin", "devtool", "--")
-REPOSITORY_POLICY = (*CARGO_RUN, "-p", "repository-policy", "--bin")
-SOURCE_CONTRACT = (*REPOSITORY_POLICY, "source-contracts", "--")
-HOST_PROOF = (*CARGO_RUN, "-p", "host-proof", "--bin")
-DOCTEST_CHECK = (
-    *CARGO_RUN,
-    "-p",
-    "doctests",
-    "--features",
-    "host",
-    "--bin",
-    "doctest-check",
-    "--",
-)
-COVERAGE_CHECK = (
-    *CARGO_RUN,
-    "-p",
-    "coverage",
-    "--features",
-    "host",
-    "--bin",
-    "coverage-check",
-    "--",
-)
 
-# Inherited Git overrides (as set inside hooks) would redirect discovery.
-GIT_OVERRIDES = (
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_COMMON_DIR",
-    "GIT_NAMESPACE",
-)
-WITHOUT_GIT_OVERRIDES: steps.Environment = dict.fromkeys(GIT_OVERRIDES)
+class Docs(StrEnum):
+    """Where the Markdown verdict comes from.
+
+    `PREPUSH` takes the shared clean-index verdict on x86_64-linux, and only
+    verifies; `HOST` runs host Prettier.
+    """
+
+    HOST = "host"
+    PREPUSH = "prepush"
+
 
 DOCS_SHAPE = (
     "sequence-check",
@@ -88,14 +68,6 @@ SOURCE_CONTRACTS = (
     "e2e-scaffold",
     "xlang-literal",
 )
-CLIPPY = (
-    "product-core-clippy",
-    "web-server-clippy",
-    "web-no-server-clippy",
-    "client-host-clippy",
-    "wasm-clippy",
-    "tools-clippy",
-)
 STATIC_CHECKS = (
     "static-docs",
     "static-typescript",
@@ -108,36 +80,24 @@ STATIC_CHECKS = (
 )
 
 
-def clean_tree() -> None:
-    """Verify workflows refuse dirty or unavailable Git state before work."""
-    status = steps.text(
-        "clean-tree",
-        ["git", "status", "--porcelain", "--untracked-files=all"],
-        WITHOUT_GIT_OVERRIDES,
-    )
-    if status:
-        steps.refuse(f"verify workflows require a clean checkout\n{status}")
-
-
 # The host check surface: its named groups in fail-fast order.
 
 
-def host(fix: bool, docs: str) -> None:
-    format_checks(fix, docs)
+def host(mode: Mode, docs: Docs) -> None:
+    format_checks(mode, docs)
     docs_shape()
     source_contracts()
-    compile_checks(fix)
-    elisp_checks(fix)
+    compile_checks(mode)
+    elisp_checks(mode)
 
 
-def format_checks(fix: bool, docs: str) -> None:
-    """Formatters; docs `prepush` takes the shared Markdown verdict (Verify only)."""
-    static.run("fmt", fix)
-    leptosfmt(fix)
-    markdown(fix, docs)
-    static.run("prettier-css", fix)
-    static.run("elisp-fmt", fix)
-    static.run("tools-fmt", fix)
+def format_checks(mode: Mode, docs: Docs) -> None:
+    static.run("fmt", mode)
+    leptosfmt(mode)
+    markdown(mode, docs)
+    static.run("prettier-css", mode)
+    static.run("elisp-fmt", mode)
+    static.run("tools-fmt", mode)
 
 
 def _build_tools(name: str, *packages: str) -> steps.Environment:
@@ -163,7 +123,7 @@ def _build_tools(name: str, *packages: str) -> steps.Environment:
     return {"PATH": f"{built}:{os.environ.get('PATH', '')}"}
 
 
-def leptosfmt(fix: bool) -> None:
+def leptosfmt(mode: Mode) -> None:
     """Runs the scoped adapter as built from this checkout, not a stale one on PATH."""
     path = _build_tools(
         "scoped-leptosfmt-build",
@@ -172,11 +132,11 @@ def leptosfmt(fix: bool) -> None:
         "--bin",
         "scoped-leptosfmt",
     )
-    steps.run("leptosfmt", static.argv("leptosfmt", fix), environment=path)
+    steps.run("leptosfmt", static.argv("leptosfmt", mode), environment=path)
 
 
-def static_all(fix: bool) -> None:
-    """The former --all population, with devtool and the adapter built from here."""
+def static_all(mode: Mode) -> None:
+    """Every static check, with devtool and the adapter built from this checkout."""
     path = _build_tools(
         "static-all-build",
         "-p",
@@ -188,16 +148,12 @@ def static_all(fix: bool) -> None:
         "--bin",
         "scoped-leptosfmt",
     )
-    static.run("all", fix, environment=path)
+    static.run("all", mode, environment=path)
 
 
-def markdown(fix: bool, docs: str) -> None:
-    """Markdown and end2end Prettier.
-
-    On x86_64-linux, prepush replaces host Prettier Markdown with the
-    clean-index static-docs verdict.
-    """
-    if docs == "prepush" and (platform.system(), platform.machine()) == (
+def markdown(mode: Mode, docs: Docs) -> None:
+    """Markdown and end2end Prettier, the Markdown verdict taken as `docs` says."""
+    if docs is Docs.PREPUSH and (platform.system(), platform.machine()) == (
         "Linux",
         "x86_64",
     ):
@@ -206,8 +162,8 @@ def markdown(fix: bool, docs: str) -> None:
             [*REPOSITORY_POLICY, "git-index-safety", "--", "prepush-docs"],
         )
     else:
-        static.run("prettier-markdown", fix)
-    static.run("prettier-end2end", fix)
+        static.run("prettier-markdown", mode)
+    static.run("prettier-end2end", mode)
 
 
 def repository_docs(check: str) -> None:
@@ -224,14 +180,14 @@ def source_contract(name: str) -> None:
 
 
 def source_contracts() -> None:
-    static.run("ast-grep-tests", False)
-    static.run("no-full-reload", False)
+    static.run("ast-grep-tests", Mode.VERIFY)
+    static.run("no-full-reload", Mode.VERIFY)
     for name in SOURCE_CONTRACTS:
         source_contract(name)
     steps.run("doctest-fences", [*DOCTEST_CHECK, "fences"], report.render)
 
 
-def tsc(fix: bool) -> None:
+def tsc(mode: Mode) -> None:
     """Type-checks the end-to-end suite after linking its pinned node_modules.
 
     Provisioning follows the current checkout, so it also works after `cd`
@@ -245,20 +201,21 @@ def tsc(fix: bool) -> None:
             os.environ.get("E2E_PLAYWRIGHT_TEST", ""),
         ],
     )
-    static.run("tsc", fix)
+    static.run("tsc", mode)
 
 
-def compile_checks(fix: bool) -> None:
-    tsc(fix)
-    static.run("cargo-deny", fix)
-    for name in CLIPPY:
-        static.run(name, fix)
+def compile_checks(mode: Mode) -> None:
+    tsc(mode)
+    static.run("cargo-deny", mode)
+    for name in static.CLIPPY:
+        static.run(name, mode)
 
 
-def elisp_checks(fix: bool) -> None:
-    static.run("byte-compile", fix)
+def elisp_checks(mode: Mode) -> None:
+    static.run("byte-compile", mode)
     # devtool times the ERT request; `cargo run` builds it from current source.
-    steps.run("ert", [*DEVTOOL, "check", "ert", *(["--fix"] if fix else [])])
+    fix = ["--fix"] if mode is Mode.FIX else []
+    steps.run("ert", [*DEVTOOL, "check", "ert", *fix])
 
 
 # Shared steps of the gates.
@@ -325,27 +282,15 @@ def wasm_tests() -> None:
 
 def _producer_and_gate(check: str) -> None:
     """Realizes a hermetic producer as a GC root, then its hard status gate."""
-    flags = ["nix", "build", "--no-update-lock-file", "--no-write-lock-file", "-L"]
-    Path(".xtask/gcroots").mkdir(parents=True, exist_ok=True)
-    steps.run(
-        check,
-        [
-            *flags,
-            f".#checks.x86_64-linux.{check}",
-            "--out-link",
-            f".xtask/gcroots/{check}",
-        ],
-    )
-    steps.run(
-        f"{check}-gate", [*flags, f".#checks.x86_64-linux.{check}-gate", "--no-link"]
-    )
+    steps.nix_check(check, NIX_LOCK_FLAGS)
+    steps.nix_check(f"{check}-gate", NIX_LOCK_FLAGS, keep=False)
 
 
 def coverage_workflow() -> None:
     _producer_and_gate("coverage")
     steps.run(
         "coverage-policy",
-        [*COVERAGE_CHECK, "policy", "--out", ".xtask/gcroots/coverage"],
+        [*COVERAGE_CHECK, "policy", "--out", f"{steps.GCROOTS}/coverage"],
         report.render,
     )
 
@@ -359,19 +304,11 @@ def elisp_coverage() -> None:
     steps.run("elisp-consume", [*COVERAGE_CHECK, "elisp-consume"], report.render)
 
 
-def e2e(jobs: str = "") -> None:
-    """The full E2E workflow: every producer, then reconciliation of both backends.
-
-    `jobs` bounds concurrent producers; empty runs every enabled lane at once.
-    """
-    steps.run("e2e", ["bash", "scripts/e2e-workflow", "all", jobs])
-
-
 # Gates.
 
 
 def check_no_test() -> None:
-    host(True, "host")
+    host(Mode.FIX, Docs.HOST)
     host_tests()
 
 
@@ -386,7 +323,7 @@ def check() -> None:
 
 def prepush() -> None:
     clean_tree()
-    host(False, "prepush")
+    host(Mode.VERIFY, Docs.PREPUSH)
     host_tests()
     test_local()
     workspace_doctests()
@@ -394,7 +331,7 @@ def prepush() -> None:
 
 def validate_no_e2e() -> None:
     clean_tree()
-    host(False, "host")
+    host(Mode.VERIFY, Docs.HOST)
     platform_contract()
     static_checks()
     wasm_budget()
@@ -407,12 +344,12 @@ def validate_no_e2e() -> None:
 
 def validate() -> None:
     validate_no_e2e()
-    e2e()
+    e2e.run_all("")
 
 
 def ci_validate_host() -> None:
     clean_tree()
-    host(False, "host")
+    host(Mode.VERIFY, Docs.HOST)
     platform_contract()
     host_tests()
 
@@ -448,5 +385,5 @@ def precommit() -> None:
 
 
 def precommit_markdown_host() -> None:
-    markdown(True, "host")
+    markdown(Mode.FIX, Docs.HOST)
     docs_shape()

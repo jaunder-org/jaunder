@@ -191,10 +191,10 @@ E2E = [["bash", "scripts/e2e-workflow", "all", ""]]
 
 
 def producer_and_gate(check: str) -> Commands:
-    flags = "nix build --no-update-lock-file --no-write-lock-file -L"
+    flags = "nix build -L --no-update-lock-file --no-write-lock-file"
     return commands(
-        f"{flags} .#checks.x86_64-linux.{check} --out-link .xtask/gcroots/{check}",
-        f"{flags} .#checks.x86_64-linux.{check}-gate --no-link",
+        f"{flags} --out-link .xtask/gcroots/{check} .#checks.x86_64-linux.{check}",
+        f"{flags} --no-link .#checks.x86_64-linux.{check}-gate",
     )
 
 
@@ -354,6 +354,9 @@ def test_clean_admission_refuses_a_dirty_tree_before_work(
     assert result.stderr == (
         b"verify workflows require a clean checkout\n M tracked.rs\n"
     )
+    # The refusal belongs to the step whose output it judged.
+    step = workflow.checkout.merged()["clean-tree"]["args"]
+    assert (step["jaunder.status"], step["process.exit.code"]) == ("failed", 1)
 
 
 @pytest.mark.parametrize("gate", ADMITTED)

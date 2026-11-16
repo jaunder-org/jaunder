@@ -1,68 +1,34 @@
 """The `dev` command line: one subcommand per workflow."""
 
+import dataclasses
 import functools
-import os
-import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import click
 
-from jaunder_dev import gates, issues, static, steps, summary, workflows
-
-
-def _git(*args: str) -> subprocess.CompletedProcess[str]:
-    environment = {
-        key: value
-        for key, value in os.environ.items()
-        if key not in gates.GIT_OVERRIDES
-    }
-    return subprocess.run(
-        ["git", *args], env=environment, capture_output=True, text=True, check=False
-    )
-
-
-def checkout_root() -> Path:
-    found = _git("rev-parse", "--show-toplevel")
-    if found.returncode != 0:
-        raise click.ClickException(
-            f"cannot find the checkout root: {found.stderr.strip()}"
-        )
-    return Path(found.stdout.strip())
-
-
-def compile_cache_environment() -> dict[str, str]:
-    """Host Cargo compilation shares rustc artifacts across every worktree.
-
-    A failed worktree listing keeps the current root alone.
-    """
-    listed = _git("worktree", "list", "--porcelain").stdout.splitlines()
-    worktrees = [
-        Path(line.removeprefix("worktree "))
-        for line in listed
-        if line.startswith("worktree ")
-    ]
-    roots = {
-        str(path.resolve())
-        for path in [*worktrees, Path.cwd()]
-        if path.is_absolute() and path.is_dir()
-    }
-    return {
-        "RUSTC_WRAPPER": "sccache",
-        "CARGO_INCREMENTAL": "0",
-        "SCCACHE_BASEDIRS": ":".join(sorted(roots)),
-    }
+from jaunder_dev import (
+    checkout,
+    csr,
+    e2e,
+    forwarding,
+    gates,
+    issues,
+    perf,
+    qualification,
+    static,
+    steps,
+    summary,
+)
+from jaunder_dev.gates import Docs
+from jaunder_dev.static import Mode
 
 
 def _gate(body: Callable[[], None], sandbox: bool = False) -> None:
     """Runs a workflow from the checkout root, or in place inside a Nix sandbox."""
     context = click.get_current_context()
-    root = Path.cwd() if sandbox else checkout_root()
-    os.chdir(root)
-    if not sandbox:
-        os.environ.update(compile_cache_environment())
-    context.exit(steps.gate(root, context.command_path, body))
+    context.exit(steps.gate(checkout.enter(sandbox), context.command_path, body))
 
 
 @click.group()
@@ -71,7 +37,10 @@ def cli() -> None:
 
 
 mode_argument = click.argument(
-    "mode", type=click.Choice(["verify", "fix"]), default="verify"
+    "mode",
+    type=click.Choice([mode.value for mode in Mode]),
+    default=Mode.VERIFY.value,
+    callback=lambda _context, _parameter, value: Mode(value),
 )
 
 
@@ -161,30 +130,35 @@ _workflow(
 
 @cli.command("format")
 @mode_argument
-@click.argument("docs", type=click.Choice(["host", "prepush"]), default="host")
-def format_command(mode: str, docs: str) -> None:
+@click.argument(
+    "docs",
+    type=click.Choice([docs.value for docs in Docs]),
+    default=Docs.HOST.value,
+    callback=lambda _context, _parameter, value: Docs(value),
+)
+def format_command(mode: Mode, docs: Docs) -> None:
     """Formatters, in Fix or Verify MODE.
 
     DOCS `prepush` takes the shared clean-index Markdown verdict on
     x86_64-linux; it only verifies.
     """
-    if docs == "prepush" and mode != "verify":
+    if docs is Docs.PREPUSH and mode is not Mode.VERIFY:
         raise click.UsageError("prepush docs require verify")
-    _gate(lambda: gates.format_checks(mode == "fix", docs))
+    _gate(lambda: gates.format_checks(mode, docs))
 
 
 @cli.command("compile-checks")
 @mode_argument
-def compile_checks(mode: str) -> None:
+def compile_checks(mode: Mode) -> None:
     """TypeScript, cargo-deny and the Clippy units."""
-    _gate(lambda: gates.compile_checks(mode == "fix"))
+    _gate(lambda: gates.compile_checks(mode))
 
 
 @cli.command("elisp-checks")
 @mode_argument
-def elisp_checks(mode: str) -> None:
+def elisp_checks(mode: Mode) -> None:
     """Elisp byte-compilation and ERT."""
-    _gate(lambda: gates.elisp_checks(mode == "fix"))
+    _gate(lambda: gates.elisp_checks(mode))
 
 
 @cli.command("source-contract")
@@ -196,26 +170,26 @@ def source_contract(name: str) -> None:
 
 @cli.command()
 @mode_argument
-def leptosfmt(mode: str) -> None:
+def leptosfmt(mode: Mode) -> None:
     """Format Leptos view! macros with the adapter built from this checkout."""
-    _gate(lambda: gates.leptosfmt(mode == "fix"))
+    _gate(lambda: gates.leptosfmt(mode))
 
 
 @cli.command()
 @mode_argument
-def tsc(mode: str) -> None:
+def tsc(mode: Mode) -> None:
     """Type-check the end-to-end suite after linking its pinned node_modules.
 
     TypeScript has no autofix, so MODE changes nothing.
     """
-    _gate(lambda: gates.tsc(mode == "fix"))
+    _gate(lambda: gates.tsc(mode))
 
 
 @cli.command("static-all")
 @mode_argument
-def static_all(mode: str) -> None:
+def static_all(mode: Mode) -> None:
     """Every static check, with devtool and the adapter built from this checkout."""
-    _gate(lambda: gates.static_all(mode == "fix"))
+    _gate(lambda: gates.static_all(mode))
 
 
 @cli.command("adr-format")
@@ -227,8 +201,8 @@ def adr_format() -> None:
 class _Forwarding(click.Command):
     """An entry point that passes every argument to its tool verbatim.
 
-    As Just's variadic recipes did, options and `--help` belong to the tool,
-    and nothing is parsed here. A leading `--` is optional and dropped, so
+    Options and `--help` belong to the tool, and nothing is parsed here. A
+    leading `--` is optional and dropped, so
     `dev X -- ARGS` and `dev X ARGS` forward the same argv; any later `--`
     is forwarded with the rest.
     """
@@ -266,21 +240,23 @@ _forwarding(
     "Focused Rust proof with isolated PostgreSQL; ARGS are nextest selectors "
     "(none: the workspace).",
 )
-_forwarding("sandbox", workflows.sandbox, "Run the UX sandbox with ARGS, kept as argv.")
+_forwarding(
+    "sandbox", forwarding.sandbox, "Run the UX sandbox with ARGS, kept as argv."
+)
 _forwarding(
     "census",
-    workflows.census,
+    forwarding.census,
     "Informational source census: a fixed domain command, not a validation.",
 )
 _forwarding(
     "pg-run",
-    workflows.pg_run,
+    forwarding.pg_run,
     "Run a command against a throwaway PostgreSQL cluster "
     "(JAUNDER_PG_TEST_URL exported).",
 )
 _forwarding(
     "coverage-check",
-    workflows.coverage_check,
+    forwarding.coverage_check,
     "Manual coverage evidence tools: probe-source | wasm-probe | wasm-measure.",
 )
 for _binary, _summary in {
@@ -293,16 +269,16 @@ for _binary, _summary in {
     "--update-visual-snapshots.",
 }.items():
     _forwarding(
-        _binary, functools.partial(workflows.host_proof_report, _binary), _summary
+        _binary, functools.partial(forwarding.host_proof_report, _binary), _summary
     )
 _forwarding(
     "pr-watch",
-    workflows.pr_watch,
+    forwarding.pr_watch,
     "Read-only caller-actionable PR observation; only this tool polls GitHub.",
 )
 _forwarding(
     "org-timezone-manifest",
-    workflows.org_timezone_manifest,
+    forwarding.org_timezone_manifest,
     "Timezone manifest of explicit local Org originals; no checkout admission.",
     required=True,
 )
@@ -312,42 +288,37 @@ _forwarding(
 @click.argument("revision")
 def production_baseline_discover(revision: str) -> None:
     """Qualify REVISION against this clean, pushed HEAD as the harness."""
-    _gate(lambda: workflows.production_baseline(revision, ""))
+    _gate(lambda: qualification.discover(revision))
 
 
 @cli.command("production-baseline-accept")
 @click.argument("source")
-@click.argument("target")
+@click.argument("target", callback=qualification.nonempty_target)
 def production_baseline_accept(source: str, target: str) -> None:
     """Accept the change from SOURCE to TARGET with this clean, pushed HEAD."""
-    # Only discovery may leave the target empty.
-    if not target:
-        raise click.ClickException(
-            "production-baseline accept requires a nonempty target"
-        )
-    _gate(lambda: workflows.production_baseline(source, target))
+    _gate(lambda: qualification.accept(source, target))
 
 
 @cli.command("production-baseline-qualify-styling")
 def production_baseline_qualify_styling() -> None:
     """Styling qualification with this clean HEAD as the harness."""
-    _gate(workflows.production_baseline_qualify_styling)
+    _gate(qualification.qualify_styling)
 
 
 @cli.command("production-baseline-smoke")
 def production_baseline_smoke() -> None:
     """Mutable local lifecycle diagnostic; deliberately no qualification."""
-    _gate(workflows.production_baseline_smoke)
+    _gate(qualification.smoke)
 
 
 @cli.command("build-csr")
 @click.argument("profile", type=click.Choice(["debug", "release"]), default="debug")
 def build_csr(profile: str) -> None:
     """Build the checkout's CSR bundle into target/site."""
-    _gate(lambda: workflows.build_csr(profile))
+    _gate(lambda: csr.build(profile))
 
 
-@cli.command()
+@cli.command("perf")
 @click.argument("profile", default="medium")
 @click.argument("backends", default="sqlite,postgres")
 @click.argument("browsers", default="")
@@ -355,55 +326,43 @@ def build_csr(profile: str) -> None:
 @click.argument("posts", default="")
 @click.argument("authors", default="")
 @click.argument("revisions", default="")
-def perf(
-    profile: str,
-    backends: str,
-    browsers: str,
-    workload: str,
-    posts: str,
-    authors: str,
-    revisions: str,
-) -> None:
+def perf_command(**request: str) -> None:
     """Measure the selected performance producers, keeping each one's evidence."""
-    _gate(
-        lambda: workflows.perf(
-            profile, backends, browsers, workload, posts, authors, revisions
-        )
-    )
+    _gate(lambda: perf.measure(perf.Request(**request)))
 
 
 @cli.command("perf-compare")
 @click.argument("result")
 def perf_compare(result: str) -> None:
     """Compare RESULT with the committed baseline; advisory only."""
-    _gate(lambda: workflows.perf_compare(result))
+    _gate(lambda: perf.compare(result))
 
 
 @cli.command("perf-import-baseline")
 @click.argument("run_id")
 def perf_import_baseline(run_id: str) -> None:
     """Replace the baseline from an authenticated CI run RUN_ID."""
-    _gate(lambda: workflows.perf_import_baseline(run_id))
+    _gate(lambda: perf.import_baseline(run_id))
 
 
-@cli.command()
+@cli.command("e2e")
 @click.argument("jobs", default="")
-def e2e(jobs: str) -> None:
+def e2e_command(jobs: str) -> None:
     """Every E2E producer, at most JOBS at once, then both reconciliations."""
-    _gate(lambda: gates.e2e(jobs))
+    _gate(lambda: e2e.run_all(jobs))
 
 
 @cli.command("e2e-producer")
 @click.argument("lane")
 def e2e_producer(lane: str) -> None:
     """One isolated E2E producer LANE, as CI runs it."""
-    _gate(lambda: workflows.e2e_producer(lane))
+    _gate(lambda: e2e.producer(lane))
 
 
 @cli.command("e2e-regenerate-coverage")
 def e2e_regenerate_coverage() -> None:
     """Regenerate the server-function coverage snapshot from its producer."""
-    _gate(workflows.e2e_regenerate_coverage)
+    _gate(e2e.regenerate_coverage)
 
 
 @cli.command("e2e-reconcile")
@@ -411,30 +370,21 @@ def e2e_regenerate_coverage() -> None:
 @click.argument("artifacts", default=".xtask/diagnostics")
 def e2e_reconcile(backend: str, artifacts: str) -> None:
     """Reconcile BACKEND's producer ARTIFACTS without building any producer."""
-    _gate(lambda: workflows.e2e_reconcile(backend, artifacts))
+    _gate(lambda: e2e.reconcile(backend, artifacts))
 
 
 @cli.command("issue-discover")
 @click.argument("milestone")
 def issue_discover(milestone: str) -> None:
     """Exhaustive read-only candidates in MILESTONE; never claims work."""
-    _gate(lambda: workflows.issue_discover(milestone))
-
-
-ISSUE_DECISIONS = [
-    "title",
-    "issue_type",
-    "milestone",
-    "priority",
-    "labels",
-    "body_file",
-]
+    _gate(lambda: forwarding.issue_discover(milestone))
 
 
 def _issue_decisions(command: Callable[..., None]) -> Callable[..., None]:
     """Both issue front doors take every decision explicitly, then any blockers."""
-    for name in reversed([*ISSUE_DECISIONS, "blockers"]):
-        command = click.argument(name, nargs=-1 if name == "blockers" else 1)(command)
+    command = click.argument("blockers", nargs=-1)(command)
+    for field in reversed(dataclasses.fields(issues.Decisions)):
+        command = click.argument(field.name)(command)
     return command
 
 
@@ -442,9 +392,7 @@ def _issue_decisions(command: Callable[..., None]) -> Callable[..., None]:
 @_issue_decisions
 def issue_create(blockers: tuple[str, ...], **decisions: str) -> None:
     """Create an issue from explicit decisions; gh mutates, readback verifies."""
-    _gate(
-        lambda: issues.create([decisions[name] for name in ISSUE_DECISIONS], blockers)
-    )
+    _gate(lambda: issues.create(issues.Decisions(**decisions), blockers))
 
 
 @cli.command("issue-edit")
@@ -452,11 +400,7 @@ def issue_create(blockers: tuple[str, ...], **decisions: str) -> None:
 @_issue_decisions
 def issue_edit(number: str, blockers: tuple[str, ...], **decisions: str) -> None:
     """Replace issue NUMBER's metadata with explicit decisions; readback verifies."""
-    _gate(
-        lambda: issues.edit(
-            number, [decisions[name] for name in ISSUE_DECISIONS], blockers
-        )
-    )
+    _gate(lambda: issues.edit(number, issues.Decisions(**decisions), blockers))
 
 
 @cli.command("pr-land", context_settings={"ignore_unknown_options": True})
@@ -468,7 +412,7 @@ def pr_land(number: str, expected_head: str, mode: str) -> None:
 
     Prior recorded exact PR/head human approval is mandatory, not inferred here.
     """
-    _gate(lambda: workflows.pr_land(number, expected_head, mode))
+    _gate(lambda: forwarding.pr_land(number, expected_head, mode))
 
 
 @cli.command("pr-cleanup")
@@ -477,7 +421,7 @@ def pr_land(number: str, expected_head: str, mode: str) -> None:
 @click.argument("ownership")
 def pr_cleanup(number: str, expected_head: str, ownership: str) -> None:
     """Clean up after a merged PR; the caller must verify unmanaged OWNERSHIP."""
-    _gate(lambda: workflows.pr_cleanup(number, expected_head, ownership))
+    _gate(lambda: forwarding.pr_cleanup(number, expected_head, ownership))
 
 
 @cli.group("static")
@@ -500,7 +444,8 @@ def _static_command(name: str, summary: str) -> None:
     def command(fix: bool, sandbox: bool) -> None:
         if sandbox and static.missing_home(name):
             raise click.ClickException("sandbox Cargo home is missing")
-        _gate(lambda: static.run(name, fix, sandbox), sandbox)
+        mode = Mode.FIX if fix else Mode.VERIFY
+        _gate(lambda: static.run(name, mode, sandbox), sandbox)
 
 
 for _name, _leaf in static.LEAVES.items():
@@ -524,7 +469,7 @@ def trace_group() -> None:
 def trace_summary(path: Path | None, markdown: bool) -> None:
     """Show a run's slowest spans; PATH is a run directory, default the latest."""
     if path is None:
-        path = summary.latest(checkout_root() / ".xtask" / "run")
+        path = summary.latest(checkout.root() / ".xtask" / "run")
     # Any record content loads; a run that cannot be read is reported, never
     # a traceback.
     try:

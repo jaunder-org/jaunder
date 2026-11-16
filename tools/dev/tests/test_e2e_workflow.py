@@ -2,8 +2,8 @@
 
 `scripts/e2e-workflow` settles every producer, lifts only its own evidence and
 reconciles both backends. It needs the repository's script, lane catalog and
-jq programs, a real Nix store for immutable outputs, and jq, so it is skipped
-in the filtered `checks.dev-python` source.
+jq programs, a real Nix store for immutable outputs, and jq, so only the
+filtered `checks.dev-python` source may skip it.
 """
 
 import shutil
@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from conftest import REPOSITORY, Checkout
+from conftest import REPOSITORY, Checkout, require
 
 BASH = shutil.which("bash") or "/bin/sh"
 NIX = shutil.which("nix")
@@ -103,8 +103,8 @@ exec '{cp}' "$@"
 
 @pytest.fixture
 def e2e(checkout: Checkout) -> E2E:
-    if NIX is None or shutil.which("jq") is None:
-        pytest.skip("needs Nix and jq")
+    require(NIX is not None, "Nix")
+    require(shutil.which("jq") is not None, "jq")
     checkout.from_repository(
         "scripts/e2e-workflow",
         "scripts/e2e-matrix.jq",
@@ -348,15 +348,20 @@ def test_unusable_kept_paths_never_replace_the_failure_or_borrow_old_evidence(
     assert "verifier" not in e2e.events()
 
 
+# The gates build the tools workspace's binaries (`cargo test` in host_tests)
+# before they run pytest; run alone, pytest names the build it needs.
 VERIFIER = REPOSITORY / "tools" / "target" / "debug" / "e2e-evidence"
+BUILD_VERIFIER = (
+    "cargo build --locked --manifest-path tools/Cargo.toml -p host-proof "
+    "--bin e2e-evidence"
+)
 
 
 @pytest.mark.parametrize("args", [["e2e-producer", LANE], ["e2e-regenerate-coverage"]])
 def test_missing_successful_evidence_fails_the_real_verifier(
     e2e: E2E, args: list[str]
 ) -> None:
-    if not VERIFIER.is_file():
-        pytest.skip("needs host-proof's e2e-evidence built under tools/target")
+    require(VERIFIER.is_file(), f"{VERIFIER}; build it with `{BUILD_VERIFIER}`")
     result = e2e.run(
         *args, output=capture_only(), status="0", REAL_VERIFIER=str(VERIFIER)
     )

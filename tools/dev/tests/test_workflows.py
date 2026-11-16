@@ -201,19 +201,19 @@ def test_a_forwarded_tool_keeps_its_streams_and_status(
     assert (result.stdout, result.stderr) == (b"sandbox out\n", b"sandbox err\n")
 
 
+@pytest.mark.parametrize("output", [b"not a report\n", b"", b" \n"])
 @pytest.mark.parametrize("command", ["wasm-audit", "coverage-check", "e2e-local"])
 def test_report_tools_fail_closed_without_a_report(
-    checkout: Checkout, command: str
+    checkout: Checkout, command: str, output: bytes
 ) -> None:
-    checkout.tool("cargo", 'print("not a report")')
+    checkout.tool("cargo", f"sys.stdout.buffer.write({output!r})")
     result = checkout.dev(command, "budget")
     assert result.returncode == 5
-    assert result.stdout == b"not a report\n"
-    assert result.stderr.endswith(b"output is not a step report\n")
+    assert result.stdout == output
+    assert result.stderr == f"dev: {command}: output is not a step report\n".encode()
 
 
-# Ported from repository-policy's org_frontdoor: the front door forwards
-# explicit local originals only. Nothing is bootstrapped and nothing but the
+# The front door forwards explicit local originals only. Nothing is bootstrapped and nothing but the
 # trace run directory (`.xtask/run`, which `dev` writes for every run) appears.
 ORG_TOOL = """\
 files = sys.argv[sys.argv.index("--") + 2:]

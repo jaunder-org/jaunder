@@ -7,8 +7,8 @@ from conftest import Checkout
 
 from jaunder_dev import report
 
-# Reports and their rendering by `jq -r -f scripts/step-report.jq`, captured
-# from the real jq once: the rendering must stay byte-identical.
+# Reports and their rendering by `jq -r -f scripts/step-report.jq`; the
+# rendering stays byte-identical to jq's.
 REPORT = {
     "command": "test-local",
     "ok": False,
@@ -97,7 +97,10 @@ def test_report_renders_as_step_report_jq_does(
     assert report.render(json.dumps(document).encode()) == rendered
 
 
+# ADR-0247: a tool prints exactly one report, so empty output is not one.
 NOT_REPORTS = [
+    b"",
+    b" \n",
     b"not a report\n",
     b"1\n",
     b'"text"\n',
@@ -113,11 +116,6 @@ def test_output_that_is_not_a_report_cannot_be_rendered(output: bytes) -> None:
     assert report.render(output) is None
 
 
-@pytest.mark.parametrize("output", [b"", b"\n"])
-def test_empty_output_renders_as_nothing_as_jq_does(output: bytes) -> None:
-    assert report.render(output) == ""
-
-
 @pytest.mark.parametrize("output", NOT_REPORTS)
 def test_a_successful_step_without_a_report_fails_closed(
     checkout: Checkout, output: bytes
@@ -127,7 +125,7 @@ def test_a_successful_step_without_a_report_fails_closed(
         f"sys.stdout.buffer.write({output!r}); print('progress', file=sys.stderr)",
     )
     result = checkout.dev("test-local")
-    # jq -r -f scripts/step-report.jq exits 5 for every such output.
+    # jq -r -f scripts/step-report.jq exits 5 for every nonempty such output.
     assert result.returncode == 5, result
     assert result.stdout == output
     assert result.stderr == (

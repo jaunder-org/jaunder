@@ -30,17 +30,16 @@ def _render(report: Any) -> str:
 
 
 # jq's status for input step-report.jq cannot render: not JSON, or JSON
-# without a `steps` list.
+# without a `steps` list. Output with no report at all fails with it too.
 NOT_A_REPORT = 5
 
 
 def render(document: bytes) -> str | None:
     """The report on a host tool's stdout, rendered; None if it is not a report.
 
-    Empty output renders as nothing, as jq reads no input from it.
+    ADR-0247 has a host tool print exactly one report, even when it refuses,
+    so empty output is not a report either.
     """
-    if not document.strip():
-        return ""
     try:
         return _render(json.loads(document))
     except ValueError, LookupError, TypeError, AttributeError:

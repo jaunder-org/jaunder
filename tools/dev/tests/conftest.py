@@ -25,6 +25,22 @@ import os, pathlib, signal, subprocess, sys, time
 with open("order", "a") as order:
     order.write(" ".join([pathlib.Path(sys.argv[0]).name, *sys.argv[1:]]) + "\\n")
 """
+
+
+def require(present: bool, prerequisite: str) -> None:
+    """Skips inside `checks.dev-python` without `prerequisite`; fails elsewhere.
+
+    That check sets JAUNDER_DEV_PYTHON_CHECK: its filtered source lacks the
+    repository's scripts and its sandbox lacks jq and Nix. Anywhere else a
+    missing prerequisite is a broken environment, not a reason to pass.
+    """
+    if present:
+        return
+    if os.environ.get("JAUNDER_DEV_PYTHON_CHECK") == "1":
+        pytest.skip(f"needs {prerequisite}")
+    pytest.fail(f"missing prerequisite: {prerequisite}")
+
+
 # How the devShim (nix/packages.nix) starts `dev`: the checkout's tools/dev
 # joins this interpreter's sys.path alone, never PYTHONPATH, so every step's
 # child inherits the caller's environment unchanged.
@@ -110,7 +126,7 @@ class Checkout:
         return path
 
     def forward_just_to_dev(self) -> None:
-        """Repository scripts still call `just X`; here that runs `dev X` instead.
+        """Repository scripts call `just X`; here that runs `dev X` instead.
 
         This stands in for the caller switch to `dev`, so a script's nested
         recipe is this package's port, joined to the same trace.
@@ -123,11 +139,10 @@ class Checkout:
         )
 
     def from_repository(self, *paths: str) -> None:
-        """Copies repository files the workflow runs; skips outside the repository."""
+        """Copies repository files the workflow runs (see `require`)."""
         for path in paths:
             source = REPOSITORY / path
-            if not source.is_file():
-                pytest.skip(f"needs the repository's {path}")
+            require(source.is_file(), f"the repository's {path}")
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(source, target)
@@ -150,7 +165,8 @@ class Checkout:
 
 # A fake for every tool a workflow runs. Each appends its argv to $FAKE_LOG
 # (unit and record separators keep empty and whitespace-bearing arguments
-# exact) and exits 17 when its command line equals $FAIL_COMMAND. Fake Git
+# exact) and exits 17 when its command line equals $FAIL_COMMAND; otherwise a
+# host tool that reports prints a minimal report with no steps. Fake Git
 # refuses inherited repository overrides with 23, answers checkout discovery
 # from the real Git, and reports a dirty tree while `dirty-status` exists.
 # Nix cache probes fail, so Nix steps record no cache source.
@@ -202,6 +218,40 @@ if [ "$name $*" = "${FAIL_COMMAND-}" ]; then
     printf '%s failed\n' "$name" >&2
     exit 17
 fi
+case "$name $*" in
+  'cargo run '*' -p host-proof --bin '*|'cargo run '*' --bin doctest-check '*|'cargo run '*' --bin coverage-check '*)
+    printf '{"steps":[]}\n' ;;
+esac
+"""
+# A fake `nix` with a store: a check's output is valid once built, or from the
+# start with NIX_VALID; the other variables inject probe and build failures.
+FAKE_NIX_STORE = """\
+import json
+command = sys.argv[1]
+env = os.environ.get
+if command == "eval":
+    if env("NIX_EVAL_FAIL"):
+        print("eval-err", file=sys.stderr)
+        sys.exit(1)
+    print("/nix/store/0000-demo", end="")
+elif command == "path-info":
+    if env("NIX_INFO_FAIL"):
+        print("info-err", file=sys.stderr)
+        sys.exit(1)
+    if env("NIX_INFO_GARBLED"):
+        print("not json")
+        sys.exit()
+    path = sys.argv[-1]
+    valid = bool(env("NIX_VALID")) or os.path.exists("built")
+    info = {"ultimate": bool(env("NIX_ULTIMATE")), "version": 1}
+    print(json.dumps({path: info if valid else None}))
+    print("info-warning", file=sys.stderr)
+else:
+    print("build-out"); print("build-err", file=sys.stderr)
+    code = int(env("NIX_BUILD_CODE", "0"))
+    if code == 0 and not env("NIX_LOST"):
+        open("built", "w").close()
+    sys.exit(code)
 """
 FAKE_TOOLS = (
     "bash",

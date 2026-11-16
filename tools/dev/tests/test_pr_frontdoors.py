@@ -1,8 +1,8 @@
 """PR land and cleanup front doors through `dev`, against scripted gh, git and
 cargo: never a real PR, merge or checkout cleanup.
 
-They run the repository's scripts and jq, so they are skipped in the filtered
-`checks.dev-python` source.
+They run the repository's scripts and jq, so only the filtered
+`checks.dev-python` source may skip them.
 """
 
 import copy
@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
-from conftest import REAL_GIT, Checkout
+from conftest import REAL_GIT, Checkout, require
 
 HEAD = "a" * 40
 MERGE = "b" * 40
@@ -76,12 +76,11 @@ class Native:
 
 @pytest.fixture
 def native(checkout: Checkout) -> Native:
-    if shutil.which("jq") is None:
-        pytest.skip("needs jq")
+    require(shutil.which("jq") is not None, "jq")
     checkout.from_repository("scripts/pr-land.sh", "scripts/pr-cleanup.sh")
     for tool in ["gh", "git", "cargo"]:
         checkout.executable(tool, NATIVE)
-    # pr-land.sh observes through `just pr-watch`, now `dev pr-watch`.
+    # pr-land.sh observes through `just pr-watch`, which runs `dev pr-watch` here.
     checkout.forward_just_to_dev()
     return Native(checkout)
 

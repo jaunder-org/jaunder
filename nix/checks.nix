@@ -3516,6 +3516,9 @@ dev-python = nonSubstitutable (
         # The CLI tests run `dev` inside throwaway Git checkouts.
         pkgs.git
       ];
+      # Only here may tests skip for the repository scripts, jq or Nix that
+      # this filtered source and sandbox lack; elsewhere their absence fails.
+      JAUNDER_DEV_PYTHON_CHECK = "1";
     }
     ''
       cp --no-preserve=mode -r ${devCheckSrc} src

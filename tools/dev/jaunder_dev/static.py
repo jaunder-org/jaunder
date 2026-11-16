@@ -9,8 +9,17 @@ before any check starts.
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 
 from jaunder_dev import steps
+
+
+class Mode(StrEnum):
+    """Whether a check repairs what it finds or only reports it."""
+
+    FIX = "fix"
+    VERIFY = "verify"
+
 
 PRODUCT_HOME = "JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME"
 TOOLS_HOME = "JAUNDER_DEVTOOL_TOOLS_CARGO_HOME"
@@ -226,8 +235,8 @@ LEAVES = {
 # Only the `all` group requests ERT through devtool, which times the request.
 _ERT_REQUEST = _fixed("", "devtool", "check", "ert")
 
-_CLIPPY = [
-    "cargo-deny",
+# The Clippy units, in the order every caller runs them.
+CLIPPY = [
     "product-core-clippy",
     "web-server-clippy",
     "web-no-server-clippy",
@@ -242,7 +251,14 @@ GROUPS = {
     ),
     "code": (
         "Elisp, ast-grep, cargo-deny and Clippy checks.",
-        ["elisp-fmt", "ast-grep-tests", "no-full-reload", "byte-compile", *_CLIPPY],
+        [
+            "elisp-fmt",
+            "ast-grep-tests",
+            "no-full-reload",
+            "byte-compile",
+            "cargo-deny",
+            *CLIPPY,
+        ],
     ),
     "all": (
         "Every static check, ERT through devtool last.",
@@ -255,7 +271,8 @@ GROUPS = {
             "no-full-reload",
             "byte-compile",
             "tsc",
-            *_CLIPPY,
+            "cargo-deny",
+            *CLIPPY,
             "ert-request",
         ],
     ),
@@ -284,13 +301,14 @@ def missing_home(name: str) -> bool:
     return any(not os.environ.get(home) for home in homes)
 
 
-def argv(name: str, fix: bool, sandbox: bool = False) -> list[str]:
-    return LEAVES[name].argv(fix, sandbox)
+def argv(name: str, mode: Mode) -> list[str]:
+    """Leaf `name`'s host argv."""
+    return LEAVES[name].argv(mode is Mode.FIX, False)
 
 
 def run(
     name: str,
-    fix: bool,
+    mode: Mode,
     sandbox: bool = False,
     environment: steps.Environment | None = None,
 ) -> None:
@@ -305,4 +323,4 @@ def run(
                 "CARGO_NET_OFFLINE": "true",
                 "CARGO_HOME": os.environ[leaf.home],
             }
-        steps.run(member, leaf.argv(fix, sandbox), environment=changes)
+        steps.run(member, leaf.argv(mode is Mode.FIX, sandbox), environment=changes)

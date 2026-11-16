@@ -2,18 +2,19 @@
 
 Native `gh` owns every mutation; each reply is checked before the next call,
 and the issue is read back in full before success is reported. Nothing is
-rolled back: a failure names the issue to inspect before retrying.
+rolled back: any failure names the issue to inspect before retrying.
 
-Ported from the shell glue in `scripts/issue-metadata.sh`, which
-`scripts/issue-discover.sh` still uses. Failures exit as that glue did: a
-violated check made with `jq -e` exits 1, a jq `error(...)` 5, a selection
-that yields nothing 4, unreadable JSON 2, and a failed `gh` its own status.
+Each class of failure has its own exit status, the same as the matching check
+in `scripts/issue-metadata.sh` (which `scripts/issue-discover.sh` uses): a
+violated check exits 1, a malformed reply 5, a selection that yields nothing 4,
+unreadable JSON 2, and a failed `gh` its own status.
 """
 
 import json
 import re
 import sys
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -41,7 +42,7 @@ PROJECT_ITEMS = (
     "ProjectV2ItemFieldSingleSelectValue{name}}} pageInfo{hasNextPage}}}}}"
 )
 
-# Exit statuses of the checks this replaces.
+# Exit statuses by class of failure.
 VIOLATED = 1
 NOTHING_SELECTED = 4
 ERROR = 5
@@ -67,8 +68,8 @@ class _Operation:
         except ValueError:
             self.fail(UNREADABLE, f"gh {args[0]} replied with unreadable JSON")
 
-    def issues(self, endpoint: str) -> list[dict[str, Any]]:
-        """Every page of a REST inventory, each row's issue identity unique.
+    def inventory(self, endpoint: str) -> list[dict[str, Any]]:
+        """Every row of a paginated REST inventory, each row's number unique.
 
         Malformed pages and repeated identities are refused before callers
         select rows, so partial data never becomes an empty or successful list.
@@ -90,7 +91,7 @@ class _Operation:
 
     def milestone(self, wanted: str) -> Any:
         """The one open milestone whose number or title is `wanted`."""
-        milestones = self.issues(f"repos/{REPO}/milestones?state=open&per_page=100")
+        milestones = self.inventory(f"repos/{REPO}/milestones?state=open&per_page=100")
         if not all(
             isinstance(row.get("title"), str) and row["title"] for row in milestones
         ):
@@ -122,43 +123,68 @@ def _blockers_valid(blockers: Sequence[str], number: str) -> bool:
     )
 
 
-class _Request:
-    """An issue's explicit decisions, checked before any tracker write."""
+@dataclass(frozen=True)
+class Decisions:
+    """An issue's explicit decisions, as both front doors take them."""
 
-    def __init__(self, operation: _Operation, decisions: Sequence[str]) -> None:
-        title, issue_type, milestone, priority, labels, body_file = decisions
-        if not TITLE.match(title):
-            operation.fail(VIOLATED, "Expected Conventional Commit title")
-        if issue_type not in ("Task", "Bug", "Feature"):
-            operation.fail(VIOLATED, "Explicit type must be Task, Bug or Feature")
-        if priority not in PRIORITY_OPTIONS:
-            operation.fail(VIOLATED, "Explicit Priority must be P1/P2/P3/P4")
-        self.priority = priority
-        self.body_file = Path(body_file)
-        milestone_number = operation.milestone(milestone)
-        try:
-            body = self.body_file.read_bytes().decode(errors="replace")
-        except OSError as error:
-            operation.fail(UNREADABLE, f"{body_file}: {error.strerror}")
-        label_list = labels.split(",") if labels else []
-        if not (
-            label_list
-            and all(label_list)
-            and len(label_list) == len(set(label_list))
-            and re.search(r"\S", body)
-        ):
-            operation.fail(ERROR, "explicit nonempty labels and body required")
-        self.input = {
-            "title": title,
-            "type": issue_type,
-            "milestone": milestone_number,
-            "labels": label_list,
-            "body": body,
-        }
+    title: str
+    issue_type: str
+    milestone: str
+    priority: str
+    labels: str
+    body_file: str
+
+
+@dataclass(frozen=True)
+class _Request:
+    """Checked decisions, ready to send; nothing is read again after the write."""
+
+    priority: str
+    body_file: str
+    # The body file's bytes, read once: the readback must return exactly them.
+    body: bytes
+    # The issue fields gh sends.
+    input: dict[str, Any]
 
     def encoded(self) -> bytes:
         """The request as gh reads it from standard input."""
         return (json.dumps(self.input, indent=2, ensure_ascii=False) + "\n").encode()
+
+
+def _request(operation: _Operation, decisions: Decisions) -> _Request:
+    """Checks every decision, resolving the milestone and reading the body."""
+    if not TITLE.match(decisions.title):
+        operation.fail(VIOLATED, "Expected Conventional Commit title")
+    if decisions.issue_type not in ("Task", "Bug", "Feature"):
+        operation.fail(VIOLATED, "Explicit type must be Task, Bug or Feature")
+    if decisions.priority not in PRIORITY_OPTIONS:
+        operation.fail(VIOLATED, "Explicit Priority must be P1/P2/P3/P4")
+    milestone = operation.milestone(decisions.milestone)
+    try:
+        body = Path(decisions.body_file).read_bytes()
+    except OSError as error:
+        operation.fail(UNREADABLE, f"{decisions.body_file}: {error.strerror}")
+    text = body.decode(errors="replace")
+    labels = decisions.labels.split(",") if decisions.labels else []
+    if not (
+        labels
+        and all(labels)
+        and len(labels) == len(set(labels))
+        and re.search(r"\S", text)
+    ):
+        operation.fail(ERROR, "explicit nonempty labels and body required")
+    return _Request(
+        priority=decisions.priority,
+        body_file=decisions.body_file,
+        body=body,
+        input={
+            "title": decisions.title,
+            "type": decisions.issue_type,
+            "milestone": milestone,
+            "labels": labels,
+            "body": text,
+        },
+    )
 
 
 def _add_blocker(operation: _Operation, number: str, blocker: str) -> None:
@@ -180,7 +206,7 @@ def _add_blocker(operation: _Operation, number: str, blocker: str) -> None:
         operation.fail(NOTHING_SELECTED, f"blocker {blocker} is not an open issue")
     blocker_id = found["id"]
     dependencies = f"repos/{REPO}/issues/{number}/dependencies/blocked_by?per_page=100"
-    present = operation.issues(dependencies)
+    present = operation.inventory(dependencies)
     if not all(_positive(row.get("id")) for row in present):
         operation.fail(VIOLATED, "invalid dependency ids")
     if not any(row["id"] == blocker_id for row in present):
@@ -194,7 +220,7 @@ def _add_blocker(operation: _Operation, number: str, blocker: str) -> None:
         )
         if not (_positive(_get(added, "id")) and _positive(_get(added, "number"))):
             operation.fail(VIOLATED, "dependency was not recorded")
-    if not any(row["id"] == blocker_id for row in operation.issues(dependencies)):
+    if not any(row["id"] == blocker_id for row in operation.inventory(dependencies)):
         operation.fail(VIOLATED, f"blocker {blocker} missing from readback")
 
 
@@ -251,7 +277,7 @@ def _finish(
         operation.fail(
             ERROR, "issue metadata/body readback mismatch (possible body mangling)"
         )
-    if readback["body"].encode() != request.body_file.read_bytes():
+    if readback["body"].encode() != request.body:
         operation.fail(VIOLATED, f"{request.body_file} differs from the readback body")
     backlog = _backlog(operation, item_id, request.priority)
     print(json.dumps(readback | {"backlog": backlog}, indent=2, ensure_ascii=False))
@@ -310,10 +336,14 @@ def _backlog(operation: _Operation, item_id: str, priority: str) -> Any:
 
 def _reporting(operation: _Operation, body: Callable[[], None]) -> None:
     """Runs `body`; on any failure, names the issue to inspect, as no change
-    is rolled back."""
+    is rolled back.
+
+    An unexpected exception is reported the same way before it propagates:
+    the tracker may already hold a partial write.
+    """
     try:
         body()
-    except steps.StepFailed:
+    except Exception:
         print(
             f"Issue operation failed; inspect {REPO}/issues/{operation.number} "
             "before retrying (no rollback).",
@@ -323,11 +353,11 @@ def _reporting(operation: _Operation, body: Callable[[], None]) -> None:
         raise
 
 
-def create(decisions: Sequence[str], blockers: Sequence[str]) -> None:
+def create(decisions: Decisions, blockers: Sequence[str]) -> None:
     operation = _Operation("issue-create")
 
     def body() -> None:
-        request = _Request(operation, decisions)
+        request = _request(operation, decisions)
         if not _blockers_valid(blockers, ""):
             operation.fail(VIOLATED, "Invalid/self blocker")
         mutated = operation.gh(
@@ -344,13 +374,13 @@ def create(decisions: Sequence[str], blockers: Sequence[str]) -> None:
     _reporting(operation, body)
 
 
-def edit(number: str, decisions: Sequence[str], blockers: Sequence[str]) -> None:
+def edit(number: str, decisions: Decisions, blockers: Sequence[str]) -> None:
     operation = _Operation("issue-edit", number)
 
     def body() -> None:
         if not POSITIVE.fullmatch(number):
             operation.fail(VIOLATED, "Expected issue number")
-        request = _Request(operation, decisions)
+        request = _request(operation, decisions)
         if not _blockers_valid(blockers, number):
             operation.fail(VIOLATED, "Invalid/self blocker")
         mutated = operation.gh(

@@ -6,23 +6,23 @@ Their full success populations are in test_gates.
 import subprocess
 
 import pytest
-from conftest import Checkout, Workflow
+from conftest import FAKE_NIX_STORE, Checkout, Workflow
 
 CLEAN = ["git", "status", "--porcelain", "--untracked-files=all"]
-NIX_BUILD = "nix build --no-update-lock-file --no-write-lock-file -L"
+NIX_BUILD = "nix build -L --no-update-lock-file --no-write-lock-file"
 CARGO_RUN = "cargo run --locked --quiet --manifest-path tools/Cargo.toml"
 STEPS = {
     "coverage": [
-        f"{NIX_BUILD} .#checks.x86_64-linux.coverage --out-link .xtask/gcroots/coverage",
-        f"{NIX_BUILD} .#checks.x86_64-linux.coverage-gate --no-link",
+        f"{NIX_BUILD} --out-link .xtask/gcroots/coverage .#checks.x86_64-linux.coverage",
+        f"{NIX_BUILD} --no-link .#checks.x86_64-linux.coverage-gate",
         (
             f"{CARGO_RUN} -p coverage --features host --bin coverage-check -- "
             "policy --out .xtask/gcroots/coverage"
         ),
     ],
     "doctests": [
-        f"{NIX_BUILD} .#checks.x86_64-linux.doctests --out-link .xtask/gcroots/doctests",
-        f"{NIX_BUILD} .#checks.x86_64-linux.doctests-gate --no-link",
+        f"{NIX_BUILD} --out-link .xtask/gcroots/doctests .#checks.x86_64-linux.doctests",
+        f"{NIX_BUILD} --no-link .#checks.x86_64-linux.doctests-gate",
     ],
 }
 
@@ -59,3 +59,24 @@ def test_public_workflows_refuse_a_really_dirty_checkout(
     assert result.returncode == 1
     assert result.stderr.startswith(b"verify workflows require a clean checkout\n")
     assert checkout.order() == ""
+
+
+@pytest.mark.parametrize(
+    ("extra", "cache"), [({"NIX_VALID": "1"}, "reused"), ({}, "substituted")]
+)
+def test_producer_and_gate_record_where_their_outputs_came_from(
+    checkout: Checkout, extra: dict[str, str], cache: str
+) -> None:
+    checkout.tool("nix", FAKE_NIX_STORE)
+    (checkout.root / ".git" / "info" / "exclude").write_text(".xtask/\nbuilt\n")
+    result = checkout.run(checkout.command("doctests"), checkout.environment(**extra))
+    assert result.returncode == 0, result
+    slices = checkout.merged()
+    assert slices["doctests"]["args"]["jaunder.cache"] == cache
+    # The fake store holds one output, which the producer step leaves valid.
+    assert slices["doctests-gate"]["args"]["jaunder.cache"] == "reused"
+    # The probes evaluate the flake as the build does, lock file untouched.
+    assert checkout.order().splitlines()[0] == (
+        "nix eval --raw --no-update-lock-file --no-write-lock-file "
+        ".#checks.x86_64-linux.doctests.outPath"
+    )

@@ -21,7 +21,7 @@ import sys
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from types import FrameType
-from typing import Any, NoReturn
+from typing import Any
 
 from opentelemetry.trace import Span
 
@@ -33,18 +33,26 @@ _HANDLED = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
 # Changes to one step's environment; None unsets a name.
 Environment = Mapping[str, str | None]
 
+# The output-holding GC roots of Nix checks, under the checkout root.
+GCROOTS = ".xtask/gcroots"
+
+
+def changed(base: Mapping[str, str], changes: Environment | None) -> dict[str, str]:
+    """`base` with `changes` applied."""
+    environment = dict(base)
+    for key, value in (changes or {}).items():
+        if value is None:
+            environment.pop(key, None)
+        else:
+            environment[key] = value
+    return environment
+
 
 class StepFailed(Exception):
     def __init__(self, code: int, signalled: bool) -> None:
         super().__init__(code)
         self.code = code
         self.signalled = signalled
-
-
-def refuse(message: str) -> NoReturn:
-    """Stops the gate with status 1 after a preflight check refuses to continue."""
-    print(message, file=sys.stderr, flush=True)
-    raise StepFailed(1, signalled=False)
 
 
 class _Interrupted(StepFailed):
@@ -110,6 +118,12 @@ def gate(root: Path, name: str, body: Callable[[], None]) -> int:
                 body()
             except StepFailed as failure:
                 code, signalled = failure.code, failure.signalled
+            except Exception:
+                # A defect, not a verdict: the gate still ends failed in the
+                # trace, and the traceback and Python's status 1 reach the
+                # caller unchanged.
+                _record_outcome(span, 1, False)
+                raise
             finally:
                 _signals.armed = False
             _record_outcome(span, code, signalled)
@@ -132,12 +146,7 @@ def _supervise(
     With `capture`, the child's stdout is returned instead of passed through;
     `stdin`, if given, is the child's whole standard input.
     """
-    child_environment = trace.child_environment()
-    for key, value in (environment or {}).items():
-        if value is None:
-            child_environment.pop(key, None)
-        else:
-            child_environment[key] = value
+    child_environment = changed(trace.child_environment(), environment)
     _signals.supervising = True
     _signals.forwarded = []
     _signals.pending = []
@@ -185,6 +194,10 @@ def _step(name: str, argv: Sequence[str]) -> Iterator[Span]:
             raise
 
 
+# Judges a successful step's captured output: the reason to refuse it, or None.
+Refusal = Callable[[bytes], str | None]
+
+
 def _run(
     name: str,
     argv: Sequence[str],
@@ -192,6 +205,7 @@ def _run(
     environment: Environment | None,
     render: Callable[[bytes], str | None] | None = None,
     stdin: bytes | None = None,
+    refusal: Refusal | None = None,
 ) -> bytes:
     with _step(name, argv) as span:
         code, signalled, output = _supervise(argv, capture, environment, stdin)
@@ -206,6 +220,13 @@ def _run(
                 print(f"dev: {name}: output is not a step report", file=sys.stderr)
                 sys.stderr.flush()
                 code = report.NOT_A_REPORT
+        if refusal is not None and not code:
+            # Judged inside the step's span, so the trace shows which step's
+            # output stopped the gate.
+            reason = refusal(output)
+            if reason is not None:
+                print(reason, file=sys.stderr, flush=True)
+                code = 1
         _record_outcome(span, code, signalled)
     if code:
         raise StepFailed(code, signalled)
@@ -241,9 +262,23 @@ def output(
     return _run(name, argv, True, environment, stdin=stdin)
 
 
-def text(name: str, argv: Sequence[str], environment: Environment | None = None) -> str:
-    """A step's stdout as a shell's `$(...)` gives it: trailing newlines removed."""
-    return output(name, argv, environment).decode(errors="replace").rstrip("\n")
+def _shell_text(output: bytes) -> str:
+    return output.decode(errors="replace").rstrip("\n")
+
+
+def text(
+    name: str,
+    argv: Sequence[str],
+    environment: Environment | None = None,
+    refusal: Callable[[str], str | None] | None = None,
+) -> str:
+    """A step's stdout as a shell's `$(...)` gives it: trailing newlines removed.
+
+    `refusal`, if given, judges that text: a reason it returns is printed and
+    fails the step with status 1.
+    """
+    judge = None if refusal is None else lambda output: refusal(_shell_text(output))
+    return _shell_text(_run(name, argv, True, environment, refusal=judge))
 
 
 class _QueryFailed(Exception):
@@ -282,33 +317,28 @@ def _built_source(output: str) -> Cache:
     return Cache.BUILT if entry.get("ultimate") else Cache.SUBSTITUTED
 
 
-def nix_check(check: str) -> None:
-    """Builds one flake check, keeping its output as a GC root.
+def nix_check(
+    check: str,
+    flags: Sequence[str] = ("--accept-flake-config",),
+    keep: bool = True,
+) -> None:
+    """Builds one flake check; `keep` holds its output as a GC root in GCROOTS.
 
-    The step records `jaunder.cache` for the check's top-level output only:
-    `reused` if it was already valid, else `built` or `substituted`. A failed
-    query records nothing rather than guess, and never changes the step.
+    `flags` apply to the build and to its probes alike. The step records
+    `jaunder.cache` for the check's top-level output only: `reused` if it was
+    already valid, else `built` or `substituted`. A failed query records
+    nothing rather than guess, and never changes the step.
     """
     installable = f".#checks.x86_64-linux.{check}"
-    argv = [
-        "nix",
-        "build",
-        "-L",
-        "--accept-flake-config",
-        "--out-link",
-        f".xtask/gcroots/{check}",
-        installable,
-    ]
-    Path(".xtask/gcroots").mkdir(parents=True, exist_ok=True)
+    if keep:
+        Path(GCROOTS).mkdir(parents=True, exist_ok=True)
+    link = ["--out-link", f"{GCROOTS}/{check}"] if keep else ["--no-link"]
+    argv = ["nix", "build", "-L", *flags, *link, installable]
     with _step(check, argv) as span:
         output: str | None
         try:
             output = _query(
-                "nix",
-                "eval",
-                "--raw",
-                "--accept-flake-config",
-                f"{installable}.outPath",
+                "nix", "eval", "--raw", *flags, f"{installable}.outPath"
             ).decode()
             reused = _store_entry(output) is not None
         except _QueryFailed:

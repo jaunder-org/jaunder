@@ -275,6 +275,9 @@ def test_an_output_that_is_not_the_selected_evidence_is_refused(
     assert result.returncode == 1
     assert message.encode() in result.stderr
     assert not perf.retained(PRODUCERS[0][0]).exists()
+    # The refusal belongs to the build step whose output it judged.
+    step = perf.checkout.merged()[PRODUCERS[0][0]]["args"]
+    assert (step["jaunder.status"], step["process.exit.code"]) == ("failed", 1)
 
 
 def set_mode(path: Path, mode: int) -> int:
@@ -291,6 +294,18 @@ def set_mode(path: Path, mode: int) -> int:
 
 def mode_of(path: Path) -> int:
     return path.stat().st_mode & 0o7777
+
+
+def test_an_unreadable_selection_fails_the_gate_with_its_traceback(
+    perf: Perf,
+) -> None:
+    (perf.checkout.root.parent / "selection.json").write_text("{}")
+    result = perf.run("success")
+    assert result.returncode == 1
+    assert b"Traceback" in result.stderr
+    assert b"KeyError: 'producers'" in result.stderr
+    gate = perf.checkout.merged()["dev perf"]["args"]
+    assert (gate["jaunder.status"], gate["process.exit.code"]) == ("failed", 1)
 
 
 def test_retained_evidence_is_owner_writable_without_changing_sources_or_links(

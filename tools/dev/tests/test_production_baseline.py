@@ -63,6 +63,13 @@ def test_preflight_refuses_before_fetch_or_host(
     assert not any(
         argv[0] == "nix" or argv[1] == "fetch" for argv in workflow.commands()
     )
+    # The refusal belongs to the step whose output it judged.
+    step = {"dirty-status": "clean-tree", "wrong-origin": "origin"}[marker]
+    attributes = workflow.checkout.merged()[step]["args"]
+    assert (attributes["jaunder.status"], attributes["process.exit.code"]) == (
+        "failed",
+        1,
+    )
 
 
 def test_identical_resolved_source_and_target_or_a_failed_fetch_refuse(
@@ -74,6 +81,8 @@ def test_identical_resolved_source_and_target_or_a_failed_fetch_refuse(
     assert result.returncode == 1
     assert b"distinct resolved" in result.stderr
     assert not any(argv[0] == "nix" for argv in workflow.commands())
+    target = workflow.checkout.merged()["target"]["args"]
+    assert (target["jaunder.status"], target["process.exit.code"]) == ("failed", 1)
     result = workflow.dev(
         "production-baseline-discover",
         "source",
