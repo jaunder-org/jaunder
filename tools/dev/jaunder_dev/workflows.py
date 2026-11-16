@@ -44,7 +44,8 @@ def org_timezone_manifest(files: Sequence[str]) -> None:
 
 
 def pg_run(args: Sequence[str]) -> None:
-    steps.run("pg-run", [*HOST_PROOF, "pg-run", "--", *args])
+    # The devShell's `pg-run` (scripts/pg-run.py) owns the throwaway cluster.
+    steps.run("pg-run", ["pg-run", *args])
 
 
 def coverage_check(args: Sequence[str]) -> None:

@@ -48,12 +48,12 @@ FORWARDED: list[tuple[list[str], Commands]] = [
     ),
     (
         ["pg-run", "psql", "-c", "select 1"],
-        [words(f"{HOST_PROOF} pg-run --", "psql", "-c", "select 1")],
+        [["pg-run", "psql", "-c", "select 1"]],
     ),
     # A leading `--` is optional and dropped; any later one is forwarded.
     (
         ["pg-run", "--", "psql", "--", "-c"],
-        [words(f"{HOST_PROOF} pg-run --", "psql", "--", "-c")],
+        [["pg-run", "psql", "--", "-c"]],
     ),
     (
         ["census", "--json", "--", "--"],
@@ -430,4 +430,4 @@ def test_missing_or_extra_arguments_are_refused_before_any_work(
 def test_forwarded_help_belongs_to_the_tool(workflow: Workflow) -> None:
     result = workflow.dev("pg-run", "--help")
     assert result.returncode == 0, result
-    assert workflow.commands() == [words(f"{HOST_PROOF} pg-run -- --help")]
+    assert workflow.commands() == [["pg-run", "--help"]]

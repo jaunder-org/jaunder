@@ -219,6 +219,7 @@ FAKE_TOOLS = (
     "ruff",
     "mypy",
     "pytest",
+    "pg-run",
 )
 # Hook-style inherited overrides that would redirect any Git they reach.
 GIT_OVERRIDES = {
