@@ -5,7 +5,7 @@
 
 use super::snapshot::{
     CheckEntry, CheckState, MergeStateStatus, Mergeable, PrSnapshot, PrState, RequiredChecks,
-    RunRef,
+    RunRef, RunStatus,
 };
 use super::{Outcome, SubjectFailure};
 
@@ -207,7 +207,7 @@ pub fn needs_ejection_probe(snap: &PrSnapshot, req: &RequiredChecks) -> bool {
         && all_required_green(snap, req)
 }
 
-/// Is this run the ejection of the PR's *current* head?
+/// Why this run is the ejection of the PR's *current* head, if it is.
 ///
 /// The run's branch name carries the **base** SHA, not the head, so recency cannot be
 /// read off the name. Comparing against `head_committed_at` is what stops a failed
@@ -217,8 +217,24 @@ pub fn needs_ejection_probe(snap: &PrSnapshot, req: &RequiredChecks) -> bool {
 /// RFC 3339 with no fractional seconds, so lexical order is chronological order. If
 /// either side ever gains fractional seconds or a numeric offset, parse instead —
 /// this would go silently wrong rather than fail.
-fn is_ejection(run: &RunRef, snap: &PrSnapshot) -> bool {
-    run.conclusion == "failure" && run.created_at > snap.head_committed_at
+///
+/// The failure is either the run's conclusion or, while slower jobs keep the run
+/// in progress, a job that already failed: the queue ejects on the job (#1982).
+fn ejection_detail(run: &RunRef, snap: &PrSnapshot) -> Option<String> {
+    if run.created_at <= snap.head_committed_at {
+        return None;
+    }
+    match &run.status {
+        RunStatus::Completed { conclusion } if conclusion == "failure" => {
+            Some("the front-of-queue merge_group run failed".into())
+        }
+        RunStatus::InProgress {
+            failed_job: Some(job),
+        } => Some(format!(
+            "job '{job}' in the front-of-queue merge_group run failed; the run is still in progress"
+        )),
+        RunStatus::Completed { .. } | RunStatus::InProgress { failed_job: None } => None,
+    }
 }
 
 pub fn classify(
@@ -298,12 +314,10 @@ pub fn classify_with_failures(
             None,
         );
     }
-    if let Some(run) = ejection.filter(|r| is_ejection(r, snap)) {
-        return terminal(
-            Outcome::Ejected,
-            Some("the front-of-queue merge_group run failed".into()),
-            Some(run.url.clone()),
-        );
+    if let Some(run) = ejection
+        && let Some(detail) = ejection_detail(run, snap)
+    {
+        return terminal(Outcome::Ejected, Some(detail), Some(run.url.clone()));
     }
 
     if snap.queue.in_queue {
@@ -758,7 +772,9 @@ mod tests {
     #[test]
     fn successful_merge_group_run_is_not_an_ejection() {
         let mut run = ejection("2026-07-30T14:30:00Z");
-        run.conclusion = "success".into();
+        run.status = RunStatus::Completed {
+            conclusion: "success".into(),
+        };
         assert!(matches!(
             classify(
                 &open(green()),
@@ -767,6 +783,66 @@ mod tests {
                 &Progress::default()
             ),
             Step::Ready
+        ));
+    }
+
+    #[test]
+    fn in_progress_run_with_a_failed_job_is_ejected_not_dequeued() {
+        // #1982: the queue ejects on the first failed job while slower jobs keep
+        // the run's conclusion empty.
+        let progress = Progress {
+            queued_head_sha: Some("abc".into()),
+        };
+        let run = in_progress_run("2026-07-30T14:30:00Z", Some("Validation host"));
+        match classify(&open(green()), &queue_rules(), Some(&run), &progress) {
+            Step::Terminal {
+                outcome,
+                detail,
+                pointer,
+                ..
+            } => {
+                assert_eq!(outcome, Outcome::Ejected);
+                assert!(detail.unwrap().contains("Validation host"));
+                assert_eq!(pointer.as_deref(), Some(run.url.as_str()));
+            }
+            other => panic!("expected ejected, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn in_progress_run_without_a_failed_job_leaves_the_removal_dequeued() {
+        let progress = Progress {
+            queued_head_sha: Some("abc".into()),
+        };
+        let run = in_progress_run("2026-07-30T14:30:00Z", None);
+        assert!(matches!(
+            classify(&open(green()), &queue_rules(), Some(&run), &progress),
+            Step::Terminal {
+                outcome: Outcome::Dequeued,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn in_progress_failed_job_older_than_head_is_not_ejected() {
+        let mut s = open(green());
+        s.head_committed_at = "2026-07-30T15:00:00Z".into();
+        let run = in_progress_run("2026-07-30T14:30:00Z", Some("Validation host"));
+        assert!(matches!(
+            classify(&s, &queue_rules(), Some(&run), &Progress::default()),
+            Step::Ready
+        ));
+        // The stale run cannot explain a same-head removal either.
+        let progress = Progress {
+            queued_head_sha: Some("abc".into()),
+        };
+        assert!(matches!(
+            classify(&s, &queue_rules(), Some(&run), &progress),
+            Step::Terminal {
+                outcome: Outcome::Dequeued,
+                ..
+            }
         ));
     }
 

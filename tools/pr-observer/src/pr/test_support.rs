@@ -13,7 +13,7 @@ use super::gh::ApiError;
 use super::shared_failure::{SharedFailureEvidence, SubjectFailure};
 use super::snapshot::{
     CheckEntry, CheckProvider, CheckState, MergeStateStatus, Mergeable, PrSnapshot, PrSource,
-    PrState, QueueState, RequiredChecks, RunRef, SharedFailureEvidenceSource,
+    PrState, QueueState, RequiredChecks, RunRef, RunStatus, SharedFailureEvidenceSource,
 };
 use super::watch::{Clock, WatchConfig};
 use super::workflow::{RuntimeJob, WorkflowGraph};
@@ -185,9 +185,22 @@ pub fn queued_at(position: u64) -> PrSnapshot {
 
 pub fn ejection(created_at: &str) -> RunRef {
     RunRef {
+        id: 9,
         url: "https://github.com/o/r/actions/runs/9".into(),
         created_at: created_at.into(),
-        conclusion: "failure".into(),
+        status: RunStatus::Completed {
+            conclusion: "failure".into(),
+        },
+    }
+}
+
+/// A merge-group run still in progress, optionally with an already-failed job.
+pub fn in_progress_run(created_at: &str, failed_job: Option<&str>) -> RunRef {
+    RunRef {
+        status: RunStatus::InProgress {
+            failed_job: failed_job.map(Into::into),
+        },
+        ..ejection(created_at)
     }
 }
 
