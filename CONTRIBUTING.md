@@ -28,7 +28,7 @@ workspace (`tools/`, `elisp/`, `end2end/`). The remaining top-level entries are:
 - `.github/`: CI workflows
 - `public/`: static assets (the favicon), staged into the embedded asset set by
   `server/build.rs`
-- `scripts/`: small shell helpers; `pg-run.sh` is packaged by Nix onto the
+- `scripts/`: small helper scripts; `pg-run.py` is packaged by Nix onto the
   devShell PATH and into the coverage derivation
 
 ### `mod.rs` assembles the module surface
@@ -1749,7 +1749,7 @@ The simplest way to run them against a throwaway PostgreSQL is
 everything down, and applies the shared `sccache` environment. `pg-run` reaches
 the cluster over a Unix socket in a short per-run directory under
 `XDG_RUNTIME_DIR` (or `TMPDIR`); the exported URLs carry it as `?host=`
-([pg-run as a bash script over a Unix socket](docs/adr/drafts/pg-run-bash-unix-socket.md)):
+([pg-run as a Python script over a Unix socket](docs/adr/drafts/pg-run-python-unix-socket.md)):
 
 ```bash
 just test-local
@@ -2277,10 +2277,7 @@ nix build .#checks.x86_64-linux.elisp-coverage-producer
 
 - Use Rust for product code and by default for infrastructure. End-to-end tests
   use Playwright and TypeScript. Python may be used for any infrastructure
-  function when it produces more focused, easier-to-maintain code. Bash may be
-  used for a small process-orchestration wrapper whose job is a fixed command
-  sequence with trap-based cleanup, packaged with `writeShellApplication` so
-  shellcheck runs at build time (`scripts/pg-run.sh`).
+  function when it produces more focused, easier-to-maintain code.
 - All Rust code is formatted with `cargo fmt`.
 - Files containing Leptos `view!` macros are additionally formatted with
   `leptosfmt` (run it first, then `cargo fmt`).

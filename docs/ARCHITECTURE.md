@@ -5003,7 +5003,7 @@ test identities; terminal execution records must reconcile exactly as
 `expected = executed + ignored`. Every required producer subprocess has its exit
 status checked, so diagnostics can explain a failure but cannot classify a
 nonzero exit as success. The derivation runs the producer under `pg-run`
-([pg-run as a bash script over a Unix socket](adr/drafts/pg-run-bash-unix-socket.md)),
+([pg-run as a Python script over a Unix socket](adr/drafts/pg-run-python-unix-socket.md)),
 giving the whole suite a throwaway PostgreSQL alongside SQLite, so
 backend-common tests retain SQLite/PostgreSQL parity and
 `storage/src/postgres/*` is instrumented rather than skipped
@@ -5181,11 +5181,12 @@ this code execute?_ ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)):
   with no I/O policy of its own
   ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)); its nondefault `host`
   feature adds the `coverage-check` consumer.
-- **`scripts/pg-run.sh`** — the single throwaway-PostgreSQL wrapper for host
+- **`scripts/pg-run.py`** — the single throwaway-PostgreSQL wrapper for host
   workflows and the coverage derivation, packaged by Nix onto the devShell PATH.
   It listens only on a Unix socket in its own short directory, exports the
-  `JAUNDER_PG_*` URLs, and tears down on exit, SIGINT and SIGTERM
-  ([pg-run as a bash script over a Unix socket](adr/drafts/pg-run-bash-unix-socket.md),
+  `JAUNDER_PG_*` URLs, passes signals on to the command, and tears down on exit,
+  SIGINT and SIGTERM
+  ([pg-run as a Python script over a Unix socket](adr/drafts/pg-run-python-unix-socket.md),
   superseding ADR-0246's library placement).
 
 The "devtool = in-sandbox, host concern packages = host" split is a litmus test
@@ -5505,7 +5506,7 @@ checker registry, runner, supervisor or replacement omnibus:
   `wasm-audit`, `source-diagnostics`).
 - `tools/coverage` (nondefault `host` feature) — `coverage-check` policy,
   benchmark, source probe, Emacs Lisp, WASM coverage and mutation evidence.
-- `scripts/pg-run.sh` (Nix package `pg-run`) — throwaway PostgreSQL.
+- `scripts/pg-run.py` (Nix package `pg-run`) — throwaway PostgreSQL.
 - `tools/doctests` (nondefault `host` feature) — `doctest-check`.
 - `test-support seed-e2e` — the canonical e2e seed.
 

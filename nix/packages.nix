@@ -1348,13 +1348,16 @@ let
   nodeModulesSetup = import ./node-modules-setup.nix { inherit pkgs; };
 
   # The single throwaway-PostgreSQL wrapper for host workflows and the coverage
-  # sandbox. Shellcheck runs at build time. Only PostgreSQL is prefixed onto
-  # PATH, because the wrapped command inherits that PATH.
-  pgRun = pkgs.writeShellApplication {
-    name = "pg-run";
-    runtimeInputs = [ pkgs.postgresql_18 ];
-    text = builtins.readFile ../scripts/pg-run.sh;
-  };
+  # sandbox. flake8 runs at build time. Only PostgreSQL is prefixed onto PATH,
+  # because the wrapped command inherits that PATH.
+  pgRun = pkgs.writers.writePython3Bin "pg-run" {
+    makeWrapperArgs = [
+      "--prefix"
+      "PATH"
+      ":"
+      (pkgs.lib.makeBinPath [ pkgs.postgresql_18 ])
+    ];
+  } (builtins.readFile ../scripts/pg-run.py);
 
   e2ePackage = pkgs.buildNpmPackage {
     name = "jaunder-e2e";
