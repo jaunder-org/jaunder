@@ -155,7 +155,8 @@ mod tests {
             "package.json",
             "package-lock.json",
             "scripts/build-csr-assets.sh",
-            "Justfile",
+            "tools/dev/pyproject.toml",
+            "tools/dev/jaunder_dev/new.py",
             "server/assets/jaunder.css",
             "host/system_theme_sources/new.css",
             "storage/migrations/new.sql",
@@ -169,7 +170,14 @@ mod tests {
         ];
         let candidates = relevant
             .iter()
-            .chain(["notes.md", "server/src/unrelated.rs"].iter())
+            .chain(
+                [
+                    "notes.md",
+                    "server/src/unrelated.rs",
+                    "tools/dev/tests/test_new.py",
+                ]
+                .iter(),
+            )
             .map(|path| Candidate {
                 path: (*path).into(),
                 kind: "regular",

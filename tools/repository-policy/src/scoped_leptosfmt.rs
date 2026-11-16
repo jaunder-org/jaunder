@@ -53,15 +53,13 @@ pub fn run(root: &Path, mode: &str) -> Result<()> {
     if !matches!(mode, "fix" | "verify") {
         bail!("expected fix or verify");
     }
-    let mut command = Command::new("just");
-    command.args([
-        "--justfile",
-        "recipes/static.just",
-        "--working-directory",
-        ".",
-        "_leptosfmt-cli",
-        mode,
-    ]);
+    // `--sandbox` runs the pin in place, so `root` is its population in a
+    // checkout and in a Nix build directory alike.
+    let mut command = Command::new("dev");
+    command.args(["static", "leptosfmt-cli", "--sandbox"]);
+    if mode == "fix" {
+        command.arg("--fix");
+    }
     if checked_inputs(root)? == 0 {
         // Never fall back to the CLI's implicit input when selection is empty.
         return Ok(());

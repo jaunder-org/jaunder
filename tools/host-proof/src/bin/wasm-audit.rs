@@ -19,9 +19,9 @@ enum Command {
     /// Measure the shipped bundle. Run after a change expected to move it (a new
     /// dependency or a client feature), or periodically to watch the trend.
     #[command(after_help = "EXAMPLES:\n  \
-        just wasm-audit report\n  \
-        just wasm-audit report --site-path /nix/store/...-jaunder-csr-wasm-bundle\n  \
-        just wasm-audit report --breakdown")]
+        dev wasm-audit report\n  \
+        dev wasm-audit report --site-path /nix/store/...-jaunder-csr-wasm-bundle\n  \
+        dev wasm-audit report --breakdown")]
     Report {
         /// Audit a prebuilt CSR bundle root instead of running `nix build`.
         #[arg(long)]

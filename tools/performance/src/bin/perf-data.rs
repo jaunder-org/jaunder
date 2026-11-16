@@ -40,12 +40,12 @@ enum CommandLine {
     },
     /// Produce a fresh invocation identifier for the Nix derivations.
     Nonce,
-    /// Validate selection and count relationships before Just starts producer builds.
+    /// Validate selection and count relationships before `dev` starts producer builds.
     ValidateSelection {
         #[arg(long)]
         selection: PathBuf,
     },
-    /// Validate retained status, fragment, and diagnostic files before Just schedules another producer.
+    /// Validate retained status, fragment, and diagnostic files before `dev` schedules another producer.
     ValidateProducer {
         #[arg(long)]
         performance_root: PathBuf,
@@ -123,7 +123,7 @@ struct SelectionDocument {
     producers: Vec<SelectedProducer>,
 }
 
-// Only identity metadata is consumed here; Nix installables belong to Just.
+// Only identity metadata is consumed here; Nix installables belong to `dev`.
 #[derive(Deserialize)]
 struct SelectedProducer {
     name: String,
@@ -177,7 +177,7 @@ fn main() -> Result<()> {
 }
 
 fn validate_selection(path: &Path) -> Result<()> {
-    // Reject invalid fixture plans before Just realizes the first VM producer.
+    // Reject invalid fixture plans before `dev` realizes the first VM producer.
     let document: SelectionDocument = read_json(path)?;
     ensure!(
         is_valid_selection(&document.selection),

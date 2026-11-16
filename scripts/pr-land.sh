@@ -25,7 +25,7 @@ read_pr() {
 }
 observe_once() {
     local code=0
-    just pr-watch "$number" --once --expected-head "$expected_head" "$@" > "$work/preflight.json" || code=$?
+    dev pr-watch "$number" --once --expected-head "$expected_head" "$@" > "$work/preflight.json" || code=$?
     # Exit 1 carries an actionable observer verdict; setup/transport absence is
     # never permission to arm. Validate identity and use only the shared verdict.
     (( code <= 1 )) || return "$code"
@@ -65,7 +65,7 @@ if jq -e '.data.repository.pullRequest.isInMergeQueue == true' "$work/live.json"
     queue_history=(--observed-queued-head "$expected_head")
 fi
 code=0
-just pr-watch "$number" --until merged --expected-head "$expected_head" "${ack[@]}" "${queue_history[@]}" > "$work/final.json" || code=$?
+dev pr-watch "$number" --until merged --expected-head "$expected_head" "${ack[@]}" "${queue_history[@]}" > "$work/final.json" || code=$?
 # Preserve the observer's direct report and failure status. Only complete merged
 # evidence for this head is success; readiness/arming/queueing are not merging.
 cat "$work/final.json"

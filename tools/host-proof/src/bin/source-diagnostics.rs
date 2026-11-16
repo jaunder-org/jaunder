@@ -15,7 +15,7 @@ struct Cli {
 enum Command {
     /// Prove the cache policy admits only support closures and excludes every
     /// coverage/e2e verdict, aggregate, and lifted equivalent.
-    #[command(after_help = "EXAMPLES:\n  traced-run -- just source-diagnostics cache-safety-probe")]
+    #[command(after_help = "EXAMPLES:\n  traced-run -- dev source-diagnostics cache-safety-probe")]
     CacheSafetyProbe,
 }
 

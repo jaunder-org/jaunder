@@ -1,5 +1,5 @@
 //! Production-baseline qualification behind the four `production-baseline-*`
-//! Just recipes (ADR-0239, ADR-0246).
+//! `dev` commands (ADR-0239, ADR-0246).
 
 mod digest;
 mod git {

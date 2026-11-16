@@ -115,7 +115,7 @@ pub(crate) fn admit_harness(
     let compiled = env!("JAUNDER_QUALIFICATION_NIX_OUTPUT");
     if compiled.is_empty() {
         bail!(
-            "qualification requires Nix-built tooling provenance; invoke through the production-baseline Just recipes"
+            "qualification requires Nix-built tooling provenance; invoke through the `dev production-baseline-*` commands"
         );
     }
     let installable = format!("{}#{}", source.locked_ref(), fixture.graph());

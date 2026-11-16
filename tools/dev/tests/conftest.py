@@ -125,14 +125,14 @@ class Checkout:
         path.chmod(0o755)
         return path
 
-    def forward_just_to_dev(self) -> None:
-        """Repository scripts call `just X`; here that runs `dev X` instead.
+    def dev_on_path(self) -> None:
+        """Repository scripts call `dev X`; here that runs this package's `dev`.
 
-        This stands in for the caller switch to `dev`, so a script's nested
-        recipe is this package's port, joined to the same trace.
+        It starts as the devShim does, so a script's nested workflow joins the
+        same trace.
         """
         self.executable(
-            "just",
+            "dev",
             f"#!{sys.executable}\nimport os, sys\n"
             f"argv = {launch(DEV)!r} + sys.argv[1:]\n"
             "os.execv(argv[0], argv)\n",
@@ -219,7 +219,7 @@ if [ "$name $*" = "${FAIL_COMMAND-}" ]; then
     exit 17
 fi
 case "$name $*" in
-  'cargo run '*' -p host-proof --bin '*|'cargo run '*' --bin doctest-check '*|'cargo run '*' --bin coverage-check '*)
+  'cargo run '*' -p host-proof --bin '*|'cargo run '*' --bin doctest-check '*|'cargo run '*' --bin coverage-check '*|'bash scripts/e2e-workflow producer '*)
     printf '{"steps":[]}\n' ;;
 esac
 """

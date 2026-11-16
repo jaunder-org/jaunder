@@ -80,8 +80,8 @@ def native(checkout: Checkout) -> Native:
     checkout.from_repository("scripts/pr-land.sh", "scripts/pr-cleanup.sh")
     for tool in ["gh", "git", "cargo"]:
         checkout.executable(tool, NATIVE)
-    # pr-land.sh observes through `just pr-watch`, which runs `dev pr-watch` here.
-    checkout.forward_just_to_dev()
+    # pr-land.sh observes through `dev pr-watch`.
+    checkout.dev_on_path()
     return Native(checkout)
 
 

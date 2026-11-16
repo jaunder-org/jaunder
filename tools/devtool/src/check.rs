@@ -1,4 +1,4 @@
-//! Retained ERT request timing; shared static invocations belong to Just.
+//! Retained ERT request timing; shared static invocations belong to `dev`.
 
 use std::{io::Write, process::Command, time::Instant};
 
@@ -9,16 +9,12 @@ pub fn run(name: &str, _fix: bool) -> Result<()> {
     if name != "ert" {
         bail!("unknown retained timing check '{name}' (expected ert)");
     }
-    let mut command = Command::new("just");
-    command.args([
-        "--justfile",
-        "recipes/static.just",
-        "--working-directory",
-        ".",
-        "ert",
-    ]);
+    // `--sandbox` runs ERT in place, so the request works from the checkout
+    // root `dev static all` starts it in and from a Nix build directory alike.
+    let mut command = Command::new("dev");
+    command.args(["static", "ert", "--sandbox"]);
     // Preserve the existing Instant/status owner. This fixed request includes
-    // Just startup/evaluation; spawn failure produces no fabricated completion.
+    // `dev` startup; spawn failure produces no fabricated completion.
     let started = Instant::now();
     let status = command.status().context("spawning `ert` for check ert")?;
     let event = serde_json::json!({

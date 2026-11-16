@@ -45,7 +45,7 @@ set -eu
 echo "verifier $*" >> "$EVENTS"
 if [[ -e $EVENTS.fail-reconcile && $1 == reconcile ]]; then exit 31; fi
 if [[ -n ${{REAL_VERIFIER-}} ]]; then exec "$REAL_VERIFIER" "$@"; fi
-exit 0
+printf '{{"steps":[{{"name":"%s","ok":true,"duration_ms":1}}]}}\\n' "$1"
 """
 LANE = "sqlite-chromium-unsplit"
 MARKER = f"producer-input-{LANE}.json"
@@ -108,11 +108,10 @@ def e2e(checkout: Checkout) -> E2E:
     checkout.from_repository(
         "scripts/e2e-workflow",
         "scripts/e2e-matrix.jq",
-        "scripts/step-report.jq",
         "end2end/e2e-lanes.json",
     )
     checkout.executable("nix", FAKE_NIX)
-    checkout.forward_just_to_dev()
+    checkout.dev_on_path()
     verifier = checkout.root.parent / "evidence-out" / "bin" / "e2e-evidence"
     verifier.parent.mkdir(parents=True)
     verifier.write_text(FAKE_VERIFIER)
@@ -207,6 +206,7 @@ def test_a_successful_producer_keeps_its_root_and_lifts_the_selected_output(
         in e2e.events()
     )
     assert "--capture .xtask/diagnostics" not in e2e.events()
+    assert result.stdout == b"[ ok ] server-fn-coverage\n", "the report is rendered"
 
 
 @pytest.mark.parametrize(

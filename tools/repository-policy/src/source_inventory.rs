@@ -52,7 +52,7 @@ pub fn read_snapshot(path: &Path) -> Result<Snapshot> {
 
 /// The regenerate command named in every failure message, so an author who hits
 /// the gate needs no external context.
-pub const REGENERATE_CMD: &str = "just e2e-regenerate-coverage";
+pub const REGENERATE_CMD: &str = "dev e2e-regenerate-coverage";
 
 /// Which server fns a real browser session drove, as committed to
 /// `docs/coverage/server-fns.json`. **This is the byte-compared artifact.**
@@ -153,7 +153,7 @@ fn check(web_src: &Path, snapshot_path: &Path) -> std::result::Result<Option<Str
 }
 
 /// The static lane over the repo's real snapshot. Runs in `check` and
-/// `just validate-no-e2e`.
+/// `dev validate-no-e2e`.
 pub fn run() -> std::result::Result<Option<String>, String> {
     check(Path::new(WEB_SRC), Path::new(SNAPSHOT_PATH))
 }

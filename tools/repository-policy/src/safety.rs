@@ -1,6 +1,6 @@
-//! Single-process Git/index custody around Just's named host workflows.
+//! Single-process Git/index custody around `dev`'s named host workflows.
 //! There is no snapshot interchange or workflow result envelope: Git owns the
-//! evidence, Just owns check ordering, and each required failure stays blocking.
+//! evidence, `dev` owns check ordering, and each required failure stays blocking.
 use crate::git;
 use anyhow::{Context, Result, bail};
 use std::{
@@ -11,16 +11,16 @@ use std::{
 };
 
 fn host(dir: &Path, class: git::PrecommitChangeClass) -> Result<()> {
-    let recipe = match class {
+    let workflow = match class {
         git::PrecommitChangeClass::StagedMarkdownOnly => "precommit-markdown-host",
         git::PrecommitChangeClass::Broad(_) => "precommit-broad-host",
     };
-    let status = Command::new("just")
-        .arg(recipe)
+    let status = Command::new("dev")
+        .arg(workflow)
         .current_dir(dir)
         .status()
-        .with_context(|| format!("could not run `just {recipe}`"))?;
-    anyhow::ensure!(status.success(), "`just {recipe}` exited {status}");
+        .with_context(|| format!("could not run `dev {workflow}`"))?;
+    anyhow::ensure!(status.success(), "`dev {workflow}` exited {status}");
     Ok(())
 }
 

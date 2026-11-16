@@ -419,8 +419,8 @@ mod tests {
         for (name, body) in [
             ("cargo", "#!/bin/sh\ntouch \"$COMPILED\"\nexit 0\n"),
             (
-                "just",
-                "#!/bin/sh\nprintf '%s|%s' \"$PWD\" \"$*\" > \"$JUST_CALL\"\nexit \"${JUST_EXIT:-0}\"\n",
+                "dev",
+                "#!/bin/sh\nprintf '%s|%s' \"$PWD\" \"$*\" > \"$DEV_CALL\"\nexit \"${DEV_EXIT:-0}\"\n",
             ),
             (
                 "nix",
@@ -446,7 +446,7 @@ mod tests {
             ),
         );
         shell.set_var("COMPILED", temp.path().join("compiled"));
-        shell.set_var("JUST_CALL", temp.path().join("just-call"));
+        shell.set_var("DEV_CALL", temp.path().join("dev-call"));
         shell.set_var("NIX_CALL", temp.path().join("nix-call"));
         shell.set_var("SELECTED_ROOT", temp.path().join("selected-root"));
         let bin = temp.path().join("bundle/bin");
@@ -480,7 +480,7 @@ mod tests {
             );
             assert!(!temp.path().join("nix-call").exists());
             assert!(!temp.path().join("compiled").exists());
-            assert!(!temp.path().join("just-call").exists());
+            assert!(!temp.path().join("dev-call").exists());
         }
     }
 
@@ -498,7 +498,7 @@ mod tests {
         );
         assert!(!result.ok);
         assert!(!temp.path().join("compiled").exists());
-        assert!(!temp.path().join("just-call").exists());
+        assert!(!temp.path().join("dev-call").exists());
         let link = fs::read_to_string(temp.path().join("selected-root")).unwrap();
         assert!(!Path::new(&link).parent().unwrap().exists());
     }
@@ -546,7 +546,7 @@ mod tests {
             assert!(retained.join("selected/bin/test-support").is_file());
             assert!(!temp.path().join(".xtask/host-artifacts.lock").exists());
             assert!(!temp.path().join("compiled").exists());
-            assert!(!temp.path().join("just-call").exists());
+            assert!(!temp.path().join("dev-call").exists());
             assert!(result.ok, "{:?}", result.steps);
             drop(prepared);
             assert!(!retained.exists());

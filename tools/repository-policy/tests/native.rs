@@ -1,24 +1,29 @@
 //! Public native commands operate on the caller's checkout, not their build root.
 use std::{
     fs,
+    os::unix::fs::PermissionsExt,
     path::Path,
     process::{Command, Output},
 };
 
+/// Keeps every Git a test runs, directly or through a command under test, to
+/// its fixture: a hook's exported repository overrides and the caller's
+/// configuration stay out.
+fn isolated(command: &mut Command) -> &mut Command {
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("GIT_") {
+            command.env_remove(name);
+        }
+    }
+    command
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+}
+
 fn git(root: &Path, args: &[&str]) -> Output {
     let mut command = Command::new("git");
     command.arg("-C").arg(root).args(args);
-    for name in [
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_COMMON_DIR",
-        "GIT_NAMESPACE",
-    ] {
-        command.env_remove(name);
-    }
-    let output = command.output().unwrap();
+    let output = isolated(&mut command).output().unwrap();
     assert!(
         output.status.success(),
         "{}",
@@ -36,22 +41,26 @@ fn checkout() -> tempfile::TempDir {
     temp
 }
 fn docs(root: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_repository-docs"))
-        .arg("adr-format")
-        .current_dir(root)
-        .output()
-        .unwrap()
+    isolated(
+        Command::new(env!("CARGO_BIN_EXE_repository-docs"))
+            .arg("adr-format")
+            .current_dir(root),
+    )
+    .output()
+    .unwrap()
 }
 #[test]
 fn documentation_verdict_emits_plain_diagnostics_without_result_artifacts() {
     let temp = checkout();
     let summary = temp.path().join("summary.md");
-    let output = Command::new(env!("CARGO_BIN_EXE_repository-docs"))
-        .arg("doc-links")
-        .current_dir(temp.path())
-        .env("GITHUB_STEP_SUMMARY", &summary)
-        .output()
-        .unwrap();
+    let output = isolated(
+        Command::new(env!("CARGO_BIN_EXE_repository-docs"))
+            .arg("doc-links")
+            .current_dir(temp.path())
+            .env("GITHUB_STEP_SUMMARY", &summary),
+    )
+    .output()
+    .unwrap();
     assert!(
         output.status.success(),
         "{}",
@@ -92,12 +101,32 @@ fn unreadable_checkout_admission_precedes_hooks_and_policy() {
         );
     }
 }
+/// Where `host_workflow` puts its `dev`: ignored, so Git status never sees it.
+const HOST_BIN: &str = ".xtask/bin";
 fn safety(root: &Path, operation: &str) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_git-index-safety"))
-        .arg(operation)
-        .current_dir(root)
-        .output()
-        .unwrap()
+    let mut paths = vec![root.join(HOST_BIN)];
+    paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+    isolated(
+        Command::new(env!("CARGO_BIN_EXE_git-index-safety"))
+            .arg(operation)
+            .current_dir(root)
+            .env("PATH", std::env::join_paths(paths).unwrap()),
+    )
+    .output()
+    .unwrap()
+}
+/// Stands in for `dev`: the safety owner must request exactly `workflow`,
+/// whose work in the checkout is `body`.
+fn host_workflow(root: &Path, workflow: &str, body: &str) {
+    let bin = root.join(HOST_BIN);
+    fs::create_dir_all(&bin).unwrap();
+    let dev = bin.join("dev");
+    fs::write(
+        &dev,
+        format!("#!/bin/sh\n[ \"$*\" = '{workflow}' ] || {{ printf 'unexpected dev %s\\n' \"$*\" >&2; exit 64; }}\n{body}\n"),
+    )
+    .unwrap();
+    fs::set_permissions(dev, fs::Permissions::from_mode(0o755)).unwrap();
 }
 fn staged_fixture(policy: &str) -> tempfile::TempDir {
     let temp = checkout();
@@ -108,7 +137,11 @@ fn staged_fixture(policy: &str) -> tempfile::TempDir {
     fs::write(root.join("guide.txt"), "original\n").unwrap();
     fs::write(root.join("docs/adr/0001-choice.md"), policy).unwrap();
     let docs = env!("CARGO_BIN_EXE_repository-docs");
-    fs::write(root.join("Justfile"), format!("precommit-broad-host:\n    printf 'formatted\\n' > guide.txt\n    '{docs}' adr-format\n\nprecommit-markdown-host: precommit-broad-host\n")).unwrap();
+    host_workflow(
+        root,
+        "precommit-broad-host",
+        &format!("printf 'formatted\\n' > guide.txt\n'{docs}' adr-format"),
+    );
     git(root, &["add", "."]);
     git(
         root,
@@ -146,8 +179,11 @@ fn precommit_reconciles_staged_fixes_even_after_real_policy_failure() {
 fn precommit_preserves_host_failure_when_after_snapshot_query_fails() {
     let temp = staged_fixture("# ADR-0001: Choice\n- Status: accepted\n");
     // Leave an invalid Git marker so failed queries cannot discover a parent repo.
-    fs::write(temp.path().join("Justfile"), "precommit-broad-host:\n    printf 'formatted\\n' > guide.txt\n    mkdir -p .xtask\n    mv .git .xtask/parked-git\n    printf 'gitdir: missing-fixture-git\\n' > .git\n    exit 23\n").unwrap();
-    git(temp.path(), &["add", "Justfile"]);
+    host_workflow(
+        temp.path(),
+        "precommit-broad-host",
+        "printf 'formatted\\n' > guide.txt\nmkdir -p .xtask\nmv .git .xtask/parked-git\nprintf 'gitdir: missing-fixture-git\\n' > .git\nexit 23",
+    );
     let index_before = git(temp.path(), &["diff", "--cached", "--raw"]).stdout;
 
     let output = safety(temp.path(), "precommit");
@@ -161,7 +197,7 @@ fn precommit_preserves_host_failure_when_after_snapshot_query_fails() {
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
-        stderr.contains("precommit-host: `just precommit-broad-host` exited exit status: 23"),
+        stderr.contains("precommit-host: `dev precommit-broad-host` exited exit status: 23"),
         "{stderr}"
     );
     assert!(
@@ -195,9 +231,12 @@ fn precommit_preserves_host_failure_when_after_snapshot_query_fails() {
 fn precommit_stages_only_safe_fixes_when_workload_creates_unowned_changes() {
     let temp = staged_fixture("# ADR-0001: Choice\n- Status: accepted\n");
     fs::write(temp.path().join("unowned.txt"), "author\n").unwrap();
-    fs::write(temp.path().join("Justfile"),
-        "precommit-broad-host:\n    printf 'formatted\\n' > guide.txt\n    printf 'unexpected\\n' > unowned.txt\n    printf 'new\\n' > new.txt\n").unwrap();
-    git(temp.path(), &["add", "Justfile", "unowned.txt"]);
+    host_workflow(
+        temp.path(),
+        "precommit-broad-host",
+        "printf 'formatted\\n' > guide.txt\nprintf 'unexpected\\n' > unowned.txt\nprintf 'new\\n' > new.txt",
+    );
+    git(temp.path(), &["add", "unowned.txt"]);
     git(
         temp.path(),
         &[
@@ -300,7 +339,11 @@ fn staged_markdown_success_keeps_the_selected_docs_root_and_reconciles_once() {
     )
     .unwrap();
     let docs = env!("CARGO_BIN_EXE_repository-docs");
-    fs::write(temp.path().join("Justfile"), format!("precommit-markdown-host:\n    printf '# Formatted\\n' > guide.md\n    '{docs}' adr-format\n")).unwrap();
+    host_workflow(
+        temp.path(),
+        "precommit-markdown-host",
+        &format!("printf '# Formatted\\n' > guide.md\n'{docs}' adr-format"),
+    );
     git(temp.path(), &["add", "."]);
     git(
         temp.path(),
@@ -394,12 +437,14 @@ fn prepush_docs_preserves_nix_failure_when_postrequest_query_fails() {
     let mut path = vec![programs.path().to_path_buf()];
     path.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
 
-    let output = Command::new(env!("CARGO_BIN_EXE_git-index-safety"))
-        .arg("prepush-docs")
-        .current_dir(temp.path())
-        .env("PATH", std::env::join_paths(path).unwrap())
-        .output()
-        .unwrap();
+    let output = isolated(
+        Command::new(env!("CARGO_BIN_EXE_git-index-safety"))
+            .arg("prepush-docs")
+            .current_dir(temp.path())
+            .env("PATH", std::env::join_paths(path).unwrap()),
+    )
+    .output()
+    .unwrap();
     fs::remove_file(temp.path().join(".git")).unwrap();
     fs::rename(
         temp.path().join(".xtask/parked-git"),
@@ -474,12 +519,14 @@ fn failed_docs_request_cannot_hide_postrequest_mutation_or_restage_it() {
         fs::set_permissions(&nix, fs::Permissions::from_mode(0o755)).unwrap();
         let mut path = vec![programs.path().to_path_buf()];
         path.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
-        let output = Command::new(env!("CARGO_BIN_EXE_git-index-safety"))
-            .arg("prepush-docs")
-            .current_dir(temp.path())
-            .env("PATH", std::env::join_paths(path).unwrap())
-            .output()
-            .unwrap();
+        let output = isolated(
+            Command::new(env!("CARGO_BIN_EXE_git-index-safety"))
+                .arg("prepush-docs")
+                .current_dir(temp.path())
+                .env("PATH", std::env::join_paths(path).unwrap()),
+        )
+        .output()
+        .unwrap();
         assert_eq!(output.status.code(), Some(1));
         let stderr = String::from_utf8(output.stderr).unwrap();
         assert!(stderr.contains("exit status: 19"), "{mutation}: {stderr}");

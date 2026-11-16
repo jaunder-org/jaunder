@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Just dependencies fail fast; this bounded loop must instead retain every verdict.
+# A `dev` gate fails fast; this bounded loop must instead retain every verdict.
 set -euo pipefail
 catalog=end2end/e2e-lanes.json
 root=.xtask/diagnostics
-# Artifact-only verdicts print one JSON report; jq derives the human view. The
-# verifier is this checkout's cached Nix-built host-proof output.
+# Artifact-only verdicts print one JSON report, which the calling `dev` step
+# renders. The verifier is this checkout's cached Nix-built host-proof output.
 evidence() {
   local out
   out=$(nix build --no-link --print-out-paths .#host-proof)
@@ -22,9 +22,9 @@ if [[ ${1-} == all ]]; then
   jobs=$(jq -n --argjson requested "$jobs" --argjson enabled "$enabled" '[$requested, $enabled] | min')
   # xargs owns bounded admission; normalize child failures so exit 255 cannot
   # cancel pending producers. All producers settle before reconciliation.
-  printf '%s\n' "$lanes" | xargs -P "$jobs" -n 1 bash -c 'just e2e-producer "$1" || exit 1' _ || status=1
+  printf '%s\n' "$lanes" | xargs -P "$jobs" -n 1 bash -c 'dev e2e-producer "$1" || exit 1' _ || status=1
   for backend in $backends; do
-    just e2e-reconcile "$backend" "$root" || status=1
+    dev e2e-reconcile "$backend" "$root" || status=1
   done
   exit "$status"
 fi
@@ -86,8 +86,7 @@ fi
 if [[ $lane == sqlite-chromium-unsplit ]]; then
   # The coverage consumer owns lane verification before comparing or regenerating.
   evidence server-fn-coverage "$action" --capture "$output/capture-$lane.tar.gz" \
-    --producer-output "$output" --lane "$lane" --catalog "$catalog" | jq -r -f scripts/step-report.jq
+    --producer-output "$output" --lane "$lane" --catalog "$catalog"
 else
-  evidence verify --lane "$lane" --catalog "$catalog" --artifacts "$output" \
-    | jq -r -f scripts/step-report.jq
+  evidence verify --lane "$lane" --catalog "$catalog" --artifacts "$output"
 fi

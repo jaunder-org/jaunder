@@ -930,7 +930,7 @@ mkE2eCheck =
   });
 
 # Cache-busting salt for e2e measurement runs (#792). Nix caches the e2e
-# check derivations, so a repeated `just trace-analysis run` returns a
+# check derivations, so a repeated `dev trace-analysis run` returns a
 # CACHED result rather than re-running the suite — silently handing back
 # traces from whenever it was last built, possibly on a CI runner under
 # unknown load. Set this to a distinct value per measurement run to force
@@ -1070,7 +1070,7 @@ e2eWorkers4ControlPackages = mkE2eControlPackages 4 6144 4;
 # name says so.
 #
 # NOT part of the gate — built on demand by
-# `just trace-analysis run --single-worker` (see docs/observability.md).
+# `dev trace-analysis run --single-worker` (see docs/observability.md).
 # They keep the default 2 GB VM, since one worker fits where two Firefox
 # workers would OOM it (#61). Note workers=1 also drops chromium's
 # whole-test scale to 1.0 from the gate's 1.5 (firefox takes
@@ -1297,7 +1297,7 @@ mkPerformanceProducer =
     '';
   };
 
-# Nix owns selection and the producer installable descriptions. Just consumes
+# Nix owns selection and the producer installable descriptions. `dev perf` consumes
 # this ordered list one installable at a time so measurement VMs never overlap.
 selectPerformanceProducers =
   {
@@ -2884,7 +2884,6 @@ mkWasmCoverageMeasurementProducer =
               "/.rustfmt.toml"
               "/.prettierrc.json"
               "/.prettierignore"
-              "/recipes/static.just"
               "/sgconfig.yml"
             ]
             || builtins.any (directory: pkgs.lib.hasInfix "/${directory}/" path) (workspaceMembers ++ [
@@ -2902,7 +2901,6 @@ mkWasmCoverageMeasurementProducer =
   clippySource = pkgs.lib.cleanSourceWith {
     src = craneLib.path ../.;
     filter =
-      assert clippySourceFilter "${toString ../.}/recipes/static.just" "regular";
       assert clippySourceFilter "${toString ../.}/Cargo.toml" "regular";
       assert clippySourceFilter "${toString ../.}/tools/Cargo.lock" "regular";
       assert clippySourceFilter "${toString ../.}/Justfile" "regular";
@@ -2930,8 +2928,9 @@ mkWasmCoverageMeasurementProducer =
       ];
       clippySourceFilter;
   };
+  # `dev` arrives as its own filtered build, so tools/dev/ edits rebuild these.
   mkClippyLeaf = name: nonSubstitutable (pkgs.runCommand name {
-    nativeBuildInputs = [ pkgs.stdenv.cc pkgs.just toolchain ] ++ hostArgs.nativeBuildInputs;
+    nativeBuildInputs = [ pkgs.stdenv.cc devBin toolchain ] ++ hostArgs.nativeBuildInputs;
     buildInputs = hostArgs.buildInputs;
     LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ];
     JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
@@ -2939,7 +2938,7 @@ mkWasmCoverageMeasurementProducer =
   } ''
     cp --no-preserve=mode -r ${clippySource} src
     cd src
-    just --justfile recipes/static.just --working-directory . ${name} verify sandbox
+    dev static ${name} --sandbox
     touch $out
   '');
 in
@@ -2963,7 +2962,7 @@ in
         }
       );
 # The e2e aggregate: a symlinkJoin of every browser/backend `e2e-*`
-# check, exposed as `checks.e2e`; Just uses the individual lane producers.
+# check, exposed as `checks.e2e`; `dev` uses the individual lane producers.
 # Adding a new browser/backend combo automatically joins it here. Its
 # `jaunder-e2e*` name keeps it out of the cachix push, so building it
 # always realizes the underlying VM checks rather than substituting a
@@ -3054,7 +3053,7 @@ e2eGateChecks
     }
   );
 
-  # Optional browser/backend join; Just preserves individual producer verdicts.
+  # Optional browser/backend join; `dev` preserves individual producer verdicts.
   # `e2e-checks` aggregates every browser/backend `checks.e2e-*` combo
   # (now 4); they are independent derivations realized in parallel up
   # to the host `max-jobs` (CI's install-nix-action sets `max-jobs =
@@ -3425,18 +3424,17 @@ static-docs =
           || pkgs.lib.hasSuffix ".md" path
           || pkgs.lib.hasSuffix "/.prettierrc.json" path
           || pkgs.lib.hasSuffix "/.prettierignore" path
-          || relative == "recipes/prettier.just"
         );
     };
   in
   pkgs.runCommand "static-docs"
     {
-      nativeBuildInputs = [ pkgs.just pkgs.prettier ];
+      nativeBuildInputs = [ devBin pkgs.prettier ];
     }
     ''
       cp --no-preserve=mode -r ${staticDocsSrc} src
       cd src
-      just --justfile recipes/prettier.just --working-directory . prettier-markdown
+      dev static prettier-markdown --sandbox
       touch $out
     '';
 # Exercise link safety with fixtures and both real dependency pins.
@@ -3540,12 +3538,10 @@ static-ert =
         relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
       in
       type == "directory"
-      || relative == "recipes/static.just"
       || (pkgs.lib.hasPrefix "elisp/" relative && !(pkgs.lib.hasSuffix ".md" path));
     staticErtSrc = pkgs.lib.cleanSourceWith {
       src = craneLib.path ../.;
       filter =
-        assert staticErtSourceFilter "${toString ../.}/recipes/static.just" "regular";
         assert staticErtSourceFilter "${toString ../.}/elisp/test/new-test.el" "regular";
         assert staticErtSourceFilter "${toString ../.}/elisp/test/fixture.bin" "regular";
         assert !(staticErtSourceFilter "${toString ../.}/elisp/README.md" "regular");
@@ -3555,7 +3551,8 @@ static-ert =
   in
   nonSubstitutable (pkgs.runCommand "static-ert"
     {
-      nativeBuildInputs = [ devtoolBin pkgs.just emacsForCi pkgs.git ];
+      # devtool requests ERT through `dev`.
+      nativeBuildInputs = [ devtoolBin devBin emacsForCi pkgs.git ];
       TZDIR = "${pkgs.tzdata}/share/zoneinfo";
     }
     ''
@@ -3565,7 +3562,7 @@ static-ert =
       touch $out
     '');
 # Elisp formatter verification and warning-as-error byte-compilation share one
-# narrow leaf; Just owns both command definitions on host and in Nix.
+# narrow leaf; `dev` owns both command definitions on host and in Nix.
 static-elisp =
   let
     staticElispSourceFilter =
@@ -3573,13 +3570,11 @@ static-elisp =
       let
         relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
       in
-      (type == "directory" && (toString path == toString ../. || relative == "recipes" || relative == "elisp" || pkgs.lib.hasPrefix "elisp/" relative))
-      || relative == "recipes/static.just"
+      (type == "directory" && (toString path == toString ../. || relative == "elisp" || pkgs.lib.hasPrefix "elisp/" relative))
       || (pkgs.lib.hasPrefix "elisp/" relative && !(pkgs.lib.hasSuffix ".md" path));
     staticElispSrc = pkgs.lib.cleanSourceWith {
       src = craneLib.path ../.;
       filter =
-        assert staticElispSourceFilter (cargoSourcePath "recipes/static.just") "regular";
         assert staticElispSourceFilter (cargoSourcePath "elisp/scripts/format.el") "regular";
         assert staticElispSourceFilter (cargoSourcePath "elisp/scripts/byte-compile.el") "regular";
         assert staticElispSourceFilter (cargoSourcePath "elisp/test/jaunder-publish-test.el") "regular";
@@ -3593,14 +3588,14 @@ static-elisp =
   in
   nonSubstitutable (pkgs.runCommand "static-elisp"
     {
-      nativeBuildInputs = [ pkgs.just emacsForCi ];
+      nativeBuildInputs = [ devBin emacsForCi ];
       TZDIR = "${pkgs.tzdata}/share/zoneinfo";
     }
     ''
       cp --no-preserve=mode -r ${staticElispSrc} src
       cd src
-      just --justfile recipes/static.just --working-directory . elisp-fmt
-      just --justfile recipes/static.just --working-directory . byte-compile
+      dev static elisp-fmt --sandbox
+      dev static byte-compile --sandbox
       touch $out
     '');
 # Cargo fmt's product/tools populations overlap. Keep their shared verdict and
@@ -3627,13 +3622,12 @@ rust-format =
           "/rustfmt.toml"
           "/leptosfmt.toml"
         ]
-        || relative == "recipes/static.just"
         || pkgs.lib.hasPrefix ".cargo/" relative
       );
     rustFormatSrc = pkgs.lib.cleanSourceWith {
       src = craneLib.path ../.;
       filter =
-        assert rustFormatSourceFilter (cargoSourcePath "recipes/static.just") "regular";
+        assert rustFormatSourceFilter (cargoSourcePath "web/src/lib.rs") "regular";
         assert !(rustFormatSourceFilter (cargoSourcePath "docs/ARCHITECTURE.md") "regular");
         rustFormatSourceFilter;
     };
@@ -3642,14 +3636,15 @@ rust-format =
     {
       # These bring their real transitive source/vendor/build closures; the
       # direct source filter alone does not promise cache isolation.
-      nativeBuildInputs = [ pkgs.just self.packages.${system}.repository-policy toolchain leptosfmt ];
+      # scoped-leptosfmt runs the pin through `dev` as well.
+      nativeBuildInputs = [ devBin self.packages.${system}.repository-policy toolchain leptosfmt ];
       JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
       JAUNDER_DEVTOOL_TOOLS_CARGO_HOME = "${toolsOfflineCargoHome}";
     }
     ''
       cp --no-preserve=mode -r ${rustFormatSrc} src
       cd src
-      just --justfile recipes/static.just --working-directory . rust-format verify sandbox
+      dev static rust-format --sandbox
       touch $out
     '');
 static-e2e-census =
@@ -3722,8 +3717,6 @@ static-code =
                 "/.rustfmt.toml"
                 "/.prettierrc.json"
                 "/.prettierignore"
-                "/recipes/prettier.just"
-                "/recipes/static.just"
                 "/sgconfig.yml"
               ]
               || builtins.any (directory: pkgs.lib.hasInfix "/${directory}/" path) (workspaceMembers ++ [
@@ -3746,8 +3739,6 @@ static-code =
           && staticCodeSourceFilter (cargoSourcePath "${member}/src/main.rs") "regular"
         ) workspaceMembers;
         assert staticCodeSourceFilter (cargoSourcePath "ux-sandbox/tests/lifecycle.rs") "regular";
-        assert staticCodeSourceFilter "/source/recipes/prettier.just" "regular";
-        assert staticCodeSourceFilter "/source/recipes/static.just" "regular";
         assert staticCodeSourceFilter "/source/xtask/theme.css" "regular";
         assert staticCodeSourceFilter "/source/nix/otel-processors.yaml" "regular";
         assert staticCodeSourceFilter "/source/xtask" "directory";
@@ -3770,7 +3761,7 @@ static-code =
         toolchain
         pkgs.cargo-deny
         pkgs.ast-grep
-        pkgs.just
+        devBin
         pkgs.prettier
         pkgs.nodejs
         pkgs.typescript
@@ -3788,11 +3779,11 @@ static-code =
       cd src
       # Residual Code verdicts; Rust-format and TypeScript have separate leaves,
       # while Clippy is requested once below through its own aggregate.
-      just --justfile recipes/prettier.just --working-directory . prettier-end2end
-      just --justfile recipes/prettier.just --working-directory . prettier-css
-      just --justfile recipes/static.just --working-directory . ast-grep-tests
-      just --justfile recipes/static.just --working-directory . no-full-reload
-      just --justfile recipes/static.just --working-directory . cargo-deny verify sandbox
+      dev static prettier-end2end --sandbox
+      dev static prettier-css --sandbox
+      dev static ast-grep-tests --sandbox
+      dev static no-full-reload --sandbox
+      dev static cargo-deny --sandbox
       test -e ${self.checks.${system}.clippy-aggregate}
       touch $out
     '');
@@ -3827,7 +3818,7 @@ doctests = craneLib.mkCargoDerivation (
       export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:''${LD_LIBRARY_PATH:-}"
       mkdir -p emit-out
       # devtool always exits 0 after writing emit-out/status.json;
-      # the direct Just workflow gates through doctests-gate.
+      # the direct `dev` workflow gates through doctests-gate.
       devtool doctests emit --out emit-out
     '';
     installPhaseCommand = ''

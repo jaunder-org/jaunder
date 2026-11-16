@@ -829,9 +829,11 @@ let
     siteSourceFilter path type
     || toolsSourceFilter path type
     || csrViteSourceFilter path type
+    # `dev build-csr` drives the host bundle build: the runner's package source.
+    || relative == "tools/dev/pyproject.toml"
+    || (pkgs.lib.hasPrefix "tools/dev/jaunder_dev/" relative && pkgs.lib.hasSuffix ".py" relative)
     # Nix expressions and the lock select producer/toolchain/native dependencies,
     # even when they are not copied into either Cargo source tree.
-    || relative == "Justfile"
     || relative == "flake.nix"
     || relative == "flake.lock"
     || pkgs.lib.hasPrefix "nix/" relative;
@@ -1487,7 +1489,7 @@ in
     jaunder = jaunderBin;
     site = site;
     # The pre-wasm-bindgen, unstripped wasm. Exposed so
-    # `just wasm-audit report --breakdown` has an artifact that still
+    # `dev wasm-audit report --breakdown` has an artifact that still
     # carries a name section: `wasm-opt` strips names from the shipped
     # bundle, so the shipped file cannot be attributed to crates (#836).
     inherit csrWasm;

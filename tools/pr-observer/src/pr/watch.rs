@@ -802,7 +802,7 @@ pub fn watch_with_progress_and_optional_failures<S: PrSource, C: Clock>(
                     Terminal {
                         outcome: Outcome::ReadyToLand,
                         detail: Some(
-                            "all required checks passed; obtain approval for this exact PR/head, then run `just pr-land`"
+                            "all required checks passed; obtain approval for this exact PR/head, then run `dev pr-land`"
                                 .into(),
                         ),
                         pointer: None,

@@ -326,7 +326,9 @@ fn is_static_docs_input_bytes(path: &[u8]) -> bool {
         return false;
     }
     path.ends_with(b".md")
-        || path == b"recipes/prettier.just"
+        // The `dev` build the static-docs check runs (`devSrc` in nix/packages.nix).
+        || path == b"tools/dev/pyproject.toml"
+        || (path.starts_with(b"tools/dev/jaunder_dev/") && path.ends_with(b".py"))
         || path == b".prettierrc.json"
         || path.ends_with(b"/.prettierrc.json")
         || path == b".prettierignore"
@@ -956,7 +958,13 @@ mod tests {
         assert!(is_static_docs_input_bytes(b"guide.md"));
         assert!(is_static_docs_input_bytes(b"docs/nested/.prettierrc.json"));
         assert!(is_static_docs_input_bytes(b".prettierignore"));
-        assert!(is_static_docs_input_bytes(b"recipes/prettier.just"));
+        assert!(is_static_docs_input_bytes(b"tools/dev/pyproject.toml"));
+        assert!(is_static_docs_input_bytes(
+            b"tools/dev/jaunder_dev/static.py"
+        ));
+        assert!(!is_static_docs_input_bytes(
+            b"tools/dev/tests/test_static.py"
+        ));
         assert!(!is_static_docs_input_bytes(b"README.MD"));
         assert!(!is_static_docs_input_bytes(b"tools/src/main.rs"));
         assert!(!is_static_docs_input_bytes(b".claude/notes.md"));
@@ -1009,10 +1017,10 @@ mod tests {
     }
 
     #[test]
-    fn shared_markdown_admission_rejects_clean_recipe_conversion() {
-        let dir = temp_repo("shared-markdown-clean-recipe-eol");
-        commit(&dir, ".gitattributes", "*.just text eol=crlf\n");
-        commit(&dir, "recipes/prettier.just", "recipe:\r\n    true\r\n");
+    fn shared_markdown_admission_rejects_clean_runner_conversion() {
+        let dir = temp_repo("shared-markdown-clean-runner-eol");
+        commit(&dir, ".gitattributes", "*.py text eol=crlf\n");
+        commit(&dir, "tools/dev/jaunder_dev/static.py", "CHECK = True\r\n");
         assert!(output(&dir, &["status", "--porcelain"]).unwrap().is_empty());
         assert!(shared_markdown_admission(&dir).is_err());
         assert!(shared_static_docs_clean_admission(&dir).is_err());

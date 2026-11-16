@@ -1,4 +1,6 @@
 //! Exercise Just at the external Nix and verifier boundaries, without VM builds.
+//! `scripts/e2e-workflow` calls `dev X` for its nested producers and
+//! reconciliations; here `dev` forwards to the Justfile's recipe of that name.
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
@@ -58,6 +60,10 @@ fi
 [[ -n ${OUTPUT-} ]] || exit 1
 printf '%s' "$OUTPUT"
 "##,
+        );
+        executable(
+            &root.path().join("bin/dev"),
+            "#!/bin/sh\nexec just \"$@\"\n",
         );
         fs::create_dir_all(root.path().join("evidence-out/bin")).unwrap();
         executable(

@@ -37,6 +37,11 @@ if [[ $(jq -r '.exit // 0' <<< "$reply") != 0 ]]; then echo 'simulated native fa
 "#).unwrap();
             std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
+        // pr-land.sh observes through `dev pr-watch`; here that runs the
+        // Justfile's recipe, so these proofs stay on the Just front doors.
+        let dev = dir.path().join("dev");
+        std::fs::write(&dev, "#!/bin/sh\nexec just \"$@\"\n").unwrap();
+        std::fs::set_permissions(dev, std::fs::Permissions::from_mode(0o755)).unwrap();
         Self { dir }
     }
     fn cleanup(&self, ownership: &str) -> Output {

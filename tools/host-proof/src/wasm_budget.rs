@@ -20,7 +20,7 @@ use serde::Serialize;
 /// changed.
 pub const WASM_RAW_ACHIEVED_BYTES: u64 = 4_009_656;
 
-/// The ceiling `just validate` enforces.
+/// The ceiling `dev validate` enforces.
 ///
 /// Decimal 5 MB, not 5 MiB: #1750 accepts additional feature headroom.
 /// See ADR-0106's amendment for the tradeoff; the achieved baseline stays historical.
@@ -53,7 +53,7 @@ pub fn failure_message(v: &BudgetVerdict) -> String {
          reads, and compile time is what dominates the boot gap (#818).\n\
          If the growth is intended, raise WASM_RAW_CEILING_BYTES in \
          tools/host-proof/src/wasm_budget.rs deliberately, and say why in the commit. \
-         If it is not, `just wasm-audit report --breakdown` attributes the bytes \
+         If it is not, `dev wasm-audit report --breakdown` attributes the bytes \
          to crates.",
         v.actual,
         v.ceiling,

@@ -1,20 +1,46 @@
-//! ERT retains its bounded Just-request event; TSC now belongs to the shared leaf.
+//! ERT retains its bounded `dev`-request event; TSC now belongs to the shared leaf.
 #![cfg(unix)]
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command, time::Instant};
 
+/// Keeps every Git the fixture, `dev`'s shim or `dev` runs to the fixture: a
+/// hook's exported repository overrides and the caller's configuration stay out.
+fn isolated(command: &mut Command) -> &mut Command {
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("GIT_") {
+            command.env_remove(name);
+        }
+    }
+    command
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+}
+
+/// A Git checkout whose `tools/dev` is this repository's runner: the devShell's
+/// `dev` shim runs `tools/dev` from the checkout root it finds.
 fn fixture() -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
-    fs::create_dir(root.path().join("bin")).unwrap();
-    fs::create_dir(root.path().join("recipes")).unwrap();
-    fs::copy(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../recipes/static.just"),
-        root.path().join("recipes/static.just"),
+    let init = isolated(Command::new("git").args(["init", "-q"]).arg(root.path()))
+        .status()
+        .unwrap();
+    assert!(init.success());
+    fs::create_dir_all(root.path().join("bin")).unwrap();
+    fs::create_dir(root.path().join("tools")).unwrap();
+    std::os::unix::fs::symlink(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../dev"),
+        root.path().join("tools/dev"),
     )
     .unwrap();
     let child = root.path().join("bin/emacs");
     fs::write(&child, "#!/bin/sh\nprintf '%s\\n' \"$@\" >> argv\nprintf 'workload stdout\\n'\nprintf 'workload stderr\\n' >&2\nsleep 0.03\nexit \"$CHECK_EXIT\"\n").unwrap();
     fs::set_permissions(child, fs::Permissions::from_mode(0o755)).unwrap();
     root
+}
+
+fn devtool(root: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_devtool"));
+    command.args(["check", "ert"]).current_dir(root);
+    isolated(&mut command);
+    command
 }
 
 fn completion(stderr: &[u8]) -> serde_json::Value {
@@ -34,14 +60,12 @@ fn ert_preserves_arguments_streams_status_and_elapsed_completion() {
         let root = fixture();
         let mut paths = vec![root.path().join("bin")];
         paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
-        let mut command = Command::new(env!("CARGO_BIN_EXE_devtool"));
-        command.args(["check", "ert"]);
+        let mut command = devtool(root.path());
         if fix {
             command.arg("--fix");
         }
         let outer = Instant::now();
         let output = command
-            .current_dir(root.path())
             .env("PATH", std::env::join_paths(paths).unwrap())
             .env("CHECK_EXIT", exit)
             .output()
@@ -68,11 +92,9 @@ fn ert_preserves_arguments_streams_status_and_elapsed_completion() {
 }
 
 #[test]
-fn missing_just_is_spawn_failure_without_fabricated_completion() {
+fn missing_dev_is_spawn_failure_without_fabricated_completion() {
     let root = fixture();
-    let output = Command::new(env!("CARGO_BIN_EXE_devtool"))
-        .args(["check", "ert"])
-        .current_dir(root.path())
+    let output = devtool(root.path())
         .env("PATH", root.path().join("bin"))
         .output()
         .unwrap();
@@ -82,18 +104,12 @@ fn missing_just_is_spawn_failure_without_fabricated_completion() {
 }
 
 #[test]
-fn recipe_failure_is_a_completed_failed_request_not_spawn_failure() {
+fn runner_failure_is_a_completed_failed_request_not_spawn_failure() {
     let root = fixture();
-    fs::write(
-        root.path().join("recipes/static.just"),
-        "not a valid recipe\n",
-    )
-    .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_devtool"))
-        .args(["check", "ert"])
-        .current_dir(root.path())
-        .output()
-        .unwrap();
+    // `dev` starts but cannot load its runner, so ERT never runs.
+    fs::remove_file(root.path().join("tools/dev")).unwrap();
+    fs::create_dir(root.path().join("tools/dev")).unwrap();
+    let output = devtool(root.path()).output().unwrap();
     assert!(!output.status.success());
     assert!(!root.path().join("argv").exists());
     let event = completion(&output.stderr);

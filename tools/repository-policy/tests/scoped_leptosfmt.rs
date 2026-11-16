@@ -1,12 +1,44 @@
 //! The public adapter refuses incomplete scope before Fix and rejects false greens.
 use std::{fs, path::Path, process::Command};
 
+/// Keeps every Git the fixture, `dev`'s shim or `dev` runs to the fixture: a
+/// hook's exported repository overrides and the caller's configuration stay out.
+fn isolated(command: &mut Command) -> &mut Command {
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("GIT_") {
+            command.env_remove(name);
+        }
+    }
+    command
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+}
+
+fn adapter(root: &Path, mode: &str) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_scoped-leptosfmt"));
+    command.current_dir(root).arg(mode);
+    isolated(&mut command);
+    command
+}
+
 fn run(root: &Path, mode: &str) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_scoped-leptosfmt"))
-        .current_dir(root)
-        .arg(mode)
-        .output()
-        .unwrap()
+    adapter(root, mode).output().unwrap()
+}
+
+/// A Git checkout whose `tools/dev` is this repository's runner: the devShell's
+/// `dev` shim runs `tools/dev` from the checkout root it finds, and the adapter
+/// runs the pin through it.
+fn checkout(root: &Path) {
+    let init = isolated(Command::new("git").args(["init", "-q"]).arg(root))
+        .status()
+        .unwrap();
+    assert!(init.success());
+    fs::create_dir(root.join("tools")).unwrap();
+    std::os::unix::fs::symlink(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../dev"),
+        root.join("tools/dev"),
+    )
+    .unwrap();
 }
 
 fn fixture() -> tempfile::TempDir {
@@ -14,12 +46,7 @@ fn fixture() -> tempfile::TempDir {
     for scope in ["web/src", "csr/src"] {
         fs::create_dir_all(root.path().join(scope)).unwrap();
     }
-    fs::create_dir(root.path().join("recipes")).unwrap();
-    fs::copy(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../recipes/static.just"),
-        root.path().join("recipes/static.just"),
-    )
-    .unwrap();
+    checkout(root.path());
     root
 }
 
@@ -27,11 +54,9 @@ fn fixture() -> tempfile::TempDir {
 fn empty_population_never_scans_unrelated_sources() {
     let root = fixture();
     fs::write(root.path().join("unrelated.rs"), "fn broken(").unwrap();
-    // No executable is available: an empty population must not spawn even Just.
+    // No executable is available: an empty population must not spawn even `dev`.
     assert!(
-        Command::new(env!("CARGO_BIN_EXE_scoped-leptosfmt"))
-            .current_dir(root.path())
-            .arg("fix")
+        adapter(root.path(), "fix")
             .env("PATH", "")
             .output()
             .unwrap()
@@ -64,16 +89,11 @@ fn missing_scope_and_invalid_utf8_fail_before_fix_mutates_valid_input() {
 fn literal_checkout_hidden_sources_and_unrelated_population_match_the_pin() {
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().join("checkout[1]");
-    let source = fixture();
     fs::create_dir(&root).unwrap();
-    for directory in ["web/src/nested", "csr/src", "recipes", "other", "target"] {
+    for directory in ["web/src/nested", "csr/src", "other", "target"] {
         fs::create_dir_all(root.join(directory)).unwrap();
     }
-    fs::copy(
-        source.path().join("recipes/static.just"),
-        root.join("recipes/static.just"),
-    )
-    .unwrap();
+    checkout(&root);
     for file in [
         "web/src/a[1].rs",
         "web/src/nested/b.rs",
@@ -138,9 +158,7 @@ fn formatter_spawn_status_and_zero_status_markers_cannot_be_false_greens() {
     ] {
         fs::write(&formatter, format!("#!/bin/sh\n{script}\n")).unwrap();
         fs::set_permissions(&formatter, fs::Permissions::from_mode(0o755)).unwrap();
-        let output = Command::new(env!("CARGO_BIN_EXE_scoped-leptosfmt"))
-            .current_dir(root.path())
-            .arg("verify")
+        let output = adapter(root.path(), "verify")
             .env("PATH", std::env::join_paths(&paths).unwrap())
             .output()
             .unwrap();
@@ -150,9 +168,7 @@ fn formatter_spawn_status_and_zero_status_markers_cannot_be_false_greens() {
             assert!(String::from_utf8_lossy(&output.stderr).contains("formatter read error"));
         }
     }
-    let missing = Command::new(env!("CARGO_BIN_EXE_scoped-leptosfmt"))
-        .current_dir(root.path())
-        .arg("fix")
+    let missing = adapter(root.path(), "fix")
         .env("PATH", "")
         .output()
         .unwrap();

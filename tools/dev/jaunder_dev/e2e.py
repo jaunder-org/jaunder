@@ -16,7 +16,12 @@ def run_all(jobs: str) -> None:
 
 
 def producer(lane: str) -> None:
-    steps.run("e2e-producer", ["bash", "scripts/e2e-workflow", "producer", lane])
+    """One lane's producer; its verification report is rendered."""
+    steps.run(
+        "e2e-producer",
+        ["bash", "scripts/e2e-workflow", "producer", lane],
+        report.render,
+    )
 
 
 def regenerate_coverage() -> None:
@@ -30,6 +35,7 @@ def regenerate_coverage() -> None:
             "sqlite-chromium-unsplit",
             "regenerate",
         ],
+        report.render,
     )
 
 

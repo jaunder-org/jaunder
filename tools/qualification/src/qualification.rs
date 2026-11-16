@@ -16,7 +16,7 @@ pub(crate) struct SourcePin {
     locked_ref: String,
 }
 impl SourcePin {
-    /// Bind the Just preflight to the exact clean source used for Nix admission.
+    /// Bind the `dev` preflight to the exact clean source used for Nix admission.
     pub(crate) fn admit_expected(root: &Path, expected: &str) -> Result<Self> {
         valid_hex(expected, 40, "expected harness")?;
         let source = Self::admit_current(root)?;

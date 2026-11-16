@@ -860,18 +860,18 @@ fn actual_just_parser_rejects_old_option_spellings_instead_of_silently_forwardin
 }
 
 #[test]
-fn hooks_invoke_only_their_just_workflow_and_preserve_its_status() {
+fn hooks_invoke_only_their_dev_workflow_and_preserve_its_status() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     for (hook, recipe) in [("pre-commit", "precommit"), ("pre-push", "prepush")] {
         for status in [0, 17] {
             let fixture = tempfile::tempdir().unwrap();
-            let just = fixture.path().join("just");
+            let dev = fixture.path().join("dev");
             fs::write(
-                &just,
+                &dev,
                 "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOOK_ARGS\"\nexit \"$HOOK_STATUS\"\n",
             )
             .unwrap();
-            fs::set_permissions(&just, fs::Permissions::from_mode(0o755)).unwrap();
+            fs::set_permissions(&dev, fs::Permissions::from_mode(0o755)).unwrap();
             let args = fixture.path().join("args");
             let output = Command::new("bash")
                 .arg(root.join(".githooks").join(hook))
@@ -909,12 +909,12 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
             .iter()
             .filter_map(|step| step["run"].as_str())
             .map(|run| run.split_whitespace().collect::<Vec<_>>().join(" "))
-            .filter(|run| run.contains("just ci-validate-"))
+            .filter(|run| run.contains("dev ci-validate-"))
             .collect::<Vec<_>>();
         assert_eq!(
             commands,
             [format!(
-                "nix develop .#ci --accept-flake-config -c just ci-validate-{lane}"
+                "nix develop .#ci --accept-flake-config -c dev ci-validate-{lane}"
             )]
         );
         let encoded = serde_yaml::to_string(job).unwrap();

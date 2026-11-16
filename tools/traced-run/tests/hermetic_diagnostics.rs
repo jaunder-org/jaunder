@@ -15,7 +15,7 @@ fn lane() -> &'static str {
 fn native_hermetic_verdict_stays_required_while_full_partial_diagnostics_are_optional() {
     let lane = lane();
     assert!(
-        lane.contains("run: nix develop .#ci --accept-flake-config -c just ci-validate-hermetic")
+        lane.contains("run: nix develop .#ci --accept-flake-config -c dev ci-validate-hermetic")
     );
     let upload = lane
         .split_once("      - name: Upload hermetic validation diagnostics\n")

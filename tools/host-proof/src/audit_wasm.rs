@@ -192,7 +192,7 @@ pub fn render_breakdown(report: &BreakdownReport) -> String {
     s.push_str(&format!("artifact: {}\n", report.artifact));
     s.push_str(&format!(
         "total: {} — this is the unstripped pre-wasm-bindgen artifact, \
-         NOT the shipped bundle size (see `just wasm-audit report` for that)\n",
+         NOT the shipped bundle size (see `dev wasm-audit report` for that)\n",
         format_bytes(report.total_bytes)
     ));
     s.push('\n');
