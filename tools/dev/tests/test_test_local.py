@@ -1,7 +1,6 @@
 """`dev test-local`: host-proof as a traced step, its report rendered."""
 
 import json
-from pathlib import Path
 
 import pytest
 from conftest import Checkout
@@ -196,9 +195,24 @@ def test_test_local_without_selectors_passes_none(checkout: Checkout) -> None:
     assert json.loads((checkout.root / "argv.json").read_text()) == HOST_PROOF
 
 
-def test_test_local_refuses_options_before_the_separator(checkout: Checkout) -> None:
+SELECTORS = ["-p", "storage", "foo", "--", "--nocapture", "--help"]
+
+
+@pytest.mark.parametrize("separator", [[], ["--"]])
+def test_test_local_forwards_selectors_with_or_without_a_leading_separator(
+    checkout: Checkout, separator: list[str]
+) -> None:
+    # Only a leading `--` is dropped; a later one belongs to nextest.
     checkout.tool("cargo", FAKE_HOST_PROOF)
-    result = checkout.dev("test-local", "-p", "storage", HOST_PROOF_CODE="0")
-    assert result.returncode == 2
-    assert not Path(checkout.root / "argv.json").exists()
-    assert checkout.runs() == []
+    result = checkout.dev(
+        "test-local",
+        *separator,
+        *SELECTORS,
+        REPORT=json.dumps(PLAIN),
+        HOST_PROOF_CODE="0",
+    )
+    assert result.returncode == 0, result
+    assert json.loads((checkout.root / "argv.json").read_text()) == [
+        *HOST_PROOF,
+        *SELECTORS,
+    ]

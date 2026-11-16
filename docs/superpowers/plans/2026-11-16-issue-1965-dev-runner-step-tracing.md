@@ -162,7 +162,7 @@ join.
 
 Review deliverable B is the full port.
 
-- [ ] **Task 4: gates on `dev`.** These gates run on `dev` with the same step
+- [x] **Task 4: gates on `dev`.** These gates run on `dev` with the same step
       order and fail-fast behaviour:
   - `check`, `check-no-test`, `prepush`, `validate-no-e2e`, `validate`
   - `ci-validate-{host,hermetic,test-checks,coverage}`
@@ -186,7 +186,7 @@ Review deliverable B is the full port.
     - `dev ci-validate-hermetic` passes, and a second run shows `reused` for its
       Nix checks
     - `just check` still passes, because Just remains until Task 7
-- [ ] **Task 5: remaining recipes on `dev`.** These run on `dev`:
+- [x] **Task 5: remaining recipes on `dev`.** These run on `dev`:
   - `e2e-local`, `e2e-producer`, `e2e-reconcile` and the other e2e recipes
   - `perf` and `perf-compare`
   - `coverage` and `coverage-gate`, `doctests`, `pr-watch`, `issue-discover`

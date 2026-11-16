@@ -21,7 +21,7 @@ import sys
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from types import FrameType
-from typing import Any
+from typing import Any, NoReturn
 
 from opentelemetry.trace import Span
 
@@ -39,6 +39,12 @@ class StepFailed(Exception):
         super().__init__(code)
         self.code = code
         self.signalled = signalled
+
+
+def refuse(message: str) -> NoReturn:
+    """Stops the gate with status 1 after a preflight check refuses to continue."""
+    print(message, file=sys.stderr, flush=True)
+    raise StepFailed(1, signalled=False)
 
 
 class _Interrupted(StepFailed):
@@ -116,11 +122,15 @@ def gate(root: Path, name: str, body: Callable[[], None]) -> int:
 
 
 def _supervise(
-    argv: Sequence[str], capture: bool, environment: Environment | None = None
+    argv: Sequence[str],
+    capture: bool,
+    environment: Environment | None = None,
+    stdin: bytes | None = None,
 ) -> tuple[int, bool, bytes]:
     """Runs the child to completion, relaying termination requests to it.
 
-    With `capture`, the child's stdout is returned instead of passed through.
+    With `capture`, the child's stdout is returned instead of passed through;
+    `stdin`, if given, is the child's whole standard input.
     """
     child_environment = trace.child_environment()
     for key, value in (environment or {}).items():
@@ -136,6 +146,7 @@ def _supervise(
             child = subprocess.Popen(
                 argv,
                 env=child_environment,
+                stdin=None if stdin is None else subprocess.PIPE,
                 stdout=subprocess.PIPE if capture else None,
             )
         except FileNotFoundError as error:
@@ -149,7 +160,7 @@ def _supervise(
         _signals.child = child
         for signum in _signals.pending:
             child.send_signal(signum)
-        output, _ = child.communicate()
+        output, _ = child.communicate(stdin)
     finally:
         _signals.supervising = False
         _signals.child = None
@@ -180,9 +191,10 @@ def _run(
     capture: bool,
     environment: Environment | None,
     render: Callable[[bytes], str | None] | None = None,
+    stdin: bytes | None = None,
 ) -> bytes:
     with _step(name, argv) as span:
-        code, signalled, output = _supervise(argv, capture, environment)
+        code, signalled, output = _supervise(argv, capture, environment, stdin)
         if render is not None:
             rendered = render(output)
             sys.stdout.buffer.write(output if rendered is None else rendered.encode())
@@ -216,9 +228,22 @@ def run(
     _run(name, argv, render is not None, environment, render)
 
 
-def output(name: str, argv: Sequence[str], environment: Environment | None) -> bytes:
-    """Runs one step for its stdout, which the user never sees; as `run` otherwise."""
-    return _run(name, argv, True, environment)
+def output(
+    name: str,
+    argv: Sequence[str],
+    environment: Environment | None,
+    stdin: bytes | None = None,
+) -> bytes:
+    """Runs one step for its stdout, which the user never sees; as `run` otherwise.
+
+    `stdin`, if given, is the step's whole standard input.
+    """
+    return _run(name, argv, True, environment, stdin=stdin)
+
+
+def text(name: str, argv: Sequence[str], environment: Environment | None = None) -> str:
+    """A step's stdout as a shell's `$(...)` gives it: trailing newlines removed."""
+    return output(name, argv, environment).decode(errors="replace").rstrip("\n")
 
 
 class _QueryFailed(Exception):

@@ -288,12 +288,21 @@ def argv(name: str, fix: bool, sandbox: bool = False) -> list[str]:
     return LEAVES[name].argv(fix, sandbox)
 
 
-def run(name: str, fix: bool, sandbox: bool = False) -> None:
-    """Runs a leaf or group as steps; the caller has admitted sandbox homes."""
+def run(
+    name: str,
+    fix: bool,
+    sandbox: bool = False,
+    environment: steps.Environment | None = None,
+) -> None:
+    """Runs a leaf or group as steps; the caller has admitted sandbox homes.
+
+    `environment` changes every member's environment.
+    """
     for member, leaf in _members(name):
-        environment = (
-            {"CARGO_NET_OFFLINE": "true", "CARGO_HOME": os.environ[leaf.home]}
-            if sandbox and leaf.home
-            else None
-        )
-        steps.run(member, leaf.argv(fix, sandbox), environment=environment)
+        changes = dict(environment or {})
+        if sandbox and leaf.home:
+            changes |= {
+                "CARGO_NET_OFFLINE": "true",
+                "CARGO_HOME": os.environ[leaf.home],
+            }
+        steps.run(member, leaf.argv(fix, sandbox), environment=changes)

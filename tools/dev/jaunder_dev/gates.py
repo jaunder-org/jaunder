@@ -8,7 +8,6 @@ verdict.
 
 import os
 import platform
-import sys
 from pathlib import Path
 
 from jaunder_dev import report, static, steps
@@ -55,6 +54,7 @@ GIT_OVERRIDES = (
     "GIT_COMMON_DIR",
     "GIT_NAMESPACE",
 )
+WITHOUT_GIT_OVERRIDES: steps.Environment = dict.fromkeys(GIT_OVERRIDES)
 
 DOCS_SHAPE = (
     "sequence-check",
@@ -110,18 +110,13 @@ STATIC_CHECKS = (
 
 def clean_tree() -> None:
     """Verify workflows refuse dirty or unavailable Git state before work."""
-    status = steps.output(
+    status = steps.text(
         "clean-tree",
         ["git", "status", "--porcelain", "--untracked-files=all"],
-        dict.fromkeys(GIT_OVERRIDES),
-    ).decode(errors="replace")
+        WITHOUT_GIT_OVERRIDES,
+    )
     if status:
-        print(
-            f"verify workflows require a clean checkout\n{status.rstrip('\n')}",
-            file=sys.stderr,
-            flush=True,
-        )
-        raise steps.StepFailed(1, signalled=False)
+        steps.refuse(f"verify workflows require a clean checkout\n{status}")
 
 
 # The host check surface: its named groups in fail-fast order.
@@ -145,10 +140,13 @@ def format_checks(fix: bool, docs: str) -> None:
     static.run("tools-fmt", fix)
 
 
-def leptosfmt(fix: bool) -> None:
-    """Runs the scoped adapter as built from this checkout, not a stale one on PATH."""
+def _build_tools(name: str, *packages: str) -> steps.Environment:
+    """Builds tool binaries from this checkout; returns a PATH that runs them first.
+
+    `packages` alternates `-p <package>` and `--bin <binary>` selections.
+    """
     steps.run(
-        "scoped-leptosfmt-build",
+        name,
         [
             "cargo",
             "build",
@@ -156,20 +154,41 @@ def leptosfmt(fix: bool) -> None:
             "--quiet",
             "--manifest-path",
             "tools/Cargo.toml",
-            "-p",
-            "repository-policy",
-            "--bin",
-            "scoped-leptosfmt",
+            *packages,
             "--target-dir",
             "tools/target",
         ],
     )
     built = Path.cwd() / "tools" / "target" / "debug"
-    steps.run(
-        "leptosfmt",
-        static.argv("leptosfmt", fix),
-        environment={"PATH": f"{built}:{os.environ.get('PATH', '')}"},
+    return {"PATH": f"{built}:{os.environ.get('PATH', '')}"}
+
+
+def leptosfmt(fix: bool) -> None:
+    """Runs the scoped adapter as built from this checkout, not a stale one on PATH."""
+    path = _build_tools(
+        "scoped-leptosfmt-build",
+        "-p",
+        "repository-policy",
+        "--bin",
+        "scoped-leptosfmt",
     )
+    steps.run("leptosfmt", static.argv("leptosfmt", fix), environment=path)
+
+
+def static_all(fix: bool) -> None:
+    """The former --all population, with devtool and the adapter built from here."""
+    path = _build_tools(
+        "static-all-build",
+        "-p",
+        "devtool",
+        "-p",
+        "repository-policy",
+        "--bin",
+        "devtool",
+        "--bin",
+        "scoped-leptosfmt",
+    )
+    static.run("all", fix, environment=path)
 
 
 def markdown(fix: bool, docs: str) -> None:
@@ -191,9 +210,13 @@ def markdown(fix: bool, docs: str) -> None:
     static.run("prettier-end2end", fix)
 
 
+def repository_docs(check: str) -> None:
+    steps.run(check, [*REPOSITORY_POLICY, "repository-docs", "--", check])
+
+
 def docs_shape() -> None:
     for check in DOCS_SHAPE:
-        steps.run(check, [*REPOSITORY_POLICY, "repository-docs", "--", check])
+        repository_docs(check)
 
 
 def source_contract(name: str) -> None:
@@ -336,9 +359,12 @@ def elisp_coverage() -> None:
     steps.run("elisp-consume", [*COVERAGE_CHECK, "elisp-consume"], report.render)
 
 
-def e2e() -> None:
-    """The full E2E workflow: every producer, then reconciliation of both backends."""
-    steps.run("e2e", ["bash", "scripts/e2e-workflow", "all", ""])
+def e2e(jobs: str = "") -> None:
+    """The full E2E workflow: every producer, then reconciliation of both backends.
+
+    `jobs` bounds concurrent producers; empty runs every enabled lane at once.
+    """
+    steps.run("e2e", ["bash", "scripts/e2e-workflow", "all", jobs])
 
 
 # Gates.

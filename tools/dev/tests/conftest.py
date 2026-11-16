@@ -12,6 +12,13 @@ from typing import Any
 import pytest
 
 PACKAGE = Path(__file__).resolve().parents[1]
+# The repository this package lives in; absent when the tests run from the
+# filtered `tools/dev/` source, as `checks.dev-python` does.
+REPOSITORY = PACKAGE.parents[1]
+# Fixed commits the fake Git resolves for the qualification preflight.
+HARNESS = "a" * 40
+SOURCE = "b" * 40
+TARGET = "c" * 40
 # Fake tools share this prelude; each records its argv in `order` at its cwd.
 PRELUDE = """\
 import os, pathlib, signal, subprocess, sys, time
@@ -95,6 +102,36 @@ class Checkout:
     def popen(self, *args: str, **extra: str) -> subprocess.Popen[bytes]:
         return self.spawn(self.command(*args), **extra)
 
+    def executable(self, name: str, text: str) -> Path:
+        """A tool written verbatim, recording nothing (no `order` prelude)."""
+        path = self.bin / name
+        path.write_text(text, encoding="utf-8")
+        path.chmod(0o755)
+        return path
+
+    def forward_just_to_dev(self) -> None:
+        """Repository scripts still call `just X`; here that runs `dev X` instead.
+
+        This stands in for the caller switch to `dev`, so a script's nested
+        recipe is this package's port, joined to the same trace.
+        """
+        self.executable(
+            "just",
+            f"#!{sys.executable}\nimport os, sys\n"
+            f"argv = {launch(DEV)!r} + sys.argv[1:]\n"
+            "os.execv(argv[0], argv)\n",
+        )
+
+    def from_repository(self, *paths: str) -> None:
+        """Copies repository files the workflow runs; skips outside the repository."""
+        for path in paths:
+            source = REPOSITORY / path
+            if not source.is_file():
+                pytest.skip(f"needs the repository's {path}")
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(source, target)
+
     def order(self) -> str:
         path = self.root / "order"
         return path.read_text(encoding="utf-8") if path.exists() else ""
@@ -142,6 +179,20 @@ printf '%s\037' "$name" "$@" >> "$FAKE_LOG"
 printf '\036' >> "$FAKE_LOG"
 if [ "$name" = git ] && [ -f dirty-status ]; then
     printf ' M tracked.rs\n'
+fi
+if [ "$name" = git ]; then
+    case "$*" in
+      'rev-parse --verify HEAD^{commit}'|'rev-parse --verify --end-of-options HEAD^{commit}')
+        printf '%s\n' "$HARNESS" ;;
+      'rev-parse --verify --end-of-options source^{commit}') printf '%s\n' "$SOURCE" ;;
+      'rev-parse --verify --end-of-options target^{commit}') printf '%s\n' "$TARGET" ;;
+      'remote get-url origin')
+        if [ -f wrong-origin ]; then
+            printf 'https://example.invalid/foreign\n'
+        else
+            printf 'https://github.com/jaunder-org/jaunder.git\n'
+        fi ;;
+    esac
 fi
 if [ "$name $*" = "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p host-proof --bin test-local --" ]; then
     touch producer-resource
@@ -195,15 +246,16 @@ class Workflow:
     ) -> subprocess.CompletedProcess[bytes]:
         log = self.root / "commands"
         log.write_bytes(b"")
-        return self.checkout.dev(
-            *args,
-            cwd=cwd,
-            FAKE_LOG=str(log),
-            FAIL_COMMAND=failure,
-            REAL_GIT=REAL_GIT,
+        environment = {
+            "FAKE_LOG": str(log),
+            "FAIL_COMMAND": failure,
+            "REAL_GIT": REAL_GIT,
+            "HARNESS": HARNESS,
+            "SOURCE": SOURCE,
+            "TARGET": TARGET,
             **GIT_OVERRIDES,
-            **extra,
-        )
+        }
+        return self.checkout.dev(*args, cwd=cwd, **(environment | extra))
 
     def commands(self) -> list[list[str]]:
         records = (self.root / "commands").read_text(encoding="utf-8").split("\x1e")
