@@ -744,6 +744,9 @@ let
       ps.coverage
       ps.mypy
       ps.pytest
+      # The suite drives `dev` as real processes; spreading it over the
+      # available cores keeps it short enough for every commit's gate.
+      ps.pytest-xdist
     ]
   );
   devPackageFiles = pkgs.lib.fileset.unions [

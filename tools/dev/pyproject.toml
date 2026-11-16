@@ -20,7 +20,7 @@ packages = ["jaunder_dev"]
 testpaths = ["tests"]
 pythonpath = ["."]
 # Keep host runs from leaving a cache directory in the checkout.
-addopts = ["-p", "no:cacheprovider"]
+addopts = ["-p", "no:cacheprovider", "-n", "auto"]
 
 # Ruff reads only a pyproject.toml with this table, which makes this directory
 # its project root wherever it runs, so first-party imports sort the same on
