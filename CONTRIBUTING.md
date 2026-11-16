@@ -262,7 +262,8 @@ Precommit still performs its after-snapshot and conservative staging
 reconciliation after the gate stops; safe formatter/check changes can be
 restaged, while mixed or unsafe Git/index state still fails closed. Work not
 reached is not reported as successful. Apart from precommit's selected routing
-surface, the workflows remain broad and preserve success-path order and
+surface, the workflows remain broad, run the host check groups in their
+documented order (see [Local checks: Just](#local-checks-just)), and preserve
 clean-tree/staged-subset authority. Independent CI lanes and required aggregates
 remain authoritative; local fail-fast behavior does not weaken their verdicts.
 
@@ -926,12 +927,28 @@ CI/`just validate-no-e2e` when hermetic confidence is the question. Focused
 
 | Command                | Runs                                                                                                                                                | Formatting    |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| `just check-no-test`   | host static checks + clippy + repository-shape checks + auxiliary host tests                                                                        | auto-fixes    |
+| `just check-no-test`   | the host check groups (below) in Fix mode + auxiliary host tests                                                                                    | auto-fixes    |
 | `just check`           | adds `test-local`, Nix `wasm-tests` and `doctests`/`doctests-gate`                                                                                  | auto-fixes    |
 | `just precommit`       | focused Git/index safety owner selects Markdown or broad Fix checks, reconciles once, and conditionally verifies shared docs                        | auto-fixes    |
 | `just prepush`         | clean tree; Verify host/static + auxiliary tests + `test-local` + `workspace-doctests`; x86_64-linux uses shared `static-docs` at the Markdown slot | never mutates |
 | `just validate-no-e2e` | clean tree; Verify host/static, Nix static proof, wasm budget/tests, Rust coverage/CRAP, doctests, and authoritative Elisp producer/consumer        | never mutates |
 | `just validate`        | adds two Chromium and six Firefox E2E lanes, reconciliation, and final authoritative SQLite/Chromium server-function flow verification              | never mutates |
+
+The host check surface that `check-no-test`, `prepush`, `validate-no-e2e` and
+`ci-validate-host` share is five public groups, run in this order and stopping
+at the first failure. Each can be run on its own to re-check one kind of
+failure; `mode` is `verify` (the default) or `fix`:
+
+| Group                        | Runs                                                                                                   |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `just format [mode]`         | Rust/tools `cargo fmt`, `leptosfmt`, Prettier Markdown/`end2end`/CSS, Elisp formatting                 |
+| `just docs-shape`            | documentation sequence, ADR format and README/view parity, doc links, flow docs                        |
+| `just source-contracts`      | ast-grep rule tests and `no-full-reload`, every repository source-contract policy, doctest fence check |
+| `just compile-checks [mode]` | `tsc`, `cargo-deny`, the six Clippy units                                                              |
+| `just elisp-checks [mode]`   | Elisp byte-compilation and ERT                                                                         |
+
+`just source-contract <name>` runs one source-contract policy, such as
+`just source-contract html-sink`.
 
 The CI host lane captures filesystem capacity/inodes, memory/swap and allocated
 bytes for checkout-owned Cargo targets before validation. It does not traverse

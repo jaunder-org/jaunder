@@ -382,79 +382,86 @@ fn real_git_refuses_unpushed_harness_and_resolves_product_aliases() {
     );
 }
 
+// Literal required populations from the existing gate, not Justfile introspection.
+const DOCS_SHAPE: [&str; 6] = [
+    "sequence-check",
+    "adr-format",
+    "adr-readme-parity",
+    "adr-view-parity",
+    "doc-links",
+    "flow-docs",
+];
+
+const SOURCE_CONTRACTS: [&str; 22] = [
+    "test-patterns",
+    "server-fn-registrar",
+    "server-fn-tracing",
+    "server-fn-coverage",
+    "server-fn-wire-arg-error",
+    "traced-context",
+    "e2e-telemetry-boundary",
+    "e2e-collector-config",
+    "proffered-secret",
+    "e2e-goto-wrapper",
+    "e2e-server-fn-endpoints",
+    "target-arch-placement",
+    "write-transaction-contract",
+    "common-host-target-closure",
+    "lint-suppression",
+    "thin-components",
+    "sqlx-newtype-bind",
+    "sqlx-newtype-decode",
+    "raw-html-door",
+    "html-sink",
+    "e2e-scaffold",
+    "xlang-literal",
+];
+
+/// The whole `_host` surface: its groups in their composed order.
 fn broad(mode: &str, shared_docs: bool) -> Vec<Vec<String>> {
-    let mut expected = Vec::new();
-    for name in [
-        "fmt",
-        "leptosfmt",
-        "prettier-markdown",
-        "prettier-end2end",
-        "prettier-css",
-        "elisp-fmt",
-        "tools-fmt",
-        "ast-grep-tests",
-        "no-full-reload",
-    ] {
-        if name == "prettier-markdown" && shared_docs {
-            expected.extend(commands(&["cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin git-index-safety -- prepush-docs"]));
-        } else {
-            if name == "leptosfmt" {
-                expected.extend(commands(&["cargo build --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin scoped-leptosfmt --target-dir tools/target"]));
-            }
-            expected.push(devtool(name, mode));
-        }
+    let mut expected = format_checks(mode, shared_docs);
+    expected.extend(docs_shape());
+    expected.extend(source_contracts());
+    expected.extend(compile_checks(mode));
+    expected.extend(elisp_checks(mode));
+    expected
+}
+
+fn format_checks(mode: &str, shared_docs: bool) -> Vec<Vec<String>> {
+    let mut expected = vec![devtool("fmt", mode)];
+    expected.extend(commands(&["cargo build --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin scoped-leptosfmt --target-dir tools/target"]));
+    expected.push(devtool("leptosfmt", mode));
+    if shared_docs {
+        expected.extend(commands(&["cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin git-index-safety -- prepush-docs"]));
+    } else {
+        expected.push(devtool("prettier-markdown", mode));
     }
-    // Literal required population from the existing gate, not Justfile introspection.
-    for name in [
-        "sequence-check",
-        "adr-format",
-        "adr-readme-parity",
-        "adr-view-parity",
-        "doc-links",
-        "flow-docs",
-        "test-patterns",
-        "server-fn-registrar",
-        "server-fn-tracing",
-        "server-fn-coverage",
-        "server-fn-wire-arg-error",
-        "traced-context",
-        "e2e-telemetry-boundary",
-        "e2e-collector-config",
-        "proffered-secret",
-        "e2e-goto-wrapper",
-        "e2e-server-fn-endpoints",
-        "target-arch-placement",
-        "write-transaction-contract",
-        "common-host-target-closure",
-        "lint-suppression",
-        "thin-components",
-        "sqlx-newtype-bind",
-        "sqlx-newtype-decode",
-        "doctest-fences",
-        "raw-html-door",
-        "html-sink",
-        "e2e-scaffold",
-        "xlang-literal",
-    ] {
-        if [
-            "sequence-check",
-            "adr-format",
-            "adr-readme-parity",
-            "adr-view-parity",
-            "doc-links",
-            "flow-docs",
-        ]
-        .contains(&name)
-        {
-            expected.extend(commands(&[&format!("cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin repository-docs -- {name}")]));
-        } else if name != "doctest-fences" {
-            expected.extend(commands(&[&format!("cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin source-contracts -- {name}")]));
-        } else {
-            expected.extend(commands(&["cargo run --locked --quiet --manifest-path tools/Cargo.toml -p doctests --features host --bin doctest-check -- fences"]));
-        }
+    for name in ["prettier-end2end", "prettier-css", "elisp-fmt", "tools-fmt"] {
+        expected.push(devtool(name, mode));
     }
-    for name in [
-        "byte-compile",
+    expected
+}
+
+fn docs_shape() -> Vec<Vec<String>> {
+    DOCS_SHAPE
+        .iter()
+        .flat_map(|name| commands(&[&format!("cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin repository-docs -- {name}")]))
+        .collect()
+}
+
+fn source_contract(name: &str) -> Vec<String> {
+    commands(&[&format!("cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin source-contracts -- {name}")]).pop().unwrap()
+}
+
+fn source_contracts() -> Vec<Vec<String>> {
+    let mut expected = vec![devtool("ast-grep-tests", ""), devtool("no-full-reload", "")];
+    expected.extend(SOURCE_CONTRACTS.map(source_contract));
+    expected.extend(commands(&["cargo run --locked --quiet --manifest-path tools/Cargo.toml -p doctests --features host --bin doctest-check -- fences"]));
+    expected
+}
+
+fn compile_checks(mode: &str) -> Vec<Vec<String>> {
+    [
         "tsc",
         "cargo-deny",
         "product-core-clippy",
@@ -463,11 +470,13 @@ fn broad(mode: &str, shared_docs: bool) -> Vec<Vec<String>> {
         "client-host-clippy",
         "wasm-clippy",
         "tools-clippy",
-    ] {
-        expected.push(devtool(name, mode));
-    }
-    expected.push(devtool("ert", mode));
-    expected
+    ]
+    .map(|name| devtool(name, mode))
+    .to_vec()
+}
+
+fn elisp_checks(mode: &str) -> Vec<Vec<String>> {
+    vec![devtool("byte-compile", ""), devtool("ert", mode)]
 }
 
 fn devtool(name: &str, mode: &str) -> Vec<String> {
@@ -1059,17 +1068,60 @@ fn markdown_host_runs_the_complete_narrow_fix_surface_in_order() {
     let workflow = Workflow::new();
     let (ok, actual, stderr) = workflow.run(&["precommit-markdown-host"], "");
     assert!(ok, "{stderr}");
-    assert_eq!(
-        actual,
-        commands(&[
-            "prettier -w **/*.md",
-            "prettier -w end2end",
-            "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin repository-docs -- sequence-check",
-            "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin repository-docs -- adr-format",
-            "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin repository-docs -- adr-readme-parity",
-            "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin repository-docs -- adr-view-parity",
-            "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin repository-docs -- doc-links",
-            "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p repository-policy --bin repository-docs -- flow-docs",
-        ])
-    );
+    assert_eq!(actual, {
+        let mut expected = commands(&["prettier -w **/*.md", "prettier -w end2end"]);
+        expected.extend(docs_shape());
+        expected
+    });
+}
+
+#[test]
+fn each_check_group_and_one_source_contract_run_alone() {
+    let workflow = Workflow::new();
+    let mut cases: Vec<(Vec<&str>, Vec<Vec<String>>)> = vec![
+        (vec!["format"], format_checks("verify", false)),
+        (
+            vec!["format", "verify", "prepush"],
+            format_checks(
+                "verify",
+                cfg!(all(target_os = "linux", target_arch = "x86_64")),
+            ),
+        ),
+        (vec!["docs-shape"], docs_shape()),
+        (vec!["source-contracts"], source_contracts()),
+        (vec!["compile-checks"], compile_checks("verify")),
+        (vec!["elisp-checks"], elisp_checks("verify")),
+        (
+            vec!["source-contract", "html-sink"],
+            vec![source_contract("html-sink")],
+        ),
+    ];
+    for mode in ["fix", "verify"] {
+        cases.push((vec!["format", mode], format_checks(mode, false)));
+        cases.push((vec!["compile-checks", mode], compile_checks(mode)));
+        cases.push((vec!["elisp-checks", mode], elisp_checks(mode)));
+    }
+    for (args, expected) in cases {
+        let (ok, actual, stderr) = workflow.run(&args, "");
+        assert!(ok, "{args:?}: {stderr}");
+        assert_eq!(actual, expected, "{args:?}");
+    }
+}
+
+#[test]
+fn markdown_slot_refuses_unknown_or_mutating_prepush_docs() {
+    let workflow = Workflow::new();
+    for (args, message) in [
+        (
+            ["format", "verify", "bogus"],
+            "expected host or prepush docs",
+        ),
+        (["format", "fix", "prepush"], "prepush docs require verify"),
+    ] {
+        let (ok, actual, stderr) = workflow.run(&args, "");
+        assert!(!ok, "{args:?} must refuse");
+        assert!(stderr.contains(message), "{args:?}: {stderr}");
+        // Refusal lands exactly at the slot: fmt and leptosfmt ran, nothing after.
+        assert_eq!(actual, format_checks(args[1], false)[..3], "{args:?}");
+    }
 }
