@@ -12,23 +12,17 @@ pub(crate) fn validate(root: &Path) -> anyhow::Result<PathBuf> {
     let root = root
         .canonicalize()
         .with_context(|| format!("resolving CSR bundle root {}", root.display()))?;
-    let manifest_check = crate::invocation_trace::active()
-        .then(|| crate::invocation_trace::phase("xtask.csr-manifest-check"));
+    let manifest_check = crate::span_records::phase("xtask.csr-manifest-check");
     let manifest_result = host::vite_manifest::csr_outputs(&root)
         .with_context(|| format!("invalid Vite manifest or output under {}", root.display()));
-    if let Some(phase) = manifest_check {
-        phase.finish(manifest_result.is_ok());
-    }
+    manifest_check.finish(manifest_result.is_ok());
     manifest_result?;
-    let inventory_check = crate::invocation_trace::active()
-        .then(|| crate::invocation_trace::phase("xtask.csr-inventory-check"));
+    let inventory_check = crate::span_records::phase("xtask.csr-inventory-check");
     let inventory_result = host::system_theme::load_system_artifact_inventory(
         &host::system_theme::DirectorySystemArtifactSource::new(&root.join("system-artifacts")),
     )
     .context("invalid system artifacts");
-    if let Some(phase) = inventory_check {
-        phase.finish(inventory_result.is_ok());
-    }
+    inventory_check.finish(inventory_result.is_ok());
     inventory_result?;
     ensure!(
         root.join("index.html").is_file(),
@@ -73,57 +67,6 @@ pub(crate) mod tests {
 <script type="module" crossorigin src="/{entry}"></script>"#,
         )).unwrap();
         host::vite_manifest::csr_outputs(root).unwrap()
-    }
-
-    #[test]
-    fn traced_validation_phases_are_nested_and_stop_after_failure() {
-        let temp = tempfile::tempdir().unwrap();
-        write_bundle(temp.path());
-        let capture = crate::invocation_trace::Capture::new();
-        capture.with_default(|| {
-            let command = crate::invocation_trace::phase("xtask.command");
-            validate(temp.path()).unwrap();
-            crate::invocation_trace::command_outcome(true, 0, None);
-            command.finish(true);
-        });
-        let trace = capture.finish().unwrap();
-        let events: Vec<serde_json::Value> = serde_json::from_slice(&trace.bytes).unwrap();
-        let names = ["xtask.csr-manifest-check", "xtask.csr-inventory-check"];
-        let begins: Vec<_> = events
-            .iter()
-            .filter(|event| {
-                names.contains(&event["name"].as_str().unwrap_or("")) && event["ph"] == "B"
-            })
-            .map(|event| event["name"].as_str().unwrap())
-            .collect();
-        assert_eq!(begins, names);
-        let stack: Vec<_> = events
-            .iter()
-            .filter(|event| names.contains(&event["name"].as_str().unwrap_or("")))
-            .filter_map(|event| match event["ph"].as_str() {
-                Some("B") => Some(event["name"].as_str().unwrap()),
-                Some("E") => Some("end"),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(stack, [names[0], "end", names[1], "end"]);
-
-        fs::write(temp.path().join(".vite/manifest.json"), "corrupt").unwrap();
-        let capture = crate::invocation_trace::Capture::new();
-        capture.with_default(|| {
-            let command = crate::invocation_trace::phase("xtask.command");
-            assert!(validate(temp.path()).is_err());
-            crate::invocation_trace::command_outcome(false, 1, None);
-            command.finish(false);
-        });
-        let trace = capture.finish().unwrap();
-        let events: Vec<serde_json::Value> = serde_json::from_slice(&trace.bytes).unwrap();
-        assert!(events.iter().any(|event| {
-            event["name"] == "xtask.phase.outcome"
-                && event["args"]["phase"] == names[0]
-                && event["args"]["outcome"] == "failure"
-        }));
-        assert!(!events.iter().any(|event| event["name"] == names[1]));
     }
 
     #[test]

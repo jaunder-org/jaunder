@@ -98,7 +98,7 @@ which runs in verify mode unless `--fix` is given. The #1958 groups become
 Review deliverable A comprises the trace layer, the runner skeleton and the Rust
 join.
 
-- [ ] **Task 1: tracer bullet.** `dev tsc` is traced on the host, and
+- [x] **Task 1: tracer bullet.** `dev tsc` is traced on the host, and
       `dev static tsc --sandbox` runs inside `checks.static-typescript`.
   - Adds:
     - `tools/dev/`: the click group, the trace module, the internal step runner
@@ -136,7 +136,7 @@ join.
         counts its spans, and record it in the task handoff
       - if not, use the ui.perfetto.dev screenshot method
       - perfetto stays out of every check closure either way
-- [ ] **Task 2: host-proof joins the trace.** `dev test-local -- <selector>`
+- [x] **Task 2: host-proof joins the trace.** `dev test-local -- <selector>`
       shows host-proof's phase spans nested under the `dev` step.
   - Replaces `tools/host-proof/src/invocation_trace.rs` (used by
     `bin/test-local.rs:23`):

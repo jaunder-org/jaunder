@@ -43,8 +43,10 @@ def gate(root: Path, name: str, body: Callable[[], None]) -> int:
         return 0
 
 
-def _supervise(argv: Sequence[str]) -> tuple[int, bool]:
+def _supervise(argv: Sequence[str], capture: bool) -> tuple[int, bool, bytes]:
     """Runs the child to completion, relaying a termination request to it.
+
+    With `capture`, the child's stdout is returned instead of passed through.
 
     SIGTERM or SIGHUP sent to `dev` alone is forwarded. A terminal's SIGINT
     already reaches the whole foreground process group, so `dev` only keeps
@@ -72,29 +74,44 @@ def _supervise(argv: Sequence[str]) -> tuple[int, bool]:
     }
     try:
         try:
-            child = subprocess.Popen(argv, env=trace.child_environment())
+            child = subprocess.Popen(
+                argv,
+                env=trace.child_environment(),
+                stdout=subprocess.PIPE if capture else None,
+            )
         except FileNotFoundError as error:
             print(f"dev: {argv[0]}: {error.strerror}", file=sys.stderr, flush=True)
-            return 127, False
+            return 127, False, b""
         # A signal that arrived while the child was starting is relayed now.
         for signum in received:
             child.send_signal(signum)
-        returncode = child.wait()
+        output, _ = child.communicate()
+        returncode = child.returncode
     finally:
         for number, handler in previous.items():
             signal.signal(number, handler)
+    output = output or b""
     if returncode < 0:
-        return 128 - returncode, True
+        return 128 - returncode, True, output
     if returncode == 0 and received:
-        return 128 + received[0], True
-    return returncode, False
+        return 128 + received[0], True, output
+    return returncode, False, output
 
 
-def run(name: str, argv: Sequence[str]) -> None:
-    """Runs one step; raises StepFailed so the gate stops at the first failure."""
+def run(
+    name: str, argv: Sequence[str], render: Callable[[bytes], str] | None = None
+) -> None:
+    """Runs one step; raises StepFailed so the gate stops at the first failure.
+
+    With `render`, the step's stdout is shown as `render` presents it, whatever
+    the step's status.
+    """
     with trace.tracer().start_as_current_span(name) as span:
         span.set_attribute(COMMAND_LINE, trace.cap_command_line(shlex.join(argv)))
-        code, signalled = _supervise(argv)
+        code, signalled, output = _supervise(argv, capture=render is not None)
         _record_outcome(span, code, signalled)
+    if render is not None:
+        sys.stdout.buffer.write(render(output).encode())
+        sys.stdout.flush()
     if code:
         raise StepFailed(code, signalled)

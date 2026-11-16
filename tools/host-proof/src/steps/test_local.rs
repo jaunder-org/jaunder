@@ -1,8 +1,34 @@
+use std::time::Instant;
+
 use xshell::Shell;
 
 use crate::compile_cache;
 use crate::report::{CommandResult, StepResult};
 use crate::sh::step_with_env;
+use crate::span_records;
+
+/// Select the checkout, then run focused host-native tests, all under the
+/// `xtask.command` span; the error is a checkout that could not be selected.
+pub fn execute(nextest_args: &[String]) -> anyhow::Result<CommandResult> {
+    let span = span_records::phase("xtask.command");
+    eprintln!("xtask-start: checkout-prepare");
+    let checkout = span_records::phase("xtask.checkout");
+    let prepared = crate::checkout::prepare();
+    checkout.finish(prepared.is_ok());
+    let result = prepared.map(|()| {
+        eprintln!("xtask-start: hook-setup");
+        crate::checkout::ensure_hooks_installed();
+        eprintln!("xtask-start: dispatch");
+        let dispatch = span_records::phase("xtask.dispatch");
+        let started = Instant::now();
+        let mut result = command(nextest_args);
+        result.duration_ms = started.elapsed().as_millis();
+        dispatch.finish(result.ok);
+        result
+    });
+    span.exited(result.as_ref().map_or(2, CommandResult::exit_code));
+    result
+}
 
 /// Run focused host-native tests and return their report.
 pub fn command(nextest_args: &[String]) -> CommandResult {
@@ -21,43 +47,32 @@ fn run(sh: &Shell, result: &mut CommandResult, nextest_args: &[String]) {
         nextest_args,
         sh.var_os("JAUNDER_CSR_BUNDLE_DIR"),
         |sh, result| {
-            let traced = crate::invocation_trace::active();
-            let phase = traced.then(|| crate::invocation_trace::phase("test-local-csr-bundle"));
-            let started = (!traced).then(std::time::Instant::now);
+            let phase = span_records::phase("test-local-csr-bundle");
+            let started = Instant::now();
             let resolve = || -> anyhow::Result<()> {
-                let admission =
-                    traced.then(|| crate::invocation_trace::phase("xtask.csr-admission"));
+                let admission = span_records::phase("xtask.csr-admission");
                 let admitted = repository_policy::checkout::admit_untracked_inputs(
                     &sh.current_dir(),
                     ".#csrBundle.sourceAdmits",
                 );
-                if let Some(admission) = admission {
-                    admission.finish(admitted.is_ok());
-                }
+                admission.finish(admitted.is_ok());
                 admitted?;
                 let root = sh.current_dir().join(".xtask/csr-bundle");
                 sh.create_dir(root.parent().unwrap())?;
-                let build = traced.then(|| crate::invocation_trace::phase("xtask.csr-build"));
+                let build = span_records::phase("xtask.csr-build");
                 let built = crate::nix_build::build_rooted(sh, "csrBundle", &root);
-                if let Some(build) = build {
-                    build.finish(built.is_ok());
-                }
+                build.finish(built.is_ok());
                 built?;
                 Ok(())
             };
-            let mut step = match resolve() {
+            let step = match resolve() {
                 Ok(()) => StepResult::ok("test-local-csr-bundle"),
                 Err(error) => {
                     StepResult::fail("test-local-csr-bundle").detail(format!("{error:#}"))
                 }
             };
-            if let Some(phase) = phase {
-                phase.finish(step.ok);
-            }
-            if let Some(started) = started {
-                step = step.with_duration(started.elapsed());
-            }
-            result.push(step);
+            phase.finish(step.ok);
+            result.push(step.with_duration(started.elapsed()));
         },
     );
 }
@@ -70,12 +85,9 @@ fn run_with_producer(
     explicit_root: Option<std::ffi::OsString>,
     produce: impl FnOnce(&Shell, &mut CommandResult),
 ) {
-    let wait = crate::invocation_trace::active()
-        .then(|| crate::invocation_trace::phase("xtask.artifact-lock-wait"));
+    let wait = span_records::phase("xtask.artifact-lock-wait");
     let lock = super::host_server::host_artifact_build_lock();
-    if let Some(wait) = wait {
-        wait.finish(lock.is_ok());
-    }
+    wait.finish(lock.is_ok());
     let _build_lock = match lock {
         Ok(lock) => lock,
         Err(error) => {
@@ -101,23 +113,26 @@ fn run_with_producer(
             sh.current_dir().join(".xtask/csr-bundle")
         }
     };
-    let validation = crate::invocation_trace::active()
-        .then(|| crate::invocation_trace::phase("test-local-csr-prerequisite"));
+    let validation = span_records::phase("test-local-csr-prerequisite");
+    let started = Instant::now();
     let validated = super::csr_prerequisite::validate(&input);
-    if let Some(validation) = validation {
-        validation.finish(validated.is_ok());
-    }
+    validation.finish(validated.is_ok());
+    let elapsed = started.elapsed();
     let root = match validated {
         Ok(root) => root,
         Err(error) => {
-            result
-                .push(StepResult::fail("test-local-csr-prerequisite").detail(format!("{error:#}")));
+            result.push(
+                StepResult::fail("test-local-csr-prerequisite")
+                    .detail(format!("{error:#}"))
+                    .with_duration(elapsed),
+            );
             return;
         }
     };
     result.push(
         StepResult::ok("test-local-csr-prerequisite")
-            .detail(format!("verified CSR bundle {}", root.display())),
+            .detail(format!("verified CSR bundle {}", root.display()))
+            .with_duration(elapsed),
     );
     // Nix's ordinary checkout-local out-link remains rooted. Keep the shared
     // lock through compilation/execution so peers cannot replace the active root.

@@ -14,16 +14,8 @@ pub fn step_with_env(
     args: &[&str],
     env: &[(String, String)],
 ) -> StepResult {
-    let traced = crate::invocation_trace::active()
-        && matches!(name, "test-local-image-worker" | "test-local");
-    let phase = traced.then(|| {
-        crate::invocation_trace::phase(if name == "test-local" {
-            "test-local"
-        } else {
-            "test-local-image-worker"
-        })
-    });
-    let start = (!traced).then(Instant::now);
+    let phase = crate::span_records::phase(name.to_owned());
+    let start = Instant::now();
     let mut cmd = sh.cmd(program).args(args).quiet().ignore_status();
     for (key, value) in env {
         cmd = cmd.env(key, value);
@@ -48,13 +40,8 @@ pub fn step_with_env(
         }
         Err(err) => StepResult::fail(name).detail(err.to_string()),
     };
-    if let Some(phase) = phase {
-        phase.finish(result.ok);
-    }
-    match start {
-        Some(start) => result.with_duration(start.elapsed()),
-        None => result,
-    }
+    phase.finish(result.ok);
+    result.with_duration(start.elapsed())
 }
 
 #[cfg(test)]

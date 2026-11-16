@@ -13,11 +13,11 @@ mod e2e_provenance;
 pub mod git {
     pub use repository_policy::git::{at, toplevel};
 }
-pub mod invocation_trace;
 pub mod nix_build;
 pub mod playwright_report;
 mod server_fn_coverage;
 mod sh;
+pub mod span_records;
 #[cfg(test)]
 mod test_support;
 pub mod traces;

@@ -20,7 +20,8 @@ struct Cli {
 
 fn main() {
     let cli = host_proof::report::parse_args::<Cli>();
-    let code = match host_proof::invocation_trace::execute_test_local(&cli.nextest_args) {
+    let _run = host_proof::span_records::join_run();
+    let code = match host_proof::steps::test_local::execute(&cli.nextest_args) {
         Ok(result) => result.emit(),
         Err(error) => {
             host_proof::report::CommandResult::refused("test-local", format!("{error:#}")).emit()
