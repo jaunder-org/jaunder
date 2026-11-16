@@ -29,13 +29,19 @@ def _render(report: Any) -> str:
     return "".join(f"{line}\n" for line in lines)
 
 
-def render(document: bytes) -> str:
-    """Renders the report on host-proof's stdout; anything else passes through.
+# jq's status for input step-report.jq cannot render: not JSON, or JSON
+# without a `steps` list.
+NOT_A_REPORT = 5
 
-    Output that is not a step report, whatever its shape, is shown as it came,
-    so the step's own status and diagnostics always survive.
+
+def render(document: bytes) -> str | None:
+    """The report on a host tool's stdout, rendered; None if it is not a report.
+
+    Empty output renders as nothing, as jq reads no input from it.
     """
+    if not document.strip():
+        return ""
     try:
         return _render(json.loads(document))
     except ValueError, LookupError, TypeError, AttributeError:
-        return document.decode(errors="replace")
+        return None

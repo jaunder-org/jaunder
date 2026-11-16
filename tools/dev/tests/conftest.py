@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -108,6 +109,117 @@ class Checkout:
         return {
             event["name"]: event for event in trace["traceEvents"] if event["ph"] == "X"
         }
+
+
+# A fake for every tool a workflow runs. Each appends its argv to $FAKE_LOG
+# (unit and record separators keep empty and whitespace-bearing arguments
+# exact) and exits 17 when its command line equals $FAIL_COMMAND. Fake Git
+# refuses inherited repository overrides with 23, answers checkout discovery
+# from the real Git, and reports a dirty tree while `dirty-status` exists.
+# Nix cache probes fail, so Nix steps record no cache source.
+FAKE = r"""#!/bin/sh
+name=${0##*/}
+if [ "$name" = git ]; then
+    if [ -n "${GIT_DIR+x}${GIT_WORK_TREE+x}${GIT_INDEX_FILE+x}${GIT_OBJECT_DIRECTORY+x}${GIT_COMMON_DIR+x}${GIT_NAMESPACE+x}" ]; then
+        printf 'Git inherited a repository override\n' >&2
+        exit 23
+    fi
+    case "$*" in
+      'rev-parse --show-toplevel') exec "$REAL_GIT" "$@" ;;
+      'worktree list --porcelain')
+        printf 'worktree %s\n\nworktree %s/.\n\nworktree %s/cache-link\n' "$PWD" "$PWD" "$PWD"
+        exit 0 ;;
+    esac
+fi
+case "$name $*" in
+  'nix eval --raw '*|'nix path-info '*) exit 1 ;;
+esac
+if [ "$name" = cargo ]; then
+    printf '%s\n' "${RUSTC_WRAPPER-unset}" "${CARGO_INCREMENTAL-unset}" "${SCCACHE_BASEDIRS-unset}" > cache-env
+    printf '%s\n' "${CARGO_HOME-unset}" "${CARGO_NET_OFFLINE-unset}" > cargo-env
+fi
+printf '%s\037' "$name" "$@" >> "$FAKE_LOG"
+printf '\036' >> "$FAKE_LOG"
+if [ "$name" = git ] && [ -f dirty-status ]; then
+    printf ' M tracked.rs\n'
+fi
+if [ "$name $*" = "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p host-proof --bin test-local --" ]; then
+    touch producer-resource
+    trap 'sleep 0.2; rm producer-resource; printf "cleaned\n" >> producer-cleanup' EXIT
+fi
+if [ "$name $*" = "${FAIL_COMMAND-}" ]; then
+    printf '%s failed\n' "$name" >&2
+    exit 17
+fi
+"""
+FAKE_TOOLS = (
+    "bash",
+    "cargo",
+    "nix",
+    "devtool",
+    "prettier",
+    "git",
+    "scoped-leptosfmt",
+    "leptosfmt",
+    "emacs",
+    "ast-grep",
+    "tsc",
+    "setup-e2e-node-modules",
+    "ruff",
+    "mypy",
+    "pytest",
+)
+# Hook-style inherited overrides that would redirect any Git they reach.
+GIT_OVERRIDES = {
+    "GIT_DIR": "foreign-git-dir",
+    "GIT_WORK_TREE": "foreign-work-tree",
+    "GIT_INDEX_FILE": "foreign-index",
+    "GIT_OBJECT_DIRECTORY": "foreign-objects",
+    "GIT_COMMON_DIR": "foreign-common-dir",
+    "GIT_NAMESPACE": "foreign-namespace",
+}
+
+
+@dataclass
+class Workflow:
+    """A checkout whose every workflow tool is a recording fake."""
+
+    checkout: Checkout
+
+    @property
+    def root(self) -> Path:
+        return self.checkout.root
+
+    def dev(
+        self, *args: str, failure: str = "", cwd: Path | None = None, **extra: str
+    ) -> subprocess.CompletedProcess[bytes]:
+        log = self.root / "commands"
+        log.write_bytes(b"")
+        return self.checkout.dev(
+            *args,
+            cwd=cwd,
+            FAKE_LOG=str(log),
+            FAIL_COMMAND=failure,
+            REAL_GIT=REAL_GIT,
+            **GIT_OVERRIDES,
+            **extra,
+        )
+
+    def commands(self) -> list[list[str]]:
+        records = (self.root / "commands").read_text(encoding="utf-8").split("\x1e")
+        return [record.split("\x1f")[:-1] for record in records[:-1]]
+
+
+REAL_GIT = shutil.which("git") or "git"
+
+
+@pytest.fixture
+def workflow(checkout: Checkout) -> Workflow:
+    for name in FAKE_TOOLS:
+        path = checkout.bin / name
+        path.write_text(FAKE, encoding="utf-8")
+        path.chmod(0o755)
+    return Workflow(checkout)
 
 
 @pytest.fixture(autouse=True)

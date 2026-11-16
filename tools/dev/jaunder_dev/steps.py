@@ -18,17 +18,20 @@ import shlex
 import signal
 import subprocess
 import sys
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from types import FrameType
 from typing import Any
 
 from opentelemetry.trace import Span
 
-from jaunder_dev import trace
+from jaunder_dev import report, trace
 from jaunder_dev.spans import CACHE, COMMAND_LINE, EXIT_CODE, STATUS, Cache, Status
 
 _HANDLED = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+
+# Changes to one step's environment; None unsets a name.
+Environment = Mapping[str, str | None]
 
 
 class StepFailed(Exception):
@@ -112,11 +115,19 @@ def gate(root: Path, name: str, body: Callable[[], None]) -> int:
     return code
 
 
-def _supervise(argv: Sequence[str], capture: bool) -> tuple[int, bool, bytes]:
+def _supervise(
+    argv: Sequence[str], capture: bool, environment: Environment | None = None
+) -> tuple[int, bool, bytes]:
     """Runs the child to completion, relaying termination requests to it.
 
     With `capture`, the child's stdout is returned instead of passed through.
     """
+    child_environment = trace.child_environment()
+    for key, value in (environment or {}).items():
+        if value is None:
+            child_environment.pop(key, None)
+        else:
+            child_environment[key] = value
     _signals.supervising = True
     _signals.forwarded = []
     _signals.pending = []
@@ -124,7 +135,7 @@ def _supervise(argv: Sequence[str], capture: bool) -> tuple[int, bool, bytes]:
         try:
             child = subprocess.Popen(
                 argv,
-                env=trace.child_environment(),
+                env=child_environment,
                 stdout=subprocess.PIPE if capture else None,
             )
         except FileNotFoundError as error:
@@ -163,22 +174,51 @@ def _step(name: str, argv: Sequence[str]) -> Iterator[Span]:
             raise
 
 
+def _run(
+    name: str,
+    argv: Sequence[str],
+    capture: bool,
+    environment: Environment | None,
+    render: Callable[[bytes], str | None] | None = None,
+) -> bytes:
+    with _step(name, argv) as span:
+        code, signalled, output = _supervise(argv, capture, environment)
+        if render is not None:
+            rendered = render(output)
+            sys.stdout.buffer.write(output if rendered is None else rendered.encode())
+            sys.stdout.flush()
+            if rendered is None and not code:
+                # A tool that succeeds without its report has not shown it
+                # passed: fail as jq does on that input. A failed tool's own
+                # status stays the verdict.
+                print(f"dev: {name}: output is not a step report", file=sys.stderr)
+                sys.stderr.flush()
+                code = report.NOT_A_REPORT
+        _record_outcome(span, code, signalled)
+    if code:
+        raise StepFailed(code, signalled)
+    return output
+
+
 def run(
-    name: str, argv: Sequence[str], render: Callable[[bytes], str] | None = None
+    name: str,
+    argv: Sequence[str],
+    render: Callable[[bytes], str | None] | None = None,
+    environment: Environment | None = None,
 ) -> None:
     """Runs one step; raises StepFailed so the gate stops at the first failure.
 
     With `render`, the step's stdout is shown as `render` presents it, whatever
-    the step's status.
+    the step's status; output it cannot render is shown unchanged and fails a
+    step that otherwise succeeded. `environment` changes only this step's
+    environment.
     """
-    with _step(name, argv) as span:
-        code, signalled, output = _supervise(argv, capture=render is not None)
-        _record_outcome(span, code, signalled)
-    if render is not None:
-        sys.stdout.buffer.write(render(output).encode())
-        sys.stdout.flush()
-    if code:
-        raise StepFailed(code, signalled)
+    _run(name, argv, render is not None, environment, render)
+
+
+def output(name: str, argv: Sequence[str], environment: Environment | None) -> bytes:
+    """Runs one step for its stdout, which the user never sees; as `run` otherwise."""
+    return _run(name, argv, True, environment)
 
 
 class _QueryFailed(Exception):

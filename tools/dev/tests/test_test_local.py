@@ -98,21 +98,54 @@ def test_report_renders_as_step_report_jq_does(
     assert report.render(json.dumps(document).encode()) == rendered
 
 
-@pytest.mark.parametrize(
-    "output",
-    [
-        b"",
-        b"not a report\n",
-        b"1\n",
-        b'"text"\n',
-        b"[]\n",
-        b'{"command": "test-local"}\n',
-        b'{"steps": 5}\n',
-        b'{"steps": [{"name": "no outcome"}]}\n',
-    ],
-)
-def test_output_that_is_not_a_report_passes_through(output: bytes) -> None:
-    assert report.render(output) == output.decode()
+NOT_REPORTS = [
+    b"not a report\n",
+    b"1\n",
+    b'"text"\n',
+    b"[]\n",
+    b'{"command": "test-local"}\n',
+    b'{"steps": 5}\n',
+    b'{"steps": [{"name": "no outcome"}]}\n',
+]
+
+
+@pytest.mark.parametrize("output", NOT_REPORTS)
+def test_output_that_is_not_a_report_cannot_be_rendered(output: bytes) -> None:
+    assert report.render(output) is None
+
+
+@pytest.mark.parametrize("output", [b"", b"\n"])
+def test_empty_output_renders_as_nothing_as_jq_does(output: bytes) -> None:
+    assert report.render(output) == ""
+
+
+@pytest.mark.parametrize("output", NOT_REPORTS)
+def test_a_successful_step_without_a_report_fails_closed(
+    checkout: Checkout, output: bytes
+) -> None:
+    checkout.tool(
+        "cargo",
+        f"sys.stdout.buffer.write({output!r}); print('progress', file=sys.stderr)",
+    )
+    result = checkout.dev("test-local")
+    # jq -r -f scripts/step-report.jq exits 5 for every such output.
+    assert result.returncode == 5, result
+    assert result.stdout == output
+    assert result.stderr == (
+        b"progress\ndev: test-local: output is not a step report\n"
+    )
+    step = checkout.merged()["test-local"]["args"]
+    assert (step["jaunder.status"], step["process.exit.code"]) == ("failed", 5)
+
+
+def test_a_failed_tool_keeps_its_own_status_without_a_report(
+    checkout: Checkout,
+) -> None:
+    checkout.tool("cargo", "print('not a report'); sys.exit(3)")
+    result = checkout.dev("test-local")
+    assert result.returncode == 3
+    assert result.stdout == b"not a report\n"
+    assert result.stderr == b""
 
 
 @pytest.mark.parametrize("code", [0, 1, 2])
