@@ -1,7 +1,13 @@
 use leptos::prelude::*;
 
+use crate::hub::{Hub, HubControls};
+
 /// The reactive half of the twin: title + optional sub + optional right-slot
-/// children. Twins [`render`] — keep their markup coincident.
+/// children, followed by the Settings/Account corner controls. Twins [`render`] —
+/// keep their markup coincident.
+///
+/// A page that a configuration hub lists also gets a link back to that hub,
+/// derived from the hub catalog so no page has to declare its own parent.
 #[component]
 pub fn Topbar(
     #[prop(into)] title: TextProp,
@@ -27,13 +33,23 @@ pub fn Topbar(
                                 })
                         })
                 }}
+                {move || {
+                    Hub::parent_of(&location.pathname.get())
+                        .map(|hub| {
+                            view! {
+                                <a class="j-topbar-back" href=hub.path()>
+                                    {format!("\u{2190} {}", hub.label())}
+                                </a>
+                            }
+                        })
+                }}
                 <h1>{move || title.get()}</h1>
                 {sub
                     .map(|s| {
                         view! { <div class="j-sub">{move || s.get()}</div> }
                     })}
             </div>
-            <div class="j-topbar-right">{children.map(|c| c())}</div>
+            <div class="j-topbar-right">{children.map(|c| c())} <HubControls /></div>
         </header>
     }
 }

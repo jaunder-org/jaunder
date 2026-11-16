@@ -32,8 +32,14 @@ export const SEL = {
   error: ".error",
   /** Generic form submit button. */
   submit: 'button[type="submit"]',
-  /** Logout link — present only once auth state is confirmed. */
-  logoutLink: 'a[href="/logout"]',
+  /** The page-header Account control (#1733) — rendered only for a signed-in
+   * viewer, so it is the signed-in / login-success signal. */
+  accountControl: 'a.j-hub-control[href="/account"]',
+  /** A page-header hub control (#1733), by its hub path. */
+  hubControl: (hub: "/settings" | "/account") =>
+    `a.j-hub-control[href="${hub}"]`,
+  /** A hub page row linking to `href` (#1733). */
+  hubRow: (href: string) => `a.j-hub-row[href="${href}"]`,
   /** Login/register username field. */
   username: 'input[name="username"]',
   /** Login/register password field. */

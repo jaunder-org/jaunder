@@ -43,12 +43,14 @@ sit inside the header, they share Home's sticky chrome, sit below warning
 banners and wrap with the header at narrow widths. No shell-level positioning is
 needed.
 
-- **First paint.** Both header twins (the pure `topbar::render` and the reactive
-  `Topbar`) emit the same slot element. On public routes, `html.authed` reserves
-  its width before first paint, so the sort button does not move when the
-  controls fill in (ADR-0044 D4). The class is not updated by in-app
-  login/logout. In normal flow a stale value costs at most an empty reservation
-  until the next document load; it causes no overlap.
+- **First paint.** The controls render only for a signed-in viewer. The
+  anonymous projector paint has none, so on public routes `html.authed` reserves
+  their exact width before first paint with a pseudo-element in the header's
+  right slot, which steps aside once the real controls exist. The sort button
+  therefore does not move when they fill in (ADR-0044 D4). The pure
+  `topbar::render` twin is unchanged. The class is not updated by in-app
+  login/logout; a stale value costs at most an empty reservation until the next
+  document load, never an overlap.
 - **Markup.** Both controls are links (`<a>`, `aria-label="Settings"` /
   `"Account"`), not menus. The matching control carries `aria-current="page"` on
   its hub and on that hub's sub-pages.
@@ -60,8 +62,8 @@ needed.
   with the avatar row.
 
 **Sub-page orientation.** Each page reached from a hub shows a "← Settings" or
-"← Account" link in its header. One optional `Topbar` input supplies it, not
-markup on each page.
+"← Account" link in its header. `Topbar` derives it from the hub catalog and the
+current path, so no page declares its own parent.
 
 **Tests.** Browser tests that relied on the removed links keep what they prove:
 
@@ -83,7 +85,8 @@ Proof to execute:
    - The sidebar catalog no longer contains the moved destinations.
    - Hub catalogs return the right rows for member and operator viewers, and for
      each Registration Policy (the existing Invites matrix moves with the item).
-   - The topbar twins emit the same slot element.
+   - Every hub page and row is a private route, and back-link ownership is
+     exact.
 2. **Browser tests.**
    - A signed-in member sees the controls after the sort button on Home and on a
      public timeline (`/~<user>`), and on a private page (`/drafts`). This

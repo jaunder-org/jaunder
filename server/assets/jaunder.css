@@ -293,6 +293,57 @@
   flex-wrap: wrap;
 }
 
+/* Settings/Account corner controls (#1733). Fixed sizes so the pre-paint
+   reservation below (`html.authed`) matches them exactly. */
+.j-topbar {
+  --hub-control-size: 36px;
+  --hub-controls-gap: 6px;
+  --hub-controls-width: calc(
+    2 * var(--hub-control-size) + var(--hub-controls-gap)
+  );
+}
+
+.j-hub-controls {
+  display: flex;
+  gap: var(--hub-controls-gap);
+  flex: none;
+}
+
+.j-hub-control {
+  box-sizing: border-box;
+  width: var(--hub-control-size);
+  height: var(--hub-control-size);
+  display: grid;
+  place-items: center;
+  border: 1px var(--border-style) var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink-soft);
+}
+
+.j-hub-control:hover {
+  color: var(--ink);
+  border-color: var(--muted-soft);
+}
+
+.j-hub-control[aria-current="page"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.j-topbar-back {
+  display: inline-block;
+  margin-bottom: 2px;
+  font-size: var(--fs-meta);
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.j-topbar-back:hover {
+  color: var(--ink);
+}
+
 .j-scroll {
   flex: 1;
   overflow: auto;
@@ -1619,6 +1670,66 @@
   margin-top: 2px;
 }
 
+/* ─── Settings and Account hubs (#1733) ─── */
+.j-hub-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.j-hub-rows li + li {
+  border-top: 1px var(--border-style) var(--line-soft);
+}
+
+.j-hub-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 12px 18px;
+  box-sizing: border-box;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.j-hub-row:hover {
+  background: var(--surface-alt);
+}
+
+.j-hub-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.j-hub-row-label {
+  font-weight: 600;
+}
+
+.j-hub-row-description {
+  font-size: var(--fs-meta);
+  color: var(--muted);
+}
+
+.j-hub-row-chevron {
+  color: var(--muted);
+  font-size: 18px;
+}
+
+.j-hub-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.j-hub-identity-name {
+  font-size: 16px;
+  font-weight: 600;
+}
+
 .j-websub-recovery-guidance,
 .j-websub-empty,
 .j-websub-redrive-guidance {
@@ -2878,8 +2989,11 @@
    CSR fill causes no visible reflow:
    - the anon-only Sign in / Register CTA on `/` is hidden for the owner (it never
      paints, so no flash);
-   - the authed sidebar footer's height is reserved so the avatar row filling in
-     doesn't shift the sidebar.
+   - the masthead reserves the Settings/Account corner controls' width so they
+     fill in without moving the page's own header actions (#1733). The reserve
+     is a pseudo-element that steps aside once the real controls exist; after an
+     in-app logout (the class is not cleared without a reload) it leaves only
+     empty space, never an overlap.
    The own-post action-column gutter is deliberately NOT reserved here: ownership
    is decided client-side from the marker (unknown at the anonymous projector
    paint), so a per-post reserve can't be pre-painted, and reserving it on every
@@ -2889,6 +3003,9 @@ html.authed .j-anon-only {
   display: none;
 }
 
-html.authed .j-sb-foot {
-  min-height: 44px;
+html.authed .j-topbar-right:not(:has(> .j-hub-controls))::after {
+  content: "";
+  width: var(--hub-controls-width);
+  height: var(--hub-control-size);
+  flex: none;
 }

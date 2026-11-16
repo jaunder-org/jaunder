@@ -46,7 +46,7 @@ test("password reset flow completes successfully", async ({
   await page.fill(SEL.username, "");
   await page.fill(SEL.password, "");
   await fillLoginForm(page, verifiedUser.username, "resetpassword789");
-  await waitForSelector(page, SEL.logoutLink, { timeout: 10_000 });
+  await waitForSelector(page, SEL.accountControl, { timeout: 10_000 });
   await waitForMount(page);
   await expect(page).toHaveURL(/\/app$/);
 });
@@ -165,7 +165,7 @@ test("password reset by email preserves input casing and completes successfully"
   await page.fill(SEL.username, "");
   await page.fill(SEL.password, "");
   await fillLoginForm(page, verifiedUser.username, "emailresetpassword789");
-  await waitForSelector(page, SEL.logoutLink, { timeout: 10_000 });
+  await waitForSelector(page, SEL.accountControl, { timeout: 10_000 });
 });
 
 test("forgot-password without a verified email stays neutral", async ({

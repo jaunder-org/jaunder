@@ -36,6 +36,7 @@ import {
   selectComposerAudience,
   scrollHomeTo,
 } from "./posts";
+import { openHubDestination } from "./hubs";
 import { navigateInApp } from "./navigate";
 import { mintAppPassword } from "./sessions";
 import { allowSecondBoot } from "./bootBudget";
@@ -817,14 +818,10 @@ test("Post headers use the current display name with a handle-only fallback", as
     `@${username}`,
   );
 
-  await navigateInApp(
-    page,
-    () => page.getByRole("link", { name: "Settings" }).click(),
-    {
-      url: "/profile",
-      ready: 'button:has-text("Update Profile")',
-    },
-  );
+  await openHubDestination(page, "/settings", {
+    url: "/profile",
+    ready: 'button:has-text("Update Profile")',
+  });
   await page.fill('input[name="display_name"]', "Ada Lovelace");
   let updated = page.waitForResponse((response) =>
     response.url().includes("profile/update"),
@@ -844,14 +841,10 @@ test("Post headers use the current display name with a handle-only fallback", as
     `@${username}`,
   );
 
-  await navigateInApp(
-    page,
-    () => page.getByRole("link", { name: "Settings" }).click(),
-    {
-      url: "/profile",
-      ready: 'button:has-text("Update Profile")',
-    },
-  );
+  await openHubDestination(page, "/settings", {
+    url: "/profile",
+    ready: 'button:has-text("Update Profile")',
+  });
   await page.fill('input[name="display_name"]', "Grace Hopper");
   updated = page.waitForResponse((response) =>
     response.url().includes("profile/update"),

@@ -22,6 +22,7 @@ import {
 } from "./helpers";
 import { allowEngineDependentBoot, allowSecondBoot } from "./bootBudget";
 import { SEL } from "./selectors";
+import { signOutViaAccount } from "./hubs";
 import { applySeededSession, createSessionViaTool } from "./seed";
 import { expectVisual } from "./visual";
 import { expectAccessible } from "./accessibility";
@@ -58,7 +59,7 @@ test("seeded: logout survives a full navigation (tombstone respected)", async ({
 }) => {
   await signInAsNewUser(page);
   await goto(page, "/app", { timeout: firstNav });
-  await click(page, SEL.logoutLink);
+  await signOutViaAccount(page);
   await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
 
   allowSecondBoot(
@@ -68,7 +69,7 @@ test("seeded: logout survives a full navigation (tombstone respected)", async ({
   await goto(page, "/", { timeout: firstNav });
 
   await expect(page.locator("html")).not.toHaveClass(/\bauthed\b/);
-  await expect(page.locator(SEL.logoutLink)).toHaveCount(0);
+  await expect(page.locator(SEL.accountControl)).toHaveCount(0);
 });
 
 // D3 (#791): seed → logout → re-seed the SAME user. The fresh nonce makes the
@@ -79,7 +80,7 @@ test("seeded: re-seed as the same user after logout boots authed", async ({
 }) => {
   const username = await signInAsNewUser(page);
   await goto(page, "/app", { timeout: firstNav });
-  await click(page, SEL.logoutLink);
+  await signOutViaAccount(page);
   await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
 
   await signInAs(page, username);
@@ -440,30 +441,31 @@ test("anonymous: / has no authed sidebar chrome", async ({ page }) => {
   await goto(page, "/");
 
   await expect(page.locator("html")).not.toHaveClass(/\bauthed\b/);
-  await expect(page.locator(SEL.logoutLink)).toHaveCount(0);
+  await expect(page.locator(SEL.accountControl)).toHaveCount(0);
   await expect(page.locator(".j-sidebar a[href='/drafts']")).toHaveCount(0);
 });
 
-// #591: operator status now rides in the auth marker, so operator chrome is seeded
-// flash-free on boot (not awaited from a server fetch). Proof: fail the `get_session()`
-// reconcile so no server confirmation can arrive — the operator admin nav must still
-// paint, sourced from the marker seed alone.
-test("operator: admin chrome is seeded flash-free from the marker", async ({
+// #591: the session (operator status included) rides in the auth marker, so the
+// signed-in chrome is seeded flash-free on boot (not awaited from a server
+// fetch). Proof: fail the `get_session()` reconcile so no server confirmation can
+// arrive — the header hub controls must still paint, sourced from the marker
+// seed alone. Operator-only destinations now live on the private Settings hub,
+// which waits for that reconcile (#1733), so a public timeline is the surface.
+test("operator: signed-in chrome is seeded flash-free from the marker", async ({
   page,
 }) => {
   // Log in as the seeded operator; this writes the marker with is_operator:true.
   // Holdout (spec D6): logging in through the real UI leaves a correct marker.
   await login(page, "testoperator", "testpassword123");
 
-  // With get_session() failing, the operator admin nav can only come from the marker.
+  // With get_session() failing, the signed-in chrome can only come from the marker.
   await failServerFn(page, "auth/get_session");
   allowSecondBoot(
     page,
-    "the pre-paint marker read happens only on a cold boot, and with get_session() failing that boot is the only source of the operator chrome",
+    "the pre-paint marker read happens only on a cold boot, and with get_session() failing that boot is the only source of the signed-in chrome",
   );
-  await goto(page, "/app");
+  await goto(page, "/~testoperator");
 
-  await expect(
-    page.locator(".j-sidebar a[href='/admin/backups']"),
-  ).toBeVisible();
+  await expect(page.locator(SEL.hubControl("/settings"))).toBeVisible();
+  await expect(page.locator(SEL.accountControl)).toBeVisible();
 });

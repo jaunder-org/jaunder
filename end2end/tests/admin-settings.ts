@@ -1,52 +1,25 @@
 /**
- * Internal: re-entry leaves and returns through a second admin route so remounting
- * recreates the settings page Resource and refetches server state. Per ADR-0111,
- * both hops stay in-app behind readiness barriers; reloading or collapsing this
- * to one hop would not exercise the lifecycle under test.
+ * Internal: re-entry leaves an admin settings page for the Settings hub and
+ * returns through its row, so remounting recreates the settings page Resource
+ * and refetches server state. Per ADR-0111, both hops stay in-app behind
+ * readiness barriers; reloading or collapsing this to one hop would not
+ * exercise the lifecycle under test.
  */
 import type { Page } from "@playwright/test";
-import { navigateInApp } from "./navigate";
+import { openHubDestination } from "./hubs";
 
 const ADMIN_SETTINGS_TARGETS = {
-  site: {
-    link: 'a.j-nav-item[href="/admin/site"]',
-    url: "/admin/site",
-    ready: 'input[name="title"]',
-    intermediate: "backups",
-  },
-  backups: {
-    link: 'a.j-nav-item[href="/admin/backups"]',
-    url: "/admin/backups",
-    ready: 'input[name="destination_path"]',
-    intermediate: "site",
-  },
-  smtp: {
-    link: 'a.j-nav-item[href="/admin/smtp"]',
-    url: "/admin/smtp",
-    ready: 'input[name="host"]',
-    intermediate: "site",
-  },
+  site: { url: "/admin/site", ready: 'input[name="title"]' },
+  backups: { url: "/admin/backups", ready: 'input[name="destination_path"]' },
+  smtp: { url: "/admin/smtp", ready: 'input[name="host"]' },
 } as const;
 
 type AdminSettingsTarget = keyof typeof ADMIN_SETTINGS_TARGETS;
-type AdminSettingsDestination =
-  (typeof ADMIN_SETTINGS_TARGETS)[AdminSettingsTarget];
 
-async function navigateToAdminSettings(
-  page: Page,
-  destination: AdminSettingsDestination,
-): Promise<void> {
-  await navigateInApp(page, () => page.click(destination.link), destination);
-}
-
-/** Remount a settings page through another admin settings route. */
+/** Remount a settings page through the Settings hub. */
 export async function reenterAdminSettings(
   page: Page,
   target: AdminSettingsTarget,
 ): Promise<void> {
-  const destination = ADMIN_SETTINGS_TARGETS[target];
-  const intermediate = ADMIN_SETTINGS_TARGETS[destination.intermediate];
-
-  await navigateToAdminSettings(page, intermediate);
-  await navigateToAdminSettings(page, destination);
+  await openHubDestination(page, "/settings", ADMIN_SETTINGS_TARGETS[target]);
 }

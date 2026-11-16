@@ -123,6 +123,7 @@ fn pattern_matches(pattern: &str, path: &str) -> bool {
 /// The exact private acceptance snapshot named by the issue specification.
 #[cfg(test)]
 const APPROVED_PRIVATE_ROUTES: &[(&str, &str)] = &[
+    ("Account", "/account"),
     ("AdminBackups", "/admin/backups"),
     ("AdminSite", "/admin/site"),
     ("AdminSmtp", "/admin/smtp"),
@@ -143,6 +144,7 @@ const APPROVED_PRIVATE_ROUTES: &[(&str, &str)] = &[
     ("RevisionHistory", "/posts/:post_id/history/:revision_id"),
     ("Scheduled", "/scheduled"),
     ("Sessions", "/sessions"),
+    ("Settings", "/settings"),
     ("Themes", "/themes"),
 ];
 
@@ -191,6 +193,8 @@ macro_rules! app_routes {
             (ProfileEmail, Private, "/profile/email", (leptos_router::StaticSegment("profile"), leptos_router::StaticSegment("email")), $crate::email::EmailPage)
             (Profile, Private, "/profile", leptos_router::StaticSegment("profile"), $crate::profile::ProfilePage)
             (Sessions, Private, "/sessions", leptos_router::StaticSegment("sessions"), $crate::sessions::SessionsPage)
+            (Settings, Private, "/settings", leptos_router::StaticSegment("settings"), $crate::hub::SettingsPage)
+            (Account, Private, "/account", leptos_router::StaticSegment("account"), $crate::hub::AccountPage)
             (Passkeys, Private, "/passkeys", leptos_router::StaticSegment("passkeys"), $crate::passkeys::PasskeysPage)
             (Audiences, Private, "/audiences", leptos_router::StaticSegment("audiences"), $crate::audiences::AudiencesPage)
             (Invites, Private, "/invites", leptos_router::StaticSegment("invites"), $crate::invites::InvitesPage)
@@ -240,7 +244,7 @@ mod tests {
     fn route_catalog_conforms_to_the_approved_private_inventory() {
         assert_eq!(
             route_catalog().len(),
-            36,
+            38,
             "every declared route is classified"
         );
         assert!(private_inventory_conforms(route_catalog()));

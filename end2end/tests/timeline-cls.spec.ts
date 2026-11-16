@@ -125,6 +125,7 @@ for (const route of ROUTES) {
       guestContext = configuredLocalIdentity
         ? await tracedContext()
         : undefined;
+      const signedIn = guestContext === undefined;
       const probePage =
         guestContext === undefined ? page : await guestContext.newPage();
       await expectNoShiftAcrossMount(probePage, {
@@ -163,6 +164,17 @@ for (const route of ROUTES) {
         },
         targets: (p) => [
           { name: "chrome", locator: p.locator(route.chrome) },
+          // A signed-in viewer's header gains the Settings/Account corner
+          // controls after mount (#1733); the `html.authed` reservation must
+          // keep the sort control ahead of them still.
+          ...(signedIn
+            ? [
+                {
+                  name: "sort control",
+                  locator: p.locator(".j-topbar .j-timeline-order"),
+                },
+              ]
+            : []),
           // Scoped by the author handle rendered at `posts/render.rs:203`, so a
           // concurrent worker's post cannot be measured by mistake.
           ...(route.measureRow
@@ -187,6 +199,11 @@ for (const route of ROUTES) {
             timeout: slowBrowserTimeoutMs(testInfo, 10_000),
           });
           await expectSemanticHero(p);
+          if (signedIn) {
+            await expect(p.locator(".j-topbar .j-hub-controls")).toBeVisible({
+              timeout: slowBrowserTimeoutMs(testInfo, 10_000),
+            });
+          }
           if (configuredLocalIdentity) {
             // `toHaveText` proves text semantics after CSR replaced the projector:
             // markup-looking config remains decoded text, never DOM markup.

@@ -212,11 +212,11 @@ export async function fillLoginForm(
 }
 
 /**
- * Log in as `username` / `password` and wait until the sidebar logout link is
+ * Log in as `username` / `password` and wait until the header Account control is
  * visible (confirming the shared session context has flipped to authenticated).
  *
  * Login redirects via client-side pushState now (#591), so `waitForURL` would be
- * reliable — but `SEL.logoutLink` is the better signal because it confirms auth
+ * reliable — but `SEL.accountControl` is the better signal because it confirms auth
  * state (content readiness), not merely the URL.
  *
  * **Boots the page** (#867). An ADR-0098 holdout: the subject is the real login
@@ -233,7 +233,7 @@ export async function login(
   await withTimedAction(page, "flow.login", async () => {
     await goto(page, "/login", { timeout: firstNavigationTimeoutMs });
     await fillLoginForm(page, username, password);
-    await waitForSelector(page, SEL.logoutLink);
+    await waitForSelector(page, SEL.accountControl);
   });
 }
 
@@ -302,7 +302,7 @@ export async function signInAs(
  * that flow (spec D6). Emits the timed action under the unchanged name
  * `flow.register` so trace counts stay comparable.
  *
- * After submission the helper races between `a[href='/logout']` (success) and
+ * After submission the helper races between `SEL.accountControl` (success) and
  * `.error` (failure) for fast failure detection.
  *
  * **Boots the page** (#867), on the same terms as {@link login}: an ADR-0098
@@ -329,7 +329,7 @@ export async function registerViaUi(
     // misconfiguration rather than burning the full test timeout.
     const outcome = await Promise.race([
       page
-        .waitForSelector(SEL.logoutLink, { timeout: 10_000 })
+        .waitForSelector(SEL.accountControl, { timeout: 10_000 })
         .then(() => "ok"),
       page.waitForSelector(SEL.error, { timeout: 10_000 }).then(() => "error"),
     ]);

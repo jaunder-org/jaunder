@@ -16,6 +16,7 @@ import { expectVisual } from "./visual";
 import { expectAccessible } from "./accessibility";
 import { navigateInApp } from "./navigate";
 import { openComposerFromSidebar } from "./posts";
+import { openHub, openHubDestination, signOutViaAccount } from "./hubs";
 
 test("register page shows form", async ({ page }) => {
   // Holdout (spec D6): proves /register renders.
@@ -68,7 +69,7 @@ test("register pending state prevents duplicate dispatch", async ({ page }) => {
   await page.locator(SEL.password).press("Enter");
   expect(requests).toBe(1);
   release();
-  await waitForSelector(page, SEL.logoutLink);
+  await waitForSelector(page, SEL.accountControl);
 });
 
 test("register server failure renders error", async ({ page }) => {
@@ -79,7 +80,7 @@ test("register server failure renders error", async ({ page }) => {
   await click(page, SEL.submit);
   await expect(page.locator(SEL.error)).toBeVisible();
   await expect(page).toHaveURL(`${BASE_URL}/register`);
-  await expect(page.locator(SEL.logoutLink)).toHaveCount(0);
+  await expect(page.locator(SEL.accountControl)).toHaveCount(0);
 });
 
 test("register with open policy succeeds", async ({ page }) => {
@@ -90,7 +91,7 @@ test("register with open policy succeeds", async ({ page }) => {
   await page.fill(SEL.username, username);
   await page.fill(SEL.password, "newpassword123");
   await click(page, SEL.submit);
-  await waitForSelector(page, SEL.logoutLink);
+  await waitForSelector(page, SEL.accountControl);
   await expect(page).toHaveURL(`${BASE_URL}/app`);
 
   await expect(page.locator(SEL.error)).not.toBeVisible();
@@ -176,7 +177,7 @@ test("authenticated private routes mount member views during in-app navigation",
   const page = await registeredPage("/sessions");
   await expect(page.locator(".j-topbar h1")).toHaveText("Sessions");
 
-  await navigateInApp(page, () => page.click('.j-nav a[href="/profile"]'), {
+  await openHubDestination(page, "/settings", {
     url: "/profile",
     ready: '.j-topbar h1:has-text("Profile")',
   });
@@ -221,21 +222,24 @@ test("direct login with valid credentials falls back to Home", async ({
   await click(page, SEL.submit);
   perf.mark("submit_clicked");
   // Login now redirects via client-side pushState (#591 dropped the full-reload
-  // hook), so waitForURL is reliable — but we wait for the sidebar logout link,
-  // which appears once the shared session context flips to authenticated, as the
-  // content-readiness signal.
-  await waitForSelector(page, SEL.logoutLink);
-  perf.mark("logout_link_visible");
+  // hook), so waitForURL is reliable — but we wait for the header Account
+  // control, which appears once the shared session context flips to
+  // authenticated, as the content-readiness signal.
+  await waitForSelector(page, SEL.accountControl);
+  perf.mark("account_control_visible");
 
   // Login's redirect is client-side pushState, so `data-mounted` (per-document)
   // is already set — assert directly on the Home destination.
   await expect(page).toHaveURL(`${BASE_URL}/app`);
-  await expect(page.locator(".j-sb-foot")).toContainText(user.username);
   await expect(page.locator(".j-sidebar")).toBeVisible();
   await expect(page.locator(".j-nav a[href='/app']")).toHaveText("Home");
   await expect(page.locator('.j-nav a[href="/"]')).toHaveCount(0);
   perf.mark("assertions_complete");
   await perf.log();
+
+  // The session is this user's: the Account hub names who is signed in.
+  await openHub(page, "/account", ".j-hub-identity");
+  await expect(page.locator(".j-hub-identity")).toContainText(user.username);
 });
 
 test("confirmed password login returns to the exact private destination without a reload", async ({
@@ -250,7 +254,7 @@ test("confirmed password login returns to the exact private destination without 
   });
 
   await fillLoginForm(page, user.username, user.password);
-  await waitForSelector(page, SEL.logoutLink);
+  await waitForSelector(page, SEL.accountControl);
   await expect(page).toHaveURL(`${BASE_URL}${destination}`);
   await expect(
     page.evaluate(
@@ -268,7 +272,7 @@ for (const returnTo of ["https://evil.example/app", "/login", "/unknown"]) {
   }) => {
     await goto(page, `/login?return_to=${encodeURIComponent(returnTo)}`);
     await fillLoginForm(page, user.username, user.password);
-    await waitForSelector(page, SEL.logoutLink);
+    await waitForSelector(page, SEL.accountControl);
     await expect(page).toHaveURL(`${BASE_URL}/app`);
   });
 }
@@ -278,7 +282,7 @@ test("login submits with Enter", async ({ page, user }) => {
   await page.fill(SEL.username, user.username);
   await page.fill(SEL.password, user.password);
   await page.locator(SEL.password).press("Enter");
-  await waitForSelector(page, SEL.logoutLink);
+  await waitForSelector(page, SEL.accountControl);
   await expect(page).toHaveURL(`${BASE_URL}/app`);
 });
 
@@ -317,7 +321,7 @@ test("login pending state prevents duplicate dispatch", async ({
   await page.locator(SEL.password).press("Enter");
   expect(requests).toBe(1);
   release();
-  await waitForSelector(page, SEL.logoutLink);
+  await waitForSelector(page, SEL.accountControl);
 });
 
 // #591: login/logout redirect via client-side pushState, so the wasm app is not
@@ -337,7 +341,7 @@ test("login navigates client-side without a full document reload", async ({
   await page.fill(SEL.username, user.username);
   await page.fill(SEL.password, user.password);
   await click(page, SEL.submit);
-  await waitForSelector(page, SEL.logoutLink);
+  await waitForSelector(page, SEL.accountControl);
 
   const survived = await page.evaluate(
     () =>
@@ -360,9 +364,9 @@ test("logout navigates client-side without a full document reload", async ({
       true;
   });
 
-  await click(page, SEL.logoutLink);
+  await signOutViaAccount(page);
   await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
-  await expect(page.locator(".j-sb-foot")).not.toContainText(user.username);
+  await expect(page.locator(SEL.accountControl)).toHaveCount(0);
 
   const survived = await page.evaluate(
     () =>
@@ -391,14 +395,15 @@ test("logout page logs out", async ({ page, user }) => {
   await signInAs(page, user.username);
   await goto(page, "/app");
 
-  // Use the rendered logout link to avoid Firefox navigation abort races.
-  await click(page, SEL.logoutLink);
+  // Use the rendered Account hub Sign out link to avoid Firefox navigation
+  // abort races.
+  await signOutViaAccount(page);
 
   // Logout clears the session and redirects to "/" via client-side pushState
   // (#591); waitForURL is reliable for pushState navigations.
   await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
-  // Footer shows neither username nor sign-in link after logout.
-  await expect(page.locator(".j-sb-foot")).not.toContainText(user.username);
+  // The header drops the Account control, and the footer shows no sign-in link.
+  await expect(page.locator(SEL.accountControl)).toHaveCount(0);
   await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);
 });
 
@@ -409,15 +414,17 @@ test("sidebar reverts to signed-out state after logout", async ({
   // Seeded session (login-as-setup); the logout itself is the subject.
   await signInAs(page, user.username);
   await goto(page, "/app");
-  // a[href='/logout'] only renders when auth Suspense resolves, confirming the
-  // user is shown.
-  await expect(page.locator(".j-sb-foot")).toContainText(user.username);
+  // The signed-in sidebar and header controls render once the session resolves.
+  await expect(page.locator(SEL.accountControl)).toBeVisible();
+  await expect(page.locator('.j-nav a[href="/app"]')).toHaveText("Home");
 
-  // Click the sidebar "Sign out" link and confirm the sidebar switches back.
-  await click(page, SEL.logoutLink);
+  // Sign out through the Account hub and confirm the sidebar switches back.
+  await signOutViaAccount(page);
   // Logout redirects to "/" via client-side pushState (#591); waitForURL is reliable.
   await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
-  await expect(page.locator(".j-sb-foot")).not.toContainText(user.username);
+  await expect(page.locator(SEL.accountControl)).toHaveCount(0);
+  await expect(page.locator(".j-nav a[href='/']")).toHaveText("Local");
+  await expect(page.locator('.j-nav a[href="/app"]')).toHaveCount(0);
   // The footer renders nothing when unauthenticated — no Sign-in link.
   await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);
 });
@@ -446,14 +453,15 @@ test("authenticated sidebar exposes Home and no Local", async ({
   await waitForSelector(page, '.j-nav a[href="/posts/new"]');
   await waitForSelector(page, '.j-nav a[href="/drafts"]');
   await waitForSelector(page, '.j-nav a[href="/scheduled"]');
-  // Home, Compose, Manage Posts, Drafts, Scheduled, History, Media,
-  // Audiences, Themes, Sessions, Passkeys, and Settings have hrefs.
+  // Home, Compose, Manage Posts, Drafts, Scheduled, History, Media and
+  // Audiences have hrefs; configuration lives behind the header hub controls
+  // (#1733).
   await waitForSelector(page, '.j-nav a[href="/audiences"]');
   await expect(page.locator(".j-sidebar")).not.toContainText("Sources");
   await expect(page.locator(".j-sidebar")).not.toContainText("Bluesky");
   await waitForSelector(page, '.j-nav a[href="/history"]');
   const navAnchors = page.locator(".j-nav a");
-  await expect(navAnchors).toHaveCount(12);
+  await expect(navAnchors).toHaveCount(8);
   const navHrefs = await navAnchors.evaluateAll((links) =>
     links.map((link) => link.getAttribute("href")),
   );
@@ -466,17 +474,13 @@ test("authenticated sidebar exposes Home and no Local", async ({
     "/history",
     "/media",
     "/audiences",
-    "/themes",
-    "/sessions",
-    "/passkeys",
-    "/profile",
   ]);
   await expect(page.locator('.j-nav a[href="/app"]')).toHaveText("Home");
   await expect(page.locator('.j-nav a[href="/"]')).toHaveCount(0);
   await expect(page.locator('.j-nav a[href="/app"]')).toHaveClass(
     /\bis-active\b/,
   );
-  await expect(page.locator(SEL.logoutLink)).toBeVisible();
+  await expect(page.locator(SEL.accountControl)).toBeVisible();
   await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);
 });
 

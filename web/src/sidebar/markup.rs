@@ -1,8 +1,6 @@
 use std::sync::LazyLock;
 
-use common::{
-    feed::FeedSurface, registration::RegistrationPolicy, root_relative_url::RootRelativeUrl,
-};
+use common::{feed::FeedSurface, root_relative_url::RootRelativeUrl};
 use maud::html;
 
 use crate::html::Markup;
@@ -10,16 +8,19 @@ use crate::icon::{self, Icons};
 
 /// A sidebar destination and its visibility policy. Shared by [`render_sidebar`]
 /// and the reactive authenticated sidebar.
+///
+/// The sidebar holds only the places where a User reads and writes Posts.
+/// Configuration destinations live on the Settings and Account hubs reached
+/// from the page-header corner controls (`crate::hub`, #1733).
 pub(super) struct NavItem {
     pub(super) key: &'static str,
     pub(super) label: &'static str,
     pub(super) icon_path: &'static str,
     pub(super) href: Option<RootRelativeUrl>,
     pub(super) requires_auth: bool,
-    pub(super) requires_operator: bool,
 }
 
-pub(super) static NAV_ITEMS: LazyLock<[NavItem; 21]> = LazyLock::new(|| {
+pub(super) static NAV_ITEMS: LazyLock<[NavItem; 12]> = LazyLock::new(|| {
     [
         NavItem {
             key: "local",
@@ -27,7 +28,6 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 21]> = LazyLock::new(|| {
             icon_path: Icons::LOCAL,
             href: Some(root_relative_url("/")),
             requires_auth: false,
-            requires_operator: false,
         },
         // The authenticated cockpit is deliberately absent from the public
         // projector's navigation; authenticated chrome exposes it as Home.
@@ -37,7 +37,6 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 21]> = LazyLock::new(|| {
             icon_path: Icons::HOME,
             href: Some(root_relative_url("/app")),
             requires_auth: true,
-            requires_operator: false,
         },
         NavItem {
             key: "compose",
@@ -45,7 +44,6 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 21]> = LazyLock::new(|| {
             icon_path: Icons::EDIT,
             href: Some(root_relative_url("/posts/new")),
             requires_auth: true,
-            requires_operator: false,
         },
         NavItem {
             key: "federated",
@@ -53,7 +51,6 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 21]> = LazyLock::new(|| {
             icon_path: Icons::FED,
             href: None,
             requires_auth: true,
-            requires_operator: false,
         },
         NavItem {
             key: "replies",
@@ -61,7 +58,6 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 21]> = LazyLock::new(|| {
             icon_path: Icons::REPLY,
             href: None,
             requires_auth: true,
-            requires_operator: false,
         },
         NavItem {
             key: "bookmarks",
@@ -69,7 +65,6 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 21]> = LazyLock::new(|| {
             icon_path: Icons::BOOKMARK,
             href: None,
             requires_auth: true,
-            requires_operator: false,
         },
         NavItem {
             key: "manage-posts",
@@ -77,7 +72,6 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 21]> = LazyLock::new(|| {
             icon_path: Icons::EDIT,
             href: Some(root_relative_url("/posts/manage")),
             requires_auth: true,
-            requires_operator: false,
         },
         NavItem {
             key: "drafts",
@@ -85,7 +79,6 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 21]> = LazyLock::new(|| {
             icon_path: Icons::EDIT,
             href: Some(root_relative_url("/drafts")),
             requires_auth: true,
-            requires_operator: false,
         },
         NavItem {
             key: "scheduled",
@@ -93,7 +86,6 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 21]> = LazyLock::new(|| {
             icon_path: Icons::EDIT,
             href: Some(root_relative_url("/scheduled")),
             requires_auth: true,
-            requires_operator: false,
         },
         NavItem {
             key: "history",
@@ -101,7 +93,6 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 21]> = LazyLock::new(|| {
             icon_path: Icons::REFRESH,
             href: Some(root_relative_url("/history")),
             requires_auth: true,
-            requires_operator: false,
         },
         NavItem {
             key: "media",
@@ -109,7 +100,6 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 21]> = LazyLock::new(|| {
             icon_path: Icons::MEDIA,
             href: Some(root_relative_url("/media")),
             requires_auth: true,
-            requires_operator: false,
         },
         NavItem {
             key: "audiences",
@@ -117,79 +107,6 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 21]> = LazyLock::new(|| {
             icon_path: Icons::BOOKMARK,
             href: Some(root_relative_url("/audiences")),
             requires_auth: true,
-            requires_operator: false,
-        },
-        NavItem {
-            key: "themes",
-            label: "Themes",
-            icon_path: Icons::COG,
-            href: Some(root_relative_url("/themes")),
-            requires_auth: true,
-            requires_operator: false,
-        },
-        NavItem {
-            key: "sessions",
-            label: "Sessions",
-            icon_path: Icons::COG,
-            href: Some(root_relative_url("/sessions")),
-            requires_auth: true,
-            requires_operator: false,
-        },
-        NavItem {
-            key: "passkeys",
-            label: "Passkeys",
-            icon_path: Icons::COG,
-            href: Some(root_relative_url("/passkeys")),
-            requires_auth: true,
-            requires_operator: false,
-        },
-        NavItem {
-            key: "settings",
-            label: "Settings",
-            icon_path: Icons::COG,
-            href: Some(root_relative_url("/profile")),
-            requires_auth: true,
-            requires_operator: false,
-        },
-        NavItem {
-            key: "invites",
-            label: "Invites",
-            icon_path: Icons::PLUS,
-            href: Some(root_relative_url("/invites")),
-            requires_auth: true,
-            requires_operator: false,
-        },
-        NavItem {
-            key: "admin-backups",
-            label: "Configure Backups",
-            icon_path: Icons::SHIELD,
-            href: Some(root_relative_url("/admin/backups")),
-            requires_auth: true,
-            requires_operator: true,
-        },
-        NavItem {
-            key: "admin-site",
-            label: "Site Settings",
-            icon_path: Icons::SHIELD,
-            href: Some(root_relative_url("/admin/site")),
-            requires_auth: true,
-            requires_operator: true,
-        },
-        NavItem {
-            key: "admin-smtp",
-            label: "SMTP Relay",
-            icon_path: Icons::SHIELD,
-            href: Some(root_relative_url("/admin/smtp")),
-            requires_auth: true,
-            requires_operator: true,
-        },
-        NavItem {
-            key: "admin-websub",
-            label: "WebSub",
-            icon_path: Icons::SHIELD,
-            href: Some(root_relative_url("/admin/websub")),
-            requires_auth: true,
-            requires_operator: true,
         },
     ]
 });
@@ -203,23 +120,12 @@ fn root_relative_url(path: &'static str) -> RootRelativeUrl {
     url
 }
 
-/// Returns linked items visible to a viewer for the projected authentication,
-/// registration-policy, and operator state.
-pub(super) fn nav_items(
-    policy: RegistrationPolicy,
-    is_operator: bool,
-    is_authenticated: bool,
-) -> impl Iterator<Item = &'static NavItem> {
-    NAV_ITEMS.iter().filter(move |item| {
-        let has_access = if is_authenticated {
-            item.requires_auth && (!item.requires_operator || is_operator)
-        } else {
-            !item.requires_auth && !item.requires_operator
-        };
-        has_access
-            && item.href.is_some()
-            && (item.key != "invites" || policy.may_issue_invitation(is_operator))
-    })
+/// Returns the linked items visible to a viewer in the projected
+/// authentication state.
+pub(super) fn nav_items(is_authenticated: bool) -> impl Iterator<Item = &'static NavItem> {
+    NAV_ITEMS
+        .iter()
+        .filter(move |item| item.requires_auth == is_authenticated && item.href.is_some())
 }
 
 /// Resolves the sole exact-match sidebar selection from the navigation catalog.
@@ -236,17 +142,11 @@ pub(crate) fn active_key(pathname: &str) -> Option<&'static str> {
 pub(super) fn test_selector(key: &str) -> Option<&'static str> {
     match key {
         "history" => Some("history-nav-link"),
-        "passkeys" => Some("passkeys-nav-link"),
         _ => None,
     }
 }
 
-/// The inner HTML of the **anonymous** `<aside class="j-sidebar">`: brand, search,
-/// the public nav (items with an href and no auth requirement — just "Local"), and
-/// an empty footer. The reactive [`crate::sidebar::Sidebar`] injects this verbatim
-/// via `inner_html` for the anonymous viewer, so a seeded first paint and the
-/// reactive re-render coincide; authenticated users get the reactive build (extra
-/// nav, footer avatar) layered on top (#181).
+/// The rail footer's syndication link for the current timeline, if any.
 #[must_use]
 pub(crate) fn feed_link(surface: Option<&FeedSurface>) -> Markup {
     Markup::new(html! {
@@ -258,7 +158,11 @@ pub(crate) fn feed_link(surface: Option<&FeedSurface>) -> Markup {
     })
 }
 
-/// Anonymous rail chrome, including only the current timeline's RSS marker.
+/// The inner HTML of the **anonymous** `<aside class="j-sidebar">`: brand, search,
+/// the public nav (just "Local"), and a footer holding only the current
+/// timeline's RSS marker. The reactive [`crate::sidebar::Sidebar`] injects this
+/// verbatim for the anonymous viewer, so a seeded first paint and the reactive
+/// re-render coincide; authenticated users get the reactive build (#181).
 #[must_use]
 pub(crate) fn render_sidebar(active_key: &str, surface: Option<&FeedSurface>) -> Markup {
     Markup::new(html! {
@@ -272,7 +176,7 @@ pub(crate) fn render_sidebar(active_key: &str, surface: Option<&FeedSurface>) ->
             span class="j-kbd" { "\u{2318}K" }
         }
         nav class="j-nav" data-jaunder-part="primary-navigation" {
-            @for item in nav_items(RegistrationPolicy::Closed, false, false) {
+            @for item in nav_items(false) {
                 @if let Some(href) = &item.href {
                     a class={ "j-nav-item" @if item.key == active_key { " is-active" } }
                         href=(href)
@@ -391,24 +295,23 @@ mod tests {
                 ("history", "/history"),
                 ("media", "/media"),
                 ("audiences", "/audiences"),
-                ("themes", "/themes"),
-                ("sessions", "/sessions"),
-                ("passkeys", "/passkeys"),
-                ("settings", "/profile"),
-                ("invites", "/invites"),
-                ("admin-backups", "/admin/backups"),
-                ("admin-site", "/admin/site"),
-                ("admin-smtp", "/admin/smtp"),
-                ("admin-websub", "/admin/websub"),
             ]
         );
 
-        let authenticated = nav_items(RegistrationPolicy::Closed, false, true)
-            .map(|item| item.key)
-            .collect::<Vec<_>>();
-        assert!(authenticated.contains(&"home"));
-        assert!(authenticated.contains(&"sessions"));
-        assert!(!authenticated.contains(&"local"));
+        let authenticated = nav_items(true).map(|item| item.key).collect::<Vec<_>>();
+        assert_eq!(
+            authenticated,
+            [
+                "home",
+                "compose",
+                "manage-posts",
+                "drafts",
+                "scheduled",
+                "history",
+                "media",
+                "audiences"
+            ]
+        );
         let anonymous = render_sidebar("", None).into_string();
         assert!(anonymous.contains(">Local<"), "{anonymous}");
         assert!(!anonymous.contains(">Home<"), "{anonymous}");
@@ -431,72 +334,24 @@ mod tests {
     #[test]
     fn browser_test_selectors_exist_only_for_navigation_contracts() {
         assert_eq!(test_selector("history"), Some("history-nav-link"));
-        assert_eq!(test_selector("passkeys"), Some("passkeys-nav-link"));
         assert_eq!(test_selector("home"), None);
     }
 
     #[test]
-    fn operator_websub_destination_uses_page_title() {
-        let websub = nav_items(RegistrationPolicy::Closed, true, true)
-            .find(|item| item.key == "admin-websub")
-            .map(|item| (item.label, item.href.as_deref()));
-
-        assert_eq!(websub, Some(("WebSub", Some("/admin/websub"))));
-    }
-
-    #[test]
-    fn operator_destinations_are_visible_only_to_operators() {
-        let viewer_items = nav_items(RegistrationPolicy::Closed, false, true)
-            .map(|item| item.key)
-            .collect::<Vec<_>>();
-        assert!(!viewer_items.contains(&"admin-backups"));
-        assert!(!viewer_items.contains(&"admin-site"));
-        assert!(!viewer_items.contains(&"admin-smtp"));
-        assert!(!viewer_items.contains(&"admin-websub"));
-
-        let operator_items = nav_items(RegistrationPolicy::Closed, true, true)
-            .map(|item| {
-                let Some(href) = item.href.as_ref() else {
-                    unreachable!("nav_items returns linked items");
-                };
-                let href: &str = href;
-                (item.key, href)
-            })
-            .collect::<Vec<_>>();
-        assert!(
-            operator_items.contains(&("admin-backups", "/admin/backups")),
-            "{operator_items:?}"
-        );
-        assert!(
-            operator_items.contains(&("admin-site", "/admin/site")),
-            "{operator_items:?}"
-        );
-        assert!(
-            operator_items.contains(&("admin-smtp", "/admin/smtp")),
-            "{operator_items:?}"
-        );
-        assert!(
-            operator_items.contains(&("admin-websub", "/admin/websub")),
-            "{operator_items:?}"
-        );
-    }
-
-    #[test]
-    fn invitation_destination_matches_policy_and_role_authority() {
-        let cases = [
-            (RegistrationPolicy::Closed, false, false),
-            (RegistrationPolicy::Closed, true, false),
-            (RegistrationPolicy::OperatorInvites, false, false),
-            (RegistrationPolicy::OperatorInvites, true, true),
-            (RegistrationPolicy::MemberInvites, false, true),
-            (RegistrationPolicy::MemberInvites, true, true),
-            (RegistrationPolicy::Open, false, false),
-            (RegistrationPolicy::Open, true, false),
-        ];
-
-        for (policy, is_operator, expected) in cases {
-            let visible = nav_items(policy, is_operator, true).any(|item| item.key == "invites");
-            assert_eq!(visible, expected, "{policy:?}, operator={is_operator}");
+    fn configuration_destinations_live_on_hubs_not_in_the_sidebar() {
+        for path in [
+            "/themes",
+            "/sessions",
+            "/passkeys",
+            "/profile",
+            "/invites",
+            "/admin/backups",
+            "/admin/site",
+            "/admin/smtp",
+            "/admin/websub",
+        ] {
+            assert_eq!(active_key(path), None, "{path}");
+            assert!(crate::hub::Hub::owning(path).is_some(), "{path}");
         }
     }
 }

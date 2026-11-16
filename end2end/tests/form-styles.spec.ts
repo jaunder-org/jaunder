@@ -2,7 +2,7 @@ import type { Locator, Page } from "@playwright/test";
 import { allowSecondBoot } from "./bootBudget";
 import { test, expect } from "./fixtures";
 import { goto, signInAs, waitForSelector } from "./helpers";
-import { navigateInApp } from "./navigate";
+import { openHubDestination } from "./hubs";
 
 type FormControl = {
   name: string;
@@ -316,21 +316,19 @@ test("operator settings forms share responsive field presentation", async ({
   await goto(page, "/admin/site");
   const desktopSite = await expectSiteForms(page);
 
-  await navigateInApp(
-    page,
-    () => page.click('a.j-nav-item[href="/admin/smtp"]'),
-    { url: "/admin/smtp", ready: 'input[name="enabled"]' },
-  );
+  await openHubDestination(page, "/settings", {
+    url: "/admin/smtp",
+    ready: 'input[name="enabled"]',
+  });
   expectSamePresentation(await expectSmtpForm(page), desktopSite);
 
   await page.setViewportSize({ width: 600, height: 800 });
   expectSamePresentation(await expectSmtpForm(page), desktopSite);
 
-  await navigateInApp(
-    page,
-    () => page.click('a.j-nav-item[href="/admin/site"]'),
-    { url: "/admin/site", ready: 'input[name="title"]' },
-  );
+  await openHubDestination(page, "/settings", {
+    url: "/admin/site",
+    ready: 'input[name="title"]',
+  });
   expectSamePresentation(await expectSiteForms(page), desktopSite);
 });
 
@@ -342,11 +340,10 @@ test("specialized form layouts retain shared presentation", async ({
   await goto(page, "/admin/backups");
   const desktopBackup = await expectBackupForm(page, 2);
 
-  await navigateInApp(
-    page,
-    () => page.click('a.j-nav-item[href="/admin/websub"]'),
-    { url: "/admin/websub", ready: 'input[name="hub_url"]' },
-  );
+  await openHubDestination(page, "/settings", {
+    url: "/admin/websub",
+    ready: 'input[name="hub_url"]',
+  });
   const desktopWebsub = await expectWebsubForm(page);
   expectSamePresentation(desktopWebsub, desktopBackup);
 
@@ -361,17 +358,15 @@ test("specialized form layouts retain shared presentation", async ({
   await page.setViewportSize({ width: 600, height: 800 });
   expectSamePresentation(await expectAppPasswordForm(page), desktopAppPassword);
 
-  await navigateInApp(
-    page,
-    () => page.click('a.j-nav-item[href="/admin/backups"]'),
-    { url: "/admin/backups", ready: 'input[name="destination_path"]' },
-  );
+  await openHubDestination(page, "/settings", {
+    url: "/admin/backups",
+    ready: 'input[name="destination_path"]',
+  });
   expectSamePresentation(await expectBackupForm(page, 1), desktopBackup);
 
-  await navigateInApp(
-    page,
-    () => page.click('a.j-nav-item[href="/admin/websub"]'),
-    { url: "/admin/websub", ready: 'input[name="hub_url"]' },
-  );
+  await openHubDestination(page, "/settings", {
+    url: "/admin/websub",
+    ready: 'input[name="hub_url"]',
+  });
   expectSamePresentation(await expectWebsubForm(page), desktopWebsub);
 });

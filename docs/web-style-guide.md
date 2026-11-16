@@ -34,6 +34,11 @@ view! {
   line.
 - `Topbar` accepts `children` for right-aligned actions (sign-in buttons,
   primary CTA). See `home.rs` Local mode for the pattern.
+- `Topbar` always ends with the signed-in Settings and Account controls
+  (`web/src/hub/`), and gives pages a hub lists a link back to that hub. Account
+  and configuration navigation belongs on those hubs (add a row to the hub
+  catalog), not in the sidebar or a page's own actions; the sidebar holds only
+  the places where a User reads and writes Posts.
 - `title` and `sub` are `leptos::TextProp`: pass a bare `&'static str` literal
   (`title="Posts"`) or `String` for static content, or a closure (`move || …`) /
   signal for reactive content — see `UserTimelinePage` for the closure form.
