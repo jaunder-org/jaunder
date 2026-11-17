@@ -4543,9 +4543,10 @@ On the host the devShells' `dev` shim runs the checkout's own `tools/dev/` with
 `python -P` under the pinned interpreter, so hooks and gates always run the
 working tree's code; Nix checks run a `dev` package built from a filtered
 `tools/dev/` source, so an edit there rebuilds them. A `checks.dev-python`
-static check runs ruff, `mypy --strict` and pytest at 90% branch coverage over
-`tools/dev/`. Just is in no Nix input, so the gates passing proves that nothing
-needs it; no source check guards against its return.
+static check runs ruff, `mypy --strict` and pytest under coverage.py
+(`fail_under = 90`, branch coverage on) over `tools/dev/`. Just is in no Nix
+input, so the gates passing proves that nothing needs it; no source check guards
+against its return.
 
 Each gate and each step is an OpenTelemetry span. A step span carries its
 `jaunder.status` (`ok`, `failed`, `signalled`), `process.exit.code`, its command

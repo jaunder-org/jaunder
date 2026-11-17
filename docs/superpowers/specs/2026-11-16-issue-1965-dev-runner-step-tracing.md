@@ -182,7 +182,8 @@ literal `just X` strings are deleted.
 
 - ruff format/check
 - `mypy --strict`
-- pytest under coverage.py, failing below 90% branch coverage of `tools/dev/`
+- pytest under coverage.py with `branch = true`, failing below `fail_under = 90`
+  (a combined statement-and-branch figure) for `tools/dev/`
 
 Subprocess paths are covered by the fake-tool tests, not excluded. The check
 joins the static set that `validate-hermetic` builds. On the host, the
@@ -311,6 +312,18 @@ delivered.
   `qualification` and `host-proof` only as placeholders, so a doctest there
   would otherwise never run. Those three have no doctests today; the check now
   compiles them.
+- **Issue helpers in Python** (owner decision). `issue-discover` and the issue
+  metadata front doors are rewritten in Python as
+  `tools/dev/jaunder_dev/issues.py`, and their shell scripts are deleted.
+- **pytest runs with pytest-xdist `-n auto`** (owner decision). That is
+  parallelism inside one step, the pytest run; gate steps still run one after
+  another.
+- **Perfetto proof by screenshot.** Task 1 found that the nixpkgs `perfetto`
+  package lacks `trace_processor_shell`, so acceptance 1 loads each trace in
+  ui.perfetto.dev and attaches screenshots.
+- **Coverage threshold as enforced.** "90% branch coverage" means what
+  `tools/dev/pyproject.toml` enforces: coverage.py `fail_under = 90` with
+  `branch = true`, a combined statement-and-branch figure.
 - **Defaults kept.** Prepush keeps building the root doctests (`checks.doctests`
   plus `doctests-gate`). The static-docs request's log and excerpt files under
   `.xtask/diagnostics/static-docs` are dropped: the request is an ordinary
@@ -353,8 +366,8 @@ Proof to run:
    an input change. A non-Nix step has no `cache` field.
 5. A pytest test shows that an unwritable trace directory leaves exit status and
    output byte-identical.
-6. The pytest contract suite, ruff, `mypy --strict` and coverage ≥90% branch
-   pass. `dev validate` passes.
+6. The pytest contract suite, ruff, `mypy --strict` and coverage.py's
+   `fail_under = 90` with `branch = true` pass. `dev validate` passes.
 
 Deliverables to commit:
 

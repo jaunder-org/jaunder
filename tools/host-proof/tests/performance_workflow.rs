@@ -61,7 +61,6 @@ fn workflow_uses_dev_and_github_failure_guards_for_evidence_retention() -> Resul
     );
     for step in steps {
         if let Some(run) = step["run"].as_str() {
-            assert!(!run.contains("cargo xtask perf"));
             assert!(!run.contains("perf-import-baseline"));
         }
     }

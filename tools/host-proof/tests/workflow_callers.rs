@@ -147,7 +147,8 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
 }
 
 /// Each named job runs a `dev` workflow, then summarises its trace into the step
-/// summary and uploads `.xtask/run/`, both diagnostic only.
+/// summary and uploads `.xtask/run/`, both diagnostic only. The summary reads the
+/// latest run, so no other `dev` step may sit between the workflow and it.
 fn assert_jobs_keep_and_summarise_their_trace(source: &str, names: &[&str]) {
     let workflow: serde_yaml::Value = serde_yaml::from_str(source).unwrap();
     let run = |step: &serde_yaml::Value| {
@@ -157,9 +158,11 @@ fn assert_jobs_keep_and_summarise_their_trace(source: &str, names: &[&str]) {
     };
     for name in names {
         let steps = workflow["jobs"][name]["steps"].as_sequence().unwrap();
+        let is_dev =
+            |step: &serde_yaml::Value| run(step).is_some_and(|run| run.contains("-c dev "));
         let first_workflow = steps
             .iter()
-            .position(|step| run(step).is_some_and(|run| run.contains("-c dev ")))
+            .position(is_dev)
             .unwrap_or_else(|| panic!("{name}: no dev workflow"));
         let uploads = steps
             .iter()
@@ -196,6 +199,10 @@ fn assert_jobs_keep_and_summarise_their_trace(source: &str, names: &[&str]) {
         assert!(
             index > first_workflow,
             "{name}: the summary follows the workflow"
+        );
+        assert!(
+            !steps[first_workflow + 1..index].iter().any(is_dev),
+            "{name}: another dev step runs between the workflow and its summary"
         );
         assert_eq!(summary["if"].as_str(), Some("always()"), "{name}");
         let command = run(summary).unwrap();

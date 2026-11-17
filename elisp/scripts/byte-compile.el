@@ -5,7 +5,7 @@
 ;; byte-compiler warnings promoted to errors, so any warning fails the gate.
 ;; Output goes to a throwaway temp dir — no .elc is left in the tree.
 ;; Self-locating via `load-file-name' so it works from the repo root (the
-;; shared Just `byte-compile' leaf) and from the nix store (`static-elisp').
+;; shared `dev static byte-compile' leaf) and from the nix store (`static-elisp').
 
 ;;; Code:
 

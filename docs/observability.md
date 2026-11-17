@@ -1087,8 +1087,8 @@ dev wasm-audit report
 
 This reports raw, gzip, and brotli sizes for the manifest-selected WASM and JS
 identity assets. Host-proof's `wasm-audit` prints one JSON report on stdout (the
-rendered table in `report`, measurements in `evidence`); the recipe derives the
-human view.
+rendered table in `report`, measurements in `evidence`); `dev` renders the human
+view.
 
 Useful options:
 

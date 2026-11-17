@@ -66,19 +66,22 @@ Work a gate performs is a visible `dev` step, not hidden inside a tool
 - `dev precommit` and `dev prepush` keep custody of the Git index themselves, in
   one process: the snapshot, Markdown-or-broad classification, the host checks,
   the staging reconciliation (also after a failed check) and the `static-docs`
-  admission, request and post-check. Each is a span directly under the gate. A
-  signal is the one exception: a check killed by signal n, or a termination
-  request to `dev`, skips the reconciliation and the post-check, and `dev` exits
-  128+n. The staging rules, refusals and the rule that uncertain evidence
-  refuses are unchanged. Every index query runs the `git` CLI
-  (`status --porcelain=v1 -z`, `diff --cached --raw -z`, `ls-files --stage -z`,
-  `hash-object`, `add`) with the hook's environment, so the evidence agrees with
-  what `git commit` writes, including the temporary `GIT_INDEX_FILE` of
-  `git commit <path>`. A library such as libgit2 could diverge on that index, on
-  filters or on fsmonitor. No step inherits the hook's `GIT_*` repository
-  overrides, so a test's scratch `git init` cannot reinitialise the hooked
-  repository. repository-policy's `git-index-safety` executable and its
-  snapshot, plan and admission code are retired.
+  admission, request and post-check. The snapshots, the staging reconciliation
+  and the docs admission, request and post-check are each a span directly under
+  the gate; the host checks run under one `precommit-markdown-host` or
+  `precommit-broad-host` phase span. A signal is the one exception: a check
+  killed by signal n, or a termination request to `dev`, skips the
+  reconciliation and the post-check, and `dev` exits 128+n. The staging rules,
+  refusals and the rule that uncertain evidence refuses are unchanged. Every
+  index query runs the `git` CLI (`status --porcelain=v1 -z`,
+  `diff --cached --raw -z`, `ls-files --stage -z`, `hash-object`, `add`) with
+  the hook's environment, so the evidence agrees with what `git commit` writes,
+  including the temporary `GIT_INDEX_FILE` of `git commit <path>`. A library
+  such as libgit2 could diverge on that index, on filters or on fsmonitor. No
+  step inherits the hook's `GIT_*` repository overrides, so a test's scratch
+  `git init` cannot reinitialise the hooked repository. repository-policy's
+  `git-index-safety` executable and its snapshot, plan and admission code are
+  retired.
 - Doctests run only in Nix. The root workspace's `checks.doctests` producer and
   `doctests-gate` keep the bidirectional fence reconciliation, and `dev prepush`
   requests them as steps. `checks.tools-doctests` runs the `tools/` workspace's
@@ -123,13 +126,29 @@ It also amends these decisions:
 - [ADR-0247](../0247-host-tool-json-report-contract.md)'s list of host tools:
   `doctest-check` and `test-local` are gone. `admit-inputs` and
   `csr-prerequisite` render no verdict report: a refusal is their exit status
-  and stderr, and `csr-prerequisite` prints only the root it verified.
+  and stderr, and `csr-prerequisite` prints only the root it verified. Its human
+  views: `dev` renders the report (`tools/dev/jaunder_dev/report.py`), and
+  `scripts/step-report.jq` and `scripts/run-report` are deleted. The shared
+  multi-checkout compile-cache environment moves from `tools/host-tool` into
+  `dev` (`tools/dev/jaunder_dev/checkout.py`), which sets it for every host
+  step.
+- [ADR-0028](../0028-devtool-vs-xtask-boundary.md)'s #1858 addendum: traced-run
+  no longer writes Chrome JSON process spans and has no launcher mode, and
+  `scripts/cargo-xtask` is deleted. traced-run keeps only captured
+  single-program execution; `dev`'s OpenTelemetry spans replace the process
+  spans and their recorded-entry links.
+- [ADR-0052](../0052-devtool-unifies-static-checks.md) and
+  [ADR-0146](../0146-devtool-owns-compiling-static-check-definitions.md):
+  `devtool check` is gone. Its last use, `devtool check ert`, was kept only for
+  its `devtool-check-timing` event; both are deleted. `dev static` owns every
+  static check definition, ERT included, and its spans give the timing.
 
 ## Consequences
 
 - Python, so far used only by the ADR promoter, now owns every workflow and gets
-  its own gates: ruff, `mypy --strict`, pytest, and at least 90% branch
-  coverage.
+  its own gates: ruff, `mypy --strict`, pytest, and coverage.py's
+  `fail_under = 90` with `branch = true`, a combined statement-and-branch
+  figure.
 - The hermetic checks' closures gain python3, click and opentelemetry.
 - Two small span-record writers, Python and Rust, must keep writing the same
   format. A shared golden-file test locks it.

@@ -46,6 +46,8 @@ status=$?
 
 # One native consumer owns all evidence policy and reporting. Propagate its
 # outcome, including launcher failures, rather than interpreting partial output.
+# `dev` runs in the checkout this script belongs to, whatever the caller's cwd.
+cd "$ROOT" || exit 1
 dev coverage-check mutants-verify \
   --package "$pkg" --file "$file" --output "$out" --producer-status "$status"
 exit $?

@@ -3392,7 +3392,7 @@ clippy-aggregate = nonSubstitutable (pkgs.runCommand "clippy-aggregate" { } ''
   test -e ${self.checks.${system}.tools-clippy}
   touch $out
 '');
-# Documentation formatting needs only the shared recipe and pinned tools.
+# Documentation formatting needs only the shared `dev` check and pinned tools.
 static-docs =
   let
     staticDocsSrc = pkgs.lib.cleanSourceWith {

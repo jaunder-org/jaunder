@@ -88,8 +88,8 @@ From a clean checkout in the repository devShell:
 traced-run -- dev production-baseline-qualify-styling
 ```
 
-This opt-in Just workflow is not a production operation or an automatic CI job.
-Just captures clean local `HEAD`; the host binds that expected SHA to its clean
+This opt-in `dev` workflow is not a production operation or an automatic CI job.
+`dev` captures clean local `HEAD`; the host binds that expected SHA to its clean
 `SourcePin` before Nix harness admission or lifecycle mutation. The immutable
 `git+file:…?rev=<commit>` source requires no canonical origin, upstream
 availability or Git-network preflight. Nix may still need ordinary dependency

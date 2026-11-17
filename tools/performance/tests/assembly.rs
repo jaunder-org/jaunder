@@ -207,7 +207,7 @@ fn browser_fragment() -> Result<Value> {
     )?)?)
 }
 
-// These fixtures exercise the public validation leaves that Just calls, not
+// These fixtures exercise the public validation leaves that `dev perf` calls, not
 // another implementation of the shared fragment or selection policies.
 fn write_producer_evidence(root: &Path, backend: Backend, browser: Option<Browser>) -> Result<()> {
     let envelope = support::fragment(DatasetProfile::Small, backend, browser)?;

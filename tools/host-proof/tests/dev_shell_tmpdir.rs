@@ -132,10 +132,9 @@ fn ci_e2e_shell_environment_is_exact() {
     assert_eq!(contract["tz"], "UTC");
     let inputs = contract["inputs"].as_array().unwrap();
     assert!(
-        inputs.iter().any(|path| {
-            path.as_str().unwrap().contains("-cargo-")
-                && !path.as_str().unwrap().contains("cargo-xtask")
-        }),
+        inputs
+            .iter()
+            .any(|path| path.as_str().unwrap().contains("-cargo-")),
         "ci-e2e must keep the Cargo subcommand dispatcher"
     );
     for tool in ["-nix-", "-findutils-", "-coreutils-", "-bash-"] {
