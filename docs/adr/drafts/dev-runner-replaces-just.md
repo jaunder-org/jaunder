@@ -100,6 +100,34 @@ Work a gate performs is a visible `dev` step, not hidden inside a tool
   root or rebuilding `target/debug/jaunder` while a run's tests use them.
   host-proof's `test-local` executable is retired.
 
+With xtask gone, the in-sandbox `devtool` crate no longer marks a boundary; it
+was a catch-all of unrelated jobs. It is dissolved: each job becomes an
+executable of the crate that owns its logic, and `tools/devtool` is deleted.
+
+- `coverage-sandbox` in `tools/coverage`: `emit` (the instrumented suite's
+  producer), `validate-status`, `wasm initialize|map|finalize` (the browser
+  WebAssembly coverage lifecycle) and `diagnostic-build` (the diagnostic CSR
+  build's artifact operations). It needs none of the crate's host-only
+  dependencies, which stay behind the `host` feature.
+- `doctests` in `tools/doctests`: `emit`, the root workspace's doctest producer.
+- `perf-producer` in a new `tools/perf-producer` crate: `storage` and
+  `validate-browser`. It links `performance` with the typed product storage. A
+  crate of its own keeps that storage out of the `performance` library and
+  `perf-data`. It also keeps the producer out of the root workspace's coverage
+  population, which `performance` belongs to through `test-support`. A feature
+  inside `performance` could do neither.
+- `system-artifacts` in a new `tools/system-artifacts` crate, which stages the
+  closed system styling inventory through `host`. Its `qualification` feature is
+  built only for the system-artifact qualification packages.
+
+Each executable is its own Nix package, built from the shared tools source and
+dependency build, and each derivation takes only the executable it runs: the
+doctest producer no longer builds the performance or styling code. Sandbox
+behaviour, outputs, status files and failure semantics are unchanged. The
+docs-only `--no-default-features` devtool build had no consumer and is not
+replaced. The executables are on no devShell PATH; host workflows reach
+`system-artifacts` through `cargo run`.
+
 This supersedes the Just-ownership parts of ADR-0237, ADR-0238, ADR-0239 and
 ADR-0240, the `just perf`, `just perf-compare` and `just perf-import-baseline`
 front doors of [ADR-0241](../0241-performance-workflow-ownership.md), the
@@ -131,6 +159,10 @@ It also amends these decisions:
   `scripts/step-report.jq` and `scripts/run-report` are deleted. The shared
   multi-checkout compile-cache environment moves from `tools/host-tool` into
   `dev` (`tools/dev/dev/checkout.py`), which sets it for every host step.
+- [ADR-0028](../0028-devtool-vs-xtask-boundary.md)'s devtool/xtask boundary:
+  superseded. Both crates are gone. The litmus test it recorded, _where must
+  this code execute?_, still separates the executables above, which run inside
+  derivations, from the host concern tools, which never do.
 - [ADR-0028](../0028-devtool-vs-xtask-boundary.md)'s #1858 addendum: traced-run
   no longer writes Chrome JSON process spans and has no launcher mode, and
   `scripts/cargo-xtask` is deleted. traced-run keeps only captured
@@ -162,3 +194,6 @@ It also amends these decisions:
 - `tools-doctests` has its own source, so an edit to `repository-policy`,
   `qualification` or `host-proof` (which the shared tools build carries only as
   placeholders) reruns it.
+- The in-derivation executables share the tools source, so an edit to any tools
+  crate in that source still rebuilds each of them and reruns the checks that
+  use them.

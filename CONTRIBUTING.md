@@ -854,7 +854,12 @@ concern-owned executables in the `tools` workspace — `repository-policy`
 checkout; CI's E2E verifier and the production-baseline workflows use their Nix
 outputs (`packages.host-proof`, `nix run .#qualification-host`). Host tools run
 only on the host, never inside derivations. Runtime paths belong to the active
-checkout, not the tool's store build directory.
+checkout, not the tool's store build directory. The executables that run inside
+derivations are likewise owned by the crates whose logic they run:
+`coverage-sandbox` (`coverage`), `doctests` (`doctests`), and the dedicated
+`perf-producer` and `system-artifacts` crates (the latter's `qualification`
+feature only for the system-artifact qualification packages). Each is its own
+Nix package, and a derivation takes only the one it runs.
 
 Each host tool prints exactly one JSON report on stdout (`host_tool::report`:
 `command`, `ok`, `duration_ms`,
@@ -1019,8 +1024,8 @@ selected consumers, inputs and populations in detail:
   selected hook and hermetic consumers. Host Fix, complete raw/index admission,
   one staging reconciliation and post-request state checks remain host
   responsibilities; other platforms retain host Markdown verification.
-- **Other formatting:** retain shared Prettier/devtool definitions and distinct
-  host Fix/Verify versus hermetic Verify. Product/tools Rust formatting
+- **Other formatting:** retain shared Prettier/`dev static` definitions and
+  distinct host Fix/Verify versus hermetic Verify. Product/tools Rust formatting
   populations overlap within `rust-format`.
 - **TypeScript/census:** retain separate compiler and E2E-population verdicts.
   The same named `tsc` definition serves host and hermetic callers, but neither
@@ -1177,12 +1182,11 @@ The Emacs client lives in `elisp/` (see [`elisp/README.md`](elisp/README.md)).
 Its ERT suite, formatter, and byte-compilation run in the verify ladder: `ert`,
 `elisp-fmt`, and `byte-compile` (which byte-compiles the package modules with
 warnings promoted to errors) are `dev check`/`dev validate` steps that run
-through shared `dev static` checks for formatting/compilation and the retained
-monotonic devtool timing owner for ERT — the same implementations the
-`static-ert` and `static-elisp` Nix derivations run, so `nix flake check` covers
-them too, with no duplicated sibling to drift (#188). prettier cannot format
-Emacs Lisp, so `elisp-fmt` uses built-in `emacs-lisp-mode` indentation (auto-fix
-under `check`, verify under `validate`).
+through shared `dev static` checks for formatting, compilation and ERT — the
+same implementations the `static-ert` and `static-elisp` Nix derivations run, so
+`nix flake check` covers them too, with no duplicated sibling to drift (#188).
+prettier cannot format Emacs Lisp, so `elisp-fmt` uses built-in
+`emacs-lisp-mode` indentation (auto-fix under `check`, verify under `validate`).
 
 `dev validate-no-e2e` builds `elisp-coverage-producer`, which runs the pure and
 self-booting live ERT populations once in a hermetic VM. Its fixed
@@ -2128,18 +2132,18 @@ Markdown formatting and its configuration; `static-typescript` owns the named
 `static-ert` owns standalone pure ERT; `static-elisp` owns Elisp formatting and
 byte-compilation over its complete non-Markdown Elisp source filter;
 `static-e2e-census` owns the existing provision-and-census command; and
-`static-code` owns the remaining shared devtool definitions. TypeScript
+`static-code` owns the remaining shared `dev static` definitions. TypeScript
 formatting remains in Code. The census leaf retains the existing Playwright
 listing configuration, test/helper/fixture files, including module-load assets,
 and package manifests/lock inputs. Its direct source filter excludes unrelated
 repository sources; its actual closure still includes the existing
 whole-`end2end` `e2ePackage`, the shared Nix setup executable, and pinned
 Node/Playwright packages. Changes to those inputs can invalidate it
-transitively; compiled `devtoolBin` and its Rust tooling closure are no longer
-census inputs. This is documented coupling, not a claim of full source
-isolation. The TypeScript split changes neither the independently landed Rust
-formatting boundary nor distinct feature/target/tools Clippy commands, and makes
-no equivalence, permanent deferral or closure claim. The census source filter's
+transitively; no compiled tools executable or its Rust tooling closure is a
+census input. This is documented coupling, not a claim of full source isolation.
+The TypeScript split changes neither the independently landed Rust formatting
+boundary nor distinct feature/target/tools Clippy commands, and makes no
+equivalence, permanent deferral or closure claim. The census source filter's
 inline assertions establish membership of the census script, Playwright
 configuration, helper/fixture/font and package manifest/lock inputs, plus
 exclusion of Markdown and unrelated server source. The CSR/site source closure
@@ -2213,7 +2217,7 @@ server-function coverage verification to `dev validate-no-e2e`.
 - `checks.x86_64-linux.static-elisp` — shared `elisp-fmt` Verify followed by
   shared `byte-compile`, over the complete non-Markdown Elisp source tree in a
   writable copy. The sandbox `dev` package, `emacsForCi`, and `TZDIR` replace
-  the former devtool build dependency. It needs no offline Cargo home,
+  the former compiled build dependency. It needs no offline Cargo home,
   Node/Playwright, or Git. The verdict is non-substitutable, but valid local
   output reuse remains possible. This selected change does not certify every
   family coupling or discharge the separately recorded invalidation deferrals.
@@ -2234,9 +2238,9 @@ server-function coverage verification to `dev validate-no-e2e`.
   `rust-format`, `static-code`, `static-elisp`, `static-e2e-census`,
   `static-ert`, `dev-python` and `tools-doctests`, in that order. The ERT leaf
   is non-substitutable but may reuse a valid local output. ERT and TSC are
-  traced like every other `dev` step; the old devtool timing events are retired.
-  No new Nix child-timing collector is introduced. Retained logs are never
-  timing inputs; Nix request duration and output reuse do not prove fresh
+  traced like every other `dev` step; the old compiled timing events are
+  retired. No new Nix child-timing collector is introduced. Retained logs are
+  never timing inputs; Nix request duration and output reuse do not prove fresh
   builder execution.
 - `checks.x86_64-linux.dev-python` — the `dev` package's own gate: ruff,
   `mypy --strict`, and pytest under coverage.py at `fail_under = 100` with
@@ -2369,9 +2373,9 @@ nix build .#checks.x86_64-linux.elisp-coverage-producer
   the warning and metric atomically. Expected validation/domain rejection may
   still become ordinary control flow. This is a semantic rule, not a ban on
   `.ok()`, `unwrap_or`, `let _`, `Err(_)`, or `map_err`. In host tools and
-  `devtool`, fail correctness-affecting operations and write a contextual stderr
-  warning only for legitimate ancillary/cleanup failure. Never report a
-  diagnostic transport/export failure through itself.
+  in-derivation tools, fail correctness-affecting operations and write a
+  contextual stderr warning only for legitimate ancillary/cleanup failure. Never
+  report a diagnostic transport/export failure through itself.
 - Comment for intent, not mechanics. A comment should state **what the code
   intends to achieve** (so a reviewer can judge whether it is fit for purpose)
   and, where the code takes a path that is not, at first glance, the obvious
@@ -2447,10 +2451,10 @@ nix build .#checks.x86_64-linux.elisp-coverage-producer
   checkout root that `git rev-parse --show-toplevel` finds, including from a
   nested directory. After a successful locked wasm build, it recursively removes
   the fixed old `target/site` output, including regular files and dangling final
-  symlinks, before invoking checked-out `tools/devtool`. Final symlink referents
-  are not removed; this is ordinary recursive removal, not a
-  physical-containment guarantee. Invalid profiles fail before build or cleanup,
-  and any failed stage stops the build.
+  symlinks, before running the checkout's `system-artifacts` tool and the CSR
+  asset script. Final symlink referents are not removed; this is ordinary
+  recursive removal, not a physical-containment guarantee. Invalid profiles fail
+  before build or cleanup, and any failed stage stops the build.
 - Leptos components should only render data; business logic belongs in server
   functions or pure transformation functions.
 - API methods are automatically prefixed with `/api`.

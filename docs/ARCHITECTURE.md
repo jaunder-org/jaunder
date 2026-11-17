@@ -74,20 +74,24 @@ the host coverage denominator
 ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)).
 
 One sibling tree is outside the root workspace as its own cargo workspace:
-`tools/` (members `coverage`, `devtool`, `diagnostic-coverage-runtime`,
-`doctests`, `host-proof`, `performance`, `pr-observer`, `qualification`,
-`repository-policy`, and `traced-run`). The host-side dev/CI commands live in
-its concern packages rather than a separate driver workspace. `performance` is
-the pure versioned dataset, producer-artifact, statistics, and comparison
+`tools/` (members `coverage`, `diagnostic-coverage-runtime`, `doctests`,
+`host-proof`, `host-tool`, `perf-producer`, `performance`, `pr-observer`,
+`qualification`, `repository-policy`, `system-artifacts`, and `traced-run`). The
+host-side dev/CI commands live in its concern packages rather than a separate
+driver workspace, and each executable that runs inside a Nix derivation lives in
+the crate that owns its logic
+([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)). `performance`
+is the pure versioned dataset, producer-artifact, statistics, and comparison
 library shared by sandbox producers and host analysis under
 [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md). The same auxiliary package
-provides the host-only `perf-data` CLI for evidence policy; sandbox producers
-consume the library, never invoke that host CLI. The diagnostic coverage runtime
-is a target-only auxiliary member that is also copied into the diagnostic Nix
-source closure; its manifest therefore keeps direct package metadata so that the
-copied crate remains independently parseable. Those boundaries are
-execution/ownership boundaries, not a claim that every `tools/` crate is absent
-from every Nix derivation
+provides the host-only `perf-data` CLI for evidence policy; the Nix performance
+producers run the separate `perf-producer` crate, which links the library with
+typed product storage, and never invoke that host CLI. The diagnostic coverage
+runtime is a target-only auxiliary member that is also copied into the
+diagnostic Nix source closure; its manifest therefore keeps direct package
+metadata so that the copied crate remains independently parseable. Those
+boundaries are execution/ownership boundaries, not a claim that every `tools/`
+crate is absent from every Nix derivation
 ([Cargo workspace execution boundaries](adr/0141-cargo-workspace-execution-boundaries.md)).
 `elisp/` (the Emacs client,
 [ADR-0031](adr/0031-elisp-separately-tested-subproject.md)) and `end2end/`
@@ -157,15 +161,14 @@ producer sequence and the host Rust performance command are unchanged.
 **Package-metadata ownership is deliberately partial.** The root
 `[workspace.package]` owns the version, edition, and license inherited by its
 nine members (`client`, `common`, `csr`, `host`, `macros`, `server`, `storage`,
-`test-support`, and `web`). The independent `tools/` workspace owns its version,
-edition, and non-publish setting for `coverage`, `devtool`, and `doctests`;
-`diagnostic-coverage-runtime` repeats those values directly for the copied-crate
-constraint above. The tools workspace also owns the license inherited by
-`coverage`, `devtool`, and `doctests`; the other tools declare it directly.
-Likewise, `test-support` keeps its release exception — direct `publish = false`
-— rather than inheriting the root's publish policy. These ownership points
-follow the two workspace roots; they are not one repository-wide metadata
-workspace.
+`test-support`, and `web`). The independent `tools/` workspace owns the version,
+edition, and non-publish setting of its members; `diagnostic-coverage-runtime`
+repeats those values directly for the copied-crate constraint above. The tools
+workspace also owns the license its members inherit;
+`diagnostic-coverage-runtime` and `performance` declare it directly. Likewise,
+`test-support` keeps its release exception — direct `publish = false` — rather
+than inheriting the root's publish policy. These ownership points follow the two
+workspace roots; they are not one repository-wide metadata workspace.
 
 Jaunder-owned code is GNU GPL version 3 or (at the recipient's option) any later
 version (`GPL-3.0-or-later`). The root README grants these terms; Cargo and
@@ -4031,10 +4034,10 @@ ban on `.ok()`, `unwrap_or`, `let _`, `Err(_)`, or `map_err`, each of which also
 expresses legitimate expected control flow
 ([ADR-0017](adr/0017-error-handling-and-the-public-boundary.md)).
 
-Short-lived host-tool and `devtool` processes do not install the application
-OTel provider: a population/correctness failure fails the command, while a
-legitimate ancillary or cleanup failure preserves the primary result and writes
-its typed source with static context to stderr.
+Short-lived host-tool and in-derivation tool processes do not install the
+application OTel provider: a population/correctness failure fails the command,
+while a legitimate ancillary or cleanup failure preserves the primary result and
+writes its typed source with static context to stderr.
 
 Internal detail reaches a client only through the masking boundary (§2). The
 leaky public constructors `WebError::storage`/`WebError::server` are removed —
@@ -4462,10 +4465,9 @@ rather than failing the check, with the JSON report still recording it
 `elisp/` is a first-class, separately-tested subproject
 ([ADR-0031](adr/0031-elisp-separately-tested-subproject.md)): three elisp steps
 — `ert`, `elisp-fmt` and `byte-compile` — run in both `check` (Fix) and
-`validate` (Check). Formatting and byte-compilation use shared `dev static`
-checks; ERT temporarily retains its devtool monotonic timing owner. Standalone
-pure `ert` runs in `static-ert`; `elisp-fmt` and `byte-compile` run in the
-separate `static-elisp` leaf
+`validate` (Check). Formatting, byte-compilation and ERT use shared `dev static`
+checks. Standalone pure `ert` runs in `static-ert`; `elisp-fmt` and
+`byte-compile` run in the separate `static-elisp` leaf
 ([ADR-0052](adr/0052-devtool-unifies-static-checks.md), now `dev static`); one
 `emacsForCi` toolchain (`nix/packages.nix:372-404`) serves both.
 
@@ -4537,7 +4539,9 @@ its own single JSON step report on stdout, which `dev` renders, and its exit
 status is the verdict. `dev static <name>` supplies formatting, Prettier,
 ast-grep, byte-compilation, cargo-deny, TSC, ERT and the six Clippy definitions
 to host and hermetic consumers. The obsolete static catalog, duplicate Leptosfmt
-source and `devtool check` are retired, not all devtool endpoints.
+source and the compiled static-check command are retired. The remaining
+in-derivation endpoints moved into the crates that own their logic
+([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)).
 
 On the host the devShells' `dev` shim runs the checkout's own `tools/dev/` with
 `python -P` under the pinned interpreter, so hooks and gates always run the
@@ -4800,18 +4804,18 @@ requests the narrow Clippy aggregate once; its six independently buildable
 terminal leaves run lint and the aggregate does not rerun it. `static-elisp`
 runs the shared `elisp-fmt` Verify and `byte-compile` checks over the complete
 non-Markdown Elisp source tree in a writable copy. The sandbox `dev` package,
-`emacsForCi` and `TZDIR` replace its former devtool build input. It needs no
+`emacsForCi` and `TZDIR` replace its former compiled build input. It needs no
 offline Cargo home, Node/Playwright, or Git. The verdict is non-substitutable,
 while valid local output reuse remains possible. This selected change does not
 certify unrelated family coupling or discharge the recorded source-invalidation
 deferrals. `static-ert` runs `dev static ert --sandbox` directly over its own
-complete population. The old devtool ERT and TSC timing events are retired; both
-are traced like any other `dev` step. The combined pure/live coverage producer
-is unchanged. The obsolete devtool static catalog, group/all selectors and
-duplicate Leptosfmt adapter are retired; the fixed `rust-format` group and
+complete population. The old compiled ERT and TSC timing events are retired;
+both are traced like any other `dev` step. The combined pure/live coverage
+producer is unchanged. The obsolete compiled static catalog, group/all selectors
+and duplicate Leptosfmt adapter are retired; the fixed `rust-format` group and
 `dev static-all` preserve those populations. `dev static-all` runs every host
 static leaf in order, each prepared from the current checkout as its host
-`dev static` leaf is; full devtool retirement remains separate.
+`dev static` leaf is.
 
 `dev validate-no-e2e` requests the independent static checks `dev` defines
 before the Nix test surfaces. ADR-0178 established the original
@@ -5206,9 +5210,13 @@ green.
 
 ## Development tooling
 
-Development tooling is split between in-sandbox `devtool` and host-run concern
-packages in the `tools` workspace, placed by a single litmus test — _where must
-this code execute?_ ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)):
+Development tooling lives in concern packages in the `tools` workspace. Each
+executable lives in the crate that owns its logic, and a single litmus test —
+_where must this code execute?_ — separates the executables that run inside Nix
+derivations from the host-only ones
+([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md), its in-sandbox crate
+dissolved by the [Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)
+decision):
 
 - **Host concern packages** — the host-side dev/CI commands, each owned by the
   concern it serves rather than one driver: `tools/repository-policy`
@@ -5243,14 +5251,26 @@ this code execute?_ ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)):
   the checkout-local `flock` on `.xtask/host-artifacts.lock` for the whole run
   so a concurrent `test-local` in the same checkout cannot repoint the bundle's
   GC root or rebuild the image worker under running tests.
-- **`tools/devtool`** — the tool that must also run inside Nix build sandboxes,
-  where `nix` and the host tools are unavailable; `devtool coverage emit`
-  produces coverage artifacts into `$out` for exfiltration
-  ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)).
+- **In-derivation executables** — the tools that must run inside Nix build
+  sandboxes or VM guests, where `nix` and the host tools are unavailable. Each
+  is its own Nix package, built from the shared tools source and dependency
+  build, and each derivation takes only the executable it runs
+  ([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)):
+  `coverage-sandbox` (`tools/coverage`: `emit` produces coverage artifacts into
+  `$out` for exfiltration, `validate-status` gates them, `wasm` drives the
+  browser WebAssembly coverage lifecycle, and `diagnostic-build` records the
+  diagnostic CSR build's artifacts); `doctests` (`tools/doctests`: `emit` runs
+  and reconciles the root workspace's doctests); `perf-producer`
+  (`tools/perf-producer`: storage measurement and browser fragment validation in
+  the performance producer VMs); and `system-artifacts`
+  (`tools/system-artifacts`: stages the closed system styling inventory for
+  every CSR bundle; its `qualification` feature is built only for the
+  system-artifact qualification packages).
 - **`tools/coverage`** — by default a pure-logic library shared by both sides,
   with no I/O policy of its own
-  ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)); its nondefault `host`
-  feature adds the `coverage-check` consumer.
+  ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)), plus the
+  `coverage-sandbox` executable; its nondefault `host` feature adds the
+  `coverage-check` consumer.
 - **`scripts/pg-run.py`** — the single throwaway-PostgreSQL wrapper for host
   workflows and the coverage derivation, packaged by Nix onto the devShell PATH.
   It listens only on a Unix socket in its own short directory, exports the
@@ -5259,23 +5279,21 @@ this code execute?_ ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)):
   ([pg-run as a Python script over a Unix socket](adr/0249-pg-run-python-unix-socket.md),
   superseding ADR-0246's library placement).
 
-The "devtool = in-sandbox, host concern packages = host" split is a litmus test
-about where code _must_ execute, not a ban on running devtool from a shell.
-ADR-0028's own Supplement (#158) originally extended `devtool run` to the host;
-#1858 moves that responsibility to standalone `traced-run`, while the host
-verify ladder now uses shared `dev static` checks, ERT included. Following the
-confirmed coordinated routing cutover, `traced-run` is the sole command-capture
-interface; devtool has no `run` subcommand or runner dependency.
+The in-derivation/host split is a litmus test about where code _must_ execute,
+not a ban on running an in-derivation executable from a shell. ADR-0028's own
+Supplement (#158) originally extended the in-sandbox tool's `run` command to the
+host; #1858 moves that responsibility to standalone `traced-run`, while the host
+verify ladder now uses shared `dev static` checks, ERT included. `traced-run` is
+the sole command-capture interface.
 
 - **`traced-run [--timeout SECONDS] -- <cmd>`** is the standalone no-shell
   runner on the host/devShell path. `packages.traced-run` is an independent Nix
-  derivation with a narrow runner source closure, not a binary bundled in
-  `packages.devtool`. Both default and CI shells include each output once; only
-  the standalone output installs `bin/traced-run`. Devtool-only implementation
-  edits do not invalidate that runner derivation. Shared tools lockfile,
-  workspace manifests, configuration and toolchain remain inputs; changes to
-  those may invalidate it, and the whole devShell still depends on devtool. This
-  is not whole-shell invalidation immunity. It parks stdout/stderr under
+  derivation with a narrow runner source closure, not a binary bundled with
+  another tool, and the only one of the tools workspace's outputs in the default
+  and CI shells. Implementation edits to other tools do not invalidate that
+  runner derivation. Shared tools lockfile, workspace manifests, configuration
+  and toolchain remain inputs; changes to those may invalidate it. This is not
+  whole-shell invalidation immunity. It parks stdout/stderr under
   `.xtask/run/<id>.{out,err}`, returns its JSON result and exits with the
   child's code. It records no spans: its former `--name`/`--launcher` span
   mechanism, recorder and workflow folding are retired in favour of `dev`'s
@@ -5283,12 +5301,12 @@ interface; devtool has no `run` subcommand or runner dependency.
   ([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md);
   [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)).
 - **Static argv lives in `dev static`**, including ERT and TSC's shared
-  host/hermetic check; `devtool check` is retired. On the host a leaf first
-  prepares what it needs from the current checkout (TSC links its pinned
-  dependencies, Leptosfmt builds its adapter); `--sandbox` runs it in place as
-  the Nix check prepared it. `rust-format` is a fixed group there;
+  host/hermetic check; the compiled static-check command is retired. On the host
+  a leaf first prepares what it needs from the current checkout (TSC links its
+  pinned dependencies, Leptosfmt builds its adapter); `--sandbox` runs it in
+  place as the Nix check prepared it. `rust-format` is a fixed group there;
   `dev static-all [fix|verify]` runs every host static leaf in order. The
-  obsolete devtool group/all/sandbox selectors, Cargo builders and duplicate
+  obsolete compiled group/all/sandbox selectors, Cargo builders and duplicate
   Leptosfmt implementation are removed. The host verify ladder calls the shared
   `dev static` checks, preserving host-local Cargo artifacts and sccache for
   Rust-compiling checks. Prettier is outside this inventory: host `dev` and Nix
@@ -5573,9 +5591,11 @@ Each tool that renders a verdict prints one JSON report on stdout, from which
 experiment-only two-worker coverage endpoints (`coverage emit --experiment`,
 `experiment-worker`, `experiment-aggregate`) and their `benchmark-local`
 comparison harness are retired by operator decision; a future partitioning
-experiment rebuilds its own harness. devtool keeps only its production producer
-and build endpoints. #1864's distinct verdicts and #1933's selected passive
-observations/retention remain separately owned.
+experiment rebuilds its own harness. The production producer and build endpoints
+live in the crates that own them
+([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)). #1864's
+distinct verdicts and #1933's selected passive observations/retention remain
+separately owned.
 
 ## Documentation & decision process
 
