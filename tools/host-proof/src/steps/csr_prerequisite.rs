@@ -12,12 +12,12 @@ pub fn validate(root: &Path) -> anyhow::Result<PathBuf> {
     let root = root
         .canonicalize()
         .with_context(|| format!("resolving CSR bundle root {}", root.display()))?;
-    let manifest_check = crate::span_records::phase("xtask.csr-manifest-check");
+    let manifest_check = crate::span_records::phase("host-proof.csr-manifest-check");
     let manifest_result = host::vite_manifest::csr_outputs(&root)
         .with_context(|| format!("invalid Vite manifest or output under {}", root.display()));
     manifest_check.finish(manifest_result.is_ok());
     manifest_result?;
-    let inventory_check = crate::span_records::phase("xtask.csr-inventory-check");
+    let inventory_check = crate::span_records::phase("host-proof.csr-inventory-check");
     let inventory_result = host::system_theme::load_system_artifact_inventory(
         &host::system_theme::DirectorySystemArtifactSource::new(&root.join("system-artifacts")),
     )

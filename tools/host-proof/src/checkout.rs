@@ -7,10 +7,7 @@ pub fn prepare() -> anyhow::Result<()> {
 
 /// Best-effort hook preparation follows checkout admission.
 pub fn ensure_hooks_installed() {
-    let phase = crate::span_records::phase("xtask.hooks");
-    phase.finish(repository_policy::checkout::ensure_hooks_installed(
-        "host-proof",
-    ));
+    repository_policy::checkout::ensure_hooks_installed("host-proof");
 }
 
 #[cfg(test)]

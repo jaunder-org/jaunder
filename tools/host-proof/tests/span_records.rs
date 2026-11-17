@@ -94,7 +94,10 @@ fn phases_nest_under_the_callers_step() {
     let records = fixture.traced(&fixture.bundle_without_inventory());
 
     assert!(records.iter().all(|record| record["trace_id"] == TRACE_ID));
-    for name in ["xtask.csr-manifest-check", "xtask.csr-inventory-check"] {
+    for name in [
+        "host-proof.csr-manifest-check",
+        "host-proof.csr-inventory-check",
+    ] {
         assert_eq!(
             span(&records, name, "start")["parent_id"],
             CALLER_SPAN,
@@ -107,12 +110,12 @@ fn phases_nest_under_the_callers_step() {
     }
     // The validation phases run one after the other, the second failing.
     assert!(
-        span(&records, "xtask.csr-manifest-check", "end")["time_ns"].as_u64()
-            <= span(&records, "xtask.csr-inventory-check", "start")["time_ns"].as_u64()
+        span(&records, "host-proof.csr-manifest-check", "end")["time_ns"].as_u64()
+            <= span(&records, "host-proof.csr-inventory-check", "start")["time_ns"].as_u64()
     );
     for (name, status) in [
-        ("xtask.csr-manifest-check", "ok"),
-        ("xtask.csr-inventory-check", "failed"),
+        ("host-proof.csr-manifest-check", "ok"),
+        ("host-proof.csr-inventory-check", "failed"),
     ] {
         assert_eq!(
             span(&records, name, "end")["attributes"],
@@ -130,13 +133,13 @@ fn csr_validation_stops_at_its_first_failed_phase() {
     let records = fixture.traced(&bundle);
 
     assert_eq!(
-        span(&records, "xtask.csr-manifest-check", "end")["attributes"],
+        span(&records, "host-proof.csr-manifest-check", "end")["attributes"],
         serde_json::json!({"jaunder.status": "failed"})
     );
     assert!(
         !records
             .iter()
-            .any(|record| record["name"] == "xtask.csr-inventory-check"),
+            .any(|record| record["name"] == "host-proof.csr-inventory-check"),
         "{records:?}"
     );
 }

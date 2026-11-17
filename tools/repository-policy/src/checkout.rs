@@ -121,17 +121,11 @@ pub fn prepare_checkout(marker: &str, source_admits: Option<&str>) -> Result<()>
 }
 
 /// Ancillary hook configuration cannot prevent the admitted policy from running.
-pub fn ensure_hooks_installed(owner: &str) -> bool {
+pub fn ensure_hooks_installed(owner: &str) {
     match git::ensure_hooks_path(Path::new(".")) {
-        Ok(true) => {
-            eprintln!("{owner}: set core.hooksPath = {}", git::HOOKS_PATH);
-            true
-        }
-        Ok(false) => true,
-        Err(error) => {
-            eprintln!("{owner}: warning: could not set core.hooksPath: {error:#}");
-            false
-        }
+        Ok(true) => eprintln!("{owner}: set core.hooksPath = {}", git::HOOKS_PATH),
+        Ok(false) => {}
+        Err(error) => eprintln!("{owner}: warning: could not set core.hooksPath: {error:#}"),
     }
 }
 

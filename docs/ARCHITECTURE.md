@@ -5232,9 +5232,9 @@ this code execute?_ ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)):
   prints exactly one JSON report on stdout (steps, outcomes, durations, details,
   verdict) and sends child output to stderr; its exit status is the verdict.
   `dev` renders the human step view; there is no sidecar, `--json` flag or
-  completion sentinel. host-proof joins the calling `dev` run's trace through
-  `TRACEPARENT`/`TRACESTATE` and `JAUNDER_TRACE_DIR`, writing its own span
-  records with the Rust OpenTelemetry SDK
+  completion sentinel. Only its `csr-prerequisite` executable joins the calling
+  `dev` run's trace, through `TRACEPARENT`/`TRACESTATE` and `JAUNDER_TRACE_DIR`,
+  writing its validation phases as span records with the Rust OpenTelemetry SDK
   ([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)). Its
   `admit-inputs` and `csr-prerequisite` executables are steps of
   `dev test-local`, which sequences CSR admission, the `.#csrBundle` build, CSR

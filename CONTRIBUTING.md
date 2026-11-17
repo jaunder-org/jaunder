@@ -1216,7 +1216,9 @@ is the root span and each step is a child span, nested as the gates compose.
 Child processes join through the OpenTelemetry environment carrier
 (`TRACEPARENT`/`TRACESTATE`) plus `JAUNDER_TRACE_DIR`, which names the run
 directory; the root is the `dev` process that finds `JAUNDER_TRACE_DIR` unset.
-host-proof writes its own spans into the same run. A step span records:
+`host-proof csr-prerequisite`, a step of `dev test-local`, writes its validation
+phases into the same run; no other host-proof executable joins it. A step span
+records:
 
 - `jaunder.status`: `ok`, `failed`, `signalled`, or `incomplete` (set by the
   merge for a span with no end record or no parent, as when a child is killed);
