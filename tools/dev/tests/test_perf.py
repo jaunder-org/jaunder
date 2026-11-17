@@ -32,6 +32,8 @@ SELECTION = {
 NIX = """\
 log = pathlib.Path(os.environ["PERF_LOG"])
 if sys.argv[1] == "eval":
+    # The checkout is a git+file: flake, never a path: copy of .git and target/.
+    assert 'builtins.getFlake ("git+file://" + toString ./.)' in sys.argv[-1], sys.argv
     parameters = json.loads(os.environ["JAUNDER_PERF_PARAMETERS"])
     pathlib.Path(os.environ["PERF_PARAMETERS"]).write_text(json.dumps(parameters))
     selection = json.loads(pathlib.Path(os.environ["PERF_SELECTION"]).read_text())

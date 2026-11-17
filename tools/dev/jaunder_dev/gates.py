@@ -287,7 +287,7 @@ def platform_contract() -> None:
             "eval",
             "--impure",
             "--expr",
-            "import ./nix/platform-contract.nix { flake = builtins.getFlake (toString ./.); }",
+            'import ./nix/platform-contract.nix { flake = builtins.getFlake ("git+file://" + toString ./.); }',
         ],
     )
 

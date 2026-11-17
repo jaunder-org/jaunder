@@ -179,7 +179,7 @@ PLATFORM = [
     "eval",
     "--impure",
     "--expr",
-    "import ./nix/platform-contract.nix { flake = builtins.getFlake (toString ./.); }",
+    'import ./nix/platform-contract.nix { flake = builtins.getFlake ("git+file://" + toString ./.); }',
 ]
 STATIC = [
     nix(check)

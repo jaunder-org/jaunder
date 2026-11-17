@@ -15,7 +15,7 @@ from jaunder_dev import steps
 from jaunder_dev.commands import PERF_DATA
 
 SELECT_PRODUCERS = (
-    "let flake = builtins.getFlake (toString ./.); "
+    'let flake = builtins.getFlake ("git+file://" + toString ./.); '
     'parameters = builtins.fromJSON (builtins.getEnv "JAUNDER_PERF_PARAMETERS"); '
     "in flake.performanceLib.${builtins.currentSystem}.selectPerformanceProducers "
     "parameters"
