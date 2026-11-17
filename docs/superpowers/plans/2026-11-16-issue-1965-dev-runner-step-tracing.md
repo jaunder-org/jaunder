@@ -296,7 +296,7 @@ Review deliverable C covers the switch, the removal and the proof.
     - `dev check` passes
   - Also: tests that run the real `dev` set `JAUNDER_TRACE_DIR` empty, starting
     with `mutants_verify.rs`; audit the rest with `rg`.
-- [ ] **Task 7e: `git-index-safety` in `dev`.** As the spec says: the snapshot,
+- [x] **Task 7e: `git-index-safety` in `dev`.** As the spec says: the snapshot,
       classification, host checks, staging reconciliation and static-docs
       admission/post-check run inside `dev precommit` / `dev prepush`, all on
       the git CLI. Delete `safety.rs`, the moved parts of `git.rs` and the
@@ -339,7 +339,7 @@ Review deliverable C covers the switch, the removal and the proof.
     CARGO_HOME from the product or tools home, `CARGO_NET_OFFLINE=true`.
   - Arguments are passed as argv lists, never through a shell string. Prettier
     globs arrive unexpanded.
-- **Precommit:** `git-index-safety` still selects the host step by change class,
+- **Precommit:** `dev precommit` still selects the host checks by change class,
   and precommit's exit status reaches the hook unchanged.
 - **Hermetic checks:** every check whose filter changes keeps its `assert` lines
   true, and no check gains the whole repository as a source.

@@ -102,18 +102,8 @@ _workflow(
 _workflow(
     "precommit",
     gates.precommit,
-    "The pre-commit gate: Git/index safety selects and runs the host checks.",
-)
-_workflow(
-    "precommit-markdown-host",
-    gates.precommit_markdown_host,
-    "Fix Markdown and end2end formatting, then docs-shape. Called only by "
-    "the Git/index safety owner.",
-)
-_workflow(
-    "precommit-broad-host",
-    gates.check_no_test,
-    "check-no-test, as the Git/index safety owner calls it.",
+    "The pre-commit gate: snapshot the index, run the host checks the change "
+    "selects, re-stage safe fixes and, for Markdown alone, verify shared docs.",
 )
 _workflow(
     "docs-shape",

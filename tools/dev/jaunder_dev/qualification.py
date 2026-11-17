@@ -10,7 +10,6 @@ import click
 
 from jaunder_dev import steps
 from jaunder_dev.checkout import clean_tree, traced_git
-from jaunder_dev.commands import WITHOUT_GIT_OVERRIDES
 
 ORIGINS = (
     "https://github.com/jaunder-org/jaunder.git",
@@ -81,7 +80,6 @@ def _qualify(source: str, target: str) -> None:
         "fetch",
         ["git", "fetch", "--quiet", "--no-write-fetch-head", "--refetch", "origin"]
         + commits,
-        environment=WITHOUT_GIT_OVERRIDES,
     )
     steps.run(
         "qualification-host",
@@ -94,7 +92,6 @@ def _qualify(source: str, target: str) -> None:
             source,
             *(["--target", target] if target else []),
         ],
-        environment=WITHOUT_GIT_OVERRIDES,
     )
 
 
@@ -112,7 +109,6 @@ def qualify_styling() -> None:
     steps.run(
         "qualification-host",
         [*QUALIFICATION_HOST, "--", "--expected-harness", harness],
-        environment=WITHOUT_GIT_OVERRIDES,
     )
 
 

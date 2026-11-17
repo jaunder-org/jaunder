@@ -1,8 +1,8 @@
 """The checkout a workflow runs in: its root, the compile cache its worktrees
 share, and its Git state.
 
-Every Git call here runs with inherited repository overrides removed, so it
-always answers for the checkout `dev` was started in.
+Every Git call here runs with inherited repository overrides removed, as every
+step does, so it always answers for the checkout `dev` was started in.
 """
 
 import os
@@ -13,14 +13,13 @@ from pathlib import Path
 import click
 
 from jaunder_dev import steps
-from jaunder_dev.commands import WITHOUT_GIT_OVERRIDES
 
 
 def untraced_git(*args: str) -> subprocess.CompletedProcess[str]:
     """A Git query made before the gate's trace exists; its streams are kept."""
     return subprocess.run(
         ["git", *args],
-        env=steps.changed(os.environ, WITHOUT_GIT_OVERRIDES),
+        env=steps.changed(os.environ, steps.WITHOUT_GIT_OVERRIDES),
         capture_output=True,
         text=True,
         check=False,
@@ -31,7 +30,7 @@ def traced_git(
     name: str, *args: str, refusal: Callable[[str], str | None] | None = None
 ) -> str:
     """A Git query run as the step `name`, its output as `steps.text` gives it."""
-    return steps.text(name, ["git", *args], WITHOUT_GIT_OVERRIDES, refusal)
+    return steps.text(name, ["git", *args], refusal=refusal)
 
 
 def root() -> Path:

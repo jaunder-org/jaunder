@@ -8,11 +8,10 @@ verdict.
 
 import fcntl
 import os
-import platform
 from enum import StrEnum
 from pathlib import Path
 
-from jaunder_dev import e2e, report, static, steps, trace
+from jaunder_dev import e2e, index, report, static, steps, trace
 from jaunder_dev.checkout import clean_tree, traced_git
 from jaunder_dev.commands import (
     COVERAGE_CHECK,
@@ -150,14 +149,8 @@ def static_all(mode: Mode) -> None:
 
 def markdown(mode: Mode, docs: Docs) -> None:
     """Markdown and end2end Prettier, the Markdown verdict taken as `docs` says."""
-    if docs is Docs.PREPUSH and (platform.system(), platform.machine()) == (
-        "Linux",
-        "x86_64",
-    ):
-        steps.run(
-            "prepush-docs",
-            [*REPOSITORY_POLICY, "git-index-safety", "--", "prepush-docs"],
-        )
+    if docs is Docs.PREPUSH and index.shares_docs():
+        index.prepush_docs()
     else:
         static.run("prettier-markdown", mode)
     static.run("prettier-end2end", mode)
@@ -416,13 +409,16 @@ def doctests() -> None:
     doctests_workflow()
 
 
+def _precommit_checks(markdown_only: bool) -> None:
+    """A Markdown-only change takes the Markdown-sensitive Fix checks, in order;
+    any other change takes check-no-test."""
+    if markdown_only:
+        markdown(Mode.FIX, Docs.HOST)
+        docs_shape()
+    else:
+        check_no_test()
+
+
 def precommit() -> None:
-    """The Git/index safety owner selects the host checks and reconciles the index."""
-    steps.run(
-        "git-index-safety", [*REPOSITORY_POLICY, "git-index-safety", "--", "precommit"]
-    )
-
-
-def precommit_markdown_host() -> None:
-    markdown(Mode.FIX, Docs.HOST)
-    docs_shape()
+    """Index custody selects the host checks and reconciles the index."""
+    index.precommit(_precommit_checks)

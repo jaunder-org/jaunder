@@ -176,8 +176,8 @@ complete pre-run dirty tree. `staged-markdown-only` is the sole narrow class: a
 nonempty tree containing only staged-only, regular, case-sensitive `.md`
 additions or modifications. Any unstaged, untracked, delete/rename,
 type-changing, non-Markdown, malformed, unparseable, or otherwise unsupported
-evidence uses the broad route. The safety owner classifies before selecting the
-host command as either
+evidence uses the broad route. `dev precommit` classifies before selecting the
+host checks as either
 `class=staged-markdown-only reason=isolated-staged-markdown` or
 `class=broad reason=<stable-kebab-case-reason>`; broad reason precedence is
 `uncertain-status`, `empty-state`, `untracked-path`, `unstaged-path`,
@@ -194,24 +194,30 @@ classification runs the existing broad host surface. `tools`-only routing is
 rejected because that workspace defines gate behavior and repository scanners
 that require their full product, documentation, CI, and e2e input populations.
 
-Precommit retains Fix-mode formatting and Rust-owned Git/index reconciliation:
-it re-stages only formatter/check mutations on already-staged tracked paths
-without pre-existing unstaged changes. It always takes its after-snapshot and
-reconciles once, including after a narrow-surface failure; mixed tracked paths,
-newly-created untracked files, and changed delete/rename states fail closed,
-while pre-existing delete/rename state and untracked files stay unstaged and
+Precommit retains Fix-mode formatting and keeps single-process custody of the
+Git index in `dev` itself (`tools/dev/jaunder_dev/index.py`): it re-stages only
+formatter/check mutations on already-staged tracked paths without pre-existing
+unstaged changes. It always takes its after-snapshot and reconciles once,
+including after a narrow-surface failure; mixed tracked paths, newly-created
+untracked files, and changed delete/rename states fail closed, while
+pre-existing delete/rename state and untracked files stay unstaged and
 tolerated. On `x86_64-linux`, successful narrow staged-Markdown checks and
 reconciliation are followed by admission (no remaining unstaged or nonignored
 untracked changes, and raw worktree/index blob identity for every tracked
 Markdown, `.prettierrc.json`, `.prettierignore`, and `tools/dev/` source input
 consumed by `static-docs`, excluding `.claude`) and then the ordinary Git-backed
-request `dev nix-check static-docs`, which builds the check with `dev`'s single
-definition of Nix flags and records it as a traced step with its cache state. A
-post-request status/index check fails on tracked, staged, or nonignored
-untracked mutation (including a rewritten `flake.lock`) without restaging.
-Admission or host/staging failure skips the request; request failure remains the
-hook verdict and is preserved if the post-check also fails. Other platforms and
-the broad route retain host-only behavior. Bypass with
+`static-docs` Nix-check step, built with `dev`'s single definition of Nix flags
+and traced with its cache state. A post-request status/index check fails on
+tracked, staged, or nonignored untracked mutation (including a rewritten
+`flake.lock`) without restaging. Admission or host/staging failure skips the
+request; request failure remains the hook verdict and is preserved if the
+post-check also fails. Other platforms and the broad route retain host-only
+behavior. Each phase (`snapshot-before`, the host checks, `snapshot-after`,
+`staging`, `static-docs-admission`, `static-docs`, `static-docs-post-check`) is
+its own span directly under `dev precommit`. Every index query is the `git` CLI
+run with the hook's environment, so the evidence describes the index the commit
+will write, including the temporary `GIT_INDEX_FILE` of `git commit <path>`; no
+step inherits the hook's `GIT_*` overrides. Bypass with
 `SKIP_PRE_COMMIT=1 git commit` for WIP.
 
 **`pre-push`** runs `dev prepush`: the fast verify-only host/static surface,
@@ -221,7 +227,7 @@ The producer runs `cargo test --workspace --doc` with the bidirectional
 root-workspace fence reconciliation (ADR-0095); there is no host doctest run.
 The hook has the same clean-tree refusal as `validate`. On `x86_64-linux`, only
 the host `prettier-markdown` Verify at its existing position is replaced with
-the same `static-docs` Nix leaf, requested through `dev nix-check`. Before the
+the same `static-docs` Nix-check step, with the same index custody. Before the
 request, the clean consumer also checks raw/index identity for the complete
 tracked Markdown and formatter-config input population; afterward it verifies
 Git state stayed unchanged. Other checks retain their order, and other platforms
@@ -247,10 +253,11 @@ order, ERT last: it builds the current checkout's adapter, then runs the `all`
 group (dependencies must already be available). Every `dev` call sets the host
 Cargo compile-cache policy (`RUSTC_WRAPPER=sccache`, `CARGO_INCREMENTAL=0`, and
 sorted, canonical Git worktree roots in `SCCACHE_BASEDIRS`, including the
-current root) and clears inherited `GIT_*` overrides before calling Git.
-Discovery failure retains the current root and Git's diagnostic. This
-environment reaches the checkout's tool builds and their compiling children as
-well as direct Cargo steps; it adds no resource limits.
+current root) and runs every step, Git or not, without the inherited `GIT_*`
+repository overrides a hook exports; only precommit/prepush index custody
+honours them. Discovery failure retains the current root and Git's diagnostic.
+This environment reaches the checkout's tool builds and their compiling children
+as well as direct Cargo steps; it adds no resource limits.
 
 All `dev` gate workflows fail fast: the first failed required step stops later
 ordinary checks, and `dev` exits with that step's status. Prepush's clean-tree
@@ -473,11 +480,13 @@ those **override `-C <dir>`**. So a test that builds a throwaway repo with
 `git -C <tmpdir> …` will, when run inside the pre-commit/pre-push hooks (which
 invoke `dev precommit`/`dev validate`, whose host tests then run that code), be
 redirected at the **real** repository — corrupting HEAD, the index, and the
-shared worktree config. Build every git command for such a test (and any
-production helper it calls) through a constructor that `env_remove`s those vars
-— see `git::at()` in `tools/repository-policy/src/git.rs`. Read-only production
-queries (`rev-parse`/`log`/`diff`/`ls-files`) are safe unscrubbed since they
-don't mutate.
+shared worktree config. `dev` runs every step (cargo test, nextest and pytest
+included) without those vars, and `tools/dev/tests/conftest.py` drops every
+`GIT_*` variable for its tests; keep both. Build every Rust test's git command
+(and any production helper it calls) through a constructor that `env_remove`s
+those vars — see `git::at()` in `tools/repository-policy/src/git.rs`. Read-only
+production queries (`rev-parse`/`log`/`diff`/`ls-files`) are safe unscrubbed
+since they don't mutate.
 
 ### Evaluating the web UX interactively
 
@@ -822,9 +831,10 @@ developer, hook, CI and Nix-sandbox workflows. Each workflow is a `dev`
 subcommand (`dev check`, `dev test-local -- -p storage foo`,
 `dev ci-validate-host`, `dev static tsc --sandbox`). It invokes the pinned tools
 and existing producer commands directly, passing arguments as argv lists, never
-through a shell; Rust algorithms and Git/index safety remain callable leaves,
-not a workflow catalog. Gates return process status and logs, not a gate-wide
-JSON report. The old cargo gate aliases and the `xtask` workspace are retired.
+through a shell; Rust algorithms remain callable leaves, not a workflow catalog,
+and Git/index custody is `dev`'s own. Gates return process status and logs, not
+a gate-wide JSON report. The old cargo gate aliases and the `xtask` workspace
+are retired.
 
 On the host, the `default`, `ci` and `ci-e2e` devShells put a `dev` shim on
 `PATH`. The shim finds the checkout with `git rev-parse --show-toplevel` and
@@ -834,10 +844,10 @@ tree's code with no virtualenv. Bytecode caching stays on; `__pycache__/` is
 ignored. Nix checks run a `dev` package built from a filtered `tools/dev/`
 source, so any edit there rebuilds them. The Rust host commands are
 concern-owned executables in the `tools` workspace — `repository-policy`
-(`repository-docs`, `source-contracts`, `git-index-safety`), `host-proof`
-(`e2e-local`, `e2e-evidence`, `trace-analysis`, `wasm-audit`,
-`source-diagnostics`, and `test-local`'s `admit-inputs` and `csr-prerequisite`),
-`coverage` (`coverage-check`, nondefault `host` feature) and `qualification`
+(`repository-docs`, `source-contracts`), `host-proof` (`e2e-local`,
+`e2e-evidence`, `trace-analysis`, `wasm-audit`, `source-diagnostics`, and
+`test-local`'s `admit-inputs` and `csr-prerequisite`), `coverage`
+(`coverage-check`, nondefault `host` feature) and `qualification`
 (`qualification-host`). `dev` runs them with locked Cargo from the active
 checkout; CI's E2E verifier and the production-baseline workflows use their Nix
 outputs (`packages.host-proof`, `nix run .#qualification-host`). Host tools run
@@ -859,7 +869,7 @@ workflow now owns authoritative output selection and trace/snapshot
 verification; the temporary `server-fn-flow` bridge is retired, while the
 independent static `server-fn-coverage` leaf remains. Verification's ordinary
 clean-tree admission is direct `dev`/Git; raw/index docs admission, post-request
-checks and precommit reconciliation remain distinct Rust safety operations.
+checks and precommit reconciliation are `dev`'s distinct index-custody phases.
 
 New, nonignored tooling inputs must be included in the Git-backed flake snapshot
 (`git add` or `git add -N`) before normal invocation. The Nix source declaration
@@ -938,7 +948,7 @@ CI/`dev validate-no-e2e` when hermetic confidence is the question. Focused
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
 | `dev check-no-test`   | the host check groups (below) in Fix mode + auxiliary host tests                                                                                                                                     | auto-fixes    |
 | `dev check`           | adds `test-local`, Nix `wasm-tests` and `doctests`/`doctests-gate`                                                                                                                                   | auto-fixes    |
-| `dev precommit`       | focused Git/index safety owner selects Markdown or broad Fix checks, reconciles once, and conditionally verifies shared docs                                                                         | auto-fixes    |
+| `dev precommit`       | Git/index custody selects Markdown or broad Fix checks, reconciles once, and conditionally verifies shared docs                                                                                      | auto-fixes    |
 | `dev prepush`         | clean tree; Verify host/static + auxiliary tests + `test-local` + Nix `doctests`/`doctests-gate`; x86_64-linux uses shared `static-docs` at the Markdown slot                                        | never mutates |
 | `dev validate-no-e2e` | clean tree; Verify host/static, Nix static proof (with `tools-doctests`), the `csrBundle` build and wasm budget, wasm tests, Rust coverage/CRAP, doctests, and authoritative Elisp producer/consumer | never mutates |
 | `dev validate`        | adds two Chromium and six Firefox E2E lanes, reconciliation, and final authoritative SQLite/Chromium server-function flow verification                                                               | never mutates |

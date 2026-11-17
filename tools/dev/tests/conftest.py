@@ -161,14 +161,22 @@ class Checkout:
 # (unit and record separators keep empty and whitespace-bearing arguments
 # exact) and exits 17 when its command line equals $FAIL_COMMAND; otherwise a
 # host tool that reports prints a minimal report with no steps. Fake Git
-# refuses inherited repository overrides with 23, answers checkout discovery
-# from the real Git, and reports a dirty tree while `dirty-status` exists. The
-# CSR prerequisite prints its root under `/verified`.
+# answers index custody's queries (the only Git that honours a hook's
+# overrides) for a clean index, refuses inherited repository overrides
+# anywhere else with 23, answers checkout discovery from the real Git, and
+# reports a dirty tree while `dirty-status` exists. The CSR prerequisite prints
+# its root under `/verified`.
 # Nix cache probes fail, so Nix steps record no cache source; a build's
 # out-link points at a fake store path named after the link.
 FAKE = r"""#!/bin/sh
 name=${0##*/}
 if [ "$name" = git ]; then
+    case "$*" in
+      'status --porcelain=v1 -z '*|'diff --cached --raw -z '*|'ls-files --stage -z')
+        printf '%s\037' "$name" "$@" >> "$FAKE_LOG"
+        printf '\036' >> "$FAKE_LOG"
+        exit 0 ;;
+    esac
     if [ -n "${GIT_DIR+x}${GIT_WORK_TREE+x}${GIT_INDEX_FILE+x}${GIT_OBJECT_DIRECTORY+x}${GIT_COMMON_DIR+x}${GIT_NAMESPACE+x}" ]; then
         printf 'Git inherited a repository override\n' >&2
         exit 23

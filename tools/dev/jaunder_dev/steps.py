@@ -14,6 +14,7 @@ probes its output) the gate stops at once. Either way the open spans close as
 
 import contextlib
 import json
+import os
 import shlex
 import signal
 import subprocess
@@ -32,6 +33,20 @@ _HANDLED = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
 
 # Changes to one step's environment; None unsets a name.
 Environment = Mapping[str, str | None]
+
+# What a Git hook exports to point Git at the repository being committed. No
+# step inherits them: they would redirect any Git a step runs, including a
+# test's `git init` of a scratch repository, at that repository. Only the
+# index custody of `dev precommit`/`dev prepush` (`index`) honours them.
+GIT_OVERRIDES = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_COMMON_DIR",
+    "GIT_NAMESPACE",
+)
+WITHOUT_GIT_OVERRIDES: Environment = dict.fromkeys(GIT_OVERRIDES)
 
 # The output-holding GC roots of Nix builds, under the checkout root.
 GCROOTS = ".xtask/gcroots"
@@ -148,7 +163,9 @@ def _supervise(
     With `capture`, the child's stdout is returned instead of passed through;
     `stdin`, if given, is the child's whole standard input.
     """
-    child_environment = changed(trace.child_environment(), environment)
+    child_environment = changed(
+        changed(trace.child_environment(), WITHOUT_GIT_OVERRIDES), environment
+    )
     _signals.supervising = True
     _signals.forwarded = []
     _signals.pending = []
@@ -290,7 +307,12 @@ class _QueryFailed(Exception):
 def _query(*argv: str) -> bytes:
     """A Nix query's stdout; its streams never reach the user."""
     try:
-        done = subprocess.run(argv, capture_output=True, check=False)
+        done = subprocess.run(
+            argv,
+            env=changed(os.environ, WITHOUT_GIT_OVERRIDES),
+            capture_output=True,
+            check=False,
+        )
     except OSError as error:
         raise _QueryFailed from error
     if done.returncode:

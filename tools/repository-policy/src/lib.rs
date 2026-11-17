@@ -10,7 +10,6 @@ pub mod ids;
 pub mod markers;
 pub mod org_timezone_manifest;
 pub mod repository_docs;
-pub mod safety;
 pub mod scoped_leptosfmt;
 pub mod server_fns;
 pub mod source_contracts;

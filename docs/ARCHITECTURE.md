@@ -4595,11 +4595,14 @@ The explicit local workflows are:
   repository-shape and type-safety checks, then auxiliary host tests.
   **`dev check`** adds host-native `test-local`, Nix `wasm-tests`, and
   `doctests`/`doctests-gate`.
-- **`dev precommit`** is the hook entrypoint, invoking only the focused native
-  `git-index-safety precommit` owner. Before gate work it classifies the
-  complete pre-run dirty-tree snapshot. The narrow `staged-markdown-only` class
-  requires a nonempty tree containing only staged-only, regular, case-sensitive
-  `.md` additions or modifications; any unstaged, untracked, delete/rename,
+- **`dev precommit`** is the hook entrypoint. It keeps single-process custody of
+  the Git index itself, on the `git` CLI
+  ([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md) moves it from
+  Rust, preserving [ADR-0029](adr/0029-git-enforced-verify-gate.md)'s
+  single-process custody). Before gate work it classifies the complete pre-run
+  dirty-tree snapshot. The narrow `staged-markdown-only` class requires a
+  nonempty tree containing only staged-only, regular, case-sensitive `.md`
+  additions or modifications; any unstaged, untracked, delete/rename,
   type-changing, non-Markdown, malformed, unparseable, or otherwise unsupported
   evidence takes the broad route. Classification precedes host execution and
   distinguishes `class=staged-markdown-only reason=isolated-staged-markdown`, or
@@ -4627,13 +4630,19 @@ The explicit local workflows are:
   identity for all tracked Markdown and formatter-config inputs selected by
   `static-docs` (`.prettierrc.json`, `.prettierignore`, and the `tools/dev/`
   source, excluding `.claude`). The ordinary Git-backed `static-docs` request
-  then runs as `dev nix-check static-docs`, so it uses `dev`'s one definition of
-  Nix check flags and appears in the trace as a step with its cache state. A
-  post-request status/index check fails on tracked, staged, or
-  nonignored-untracked mutation (including a rewritten `flake.lock`) without
-  restaging. Host, staging, or admission failure skips the request; a request
-  failure remains recorded if the post-check also fails. Broad routing and
-  non-x86 behavior remain host-only.
+  then runs as a `dev` Nix-check step, so it uses `dev`'s one definition of Nix
+  check flags and appears in the trace with its cache state. A post-request
+  status/index check fails on tracked, staged, or nonignored-untracked mutation
+  (including a rewritten `flake.lock`) without restaging. Host, staging, or
+  admission failure skips the request; a request failure remains recorded if the
+  post-check also fails. Broad routing and non-x86 behavior remain host-only.
+  The snapshot, host checks, after-snapshot, staging, admission, request and
+  post-check are each a span directly under `dev precommit`. Every index query
+  runs the `git` CLI (`status`, `diff`, `ls-files`, `hash-object`, `add`) with
+  the hook's environment, so the evidence is the index `git commit` will write,
+  including the temporary `GIT_INDEX_FILE` of `git commit <path>`; a library
+  such as libgit2 could diverge from it on that index, on filters or on
+  fsmonitor.
 
 - **`dev prepush`** is the fast local push-hook entrypoint. It opens with the
   same clean-tree precheck as `validate`, then runs the verify-only host/static
@@ -4689,21 +4698,24 @@ at prepush's Markdown Verify position; prepush also requests the Nix doctest
 producer and gate.
 
 Enforcement is git-native ([ADR-0029](adr/0029-git-enforced-verify-gate.md)).
-`.githooks/pre-commit` calls `dev precommit`, which runs repository-policy's
-`git-index-safety` owner with locked Cargo. Git/index reconciliation lives in
-Rust rather than the shell hook. `.githooks/pre-push` calls `dev prepush`.
-Verify workflows share `dev`'s direct clean-tree Git-status admission and refuse
-dirty or unavailable state before expensive work. That simple check is not
-raw/index docs admission or precommit reconciliation, which remain in Rust.
-There is no `dev` `--allow-dirty` option; `SKIP_PRE_PUSH=1` remains a deliberate
-hook escape. The hook proves the fast local lane ran on the committed tip with
-no uncommitted files hiding; CI remains the non-bypassable hermetic authority;
-prepush's shared `static-docs` leaf and its Nix doctest producer and gate are
-the deliberate exceptions to its otherwise host-only gate
-([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md) amends the #1117
-supplement). Every host tool (and `dev precommit` through `git-index-safety`)
-self-heals `core.hooksPath` to the tracked, relative `.githooks` before its
-workload (`tools/repository-policy/src/checkout.rs`: `ensure_hooks_installed`).
+`.githooks/pre-commit` calls `dev precommit`, which owns Git/index
+reconciliation in the same process as the host checks, not in the shell hook.
+`.githooks/pre-push` calls `dev prepush`. Verify workflows share `dev`'s direct
+clean-tree Git-status admission and refuse dirty or unavailable state before
+expensive work. That simple check is not raw/index docs admission or precommit
+reconciliation, which are `dev`'s index custody
+(`tools/dev/jaunder_dev/index.py`). Only that custody honours the `GIT_*`
+repository overrides a hook exports; every step, including cargo test, nextest
+and pytest, runs without them, so a test's scratch `git init` cannot
+reinitialise the hooked repository. There is no `dev` `--allow-dirty` option;
+`SKIP_PRE_PUSH=1` remains a deliberate hook escape. The hook proves the fast
+local lane ran on the committed tip with no uncommitted files hiding; CI remains
+the non-bypassable hermetic authority; prepush's shared `static-docs` leaf and
+its Nix doctest producer and gate are the deliberate exceptions to its otherwise
+host-only gate ([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)
+amends the #1117 supplement). Every repository-policy host tool self-heals
+`core.hooksPath` to the tracked, relative `.githooks` before its workload
+(`tools/repository-policy/src/checkout.rs`: `ensure_hooks_installed`).
 `SKIP_PRE_COMMIT=1` / `SKIP_PRE_PUSH=1` are deliberate local escapes; CI is the
 non-bypassable authority.
 
@@ -4733,11 +4745,10 @@ derivation.
 
 `dev` requests hermetic leaves directly with
 `nix build -L --accept-flake-config --out-link .xtask/gcroots/<check> .#checks.x86_64-linux.<check>`,
-one definition shared by every gate and by `dev nix-check <check>`, which
-`git-index-safety` uses for its docs request. Their named output links retain
-producer evidence as GC roots; failure stops the workflow. The wasm budget
-builds `.#csrBundle` the same way as its own step, at
-`.xtask/gcroots/csrBundle`, and passes that output to
+one definition shared by every gate, `dev nix-check <check>` and the index
+custody's docs request. Their named output links retain producer evidence as GC
+roots; failure stops the workflow. The wasm budget builds `.#csrBundle` the same
+way as its own step, at `.xtask/gcroots/csrBundle`, and passes that output to
 `wasm-audit budget --site-path`, which requires the path and never runs Nix. The
 budget preserves manifest, generated-shell and name-section verification, and
 applies the raw-size budget. It no longer observes unrelated `.#site`
@@ -5193,10 +5204,9 @@ this code execute?_ ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)):
 
 - **Host concern packages** — the host-side dev/CI commands, each owned by the
   concern it serves rather than one driver: `tools/repository-policy`
-  (`repository-docs`, `source-contracts`, `git-index-safety`, and the shared
-  `host_tool::report` contract), `tools/qualification` (`qualification-host`),
-  `tools/host-proof` (below), `tools/coverage` with its nondefault `host`
-  feature
+  (`repository-docs`, `source-contracts`, and the shared `host_tool::report`
+  contract), `tools/qualification` (`qualification-host`), `tools/host-proof`
+  (below), `tools/coverage` with its nondefault `host` feature
   (`coverage-check policy | elisp-consume | mutants-verify | probe-source | wasm-probe | wasm-measure`).
   `dev` owns gate composition. These commands invoke `nix build` and
   consume/analyze exfiltrated build artifacts (coverage gate, CRAP gate,
@@ -5533,9 +5543,8 @@ The residual homes are concern packages in the `tools/` workspace, not a generic
 checker registry, runner, supervisor or replacement omnibus:
 
 - `tools/repository-policy` — fixed repository-docs/source-contracts policy
-  interfaces, the single-process `git-index-safety` owner, shared checkout
-  admission and best-effort `core.hooksPath` preparation (every host tool calls
-  it before its workload).
+  interfaces, shared checkout admission and best-effort `core.hooksPath`
+  preparation (every host tool calls it before its workload).
 - `tools/host-tool` — the shared host-tool report contract.
 - `tools/qualification` — `qualification-host` behind the four
   `dev production-baseline-*` commands.

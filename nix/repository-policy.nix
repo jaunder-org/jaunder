@@ -57,7 +57,7 @@ craneLib.buildPackage {
   doNotPostBuildInstallCargoBinaries = true;
   installPhase = ''
     mkdir -p "$out/bin"
-    cp tools/target/debug/{repository-docs,source-contracts,git-index-safety,org-timezone-manifest,scoped-leptosfmt} "$out/bin/"
+    cp tools/target/debug/{repository-docs,source-contracts,org-timezone-manifest,scoped-leptosfmt} "$out/bin/"
   '';
   meta = {
     license = pkgs.lib.licenses.gpl3Plus;

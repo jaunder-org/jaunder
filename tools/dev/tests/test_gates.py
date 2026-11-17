@@ -71,6 +71,23 @@ def commands(*lines: str) -> Commands:
     return [line.split(" ") for line in lines]
 
 
+# Index custody around prepush's shared docs request: the clean admission's
+# queries, the request, then the post-check's queries.
+INDEX_QUERIES = commands(
+    "git status --porcelain=v1 -z --untracked-files=all --no-renames",
+    "git diff --cached --raw -z --no-abbrev --no-renames",
+    "git ls-files --stage -z",
+)
+PREPUSH_DOCS = [
+    *INDEX_QUERIES,
+    *commands(
+        "nix build -L --accept-flake-config --out-link .xtask/gcroots/static-docs "
+        ".#checks.x86_64-linux.static-docs"
+    ),
+    *INDEX_QUERIES,
+]
+
+
 def format_checks(mode: str, shared_docs: bool = False) -> Commands:
     fix = mode == "fix"
     check = "" if fix else " --check"
@@ -82,7 +99,7 @@ def format_checks(mode: str, shared_docs: bool = False) -> Commands:
         f"scoped-leptosfmt {mode}",
     )
     if shared_docs:
-        expected += commands(f"{POLICY} git-index-safety -- prepush-docs")
+        expected += PREPUSH_DOCS
     else:
         expected += [["prettier", write, "**/*.md"]]
     return expected + [
@@ -242,10 +259,8 @@ VALIDATE_NO_E2E = [
     *DOCTESTS,
     *ELISP,
 ]
-PRECOMMIT = commands(f"{POLICY} git-index-safety -- precommit")
 GATES: dict[str, Commands] = {
     "check-no-test": CHECK_NO_TEST,
-    "precommit-broad-host": CHECK_NO_TEST,
     "check": CHECK,
     "prepush": PREPUSH,
     "validate-no-e2e": VALIDATE_NO_E2E,
@@ -256,12 +271,6 @@ GATES: dict[str, Commands] = {
     "ci-validate-coverage": [*CLEAN, *COVERAGE],
     "coverage": [*CLEAN, *COVERAGE],
     "doctests": [*CLEAN, *DOCTESTS],
-    "precommit": PRECOMMIT,
-    "precommit-markdown-host": [
-        ["prettier", "-w", "**/*.md"],
-        ["prettier", "-w", "end2end"],
-        *docs_shape(),
-    ],
 }
 
 
@@ -388,8 +397,8 @@ def test_dirty_fix_check_reaches_its_doctests_without_admission(
 
 
 # Every gate and lane whose failures the hooks and CI depend on.
+# Precommit's are in test_index.py, with its index custody.
 FAIL_FAST = [
-    "precommit-markdown-host",
     "check",
     "prepush",
     "validate",
@@ -397,7 +406,6 @@ FAIL_FAST = [
     "ci-validate-hermetic",
     "ci-validate-test-checks",
     "ci-validate-coverage",
-    "precommit",
 ]
 
 
@@ -410,6 +418,9 @@ def test_every_step_failure_is_its_status_and_stops_subsequent_work(
     for gate in FAIL_FAST:
         success = GATES[gate]
         for index, argv in enumerate(success):
+            if argv in PREPUSH_DOCS:
+                # Index custody combines its failures (test_index.py).
+                continue
             first_time = tuple(argv) not in tested
             tested.add(tuple(argv))
             if not first_time and index not in (0, len(success) - 1):
@@ -486,21 +497,3 @@ def test_leptosfmt_runs_the_adapter_this_checkout_built(workflow: Workflow) -> N
         assert result.returncode == 0, result
         assert workflow.commands() == format_checks(mode)[1:2]
         assert (workflow.root / "built-adapter").read_text() == f"{mode}\n"
-
-
-@pytest.mark.parametrize("code", [0, 1, 23])
-def test_precommit_delegates_to_the_safety_owner_and_keeps_its_status(
-    workflow: Workflow, code: int
-) -> None:
-    workflow.checkout.tool(
-        "cargo",
-        'print("safety stdout"); print("safety stderr", file=sys.stderr)\n'
-        "print(os.environ.get('GIT_INDEX_FILE'), file=sys.stderr)\n"
-        f"sys.exit({code})",
-    )
-    result = workflow.dev("precommit")
-    assert result.returncode == code
-    assert result.stdout == b"safety stdout\n"
-    # The hook's index stays visible to the owner that reconciles it.
-    assert result.stderr == b"safety stderr\nforeign-index\n"
-    assert (workflow.root / "order").read_text() == " ".join(PRECOMMIT[0]) + "\n"

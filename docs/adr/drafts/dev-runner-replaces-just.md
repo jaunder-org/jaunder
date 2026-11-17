@@ -59,9 +59,22 @@ Work a gate performs is a visible `dev` step, not hidden inside a tool
 - The wasm budget builds `.#csrBundle` as its own Nix step, with its cache
   state, and passes that output to `wasm-audit budget --site-path`. The budget
   requires the path and never runs Nix itself.
-- Every Nix check `dev` requests goes through one definition of its build flags.
-  `git-index-safety` keeps sole custody of the Git index, but requests the
-  shared docs verdict as `dev nix-check static-docs`.
+- Every Nix check `dev` requests goes through one definition of its build flags,
+  the shared `static-docs` verdict of precommit and prepush included.
+- `dev precommit` and `dev prepush` keep custody of the Git index themselves, in
+  one process: the snapshot, Markdown-or-broad classification, the host checks,
+  the staging reconciliation (also after a failed check) and the `static-docs`
+  admission, request and post-check. Each is a span directly under the gate. The
+  staging rules, refusals and the rule that uncertain evidence refuses are
+  unchanged. Every index query runs the `git` CLI (`status --porcelain=v1 -z`,
+  `diff --cached --raw -z`, `ls-files --stage -z`, `hash-object`, `add`) with
+  the hook's environment, so the evidence agrees with what `git commit` writes,
+  including the temporary `GIT_INDEX_FILE` of `git commit <path>`. A library
+  such as libgit2 could diverge on that index, on filters or on fsmonitor. No
+  step inherits the hook's `GIT_*` repository overrides, so a test's scratch
+  `git init` cannot reinitialise the hooked repository. repository-policy's
+  `git-index-safety` executable and its snapshot, plan and admission code are
+  retired.
 - Doctests run only in Nix. The root workspace's `checks.doctests` producer and
   `doctests-gate` keep the bidirectional fence reconciliation, and `dev prepush`
   requests them as steps. `checks.tools-doctests` runs the `tools/` workspace's
@@ -86,7 +99,7 @@ front doors of [ADR-0241](../0241-performance-workflow-ownership.md), the
 span-mechanism constraint in milestone 33. Those workflows keep their names and
 arguments as `dev` subcommands.
 
-It also amends three decisions:
+It also amends these decisions:
 
 - [ADR-0095](../0095-doctest-gate-enumerates-the-fence-population.md)'s host
   half: `tools/` leaves the fence population. It has no doctests, so its plain
@@ -95,6 +108,12 @@ It also amends three decisions:
 - [ADR-0029](../0029-git-enforced-verify-gate.md)'s #1117 supplement: `prepush`
   no longer runs host `workspace-doctests`. It requests the Nix doctest producer
   and gate, so it is no longer free of Nix derivations.
+- [ADR-0029](../0029-git-enforced-verify-gate.md)'s #1079 and #1863 supplements:
+  the single-process index custody they describe is preserved, but it lives in
+  `dev` on the `git` CLI rather than in Rust, and it now reads the hook's index
+  (a temporary one included) rather than clearing the hook's overrides.
+- [ADR-0246](../0246-retire-xtask-devtool-endpoints.md)'s repository-policy
+  home: it no longer owns `git-index-safety`.
 - [ADR-0247](../0247-host-tool-json-report-contract.md)'s list of host tools:
   `doctest-check` and `test-local` are gone. `admit-inputs` and
   `csr-prerequisite` render no verdict report: a refusal is their exit status
