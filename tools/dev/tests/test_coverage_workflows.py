@@ -13,16 +13,16 @@ NIX_BUILD = "nix build -L --no-update-lock-file --no-write-lock-file"
 CARGO_RUN = "cargo run --locked --quiet --manifest-path tools/Cargo.toml"
 STEPS = {
     "coverage": [
-        f"{NIX_BUILD} --out-link .xtask/gcroots/coverage .#checks.x86_64-linux.coverage",
-        f"{NIX_BUILD} --no-link .#checks.x86_64-linux.coverage-gate",
+        f"{NIX_BUILD} --print-out-paths --out-link .xtask/gcroots/coverage .#checks.x86_64-linux.coverage",
+        f"{NIX_BUILD} --print-out-paths --no-link .#checks.x86_64-linux.coverage-gate",
         (
             f"{CARGO_RUN} -p coverage --features host --bin coverage-check -- "
             "policy --out .xtask/gcroots/coverage"
         ),
     ],
     "doctests": [
-        f"{NIX_BUILD} --out-link .xtask/gcroots/doctests .#checks.x86_64-linux.doctests",
-        f"{NIX_BUILD} --no-link .#checks.x86_64-linux.doctests-gate",
+        f"{NIX_BUILD} --print-out-paths --out-link .xtask/gcroots/doctests .#checks.x86_64-linux.doctests",
+        f"{NIX_BUILD} --print-out-paths --no-link .#checks.x86_64-linux.doctests-gate",
     ],
 }
 

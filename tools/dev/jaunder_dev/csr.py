@@ -11,9 +11,8 @@ from jaunder_dev import steps
 def build(profile: str) -> None:
     checkout = Path.cwd()
     release = profile == "release"
-    vite_tools = steps.text(
-        "csr-vite-node-modules",
-        ["nix", "build", ".#csr-vite-node-modules", "--no-link", "--print-out-paths"],
+    vite_tools = steps.nix_build(
+        "csr-vite-node-modules", ".#csr-vite-node-modules", keep=False
     )
     steps.run(
         "csr-wasm",

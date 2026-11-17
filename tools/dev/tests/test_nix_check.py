@@ -9,7 +9,7 @@ OUT = "/nix/store/0000-demo"
 EVAL = "nix eval --raw --accept-flake-config .#checks.x86_64-linux.demo.outPath\n"
 PATH_INFO = f"nix path-info --json --json-format 1 -- {OUT}\n"
 BUILD = (
-    "nix build -L --accept-flake-config --out-link .xtask/gcroots/demo"
+    "nix build -L --accept-flake-config --print-out-paths --out-link .xtask/gcroots/demo"
     " .#checks.x86_64-linux.demo\n"
 )
 
@@ -37,14 +37,15 @@ def test_nix_check_records_where_its_output_came_from(
     assert result.returncode == 0, result
     assert checkout.order() == order
     assert (checkout.root / ".xtask" / "gcroots").is_dir()
-    # Only the build's own streams reach the user; the probes' stay captured.
-    assert result.stdout == b"build-out\n"
+    # Only the build's log reaches the user; its printed output path is the
+    # caller's, and the probes' streams stay captured.
+    assert result.stdout == b""
     assert result.stderr == b"build-err\n"
     step = checkout.merged()["demo"]["args"]
     assert step["jaunder.cache"] == cache
     assert step["jaunder.status"] == "ok"
     assert step["process.command_line"] == (
-        "nix build -L --accept-flake-config --out-link .xtask/gcroots/demo"
+        "nix build -L --accept-flake-config --print-out-paths --out-link .xtask/gcroots/demo"
         " '.#checks.x86_64-linux.demo'"
     )
 
@@ -79,7 +80,7 @@ def test_failed_probe_records_no_cache_and_changes_nothing_else(
     )
 
     assert result.returncode == build_code
-    assert result.stdout == b"build-out\n"
+    assert result.stdout == b""
     assert result.stderr == b"build-err\n"
     step = checkout.merged()["demo"]["args"]
     assert step["jaunder.status"] == ("ok" if build_code == 0 else "failed")
@@ -122,7 +123,59 @@ def test_a_named_package_build_records_its_step_and_cache(checkout: Checkout) ->
     assert checkout.order() == (
         "nix eval --raw --accept-flake-config .#demo.outPath\n"
         + PATH_INFO
-        + "nix build -L --accept-flake-config --out-link .xtask/gcroots/bundle"
+        + "nix build -L --accept-flake-config --print-out-paths --out-link .xtask/gcroots/bundle"
         " .#demo\n"
     )
     assert checkout.merged()["bundle"]["args"]["jaunder.cache"] == "reused"
+
+
+def build(
+    checkout: Checkout, call: str, **extra: str
+) -> subprocess.CompletedProcess[bytes]:
+    """Runs `steps.nix_build(<call>)` as a gate's one step, printing its result."""
+    checkout.tool("nix", FAKE_NIX_STORE)
+    gate = (
+        "from pathlib import Path; from jaunder_dev import steps; "
+        'sys.exit(steps.gate(Path.cwd(), "dev demo", '
+        f"lambda: print(steps.nix_build({call}))))"
+    )
+    return checkout.run(launch(gate), checkout.environment(**extra))
+
+
+def test_a_build_returns_the_output_path_it_printed(checkout: Checkout) -> None:
+    result = build(checkout, '"vite", ".#vite", keep=False')
+    assert result.returncode == 0, result
+    assert result.stdout == b"build-out\n"
+    assert (
+        "nix build -L --accept-flake-config --print-out-paths --no-link .#vite"
+        in checkout.order().splitlines()
+    )
+    assert not (checkout.root / ".xtask" / "gcroots").exists()
+
+
+def test_a_known_output_is_probed_instead_of_evaluated(checkout: Checkout) -> None:
+    drv = "/nix/store/0000-demo.drv^out"
+    result = build(
+        checkout, f'"producer", "{drv}", flags=(), keep=False, output="{OUT}"'
+    )
+    assert result.returncode == 0, result
+    assert checkout.order() == (
+        PATH_INFO + f"nix build -L --print-out-paths --no-link {drv}\n" + PATH_INFO
+    )
+    assert checkout.merged()["producer"]["args"]["jaunder.cache"] == "substituted"
+
+
+def test_a_refused_output_fails_its_build_step_without_a_cache(
+    checkout: Checkout,
+) -> None:
+    result = build(
+        checkout,
+        '"producer", ".#demo", refusal=lambda path: f"refused {path}"',
+        NIX_VALID="1",
+    )
+    assert result.returncode == 1
+    assert result.stdout == b""
+    assert result.stderr == b"build-err\nrefused build-out\n"
+    step = checkout.merged()["producer"]["args"]
+    assert (step["jaunder.status"], step["process.exit.code"]) == ("failed", 1)
+    assert "jaunder.cache" not in step

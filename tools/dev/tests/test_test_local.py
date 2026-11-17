@@ -131,7 +131,7 @@ def nextest(checkout: Checkout) -> dict[str, Any]:
 
 
 BUNDLE_BUILD = (
-    "nix build -L --accept-flake-config --out-link .xtask/gcroots/csr-bundle "
+    "nix build -L --accept-flake-config --print-out-paths --out-link .xtask/gcroots/csr-bundle "
     ".#csrBundle"
 )
 PREREQUISITE = f"{CARGO_RUN} -p host-proof --bin csr-prerequisite --"

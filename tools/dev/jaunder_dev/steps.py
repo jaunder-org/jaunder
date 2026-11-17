@@ -366,29 +366,39 @@ def nix_build(
     installable: str,
     flags: Sequence[str] = NIX_FLAGS,
     keep: bool = True,
-) -> None:
-    """Builds one flake installable as the step `name`.
+    output: str | None = None,
+    refusal: Callable[[str], str | None] | None = None,
+) -> str:
+    """Builds one flake installable as the step `name`; returns its output path.
 
-    `keep` holds its output as the GC root GCROOTS/`name`. `flags` apply to the
+    `keep` holds the output as the GC root GCROOTS/`name`. `flags` apply to the
     build and to its probes alike. The step records `jaunder.cache` for the
     top-level output only: `reused` if it was already valid, else `built` or
-    `substituted`. A failed query records nothing rather than guess, and never
-    changes the step.
+    `substituted`. That output is `<installable>.outPath`, or `output` when the
+    caller knows it (a derivation installable has no attribute to evaluate). A
+    failed query records nothing rather than guess, and never changes the step.
+    `refusal`, if given, judges the output path as `text` judges its text.
     """
     if keep:
         Path(GCROOTS).mkdir(parents=True, exist_ok=True)
     link = ["--out-link", f"{GCROOTS}/{name}"] if keep else ["--no-link"]
-    argv = ["nix", "build", "-L", *flags, *link, installable]
+    argv = ["nix", "build", "-L", *flags, "--print-out-paths", *link, installable]
     with _step(name, argv) as span:
-        output: str | None
         try:
-            output = _query(
-                "nix", "eval", "--raw", *flags, f"{installable}.outPath"
-            ).decode()
+            if output is None:
+                output = _query(
+                    "nix", "eval", "--raw", *flags, f"{installable}.outPath"
+                ).decode()
             reused = _store_entry(output) is not None
         except _QueryFailed:
             output, reused = None, False
-        code, signalled, _ = _supervise(argv, capture=False)
+        code, signalled, printed = _supervise(argv, capture=True)
+        built = _shell_text(printed)
+        if refusal is not None and not code:
+            reason = refusal(built)
+            if reason is not None:
+                print(reason, file=sys.stderr, flush=True)
+                code = 1
         _record_outcome(span, code, signalled)
         if code == 0 and output is not None:
             with contextlib.suppress(_QueryFailed):
@@ -397,6 +407,7 @@ def nix_build(
                 )
     if code:
         raise StepFailed(code, signalled)
+    return built
 
 
 def nix_check(

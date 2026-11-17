@@ -1221,15 +1221,18 @@ host-proof writes its own spans into the same run. A step span records:
 - `jaunder.status`: `ok`, `failed`, `signalled`, or `incomplete` (set by the
   merge for a span with no end record or no parent, as when a child is killed);
 - `process.exit.code` and `process.command_line`, capped at 1 KiB;
-- `jaunder.cache`, for Nix check steps only.
+- `jaunder.cache`, for Nix build steps only: every Nix build `dev` runs as a
+  step. `scripts/e2e-workflow`'s own builds, inside its E2E steps, record none.
 
-`jaunder.cache` describes only the check's top-level output path, evaluated
-before the build: `reused` if that path was already valid, otherwise `built` if
-`nix path-info` marks it `ultimate` afterwards and `substituted` if not. It says
-nothing about the output's dependencies, and no other step records a cache
-value. Neither elapsed time nor a missing `cache` attribute proves a fresh
-build, substitution or newly executed Nix builder work. Nested or overlapping
-spans are not additive CPU or human effort and must not be summed as such.
+`jaunder.cache` describes only the build's top-level output path, evaluated
+before the build (or, for a derivation installable such as a performance
+producer, the output path its selection names): `reused` if that path was
+already valid, otherwise `built` if `nix path-info` marks it `ultimate`
+afterwards and `substituted` if not. It says nothing about the output's
+dependencies, and no other step records a cache value. Neither elapsed time nor
+a missing `cache` attribute proves a fresh build, substitution or newly executed
+Nix builder work. Nested or overlapping spans are not additive CPU or human
+effort and must not be summed as such.
 
 Every process appends span start and end records, one JSON object per line, to
 its own `<pid>-<random>.jsonl` file in `.xtask/run/<run_id>.trace.d/`; the

@@ -4549,23 +4549,24 @@ needs it; no source check guards against its return.
 
 Each gate and each step is an OpenTelemetry span. A step span carries its
 `jaunder.status` (`ok`, `failed`, `signalled`), `process.exit.code`, its command
-line capped at 1 KiB and, for Nix check steps only, `jaunder.cache`: `reused`
-when the check's top-level output path was already valid before the build,
-otherwise `built` or `substituted` by `nix path-info`'s `ultimate` flag. It
-describes only that top-level output. Child processes join through
-`TRACEPARENT`/`TRACESTATE` plus `JAUNDER_TRACE_DIR`; the root is the `dev`
-process that finds the latter unset. Every process, including host-proof through
-the Rust OpenTelemetry SDK, appends start and end span records to its own file
-in `.xtask/run/<run_id>.trace.d/`, in one format locked by a shared golden file.
-When the root ends it always merges them into `<run_id>.trace.json`, Chrome
-trace JSON that Perfetto opens, assigning tracks from the span tree and marking
-a span with no end or no parent `incomplete`.
-`dev trace summary [PATH] [--markdown]` reads a run's records locally or from a
-CI artifact; CI uploads `.xtask/run/` from every validation and E2E job and
-appends the summary to its step summary, diagnostically only. Spans go only to
-files, never OTLP, and tracing never changes a step's exit status or output.
-This replaces traced-run's custom span mechanism (`JAUNDER_TRACED_RUN_CONTEXT`,
-trace fragments and workflow folding). Product telemetry is unchanged.
+line capped at 1 KiB and, for Nix build steps only (every Nix build `dev` runs
+as a step), `jaunder.cache`: `reused` when the build's top-level output path was
+already valid before the build, otherwise `built` or `substituted` by
+`nix path-info`'s `ultimate` flag. It describes only that top-level output.
+Child processes join through `TRACEPARENT`/`TRACESTATE` plus
+`JAUNDER_TRACE_DIR`; the root is the `dev` process that finds the latter unset.
+Every process, including host-proof through the Rust OpenTelemetry SDK, appends
+start and end span records to its own file in `.xtask/run/<run_id>.trace.d/`, in
+one format locked by a shared golden file. When the root ends it always merges
+them into `<run_id>.trace.json`, Chrome trace JSON that Perfetto opens,
+assigning tracks from the span tree and marking a span with no end or no parent
+`incomplete`. `dev trace summary [PATH] [--markdown]` reads a run's records
+locally or from a CI artifact; CI uploads `.xtask/run/` from every validation
+and E2E job and appends the summary to its step summary, diagnostically only.
+Spans go only to files, never OTLP, and tracing never changes a step's exit
+status or output. This replaces traced-run's custom span mechanism
+(`JAUNDER_TRACED_RUN_CONTEXT`, trace fragments and workflow folding). Product
+telemetry is unchanged.
 
 The auxiliary repository-policy package owns the fixed documentation policies
 (`repository-docs`), fixed Rust/TypeScript source contracts and informational

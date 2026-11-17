@@ -28,9 +28,15 @@ SELECTION = {
     "browser": True,
     "count_overrides": {"posts": None, "authors": None, "revisions": None},
 }
-# The selector and the build of each producer; MODE injects one failure.
+# The selector, the store and the build of each producer; MODE injects one
+# failure. A producer's output is valid, built here, once it has been built.
 NIX = """\
 log = pathlib.Path(os.environ["PERF_LOG"])
+if sys.argv[1] == "path-info":
+    path = sys.argv[-1]
+    built = log.exists() and f"build:{pathlib.Path(path).name}" in log.read_text()
+    print(json.dumps({path: {"ultimate": True} if built else None}))
+    sys.exit(0)
 if sys.argv[1] == "eval":
     # The checkout is a git+file: flake, never a path: copy of .git and target/.
     assert 'builtins.getFlake ("git+file://" + toString ./.)' in sys.argv[-1], sys.argv
@@ -39,7 +45,7 @@ if sys.argv[1] == "eval":
     selection = json.loads(pathlib.Path(os.environ["PERF_SELECTION"]).read_text())
     print(json.dumps({**selection, "profile": parameters["profile"]}))
     sys.exit(0)
-assert sys.argv[1:4] == ["build", "--no-link", "--print-out-paths"], sys.argv
+assert sys.argv[1:5] == ["build", "-L", "--print-out-paths", "--no-link"], sys.argv
 name = pathlib.Path(sys.argv[-1].removesuffix("^out")).stem
 with log.open("a") as out:
     out.write(f"build:{name}\\n")
@@ -231,6 +237,17 @@ def test_a_later_producer_status_failure_keeps_evidence_and_stops(
         "build:performance-browser-sqlite-chromium",
         "validate:performance-browser-sqlite-chromium",
     ]
+
+
+def test_each_producer_build_is_a_step_with_its_cache_state(perf: Perf) -> None:
+    assert perf.run("success", "small").returncode == 0
+    slices = perf.checkout.merged()
+    for name, *_ in PRODUCERS:
+        step = slices[name]["args"]
+        assert step["process.command_line"] == (
+            f"nix build -L --print-out-paths --no-link '/fake/{name}.drv^out'"
+        )
+        assert (step["jaunder.status"], step["jaunder.cache"]) == ("ok", "built")
 
 
 def test_every_retained_producer_is_assembled_into_one_invocation(

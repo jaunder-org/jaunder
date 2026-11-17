@@ -81,7 +81,8 @@ INDEX_QUERIES = commands(
 # The shared docs request leaves flake.lock as committed.
 STATIC_DOCS = commands(
     "nix build -L --accept-flake-config --no-update-lock-file --no-write-lock-file "
-    "--out-link .xtask/gcroots/static-docs .#checks.x86_64-linux.static-docs"
+    "--print-out-paths --out-link .xtask/gcroots/static-docs "
+    ".#checks.x86_64-linux.static-docs"
 )[0]
 PREPUSH_DOCS = [*INDEX_QUERIES, STATIC_DOCS, *INDEX_QUERIES]
 
@@ -167,7 +168,7 @@ def host_tests() -> Commands:
 
 def nix(check: str) -> list[str]:
     return commands(
-        f"nix build -L --accept-flake-config --out-link .xtask/gcroots/{check} "
+        f"nix build -L --accept-flake-config --print-out-paths --out-link .xtask/gcroots/{check} "
         f".#checks.x86_64-linux.{check}"
     )[0]
 
@@ -196,7 +197,7 @@ STATIC = [
 CLEAN = commands("git status --porcelain --untracked-files=all")
 TEST_LOCAL = commands(
     f"{CARGO_RUN} -p host-proof --bin admit-inputs -- .#csrBundle.sourceAdmits",
-    "nix build -L --accept-flake-config --out-link .xtask/gcroots/csr-bundle "
+    "nix build -L --accept-flake-config --print-out-paths --out-link .xtask/gcroots/csr-bundle "
     ".#csrBundle",
     f"{CARGO_RUN} -p host-proof --bin csr-prerequisite -- .xtask/gcroots/csr-bundle",
     "cargo build --locked -p jaunder --bin jaunder",
@@ -205,7 +206,7 @@ TEST_LOCAL = commands(
 
 # The bundle is its own Nix step; the budget measures the output it linked.
 WASM_BUDGET = commands(
-    "nix build -L --accept-flake-config --out-link .xtask/gcroots/csr-bundle "
+    "nix build -L --accept-flake-config --print-out-paths --out-link .xtask/gcroots/csr-bundle "
     ".#csrBundle",
     f"{CARGO_RUN} -p host-proof --bin wasm-audit -- budget "
     "--site-path /nix/store/fake-csr-bundle",
@@ -216,8 +217,8 @@ E2E = [["bash", "scripts/e2e-workflow", "all", ""]]
 def producer_and_gate(check: str) -> Commands:
     flags = "nix build -L --no-update-lock-file --no-write-lock-file"
     return commands(
-        f"{flags} --out-link .xtask/gcroots/{check} .#checks.x86_64-linux.{check}",
-        f"{flags} --no-link .#checks.x86_64-linux.{check}-gate",
+        f"{flags} --print-out-paths --out-link .xtask/gcroots/{check} .#checks.x86_64-linux.{check}",
+        f"{flags} --print-out-paths --no-link .#checks.x86_64-linux.{check}-gate",
     )
 
 

@@ -42,7 +42,7 @@ def _compact(value: object) -> str:
 def _retain(run_root: Path, selected: dict[str, Any]) -> None:
     """Builds one selected producer and keeps a writable copy of its evidence."""
     name = str(selected["name"])
-    identity = selected["identity"]
+    identity = str(selected["identity"])
     backend = str(selected["backend"])
     kind = str(selected["producer"])
     browser = selected.get("browser") or ""
@@ -57,15 +57,14 @@ def _retain(run_root: Path, selected: dict[str, Any]) -> None:
             return f"Nix output lacks performance evidence for {name}: {output}"
         return None
 
-    output = steps.text(
+    # Without the flake's configuration, so its substituters stay out of a
+    # measurement run.
+    output = steps.nix_build(
         name,
-        [
-            "nix",
-            "build",
-            "--no-link",
-            "--print-out-paths",
-            str(selected["installable"]),
-        ],
+        str(selected["installable"]),
+        flags=(),
+        keep=False,
+        output=identity,
         refusal=refusal,
     )
     producer_root = run_root / "producers" / name

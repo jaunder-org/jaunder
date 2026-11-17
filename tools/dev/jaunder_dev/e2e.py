@@ -41,9 +41,7 @@ def regenerate_coverage() -> None:
 
 def reconcile(backend: str, artifacts: str) -> None:
     """Artifact-only reconciliation by this checkout's Nix-built verifier."""
-    verifier = steps.text(
-        "host-proof", ["nix", "build", "--no-link", "--print-out-paths", ".#host-proof"]
-    )
+    verifier = steps.nix_build("host-proof", ".#host-proof", keep=False)
     steps.run(
         "e2e-reconcile",
         [

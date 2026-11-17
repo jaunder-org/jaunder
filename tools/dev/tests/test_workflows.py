@@ -4,6 +4,7 @@ Expected commands are literal, not derived from `dev`'s own tables.
 """
 
 import json
+import shutil
 
 import pytest
 from conftest import Checkout, Workflow
@@ -264,6 +265,18 @@ def test_org_timezone_manifest_forwards_originals_without_bootstrap(
     assert (checkout.root / name).read_text() == text
 
 
+def store_nix(output: str) -> str:
+    """A fake `nix` whose every installable evaluates and builds to `output`,
+    already valid in its store."""
+    return (
+        "import json\n"
+        'if sys.argv[1] == "path-info":\n'
+        '    print(json.dumps({sys.argv[-1]: {"ultimate": False}}))\n'
+        "else:\n"
+        f"    print({output!r}, end='' if sys.argv[1] == 'eval' else '\\n')\n"
+    )
+
+
 def test_e2e_reconcile_runs_the_built_verifier_on_artifacts_only(
     checkout: Checkout,
 ) -> None:
@@ -275,7 +288,7 @@ def test_e2e_reconcile_runs_the_built_verifier_on_artifacts_only(
         'printf \'{"steps":[{"name":"reconcile","ok":true,"duration_ms":1}]}\'\n'
     )
     evidence.chmod(0o755)
-    checkout.tool("nix", f'print("{verifier}")')
+    checkout.tool("nix", store_nix(str(verifier)))
     for args, artifacts in [
         ([], ".xtask/diagnostics"),
         (["downloaded artifacts"], "downloaded artifacts"),
@@ -292,10 +305,11 @@ def test_e2e_reconcile_runs_the_built_verifier_on_artifacts_only(
             "--diagnostics-root",
             artifacts,
         ]
-    assert (
-        checkout.order().splitlines()
-        == ["nix build --no-link --print-out-paths .#host-proof"] * 2
-    )
+        assert checkout.merged()["host-proof"]["args"]["jaunder.cache"] == "reused"
+        shutil.rmtree(checkout.root / ".xtask" / "run")
+    assert [line for line in checkout.order().splitlines() if " build " in line] == [
+        "nix build -L --accept-flake-config --print-out-paths --no-link .#host-proof"
+    ] * 2
 
 
 STATIC_ALL = [
@@ -373,7 +387,7 @@ def test_build_csr_assembles_the_bundle_into_target_site(
     stale = checkout.root / "target" / "site" / "stale"
     stale.parent.mkdir(parents=True)
     stale.write_text("old")
-    checkout.tool("nix", 'print("/vite-tools")')
+    checkout.tool("nix", store_nix("/vite-tools"))
     checkout.tool("cargo", "")
     checkout.tool("bash", CSR_ASSETS)
     args = [profile] if profile == "release" else []
@@ -385,9 +399,19 @@ def test_build_csr_assembles_the_bundle_into_target_site(
         f"target/wasm32-unknown-unknown/{profile}/csr.wasm "
         f"{checkout.root}/public /vite-tools/node_modules"
     )
-    order = checkout.order().splitlines()
+    order = [
+        line
+        for line in checkout.order().splitlines()
+        if not line.startswith(("nix eval ", "nix path-info "))
+    ]
+    assert checkout.merged()["csr-vite-node-modules"]["args"]["jaunder.cache"] == (
+        "reused"
+    )
     assert order[:2] == [
-        "nix build .#csr-vite-node-modules --no-link --print-out-paths",
+        (
+            "nix build -L --accept-flake-config --print-out-paths --no-link "
+            ".#csr-vite-node-modules"
+        ),
         " ".join(
             [
                 "cargo",
