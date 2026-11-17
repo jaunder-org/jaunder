@@ -225,7 +225,7 @@ LEAVES = {
         "--workspace",
         "--all-targets",
         "--features",
-        "doctests/host,coverage/host",
+        "coverage/host",
     ),
     "prettier-markdown": _prettier("**/*.md"),
     "prettier-end2end": _prettier("end2end"),

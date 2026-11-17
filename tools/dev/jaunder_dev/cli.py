@@ -65,7 +65,7 @@ _workflow(
     "prepush",
     gates.prepush,
     "Clean tree; the host check groups in Verify mode, the auxiliary host "
-    "tests, test-local and the workspace doctests.",
+    "tests, test-local and the doctests producer and gate.",
 )
 _workflow(
     "validate-no-e2e",
@@ -123,9 +123,15 @@ _workflow(
 _workflow(
     "source-contracts",
     gates.source_contracts,
-    "ast-grep rules, every repository source-contract policy and the "
-    "doctest fence check.",
+    "ast-grep rules and every repository source-contract policy.",
 )
+
+
+@cli.command("nix-check")
+@click.argument("check")
+def nix_check(check: str) -> None:
+    """Build the flake check CHECK as one traced step with its cache state."""
+    _gate(lambda: steps.nix_check(check))
 
 
 @cli.command("format")
@@ -261,7 +267,7 @@ _forwarding(
 )
 for _binary, _summary in {
     "wasm-audit": "Bundle size diagnostics: report [--site-path P] "
-    "[--breakdown [--wasm F]] | budget.",
+    "[--breakdown [--wasm F]] | budget --site-path P.",
     "source-diagnostics": "Eval-only Nix guard: cache-safety-probe.",
     "trace-analysis": "Manual OTel trace diagnostics: analyze <files> | "
     "run [--single-worker] | boot-phases <files>.",

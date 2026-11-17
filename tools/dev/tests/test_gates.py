@@ -60,7 +60,7 @@ CLIPPY = [
     ),
     (
         "cargo clippy --manifest-path tools/Cargo.toml --workspace --all-targets "
-        "--features doctests/host,coverage/host -- -D warnings"
+        "--features coverage/host -- -D warnings"
     ),
 ]
 
@@ -112,9 +112,6 @@ def source_contracts() -> Commands:
             "web/src client/src",
         ),
         *map(source_contract, SOURCE_CONTRACTS),
-        *commands(
-            f"{CARGO_RUN} -p doctests --features host --bin doctest-check -- fences"
-        ),
     ]
 
 
@@ -145,7 +142,7 @@ def host(mode: str, shared_docs: bool = False) -> Commands:
 def host_tests() -> Commands:
     return commands(
         "cargo test --manifest-path tools/Cargo.toml --lib --bins --tests "
-        "--features doctests/host,coverage/host",
+        "--features coverage/host",
         "ruff format --check tools/dev",
         "ruff check tools/dev",
         "mypy --strict tools/dev",
@@ -178,13 +175,18 @@ STATIC = [
         "static-e2e-census",
         "static-ert",
         "dev-python",
+        "tools-doctests",
     ]
 ]
 CLEAN = commands("git status --porcelain --untracked-files=all")
 TEST_LOCAL = commands(f"{CARGO_RUN} -p host-proof --bin test-local --")
-WASM_BUDGET = commands(f"{CARGO_RUN} -p host-proof --bin wasm-audit -- budget")
-WORKSPACE_DOCTESTS = commands(
-    f"{CARGO_RUN} -p doctests --features host --bin doctest-check -- workspace"
+
+# The bundle is its own Nix step; the budget measures the output it linked.
+WASM_BUDGET = commands(
+    "nix build -L --accept-flake-config --out-link .xtask/gcroots/csrBundle "
+    ".#csrBundle",
+    f"{CARGO_RUN} -p host-proof --bin wasm-audit -- budget "
+    "--site-path /nix/store/fake-csrBundle",
 )
 E2E = [["bash", "scripts/e2e-workflow", "all", ""]]
 
@@ -218,7 +220,7 @@ PREPUSH = [
     *host("verify", PREPUSH_SHARES_DOCS),
     *host_tests(),
     *TEST_LOCAL,
-    *WORKSPACE_DOCTESTS,
+    *DOCTESTS,
 ]
 HOST_LANE = [*host("verify"), PLATFORM]
 HERMETIC = [*STATIC, *WASM_BUDGET]
@@ -425,15 +427,22 @@ def test_a_failing_gate_records_the_failed_step_and_status(
 
 
 def test_a_report_step_without_a_report_fails_closed(workflow: Workflow) -> None:
-    # Every Cargo tool prints the same non-report; only the doctest fence
-    # check is a report step, so it alone fails, with jq's status 5.
+    # Every Cargo tool prints the same non-report; in the hermetic lane only
+    # the wasm budget is a Cargo step, so it alone fails, with jq's status 5.
     workflow.checkout.tool("cargo", 'print("not a report")')
-    result = workflow.dev("source-contracts")
+    result = workflow.dev("ci-validate-hermetic")
     assert result.returncode == 5, result
-    assert result.stdout == b"not a report\n" * (len(SOURCE_CONTRACTS) + 1)
-    assert result.stderr == b"dev: doctest-fences: output is not a step report\n"
+    assert result.stdout == b"not a report\n"
+    assert result.stderr == b"dev: wasm-budget: output is not a step report\n"
     order = (workflow.root / "order").read_text().splitlines()
-    assert order[-1] == " ".join(source_contracts()[-1])
+    assert order == [" ".join(WASM_BUDGET[-1])]
+
+
+def test_the_wasm_budget_never_runs_without_its_bundle(workflow: Workflow) -> None:
+    result = workflow.dev("ci-validate-hermetic", failure=" ".join(WASM_BUDGET[0]))
+    assert result.returncode == 17
+    assert workflow.commands() == [*CLEAN, *STATIC, WASM_BUDGET[0]]
+    assert "wasm-budget" not in workflow.checkout.merged()
 
 
 @pytest.mark.parametrize("failure", ["", " ".join(TEST_LOCAL[0])])

@@ -7,6 +7,9 @@ let
 in
 {
   inherit cargoArtifacts;
+  # `cargo test --doc` over the workspace, sharing the dependency build.
+  docTest = overrides:
+    craneLib.cargoDocTest (buildArgs // overrides // { inherit cargoArtifacts; });
   buildPackage = overrides:
     craneLib.buildPackage (
       buildArgs

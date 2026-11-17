@@ -13,7 +13,7 @@ CLIPPY = {
     "wasm-clippy": "clippy -p web -p client -p csr --features csr "
     "--target wasm32-unknown-unknown -- -D warnings",
     "tools-clippy": "clippy --manifest-path tools/Cargo.toml --workspace "
-    "--all-targets --features doctests/host,coverage/host -- -D warnings",
+    "--all-targets --features coverage/host -- -D warnings",
 }
 # Each Cargo leaf's sandbox argv after `cargo --offline`, and its home.
 SANDBOX_CARGO = {

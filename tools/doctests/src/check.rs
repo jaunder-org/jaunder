@@ -331,7 +331,7 @@ pub fn problems(scanned: &[ScannedFile], output: &str) -> Vec<Violation> {
     }
 
     // run → tree. Only files we actually scanned are in scope: a run may legitimately
-    // report entries from paths outside this half's roots (the other half gates those).
+    // report entries from paths outside the scanned roots, which are not ours to judge.
     for ((run_path, line), _) in groups {
         let Some(path) = scanned_paths.get(run_path) else {
             continue;
@@ -682,9 +682,9 @@ mod tests {
     }
 
     #[test]
-    fn entries_from_files_this_half_did_not_scan_are_left_alone() {
-        // The workspace producer and the host step each reconcile their own roots;
-        // neither may claim the other's entries are orphans.
+    fn entries_from_files_outside_the_scan_are_left_alone() {
+        // Reconciliation judges only the roots it scanned; an entry from any
+        // other path is not its orphan.
         let out = "test a.rs - a::A (line 2) ... ok\ntest a.rs - a::A (line 7) - compile fail ... ok\ntest elsewhere/b.rs - b::B (line 3) ... ok\n";
         let v = problems(&[file("a.rs", "a.rs", OK_SRC)], out);
         assert!(v.is_empty(), "{v:?}");

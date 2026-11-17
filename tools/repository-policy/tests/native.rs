@@ -115,19 +115,29 @@ fn safety(root: &Path, operation: &str) -> Output {
     .output()
     .unwrap()
 }
-/// Stands in for `dev`: the safety owner must request exactly `workflow`,
-/// whose work in the checkout is `body`.
-fn host_workflow(root: &Path, workflow: &str, body: &str) {
+/// Stands in for `dev`: the safety owner may request only the listed
+/// commands, each of whose work in the checkout is its body.
+fn fake_dev(root: &Path, commands: &[(&str, &str)]) {
     let bin = root.join(HOST_BIN);
     fs::create_dir_all(&bin).unwrap();
     let dev = bin.join("dev");
+    let cases: String = commands
+        .iter()
+        .map(|(command, body)| format!("  '{command}')\n{body}\n    ;;\n"))
+        .collect();
     fs::write(
         &dev,
-        format!("#!/bin/sh\n[ \"$*\" = '{workflow}' ] || {{ printf 'unexpected dev %s\\n' \"$*\" >&2; exit 64; }}\n{body}\n"),
+        format!("#!/bin/sh\ncase \"$*\" in\n{cases}  *) printf 'unexpected dev %s\\n' \"$*\" >&2; exit 64 ;;\nesac\n"),
     )
     .unwrap();
     fs::set_permissions(dev, fs::Permissions::from_mode(0o755)).unwrap();
 }
+/// A `dev` that serves exactly one request, `workflow`.
+fn host_workflow(root: &Path, workflow: &str, body: &str) {
+    fake_dev(root, &[(workflow, body)]);
+}
+/// The request that builds the shared docs verdict.
+const STATIC_DOCS: &str = "nix-check static-docs";
 fn staged_fixture(policy: &str) -> tempfile::TempDir {
     let temp = checkout();
     let root = temp.path();
@@ -171,8 +181,8 @@ fn precommit_reconciles_staged_fixes_even_after_real_policy_failure() {
         b"M  guide.txt\n"
     );
     assert!(
-        !stderr.contains("nix-static-docs"),
-        "failed policy must skip Nix"
+        !stderr.contains(STATIC_DOCS),
+        "failed policy must skip the docs request"
     );
 }
 #[test]
@@ -209,7 +219,7 @@ fn precommit_preserves_host_failure_when_after_snapshot_query_fails() {
         "{stderr}"
     );
     assert_eq!(stderr.matches("precommit-staging:").count(), 1, "{stderr}");
-    assert!(!stderr.contains("nix-static-docs"), "{stderr}");
+    assert!(!stderr.contains(STATIC_DOCS), "{stderr}");
     assert_eq!(
         git(temp.path(), &["diff", "--cached", "--raw"]).stdout,
         index_before
@@ -317,32 +327,21 @@ fn precommit_never_stages_mixed_work_or_preexisting_untracked_files() {
 }
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
-fn staged_markdown_success_keeps_the_selected_docs_root_and_reconciles_once() {
+fn staged_markdown_success_requests_the_docs_verdict_and_reconciles_once() {
     let temp = staged_fixture("# ADR-0001: Choice\n- Status: accepted\n");
-    let shell = Command::new("bash")
-        .args(["-c", "printf %s \"$BASH\""])
-        .output()
-        .unwrap();
-    assert!(shell.status.success());
-    let shell = String::from_utf8(shell.stdout).unwrap();
-    let shell_root = Path::new(&shell).parent().unwrap().parent().unwrap();
-    fs::write(
-        temp.path().join("flake.nix"),
-        format!(
-            r#"{{ outputs = {{ self }}: {{ checks.x86_64-linux.static-docs = builtins.derivation {{
-      name = "repository-policy-docs-fixture"; system = "x86_64-linux";
-      builder = builtins.appendContext "{shell}" {{ "{shell_root}" = {{ path = true; }}; }};
-      args = [ "-c" "printf passed > $out" ];
-    }}; }}; }}"#,
-            shell_root = shell_root.display()
-        ),
-    )
-    .unwrap();
     let docs = env!("CARGO_BIN_EXE_repository-docs");
-    host_workflow(
+    fake_dev(
         temp.path(),
-        "precommit-markdown-host",
-        &format!("printf '# Formatted\\n' > guide.md\n'{docs}' adr-format"),
+        &[
+            (
+                "precommit-markdown-host",
+                &format!("printf '# Formatted\\n' > guide.md\n'{docs}' adr-format"),
+            ),
+            (
+                STATIC_DOCS,
+                "printf 'requested\\n' > .xtask/static-docs-request",
+            ),
+        ],
     );
     git(temp.path(), &["add", "."]);
     git(
@@ -371,8 +370,8 @@ fn staged_markdown_success_keeps_the_selected_docs_root_and_reconciles_once() {
         "{stderr}"
     );
     assert_eq!(
-        fs::read_to_string(temp.path().join(".xtask/gcroots/static-docs")).unwrap(),
-        "passed"
+        fs::read_to_string(temp.path().join(".xtask/static-docs-request")).unwrap(),
+        "requested\n"
     );
     assert_eq!(
         git(temp.path(), &["status", "--porcelain"]).stdout,
@@ -381,8 +380,13 @@ fn staged_markdown_success_keeps_the_selected_docs_root_and_reconciles_once() {
     assert!(!temp.path().join(".xtask/last-result.json").exists());
 }
 #[test]
-fn prepush_docs_retains_real_nix_failure_logs_and_runs_postcheck() {
+fn prepush_docs_retains_request_failure_logs_and_runs_postcheck() {
     let temp = staged_fixture("# ADR-0001: Choice\n- Status: accepted\n");
+    host_workflow(
+        temp.path(),
+        STATIC_DOCS,
+        "printf 'building static-docs\\n' >&2\nprintf 'error: fixture docs failure\\n  detail\\n' >&2\nexit 1",
+    );
     git(
         temp.path(),
         &[
@@ -396,7 +400,10 @@ fn prepush_docs_retains_real_nix_failure_logs_and_runs_postcheck() {
     let output = safety(temp.path(), "prepush-docs");
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("nix-static-docs exited"), "{stderr}");
+    assert!(
+        stderr.contains("`dev nix-check static-docs` exited"),
+        "{stderr}"
+    );
     assert!(
         stderr.contains("shared-static-docs-state: unchanged"),
         "{stderr}"
@@ -404,8 +411,8 @@ fn prepush_docs_retains_real_nix_failure_logs_and_runs_postcheck() {
     let diagnostics = temp.path().join(".xtask/diagnostics/static-docs");
     let log = fs::read_to_string(diagnostics.join("build.log")).unwrap();
     let excerpt = fs::read_to_string(diagnostics.join("failure-excerpt.log")).unwrap();
-    assert!(log.contains("error:"), "{log}");
-    assert!(excerpt.starts_with("error:"), "{excerpt}");
+    assert!(log.starts_with("building static-docs\n"), "{log}");
+    assert_eq!(excerpt, "error: fixture docs failure\n  detail\n");
     assert!(stderr.contains("scoped excerpt (read first)"));
     assert!(
         git(temp.path(), &["status", "--porcelain"])
@@ -413,10 +420,8 @@ fn prepush_docs_retains_real_nix_failure_logs_and_runs_postcheck() {
             .is_empty()
     );
 }
-#[cfg(unix)]
 #[test]
-fn prepush_docs_preserves_nix_failure_when_postrequest_query_fails() {
-    use std::os::unix::fs::PermissionsExt;
+fn prepush_docs_preserves_request_failure_when_postrequest_query_fails() {
     let temp = staged_fixture("# ADR-0001: Choice\n- Status: accepted\n");
     git(
         temp.path(),
@@ -429,22 +434,14 @@ fn prepush_docs_preserves_nix_failure_when_postrequest_query_fails() {
         ],
     );
     let index_before = git(temp.path(), &["diff", "--cached", "--raw"]).stdout;
-    let programs = tempfile::tempdir().unwrap();
-    let nix = programs.path().join("nix");
     // Fail the external request and its subsequent real Git query independently.
-    fs::write(&nix, "#!/bin/sh\nprintf 'request mutation\\n' > guide.txt\nmv .git .xtask/parked-git\nprintf 'gitdir: missing-fixture-git\\n' > .git\nprintf 'error: original request failure\\n' >&2\nexit 19\n").unwrap();
-    fs::set_permissions(&nix, fs::Permissions::from_mode(0o755)).unwrap();
-    let mut path = vec![programs.path().to_path_buf()];
-    path.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+    host_workflow(
+        temp.path(),
+        STATIC_DOCS,
+        "printf 'request mutation\\n' > guide.txt\nmv .git .xtask/parked-git\nprintf 'gitdir: missing-fixture-git\\n' > .git\nprintf 'error: original request failure\\n' >&2\nexit 19",
+    );
 
-    let output = isolated(
-        Command::new(env!("CARGO_BIN_EXE_git-index-safety"))
-            .arg("prepush-docs")
-            .current_dir(temp.path())
-            .env("PATH", std::env::join_paths(path).unwrap()),
-    )
-    .output()
-    .unwrap();
+    let output = safety(temp.path(), "prepush-docs");
     fs::remove_file(temp.path().join(".git")).unwrap();
     fs::rename(
         temp.path().join(".xtask/parked-git"),
@@ -456,7 +453,7 @@ fn prepush_docs_preserves_nix_failure_when_postrequest_query_fails() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("original request failure"), "{stderr}");
     assert!(
-        stderr.contains("nix-static-docs exited exit status: 19"),
+        stderr.contains("`dev nix-check static-docs` exited exit status: 19"),
         "{stderr}"
     );
     assert!(
@@ -481,10 +478,8 @@ fn prepush_docs_preserves_nix_failure_when_postrequest_query_fails() {
         b" M guide.txt\n"
     );
 }
-#[cfg(unix)]
 #[test]
 fn failed_docs_request_cannot_hide_postrequest_mutation_or_restage_it() {
-    use std::os::unix::fs::PermissionsExt;
     for (mutation, expected) in [
         ("printf changed > late.md", "?? late.md\n"),
         (
@@ -512,21 +507,15 @@ fn failed_docs_request_cannot_hide_postrequest_mutation_or_restage_it() {
                 "staged fixture",
             ],
         );
-        let programs = tempfile::tempdir().unwrap();
-        let nix = programs.path().join("nix");
         // Fault only the external request; Git still observes the real fixture.
-        fs::write(&nix, format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > .xtask/request-args\n{mutation}\nprintf 'error: fixture request failed\\n' >&2\nexit 19\n")).unwrap();
-        fs::set_permissions(&nix, fs::Permissions::from_mode(0o755)).unwrap();
-        let mut path = vec![programs.path().to_path_buf()];
-        path.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
-        let output = isolated(
-            Command::new(env!("CARGO_BIN_EXE_git-index-safety"))
-                .arg("prepush-docs")
-                .current_dir(temp.path())
-                .env("PATH", std::env::join_paths(path).unwrap()),
-        )
-        .output()
-        .unwrap();
+        host_workflow(
+            temp.path(),
+            STATIC_DOCS,
+            &format!(
+                "printf '%s\\n' \"$@\" > .xtask/request-args\n{mutation}\nprintf 'error: fixture request failed\\n' >&2\nexit 19"
+            ),
+        );
+        let output = safety(temp.path(), "prepush-docs");
         assert_eq!(output.status.code(), Some(1));
         let stderr = String::from_utf8(output.stderr).unwrap();
         assert!(stderr.contains("exit status: 19"), "{mutation}: {stderr}");
@@ -541,7 +530,7 @@ fn failed_docs_request_cannot_hide_postrequest_mutation_or_restage_it() {
         );
         assert_eq!(
             fs::read_to_string(temp.path().join(".xtask/request-args")).unwrap(),
-            "build\n-L\n--keep-failed\n--log-lines\n50\n--accept-flake-config\n--no-update-lock-file\n--no-write-lock-file\n--out-link\n.xtask/gcroots/static-docs\n.#checks.x86_64-linux.static-docs\n"
+            "nix-check\nstatic-docs\n"
         );
     }
 }

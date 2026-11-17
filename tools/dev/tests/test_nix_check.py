@@ -1,9 +1,9 @@
-"""The internal Nix-check step: its build, status and `jaunder.cache` value."""
+"""`dev nix-check`: one flake check as a step, its status and `jaunder.cache`."""
 
 import subprocess
 
 import pytest
-from conftest import FAKE_NIX_STORE, NIX_GATE, Checkout, launch
+from conftest import FAKE_NIX_STORE, Checkout, launch
 
 OUT = "/nix/store/0000-demo"
 EVAL = "nix eval --raw --accept-flake-config .#checks.x86_64-linux.demo.outPath\n"
@@ -16,7 +16,9 @@ BUILD = (
 
 def nix_check(checkout: Checkout, **extra: str) -> subprocess.CompletedProcess[bytes]:
     checkout.tool("nix", FAKE_NIX_STORE)
-    return checkout.run(launch(NIX_GATE), checkout.environment(**extra))
+    return checkout.run(
+        checkout.command("nix-check", "demo"), checkout.environment(**extra)
+    )
 
 
 @pytest.mark.parametrize(
@@ -97,3 +99,30 @@ def test_steps_that_cannot_use_a_cache_record_none(checkout: Checkout) -> None:
     checkout.tool("tsc", "")
     assert checkout.dev("static", "tsc", "--sandbox").returncode == 0
     assert "jaunder.cache" not in checkout.merged()["tsc"]["args"]
+
+
+@pytest.mark.parametrize("args", [[], ["demo", "extra"]])
+def test_nix_check_takes_exactly_one_check(checkout: Checkout, args: list[str]) -> None:
+    checkout.tool("nix", FAKE_NIX_STORE)
+    result = checkout.dev("nix-check", *args)
+    assert result.returncode == 2, result
+    assert checkout.order() == ""
+    assert checkout.runs() == []
+
+
+def test_a_named_package_build_records_its_step_and_cache(checkout: Checkout) -> None:
+    checkout.tool("nix", FAKE_NIX_STORE)
+    gate = (
+        "from pathlib import Path; from jaunder_dev import steps; "
+        'sys.exit(steps.gate(Path.cwd(), "dev demo", '
+        'lambda: steps.nix_build("bundle", ".#demo")))'
+    )
+    result = checkout.run(launch(gate), checkout.environment(NIX_VALID="1"))
+    assert result.returncode == 0, result
+    assert checkout.order() == (
+        "nix eval --raw --accept-flake-config .#demo.outPath\n"
+        + PATH_INFO
+        + "nix build -L --accept-flake-config --out-link .xtask/gcroots/bundle"
+        " .#demo\n"
+    )
+    assert checkout.merged()["bundle"]["args"]["jaunder.cache"] == "reused"

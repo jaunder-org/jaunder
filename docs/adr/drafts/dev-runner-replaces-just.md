@@ -53,6 +53,21 @@ Tracing never changes a step's exit status or output. traced-run keeps only its
 output-parking runner; its launcher, span, recorder and workflow-folding code is
 retired.
 
+Work a gate performs is a visible `dev` step, not hidden inside a tool
+([#1962](https://github.com/jaunder-org/jaunder/issues/1962)):
+
+- The wasm budget builds `.#csrBundle` as its own Nix step, with its cache
+  state, and passes that output to `wasm-audit budget --site-path`. The budget
+  requires the path and never runs Nix itself.
+- Every Nix check `dev` requests goes through one definition of its build flags.
+  `git-index-safety` keeps sole custody of the Git index, but requests the
+  shared docs verdict as `dev nix-check static-docs`.
+- Doctests run only in Nix. The root workspace's `checks.doctests` producer and
+  `doctests-gate` keep the bidirectional fence reconciliation, and `dev prepush`
+  requests them as steps. `checks.tools-doctests` runs the `tools/` workspace's
+  `cargo test --doc` without reconciliation. The host `doctest-fences` and
+  `workspace-doctests` steps and the `doctest-check` executable are retired.
+
 This supersedes the Just-ownership parts of ADR-0237, ADR-0238, ADR-0239 and
 ADR-0240, the `just perf`, `just perf-compare` and `just perf-import-baseline`
 front doors of [ADR-0241](../0241-performance-workflow-ownership.md), the
@@ -60,6 +75,18 @@ front doors of [ADR-0241](../0241-performance-workflow-ownership.md), the
 [ADR-0244](../0244-standalone-ux-sandbox-lifecycle.md), and the traced-run
 span-mechanism constraint in milestone 33. Those workflows keep their names and
 arguments as `dev` subcommands.
+
+It also amends three decisions:
+
+- [ADR-0095](../0095-doctest-gate-enumerates-the-fence-population.md)'s host
+  half: `tools/` leaves the fence population. It has no doctests, so its plain
+  Nix doctest run proves what reconciliation would. Only the root workspace is
+  reconciled, as before.
+- [ADR-0029](../0029-git-enforced-verify-gate.md)'s #1117 supplement: `prepush`
+  no longer runs host `workspace-doctests`. It requests the Nix doctest producer
+  and gate, so it is no longer free of Nix derivations.
+- [ADR-0247](../0247-host-tool-json-report-contract.md)'s list of host tools:
+  `doctest-check` is gone.
 
 ## Consequences
 
@@ -75,3 +102,8 @@ arguments as `dev` subcommands.
 - No source check guards against Just's return. Just is in no Nix input, so the
   gates passing proves that nothing needs it.
 - Adding OTLP export later is a configuration choice, not a redesign.
+- Pre-push builds the root doctest producer in Nix. A reused output is cheap,
+  but a changed root source rebuilds it.
+- Members the tools source carries only as placeholders (`repository-policy`,
+  `qualification`, `host-proof`) contribute no doctests to `tools-doctests`. A
+  doctest added there would not run.

@@ -14,24 +14,22 @@
 //! - [`check`] holds the rules (the closed fence vocabulary, the companion rule)
 //!   and the bidirectional reconciliation between those two populations.
 //! - [`status`] is the sentinel the Nix producer writes and the gate consumes.
-//! - [`roots`] is the one home for the scan roots, shared by both consumers.
+//! - [`roots`] is the one home for the scan roots.
 //!
-//! # The two halves of the run
+//! # The population
 //!
-//! The population does not fit one invocation. `devtool doctests emit` runs
-//! `cargo test --workspace --doc` inside the Nix producer and reconciles the root
-//! workspace; the host-side `doctest-fences` xtask step covers `xtask/` and
-//! `tools/`, which the flake `src` filter and the workspace boundary respectively
-//! put out of reach. Each reconciles only its own roots, and [`roots::ALL`] is
-//! asserted to cover every tracked `.rs` file — the only check that can catch a
-//! crate belonging to neither half.
+//! `devtool doctests emit` runs `cargo test --workspace --doc` inside the Nix
+//! producer and reconciles the root workspace's roots, [`roots::WORKSPACE`].
+//! The separate `tools/` workspace is deliberately outside the fence population:
+//! it has no doctests, and `checks.tools-doctests` runs its `cargo test --doc`
+//! without reconciliation. The roots module asserts that every tracked `.rs`
+//! file has exactly one owner — the only check that can catch a crate that
+//! belongs to neither.
 
 pub mod check;
 pub mod fence;
 #[cfg(test)]
 mod harness;
-#[cfg(feature = "host")]
-pub mod host;
 pub mod libtest;
 pub mod roots;
 pub mod status;

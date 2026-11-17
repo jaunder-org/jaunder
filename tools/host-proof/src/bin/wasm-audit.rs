@@ -1,7 +1,7 @@
 //! `wasm-audit` — frontend WASM/JS bundle size (raw, gzip, brotli) from the
-//! manifest-selected identity assets of deterministic `nix build .#csrBundle`,
-//! and the `budget` gate that reads the same measurement (#836). Prints one JSON
-//! report on stdout; tables ride in `report`, measurements in `evidence`.
+//! manifest-selected identity assets of a `.#csrBundle` output, and the `budget`
+//! gate that reads the same measurement (#836). Prints one JSON report on
+//! stdout; tables ride in `report`, measurements in `evidence`.
 
 use clap::{Parser, Subcommand};
 use host_proof::audit_wasm;
@@ -39,8 +39,12 @@ enum Command {
         wasm: Option<String>,
     },
     /// Fail when the manifest-selected WASM identity artifact exceeds the
-    /// committed ceiling.
-    Budget,
+    /// committed ceiling. The caller builds the bundle; this never runs Nix.
+    Budget {
+        /// The built CSR bundle root to measure.
+        #[arg(long)]
+        site_path: String,
+    },
 }
 
 fn main() {
@@ -68,7 +72,9 @@ fn main() {
         }
         Command::Report { site_path, .. } => {
             result = CommandResult::new("audit-wasm");
-            let step = match audit_wasm::run(site_path.as_deref()) {
+            let step = match audit_wasm::resolve_site_path(site_path.as_deref())
+                .and_then(|site_path| audit_wasm::run(&site_path))
+            {
                 Ok(report) => {
                     result.report = Some(audit_wasm::render_table(&report));
                     result.evidence = serde_json::to_value(&report).ok();
@@ -79,9 +85,9 @@ fn main() {
             };
             result.push(step);
         }
-        Command::Budget => {
+        Command::Budget { site_path } => {
             result = CommandResult::new("wasm-budget");
-            host_proof::steps::wasm_budget::run(&mut result);
+            host_proof::steps::wasm_budget::run(&mut result, &site_path);
         }
     }
     if let Some(step) = result.steps.last_mut() {
@@ -97,7 +103,7 @@ mod tests {
     use clap::Parser;
 
     #[test]
-    fn wasm_file_requires_breakdown_and_budget_parses() {
+    fn wasm_file_requires_breakdown_and_budget_requires_a_site_path() {
         assert!(Cli::try_parse_from(["wasm-audit", "report", "--wasm", "x.wasm"]).is_err());
         assert!(matches!(
             Cli::try_parse_from(["wasm-audit", "report", "--breakdown", "--wasm", "x.wasm"])
@@ -108,11 +114,12 @@ mod tests {
                 ..
             }
         ));
+        assert!(Cli::try_parse_from(["wasm-audit", "budget"]).is_err());
         assert!(matches!(
-            Cli::try_parse_from(["wasm-audit", "budget"])
+            Cli::try_parse_from(["wasm-audit", "budget", "--site-path", "/nix/store/x"])
                 .unwrap()
                 .command,
-            Command::Budget
+            Command::Budget { site_path } if site_path == "/nix/store/x"
         ));
     }
 }

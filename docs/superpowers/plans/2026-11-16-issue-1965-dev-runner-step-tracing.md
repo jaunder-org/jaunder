@@ -256,7 +256,7 @@ Review deliverable C covers the switch, the removal and the proof.
     - the Rust coverage gate passes with no lowered threshold. If it drops, add
       Rust unit tests.
     - the `rg` guard is clean
-- [ ] **Task 7a: deliverable C review fixes.**
+- [x] **Task 7a: deliverable C review fixes.**
   - Add ADR-0241 (`just perf*`) and ADR-0244 (`just sandbox`) to the ADR draft's
     supersedes list and to its ARCHITECTURE projection. Fix the stale 0241 line
     at `ARCHITECTURE.md:149-155`.
@@ -269,12 +269,12 @@ Review deliverable C covers the switch, the removal and the proof.
   - Upload `.xtask/run/` and add the trace summary step in `performance.yml`,
     and note the artifact layout in `observability.md`.
   - Verification: the pre-commit gate passes.
-- [ ] **Task 7b: #1959 and #1960.** As the spec says: delete `devtool check`;
+- [x] **Task 7b: #1959 and #1960.** As the spec says: delete `devtool check`;
       `dev static ert` runs directly from `all` and from `static-ert`; delete
       the `code` group; keep `all` and document its purpose.
   - Verification: `nix build .#checks.x86_64-linux.static-ert` passes, and so do
     the pre-commit gate and `dev static-all`.
-- [ ] **Task 7c: #1962.**
+- [x] **Task 7c: #1962.**
   - The `csrBundle` step plus `wasm-audit budget --site-path`.
   - Doctests: add a `tools-doctests` `craneLib.cargoDocTest` check, and add it
     to `dev`'s Nix static checks. Prepush uses a `doctests-gate` Nix-check step.

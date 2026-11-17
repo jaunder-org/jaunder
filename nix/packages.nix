@@ -413,7 +413,6 @@ let
       # sandboxed library builds never compile them, so they must not invalidate.
       && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/coverage/src/host/" path)
       && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/coverage/tests/" path)
-      && path != "${toString (craneLib.path ../.)}/tools/doctests/src/host.rs"
       && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/doctests/tests/" path)
       && (
         (pkgs.lib.hasSuffix ".sql" path)
@@ -817,7 +816,6 @@ let
       && !(pkgs.lib.hasPrefix "tools/host-proof/" relative && relative != "tools/host-proof/Cargo.toml")
       && !(pkgs.lib.hasPrefix "tools/coverage/src/host/" relative)
       && !(pkgs.lib.hasPrefix "tools/coverage/tests/" relative)
-      && relative != "tools/doctests/src/host.rs"
       && !(pkgs.lib.hasPrefix "tools/doctests/tests/" relative)
       && craneLib.filterCargoSources path type
     );
@@ -1586,6 +1584,7 @@ in
       diagnosticBaselineCsrWasmBundle
       testSupportBin
       devtoolBin
+      toolsBuild
       tracedRunBin
       devBin
       devShim

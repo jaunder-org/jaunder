@@ -1001,15 +1001,11 @@ name = "doctests"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "clap",
- "host-tool",
  "proc-macro2",
- "repository-policy",
  "serde",
  "serde_json",
  "syn 2.0.119",
  "tempfile",
- "xshell",
 ]
 
 [[package]]

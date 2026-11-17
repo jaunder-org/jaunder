@@ -15,7 +15,6 @@ from jaunder_dev import e2e, report, static, steps
 from jaunder_dev.checkout import clean_tree
 from jaunder_dev.commands import (
     COVERAGE_CHECK,
-    DOCTEST_CHECK,
     HOST_PROOF,
     NIX_LOCK_FLAGS,
     REPOSITORY_POLICY,
@@ -76,6 +75,7 @@ STATIC_CHECKS = (
     "static-e2e-census",
     "static-ert",
     "dev-python",
+    "tools-doctests",
 )
 
 
@@ -179,7 +179,6 @@ def source_contracts() -> None:
     static.run("no-full-reload", Mode.VERIFY)
     for name in SOURCE_CONTRACTS:
         source_contract(name)
-    steps.run("doctest-fences", [*DOCTEST_CHECK, "fences"], report.render)
 
 
 def tsc(mode: Mode) -> None:
@@ -226,7 +225,7 @@ def host_tests() -> None:
             "--bins",
             "--tests",
             "--features",
-            "doctests/host,coverage/host",
+            "coverage/host",
         ],
     )
     steps.run("ruff-format", ["ruff", "format", "--check", "tools/dev"])
@@ -241,10 +240,6 @@ def test_local(nextest_args: tuple[str, ...] = ()) -> None:
         [*HOST_PROOF, "test-local", "--", *nextest_args],
         report.render,
     )
-
-
-def workspace_doctests() -> None:
-    steps.run("workspace-doctests", [*DOCTEST_CHECK, "workspace"], report.render)
 
 
 def platform_contract() -> None:
@@ -266,7 +261,14 @@ def static_checks() -> None:
 
 
 def wasm_budget() -> None:
-    steps.run("wasm-budget", [*HOST_PROOF, "wasm-audit", "--", "budget"], report.render)
+    """Builds the CSR bundle as its own step, then measures that output."""
+    steps.nix_build("csrBundle", ".#csrBundle")
+    bundle = (Path(steps.GCROOTS) / "csrBundle").resolve()
+    steps.run(
+        "wasm-budget",
+        [*HOST_PROOF, "wasm-audit", "--", "budget", "--site-path", str(bundle)],
+        report.render,
+    )
 
 
 def wasm_tests() -> None:
@@ -319,7 +321,7 @@ def prepush() -> None:
     host(Mode.VERIFY, Docs.PREPUSH)
     host_tests()
     test_local()
-    workspace_doctests()
+    doctests_workflow()
 
 
 def validate_no_e2e() -> None:

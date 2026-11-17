@@ -304,7 +304,7 @@ STATIC_ALL = [
     ),
     words(
         "cargo clippy --manifest-path tools/Cargo.toml --workspace --all-targets "
-        "--features doctests/host,coverage/host -- -D warnings"
+        "--features coverage/host -- -D warnings"
     ),
     words("emacs --batch -Q -l elisp/scripts/run-tests.el"),
 ]

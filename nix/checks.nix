@@ -26,6 +26,7 @@ let
     jaunderBin
     testSupportBin
     devtoolBin
+    toolsBuild
     devBin
     devPythonCheck
     devCheckSrc
@@ -3515,6 +3516,12 @@ dev-python = nonSubstitutable (
       touch $out
     ''
 );
+# The tools workspace's doctests, run plainly over the tools source and its
+# shared dependency build. `tools/` has no doctests and sits outside the
+# ADR-0095 fence population, so nothing is reconciled here; members the tools
+# source carries only as placeholders (repository-policy, qualification,
+# host-proof) contribute no doctests.
+tools-doctests = toolsBuild.docTest { pname = "jaunder-tools-doctests"; };
 # Standalone pure ERT verdict. The combined pure/live coverage producer is separate.
 static-ert =
   let

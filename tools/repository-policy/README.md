@@ -26,11 +26,12 @@ boundary.
 Exit 0 is success and 1 is a policy/safety/request failure. Invalid argv
 exits 2. Checkout/source admission retains the caller boundary: precommit exits
 1; repository-docs and prepush-docs exit 2. Required failures remain failures.
-The docs request retains its GC root under `.xtask/gcroots/static-docs`, live
-stderr and `.xtask/diagnostics/static-docs/build.log`; on failure, a
-successfully captured log also produces `failure-excerpt.log`. Diagnostic-write
-failures warn without hiding the primary verdict. There is no workflow report or
-snapshot protocol.
+The docs request runs `dev nix-check static-docs`, which keeps its GC root under
+`.xtask/gcroots/static-docs` and records it as a traced step with its cache
+state. The request keeps live stderr and
+`.xtask/diagnostics/static-docs/build.log`; on failure, a successfully captured
+log also produces `failure-excerpt.log`. Diagnostic-write failures warn without
+hiding the primary verdict. There is no workflow report or snapshot protocol.
 
 The Git and numbered-ADR algorithms are shared with retained xtask consumers,
 not copied into a second parser. Remaining policies and workflows are not yet

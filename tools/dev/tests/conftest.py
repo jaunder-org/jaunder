@@ -46,12 +46,6 @@ def require(present: bool, prerequisite: str) -> None:
 # child inherits the caller's environment unchanged.
 LAUNCH = "import sys; sys.path.insert(0, sys.argv.pop(1)); "
 DEV = "from jaunder_dev.__main__ import main; main()"
-# No public command runs a Nix check yet, so a gate is driven exactly as a
-# `dev` subcommand would drive it.
-NIX_GATE = (
-    "from pathlib import Path; from jaunder_dev import steps; "
-    'sys.exit(steps.gate(Path.cwd(), "dev nix", lambda: steps.nix_check("demo")))'
-)
 
 
 def launch(code: str, *args: str) -> list[str]:
@@ -169,7 +163,8 @@ class Checkout:
 # host tool that reports prints a minimal report with no steps. Fake Git
 # refuses inherited repository overrides with 23, answers checkout discovery
 # from the real Git, and reports a dirty tree while `dirty-status` exists.
-# Nix cache probes fail, so Nix steps record no cache source.
+# Nix cache probes fail, so Nix steps record no cache source; a build's
+# out-link points at a fake store path named after the link.
 FAKE = r"""#!/bin/sh
 name=${0##*/}
 if [ "$name" = git ]; then
@@ -190,6 +185,15 @@ esac
 if [ "$name" = cargo ]; then
     printf '%s\n' "${RUSTC_WRAPPER-unset}" "${CARGO_INCREMENTAL-unset}" "${SCCACHE_BASEDIRS-unset}" > cache-env
     printf '%s\n' "${CARGO_HOME-unset}" "${CARGO_NET_OFFLINE-unset}" > cargo-env
+fi
+if [ "$name $1" = "nix build" ]; then
+    previous=
+    for argument in "$@"; do
+        if [ "$previous" = --out-link ]; then
+            ln -sfn "/nix/store/fake-${argument##*/}" "$argument"
+        fi
+        previous=$argument
+    done
 fi
 printf '%s\037' "$name" "$@" >> "$FAKE_LOG"
 printf '\036' >> "$FAKE_LOG"
@@ -219,7 +223,7 @@ if [ "$name $*" = "${FAIL_COMMAND-}" ]; then
     exit 17
 fi
 case "$name $*" in
-  'cargo run '*' -p host-proof --bin '*|'cargo run '*' --bin doctest-check '*|'cargo run '*' --bin coverage-check '*|'bash scripts/e2e-workflow producer '*)
+  'cargo run '*' -p host-proof --bin '*|'cargo run '*' --bin coverage-check '*|'bash scripts/e2e-workflow producer '*)
     printf '{"steps":[]}\n' ;;
 esac
 """

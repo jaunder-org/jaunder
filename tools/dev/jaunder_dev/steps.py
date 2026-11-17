@@ -33,8 +33,10 @@ _HANDLED = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
 # Changes to one step's environment; None unsets a name.
 Environment = Mapping[str, str | None]
 
-# The output-holding GC roots of Nix checks, under the checkout root.
+# The output-holding GC roots of Nix builds, under the checkout root.
 GCROOTS = ".xtask/gcroots"
+# The flags a Nix build takes unless its caller names others.
+NIX_FLAGS = ("--accept-flake-config",)
 
 
 def changed(base: Mapping[str, str], changes: Environment | None) -> dict[str, str]:
@@ -317,24 +319,25 @@ def _built_source(output: str) -> Cache:
     return Cache.BUILT if entry.get("ultimate") else Cache.SUBSTITUTED
 
 
-def nix_check(
-    check: str,
-    flags: Sequence[str] = ("--accept-flake-config",),
+def nix_build(
+    name: str,
+    installable: str,
+    flags: Sequence[str] = NIX_FLAGS,
     keep: bool = True,
 ) -> None:
-    """Builds one flake check; `keep` holds its output as a GC root in GCROOTS.
+    """Builds one flake installable as the step `name`.
 
-    `flags` apply to the build and to its probes alike. The step records
-    `jaunder.cache` for the check's top-level output only: `reused` if it was
-    already valid, else `built` or `substituted`. A failed query records
-    nothing rather than guess, and never changes the step.
+    `keep` holds its output as the GC root GCROOTS/`name`. `flags` apply to the
+    build and to its probes alike. The step records `jaunder.cache` for the
+    top-level output only: `reused` if it was already valid, else `built` or
+    `substituted`. A failed query records nothing rather than guess, and never
+    changes the step.
     """
-    installable = f".#checks.x86_64-linux.{check}"
     if keep:
         Path(GCROOTS).mkdir(parents=True, exist_ok=True)
-    link = ["--out-link", f"{GCROOTS}/{check}"] if keep else ["--no-link"]
+    link = ["--out-link", f"{GCROOTS}/{name}"] if keep else ["--no-link"]
     argv = ["nix", "build", "-L", *flags, *link, installable]
-    with _step(check, argv) as span:
+    with _step(name, argv) as span:
         output: str | None
         try:
             output = _query(
@@ -352,3 +355,12 @@ def nix_check(
                 )
     if code:
         raise StepFailed(code, signalled)
+
+
+def nix_check(
+    check: str,
+    flags: Sequence[str] = NIX_FLAGS,
+    keep: bool = True,
+) -> None:
+    """Builds one flake check as `nix_build` does, as the step `check`."""
+    nix_build(check, f".#checks.x86_64-linux.{check}", flags, keep)

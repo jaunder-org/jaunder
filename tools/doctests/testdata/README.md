@@ -29,7 +29,7 @@ matches this repo's other fixture trees, which are never `.rs` either.
 
 **Shrink vector 4** — a crate outside every scan root — is structural and cannot
 be shown in a fixture crate: it is the absence of a root, not a property of one.
-It is covered instead by the scan-root coverage assertion over `roots::ALL`.
+It is covered instead by the source-ownership census in `roots.rs`.
 
 **The macro half of the ordering claim** — that `#[str_newtype(no_ord)]` and
 `secret` actually suppress ordering, while an un-suppressed newtype orders — is

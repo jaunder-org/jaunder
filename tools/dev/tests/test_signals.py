@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 import pytest
-from conftest import NIX_GATE, Checkout, launch
+from conftest import Checkout
 
 # The fake check announces readiness, then waits to be signalled or released.
 WAIT = """\
@@ -117,7 +117,7 @@ def test_a_signal_while_no_step_runs_closes_the_gate_as_signalled(
         '    pathlib.Path("ready").touch()\n'
         "    time.sleep(30)\n",
     )
-    dev = checkout.spawn(launch(NIX_GATE))
+    dev = checkout.popen("nix-check", "demo")
     wait_for(checkout.root / "ready")
     dev.send_signal(sent)
     _, stderr = dev.communicate(timeout=30)
@@ -126,7 +126,7 @@ def test_a_signal_while_no_step_runs_closes_the_gate_as_signalled(
     assert stderr == b""
     assert "nix build" not in checkout.order()
     slices = checkout.merged()
-    for name in ("dev nix", "demo"):
+    for name in ("dev nix-check", "demo"):
         assert slices[name]["args"]["jaunder.status"] == "signalled"
         assert slices[name]["args"]["process.exit.code"] == 128 + sent
 

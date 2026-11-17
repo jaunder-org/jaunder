@@ -205,25 +205,27 @@ reconciliation are followed by admission (no remaining unstaged or nonignored
 untracked changes, and raw worktree/index blob identity for every tracked
 Markdown, `.prettierrc.json`, `.prettierignore`, and `tools/dev/` source input
 consumed by `static-docs`, excluding `.claude`) and then the ordinary Git-backed
-`.#checks.x86_64-linux.static-docs` request with lock update/write disabled. A
+request `dev nix-check static-docs`, which builds the check with `dev`'s single
+definition of Nix flags and records it as a traced step with its cache state. A
 post-request status/index check fails on tracked, staged, or nonignored
-untracked mutation without restaging. Admission or host/staging failure skips
-Nix; Nix failure remains the hook verdict and is preserved if the post-check
-also fails. Other platforms and the broad route retain host-only behavior.
-Bypass with `SKIP_PRE_COMMIT=1 git commit` for WIP.
+untracked mutation (including a rewritten `flake.lock`) without restaging.
+Admission or host/staging failure skips the request; request failure remains the
+hook verdict and is preserved if the post-check also fails. Other platforms and
+the broad route retain host-only behavior. Bypass with
+`SKIP_PRE_COMMIT=1 git commit` for WIP.
 
 **`pre-push`** runs `dev prepush`: the fast verify-only host/static surface,
 existing auxiliary `tools` non-doc tests, host-native product Rust tests, and
-`workspace-doctests` after the product tests. `workspace-doctests` executes
-`cargo test --workspace --doc` and the same bidirectional root-workspace fence
-reconciliation as the Nix doctest gate. The hook has the same clean-tree refusal
-as `validate`. On `x86_64-linux`, only the host `prettier-markdown` Verify at
-its existing position is replaced with the same lock-write-disabled
-`static-docs` Nix leaf. Before the request, the clean consumer also checks
-raw/index identity for the complete tracked Markdown and formatter-config input
-population; afterward it verifies Git state stayed unchanged. Other checks
-retain their order, and other platforms keep host Markdown Verify. Bypass with
-`SKIP_PRE_PUSH=1 git push` for WIP.
+then the Nix `doctests` producer and `doctests-gate` as `dev` Nix-check steps.
+The producer runs `cargo test --workspace --doc` with the bidirectional
+root-workspace fence reconciliation (ADR-0095); there is no host doctest run.
+The hook has the same clean-tree refusal as `validate`. On `x86_64-linux`, only
+the host `prettier-markdown` Verify at its existing position is replaced with
+the same `static-docs` Nix leaf, requested through `dev nix-check`. Before the
+request, the clean consumer also checks raw/index identity for the complete
+tracked Markdown and formatter-config input population; afterward it verifies
+Git state stayed unchanged. Other checks retain their order, and other platforms
+keep host Markdown Verify. Bypass with `SKIP_PRE_PUSH=1 git push` for WIP.
 
 Run `dev tsc` for the single-command TypeScript workflow, including after `cd`
 to another worktree in an existing devShell. Nix's shared setup executable links
@@ -834,13 +836,13 @@ source, so any edit there rebuilds them. The Rust host commands are
 concern-owned executables in the `tools` workspace — `repository-policy`
 (`repository-docs`, `source-contracts`, `git-index-safety`), `host-proof`
 (`test-local`, `e2e-local`, `e2e-evidence`, `trace-analysis`, `wasm-audit`,
-`source-diagnostics`), `coverage` (`coverage-check`, nondefault `host` feature),
-`doctests` (`doctest-check`, nondefault `host` feature) and `qualification`
-(`qualification-host`). `dev` runs them with locked Cargo from the active
-checkout; CI's E2E verifier and the production-baseline workflows use their Nix
-outputs (`packages.host-proof`, `nix run .#qualification-host`). Host tools run
-only on the host, never inside derivations. Runtime paths belong to the active
-checkout, not the tool's store build directory.
+`source-diagnostics`), `coverage` (`coverage-check`, nondefault `host` feature)
+and `qualification` (`qualification-host`). `dev` runs them with locked Cargo
+from the active checkout; CI's E2E verifier and the production-baseline
+workflows use their Nix outputs (`packages.host-proof`,
+`nix run .#qualification-host`). Host tools run only on the host, never inside
+derivations. Runtime paths belong to the active checkout, not the tool's store
+build directory.
 
 Each host tool prints exactly one JSON report on stdout (`host_tool::report`:
 `command`, `ok`, `duration_ms`,
@@ -850,15 +852,14 @@ argument parser points fd 1 at stderr and reserves the real stdout for that
 report, so child output goes to stderr; the exit status is the verdict. `dev`
 renders the human view from that report (`tools/dev/jaunder_dev/report.py`);
 output that is not a report fails the step. There is no `--json` flag,
-`.xtask/last-result.json` sidecar or completion sentinel. Host doctest execution
-and Elisp artifact lifting remain alongside their substantive
-reconciliation/consumer algorithms (`doctest-check workspace`,
-`coverage-check elisp-consume`). The E2E workflow now owns authoritative output
-selection and trace/snapshot verification; the temporary `server-fn-flow` bridge
-is retired, while the independent static `server-fn-coverage` leaf remains.
-Verification's ordinary clean-tree admission is direct `dev`/Git; raw/index docs
-admission, post-request checks and precommit reconciliation remain distinct Rust
-safety operations.
+`.xtask/last-result.json` sidecar or completion sentinel. Elisp artifact lifting
+remains alongside its consumer algorithm (`coverage-check elisp-consume`);
+doctests run only in Nix (`checks.doctests`, `checks.tools-doctests`). The E2E
+workflow now owns authoritative output selection and trace/snapshot
+verification; the temporary `server-fn-flow` bridge is retired, while the
+independent static `server-fn-coverage` leaf remains. Verification's ordinary
+clean-tree admission is direct `dev`/Git; raw/index docs admission, post-request
+checks and precommit reconciliation remain distinct Rust safety operations.
 
 New, nonignored tooling inputs must be included in the Git-backed flake snapshot
 (`git add` or `git add -N`) before normal invocation. The Nix source declaration
@@ -870,11 +871,11 @@ evidence: that requires the Nix-selected executable and harness described in
 [production baseline](docs/production-baseline.md).
 
 Host-side steps cover static checks, clippy, the standalone `tools` workspace,
-and day-to-day root-workspace Rust tests. `prepush` adds the host
-`workspace-doctests` verdict; it remains a fast local gate rather than an alias
-for hermetic `dev validate-no-e2e`. Nix static proof, coverage/CRAP, wasm
-browser tests, Elisp coverage, the wasm budget, and e2e retain their stated
-hermetic or full-validate authorities.
+and day-to-day root-workspace Rust tests. `prepush` adds the Nix doctest
+producer and gate; it remains a fast local gate rather than an alias for
+hermetic `dev validate-no-e2e`. Nix static proof, coverage/CRAP, wasm browser
+tests, Elisp coverage, the wasm budget, and e2e retain their stated hermetic or
+full-validate authorities.
 
 #### Hermetic Rust coverage evidence
 
@@ -895,13 +896,14 @@ producers or validate producer status. The Nix gate rejects missing, invalid, or
 non-success status before policy runs. A missing, malformed, or empty text
 report, or a report with zero executable lines, is rejected rather than reported
 green. Validation and CI call these clean-gated public workflows. Fix-mode
-`dev check` instead uses the existing internal `doctests-workflow`, preserving
-its dirty-tree formatting behavior and full doctest producer/gate population
-without applying public `dev doctests` clean-tree admission. Doctests and the
-auxiliary `tools` workspace retain their separate test authorities outside this
-root-workspace nextest population. The Rust gate aggregates are retired; the
-four `dev ci-validate-*` commands compose the public workflows while preserving
-independent lane verdicts.
+`dev check` and `dev prepush` instead use the internal doctests workflow, the
+same producer/gate population without the public `dev doctests` clean-tree
+admission: `check` keeps its dirty-tree formatting behavior, and `prepush` has
+already refused a dirty tree. Doctests and the auxiliary `tools` workspace
+retain their separate test authorities outside this root-workspace nextest
+population. The Rust gate aggregates are retired; the four `dev ci-validate-*`
+commands compose the public workflows while preserving independent lane
+verdicts.
 
 Within the host/local gate, health checks are ordered for fast, actionable
 feedback: clean/staged-tree preconditions first, source-format and generated-doc
@@ -932,30 +934,31 @@ diagnostic/integration commands, `dev prepush` through the push hook, and
 CI/`dev validate-no-e2e` when hermetic confidence is the question. Focused
 `test-local` is an accelerator, not a certification gate.
 
-| Command               | Runs                                                                                                                                                | Formatting    |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| `dev check-no-test`   | the host check groups (below) in Fix mode + auxiliary host tests                                                                                    | auto-fixes    |
-| `dev check`           | adds `test-local`, Nix `wasm-tests` and `doctests`/`doctests-gate`                                                                                  | auto-fixes    |
-| `dev precommit`       | focused Git/index safety owner selects Markdown or broad Fix checks, reconciles once, and conditionally verifies shared docs                        | auto-fixes    |
-| `dev prepush`         | clean tree; Verify host/static + auxiliary tests + `test-local` + `workspace-doctests`; x86_64-linux uses shared `static-docs` at the Markdown slot | never mutates |
-| `dev validate-no-e2e` | clean tree; Verify host/static, Nix static proof, wasm budget/tests, Rust coverage/CRAP, doctests, and authoritative Elisp producer/consumer        | never mutates |
-| `dev validate`        | adds two Chromium and six Firefox E2E lanes, reconciliation, and final authoritative SQLite/Chromium server-function flow verification              | never mutates |
+| Command               | Runs                                                                                                                                                                                                 | Formatting    |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| `dev check-no-test`   | the host check groups (below) in Fix mode + auxiliary host tests                                                                                                                                     | auto-fixes    |
+| `dev check`           | adds `test-local`, Nix `wasm-tests` and `doctests`/`doctests-gate`                                                                                                                                   | auto-fixes    |
+| `dev precommit`       | focused Git/index safety owner selects Markdown or broad Fix checks, reconciles once, and conditionally verifies shared docs                                                                         | auto-fixes    |
+| `dev prepush`         | clean tree; Verify host/static + auxiliary tests + `test-local` + Nix `doctests`/`doctests-gate`; x86_64-linux uses shared `static-docs` at the Markdown slot                                        | never mutates |
+| `dev validate-no-e2e` | clean tree; Verify host/static, Nix static proof (with `tools-doctests`), the `csrBundle` build and wasm budget, wasm tests, Rust coverage/CRAP, doctests, and authoritative Elisp producer/consumer | never mutates |
+| `dev validate`        | adds two Chromium and six Firefox E2E lanes, reconciliation, and final authoritative SQLite/Chromium server-function flow verification                                                               | never mutates |
 
 The host check surface that `check-no-test`, `prepush`, `validate-no-e2e` and
 `ci-validate-host` share is five public groups, run in this order and stopping
 at the first failure. Each can be run on its own to re-check one kind of
 failure; `mode` is `verify` (the default) or `fix`:
 
-| Group                       | Runs                                                                                                   |
-| --------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `dev format [mode]`         | Rust/tools `cargo fmt`, `leptosfmt`, Prettier Markdown/`end2end`/CSS, Elisp formatting                 |
-| `dev docs-shape`            | documentation sequence, ADR format and README/view parity, doc links, flow docs                        |
-| `dev source-contracts`      | ast-grep rule tests and `no-full-reload`, every repository source-contract policy, doctest fence check |
-| `dev compile-checks [mode]` | `tsc`, `cargo-deny`, the six Clippy units                                                              |
-| `dev elisp-checks [mode]`   | Elisp byte-compilation and ERT                                                                         |
+| Group                       | Runs                                                                                   |
+| --------------------------- | -------------------------------------------------------------------------------------- |
+| `dev format [mode]`         | Rust/tools `cargo fmt`, `leptosfmt`, Prettier Markdown/`end2end`/CSS, Elisp formatting |
+| `dev docs-shape`            | documentation sequence, ADR format and README/view parity, doc links, flow docs        |
+| `dev source-contracts`      | ast-grep rule tests and `no-full-reload`, every repository source-contract policy      |
+| `dev compile-checks [mode]` | `tsc`, `cargo-deny`, the six Clippy units                                              |
+| `dev elisp-checks [mode]`   | Elisp byte-compilation and ERT                                                         |
 
 `dev source-contract <name>` runs one source-contract policy, such as
-`dev source-contract html-sink`.
+`dev source-contract html-sink`. `dev nix-check <name>` builds one flake check,
+such as `dev nix-check static-docs`, as a traced step with its cache state.
 
 The CI host lane captures filesystem capacity/inodes, memory/swap and allocated
 bytes for checkout-owned Cargo targets before validation. It does not traverse
@@ -977,22 +980,23 @@ The fast local lane and `dev validate-no-e2e` do not run the same tests in
 different environments. They have the following explicit authority split
 ([ADR-0029](docs/adr/0029-git-enforced-verify-gate.md), #1117 supplement):
 
-| `dev validate-no-e2e` surface                            | `prepush` coverage                                                                                                 | Authority / rationale                                                                                                                                                              |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Verify-only host/static surface                          | Runs the same host surface except `x86_64-linux` replaces only `prettier-markdown` Verify with `static-docs`.      | Prepush provides the Markdown leaf verdict; other Nix static proof remains authoritative for the sandboxed offline environment.                                                    |
-| Auxiliary `tools` non-doc tests                          | Runs once.                                                                                                         | The host tests are the applicable verdict; they are outside the application coverage/Nix test gates.                                                                               |
-| Host-native product Rust tests                           | Runs `test-local`.                                                                                                 | The host-native product verdict is cheap and cache-friendly.                                                                                                                       |
-| Root-workspace doctests and fence reconciliation         | Runs `workspace-doctests`: `cargo test --workspace --doc` plus the same bidirectional root-workspace fence census. | Prepush is authoritative for host-toolchain example execution and reconciliation; Nix `doctests`/`doctests-gate` remains authoritative for the pinned sandbox/offline environment. |
-| Nix static proof                                         | Only the shared `static-docs` leaf runs on `x86_64-linux`; other static derivations do not.                        | The leaf shares the docs formatting verdict; other static definitions still require the sandboxed offline environment.                                                             |
-| Rust coverage/CRAP                                       | Does not run.                                                                                                      | Instrumentation and SQLite/PostgreSQL backend parity are part of the verdict.                                                                                                      |
-| Wasm browser tests                                       | Does not run.                                                                                                      | The verdict exercises wasm browser primitives unavailable to a cheap host lane.                                                                                                    |
-| Elisp coverage                                           | Does not run.                                                                                                      | The coverage VM is the authoritative execution environment.                                                                                                                        |
-| Wasm budget                                              | Does not run.                                                                                                      | The verdict is defined by the Nix-built artifact's size semantics.                                                                                                                 |
-| Server-function flow verification (full `validate` only) | Does not run.                                                                                                      | This is an e2e/full-validate responsibility outside the `dev validate-no-e2e` comparator.                                                                                          |
+| `dev validate-no-e2e` surface                            | `prepush` coverage                                                                                            | Authority / rationale                                                                                                                                                    |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Verify-only host/static surface                          | Runs the same host surface except `x86_64-linux` replaces only `prettier-markdown` Verify with `static-docs`. | Prepush provides the Markdown leaf verdict; other Nix static proof remains authoritative for the sandboxed offline environment.                                          |
+| Auxiliary `tools` non-doc tests                          | Runs once.                                                                                                    | The host tests are the applicable verdict; they are outside the application coverage/Nix test gates.                                                                     |
+| Host-native product Rust tests                           | Runs `test-local`.                                                                                            | The host-native product verdict is cheap and cache-friendly.                                                                                                             |
+| Root-workspace doctests and fence reconciliation         | Runs the Nix `doctests` producer and `doctests-gate`.                                                         | The same sandboxed verdict validation requests; there is no host doctest run.                                                                                            |
+| Nix static proof, including `tools-doctests`             | Only the shared `static-docs` leaf runs on `x86_64-linux`; other static derivations do not.                   | The leaf shares the docs formatting verdict; other static definitions still require the sandboxed offline environment.                                                   |
+| Rust coverage/CRAP                                       | Does not run.                                                                                                 | Instrumentation and SQLite/PostgreSQL backend parity are part of the verdict.                                                                                            |
+| Wasm browser tests                                       | Does not run.                                                                                                 | The verdict exercises wasm browser primitives unavailable to a cheap host lane.                                                                                          |
+| Elisp coverage                                           | Does not run.                                                                                                 | The coverage VM is the authoritative execution environment.                                                                                                              |
+| Wasm budget                                              | Does not run.                                                                                                 | The verdict is defined by the Nix-built artifact's size semantics: `dev` builds `.#csrBundle` as its own step and passes that output to `wasm-audit budget --site-path`. |
+| Server-function flow verification (full `validate` only) | Does not run.                                                                                                 | This is an e2e/full-validate responsibility outside the `dev validate-no-e2e` comparator.                                                                                |
 
-`workspace-doctests` and the Nix doctest producer/gate reconcile the same
-root-workspace fence population in both directions; neither path may silently
-shrink it. Only the Nix path establishes the pinned sandbox/offline verdict.
+The Nix doctest producer/gate is the only execution of the root-workspace
+doctests and reconciles their fence population in both directions; it may not
+silently shrink it. `prepush`, `check` and validation all request that same
+derivation.
 
 Shared command definitions are not automatically shared verification verdicts.
 The family decisions below retain useful sharing without replacing distinct
@@ -1017,9 +1021,9 @@ selected consumers, inputs and populations in detail:
   remain outside product coverage; lint compilation is not behavioral proof.
   Host cargo-deny includes advisories; sandbox mode intentionally checks only
   offline bans, licenses and sources (ADR-0145).
-- **Doctests:** retain host and hermetic execution of the root fence population
-  plus separate auxiliary doctests. Shared bidirectional reconciliation prevents
-  population loss; it does not erase the offline execution boundary.
+- **Doctests:** execute the root fence population only in the hermetic producer,
+  whose bidirectional reconciliation prevents population loss, plus the
+  separate, unreconciled `tools-doctests` run of the tools workspace.
 - **Rust coverage/CRAP:** retain the instrumented SQLite/PostgreSQL producer,
   hard status gate and host source-aware policy. A host test pass or a produced
   report alone cannot replace that verdict chain.
@@ -1424,7 +1428,9 @@ baseline.
   request does not promise a gate-generated excerpt.
 
 - **WASM Audit**: Use `dev wasm-audit report` to measure the size of the
-  frontend WASM and JS bundles from the deterministic Nix build.
+  frontend WASM and JS bundles from the deterministic Nix build. The budget gate
+  never builds: `dev` realizes `.#csrBundle` as its own step, then runs
+  `wasm-audit budget --site-path <that output>`, which requires the path.
 
   ```bash
   dev wasm-audit report
@@ -1676,14 +1682,14 @@ Test paths follow the nested module path to the test name. A shallow file yields
 
 ### Doctests and the fence vocabulary
 
-`cargo nextest` structurally cannot run doctests. `workspace-doctests` runs the
-root workspace on the host during `prepush`; the Nix `doctests`/`doctests-gate`
-producer/consumer remains the sandbox/offline authority for that same root
-population. The host-side `doctest-fences` step (`doctest-check fences`) covers
-`tools`, whose doctests remain outside that Nix population. Each applicable path
-reads rustdoc fences with `syn` and **reconciles** its population against what
+`cargo nextest` structurally cannot run doctests. The Nix
+`doctests`/`doctests-gate` producer/consumer runs the root workspace's doctests
+(`dev prepush`, `dev check`, `dev doctests` and validation all request it). It
+reads rustdoc fences with `syn` and **reconciles** that population against what
 the runner reported, in both directions. A fence that exists but never ran is a
-failure, and so is a reported doctest the scanner did not find.
+failure, and so is a reported doctest the scanner did not find. `tools/` is
+deliberately outside the fence population: it has no doctests, and the separate
+`checks.tools-doctests` runs its `cargo test --doc` without reconciliation.
 
 Run them directly with `cargo test --workspace --doc`. Use `--workspace`, never
 `-p`: package scoping silently drops the `#[cfg(feature = "sanitize")]` fences
@@ -2186,12 +2192,13 @@ server-function coverage verification to `dev validate-no-e2e`.
   with the sandbox `dev` package, existing `emacsForCi`, Git and timezone
   inputs. The separate combined pure/live coverage producer below is unchanged.
   Hermetic validation requests `static-docs`, `static-typescript`,
-  `rust-format`, `static-code`, `static-elisp`, `static-e2e-census`, and
-  `static-ert`, in that order. The ERT leaf is non-substitutable but may reuse a
-  valid local output. ERT and TSC are traced like every other `dev` step; the
-  old devtool timing events are retired. No new Nix child-timing collector is
-  introduced. Retained logs are never timing inputs; Nix request duration and
-  output reuse do not prove fresh builder execution.
+  `rust-format`, `static-code`, `static-elisp`, `static-e2e-census`,
+  `static-ert`, `dev-python` and `tools-doctests`, in that order. The ERT leaf
+  is non-substitutable but may reuse a valid local output. ERT and TSC are
+  traced like every other `dev` step; the old devtool timing events are retired.
+  No new Nix child-timing collector is introduced. Retained logs are never
+  timing inputs; Nix request duration and output reuse do not prove fresh
+  builder execution.
 - `checks.x86_64-linux.wasm-tests` — `wasm-bindgen-test` cases executed in
   headless Nix-store Chromium through the matching Nix-store chromedriver. This
   is behavioral pass/fail execution for irreducible browser code, not wasm line
@@ -2209,6 +2216,10 @@ server-function coverage verification to `dev validate-no-e2e`.
   markers with non-empty trimmed reasons.
 - `checks.x86_64-linux.doctests` and `.doctests-gate` — the root workspace's
   doctests and the fence reconciliation over them
+- `checks.x86_64-linux.tools-doctests` — a plain `craneLib.cargoDocTest` of the
+  tools workspace over its shared tools source and dependency build, without
+  fence reconciliation; members that source carries only as placeholders
+  (`repository-policy`, `qualification`, `host-proof`) contribute none
 - `checks.x86_64-linux.e2e-{sqlite,postgres}-chromium-unsplit` — one unsplit
   Chromium Playwright lane per backend
 - `checks.x86_64-linux.e2e-{sqlite,postgres}-firefox-ordinary-{1,2}-of-2` — two

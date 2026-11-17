@@ -81,23 +81,11 @@ pub fn static_docs(dir: &Path, require_clean: bool) -> Result<()> {
     }
 }
 
+/// Builds the shared docs verdict through `dev nix-check`, the single definition
+/// of how a Nix check is built and traced.
 fn request_static_docs(dir: &Path) -> Result<()> {
-    std::fs::create_dir_all(dir.join(".xtask/gcroots"))
-        .context("creating static-docs root directory")?;
-    let mut command = Command::new("nix");
-    command.current_dir(dir).args([
-        "build",
-        "-L",
-        "--keep-failed",
-        "--log-lines",
-        "50",
-        "--accept-flake-config",
-        "--no-update-lock-file",
-        "--no-write-lock-file",
-        "--out-link",
-        ".xtask/gcroots/static-docs",
-        ".#checks.x86_64-linux.static-docs",
-    ]);
+    let mut command = Command::new("dev");
+    command.current_dir(dir).args(["nix-check", "static-docs"]);
     for name in [
         "GIT_DIR",
         "GIT_WORK_TREE",
@@ -108,8 +96,7 @@ fn request_static_docs(dir: &Path) -> Result<()> {
     ] {
         command.env_remove(name);
     }
-    // The docs leaf keeps its live stderr and caller-owned diagnostic log without
-    // the host workflow's generic Nix report or VM-artifact rescue machinery.
+    // The docs request keeps its live stderr and a caller-owned diagnostic log.
     let diagnostics = dir.join(".xtask/diagnostics/static-docs");
     let log_path = diagnostics.join("build.log");
     let mut log = std::fs::create_dir_all(&diagnostics).and_then(|()| File::create(&log_path));
@@ -117,11 +104,11 @@ fn request_static_docs(dir: &Path) -> Result<()> {
     let mut child = command
         .stderr(Stdio::piped())
         .spawn()
-        .context("nix-static-docs request")?;
+        .context("could not run `dev nix-check static-docs`")?;
     let mut stderr = child
         .stderr
         .take()
-        .context("nix-static-docs stderr pipe unavailable")?;
+        .context("static-docs request stderr pipe unavailable")?;
     let mut primary_failed = false;
     let mut buffer = [0; 8192];
     loop {
@@ -141,7 +128,9 @@ fn request_static_docs(dir: &Path) -> Result<()> {
         }
     }
     drop(stderr);
-    let status = child.wait().context("waiting for nix-static-docs")?;
+    let status = child
+        .wait()
+        .context("waiting for `dev nix-check static-docs`")?;
     drop(log);
     if !status.success() && !diagnostic_failed {
         match std::fs::read_to_string(&log_path) {
@@ -157,7 +146,7 @@ fn request_static_docs(dir: &Path) -> Result<()> {
                 let excerpt_path = diagnostics.join("failure-excerpt.log");
                 if std::fs::write(&excerpt_path, format!("{excerpt}\n")).is_ok() {
                     eprintln!(
-                        "nix-static-docs: scoped excerpt (read first): {}; full build log: {}",
+                        "static-docs: scoped excerpt (read first): {}; full build log: {}",
                         excerpt_path.display(),
                         log_path.display()
                     );
@@ -175,8 +164,11 @@ fn request_static_docs(dir: &Path) -> Result<()> {
     }
     anyhow::ensure!(
         !primary_failed,
-        "failed to stream nix-static-docs stderr (child exited {status})"
+        "failed to stream the static-docs request's stderr (child exited {status})"
     );
-    anyhow::ensure!(status.success(), "nix-static-docs exited {status}");
+    anyhow::ensure!(
+        status.success(),
+        "`dev nix-check static-docs` exited {status}"
+    );
     Ok(())
 }

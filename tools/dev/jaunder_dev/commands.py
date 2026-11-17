@@ -17,16 +17,6 @@ CARGO_RUN = (
 REPOSITORY_POLICY = (*CARGO_RUN, "-p", "repository-policy", "--bin")
 SOURCE_CONTRACT = (*REPOSITORY_POLICY, "source-contracts", "--")
 HOST_PROOF = (*CARGO_RUN, "-p", "host-proof", "--bin")
-DOCTEST_CHECK = (
-    *CARGO_RUN,
-    "-p",
-    "doctests",
-    "--features",
-    "host",
-    "--bin",
-    "doctest-check",
-    "--",
-)
 COVERAGE_CHECK = (
     *CARGO_RUN,
     "-p",
