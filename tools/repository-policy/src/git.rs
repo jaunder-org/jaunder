@@ -1,5 +1,7 @@
-//! Git helpers for the verify gate: working-tree cleanliness (the `validate`
-//! backstop) and self-healing `core.hooksPath` installation.
+//! Git helpers shared by the tools: a `git -C` that hook overrides cannot
+//! redirect, tracked-file and config queries, and the `core.hooksPath`
+//! installation of checkout admission. Index custody is `dev`'s
+//! (`tools/dev/jaunder_dev/index.py`), not this module's.
 
 use std::path::Path;
 use std::process::Command;
@@ -30,14 +32,6 @@ pub fn at(dir: &Path) -> Command {
     cmd
 }
 
-/// True when `git status --porcelain` output denotes a dirty tree. Porcelain lists
-/// staged + unstaged tracked changes AND untracked non-gitignored files (`??`), and
-/// omits gitignored paths — exactly the surface the Nix coverage source picks up.
-/// Any non-blank line means dirty.
-pub fn porcelain_is_dirty(porcelain: &str) -> bool {
-    porcelain.lines().any(|line| !line.trim().is_empty())
-}
-
 /// Whether `core.hooksPath` needs (re)pointing at [`HOOKS_PATH`], given its current
 /// value (`None` = unset).
 pub fn needs_hooks_path(current: Option<&str>) -> bool {
@@ -45,11 +39,6 @@ pub fn needs_hooks_path(current: Option<&str>) -> bool {
         Some(value) => value.trim() != HOOKS_PATH,
         None => true,
     }
-}
-
-/// `git status --porcelain` text. Errors only if git itself cannot run.
-pub fn working_tree_status(dir: &Path) -> Result<String> {
-    output(dir, &["status", "--porcelain"])
 }
 
 /// Tracked files matching `glob`, sorted, relative to `dir`.
@@ -67,26 +56,6 @@ pub fn tracked_files(dir: &Path, glob: &str) -> Result<Vec<String>> {
     let mut files: Vec<String> = out.lines().map(str::to_string).collect();
     files.sort();
     Ok(files)
-}
-
-/// The checked-out branch, or `None` when HEAD is detached (`--show-current`
-/// prints nothing there). Used by `pr land` to tell "I am standing on this PR's
-/// branch" from "I am elsewhere".
-pub fn current_branch(dir: &Path) -> Result<Option<String>> {
-    let name = output(dir, &["branch", "--show-current"])?;
-    Ok((!name.is_empty()).then_some(name))
-}
-
-/// The local HEAD commit, or `None` in a repo with no commits yet (exit 128).
-pub fn head_sha(dir: &Path) -> Result<Option<String>> {
-    output_or(dir, &["rev-parse", "HEAD"], 128)
-}
-
-/// A remote's URL, or `None` when that remote is not configured. Read through
-/// `config --get` rather than `remote get-url` so the unset case reuses the
-/// exit-1-is-a-valid-nothing path already established here.
-pub fn remote_url(dir: &Path, name: &str) -> Result<Option<String>> {
-    config_get(dir, &format!("remote.{name}.url"))
 }
 
 /// Current `core.hooksPath`, or `None` when unset/blank (see [`config_get`]).
@@ -143,27 +112,6 @@ pub fn run(dir: &Path, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-/// Trimmed stdout of a git command, or `None` when it exits with `tolerated`
-/// instead of bailing — the shared core of the two helpers that read one exit
-/// code as a valid "nothing" answer (`grep`'s exit 1 = no match, `config --get`'s
-/// exit 1 = unset). Any other non-zero still bails.
-fn output_or(dir: &Path, args: &[&str], tolerated: i32) -> Result<Option<String>> {
-    let out = at(dir)
-        .args(args)
-        .output()
-        .with_context(|| format!("running git {args:?}"))?;
-    match out.status.code() {
-        Some(0) => Ok(Some(
-            String::from_utf8_lossy(&out.stdout).trim().to_string(),
-        )),
-        Some(c) if c == tolerated => Ok(None),
-        _ => anyhow::bail!(
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ),
-    }
-}
-
 /// `git ls-files -- *.md` — tracked Markdown, repo-relative. The pathspec glob
 /// matches at any depth, so filtering happens in git rather than in Rust.
 pub fn ls_files_md(dir: &Path) -> Result<Vec<String>> {
@@ -177,10 +125,24 @@ pub fn toplevel(dir: &Path) -> Result<String> {
 
 /// `git config --get <key>` → the value, or `None` when unset (exit 1) or blank.
 /// Bails on any other non-zero (e.g. exit 128 = corrupt config): a broken config
-/// surfaces as an error rather than being silently treated as "unset" (see
-/// [`output_or`]).
+/// surfaces as an error rather than being silently treated as "unset".
 pub fn config_get(dir: &Path, key: &str) -> Result<Option<String>> {
-    Ok(output_or(dir, &["config", "--get", key], 1)?.filter(|s| !s.is_empty()))
+    let args = ["config", "--get", key];
+    let out = at(dir)
+        .args(args)
+        .output()
+        .with_context(|| format!("running git {args:?}"))?;
+    match out.status.code() {
+        Some(0) => {
+            let value = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            Ok((!value.is_empty()).then_some(value))
+        }
+        Some(1) => Ok(None),
+        _ => anyhow::bail!(
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
+    }
 }
 
 /// `git config <key> <value>`.
@@ -248,49 +210,18 @@ mod tests {
     }
 
     #[test]
+    fn config_get_bails_on_a_broken_config_rather_than_reading_unset() {
+        let dir = temp_repo("broken-config");
+        std::fs::write(dir.join(".git/config"), "[core\n").unwrap();
+        assert!(config_get(&dir, "core.hooksPath").is_err());
+    }
+
+    #[test]
     fn ensure_hooks_path_sets_then_is_noop() {
         let dir = temp_repo("ensure-hooks");
         assert!(ensure_hooks_path(&dir).unwrap(), "first call sets it");
         assert!(!ensure_hooks_path(&dir).unwrap(), "second call is a no-op");
         assert_eq!(hooks_path(&dir).unwrap(), Some(HOOKS_PATH.to_string()));
-    }
-
-    #[test]
-    fn current_branch_head_sha_and_remote_read_a_real_repo() {
-        let dir = temp_repo("readers");
-        commit(&dir, "seed.txt", "x\n");
-        assert!(current_branch(&dir).unwrap().is_some());
-        let sha = head_sha(&dir).unwrap().expect("a seeded repo has a HEAD");
-        assert_eq!(sha.len(), 40, "full sha, not abbreviated");
-        assert_eq!(
-            remote_url(&dir, "origin").unwrap(),
-            None,
-            "a throwaway repo has no remote"
-        );
-        config_set(&dir, "remote.origin.url", "git@github.com:o/r.git").unwrap();
-        assert_eq!(
-            remote_url(&dir, "origin").unwrap(),
-            Some("git@github.com:o/r.git".to_string())
-        );
-    }
-
-    #[test]
-    fn porcelain_blank_is_clean() {
-        assert!(!porcelain_is_dirty(""));
-        assert!(!porcelain_is_dirty("\n"));
-        assert!(!porcelain_is_dirty("   \n  \n"));
-    }
-
-    #[test]
-    fn porcelain_untracked_is_dirty() {
-        assert!(porcelain_is_dirty("?? new_file.rs"));
-    }
-
-    #[test]
-    fn porcelain_staged_or_modified_is_dirty() {
-        assert!(porcelain_is_dirty(" M src/lib.rs"));
-        assert!(porcelain_is_dirty("A  staged.rs"));
-        assert!(porcelain_is_dirty("?? a\n M b"));
     }
 
     #[test]

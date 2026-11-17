@@ -26,6 +26,3 @@ COVERAGE_CHECK = (
     "--",
 )
 PERF_DATA = (*CARGO_RUN, "-p", "performance", "--bin", "perf-data", "--")
-
-# Flake commands that must leave flake.lock exactly as committed.
-NIX_LOCK_FLAGS = ("--no-update-lock-file", "--no-write-lock-file")

@@ -879,6 +879,37 @@ let
         "tools/qualification"
         "tools/host-proof"
       ];
+  # `checks.tools-doctests` documents every tools member, so the members toolsSrc
+  # carries as placeholders are real here, with the files their libraries compile
+  # in. Only product members outside the tools closure stay placeholders.
+  toolsDocTestSrc =
+    let
+      hostRunMembers = [
+        "tools/repository-policy"
+        "tools/qualification"
+        "tools/host-proof"
+      ];
+    in
+    withWorkspacePlaceholders "jaunder-tools-doctests-source"
+      (pkgs.lib.cleanSourceWith {
+        src = craneLib.path ../.;
+        filter =
+          path: type:
+          let
+            relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
+          in
+          toolsSourceFilter path type
+          || cargoMemberSource hostRunMembers path type
+          # Compiled into the qualification library (production_baseline.rs).
+          || relative == "docs/production-baseline.schema.json";
+      })
+      [
+        "client"
+        "csr"
+        "server"
+        "test-support"
+        "web"
+      ];
   toolsBaseArgs = {
     src = toolsSrc;
     extraDummyScript = sqlxSqliteExtraDummyScript;
@@ -1585,6 +1616,7 @@ in
       testSupportBin
       devtoolBin
       toolsBuild
+      toolsDocTestSrc
       tracedRunBin
       devBin
       devShim

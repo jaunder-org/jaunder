@@ -78,14 +78,12 @@ INDEX_QUERIES = commands(
     "git diff --cached --raw -z --no-abbrev --no-renames",
     "git ls-files --stage -z",
 )
-PREPUSH_DOCS = [
-    *INDEX_QUERIES,
-    *commands(
-        "nix build -L --accept-flake-config --out-link .xtask/gcroots/static-docs "
-        ".#checks.x86_64-linux.static-docs"
-    ),
-    *INDEX_QUERIES,
-]
+# The shared docs request leaves flake.lock as committed.
+STATIC_DOCS = commands(
+    "nix build -L --accept-flake-config --no-update-lock-file --no-write-lock-file "
+    "--out-link .xtask/gcroots/static-docs .#checks.x86_64-linux.static-docs"
+)[0]
+PREPUSH_DOCS = [*INDEX_QUERIES, STATIC_DOCS, *INDEX_QUERIES]
 
 
 def format_checks(mode: str, shared_docs: bool = False) -> Commands:
@@ -196,8 +194,12 @@ STATIC = [
     ]
 ]
 CLEAN = commands("git status --porcelain --untracked-files=all")
-TEST_LOCAL = commands(
+# Read, then written only when it differs; a failure only warns.
+HOOKS_PATH = commands(
+    "git config --get core.hooksPath",
     "git config core.hooksPath .githooks",
+)
+TEST_LOCAL = HOOKS_PATH + commands(
     f"{CARGO_RUN} -p host-proof --bin admit-inputs -- .#csrBundle.sourceAdmits",
     "nix build -L --accept-flake-config --out-link .xtask/gcroots/csr-bundle "
     ".#csrBundle",
@@ -208,10 +210,10 @@ TEST_LOCAL = commands(
 
 # The bundle is its own Nix step; the budget measures the output it linked.
 WASM_BUDGET = commands(
-    "nix build -L --accept-flake-config --out-link .xtask/gcroots/csrBundle "
+    "nix build -L --accept-flake-config --out-link .xtask/gcroots/csr-bundle "
     ".#csrBundle",
     f"{CARGO_RUN} -p host-proof --bin wasm-audit -- budget "
-    "--site-path /nix/store/fake-csrBundle",
+    "--site-path /nix/store/fake-csr-bundle",
 )
 E2E = [["bash", "scripts/e2e-workflow", "all", ""]]
 
@@ -420,6 +422,9 @@ def test_every_step_failure_is_its_status_and_stops_subsequent_work(
         for index, argv in enumerate(success):
             if argv in PREPUSH_DOCS:
                 # Index custody combines its failures (test_index.py).
+                continue
+            if argv in HOOKS_PATH:
+                # Not a verdict: a failure only warns (test_test_local.py).
                 continue
             first_time = tuple(argv) not in tested
             tested.add(tuple(argv))

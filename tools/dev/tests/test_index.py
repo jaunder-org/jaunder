@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 from conftest import REAL_GIT, Workflow
-from test_gates import CHECK_NO_TEST, PREPUSH_SHARES_DOCS, docs_shape, nix
+from test_gates import CHECK_NO_TEST, PREPUSH_SHARES_DOCS, STATIC_DOCS, docs_shape
 
 from jaunder_dev import index
 from jaunder_dev.index import PathStatus, Reason, Refused, Snapshot
@@ -22,7 +22,6 @@ shared_docs = pytest.mark.skipif(
 )
 # What the fakes and `dev` write into the checkout root.
 EXCLUDE = "/order\n/commands\n/cache-env\n/cargo-env\n/.xtask/\n"
-STATIC_DOCS = nix("static-docs")
 MARKDOWN_HOST = [
     ["prettier", "-w", "**/*.md"],
     ["prettier", "-w", "end2end"],
@@ -458,9 +457,7 @@ def test_prepush_passes_on_a_clean_request(repo: Repo) -> None:
     assert result.returncode == 0, result
     assert b"[ ok ] prepush-docs\n" in result.stdout
     assert stderr(result) == "shared-static-docs-state: unchanged\n"
-    assert (repo.root / "request-args").read_text().splitlines()[-1] == (
-        ".#checks.x86_64-linux.static-docs"
-    )
+    assert (repo.root / "request-args").read_text().splitlines() == STATIC_DOCS[1:]
 
 
 @shared_docs

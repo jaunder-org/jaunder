@@ -478,7 +478,7 @@ runs a hook it exports `GIT_DIR`/`GIT_INDEX_FILE` (and
 `GIT_WORK_TREE`/`GIT_OBJECT_DIRECTORY`/`GIT_COMMON_DIR`/`GIT_NAMESPACE`), and
 those **override `-C <dir>`**. So a test that builds a throwaway repo with
 `git -C <tmpdir> …` will, when run inside the pre-commit/pre-push hooks (which
-invoke `dev precommit`/`dev validate`, whose host tests then run that code), be
+invoke `dev precommit`/`dev prepush`, whose host tests then run that code), be
 redirected at the **real** repository — corrupting HEAD, the index, and the
 shared worktree config. `dev` runs every step (cargo test, nextest and pytest
 included) without those vars, and `tools/dev/tests/conftest.py` drops every
@@ -1788,7 +1788,9 @@ dev test-local -p storage site_config_primitives_round_trip
 `test-local` is a `dev` step sequence, each step its own span in the run's trace
 (`dev trace summary`):
 
-1. `hooks-path` points `core.hooksPath` at `.githooks`.
+1. `hooks-path` points `core.hooksPath` at `.githooks`. It writes only when the
+   value differs, so the span appears only then, and a failed write (a locked
+   `.git/config`, say) warns rather than stopping the run.
 2. `host-artifacts-lock` waits for the checkout-local
    `.xtask/host-artifacts.lock` (an exclusive `flock`, held by `dev` itself in a
    descriptor no child inherits) and keeps it until the run ends.
@@ -2250,9 +2252,9 @@ server-function coverage verification to `dev validate-no-e2e`.
 - `checks.x86_64-linux.doctests` and `.doctests-gate` — the root workspace's
   doctests and the fence reconciliation over them
 - `checks.x86_64-linux.tools-doctests` — a plain `craneLib.cargoDocTest` of the
-  tools workspace over its shared tools source and dependency build, without
-  fence reconciliation; members that source carries only as placeholders
-  (`repository-policy`, `qualification`, `host-proof`) contribute none
+  tools workspace, without fence reconciliation, over its own source
+  (`toolsDocTestSrc` in `nix/packages.nix`) in which every tools member is real,
+  reusing the shared tools dependency build
 - `checks.x86_64-linux.e2e-{sqlite,postgres}-chromium-unsplit` — one unsplit
   Chromium Playwright lane per backend
 - `checks.x86_64-linux.e2e-{sqlite,postgres}-firefox-ordinary-{1,2}-of-2` — two

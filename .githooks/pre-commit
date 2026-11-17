@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Pre-commit gate: run the fast host-side `dev precommit` workflow. The Rust
-# command owns Git/index reconciliation, preserving staged subsets while
-# auto-staging only formatter/check mutations that are provably safe.
+# Pre-commit gate: run the fast host-side `dev precommit` workflow. `dev
+# precommit` itself (tools/dev/jaunder_dev/index.py) owns Git/index
+# reconciliation, preserving staged subsets while auto-staging only
+# formatter/check mutations that are provably safe.
 #
 # SKIP_PRE_COMMIT=1 bypasses for WIP commits.
 set -euo pipefail

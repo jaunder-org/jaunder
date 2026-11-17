@@ -16,7 +16,7 @@ from jaunder_dev import steps
 
 
 def untraced_git(*args: str) -> subprocess.CompletedProcess[str]:
-    """A Git query made before the gate's trace exists; its streams are kept."""
+    """A Git query that is not a step: it records no span; its streams are kept."""
     return subprocess.run(
         ["git", *args],
         env=steps.changed(os.environ, steps.WITHOUT_GIT_OVERRIDES),

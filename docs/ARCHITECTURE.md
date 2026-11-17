@@ -4569,15 +4569,16 @@ trace fragments and workflow folding). Product telemetry is unchanged.
 
 The auxiliary repository-policy package owns the fixed documentation policies
 (`repository-docs`), fixed Rust/TypeScript source contracts and informational
-17-cell census (`source-contracts`), and the single-process Git/index safety
-owner. `dev` retains their independent verdicts and order; the binaries do not
-select a workflow or emit an omnibus result envelope. Shared source inventory,
-marker and server-function contracts have one canonical home, reused by the
-remaining runtime coverage consumer rather than cloned. `dev census [--json]` is
-informational: candidates and unavailable capabilities are not gate failures;
-failed collection remains nonzero with completed cells retained. The
-explicit-file `dev org-timezone-manifest` artifact command reuses common
-Org/timezone types and bypasses checkout/hook bootstrap. The narrow
+17-cell census (`source-contracts`). The single-process Git/index safety owner
+is `dev precommit`/`dev prepush` itself (`tools/dev/jaunder_dev/index.py`), not
+this package. `dev` retains their independent verdicts and order; the binaries
+do not select a workflow or emit an omnibus result envelope. Shared source
+inventory, marker and server-function contracts have one canonical home, reused
+by the remaining runtime coverage consumer rather than cloned.
+`dev census [--json]` is informational: candidates and unavailable capabilities
+are not gate failures; failed collection remains nonzero with completed cells
+retained. The explicit-file `dev org-timezone-manifest` artifact command reuses
+common Org/timezone types and bypasses checkout/hook bootstrap. The narrow
 scoped-Leptosfmt adapter is the formatter exception, not a general process
 runner.
 
@@ -4715,7 +4716,9 @@ its Nix doctest producer and gate are the deliberate exceptions to its otherwise
 host-only gate ([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)
 amends the #1117 supplement). Every repository-policy host tool self-heals
 `core.hooksPath` to the tracked, relative `.githooks` before its workload
-(`tools/repository-policy/src/checkout.rs`: `ensure_hooks_installed`).
+(`tools/repository-policy/src/checkout.rs`: `ensure_hooks_installed`), and
+`dev test-local` does the same, writing only a differing value and warning when
+the write fails. `dev precommit` deliberately does not touch it.
 `SKIP_PRE_COMMIT=1` / `SKIP_PRE_PUSH=1` are deliberate local escapes; CI is the
 non-bypassable authority.
 
@@ -4745,10 +4748,13 @@ derivation.
 
 `dev` requests hermetic leaves directly with
 `nix build -L --accept-flake-config --out-link .xtask/gcroots/<check> .#checks.x86_64-linux.<check>`,
-one definition shared by every gate, `dev nix-check <check>` and the index
-custody's docs request. Their named output links retain producer evidence as GC
+one definition of their flags (`steps.py`) shared by every gate,
+`dev nix-check <check>` and the index custody's docs request, which adds the
+lock flags `--no-update-lock-file --no-write-lock-file` as the doctest and
+coverage producers do. Their named output links retain producer evidence as GC
 roots; failure stops the workflow. The wasm budget builds `.#csrBundle` the same
-way as its own step, at `.xtask/gcroots/csrBundle`, and passes that output to
+way as its own `csr-bundle` step, at `.xtask/gcroots/csr-bundle` (the step and
+root `dev test-local` uses), and passes that output to
 `wasm-audit budget --site-path`, which requires the path and never runs Nix. The
 budget preserves manifest, generated-shell and name-section verification, and
 applies the raw-size budget. It no longer observes unrelated `.#site`

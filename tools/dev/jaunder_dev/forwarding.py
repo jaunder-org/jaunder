@@ -11,7 +11,6 @@ from jaunder_dev.commands import (
     CARGO_RUN,
     COVERAGE_CHECK,
     HOST_PROOF,
-    NIX_LOCK_FLAGS,
     REPOSITORY_POLICY,
     SOURCE_CONTRACT,
 )
@@ -19,7 +18,8 @@ from jaunder_dev.commands import (
 
 def sandbox(args: Sequence[str]) -> None:
     steps.run(
-        "ux-sandbox", ["nix", "run", *NIX_LOCK_FLAGS, ".#ux-sandbox", "--", *args]
+        "ux-sandbox",
+        ["nix", "run", *steps.NIX_LOCK_FLAGS, ".#ux-sandbox", "--", *args],
     )
 
 

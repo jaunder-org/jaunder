@@ -8,19 +8,18 @@ verdict.
 
 import fcntl
 import os
+import sys
 from enum import StrEnum
 from pathlib import Path
 
-from jaunder_dev import e2e, index, report, static, steps, trace
-from jaunder_dev.checkout import clean_tree, traced_git
+from jaunder_dev import e2e, index, report, static, steps
+from jaunder_dev.checkout import clean_tree, traced_git, untraced_git
 from jaunder_dev.commands import (
     COVERAGE_CHECK,
     HOST_PROOF,
-    NIX_LOCK_FLAGS,
     REPOSITORY_POLICY,
     SOURCE_CONTRACT,
 )
-from jaunder_dev.spans import STATUS, Status
 from jaunder_dev.static import Mode
 
 
@@ -233,6 +232,38 @@ def host_tests() -> None:
 # would otherwise replace the CSR bundle root or the image worker while a run's
 # tests still use them.
 HOST_ARTIFACTS_LOCK = ".xtask/host-artifacts.lock"
+# The step that builds `.#csrBundle`, and the name of its GC root.
+CSR_BUNDLE = "csr-bundle"
+# Where the checkout's Git hooks live, relative so each worktree uses its own.
+HOOKS_PATH = ".githooks"
+
+
+def csr_bundle() -> str:
+    """Builds `.#csrBundle` as its own step; returns the GC root that holds it."""
+    steps.nix_build(CSR_BUNDLE, ".#csrBundle")
+    return f"{steps.GCROOTS}/{CSR_BUNDLE}"
+
+
+def hooks_path() -> None:
+    """Points `core.hooksPath` at HOOKS_PATH, writing only when it differs.
+
+    A failed write warns and the run goes on: the hooks are a convenience to
+    the tests that follow, not a condition of them.
+    """
+    current = untraced_git("config", "--get", "core.hooksPath")
+    if current.returncode == 0 and current.stdout.strip() == HOOKS_PATH:
+        return
+    try:
+        traced_git("hooks-path", "config", "core.hooksPath", HOOKS_PATH)
+    except steps.StepFailed as failure:
+        if failure.signalled:
+            raise
+        print(
+            f"dev: warning: could not set core.hooksPath to {HOOKS_PATH} "
+            f"(git exited {failure.code}); continuing",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def test_local(nextest_args: tuple[str, ...] = ()) -> None:
@@ -241,22 +272,20 @@ def test_local(nextest_args: tuple[str, ...] = ()) -> None:
     JAUNDER_CSR_BUNDLE_DIR names a bundle to use instead of building one.
     `nextest_args` select tests; none run the whole workspace.
     """
-    traced_git("hooks-path", "config", "core.hooksPath", ".githooks")
+    hooks_path()
     Path(HOST_ARTIFACTS_LOCK).parent.mkdir(parents=True, exist_ok=True)
     # Python opens files non-inheritable, so no step's child (or a daemon it
     # leaves behind, such as the sccache server) holds the lock past this run.
     with open(HOST_ARTIFACTS_LOCK, "a") as lock:
-        with trace.tracer().start_as_current_span("host-artifacts-lock") as span:
+        with steps.phase("host-artifacts-lock"):
             fcntl.flock(lock, fcntl.LOCK_EX)
-            span.set_attribute(STATUS, Status.OK)
         bundle = os.environ.get("JAUNDER_CSR_BUNDLE_DIR")
         if bundle is None:
             steps.run(
                 "csr-admission",
                 [*HOST_PROOF, "admit-inputs", "--", ".#csrBundle.sourceAdmits"],
             )
-            steps.nix_build("csr-bundle", ".#csrBundle")
-            bundle = f"{steps.GCROOTS}/csr-bundle"
+            bundle = csr_bundle()
         root = steps.text(
             "csr-prerequisite", [*HOST_PROOF, "csr-prerequisite", "--", bundle]
         )
@@ -299,8 +328,7 @@ def static_checks() -> None:
 
 def wasm_budget() -> None:
     """Builds the CSR bundle as its own step, then measures that output."""
-    steps.nix_build("csrBundle", ".#csrBundle")
-    bundle = (Path(steps.GCROOTS) / "csrBundle").resolve()
+    bundle = Path(csr_bundle()).resolve()
     steps.run(
         "wasm-budget",
         [*HOST_PROOF, "wasm-audit", "--", "budget", "--site-path", str(bundle)],
@@ -314,8 +342,8 @@ def wasm_tests() -> None:
 
 def _producer_and_gate(check: str) -> None:
     """Realizes a hermetic producer as a GC root, then its hard status gate."""
-    steps.nix_check(check, NIX_LOCK_FLAGS)
-    steps.nix_check(f"{check}-gate", NIX_LOCK_FLAGS, keep=False)
+    steps.nix_check(check, steps.NIX_LOCK_FLAGS)
+    steps.nix_check(f"{check}-gate", steps.NIX_LOCK_FLAGS, keep=False)
 
 
 def coverage_workflow() -> None:

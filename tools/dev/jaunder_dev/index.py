@@ -4,7 +4,9 @@ ADR-0029: the precommit snapshots the dirty tree, runs the host checks its
 class selects, and then re-stages only provably safe formatter/check fixes,
 also after a failed check. A Markdown-only change and prepush's Markdown slot
 request the shared `static-docs` verdict between an admission and a mandatory
-post-check.
+post-check. A signal is the one exception: a check or request killed by signal
+n, or a termination request to `dev`, skips the reconciliation and the
+post-check, and `dev` exits 128+n.
 
 Every Git query here runs on the `git` CLI with the hook's environment, so a
 hook's GIT_DIR or temporary GIT_INDEX_FILE (as `git commit <path>` sets) is
@@ -12,20 +14,18 @@ the index the evidence describes. Steps never inherit them (`steps`). Evidence
 that cannot be represented exactly is uncertain, and uncertainty refuses.
 """
 
-import contextlib
 import json
 import os
 import platform
 import stat
 import subprocess
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import NoReturn
 
-from jaunder_dev import steps, trace
-from jaunder_dev.spans import STATUS, Status
+from jaunder_dev import steps
 
 # Index modes of regular files, the only ones auto-staging and the narrow
 # route accept.
@@ -576,43 +576,32 @@ def _unchanged(before: Snapshot) -> None:
     _worktree_matches_index()
 
 
-@contextlib.contextmanager
-def _phase(name: str) -> Iterator[None]:
-    """One span for a part of the custody that is not itself a step."""
-    with trace.tracer().start_as_current_span(name) as span:
-        try:
-            yield
-        except steps.StepFailed as failure:
-            span.set_attribute(
-                STATUS, Status.SIGNALLED if failure.signalled else Status.FAILED
-            )
-            raise
-        except Refused:
-            span.set_attribute(STATUS, Status.FAILED)
-            raise
-        span.set_attribute(STATUS, Status.OK)
+# The request leaves flake.lock exactly as committed, as the clean-state
+# admission and post-check assume.
+STATIC_DOCS_FLAGS = (*steps.NIX_FLAGS, *steps.NIX_LOCK_FLAGS)
 
 
 def static_docs(admission: Callable[[], Snapshot]) -> None:
     """Requests `static-docs` between `admission` and the mandatory post-check.
 
     The post-check runs even when the request fails, and its own failure never
-    hides the request's.
+    hides the request's. A request killed by a signal, or a termination request
+    to `dev`, skips the post-check: the gate stops at once and exits 128+n.
     """
     try:
-        with _phase("static-docs-admission"):
+        with steps.phase("static-docs-admission"):
             before = admission()
     except Refused as refused:
         raise Refused(f"shared-static-docs-admission: {refused}") from refused
     request: str | None = None
     try:
-        steps.nix_check("static-docs")
+        steps.nix_check("static-docs", STATIC_DOCS_FLAGS)
     except steps.StepFailed as failure:
         if failure.signalled:
             raise
         request = f"the static-docs request exited {failure.code}"
     try:
-        with _phase("static-docs-post-check"):
+        with steps.phase("static-docs-post-check"):
             _unchanged(before)
     except Refused as refused:
         post = f"shared-static-docs-state: {refused}"
@@ -635,11 +624,13 @@ def precommit(checks: Callable[[bool], None]) -> None:
     Markdown-only.
 
     The after-snapshot and one staging reconciliation run even when the checks
-    fail; only a termination request stops the gate at once. Host, staging or
-    admission failure skips the docs request.
+    fail. The exception is a signal: a check killed by signal n, or a
+    termination request to `dev`, stops the gate at once, skipping the
+    reconciliation and the docs post-check, and `dev` exits 128+n. Host, staging
+    or admission failure skips the docs request.
     """
     try:
-        with _phase("snapshot-before"):
+        with steps.phase("snapshot-before"):
             before = snapshot()
     except Refused as refused:
         _fail("precommit", f"precommit before-snapshot: {refused}")
@@ -649,21 +640,21 @@ def precommit(checks: Callable[[bool], None]) -> None:
     host = "precommit-markdown-host" if markdown else "precommit-broad-host"
     failures: list[str] = []
     try:
-        with _phase(host):
+        with steps.phase(host):
             checks(markdown)
     except steps.StepFailed as failure:
         if failure.signalled:
             raise
         failures.append(f"precommit-host: {host} exited {failure.code}")
     try:
-        with _phase("snapshot-after"):
+        with steps.phase("snapshot-after"):
             try:
                 after = snapshot()
             except Refused as refused:
                 raise Refused(
                     f"after-snapshot failed; refusing staging: {refused}"
                 ) from refused
-        with _phase("staging"):
+        with steps.phase("staging"):
             detail = apply(stage_plan(before, after))
         print(f"precommit-staging: {detail}", file=sys.stderr, flush=True)
     except Refused as refused:

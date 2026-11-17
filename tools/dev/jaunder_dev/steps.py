@@ -52,6 +52,8 @@ WITHOUT_GIT_OVERRIDES: Environment = dict.fromkeys(GIT_OVERRIDES)
 GCROOTS = ".xtask/gcroots"
 # The flags a Nix build takes unless its caller names others.
 NIX_FLAGS = ("--accept-flake-config",)
+# Flake commands that must leave flake.lock exactly as committed.
+NIX_LOCK_FLAGS = ("--no-update-lock-file", "--no-write-lock-file")
 
 
 def changed(base: Mapping[str, str], changes: Environment | None) -> dict[str, str]:
@@ -211,6 +213,25 @@ def _step(name: str, argv: Sequence[str]) -> Iterator[Span]:
         except _Interrupted as interrupted:
             _record_outcome(span, interrupted.code, True)
             raise
+
+
+@contextlib.contextmanager
+def phase(name: str) -> Iterator[None]:
+    """One span for gate work that is not itself a step's child process.
+
+    It ends `ok`; a step failure or termination request inside it ends it as
+    that step's outcome, and any other exception ends it `failed`.
+    """
+    with trace.tracer().start_as_current_span(name) as span:
+        try:
+            yield
+        except StepFailed as failure:
+            _record_outcome(span, failure.code, failure.signalled)
+            raise
+        except Exception:
+            span.set_attribute(STATUS, Status.FAILED)
+            raise
+        span.set_attribute(STATUS, Status.OK)
 
 
 # Judges a successful step's captured output: the reason to refuse it, or None.

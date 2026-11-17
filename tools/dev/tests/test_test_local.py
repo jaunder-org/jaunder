@@ -3,6 +3,7 @@
 import fcntl
 import json
 import os
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -24,16 +25,28 @@ STEPS = [
 ]
 
 # Host-proof's helpers, the image worker build and nextest (behind the fake
-# pg-run). The helpers fail as ADMIT_CODE and PREREQUISITE_CODE say; the
-# prerequisite prints its resolved root. The build records CFLAGS. nextest
-# records what it was given, and while `hold` exists it removes it, says it
-# is `holding` and waits for `release`.
+# pg-run). The helpers fail as ADMIT_CODE and PREREQUISITE_CODE say; with
+# DAEMON set, admission first leaves behind a daemon that keeps every
+# inheritable descriptor, its pid in `daemon.pid`. The prerequisite prints its
+# resolved root. The build records CFLAGS. nextest records what it was given,
+# and while `hold` exists it removes it, says it is `holding` and waits for
+# `release`.
 CARGO = """\
 import json
 args = sys.argv[1:]
 if args[0] == "run":
     binary = args[args.index("--bin") + 1]
     root = args[args.index("--") + 1:]
+    if binary == "admit-inputs" and os.environ.get("DAEMON"):
+        daemon = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=False,
+            start_new_session=True,
+        )
+        pathlib.Path("daemon.pid").write_text(str(daemon.pid))
     code = int(os.environ.get(
         "ADMIT_CODE" if binary == "admit-inputs" else "PREREQUISITE_CODE", "0"))
     if code:
@@ -263,3 +276,87 @@ def test_the_lock_is_held_for_the_whole_run_so_a_second_run_waits(
     assert second.wait(timeout=60) == 0
     lines = [line for line in order(local) if " eval " not in line]
     assert lines == expected_order("-p", "common") * 2
+
+
+def test_the_lock_is_released_after_a_failed_step_despite_a_lingering_daemon(
+    local: Checkout,
+) -> None:
+    result = run_test_local(local, ADMIT_CODE="3", DAEMON="1")
+    daemon = int((local.root / "daemon.pid").read_text())
+    try:
+        assert result.returncode == 3, result
+        with open(local.root / LOCK) as probe:
+            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        os.kill(daemon, signal.SIGKILL)
+
+
+def test_a_termination_request_while_waiting_for_the_lock_closes_it_signalled(
+    local: Checkout,
+) -> None:
+    (local.root / LOCK).parent.mkdir(parents=True)
+    with open(local.root / LOCK, "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        dev = subprocess.Popen(
+            local.command("test-local"),
+            cwd=local.root,
+            env=environment(local),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        deadline = time.monotonic() + 30
+        while not any(
+            '"host-artifacts-lock"' in records.read_text()
+            for records in (local.root / ".xtask" / "run").glob("*.trace.d/*.jsonl")
+        ):
+            assert time.monotonic() < deadline, "the lock wait never started"
+            time.sleep(0.02)
+        dev.send_signal(signal.SIGTERM)
+        dev.communicate(timeout=30)
+    assert dev.returncode == 128 + signal.SIGTERM
+    assert "admit-inputs" not in local.order()
+    waited = local.merged()["host-artifacts-lock"]["args"]
+    assert (waited["jaunder.status"], waited["process.exit.code"]) == (
+        "signalled",
+        128 + signal.SIGTERM,
+    )
+
+
+def git_config(checkout: Checkout, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(checkout.root), "config", *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
+
+
+def lock_git_config(checkout: Checkout) -> None:
+    """Holds `.git/config` as a concurrent Git writer would."""
+    (checkout.root / ".git" / "config.lock").touch()
+
+
+def test_a_hooks_path_already_in_place_is_not_rewritten(local: Checkout) -> None:
+    git_config(local, "core.hooksPath", ".githooks")
+    lock_git_config(local)
+    result = run_test_local(local)
+    assert result.returncode == 0, result
+    assert b"warning" not in result.stderr
+    assert "hooks-path" not in local.merged()
+
+
+def test_a_hooks_path_that_cannot_be_written_warns_and_the_run_goes_on(
+    local: Checkout,
+) -> None:
+    lock_git_config(local)
+    result = run_test_local(local)
+    assert result.returncode == 0, result
+    assert (
+        b"dev: warning: could not set core.hooksPath to .githooks (git exited "
+        in result.stderr
+    )
+    assert nextest(local)["args"] == ["nextest", "run", "--workspace"]
+    assert git_config(local, "--get", "core.hooksPath") == ""
+    slices = local.merged()
+    assert slices["hooks-path"]["args"]["jaunder.status"] == "failed"
+    assert slices["dev test-local"]["args"]["jaunder.status"] == "ok"

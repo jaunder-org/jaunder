@@ -56,30 +56,36 @@ retired.
 Work a gate performs is a visible `dev` step, not hidden inside a tool
 ([#1962](https://github.com/jaunder-org/jaunder/issues/1962)):
 
-- The wasm budget builds `.#csrBundle` as its own Nix step, with its cache
-  state, and passes that output to `wasm-audit budget --site-path`. The budget
-  requires the path and never runs Nix itself.
+- The wasm budget builds `.#csrBundle` as its own Nix step, with its cache state
+  (the same `csr-bundle` step and GC root `dev test-local` uses), and passes
+  that output to `wasm-audit budget --site-path`. The budget requires the path
+  and never runs Nix itself.
 - Every Nix check `dev` requests goes through one definition of its build flags,
-  the shared `static-docs` verdict of precommit and prepush included.
+  the shared `static-docs` verdict of precommit and prepush included; that
+  request also leaves `flake.lock` exactly as committed.
 - `dev precommit` and `dev prepush` keep custody of the Git index themselves, in
   one process: the snapshot, Markdown-or-broad classification, the host checks,
   the staging reconciliation (also after a failed check) and the `static-docs`
-  admission, request and post-check. Each is a span directly under the gate. The
-  staging rules, refusals and the rule that uncertain evidence refuses are
-  unchanged. Every index query runs the `git` CLI (`status --porcelain=v1 -z`,
-  `diff --cached --raw -z`, `ls-files --stage -z`, `hash-object`, `add`) with
-  the hook's environment, so the evidence agrees with what `git commit` writes,
-  including the temporary `GIT_INDEX_FILE` of `git commit <path>`. A library
-  such as libgit2 could diverge on that index, on filters or on fsmonitor. No
-  step inherits the hook's `GIT_*` repository overrides, so a test's scratch
-  `git init` cannot reinitialise the hooked repository. repository-policy's
-  `git-index-safety` executable and its snapshot, plan and admission code are
-  retired.
+  admission, request and post-check. Each is a span directly under the gate. A
+  signal is the one exception: a check killed by signal n, or a termination
+  request to `dev`, skips the reconciliation and the post-check, and `dev` exits
+  128+n. The staging rules, refusals and the rule that uncertain evidence
+  refuses are unchanged. Every index query runs the `git` CLI
+  (`status --porcelain=v1 -z`, `diff --cached --raw -z`, `ls-files --stage -z`,
+  `hash-object`, `add`) with the hook's environment, so the evidence agrees with
+  what `git commit` writes, including the temporary `GIT_INDEX_FILE` of
+  `git commit <path>`. A library such as libgit2 could diverge on that index, on
+  filters or on fsmonitor. No step inherits the hook's `GIT_*` repository
+  overrides, so a test's scratch `git init` cannot reinitialise the hooked
+  repository. repository-policy's `git-index-safety` executable and its
+  snapshot, plan and admission code are retired.
 - Doctests run only in Nix. The root workspace's `checks.doctests` producer and
   `doctests-gate` keep the bidirectional fence reconciliation, and `dev prepush`
   requests them as steps. `checks.tools-doctests` runs the `tools/` workspace's
-  `cargo test --doc` without reconciliation. The host `doctest-fences` and
-  `workspace-doctests` steps and the `doctest-check` executable are retired.
+  `cargo test --doc` without reconciliation, over a source in which every tools
+  member is real, so no member's doctests can go unrun. The host
+  `doctest-fences` and `workspace-doctests` steps and the `doctest-check`
+  executable are retired.
 - `dev test-local` sequences its own steps
   ([#1964](https://github.com/jaunder-org/jaunder/issues/1964)): hook path, CSR
   input admission, the `.#csrBundle` Nix step, CSR validation, the image worker
@@ -135,6 +141,6 @@ It also amends these decisions:
 - Adding OTLP export later is a configuration choice, not a redesign.
 - Pre-push builds the root doctest producer in Nix. A reused output is cheap,
   but a changed root source rebuilds it.
-- Members the tools source carries only as placeholders (`repository-policy`,
-  `qualification`, `host-proof`) contribute no doctests to `tools-doctests`. A
-  doctest added there would not run.
+- `tools-doctests` has its own source, so an edit to `repository-policy`,
+  `qualification` or `host-proof` (which the shared tools build carries only as
+  placeholders) reruns it.

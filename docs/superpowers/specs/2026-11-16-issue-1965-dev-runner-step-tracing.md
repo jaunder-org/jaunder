@@ -63,7 +63,7 @@ Callers that change:
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ | ---------------------------------------- |
 | `.githooks/pre-commit`, `pre-push`                                                                                                                                                                                             | `just precommit` / `just prepush`                      | `dev precommit` / `dev prepush`          |
 | CI `ci.yml`, `performance.yml`                                                                                                                                                                                                 | `nix develop .#ci -c just …`                           | `… -c dev …`                             |
-| `git-index-safety precommit`                                                                                                                                                                                                   | `just precommit-*-host`                                | `dev precommit-*-host`                   |
+| `git-index-safety precommit` (superseded by Task 7e: the binary is gone and `dev precommit` runs the host checks itself)                                                                                                       | `just precommit-*-host`                                | `dev precommit-*-host`                   |
 | `devtool check ert`, `scoped-leptosfmt`                                                                                                                                                                                        | `just --justfile recipes/static.just …`                | `dev static …`                           |
 | Nix checks (~15 call sites)                                                                                                                                                                                                    | `just --justfile recipes/static.just X verify sandbox` | `dev static X --sandbox`                 |
 | `scripts/pr-land.sh`                                                                                                                                                                                                           | `just pr-watch`                                        | `dev pr-watch`                           |
@@ -218,9 +218,10 @@ delivered.
   that runs every host static leaf in order. The `devtool` build drops out of
   `dev static-all` along with ERT's hop.
 - **#1962: hidden gate work becomes `dev` steps.**
-  1. `wasm-budget`: `dev` builds `csrBundle` as its own Nix step, with a cache
-     state, and passes the store path to `wasm-audit budget --site-path <p>`.
-     Without a path, the gate refuses to run.
+  1. `wasm-budget`: `dev` builds `.#csrBundle` as its own Nix step, with a cache
+     state (the `csr-bundle` step and GC root test-local also uses), and passes
+     the store path to `wasm-audit budget --site-path <p>`. Without a path, the
+     gate refuses to run.
   2. Doctests move into crane; no host `cargo test --doc` remains (owner
      decision 2026-11-17):
      - `tools/` has no doctests, so checking its fences against its run proves
@@ -234,14 +235,16 @@ delivered.
      - The `doctest-check` binary and `tools/doctests/src/host.rs` are deleted.
        `roots::HOST` goes, and the ownership test records that `tools/` is
        outside the fence population.
-  3. Pre-commit: `git-index-safety` keeps sole custody of the Git index
-     (ADR-0029): it snapshots, runs `dev precommit-*-host`, reconciles staging,
-     and still runs the post-check after a failure. Its hand-built
-     `nix build …static-docs` becomes `dev nix-check static-docs`, so all Nix
-     check flags have one definition (`steps.nix_check`), and the request shows
-     up as a step with a cache state. The `dev` → Rust → `dev` nesting stays,
-     because single-process index custody is deliberate, and the trace now shows
-     every level.
+  3. _Superseded by Task 7e (the `git-index-safety` port below): custody moved
+     into `dev` itself, with no `dev` → Rust → `dev` nesting. Kept as the
+     history of the intermediate step._ Pre-commit: `git-index-safety` keeps
+     sole custody of the Git index (ADR-0029): it snapshots, runs
+     `dev precommit-*-host`, reconciles staging, and still runs the post-check
+     after a failure. Its hand-built `nix build …static-docs` becomes
+     `dev nix-check static-docs`, so all Nix check flags have one definition
+     (`steps.nix_check`), and the request shows up as a step with a cache state.
+     The `dev` → Rust → `dev` nesting stays, because single-process index
+     custody is deliberate, and the trace now shows every level.
 - **#1964: test-local sequencing in `dev`.** The lock question is answered. The
   lock is a checkout-local `flock` on `.xtask/host-artifacts.lock`, and only
   test-local takes it. It stops a concurrent test-local in the same checkout
@@ -287,6 +290,29 @@ delivered.
   snapshot, plan and admission parts of `git.rs`, and the `git-index-safety`
   binary are deleted, and their `native.rs` tests become pytest tests against
   real temporary repositories. The rest of `git.rs` stays for the other tools.
+
+**Decisions recorded at the deliverable D review (2026-11-17):**
+
+- **Local E2E concurrency.** `dev validate`'s local E2E runs at most three VMs
+  at once by default (`scripts/e2e-workflow`, `jobs=${2:-3}`), the peak before
+  #1890, when each backend's three Firefox lanes ran together. Running every VM
+  at once is an error, not a default.
+- **No hook-path self-healing in precommit.** `dev precommit` deliberately
+  dropped the `core.hooksPath` self-healing `git-index-safety` did; a hook that
+  runs has its path already. `dev test-local` keeps setting it, writing only a
+  differing value and warning, not failing, when the write fails.
+- **`tools-doctests` source.** The check runs over its own source
+  (`toolsDocTestSrc`), in which every tools member is real, reusing the shared
+  tools dependency build. The shared tools source carries `repository-policy`,
+  `qualification` and `host-proof` only as placeholders, so a doctest there
+  would otherwise never run. Those three have no doctests today; the check now
+  compiles them.
+- **Defaults kept.** Prepush keeps building the root doctests (`checks.doctests`
+  plus `doctests-gate`). The static-docs request's log and excerpt files under
+  `.xtask/diagnostics/static-docs` are dropped: the request is an ordinary
+  Nix-check step whose output the trace and Nix's own log keep. A check killed
+  by a signal, or a termination request to `dev`, skips the staging
+  reconciliation and the docs post-check, and `dev` exits 128+n.
 
 ## Delivery
 

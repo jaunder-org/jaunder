@@ -208,7 +208,7 @@ Review deliverable B is the full port.
 
 Review deliverable C covers the switch, the removal and the proof.
 
-- [ ] **Task 6: callers switch to `dev`.** In one commit, every row of the
+- [x] **Task 6: callers switch to `dev`.** In one commit, every row of the
       spec's caller table now calls `dev`:
   - `.githooks`
   - `ci.yml` and `performance.yml`
@@ -229,7 +229,7 @@ Review deliverable C covers the switch, the removal and the proof.
   - Contract: none new.
   - Verification: `dev validate` passes, and the pre-commit hook runs
     `dev precommit`.
-- [ ] **Task 7: Just is gone.**
+- [x] **Task 7: Just is gone.**
   - Delete:
     - `Justfile` and `recipes/`
     - `pkgs.just` from every devShell
