@@ -67,13 +67,14 @@ feature-depth = 1
 #db-path = "$CARGO_HOME/advisory-dbs"
 # The url(s) of the advisory databases to use
 #db-urls = ["https://github.com/rustsec/advisory-db"]
+# Fail on an unmaintained crate only when a workspace crate depends on it
+# directly; we can act on that. A transitive one is not reported at all: it
+# says something about a direct dependency's health, which the periodic review
+# in #1994 assesses, but it should not block every commit (#1997).
+unmaintained = "workspace"
 # A list of advisory IDs to ignore. Note that ignored advisories will still
 # output a note when they are encountered.
 ignore = [
-    { id = "RUSTSEC-2024-0436", reason = "The issue seems overblown, original author simply sees no future development required." },
-    { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 is unmaintained but is a compile-time-only (proc-macro) transitive dep pulled in solely by leptos 0.8.x macro crates (leptos_macro, leptos_router_macro, reactive_stores_macro, rstml); it never ships in the binary. No leptos 0.8.x release drops it. Remove this ignore once leptos drops the dependency (likely a 0.9 upgrade) — see jaunder-0eir." },
-    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained and no safe upgrade exists. No first-party crate depends on it (we use jiff); it is transitive only (`cargo tree -i chrono`). Remove this ignore once that tree is empty — see #1994, which lists the dependents." },
-    { id = "RUSTSEC-2026-0555", reason = "chrono-tz is unmaintained and no safe upgrade exists. It is transitive only, via tokio-cron-scheduler 0.15 (jaunder). Remove this ignore once tokio-cron-scheduler is upgraded past chrono-tz or replaced — see #1994." },
     #"RUSTSEC-0000-0000",
     #{ id = "RUSTSEC-0000-0000", reason = "you can specify a reason the advisory is ignored" },
     #"a-crate-that-is-yanked@0.1.1", # you can also ignore yanked crate versions if you wish
