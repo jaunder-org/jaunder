@@ -1,4 +1,4 @@
-"""`dev tsc` and `dev static tsc`: arguments, streams, status and their spans."""
+"""`dev static tsc`: arguments, streams, status and their spans."""
 
 import pytest
 from conftest import Checkout
@@ -20,16 +20,17 @@ def fake_tools(checkout: Checkout) -> None:
 
 
 @pytest.mark.parametrize(
-    ("mode", "setup", "tsc", "expected"),
-    [("verify", 0, 0, 0), ("fix", 0, 17, 17), ("verify", 19, 0, 19)],
+    ("args", "setup", "tsc", "expected"),
+    [([], 0, 0, 0), (["--fix"], 0, 17, 17), ([], 19, 0, 19)],
 )
-def test_tsc_provisions_then_type_checks_and_stops_at_the_first_failure(
-    checkout: Checkout, mode: str, setup: int, tsc: int, expected: int
+def test_host_tsc_provisions_then_type_checks_and_stops_at_the_first_failure(
+    checkout: Checkout, args: list[str], setup: int, tsc: int, expected: int
 ) -> None:
     fake_tools(checkout)
     result = checkout.dev(
+        "static",
         "tsc",
-        mode,
+        *args,
         cwd=checkout.root / "sub",
         SETUP_CODE=str(setup),
         TSC_CODE=str(tsc),
@@ -49,7 +50,7 @@ def test_tsc_provisions_then_type_checks_and_stops_at_the_first_failure(
         assert result.stderr == b"setup-err\n"
 
     slices = checkout.merged()
-    gate = slices["dev tsc"]
+    gate = slices["dev static tsc"]
     assert gate["args"]["jaunder.status"] == ("ok" if expected == 0 else "failed")
     assert gate["args"]["process.exit.code"] == expected
     provision = slices["setup-e2e-node-modules"]
@@ -67,15 +68,15 @@ def test_tsc_provisions_then_type_checks_and_stops_at_the_first_failure(
         assert "tsc" not in slices
 
 
-def test_tsc_passes_unset_pins_as_empty_arguments(checkout: Checkout) -> None:
+def test_host_tsc_passes_unset_pins_as_empty_arguments(checkout: Checkout) -> None:
     fake_tools(checkout)
-    result = checkout.dev("tsc", SETUP_CODE="0", TSC_CODE="0")
+    result = checkout.dev("static", "tsc", SETUP_CODE="0", TSC_CODE="0")
     assert result.returncode == 0, result
     assert checkout.order() == "setup-e2e-node-modules  \n" + TSC
 
 
-@pytest.mark.parametrize("args", [[], ["--fix"], ["--sandbox"], ["--fix", "--sandbox"]])
-def test_static_tsc_only_type_checks(checkout: Checkout, args: list[str]) -> None:
+@pytest.mark.parametrize("args", [["--sandbox"], ["--fix", "--sandbox"]])
+def test_sandbox_tsc_only_type_checks(checkout: Checkout, args: list[str]) -> None:
     fake_tools(checkout)
     result = checkout.dev("static", "tsc", *args, TSC_CODE="3")
     assert result.returncode == 3, result
@@ -109,7 +110,7 @@ def test_host_run_outside_a_checkout_is_refused(checkout: Checkout) -> None:
 
 
 @pytest.mark.parametrize(
-    "args", [["tsc", "bogus"], ["tsc", "--bogus"], ["static", "tsc", "x"]]
+    "args", [["static", "tsc", "--bogus"], ["static", "tsc", "x"], ["tsc"]]
 )
 def test_unknown_arguments_are_refused_before_any_work(
     checkout: Checkout, args: list[str]
@@ -136,7 +137,7 @@ def test_steps_inherit_the_callers_pythonpath_unchanged(
     environment = checkout.environment()
     if inherited is not None:
         environment["PYTHONPATH"] = inherited
-    result = checkout.run(checkout.command("static", "tsc"), environment)
+    result = checkout.run(checkout.command("static", "tsc", "--sandbox"), environment)
     assert result.returncode == 0, result
     assert result.stdout == f"{inherited}\n".encode()
 

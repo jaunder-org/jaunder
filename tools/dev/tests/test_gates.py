@@ -194,12 +194,7 @@ STATIC = [
     ]
 ]
 CLEAN = commands("git status --porcelain --untracked-files=all")
-# Read, then written only when it differs; a failure only warns.
-HOOKS_PATH = commands(
-    "git config --get core.hooksPath",
-    "git config core.hooksPath .githooks",
-)
-TEST_LOCAL = HOOKS_PATH + commands(
+TEST_LOCAL = commands(
     f"{CARGO_RUN} -p host-proof --bin admit-inputs -- .#csrBundle.sourceAdmits",
     "nix build -L --accept-flake-config --out-link .xtask/gcroots/csr-bundle "
     ".#csrBundle",
@@ -270,7 +265,6 @@ GATES: dict[str, Commands] = {
     "ci-validate-host": [*CLEAN, *HOST_LANE, *host_tests()],
     "ci-validate-hermetic": [*CLEAN, *HERMETIC],
     "ci-validate-test-checks": [*CLEAN, nix("wasm-tests"), *DOCTESTS, *ELISP],
-    "ci-validate-coverage": [*CLEAN, *COVERAGE],
     "coverage": [*CLEAN, *COVERAGE],
     "doctests": [*CLEAN, *DOCTESTS],
 }
@@ -357,7 +351,6 @@ ADMITTED = [
     "ci-validate-host",
     "ci-validate-hermetic",
     "ci-validate-test-checks",
-    "ci-validate-coverage",
     "coverage",
     "doctests",
 ]
@@ -407,7 +400,7 @@ FAIL_FAST = [
     "ci-validate-host",
     "ci-validate-hermetic",
     "ci-validate-test-checks",
-    "ci-validate-coverage",
+    "coverage",
 ]
 
 
@@ -422,9 +415,6 @@ def test_every_step_failure_is_its_status_and_stops_subsequent_work(
         for index, argv in enumerate(success):
             if argv in PREPUSH_DOCS:
                 # Index custody combines its failures (test_index.py).
-                continue
-            if argv in HOOKS_PATH:
-                # Not a verdict: a failure only warns (test_test_local.py).
                 continue
             first_time = tuple(argv) not in tested
             tested.add(tuple(argv))
@@ -452,10 +442,10 @@ def test_a_failing_gate_records_the_failed_step_and_status(
 
 def test_a_report_step_without_a_report_fails_closed(workflow: Workflow) -> None:
     # Every Cargo tool prints the same non-report; in the hermetic lane only
-    # the wasm budget is a Cargo step, so it alone fails, with jq's status 5.
+    # the wasm budget is a Cargo step, so it alone fails.
     workflow.checkout.tool("cargo", 'print("not a report")')
     result = workflow.dev("ci-validate-hermetic")
-    assert result.returncode == 5, result
+    assert result.returncode == 1, result
     assert result.stdout == b"not a report\n"
     assert result.stderr == b"dev: wasm-budget: output is not a step report\n"
     order = (workflow.root / "order").read_text().splitlines()
@@ -497,8 +487,8 @@ def test_leptosfmt_runs_the_adapter_this_checkout_built(workflow: Workflow) -> N
     adapter = built / "scoped-leptosfmt"
     adapter.write_text('#!/bin/sh\nprintf "%s\\n" "$*" > built-adapter\n')
     adapter.chmod(0o755)
-    for mode in ["verify", "fix"]:
-        result = workflow.dev("leptosfmt", mode)
+    for mode, args in [("verify", []), ("fix", ["--fix"])]:
+        result = workflow.dev("static", "leptosfmt", *args)
         assert result.returncode == 0, result
         assert workflow.commands() == format_checks(mode)[1:2]
         assert (workflow.root / "built-adapter").read_text() == f"{mode}\n"

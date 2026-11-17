@@ -90,11 +90,6 @@ _workflow(
     gates.ci_validate_test_checks,
     "CI test-checks lane: clean tree, wasm tests, doctests and Elisp coverage.",
 )
-_workflow(
-    "ci-validate-coverage",
-    gates.coverage,
-    "CI coverage lane: clean tree, then Rust coverage and CRAP policy.",
-)
 _workflow("coverage", gates.coverage, "Clean tree, then Rust coverage and CRAP policy.")
 _workflow(
     "doctests", gates.doctests, "Clean tree, then the doctests producer and gate."
@@ -164,28 +159,11 @@ def source_contract(name: str) -> None:
     _gate(lambda: gates.source_contract(name))
 
 
-@cli.command()
-@mode_argument
-def leptosfmt(mode: Mode) -> None:
-    """Format Leptos view! macros with the adapter built from this checkout."""
-    _gate(lambda: gates.leptosfmt(mode))
-
-
-@cli.command()
-@mode_argument
-def tsc(mode: Mode) -> None:
-    """Type-check the end-to-end suite after linking its pinned node_modules.
-
-    TypeScript has no autofix, so MODE changes nothing.
-    """
-    _gate(lambda: gates.tsc(mode))
-
-
 @cli.command("static-all")
 @mode_argument
 def static_all(mode: Mode) -> None:
-    """Every host static leaf in order, with the adapter built from this checkout."""
-    _gate(lambda: gates.static_all(mode))
+    """Every host static leaf in order, each prepared from this checkout."""
+    _gate(lambda: static.run_all(mode))
 
 
 @cli.command("adr-format")
@@ -424,6 +402,7 @@ def pr_cleanup(number: str, expected_head: str, ownership: str) -> None:
 def static_group() -> None:
     """Pinned static checks: one named check, or a fixed group of them.
 
+    On the host a check first prepares what it needs from this checkout.
     Checks without an autofix ignore --fix.
     """
 
@@ -434,8 +413,9 @@ def _static_command(name: str, summary: str) -> None:
     @click.option(
         "--sandbox",
         is_flag=True,
-        help="Run in place, offline against the provided Cargo homes, as a Nix "
-        "check does.",
+        help="Run in place, as a Nix check does: no checkout root, compile cache "
+        "or host preparation, and Cargo checks offline against the provided "
+        "Cargo homes.",
     )
     def command(fix: bool, sandbox: bool) -> None:
         if sandbox and static.missing_home(name):

@@ -236,10 +236,10 @@ impl Serialize for Attributes<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const EXIT_CODE: &str = "process.exit.code";
     use opentelemetry::trace::{Span as _, TraceId, TracerProvider as _};
     use opentelemetry_sdk::trace::IdGenerator;
+
+    const EXIT_CODE: &str = "process.exit.code";
 
     /// The ids the golden records use.
     #[derive(Debug)]

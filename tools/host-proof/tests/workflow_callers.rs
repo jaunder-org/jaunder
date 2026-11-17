@@ -4,7 +4,7 @@ use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf, process::Command};
 #[test]
 fn hooks_invoke_only_their_dev_workflow_and_preserve_its_status() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    for (hook, recipe) in [("pre-commit", "precommit"), ("pre-push", "prepush")] {
+    for (hook, workflow) in [("pre-commit", "precommit"), ("pre-push", "prepush")] {
         for status in [0, 17] {
             let fixture = tempfile::tempdir().unwrap();
             let dev = fixture.path().join("dev");
@@ -33,7 +33,7 @@ fn hooks_invoke_only_their_dev_workflow_and_preserve_its_status() {
                 .output()
                 .unwrap();
             assert_eq!(output.status.code(), Some(status), "{hook}: {output:?}");
-            assert_eq!(fs::read_to_string(args).unwrap(), format!("{recipe}\n"));
+            assert_eq!(fs::read_to_string(args).unwrap(), format!("{workflow}\n"));
         }
     }
 }
@@ -43,7 +43,12 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
     let source = include_str!("../../../.github/workflows/ci.yml");
     let workflow: serde_yaml::Value = serde_yaml::from_str(source).unwrap();
     let jobs = &workflow["jobs"];
-    for lane in ["host", "hermetic", "test-checks", "coverage"] {
+    for (lane, gate) in [
+        ("host", "ci-validate-host"),
+        ("hermetic", "ci-validate-hermetic"),
+        ("test-checks", "ci-validate-test-checks"),
+        ("coverage", "coverage"),
+    ] {
         let id = format!("validate-{lane}");
         let job = &jobs[&id];
         let steps = job["steps"].as_sequence().unwrap();
@@ -51,12 +56,12 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
             .iter()
             .filter_map(|step| step["run"].as_str())
             .map(|run| run.split_whitespace().collect::<Vec<_>>().join(" "))
-            .filter(|run| run.contains("dev ci-validate-"))
+            .filter(|run| run.contains("-c dev "))
             .collect::<Vec<_>>();
         assert_eq!(
             commands,
             [format!(
-                "nix develop .#ci --accept-flake-config -c dev ci-validate-{lane}"
+                "nix develop .#ci --accept-flake-config -c dev {gate}"
             )]
         );
         let encoded = serde_yaml::to_string(job).unwrap();

@@ -1,15 +1,17 @@
 """Pinned static checks: one named check (a leaf), or a fixed group of them.
 
-The host runs them from the checkout root; Nix checks run them in place as the
-`sandbox` lane. A Cargo leaf's sandbox lane works offline against the Cargo
-home its derivation provides, and a sandbox run admits every home it may need
-before any check starts.
+The host runs them from the checkout root, first preparing what a leaf needs
+from this checkout; Nix checks run them in place as the `sandbox` lane, whose
+derivation has prepared it. A Cargo leaf's sandbox lane works offline against
+the Cargo home its derivation provides, and a sandbox run admits every home it
+may need before any check starts.
 """
 
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 
 from jaunder_dev import steps
 
@@ -32,6 +34,9 @@ class Leaf:
     argv: Callable[[bool, bool], list[str]]
     # A Cargo leaf: the variable naming its sandbox Cargo home.
     home: str | None = None
+    # Host preparation, run as its own steps first: the environment changes
+    # the check then needs.
+    prepare: Callable[[], steps.Environment] | None = None
 
 
 def _fixed(summary: str, *argv: str) -> Leaf:
@@ -59,6 +64,47 @@ def _clippy(summary: str, home: str, *args: str) -> Leaf:
     return _cargo(
         summary, home, lambda _fix, _sandbox: ["clippy", *args, "--", "-D", "warnings"]
     )
+
+
+def _link_e2e_node_modules() -> steps.Environment:
+    """Links the end-to-end suite's pinned node_modules into this checkout.
+
+    Provisioning follows the current checkout, so it also works after `cd`
+    into another worktree from an existing devShell.
+    """
+    steps.run(
+        "setup-e2e-node-modules",
+        [
+            "setup-e2e-node-modules",
+            os.environ.get("E2E_TYPES_NODE_MODULES", ""),
+            os.environ.get("E2E_PLAYWRIGHT_TEST", ""),
+        ],
+    )
+    return {}
+
+
+def _build_scoped_leptosfmt() -> steps.Environment:
+    """Builds the scoped adapter from this checkout, not a stale one on PATH;
+    returns a PATH that runs it first."""
+    steps.run(
+        "scoped-leptosfmt-build",
+        [
+            "cargo",
+            "build",
+            "--locked",
+            "--quiet",
+            "--manifest-path",
+            "tools/Cargo.toml",
+            "-p",
+            "repository-policy",
+            "--bin",
+            "scoped-leptosfmt",
+            "--target-dir",
+            "tools/target",
+        ],
+    )
+    built = Path.cwd() / "tools" / "target" / "debug"
+    return {"PATH": f"{built}:{os.environ.get('PATH', '')}"}
 
 
 def _prettier(population: str) -> Leaf:
@@ -103,12 +149,11 @@ LEAVES = {
         "-l",
         "elisp/scripts/byte-compile.el",
     ),
-    "tsc": _fixed(
-        "Type-check the end-to-end suite; its node_modules must already be linked.",
-        "tsc",
-        "--noEmit",
-        "-p",
-        "end2end/tsconfig.json",
+    "tsc": Leaf(
+        "Type-check the end-to-end suite, on the host after linking its pinned "
+        "node_modules.",
+        lambda _fix, _sandbox: ["tsc", "--noEmit", "-p", "end2end/tsconfig.json"],
+        prepare=_link_e2e_node_modules,
     ),
     "ert": _fixed(
         "Run the Elisp ERT suite.",
@@ -121,8 +166,10 @@ LEAVES = {
     # The adapter admits scoped UTF-8 inputs and promotes the pin's per-file
     # errors; it runs `leptosfmt-cli` on the population it admitted.
     "leptosfmt": Leaf(
-        "Format Leptos view! macros through scoped-leptosfmt.",
+        "Format Leptos view! macros through scoped-leptosfmt, on the host as "
+        "built from this checkout.",
         lambda fix, _sandbox: ["scoped-leptosfmt", "fix" if fix else "verify"],
+        prepare=_build_scoped_leptosfmt,
     ),
     "leptosfmt-cli": Leaf(
         "The pinned leptosfmt itself, as scoped-leptosfmt runs it.",
@@ -246,23 +293,21 @@ GROUPS = {
         "Rust formatting: fmt, leptosfmt and tools-fmt.",
         ["fmt", "leptosfmt", "tools-fmt"],
     ),
-    "all": (
-        "Every host static check in order, ERT last.",
-        [
-            "fmt",
-            "leptosfmt",
-            "elisp-fmt",
-            "tools-fmt",
-            "ast-grep-tests",
-            "no-full-reload",
-            "byte-compile",
-            "tsc",
-            "cargo-deny",
-            *CLIPPY,
-            "ert",
-        ],
-    ),
 }
+# Every host static leaf, in the order `dev static-all` runs them, ERT last.
+ALL = [
+    "fmt",
+    "leptosfmt",
+    "elisp-fmt",
+    "tools-fmt",
+    "ast-grep-tests",
+    "no-full-reload",
+    "byte-compile",
+    "tsc",
+    "cargo-deny",
+    *CLIPPY,
+    "ert",
+]
 
 
 def _members(name: str) -> list[tuple[str, Leaf]]:
@@ -284,26 +329,25 @@ def missing_home(name: str) -> bool:
     return any(not os.environ.get(home) for home in homes)
 
 
-def argv(name: str, mode: Mode) -> list[str]:
-    """Leaf `name`'s host argv."""
-    return LEAVES[name].argv(mode is Mode.FIX, False)
-
-
-def run(
-    name: str,
-    mode: Mode,
-    sandbox: bool = False,
-    environment: steps.Environment | None = None,
-) -> None:
+def run(name: str, mode: Mode, sandbox: bool = False) -> None:
     """Runs a leaf or group as steps; the caller has admitted sandbox homes.
 
-    `environment` changes every member's environment.
+    On the host each member's preparation runs just before it.
     """
     for member, leaf in _members(name):
-        changes = dict(environment or {})
-        if sandbox and leaf.home:
-            changes |= {
-                "CARGO_NET_OFFLINE": "true",
-                "CARGO_HOME": os.environ[leaf.home],
-            }
+        changes: steps.Environment = {}
+        if sandbox:
+            if leaf.home:
+                changes = {
+                    "CARGO_NET_OFFLINE": "true",
+                    "CARGO_HOME": os.environ[leaf.home],
+                }
+        elif leaf.prepare is not None:
+            changes = leaf.prepare()
         steps.run(member, leaf.argv(mode is Mode.FIX, sandbox), environment=changes)
+
+
+def run_all(mode: Mode) -> None:
+    """Every host static leaf in order, each prepared from this checkout."""
+    for name in ALL:
+        run(name, mode)

@@ -87,11 +87,11 @@ Work a gate performs is a visible `dev` step, not hidden inside a tool
   `doctest-fences` and `workspace-doctests` steps and the `doctest-check`
   executable are retired.
 - `dev test-local` sequences its own steps
-  ([#1964](https://github.com/jaunder-org/jaunder/issues/1964)): hook path, CSR
-  input admission, the `.#csrBundle` Nix step, CSR validation, the image worker
-  build and `pg-run cargo nextest`. Admission and validation stay in Rust as the
-  small `host-proof admit-inputs` and `host-proof csr-prerequisite` executables.
-  `dev` holds the checkout-local `flock` on `.xtask/host-artifacts.lock`, in a
+  ([#1964](https://github.com/jaunder-org/jaunder/issues/1964)): CSR input
+  admission, the `.#csrBundle` Nix step, CSR validation, the image worker build
+  and `pg-run cargo nextest`. Admission and validation stay in Rust as the small
+  `host-proof admit-inputs` and `host-proof csr-prerequisite` executables. `dev`
+  holds the checkout-local `flock` on `.xtask/host-artifacts.lock`, in a
   descriptor no child inherits, for the whole sequence. The lock stays: it stops
   a concurrent `test-local` in the same checkout from repointing the bundle's GC
   root or rebuilding `target/debug/jaunder` while a run's tests use them.

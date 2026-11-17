@@ -53,8 +53,9 @@ pub fn run(root: &Path, mode: &str) -> Result<()> {
     if !matches!(mode, "fix" | "verify") {
         bail!("expected fix or verify");
     }
-    // `--sandbox` runs the pin in place, so `root` is its population in a
-    // checkout and in a Nix build directory alike.
+    // `--sandbox` runs the pin in place, without looking for a checkout root,
+    // so `root` is its population in a checkout and in a Nix build directory
+    // alike.
     let mut command = Command::new("dev");
     command.args(["static", "leptosfmt-cli", "--sandbox"]);
     if mode == "fix" {

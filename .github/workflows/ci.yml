@@ -205,7 +205,7 @@ jobs:
             fi
           done
       - name: Validate Rust coverage lane (via dev)
-        run: nix develop .#ci --accept-flake-config -c dev ci-validate-coverage
+        run: nix develop .#ci --accept-flake-config -c dev coverage
       # Diagnostic only: the table never decides the job's result.
       - name: Trace summary
         if: always()

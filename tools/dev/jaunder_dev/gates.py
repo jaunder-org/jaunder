@@ -8,12 +8,11 @@ verdict.
 
 import fcntl
 import os
-import sys
 from enum import StrEnum
 from pathlib import Path
 
 from jaunder_dev import e2e, index, report, static, steps
-from jaunder_dev.checkout import clean_tree, traced_git, untraced_git
+from jaunder_dev.checkout import clean_tree
 from jaunder_dev.commands import (
     COVERAGE_CHECK,
     HOST_PROOF,
@@ -92,58 +91,11 @@ def host(mode: Mode, docs: Docs) -> None:
 
 def format_checks(mode: Mode, docs: Docs) -> None:
     static.run("fmt", mode)
-    leptosfmt(mode)
+    static.run("leptosfmt", mode)
     markdown(mode, docs)
     static.run("prettier-css", mode)
     static.run("elisp-fmt", mode)
     static.run("tools-fmt", mode)
-
-
-def _build_tools(name: str, *packages: str) -> steps.Environment:
-    """Builds tool binaries from this checkout; returns a PATH that runs them first.
-
-    `packages` alternates `-p <package>` and `--bin <binary>` selections.
-    """
-    steps.run(
-        name,
-        [
-            "cargo",
-            "build",
-            "--locked",
-            "--quiet",
-            "--manifest-path",
-            "tools/Cargo.toml",
-            *packages,
-            "--target-dir",
-            "tools/target",
-        ],
-    )
-    built = Path.cwd() / "tools" / "target" / "debug"
-    return {"PATH": f"{built}:{os.environ.get('PATH', '')}"}
-
-
-def leptosfmt(mode: Mode) -> None:
-    """Runs the scoped adapter as built from this checkout, not a stale one on PATH."""
-    path = _build_tools(
-        "scoped-leptosfmt-build",
-        "-p",
-        "repository-policy",
-        "--bin",
-        "scoped-leptosfmt",
-    )
-    steps.run("leptosfmt", static.argv("leptosfmt", mode), environment=path)
-
-
-def static_all(mode: Mode) -> None:
-    """Every host static leaf in order, with the adapter built from this checkout."""
-    path = _build_tools(
-        "static-all-build",
-        "-p",
-        "repository-policy",
-        "--bin",
-        "scoped-leptosfmt",
-    )
-    static.run("all", mode, environment=path)
 
 
 def markdown(mode: Mode, docs: Docs) -> None:
@@ -175,25 +127,8 @@ def source_contracts() -> None:
         source_contract(name)
 
 
-def tsc(mode: Mode) -> None:
-    """Type-checks the end-to-end suite after linking its pinned node_modules.
-
-    Provisioning follows the current checkout, so it also works after `cd`
-    into another worktree from an existing devShell.
-    """
-    steps.run(
-        "setup-e2e-node-modules",
-        [
-            "setup-e2e-node-modules",
-            os.environ.get("E2E_TYPES_NODE_MODULES", ""),
-            os.environ.get("E2E_PLAYWRIGHT_TEST", ""),
-        ],
-    )
-    static.run("tsc", mode)
-
-
 def compile_checks(mode: Mode) -> None:
-    tsc(mode)
+    static.run("tsc", mode)
     static.run("cargo-deny", mode)
     for name in static.CLIPPY:
         static.run(name, mode)
@@ -234,8 +169,6 @@ def host_tests() -> None:
 HOST_ARTIFACTS_LOCK = ".xtask/host-artifacts.lock"
 # The step that builds `.#csrBundle`, and the name of its GC root.
 CSR_BUNDLE = "csr-bundle"
-# Where the checkout's Git hooks live, relative so each worktree uses its own.
-HOOKS_PATH = ".githooks"
 
 
 def csr_bundle() -> str:
@@ -244,35 +177,12 @@ def csr_bundle() -> str:
     return f"{steps.GCROOTS}/{CSR_BUNDLE}"
 
 
-def hooks_path() -> None:
-    """Points `core.hooksPath` at HOOKS_PATH, writing only when it differs.
-
-    A failed write warns and the run goes on: the hooks are a convenience to
-    the tests that follow, not a condition of them.
-    """
-    current = untraced_git("config", "--get", "core.hooksPath")
-    if current.returncode == 0 and current.stdout.strip() == HOOKS_PATH:
-        return
-    try:
-        traced_git("hooks-path", "config", "core.hooksPath", HOOKS_PATH)
-    except steps.StepFailed as failure:
-        if failure.signalled:
-            raise
-        print(
-            f"dev: warning: could not set core.hooksPath to {HOOKS_PATH} "
-            f"(git exited {failure.code}); continuing",
-            file=sys.stderr,
-            flush=True,
-        )
-
-
 def test_local(nextest_args: tuple[str, ...] = ()) -> None:
     """Focused host-native tests against a verified CSR bundle and image worker.
 
     JAUNDER_CSR_BUNDLE_DIR names a bundle to use instead of building one.
     `nextest_args` select tests; none run the whole workspace.
     """
-    hooks_path()
     Path(HOST_ARTIFACTS_LOCK).parent.mkdir(parents=True, exist_ok=True)
     # Python opens files non-inheritable, so no step's child (or a daemon it
     # leaves behind, such as the sccache server) holds the lock past this run.

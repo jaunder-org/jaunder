@@ -109,31 +109,12 @@ def test_sandbox_fix_drops_the_check_flag(workflow: Workflow) -> None:
     assert workflow.commands() == [["cargo", "--offline", "fmt"]]
 
 
-CODE = [
-    "emacs --batch -Q -l elisp/scripts/format.el -f jaunder-fmt-fix",
-    "ast-grep test --config sgconfig.yml",
-    "ast-grep scan --config sgconfig.yml --filter ^no-full-reload$ web/src client/src",
-    "emacs --batch -Q -l elisp/scripts/byte-compile.el",
-]
-SANDBOX_CLIPPY = [
-    "cargo --offline deny check bans licenses sources",
-    *(f"cargo --offline {line}" for line in CLIPPY.values()),
-]
+# The sandbox prepares nothing: its derivation already has.
 GROUPS = {
     "rust-format": [
         "cargo --offline fmt",
         "scoped-leptosfmt fix",
         "cargo --offline fmt --manifest-path tools/Cargo.toml --all",
-    ],
-    "all": [
-        "cargo --offline fmt",
-        "scoped-leptosfmt fix",
-        CODE[0],
-        "cargo --offline fmt --manifest-path tools/Cargo.toml --all",
-        *CODE[1:],
-        "tsc --noEmit -p end2end/tsconfig.json",
-        *SANDBOX_CLIPPY,
-        "emacs --batch -Q -l elisp/scripts/run-tests.el",
     ],
 }
 
@@ -183,6 +164,7 @@ LEAVES = {
     )
     * 2,
     "leptosfmt": ("scoped-leptosfmt verify", "scoped-leptosfmt fix"),
+    "tsc": ("tsc --noEmit -p end2end/tsconfig.json",) * 2,
     "leptosfmt-cli": (
         "leptosfmt -x .direnv -x .git -x target --check web/src csr/src",
         "leptosfmt -x .direnv -x .git -x target web/src csr/src",
@@ -201,9 +183,21 @@ LEAVES = {
 }
 
 
+# What the host runs before a leaf, from this checkout.
+PREPARATION = {
+    "tsc": ["setup-e2e-node-modules  "],
+    "leptosfmt": [
+        (
+            "cargo build --locked --quiet --manifest-path tools/Cargo.toml "
+            "-p repository-policy --bin scoped-leptosfmt --target-dir tools/target"
+        )
+    ],
+}
+
+
 @pytest.mark.parametrize(("leaf", "lines"), LEAVES.items())
 @pytest.mark.parametrize("fix", [False, True])
-def test_host_leaves_run_their_check_from_the_checkout_root(
+def test_host_leaves_prepare_then_run_their_check_from_the_checkout_root(
     workflow: Workflow, leaf: str, lines: tuple[str, str], fix: bool
 ) -> None:
     (workflow.root / "nested").mkdir()
@@ -214,12 +208,21 @@ def test_host_leaves_run_their_check_from_the_checkout_root(
 
     result = workflow.dev("static", leaf, *args, cwd=workflow.root / "sub")
     assert result.returncode == 0, result
-    assert workflow.commands() == [argv(line)]
+    assert workflow.commands() == [
+        argv(prepared) for prepared in [*PREPARATION.get(leaf, []), line]
+    ]
     assert not (workflow.root / "sub" / "commands").exists()
 
     failed = workflow.dev("static", leaf, *args, failure=line)
     assert failed.returncode == 17
     assert failed.stderr.endswith(f"{line.split()[0]} failed\n".encode())
+
+
+def test_a_failed_preparation_stops_before_its_check(workflow: Workflow) -> None:
+    build = PREPARATION["leptosfmt"][0]
+    result = workflow.dev("static", "rust-format", failure=build)
+    assert result.returncode == 17
+    assert workflow.commands() == [argv("cargo fmt --check"), argv(build)]
 
 
 def test_a_leaf_keeps_its_streams(workflow: Workflow) -> None:
@@ -241,6 +244,7 @@ def test_a_leaf_keeps_its_streams(workflow: Workflow) -> None:
     "args",
     [
         ["static", "bogus"],
+        ["static", "all"],
         ["static", "fmt", "verify"],
         ["static", "fmt", "--check"],
     ],

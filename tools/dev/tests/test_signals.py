@@ -47,7 +47,7 @@ def test_termination_sent_to_dev_alone_is_forwarded_and_exits_128_plus_n(
     checkout: Checkout, sent: signal.Signals
 ) -> None:
     checkout.tool("tsc", WAIT.format(handlers=DIE_FROM_SIGNAL))
-    dev = checkout.popen("static", "tsc")
+    dev = checkout.popen("static", "tsc", "--sandbox")
     wait_for(checkout.root / "ready")
     dev.send_signal(sent)
     dev.communicate(timeout=30)
@@ -71,7 +71,7 @@ def test_interrupt_sent_to_dev_alone_is_not_forwarded(checkout: Checkout) -> Non
         "signal.signal(signal.SIGTERM, leave)\n"
     )
     checkout.tool("tsc", WAIT.format(handlers=note_all))
-    dev = checkout.popen("static", "tsc")
+    dev = checkout.popen("static", "tsc", "--sandbox")
     wait_for(checkout.root / "ready")
     # Pending signals are handled lowest number first, so `dev` has dealt with
     # SIGINT before it forwards SIGTERM: a forwarded SIGINT would reach the
@@ -95,7 +95,7 @@ def test_a_child_that_exits_cleanly_after_termination_still_stops_the_gate(
     )
     checkout.tool("setup-e2e-node-modules", WAIT.format(handlers=clean_exit))
     checkout.tool("tsc", "")
-    dev = checkout.popen("tsc")
+    dev = checkout.popen("static", "tsc")
     wait_for(checkout.root / "ready")
     dev.send_signal(signal.SIGTERM)
     dev.communicate(timeout=30)
@@ -133,7 +133,7 @@ def test_a_signal_while_no_step_runs_closes_the_gate_as_signalled(
 
 def test_a_child_killed_by_a_signal_exits_128_plus_n(checkout: Checkout) -> None:
     checkout.tool("tsc", "os.kill(os.getpid(), signal.SIGKILL)")
-    result = checkout.dev("static", "tsc")
+    result = checkout.dev("static", "tsc", "--sandbox")
     assert result.returncode == 128 + signal.SIGKILL
     tsc = checkout.merged()["tsc"]["args"]
     assert (tsc["jaunder.status"], tsc["process.exit.code"]) == ("signalled", 137)

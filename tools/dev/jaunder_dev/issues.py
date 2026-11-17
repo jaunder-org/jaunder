@@ -72,7 +72,7 @@ class _Operation:
 
     def gh(self, *args: str, stdin: bytes | None = None) -> Any:
         """A gh call's JSON reply; a failed call keeps gh's own status."""
-        reply = steps.output("gh", ["gh", *args], None, stdin)
+        reply = steps.output("gh", ["gh", *args], stdin=stdin)
         try:
             return json.loads(reply)
         except ValueError:

@@ -15,7 +15,6 @@ from conftest import Checkout
 CARGO_RUN = "cargo run --locked --quiet --manifest-path tools/Cargo.toml"
 LOCK = ".xtask/host-artifacts.lock"
 STEPS = [
-    "hooks-path",
     "host-artifacts-lock",
     "csr-admission",
     "csr-bundle",
@@ -162,13 +161,6 @@ def test_each_step_runs_in_order_as_a_span_of_the_gate(local: Checkout) -> None:
         assert slices[name]["args"]["parent_id"] == gate, name
     starts = [slices[name]["ts"] for name in STEPS]
     assert starts == sorted(starts)
-    hooks = subprocess.run(
-        ["git", "-C", str(local.root), "config", "core.hooksPath"],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    assert hooks.stdout == ".githooks\n"
 
 
 def test_nextest_gets_the_verified_bundle_and_the_built_worker(
@@ -320,43 +312,3 @@ def test_a_termination_request_while_waiting_for_the_lock_closes_it_signalled(
         "signalled",
         128 + signal.SIGTERM,
     )
-
-
-def git_config(checkout: Checkout, *args: str) -> str:
-    return subprocess.run(
-        ["git", "-C", str(checkout.root), "config", *args],
-        capture_output=True,
-        text=True,
-        check=False,
-    ).stdout
-
-
-def lock_git_config(checkout: Checkout) -> None:
-    """Holds `.git/config` as a concurrent Git writer would."""
-    (checkout.root / ".git" / "config.lock").touch()
-
-
-def test_a_hooks_path_already_in_place_is_not_rewritten(local: Checkout) -> None:
-    git_config(local, "core.hooksPath", ".githooks")
-    lock_git_config(local)
-    result = run_test_local(local)
-    assert result.returncode == 0, result
-    assert b"warning" not in result.stderr
-    assert "hooks-path" not in local.merged()
-
-
-def test_a_hooks_path_that_cannot_be_written_warns_and_the_run_goes_on(
-    local: Checkout,
-) -> None:
-    lock_git_config(local)
-    result = run_test_local(local)
-    assert result.returncode == 0, result
-    assert (
-        b"dev: warning: could not set core.hooksPath to .githooks (git exited "
-        in result.stderr
-    )
-    assert nextest(local)["args"] == ["nextest", "run", "--workspace"]
-    assert git_config(local, "--get", "core.hooksPath") == ""
-    slices = local.merged()
-    assert slices["hooks-path"]["args"]["jaunder.status"] == "failed"
-    assert slices["dev test-local"]["args"]["jaunder.status"] == "ok"

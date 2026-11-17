@@ -233,31 +233,33 @@ tracked Markdown and formatter-config input population; afterward it verifies
 Git state stayed unchanged. Other checks retain their order, and other platforms
 keep host Markdown Verify. Bypass with `SKIP_PRE_PUSH=1 git push` for WIP.
 
-Run `dev tsc` for the single-command TypeScript workflow, including after `cd`
-to another worktree in an existing devShell. Nix's shared setup executable links
-the pinned dependencies before the shared `tsc` check; `dev static tsc` alone
-assumes dependencies are already available. Shell entry uses the same setup for
-IDEs. Setup refreshes current visible packages and the browser-matched
-Playwright override, preserves unrelated directory entries, and unlinks a stale
-destination symlink without touching its referent.
+Run `dev static tsc` for the single-command TypeScript workflow, including after
+`cd` to another worktree in an existing devShell. On the host it first runs
+Nix's shared setup executable, which links the pinned dependencies into the
+current checkout; the Nix check has done that setup before it runs
+`dev static tsc --sandbox`. Shell entry uses the same setup for IDEs. Setup
+refreshes current visible packages and the browser-matched Playwright override,
+preserves unrelated directory entries, and unlinks a stale destination symlink
+without touching its referent.
 
 Host and hermetic callers use the named checks of `dev static` for formatting,
 Prettier, ast-grep, byte-compilation, cargo-deny, ERT and the six Clippy units.
 `dev static <name>` runs one check in Verify mode; `--fix` repairs where the
-check has an autofix, and `--sandbox` runs it in place, offline against the
-Cargo homes a Nix check provides, admitting every home before any work.
-`rust-format` and `all` are fixed groups of checks. `dev leptosfmt` builds its
-narrow adapter from the current checkout before running the `leptosfmt` check.
-`dev static-all [fix|verify]` is one command that runs every host static leaf in
-order, ERT last: it builds the current checkout's adapter, then runs the `all`
-group (dependencies must already be available). Every `dev` call sets the host
-Cargo compile-cache policy (`RUSTC_WRAPPER=sccache`, `CARGO_INCREMENTAL=0`, and
-sorted, canonical Git worktree roots in `SCCACHE_BASEDIRS`, including the
-current root) and runs every step, Git or not, without the inherited `GIT_*`
-repository overrides a hook exports; only precommit/prepush index custody
-honours them. Discovery failure retains the current root and Git's diagnostic.
-This environment reaches the checkout's tool builds and their compiling children
-as well as direct Cargo steps; it adds no resource limits.
+check has an autofix. On the host a check first prepares what it needs from the
+current checkout: `tsc` links its pinned dependencies and `leptosfmt` builds its
+narrow adapter. `--sandbox` runs a check in place, as a Nix check does: no
+checkout root, compile cache or host preparation, and Cargo checks offline
+against the Cargo homes the derivation provides, admitting every home before any
+work. `rust-format` is a fixed group of checks. `dev static-all [fix|verify]` is
+one command that runs every host static leaf in order, ERT last, each prepared
+as above. Every `dev` call sets the host Cargo compile-cache policy
+(`RUSTC_WRAPPER=sccache`, `CARGO_INCREMENTAL=0`, and sorted, canonical Git
+worktree roots in `SCCACHE_BASEDIRS`, including the current root) and runs every
+step, Git or not, without the inherited `GIT_*` repository overrides a hook
+exports; only precommit/prepush index custody honours them. Discovery failure
+retains the current root and Git's diagnostic. This environment reaches the
+checkout's tool builds and their compiling children as well as direct Cargo
+steps; it adds no resource limits.
 
 All `dev` gate workflows fail fast: the first failed required step stops later
 ordinary checks, and `dev` exits with that step's status. Prepush's clean-tree
@@ -1088,10 +1090,10 @@ work between agents and checkouts.
 
 CI does **not** run `dev validate` as a single job. It distributes the non-e2e
 surface across `dev ci-validate-host`, `dev ci-validate-hermetic`,
-`dev ci-validate-test-checks`, and `dev ci-validate-coverage`, and joins them
-under the stable `Validate (no e2e)` result-only job. The coverage source-filter
-probe (`dev coverage-check probe-source`) is an on-demand diagnostic, not an
-automatic CI step.
+`dev ci-validate-test-checks`, and `dev coverage`, and joins them under the
+stable `Validate (no e2e)` result-only job. The coverage source-filter probe
+(`dev coverage-check probe-source`) is an on-demand diagnostic, not an automatic
+CI step.
 
 E2E uses catalog-derived matrices for two unsplit Chromium producers and six
 isolated Firefox producers (`dev e2e-producer <identity>`). An `always()`
@@ -1107,14 +1109,14 @@ and the
 [retained distributed topology](docs/adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md).
 
 - `cargo fmt --check` checks Rust formatting.
-- `dev leptosfmt` invokes the pinned formatter on only `web/src` and `csr/src`
-  (the same roots in Fix and Verify). It retains the default full macro paths
-  `view` and `leptos::view`. Checked glob enumeration and UTF-8 reads fail
-  closed; the adapter also promotes the pin's per-file error marker even when
-  its exit status is zero. Empty scoped populations are a no-op, not an implicit
-  repository scan. A future frontend root requires an explicit scope, Nix-input
-  and documentation update; this is not a syntax-placement policy. Rustfmt
-  continues to cover Rust outside these roots.
+- `dev static leptosfmt` invokes the pinned formatter on only `web/src` and
+  `csr/src` (the same roots in Fix and Verify). It retains the default full
+  macro paths `view` and `leptos::view`. Checked glob enumeration and UTF-8
+  reads fail closed; the adapter also promotes the pin's per-file error marker
+  even when its exit status is zero. Empty scoped populations are a no-op, not
+  an implicit repository scan. A future frontend root requires an explicit
+  scope, Nix-input and documentation update; this is not a syntax-placement
+  policy. Rustfmt continues to cover Rust outside these roots.
 - `prettier --check end2end`, `prettier --check '**/*.md'`, and
   `prettier --check '**/*.css'` check Playwright/frontend test assets, all
   tracked Markdown, and all tracked CSS respectively (`proseWrap: always`;
@@ -1788,31 +1790,28 @@ dev test-local -p storage site_config_primitives_round_trip
 `test-local` is a `dev` step sequence, each step its own span in the run's trace
 (`dev trace summary`):
 
-1. `hooks-path` points `core.hooksPath` at `.githooks`. It writes only when the
-   value differs, so the span appears only then, and a failed write (a locked
-   `.git/config`, say) warns rather than stopping the run.
-2. `host-artifacts-lock` waits for the checkout-local
+1. `host-artifacts-lock` waits for the checkout-local
    `.xtask/host-artifacts.lock` (an exclusive `flock`, held by `dev` itself in a
    descriptor no child inherits) and keeps it until the run ends.
-3. `csr-admission` (`host-proof admit-inputs .#csrBundle.sourceAdmits`) refuses
+2. `csr-admission` (`host-proof admit-inputs .#csrBundle.sourceAdmits`) refuses
    relevant nonignored untracked source/producer/Nix inputs: use `git add -N` or
    `git add` to include them in the Git flake snapshot. Nothing is staged
    automatically; tracked dirty and intent-to-add inputs participate, unrelated
    notes do not.
-4. `csr-bundle` realizes the native-platform `.#csrBundle` from the evaluated
+3. `csr-bundle` realizes the native-platform `.#csrBundle` from the evaluated
    checkout as the GC root `.xtask/gcroots/csr-bundle` (not the incomplete
    `.#site`), recording its cache state. Nix and the configured Cachix
    substituter own artifact identity/reuse; no cached test verdict is used.
-5. `csr-prerequisite` (`host-proof csr-prerequisite <root>`) validates the
+4. `csr-prerequisite` (`host-proof csr-prerequisite <root>`) validates the
    complete immutable output and prints its absolute root.
-6. `image-worker` builds `target/debug/jaunder` with `CFLAGS` set empty when
+5. `image-worker` builds `target/debug/jaunder` with `CFLAGS` set empty when
    absent (an inherited value is kept), which storage and seeding tests start
    even when nextest selects only storage.
-7. `nextest` runs `pg-run cargo nextest run <args>` (`--workspace` without args)
+6. `nextest` runs `pg-run cargo nextest run <args>` (`--workspace` without args)
    with `JAUNDER_CSR_BUNDLE_DIR` set to the verified root and
    `JAUNDER_TEST_EXECUTABLE` to the image worker.
 
-An explicit `JAUNDER_CSR_BUNDLE_DIR` skips steps 3 and 4; step 5 validates it
+An explicit `JAUNDER_CSR_BUNDLE_DIR` skips steps 2 and 3; step 4 validates it
 instead. The first failing step stops the run, so admission, realization or
 validation failure prevents compilation, without fallback to an older root or
 `target/site`.

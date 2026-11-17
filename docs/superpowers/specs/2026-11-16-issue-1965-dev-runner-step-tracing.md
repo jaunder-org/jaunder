@@ -267,9 +267,9 @@ delivered.
   through `.mutants-loop/verify.sh`) sets `JAUNDER_TRACE_DIR` empty, so its fake
   runs neither nest in a gate's trace nor leave roots in `.xtask/run`.
 
-  The checkout preparation and hook setup that test-local does today move to
-  `dev` too, so host-proof's `test-local` binary and `steps/test_local.rs` are
-  deleted. Selectors still pass through, and each step is its own span.
+  The checkout preparation that test-local does today moves to `dev` too, so
+  host-proof's `test-local` binary and `steps/test_local.rs` are deleted.
+  Selectors still pass through, and each step is its own span.
 
 - **`git-index-safety` moves into `dev`** (owner decision 2026-11-17, part of
   #1962's visibility and #1977's language review). `dev precommit` itself:
@@ -298,10 +298,13 @@ delivered.
   at once by default (`scripts/e2e-workflow`, `jobs=${2:-3}`), the peak before
   #1890, when each backend's three Firefox lanes ran together. Running every VM
   at once is an error, not a default.
-- **No hook-path self-healing in precommit.** `dev precommit` deliberately
-  dropped the `core.hooksPath` self-healing `git-index-safety` did; a hook that
-  runs has its path already. `dev test-local` keeps setting it, writing only a
-  differing value and warning, not failing, when the write fails.
+- **No hook-path self-healing in `dev`.** `dev precommit` deliberately dropped
+  the `core.hooksPath` self-healing `git-index-safety` did; a hook that runs has
+  its path already. `dev test-local` does not set it either (whole-branch
+  review, 2026-11-17): its Python copy duplicated the one owner,
+  `repository_policy::checkout::ensure_hooks_installed`, which the
+  repository-policy host tools, `coverage-check`, `e2e-local` and
+  `source-diagnostics` already call before their work.
 - **`tools-doctests` source.** The check runs over its own source
   (`toolsDocTestSrc`), in which every tools member is real, reusing the shared
   tools dependency build. The shared tools source carries `repository-policy`,

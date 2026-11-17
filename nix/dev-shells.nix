@@ -157,7 +157,7 @@ let
     # Host checks that spawn Cargo for the product workspace use the same
     # reviewed, offline dependency closure as the sandboxed static checks.
     JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
-    # `dev tsc` retains both pins after cd into another worktree,
+    # Host `dev static tsc` retains both pins after cd into another worktree,
     # where the IDE setup hook has not run.
     E2E_TYPES_NODE_MODULES = "${e2ePackage}/node_modules";
     E2E_PLAYWRIGHT_TEST = "${pkgs.playwright-test}/lib/node_modules/@playwright/test";

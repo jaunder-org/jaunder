@@ -8,31 +8,19 @@ import json
 from typing import Any
 
 
-def _jq_truthy(value: Any) -> bool:
-    # jq truthiness, kept so reports render as they always have: an optional
-    # field counts unless it is null or false.
-    return value is not None and value is not False
-
-
 def _render(report: Any) -> str:
     lines = []
-    if _jq_truthy(report.get("report")):
+    if report.get("report"):
         lines.append(report["report"])
     for step in report["steps"]:
-        skipped = _jq_truthy(step.get("skipped"))
-        mark = "skip" if skipped else " ok " if step["ok"] else "FAIL"
+        mark = "skip" if step.get("skipped") else " ok " if step["ok"] else "FAIL"
         line = f"[{mark}] {step['name']}"
         if not step["ok"] or step["duration_ms"] >= 1000:
             line += f" ({step['duration_ms']} ms)"
-        if _jq_truthy(step.get("detail")):
+        if step.get("detail"):
             line += f" — {step['detail']}"
         lines.append(line)
     return "".join(f"{line}\n" for line in lines)
-
-
-# The status for input that is not a report: not JSON, or JSON without a
-# `steps` list. Output with no report at all fails with it too.
-NOT_A_REPORT = 5
 
 
 def render(document: bytes) -> str | None:

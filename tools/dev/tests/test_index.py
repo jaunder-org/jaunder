@@ -954,8 +954,18 @@ def test_a_new_untracked_file_is_refused(cwd_repo: Repo, old: str) -> None:
 
 
 def test_a_path_git_cannot_add_is_reported(cwd_repo: Repo) -> None:
-    with pytest.raises(Refused, match=r'^git \["add", "--", "missing"\] failed$'):
+    with pytest.raises(
+        Refused, match=r'^git \["add", "--", "missing"\] failed: .*missing'
+    ):
         index.apply(index.StagePlan(["missing"], []))
+
+
+def test_git_that_cannot_start_refuses_staging(
+    cwd_repo: Repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PATH", str(cwd_repo.root / "no-tools"))
+    with pytest.raises(Refused, match=r'^running git \["add", "--", "guide.txt"\]'):
+        index.apply(index.StagePlan(["guide.txt"], []))
 
 
 def test_snapshots_never_detect_copies(cwd_repo: Repo) -> None:

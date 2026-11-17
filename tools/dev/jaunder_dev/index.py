@@ -463,8 +463,11 @@ def apply(plan: StagePlan) -> str:
     """Stages the plan's safe paths, even beside refusals; returns the detail."""
     failures = list(plan.failures)
     for path in plan.stage:
-        if subprocess.run(["git", "add", "--", path], check=False).returncode:
-            failures.append(f"git {_debug(['add', '--', path])} failed")
+        added = _git("add", "--", path)
+        if added.returncode:
+            failures.append(
+                f"git {_debug(['add', '--', path])} failed: {_stderr(added)}"
+            )
     if failures:
         raise Refused("\n".join(sorted(set(failures))))
     if not plan.stage:

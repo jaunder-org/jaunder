@@ -38,7 +38,7 @@ RENDERED = (
     "  row\n"
     "[ ok ] fast\n"
     "[ ok ] slow (1000 ms) — verified CSR bundle /nix/store/x\n"
-    "[ ok ] blank — \n"
+    "[ ok ] blank\n"
     "[skip] skipped (0 ms)\n"
     "[FAIL] broken (12 ms) — line one\n"
     "line two — ü\n"
@@ -55,7 +55,7 @@ PLAIN = {
     ("document", "rendered"),
     [(REPORT, RENDERED), (PLAIN, "[ ok ] wasm-audit\n")],
 )
-def test_report_renders_as_step_report_jq_does(
+def test_a_report_renders_its_table_then_one_line_per_step(
     document: dict[str, object], rendered: str
 ) -> None:
     assert report.render(json.dumps(document).encode()) == rendered

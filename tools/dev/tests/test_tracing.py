@@ -246,11 +246,13 @@ def test_unwritable_trace_directory_leaves_output_and_status_unchanged(
 ) -> None:
     checkout.tool("tsc", 'print("out"); print("err", file=sys.stderr); sys.exit(5)')
     (checkout.root / ".xtask").write_text("not a directory")
-    unwritable = outcome(checkout.dev("static", "tsc"))
+    unwritable = outcome(checkout.dev("static", "tsc", "--sandbox"))
     missing = str(checkout.root / "missing")
-    child = outcome(checkout.dev("static", "tsc", JAUNDER_TRACE_DIR=missing))
+    child = outcome(
+        checkout.dev("static", "tsc", "--sandbox", JAUNDER_TRACE_DIR=missing)
+    )
     (checkout.root / ".xtask").unlink()
-    traced = outcome(checkout.dev("static", "tsc"))
+    traced = outcome(checkout.dev("static", "tsc", "--sandbox"))
     assert traced == (5, b"out\n", b"err\n")
 
     for code, stdout, stderr in (unwritable, child):
@@ -292,7 +294,7 @@ def test_malformed_records_change_neither_the_merge_nor_the_outcome(
 ) -> None:
     action = f'(run / "9-x.jsonl").write_bytes({MALFORMED!r})'
     checkout.tool("tsc", FAIL_AFTER.format(action=action))
-    result = checkout.dev("static", "tsc")
+    result = checkout.dev("static", "tsc", "--sandbox")
     assert outcome(result) == (3, b"out\n", b"err\n")
     slices = checkout.merged()
     assert set(slices) == {"dev static tsc", "tsc"}
@@ -310,7 +312,7 @@ def test_a_failed_merge_warns_once_and_changes_nothing_else(
     # The merged file's path is taken by a directory.
     action = 'run.with_name(run.name.removesuffix(".d") + ".json").mkdir()'
     checkout.tool("tsc", FAIL_AFTER.format(action=action))
-    code, stdout, stderr = outcome(checkout.dev("static", "tsc"))
+    code, stdout, stderr = outcome(checkout.dev("static", "tsc", "--sandbox"))
     assert (code, stdout) == (3, b"out\n")
     rest, warning = stderr.split(b"\n", 1)
     assert rest == b"err"
@@ -335,7 +337,9 @@ def test_a_run_whose_root_disabled_tracing_stays_silent(checkout: Checkout) -> N
         "tsc",
         'print(repr(os.environ["JAUNDER_TRACE_DIR"]), "TRACEPARENT" in os.environ)',
     )
-    result = checkout.dev("static", "tsc", JAUNDER_TRACE_DIR="", TRACEPARENT="00-x")
+    result = checkout.dev(
+        "static", "tsc", "--sandbox", JAUNDER_TRACE_DIR="", TRACEPARENT="00-x"
+    )
     assert (result.returncode, result.stdout, result.stderr) == (0, b"'' False\n", b"")
     assert checkout.runs() == []
 
@@ -344,7 +348,7 @@ def test_command_text_is_capped_at_one_kibibyte(checkout: Checkout) -> None:
     checkout.tool("setup-e2e-node-modules", "")
     checkout.tool("tsc", "")
     long_pin = "é" * 600
-    result = checkout.dev("tsc", E2E_TYPES_NODE_MODULES=long_pin)
+    result = checkout.dev("static", "tsc", E2E_TYPES_NODE_MODULES=long_pin)
     assert result.returncode == 0, result
     text = checkout.merged()["setup-e2e-node-modules"]["args"]["process.command_line"]
     assert len(text.encode()) <= 1024
@@ -354,7 +358,7 @@ def test_command_text_is_capped_at_one_kibibyte(checkout: Checkout) -> None:
 def test_an_outside_traceparent_does_not_parent_the_root(checkout: Checkout) -> None:
     checkout.tool("tsc", "")
     outside = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
-    result = checkout.dev("static", "tsc", TRACEPARENT=outside)
+    result = checkout.dev("static", "tsc", "--sandbox", TRACEPARENT=outside)
     assert result.returncode == 0, result
     gate = checkout.merged()["dev static tsc"]["args"]
     assert gate["parent_id"] is None

@@ -4672,13 +4672,13 @@ The explicit local workflows are:
   not establish the complete reconciled verdict.
 
 CI invokes four independent commands: `dev ci-validate-host`,
-`dev ci-validate-hermetic`, `dev ci-validate-test-checks`, and
-`dev ci-validate-coverage`. `host` owns the verify-only host/static gate and
-auxiliary host tests; `hermetic` owns Nix static checks, the `csrBundle` build
-and the wasm budget; `test-checks` owns wasm tests, doctests, and Elisp
-coverage; and `coverage` owns Rust coverage plus its gate. Producer/consumer
-pairs never cross jobs. The coverage source-filter probe remains a manually
-callable diagnostic, not an automatic CI step
+`dev ci-validate-hermetic`, `dev ci-validate-test-checks`, and `dev coverage`.
+`host` owns the verify-only host/static gate and auxiliary host tests;
+`hermetic` owns Nix static checks, the `csrBundle` build and the wasm budget;
+`test-checks` owns wasm tests, doctests, and Elisp coverage; and `coverage` owns
+Rust coverage plus its gate. Producer/consumer pairs never cross jobs. The
+coverage source-filter probe remains a manually callable diagnostic, not an
+automatic CI step
 ([on-demand source probes](adr/0227-on-demand-source-invalidation-probes.md));
 the Nix derivation-identity matrix probe is retired
 ([retired matrix probe](adr/0248-retire-nix-source-invalidation-matrix-probe.md)).
@@ -4716,11 +4716,10 @@ its Nix doctest producer and gate are the deliberate exceptions to its otherwise
 host-only gate ([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)
 amends the #1117 supplement). Every repository-policy host tool self-heals
 `core.hooksPath` to the tracked, relative `.githooks` before its workload
-(`tools/repository-policy/src/checkout.rs`: `ensure_hooks_installed`), and
-`dev test-local` does the same, writing only a differing value and warning when
-the write fails. `dev precommit` deliberately does not touch it.
-`SKIP_PRE_COMMIT=1` / `SKIP_PRE_PUSH=1` are deliberate local escapes; CI is the
-non-bypassable authority.
+(`tools/repository-policy/src/checkout.rs`: `ensure_hooks_installed`, the one
+owner of that repair); `dev` itself, precommit and test-local included, does not
+touch it. `SKIP_PRE_COMMIT=1` / `SKIP_PRE_PUSH=1` are deliberate local escapes;
+CI is the non-bypassable authority.
 
 #### Prepush parity by failure surface
 
@@ -4807,10 +4806,10 @@ deferrals. `static-ert` runs `dev static ert --sandbox` directly over its own
 complete population. The old devtool ERT and TSC timing events are retired; both
 are traced like any other `dev` step. The combined pure/live coverage producer
 is unchanged. The obsolete devtool static catalog, group/all selectors and
-duplicate Leptosfmt adapter are retired; the fixed `rust-format` and independent
-`all` groups preserve those populations. `dev static-all` builds the
-current-checkout Leptosfmt adapter, then runs every host static leaf in order;
-full devtool retirement remains separate.
+duplicate Leptosfmt adapter are retired; the fixed `rust-format` group and
+`dev static-all` preserve those populations. `dev static-all` runs every host
+static leaf in order, each prepared from the current checkout as its host
+`dev static` leaf is; full devtool retirement remains separate.
 
 `dev validate-no-e2e` requests the independent static checks `dev` defines
 before the Nix test surfaces. ADR-0178 established the original
@@ -4858,13 +4857,14 @@ boundary drifts from the host definitions
 [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md)).
 
 Nix's `setup-e2e-node-modules` executable owns the ignored dependency links,
-shared by devShell entry for IDEs, `dev tsc` for the current checkout, and the
-copied-source TypeScript and census leaves. Each caller supplies the same pinned
-`e2ePackage/node_modules` and Nix `@playwright/test` paths. Setup unlinks a
-stale destination symlink without touching its referent, refreshes visible
-current packages while preserving unrelated entries, skips dot entries, and
-overrides Playwright with the browser-matched pin. `dev static tsc` owns the
-unchanged compiler argv, not dependency setup.
+shared by devShell entry for IDEs, host `dev static tsc` for the current
+checkout, and the copied-source TypeScript and census leaves. Each caller
+supplies the same pinned `e2ePackage/node_modules` and Nix `@playwright/test`
+paths. Setup unlinks a stale destination symlink without touching its referent,
+refreshes visible current packages while preserving unrelated entries, skips dot
+entries, and overrides Playwright with the browser-matched pin. `dev static tsc`
+owns the unchanged compiler argv; on the host it runs that setup first, and in
+the sandbox the derivation has.
 
 The TypeScript leaf sets up those dependencies before `dev static tsc --sandbox`
 with the sandbox `dev` package and pinned TypeScript. Its direct filter admits
@@ -5261,10 +5261,9 @@ The "devtool = in-sandbox, host concern packages = host" split is a litmus test
 about where code _must_ execute, not a ban on running devtool from a shell.
 ADR-0028's own Supplement (#158) originally extended `devtool run` to the host;
 #1858 moves that responsibility to standalone `traced-run`, while the host
-verify ladder now uses shared `dev static` checks; only ERT retains its devtool
-request timer. Following the confirmed coordinated routing cutover, `traced-run`
-is the sole command-capture interface; devtool has no `run` subcommand or runner
-dependency.
+verify ladder now uses shared `dev static` checks, ERT included. Following the
+confirmed coordinated routing cutover, `traced-run` is the sole command-capture
+interface; devtool has no `run` subcommand or runner dependency.
 
 - **`traced-run [--timeout SECONDS] -- <cmd>`** is the standalone no-shell
   runner on the host/devShell path. `packages.traced-run` is an independent Nix
@@ -5282,22 +5281,24 @@ dependency.
   ([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md);
   [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)).
 - **Static argv lives in `dev static`**, including ERT and TSC's shared
-  host/hermetic check, which `dev tsc` runs after setup; `devtool check` is
-  retired. `rust-format` is a fixed group there; `dev static-all [fix|verify]`
-  builds the current checkout's Leptosfmt adapter before invoking the
-  independent ordered `all` composition. The obsolete devtool group/all/sandbox
-  selectors, Cargo builders and duplicate Leptosfmt implementation are removed.
-  The host verify ladder calls the shared `dev static` checks, preserving
-  host-local Cargo artifacts and sccache for Rust-compiling checks. Prettier is
-  outside this inventory: host `dev` and Nix call the shared
-  `dev static prettier-*` checks directly. Nix `static-docs` runs Markdown;
-  `static-typescript`, `rust-format`, `static-code`, `static-elisp`, and
-  `static-ert` run named `tsc`, Rust-format, residual code (including end-to-end
-  and CSS Prettier), Elisp formatting/byte-compilation, and ERT respectively.
-  Static-code requests the six-leaf Clippy aggregate once; its own derivation
-  does not rerun those lints. Code retains workspace-specific offline Cargo
-  homes; Cargo-deny uses full `cargo deny check` on host and skips `advisories`
-  in sandbox mode ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
+  host/hermetic check; `devtool check` is retired. On the host a leaf first
+  prepares what it needs from the current checkout (TSC links its pinned
+  dependencies, Leptosfmt builds its adapter); `--sandbox` runs it in place as
+  the Nix check prepared it. `rust-format` is a fixed group there;
+  `dev static-all [fix|verify]` runs every host static leaf in order. The
+  obsolete devtool group/all/sandbox selectors, Cargo builders and duplicate
+  Leptosfmt implementation are removed. The host verify ladder calls the shared
+  `dev static` checks, preserving host-local Cargo artifacts and sccache for
+  Rust-compiling checks. Prettier is outside this inventory: host `dev` and Nix
+  call the shared `dev static prettier-*` checks directly. Nix `static-docs`
+  runs Markdown; `static-typescript`, `rust-format`, `static-code`,
+  `static-elisp`, and `static-ert` run named `tsc`, Rust-format, residual code
+  (including end-to-end and CSS Prettier), Elisp formatting/byte-compilation,
+  and ERT respectively. Static-code requests the six-leaf Clippy aggregate once;
+  its own derivation does not rerun those lints. Code retains workspace-specific
+  offline Cargo homes; Cargo-deny uses full `cargo deny check` on host and skips
+  `advisories` in sandbox mode
+  ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
   [Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md),
   [devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md),
   [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md),

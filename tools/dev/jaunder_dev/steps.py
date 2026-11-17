@@ -26,7 +26,7 @@ from typing import Any
 
 from opentelemetry.trace import Span
 
-from jaunder_dev import report, trace
+from jaunder_dev import trace
 from jaunder_dev.spans import CACHE, COMMAND_LINE, EXIT_CODE, STATUS, Cache, Status
 
 _HANDLED = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
@@ -255,11 +255,10 @@ def _run(
             sys.stdout.flush()
             if rendered is None and not code:
                 # A tool that succeeds without its report has not shown it
-                # passed: fail as jq does on that input. A failed tool's own
-                # status stays the verdict.
+                # passed. A failed tool's own status stays the verdict.
                 print(f"dev: {name}: output is not a step report", file=sys.stderr)
                 sys.stderr.flush()
-                code = report.NOT_A_REPORT
+                code = 1
         if refusal is not None and not code:
             # Judged inside the step's span, so the trace shows which step's
             # output stopped the gate.
@@ -292,7 +291,7 @@ def run(
 def output(
     name: str,
     argv: Sequence[str],
-    environment: Environment | None,
+    environment: Environment | None = None,
     stdin: bytes | None = None,
 ) -> bytes:
     """Runs one step for its stdout, which the user never sees; as `run` otherwise.

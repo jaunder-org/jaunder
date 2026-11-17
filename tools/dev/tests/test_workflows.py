@@ -1,4 +1,4 @@
-"""The remaining recipes: each entry point's commands, argv and admission.
+"""The remaining entry points: each one's commands, argv and admission.
 
 Expected commands are literal, not derived from `dev`'s own tables.
 """
@@ -204,7 +204,7 @@ def test_report_tools_fail_closed_without_a_report(
 ) -> None:
     checkout.tool("cargo", f"sys.stdout.buffer.write({output!r})")
     result = checkout.dev(command, "budget")
-    assert result.returncode == 5
+    assert result.returncode == 1
     assert result.stdout == output
     assert result.stderr == f"dev: {command}: output is not a step report\n".encode()
 
@@ -299,11 +299,11 @@ def test_e2e_reconcile_runs_the_built_verifier_on_artifacts_only(
 
 
 STATIC_ALL = [
+    words("cargo fmt --check"),
     words(
         "cargo build --locked --quiet --manifest-path tools/Cargo.toml "
         "-p repository-policy --bin scoped-leptosfmt --target-dir tools/target"
     ),
-    words("cargo fmt --check"),
     words("scoped-leptosfmt verify"),
     words("emacs --batch -Q -l elisp/scripts/format.el -f jaunder-fmt-check"),
     words("cargo fmt --manifest-path tools/Cargo.toml --all --check"),
@@ -312,6 +312,7 @@ STATIC_ALL = [
         "ast-grep scan --config sgconfig.yml --filter ^no-full-reload$ web/src client/src"
     ),
     words("emacs --batch -Q -l elisp/scripts/byte-compile.el"),
+    ["setup-e2e-node-modules", "", ""],
     words("tsc --noEmit -p end2end/tsconfig.json"),
     words("cargo deny check"),
     words(
@@ -333,7 +334,7 @@ STATIC_ALL = [
 ]
 
 
-def test_static_all_runs_every_static_check_with_tools_built_here(
+def test_static_all_runs_every_static_check_each_prepared_here(
     workflow: Workflow,
 ) -> None:
     result = workflow.dev("static-all")
@@ -341,7 +342,7 @@ def test_static_all_runs_every_static_check_with_tools_built_here(
     assert workflow.commands() == STATIC_ALL
     result = workflow.dev("static-all", "fix", failure="cargo fmt")
     assert result.returncode == 17
-    assert workflow.commands() == [STATIC_ALL[0], words("cargo fmt")]
+    assert workflow.commands() == [words("cargo fmt")]
 
 
 CSR_ASSETS = """\

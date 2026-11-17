@@ -748,6 +748,9 @@ let
       ps.pytest-xdist
     ]
   );
+  # The prepush docs admission compares these files' worktree bytes with the
+  # index (`_static_docs_input` in tools/dev/jaunder_dev/index.py): keep the two
+  # selections in step.
   devPackageFiles = pkgs.lib.fileset.unions [
     ../tools/dev/pyproject.toml
     (pkgs.lib.fileset.fileFilter (file: file.hasExt "py") ../tools/dev/jaunder_dev)
