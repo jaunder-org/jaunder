@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import pytest
 from opentelemetry.sdk.trace.id_generator import IdGenerator
 
 from dev import trace
@@ -41,3 +42,12 @@ def test_writer_emits_the_golden_records(tmp_path: Path) -> None:
 
     (written,) = tmp_path.glob("*.jsonl")
     assert written.read_text(encoding="utf-8") == GOLDEN.read_text(encoding="utf-8")
+
+
+def test_only_the_first_tracing_failure_is_reported(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    warn = trace.Warner()
+    warn("first")
+    warn("second")
+    assert capsys.readouterr().err == "dev: tracing disabled: first\n"

@@ -27,13 +27,13 @@ addopts = ["-p", "no:cacheprovider", "-n", "auto"]
 # the host and in the Nix check.
 [tool.ruff]
 
-# The CLI tests drive `python -m dev` as a real process, so coverage
-# follows them into subprocesses.
+# The CLI tests drive `dev` as real processes, so coverage follows them into
+# subprocesses.
 [tool.coverage.run]
 branch = true
 source = ["dev"]
 patch = ["subprocess"]
 
 [tool.coverage.report]
-fail_under = 90
+fail_under = 100
 show_missing = true

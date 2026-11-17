@@ -4544,7 +4544,7 @@ On the host the devShells' `dev` shim runs the checkout's own `tools/dev/` with
 working tree's code; Nix checks run a `dev` package built from a filtered
 `tools/dev/` source, so an edit there rebuilds them. A `checks.dev-python`
 static check runs ruff, `mypy --strict` and pytest under coverage.py
-(`fail_under = 90`, branch coverage on) over `tools/dev/`. Just is in no Nix
+(`fail_under = 100`, branch coverage on) over `tools/dev/`. Just is in no Nix
 input, so the gates passing proves that nothing needs it; no source check guards
 against its return.
 

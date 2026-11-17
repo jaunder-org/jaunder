@@ -179,3 +179,19 @@ def test_a_refused_output_fails_its_build_step_without_a_cache(
     step = checkout.merged()["producer"]["args"]
     assert (step["jaunder.status"], step["process.exit.code"]) == ("failed", 1)
     assert "jaunder.cache" not in step
+
+
+def test_without_nix_the_check_fails_127_and_records_no_cache(
+    checkout: Checkout,
+) -> None:
+    gate = (
+        "from pathlib import Path; from dev import steps; "
+        'sys.exit(steps.gate(Path.cwd(), "dev nix-check", '
+        'lambda: steps.nix_check("demo")))'
+    )
+    result = checkout.run(launch(gate), checkout.environment(PATH=str(checkout.bin)))
+    assert result.returncode == 127
+    assert result.stderr == b"dev: nix: No such file or directory\n"
+    step = checkout.merged()["demo"]["args"]
+    assert step["process.exit.code"] == 127
+    assert "jaunder.cache" not in step

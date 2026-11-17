@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 import pytest
-from conftest import Checkout
+from conftest import Checkout, launch
 
 # The fake check announces readiness, then waits to be signalled or released.
 WAIT = """\
@@ -137,3 +137,73 @@ def test_a_child_killed_by_a_signal_exits_128_plus_n(checkout: Checkout) -> None
     assert result.returncode == 128 + signal.SIGKILL
     tsc = checkout.merged()["tsc"]["args"]
     assert (tsc["jaunder.status"], tsc["process.exit.code"]) == ("signalled", 137)
+
+
+# A gate whose one step runs the `demo` tool, with SIGTERM raised in `dev`
+# itself at the point `{hook}` chooses: deterministic, where a signal from
+# outside could not hit so narrow a window.
+INJECTED = """\
+import contextlib, os, signal, subprocess
+from pathlib import Path
+from dev import steps, trace
+opened = trace.run
+popen = subprocess.Popen
+def terminate():
+    os.kill(os.getpid(), signal.SIGTERM)
+{hook}
+sys.exit(steps.gate(Path.cwd(), "dev demo", lambda: steps.run("demo", ["demo"])))
+"""
+WHILE_OPENING = """\
+@contextlib.contextmanager
+def run(root, name):
+    with opened(root, name) as span:
+        terminate()
+        yield span
+trace.run = run
+"""
+WHILE_CLOSING = """\
+@contextlib.contextmanager
+def run(root, name):
+    with opened(root, name) as span:
+        yield span
+        terminate()
+trace.run = run
+"""
+WHILE_STARTING = """\
+def starting(*args, **kwargs):
+    terminate()
+    return popen(*args, **kwargs)
+subprocess.Popen = starting
+"""
+
+
+def injected(checkout: Checkout, hook: str) -> int:
+    code = INJECTED.format(hook=hook)
+    return checkout.run(launch(code), checkout.environment()).returncode
+
+
+def test_a_request_while_the_run_opens_stops_the_gate_before_any_step(
+    checkout: Checkout,
+) -> None:
+    checkout.tool("demo", "")
+    assert injected(checkout, WHILE_OPENING) == 128 + signal.SIGTERM
+    assert checkout.order() == ""
+    gate = checkout.merged()["dev demo"]["args"]
+    assert gate["jaunder.status"] == "signalled"
+
+
+def test_a_request_while_the_trace_is_written_still_ends_the_gate_signalled(
+    checkout: Checkout,
+) -> None:
+    checkout.tool("demo", "")
+    assert injected(checkout, WHILE_CLOSING) == 128 + signal.SIGTERM
+    assert checkout.order() == "demo\n"
+
+
+def test_a_request_while_a_child_starts_reaches_it_once_it_has(
+    checkout: Checkout,
+) -> None:
+    checkout.tool("demo", "time.sleep(30)")
+    assert injected(checkout, WHILE_STARTING) == 128 + signal.SIGTERM
+    step = checkout.merged()["demo"]["args"]
+    assert step["jaunder.status"] == "signalled"

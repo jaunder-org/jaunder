@@ -13,12 +13,11 @@ import os
 import secrets
 import sys
 import time
-from collections.abc import Iterator, Mapping, MutableMapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 
 from opentelemetry import context as context_api
-from opentelemetry.propagators.textmap import Getter, Setter
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import (
     SimpleSpanProcessor,
@@ -124,24 +123,6 @@ def recording_provider(
     return provider
 
 
-class EnvironmentGetter(Getter[Mapping[str, str]]):
-    """Reads W3C trace context from environment variables (`TRACEPARENT`)."""
-
-    def get(self, carrier: Mapping[str, str], key: str) -> list[str] | None:
-        value = carrier.get(key.upper())
-        return None if value is None else [value]
-
-    def keys(self, carrier: Mapping[str, str]) -> list[str]:
-        return [key.lower() for key in carrier]
-
-
-class EnvironmentSetter(Setter[MutableMapping[str, str]]):
-    """Writes W3C trace context as environment variables for a child process."""
-
-    def set(self, carrier: MutableMapping[str, str], key: str, value: str) -> None:
-        carrier[key.upper()] = value
-
-
 _PROPAGATOR = TraceContextTextMapPropagator()
 
 
@@ -169,7 +150,10 @@ def child_environment() -> dict[str, str]:
         environment.pop(key, None)
     environment[TRACE_DIR] = _current.directory
     if _current.directory:
-        _PROPAGATOR.inject(environment, setter=EnvironmentSetter())
+        # W3C trace context travels as upper-case environment variables.
+        carrier: dict[str, str] = {}
+        _PROPAGATOR.inject(carrier)
+        environment.update({key.upper(): value for key, value in carrier.items()})
     return environment
 
 
@@ -200,7 +184,9 @@ def run(root: Path, name: str) -> Iterator[ApiSpan]:
             merge = (candidate, candidate.with_name(f"{run_id}.trace.json"))
     else:
         directory = Path(inherited) if inherited else None
-        parent = _PROPAGATOR.extract(os.environ, getter=EnvironmentGetter())
+        parent = _PROPAGATOR.extract(
+            {key.lower(): os.environ[key] for key in CARRIER_KEYS if key in os.environ}
+        )
     writer = RecordWriter(directory, warn)
     provider = recording_provider(writer)
     _current = _Run(provider.get_tracer("dev"), directory)

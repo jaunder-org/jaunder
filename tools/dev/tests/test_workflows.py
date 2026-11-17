@@ -5,9 +5,11 @@ Expected commands are literal, not derived from `dev`'s own tables.
 
 import json
 import shutil
+import subprocess
+import sys
 
 import pytest
-from conftest import Checkout, Workflow
+from conftest import PACKAGE, Checkout, Workflow
 
 CARGO_RUN = "cargo run --locked --quiet --manifest-path tools/Cargo.toml"
 HOST_PROOF = f"{CARGO_RUN} -p host-proof --bin"
@@ -468,3 +470,16 @@ def test_forwarded_help_belongs_to_the_tool(workflow: Workflow) -> None:
     result = workflow.dev("pg-run", "--help")
     assert result.returncode == 0, result
     assert workflow.commands() == [["pg-run", "--help"]]
+
+
+def test_the_package_runs_as_a_module(checkout: Checkout) -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "dev", "--help"],
+        cwd=PACKAGE,
+        env=checkout.environment(),
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert result.returncode == 0, result
+    assert result.stdout.startswith(b"Usage: dev ")

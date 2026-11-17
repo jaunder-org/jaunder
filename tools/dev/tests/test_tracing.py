@@ -271,6 +271,8 @@ MALFORMED = (
     b'{"kind":"start"}\n'
     b'{"kind":"end","trace_id":"t","span_id":"x","parent_id":null,"name":"x",'
     b'"time_ns":"late","attributes":{}}\n'
+    b'{"kind":"end","trace_id":"t","span_id":"z","parent_id":null,"name":"z",'
+    b'"time_ns":4,"attributes":[]}\n'
     b"\xff\xfe\n"
     b'{"kind":"start","trace_id":"t","span_id":"y","parent_id":null,"name":"\xc3\n'
     # Two spans, finished and not, each naming the other as its parent.

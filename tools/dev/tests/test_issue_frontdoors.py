@@ -246,6 +246,44 @@ def test_explicit_dependencies_use_database_ids_and_verified_readback(
     ]
 
 
+def test_a_dependency_already_recorded_is_not_added_again(tracker: Tracker) -> None:
+    replies = responses()
+    replies[4:4] = [{"body": BLOCKER}, {"body": [[BLOCKER]]}, {"body": [[BLOCKER]]}]
+    tracker.reply(replies)
+    result = tracker.mutate("issue-create", None, "42")
+    assert result.returncode == 0, result
+    assert not any(
+        "--method" in call["args"] and "POST" in call["args"]
+        for call in tracker.calls()[2:]
+    )
+
+
+def test_a_created_issue_cannot_block_itself(tracker: Tracker) -> None:
+    tracker.reply(responses())
+    result = tracker.mutate("issue-create", None, "731")
+    assert result.returncode == 1
+    assert b"Invalid/self blocker" in result.stderr
+    assert not any("dependencies" in " ".join(c["args"]) for c in tracker.calls())
+
+
+def test_an_invalid_blocker_is_refused_before_creation(tracker: Tracker) -> None:
+    tracker.reply(responses())
+    result = tracker.mutate("issue-create", None, "x")
+    assert result.returncode == 1
+    assert all("--method" not in call["args"] for call in tracker.calls())
+
+
+def test_a_title_that_is_not_a_conventional_commit_is_refused(
+    tracker: Tracker,
+) -> None:
+    tracker.reply(responses())
+    body = tracker.checkout.root.parent / "body.md"
+    result = tracker.dev("issue-create", "preserve metadata", *DECISIONS[1:], str(body))
+    assert result.returncode == 1
+    assert b"Expected Conventional Commit title" in result.stderr
+    assert tracker.calls() == []
+
+
 def test_missing_dependency_readback_cannot_claim_success(tracker: Tracker) -> None:
     replies = dependency_replies([[]])
     replies[5] = {"body": [[]]}

@@ -2238,6 +2238,10 @@ server-function coverage verification to `dev validate-no-e2e`.
   No new Nix child-timing collector is introduced. Retained logs are never
   timing inputs; Nix request duration and output reuse do not prove fresh
   builder execution.
+- `checks.x86_64-linux.dev-python` — the `dev` package's own gate: ruff,
+  `mypy --strict`, and pytest under coverage.py at `fail_under = 100` with
+  branch coverage, subprocesses included. New `dev` code needs behaviour tests
+  that keep it at 100%.
 - `checks.x86_64-linux.wasm-tests` — `wasm-bindgen-test` cases executed in
   headless Nix-store Chromium through the matching Nix-store chromedriver. This
   is behavioral pass/fail execution for irreducible browser code, not wasm line

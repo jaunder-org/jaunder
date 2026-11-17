@@ -146,7 +146,7 @@ It also amends these decisions:
 
 - Python, so far used only by the ADR promoter, now owns every workflow and gets
   its own gates: ruff, `mypy --strict`, pytest, and coverage.py's
-  `fail_under = 90` with `branch = true`, a combined statement-and-branch
+  `fail_under = 100` with `branch = true`, a combined statement-and-branch
   figure.
 - The hermetic checks' closures gain python3, click and opentelemetry.
 - Two small span-record writers, Python and Rust, must keep writing the same

@@ -3491,7 +3491,7 @@ static-typescript =
       ''
   );
 # `dev`'s own quality gate: formatting, lint, strict types, and its tests at
-# 90% branch coverage, subprocesses included.
+# 100% statement and branch coverage, subprocesses included.
 dev-python = nonSubstitutable (
   pkgs.runCommand "dev-python"
     {
