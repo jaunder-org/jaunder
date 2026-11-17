@@ -278,6 +278,7 @@ convention). See the Status column below for each ADR's current status.
 | [0247](adr/0247-host-tool-json-report-contract.md)                       | Host tools report one JSON document on stdout                                                                | accepted   |
 | [0248](adr/0248-retire-nix-source-invalidation-matrix-probe.md)          | Retire the Nix source-invalidation matrix probe                                                              | accepted   |
 | [0249](adr/0249-pg-run-python-unix-socket.md)                            | Throwaway test PostgreSQL is a Python script over a Unix socket                                              | accepted   |
+| [0250](adr/0250-graceful-shutdown-takes-a-final-backup.md)               | Graceful shutdown takes a final backup                                                                       | accepted   |
 
 <!-- adr-table:end -->
 

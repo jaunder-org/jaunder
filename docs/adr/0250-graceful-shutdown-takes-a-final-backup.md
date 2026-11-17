@@ -1,6 +1,6 @@
-# ADR-DRAFT: Graceful shutdown takes a final backup
+# ADR-0250: Graceful shutdown takes a final backup
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-16
 - Issue: [#1936](https://github.com/jaunder-org/jaunder/issues/1936)
 
@@ -23,7 +23,7 @@ a run killed midway left a truncated archive that pruning counted as a backup.
 
 A backup taken while stopping also lengthens the stop. systemd kills a unit
 still stopping after its 90-second default, and the
-[identity-verified local shutdown decision](../0181-identity-verified-local-shutdown.md)
+[identity-verified local shutdown decision](0181-identity-verified-local-shutdown.md)
 gave `jaunder shut-down` a 30-second default wait that reports failure on
 timeout.
 
@@ -41,7 +41,7 @@ stop itself still succeeds. A forced exit, SIGKILL or crash takes no backup.
 **Back Up Now**, and shutdown. A single runner instance built at the serve
 composition root is shared by the scheduled worker, the router context (web
 reaches it through a web-defined trait the server provides, per
-[ADR-0016](../0016-dependency-injection-and-appstate.md)) and the drain.
+[ADR-0016](0016-dependency-injection-and-appstate.md)) and the drain.
 
 - A run-at-a-time guard is held across export _and_ prune. The manual trigger
   tries to acquire it and is refused with "a backup is already running";
