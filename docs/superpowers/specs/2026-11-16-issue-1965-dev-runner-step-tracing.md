@@ -257,9 +257,35 @@ delivered.
   5. `pg-run cargo nextest run …` with `JAUNDER_CSR_BUNDLE_DIR` and
      `JAUNDER_TEST_EXECUTABLE` set
 
+  The same task stops tests from tracing into the real checkout. A test that
+  runs the real `dev` (for example `tools/coverage/tests/mutants_verify.rs`
+  through `.mutants-loop/verify.sh`) sets `JAUNDER_TRACE_DIR` empty, so its fake
+  runs neither nest in a gate's trace nor leave roots in `.xtask/run`.
+
   The checkout preparation and hook setup that test-local does today move to
   `dev` too, so host-proof's `test-local` binary and `steps/test_local.rs` are
   deleted. Selectors still pass through, and each step is its own span.
+
+- **`git-index-safety` moves into `dev`** (owner decision 2026-11-17, part of
+  #1962's visibility and #1977's language review). `dev precommit` itself:
+  1. takes the before snapshot
+  2. classifies the change as Markdown-only or broad
+  3. runs the matching host checks in the same process
+  4. reconciles staging even after a failure
+  5. for a Markdown-only change, requests `static-docs` with the clean-state
+     admission and the mandatory post-check
+
+  `dev prepush` does the `prepush-docs` request the same way. This keeps
+  ADR-0029's single-process custody of the index without a `dev` → Rust → `dev`
+  bounce. Every git operation stays on the `git` CLI
+  (`status --porcelain=v1 -z`, `diff --cached --raw -z`, `hash-object`, `add`),
+  so the snapshot always agrees with what `git commit` writes, including a
+  hook's temporary `GIT_INDEX_FILE`. A library such as libgit2 could diverge on
+  that index, on filters or on fsmonitor. The staging rules, the refusals and
+  the "uncertain evidence refuses" rule are unchanged. `safety.rs`, the
+  snapshot, plan and admission parts of `git.rs`, and the `git-index-safety`
+  binary are deleted, and their `native.rs` tests become pytest tests against
+  real temporary repositories. The rest of `git.rs` stays for the other tools.
 
 ## Delivery
 
@@ -272,8 +298,8 @@ pre-commit gate:
 4. the Nix/CI/hooks/caller switch, including host-proof OpenTelemetry
 5. deleting the Justfile, `recipes/` and Just from the devShell, retiring
    traced-run's span code, and updating the docs
-6. the folded-in issues: #1959 with #1960, then #1962, then #1964, one commit
-   each
+6. the folded-in issues: #1959 with #1960, then #1962, then #1964, then the
+   `git-index-safety` port, one commit each
 
 ## Acceptance
 

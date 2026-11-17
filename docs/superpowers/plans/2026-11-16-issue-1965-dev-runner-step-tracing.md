@@ -294,6 +294,21 @@ Review deliverable C covers the switch, the removal and the proof.
     - `dev test-local -- -p common` passes
     - a second concurrent `dev test-local` waits on the lock
     - `dev check` passes
+  - Also: tests that run the real `dev` set `JAUNDER_TRACE_DIR` empty, starting
+    with `mutants_verify.rs`; audit the rest with `rg`.
+- [ ] **Task 7e: `git-index-safety` in `dev`.** As the spec says: the snapshot,
+      classification, host checks, staging reconciliation and static-docs
+      admission/post-check run inside `dev precommit` / `dev prepush`, all on
+      the git CLI. Delete `safety.rs`, the moved parts of `git.rs` and the
+      binary. Port the `native.rs` index-safety tests to pytest with real
+      temporary repositories, keeping every refusal and the
+      post-check-after-failure case.
+  - Verification:
+    - pytest index-safety suite passes
+    - a broad commit and a Markdown-only `dev precommit` show the steps nested
+      directly under `dev precommit` in the trace
+    - a partially staged file is refused, as today
+    - `dev prepush` passes
 - [ ] **Task 8: acceptance proof.**
   - Local runs:
     - `dev check` succeeds
