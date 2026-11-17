@@ -339,6 +339,12 @@ mod tests {
     }
 
     #[test]
+    fn area_labels_name_the_header_controls_and_back_links() {
+        assert_eq!(SettingsArea::Settings.label(), "Settings");
+        assert_eq!(SettingsArea::Account.label(), "Account");
+    }
+
+    #[test]
     fn back_link_parent_excludes_the_area_page_itself() {
         assert_eq!(SettingsArea::parent_of("/settings"), None);
         assert_eq!(SettingsArea::parent_of("/account"), None);

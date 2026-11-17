@@ -88,6 +88,13 @@
 }
 
 /* ─── reset ─── */
+/* `.j-root` is exactly one viewport tall; the user agent's default 8px body
+   margin would push it past the window and give every page a stray 16px
+   document scroll. */
+body {
+  margin: 0;
+}
+
 .j-root {
   all: initial;
 }
@@ -1376,6 +1383,10 @@
   z-index: 1;
   top: anchor(top);
   left: anchor(left);
+  /* The trusted layer sits above the themed surface; once a Post's header has
+     scrolled out of view its trigger must not float over the masthead and its
+     Settings/Account controls. */
+  position-visibility: anchors-visible;
   width: 72px;
   height: 32px;
   pointer-events: auto;
