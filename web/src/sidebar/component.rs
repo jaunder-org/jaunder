@@ -72,7 +72,7 @@ pub fn Sidebar() -> impl IntoView {
 
 /// The authenticated sidebar chrome (brand, search, Post navigation, and the
 /// syndication footer). Account and configuration destinations are not here:
-/// they are reached from the page-header corner controls (`crate::hub`, #1733).
+/// they are reached from the page-header corner controls (`crate::settings`, #1733).
 fn authed_sidebar(active_key: &str, surface: Option<&common::feed::FeedSurface>) -> impl IntoView {
     let active_key = active_key.to_string();
     view! {

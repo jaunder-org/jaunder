@@ -1,13 +1,16 @@
 use leptos::prelude::*;
 
-use crate::hub::{Hub, HubControls};
+use crate::settings::{AreaControls, SettingsArea};
 
 /// The reactive half of the twin: title + optional sub + optional right-slot
-/// children, followed by the Settings/Account corner controls. Twins [`render`] —
-/// keep their markup coincident.
+/// children, followed by the Settings/Account corner controls. Twins [`render`],
+/// with an intentional asymmetry: this reactive twin additionally renders the
+/// signed-in-only corner controls (whose width `html.authed` reserves on the
+/// projector paint) and a back link that appears only on private pages a
+/// settings area lists. Everything else stays coincident with `topbar::render`.
 ///
-/// A page that a configuration hub lists also gets a link back to that hub,
-/// derived from the hub catalog so no page has to declare its own parent.
+/// The back link is derived from the settings area catalog, so no page has to
+/// declare its own parent.
 #[component]
 pub fn Topbar(
     #[prop(into)] title: TextProp,
@@ -34,11 +37,11 @@ pub fn Topbar(
                         })
                 }}
                 {move || {
-                    Hub::parent_of(&location.pathname.get())
-                        .map(|hub| {
+                    SettingsArea::parent_of(&location.pathname.get())
+                        .map(|area| {
                             view! {
-                                <a class="j-topbar-back" href=hub.path()>
-                                    {format!("\u{2190} {}", hub.label())}
+                                <a class="j-topbar-back" href=area.path()>
+                                    {format!("\u{2190} {}", area.label())}
                                 </a>
                             }
                         })
@@ -49,7 +52,7 @@ pub fn Topbar(
                         view! { <div class="j-sub">{move || s.get()}</div> }
                     })}
             </div>
-            <div class="j-topbar-right">{children.map(|c| c())} <HubControls /></div>
+            <div class="j-topbar-right">{children.map(|c| c())} <AreaControls /></div>
         </header>
     }
 }

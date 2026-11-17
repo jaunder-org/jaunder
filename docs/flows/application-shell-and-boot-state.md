@@ -39,13 +39,13 @@ directly to `/app`; logout clears it and returns to Local.
 The sidebar lists only the places where a signed-in User reads and writes Posts.
 Configuration is reached from two controls at the end of every page header,
 after page actions such as the timeline order toggle: the **Settings** control
-opens the `/settings` hub (profile and posting defaults, Themes, Invitations
+opens the `/settings` page (profile and posting defaults, Themes, Invitations
 when the Registration Policy allows, and operator-only site administration) and
-the **Account** control opens the `/account` hub (Email, Passkeys, Sessions and
+the **Account** control opens the `/account` page (Email, Passkeys, Sessions and
 Sign out). The controls render only for a signed-in viewer; on public routes the
 prepaint `authed` class reserves their width so they fill in without moving the
-header's own actions. Pages a hub lists show a link back to that hub, and the
-matching control is marked as the current page.
+header's own actions. Pages the Settings or Account page lists show a link back
+to that page, and the matching control is marked as the current page.
 
 The shell also owns the theme signal and applies it directly on the `data-theme`
 attribute of `j-root`, so the mounted tree, the projector output, and the

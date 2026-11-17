@@ -2,7 +2,7 @@ import type { Locator, Page } from "@playwright/test";
 import { allowSecondBoot } from "./bootBudget";
 import { test, expect } from "./fixtures";
 import { goto, signInAs, waitForSelector } from "./helpers";
-import { openHubDestination } from "./hubs";
+import { openAreaDestination } from "./settings-areas";
 
 type FormControl = {
   name: string;
@@ -316,7 +316,7 @@ test("operator settings forms share responsive field presentation", async ({
   await goto(page, "/admin/site");
   const desktopSite = await expectSiteForms(page);
 
-  await openHubDestination(page, "/settings", {
+  await openAreaDestination(page, "/settings", {
     url: "/admin/smtp",
     ready: 'input[name="enabled"]',
   });
@@ -325,7 +325,7 @@ test("operator settings forms share responsive field presentation", async ({
   await page.setViewportSize({ width: 600, height: 800 });
   expectSamePresentation(await expectSmtpForm(page), desktopSite);
 
-  await openHubDestination(page, "/settings", {
+  await openAreaDestination(page, "/settings", {
     url: "/admin/site",
     ready: 'input[name="title"]',
   });
@@ -340,7 +340,7 @@ test("specialized form layouts retain shared presentation", async ({
   await goto(page, "/admin/backups");
   const desktopBackup = await expectBackupForm(page, 2);
 
-  await openHubDestination(page, "/settings", {
+  await openAreaDestination(page, "/settings", {
     url: "/admin/websub",
     ready: 'input[name="hub_url"]',
   });
@@ -358,13 +358,13 @@ test("specialized form layouts retain shared presentation", async ({
   await page.setViewportSize({ width: 600, height: 800 });
   expectSamePresentation(await expectAppPasswordForm(page), desktopAppPassword);
 
-  await openHubDestination(page, "/settings", {
+  await openAreaDestination(page, "/settings", {
     url: "/admin/backups",
     ready: 'input[name="destination_path"]',
   });
   expectSamePresentation(await expectBackupForm(page, 1), desktopBackup);
 
-  await openHubDestination(page, "/settings", {
+  await openAreaDestination(page, "/settings", {
     url: "/admin/websub",
     ready: 'input[name="hub_url"]',
   });

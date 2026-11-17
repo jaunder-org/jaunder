@@ -40,8 +40,8 @@ graph TD
 
     subgraph Authenticated authoring
         home["Home<br/>/app"]
-        settings["Settings hub<br/>/settings"]
-        account["Account hub<br/>/account"]
+        settings["Settings page<br/>/settings"]
+        account["Account page<br/>/account"]
         logout["/logout"]
         profile["/profile"]
         profileEmail["/profile/email"]

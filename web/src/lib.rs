@@ -20,7 +20,6 @@ pub mod forms;
 /// `Markup` — the render layer's currency and its one trusted-HTML door. Every
 /// pure builder returns it; escaping is maud's job, not the caller's.
 mod html;
-pub mod hub;
 pub mod icon;
 pub mod invites;
 pub mod local;
@@ -40,6 +39,7 @@ pub mod registration;
 /// rather than under the wasm-only `app` module that consumes it.
 pub mod route_segments;
 pub mod sessions;
+pub mod settings;
 pub mod sidebar;
 pub mod site;
 pub mod smtp;

@@ -1,7 +1,7 @@
 import { reenterAdminSettings } from "./admin-settings";
 import { test, expect } from "./fixtures";
 import { click, goto, signInAs, waitForSelector } from "./helpers";
-import { openHubDestination, signOutViaAccount } from "./hubs";
+import { openAreaDestination, signOutViaAccount } from "./settings-areas";
 import { navigateInApp } from "./navigate";
 import { SEL } from "./selectors";
 import { seedConfigViaTool } from "./seed";
@@ -347,7 +347,7 @@ test("site base URL warning banner revalidates in place after relevant settings 
     expect(homeChromeBox.y).toBeGreaterThanOrEqual(
       warningBox.y + warningBox.height,
     );
-    await openHubDestination(page, "/settings", {
+    await openAreaDestination(page, "/settings", {
       url: "/admin/site",
       ready: 'input[name="base_url"]',
     });

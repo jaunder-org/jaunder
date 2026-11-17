@@ -22,7 +22,7 @@ import {
 } from "./helpers";
 import { allowEngineDependentBoot, allowSecondBoot } from "./bootBudget";
 import { SEL } from "./selectors";
-import { signOutViaAccount } from "./hubs";
+import { signOutViaAccount } from "./settings-areas";
 import { applySeededSession, createSessionViaTool } from "./seed";
 import { expectVisual } from "./visual";
 import { expectAccessible } from "./accessibility";
@@ -448,8 +448,8 @@ test("anonymous: / has no authed sidebar chrome", async ({ page }) => {
 // #591: the session (operator status included) rides in the auth marker, so the
 // signed-in chrome is seeded flash-free on boot (not awaited from a server
 // fetch). Proof: fail the `get_session()` reconcile so no server confirmation can
-// arrive — the header hub controls must still paint, sourced from the marker
-// seed alone. Operator-only destinations now live on the private Settings hub,
+// arrive — the header Settings and Account controls must still paint, sourced from the marker
+// seed alone. Operator-only destinations now live on the private Settings page,
 // which waits for that reconcile (#1733), so a public timeline is the surface.
 test("operator: signed-in chrome is seeded flash-free from the marker", async ({
   page,
@@ -466,6 +466,6 @@ test("operator: signed-in chrome is seeded flash-free from the marker", async ({
   );
   await goto(page, "/~testoperator");
 
-  await expect(page.locator(SEL.hubControl("/settings"))).toBeVisible();
+  await expect(page.locator(SEL.areaControl("/settings"))).toBeVisible();
   await expect(page.locator(SEL.accountControl)).toBeVisible();
 });

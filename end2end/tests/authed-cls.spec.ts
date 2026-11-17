@@ -15,7 +15,7 @@ import { signInAsNewUser } from "./helpers";
 import { createPostViaApi } from "./posts";
 import { expectNoShiftAcrossMount } from "./layout-shift";
 
-test("authed owner: Actions trigger and hub controls are additive (no content shift)", async ({
+test("authed owner: Actions trigger and Settings and Account controls are additive (no content shift)", async ({
   page,
 }, testInfo) => {
   // signInAsNewUser (not the registeredPage fixture) so we get the username to
@@ -52,7 +52,7 @@ test("authed owner: Actions trigger and hub controls are additive (no content sh
       await expect(p.locator(".j-post-action-trigger")).toBeVisible({
         timeout: slowBrowserTimeoutMs(testInfo, 10_000),
       });
-      await expect(p.locator(".j-topbar .j-hub-controls")).toBeVisible({
+      await expect(p.locator(".j-topbar .j-area-controls")).toBeVisible({
         timeout: slowBrowserTimeoutMs(testInfo, 10_000),
       });
     },

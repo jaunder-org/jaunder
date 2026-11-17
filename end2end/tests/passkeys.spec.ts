@@ -14,7 +14,7 @@ import {
   setAndVerifyEmail,
   waitForSelector,
 } from "./helpers";
-import { openHubDestination, signOutViaAccount } from "./hubs";
+import { openAreaDestination, signOutViaAccount } from "./settings-areas";
 import { navigateInApp } from "./navigate";
 import { SEL } from "./selectors";
 import { applySeededSession, seedConfigViaTool } from "./seed";
@@ -164,7 +164,7 @@ test("Chromium passkeys enroll, authenticate discoverably, refresh metadata, and
     await waitForSelector(page, PASSKEY_LOGIN);
     await click(page, PASSKEY_LOGIN);
     await waitForSelector(page, SEL.accountControl);
-    await openHubDestination(page, "/account", {
+    await openAreaDestination(page, "/account", {
       url: "/passkeys",
       ready: PASSKEYS_LIST,
     });
@@ -238,7 +238,7 @@ test("Chromium passkeys enroll, authenticate discoverably, refresh metadata, and
     await click(page, PASSKEY_LOGIN);
     await waitForSelector(page, SEL.accountControl);
 
-    await openHubDestination(page, "/account", {
+    await openAreaDestination(page, "/account", {
       url: "/passkeys",
       ready: PASSKEYS_LIST,
     });
@@ -265,7 +265,7 @@ test("Chromium passkeys enroll, authenticate discoverably, refresh metadata, and
     });
     await click(page, PASSKEY_LOGIN);
     await waitForSelector(page, SEL.accountControl);
-    await openHubDestination(page, "/account", {
+    await openAreaDestination(page, "/account", {
       url: "/passkeys",
       ready: PASSKEYS_LIST,
     });
@@ -306,10 +306,10 @@ test("anonymous passkeys route redirects to Login", async ({ page }) => {
   await expect(page.locator(PASSKEY_PAGE)).toHaveCount(0);
 });
 
-test("authenticated Account hub reaches passkeys", async ({ page, user }) => {
+test("authenticated Account page reaches passkeys", async ({ page, user }) => {
   await signInAs(page, user.username);
   await goto(page, "/app");
-  await openHubDestination(page, "/account", {
+  await openAreaDestination(page, "/account", {
     url: "/passkeys",
     ready: PASSKEY_PAGE,
   });

@@ -1,35 +1,37 @@
 /**
- * #1733 — the Settings and Account corner controls and their hub pages.
+ * #1733 — the Settings and Account corner controls and the Settings and
+ * Account pages they open.
  *
  * Configuration left the sidebar: every page header ends, for a signed-in
- * viewer, with a Settings and an Account control, each opening a hub page that
- * links to the existing configuration pages. Hub rows follow the viewer rules
- * (operators alone see Site administration); a hub's sub-pages link back to it
- * and keep its control marked current.
+ * viewer, with a Settings and an Account control, each opening a page that
+ * links to the existing configuration pages. Rows follow the viewer rules
+ * (operators alone see Site administration); a settings area's sub-pages link
+ * back to it and keep its control marked current.
  */
 import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import {
   BASE_URL,
   click,
+  failServerFn,
   fillLoginForm,
   goto,
   signInAs,
   signInAsNewUser,
   waitForSelector,
 } from "./helpers";
-import { openHub, signOutViaAccount } from "./hubs";
+import { openArea, signOutViaAccount } from "./settings-areas";
 import { navigateInApp } from "./navigate";
 import { SEL } from "./selectors";
 
-const HUB_CONTROLS = ".j-topbar .j-hub-controls";
-const SETTINGS_CONTROL = SEL.hubControl("/settings");
+const AREA_CONTROLS = ".j-topbar .j-area-controls";
+const SETTINGS_CONTROL = SEL.areaControl("/settings");
 const BACK_LINK = ".j-topbar .j-topbar-back";
 
 /** Both controls are present, last in the header's right slot, and — where the
  *  page has a timeline sort control — after it. */
-async function expectHubControls(page: Page, afterSort: boolean) {
-  await expect(page.locator(HUB_CONTROLS)).toBeVisible();
+async function expectAreaControls(page: Page, afterSort: boolean) {
+  await expect(page.locator(AREA_CONTROLS)).toBeVisible();
   await expect(page.locator(SETTINGS_CONTROL)).toHaveAttribute(
     "aria-label",
     "Settings",
@@ -41,14 +43,14 @@ async function expectHubControls(page: Page, afterSort: boolean) {
   const right = page.locator(".j-topbar .j-topbar-right");
   expect(
     await right.evaluate((slot) =>
-      slot.lastElementChild?.classList.contains("j-hub-controls"),
+      slot.lastElementChild?.classList.contains("j-area-controls"),
     ),
   ).toBe(true);
   if (afterSort) {
     const sort = right.locator(".j-timeline-order");
     await expect(sort).toBeVisible();
     const sortBox = (await sort.boundingBox())!;
-    const controlsBox = (await page.locator(HUB_CONTROLS).boundingBox())!;
+    const controlsBox = (await page.locator(AREA_CONTROLS).boundingBox())!;
     expect(controlsBox.x).toBeGreaterThanOrEqual(sortBox.x + sortBox.width);
   }
 }
@@ -57,7 +59,7 @@ test("signed-in member sees the controls after the sort button on Home", async (
   registeredPage,
 }) => {
   const page = await registeredPage("/app");
-  await expectHubControls(page, true);
+  await expectAreaControls(page, true);
   await expect(page.locator(SETTINGS_CONTROL)).not.toHaveAttribute(
     "aria-current",
     "page",
@@ -69,7 +71,7 @@ test("signed-in member sees the controls after the sort button on a public timel
 }) => {
   const username = await signInAsNewUser(page);
   await goto(page, `/~${username}`);
-  await expectHubControls(page, true);
+  await expectAreaControls(page, true);
 });
 
 test("signed-in member sees the controls on a private page", async ({
@@ -77,16 +79,18 @@ test("signed-in member sees the controls on a private page", async ({
 }) => {
   const page = await registeredPage("/drafts");
   await expect(page.locator(SEL.topbarHeading)).toHaveText("Drafts");
-  await expectHubControls(page, false);
+  await expectAreaControls(page, false);
 });
 
-test("anonymous viewer sees no hub controls", async ({ page }) => {
+test("anonymous viewer sees no Settings or Account controls", async ({
+  page,
+}) => {
   // `goto` waits for the CSR mount, so an absent control is a real absence
   // rather than an unmounted tree.
   await goto(page, "/");
   await expect(page.locator(".j-topbar .j-timeline-order")).toBeVisible();
-  await expect(page.locator(".j-hub-controls")).toHaveCount(0);
-  await expect(page.locator(".j-hub-control")).toHaveCount(0);
+  await expect(page.locator(".j-area-controls")).toHaveCount(0);
+  await expect(page.locator(".j-area-control")).toHaveCount(0);
 });
 
 test("in-app login shows the controls without a reload", async ({
@@ -95,7 +99,7 @@ test("in-app login shows the controls without a reload", async ({
   firstNav,
 }) => {
   await goto(page, "/login", { timeout: firstNav });
-  await expect(page.locator(".j-hub-controls")).toHaveCount(0);
+  await expect(page.locator(".j-area-controls")).toHaveCount(0);
   await page.evaluate(() => {
     (window as Window & { __jaunderNoReload?: boolean }).__jaunderNoReload =
       true;
@@ -104,7 +108,7 @@ test("in-app login shows the controls without a reload", async ({
   await fillLoginForm(page, user.username, user.password);
   await waitForSelector(page, SEL.accountControl);
   await expect(page).toHaveURL(`${BASE_URL}/app`);
-  await expectHubControls(page, true);
+  await expectAreaControls(page, true);
   expect(
     await page.evaluate(
       () =>
@@ -114,11 +118,11 @@ test("in-app login shows the controls without a reload", async ({
   ).toBe(true);
 });
 
-test("member Settings hub has no Site administration group", async ({
+test("member Settings page has no Site administration group", async ({
   registeredPage,
 }) => {
   const page = await registeredPage("/app");
-  await openHub(page, "/settings", SEL.hubRow("/profile"));
+  await openArea(page, "/settings", SEL.areaRow("/profile"));
 
   await expect(page.locator(SETTINGS_CONTROL)).toHaveAttribute(
     "aria-current",
@@ -129,11 +133,25 @@ test("member Settings hub has no Site administration group", async ({
     "page",
   );
   await expect(page.locator(BACK_LINK)).toHaveCount(0);
-  await expect(page.locator(SEL.hubRow("/themes"))).toBeVisible();
+  await expect(page.locator(SEL.areaRow("/themes"))).toBeVisible();
   await expect(
-    page.locator(".j-hub-group h2", { hasText: "Site administration" }),
+    page.locator(".j-area-group h2", { hasText: "Site administration" }),
   ).toHaveCount(0);
-  await expect(page.locator('.j-hub-row[href^="/admin/"]')).toHaveCount(0);
+  await expect(page.locator('.j-area-row[href^="/admin/"]')).toHaveCount(0);
+});
+
+test("Settings page keeps its rows when the Registration Policy fails to load", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/app");
+  await failServerFn(page, "registration/get_policy");
+  await openArea(page, "/settings", SEL.areaRow("/profile"));
+
+  await expect(page.locator(".j-settings p.error")).toContainText(
+    "Invitation availability could not be loaded",
+  );
+  await expect(page.locator(SEL.areaRow("/themes"))).toBeVisible();
+  await expect(page.locator(SEL.areaRow("/invites"))).toHaveCount(0);
 });
 
 const ADMIN_DESTINATIONS = [
@@ -143,30 +161,32 @@ const ADMIN_DESTINATIONS = [
   { url: "/admin/websub", ready: 'input[name="hub_url"]' },
 ] as const;
 
-test("operator Settings hub lists every admin page and each row reaches it", async ({
+test("operator Settings page lists every admin page and each row reaches it", async ({
   page,
 }) => {
   await signInAs(page, "testoperator");
   await goto(page, "/app");
-  await openHub(page, "/settings", SEL.hubRow("/admin/backups"));
+  await openArea(page, "/settings", SEL.areaRow("/admin/backups"));
 
-  const adminGroup = page.locator(".j-hub-group", {
+  const adminGroup = page.locator(".j-area-group", {
     has: page.locator("h2", { hasText: "Site administration" }),
   });
-  await expect(adminGroup.locator(".j-hub-row")).toHaveCount(
+  await expect(adminGroup.locator(".j-area-row")).toHaveCount(
     ADMIN_DESTINATIONS.length,
   );
   for (const destination of ADMIN_DESTINATIONS) {
-    await expect(adminGroup.locator(SEL.hubRow(destination.url))).toBeVisible();
+    await expect(
+      adminGroup.locator(SEL.areaRow(destination.url)),
+    ).toBeVisible();
   }
 
   for (const [index, destination] of ADMIN_DESTINATIONS.entries()) {
     if (index > 0) {
-      await openHub(page, "/settings", SEL.hubRow(destination.url));
+      await openArea(page, "/settings", SEL.areaRow(destination.url));
     }
     await navigateInApp(
       page,
-      () => click(page, SEL.hubRow(destination.url)),
+      () => click(page, SEL.areaRow(destination.url)),
       destination,
     );
     await expect(page.locator(BACK_LINK)).toHaveText("← Settings");
@@ -182,9 +202,9 @@ test("Account → Passkeys shows the back link and keeps Account current", async
 }) => {
   const username = await signInAsNewUser(page);
   await goto(page, "/app");
-  await openHub(page, "/account", SEL.hubRow("/passkeys"));
+  await openArea(page, "/account", SEL.areaRow("/passkeys"));
 
-  await expect(page.locator(".j-hub-identity")).toContainText(username);
+  await expect(page.locator(".j-area-identity")).toContainText(username);
   await expect(page.locator(SEL.accountControl)).toHaveAttribute(
     "aria-current",
     "page",
@@ -195,7 +215,7 @@ test("Account → Passkeys shows the back link and keeps Account current", async
   );
   await expect(page.locator(BACK_LINK)).toHaveCount(0);
 
-  await navigateInApp(page, () => click(page, SEL.hubRow("/passkeys")), {
+  await navigateInApp(page, () => click(page, SEL.areaRow("/passkeys")), {
     url: "/passkeys",
     ready: '[data-test="passkeys-page"]',
   });
@@ -208,7 +228,7 @@ test("Account → Passkeys shows the back link and keeps Account current", async
 
   await navigateInApp(page, () => click(page, BACK_LINK), {
     url: "/account",
-    ready: SEL.hubRow("/passkeys"),
+    ready: SEL.areaRow("/passkeys"),
   });
 });
 
@@ -216,11 +236,11 @@ test("Account → Sign out signs out and the controls disappear", async ({
   registeredPage,
 }) => {
   const page = await registeredPage("/app");
-  await expect(page.locator(HUB_CONTROLS)).toBeVisible();
+  await expect(page.locator(AREA_CONTROLS)).toBeVisible();
 
   await signOutViaAccount(page);
   await page.waitForURL(`${BASE_URL}/`);
   await expect(page.locator(".j-nav a[href='/']")).toHaveText("Local");
-  await expect(page.locator(".j-hub-controls")).toHaveCount(0);
-  await expect(page.locator(".j-hub-control")).toHaveCount(0);
+  await expect(page.locator(".j-area-controls")).toHaveCount(0);
+  await expect(page.locator(".j-area-control")).toHaveCount(0);
 });

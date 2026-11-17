@@ -1,21 +1,23 @@
-//! The Settings and Account hub catalogs: which configuration destinations each
-//! hub lists, who may see them, and which hub owns a given page. Pure and
-//! host-tested; the reactive hub pages and the `Topbar` corner controls render
-//! from it, so visibility rules live in exactly one place.
+//! The Settings and Account area catalogs: which configuration destinations the
+//! Settings page and the Account page each list, who may see them, and which
+//! settings area owns a given page. Pure and host-tested; the reactive Settings
+//! and Account pages and the `Topbar` corner controls render from it, so
+//! visibility rules live in exactly one place.
 
 use std::sync::LazyLock;
 
 use common::{registration::RegistrationPolicy, root_relative_url::RootRelativeUrl};
 
-/// One of the two configuration hubs reached from the page-header controls.
+/// One of the two settings areas (the Settings page and the Account page)
+/// reached from the page-header controls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Hub {
+pub enum SettingsArea {
     Settings,
     Account,
 }
 
-impl Hub {
-    /// The hub page's own path.
+impl SettingsArea {
+    /// The area page's own path.
     #[must_use]
     pub const fn path(self) -> &'static str {
         match self {
@@ -24,7 +26,7 @@ impl Hub {
         }
     }
 
-    /// The hub's visible name, used for its page title and back links.
+    /// The area's visible name, used for its page title and back links.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
@@ -33,28 +35,29 @@ impl Hub {
         }
     }
 
-    /// The hub that owns `pathname`: the hub page itself or any destination it
+    /// The area that owns `pathname`: the area page itself or any destination it
     /// lists. Matching is exact, like the sidebar's, so nested routes (e.g. a
-    /// Post editor) are never claimed by a hub.
+    /// Post editor) are never claimed by a settings area.
     #[must_use]
     pub fn owning(pathname: &str) -> Option<Self> {
-        [Self::Settings, Self::Account].into_iter().find(|hub| {
-            hub.path() == pathname
-                || HUB_LINKS
+        [Self::Settings, Self::Account].into_iter().find(|area| {
+            area.path() == pathname
+                || AREA_LINKS
                     .iter()
-                    .any(|link| link.hub == *hub && link.href.as_ref() == pathname)
+                    .any(|link| link.area == *area && link.href.as_ref() == pathname)
         })
     }
 
-    /// The hub a sub-page should link back to; `None` on the hub page itself
-    /// and on pages no hub owns.
+    /// The area a sub-page should link back to; `None` on the area page itself
+    /// and on pages no settings area owns.
     #[must_use]
     pub fn parent_of(pathname: &str) -> Option<Self> {
-        Self::owning(pathname).filter(|hub| hub.path() != pathname)
+        Self::owning(pathname).filter(|area| area.path() != pathname)
     }
 }
 
-/// Who may see a hub row, beyond being signed in (both hubs are private).
+/// Who may see an area row, beyond being signed in (both area pages are
+/// private).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Visibility {
     Everyone,
@@ -63,9 +66,9 @@ enum Visibility {
     Operators,
 }
 
-/// A linked configuration destination listed on a hub.
-pub struct HubLink {
-    hub: Hub,
+/// A linked configuration destination listed on a settings area page.
+pub struct AreaLink {
+    area: SettingsArea,
     pub group: &'static str,
     pub label: &'static str,
     pub description: &'static str,
@@ -73,15 +76,15 @@ pub struct HubLink {
     visibility: Visibility,
 }
 
-/// Group names, in display order within their hub.
+/// Group names, in display order within their settings area.
 const PUBLISHING: &str = "Publishing";
 const INVITATIONS: &str = "Invitations";
 const SITE_ADMINISTRATION: &str = "Site administration";
 const SIGN_IN: &str = "Sign-in and security";
 
-static HUB_LINKS: LazyLock<[HubLink; 10]> = LazyLock::new(|| {
-    let link = |hub, group, label, description, href, visibility| HubLink {
-        hub,
+static AREA_LINKS: LazyLock<[AreaLink; 10]> = LazyLock::new(|| {
+    let link = |area, group, label, description, href, visibility| AreaLink {
+        area,
         group,
         label,
         description,
@@ -92,7 +95,7 @@ static HUB_LINKS: LazyLock<[HubLink; 10]> = LazyLock::new(|| {
         // `/profile` is a Settings destination: beyond the username card it
         // holds the Default Audience, Content License and Default Post Format.
         link(
-            Hub::Settings,
+            SettingsArea::Settings,
             PUBLISHING,
             "Profile and posting defaults",
             "Display name, bio, default audience, license and post format",
@@ -100,7 +103,7 @@ static HUB_LINKS: LazyLock<[HubLink; 10]> = LazyLock::new(|| {
             Visibility::Everyone,
         ),
         link(
-            Hub::Settings,
+            SettingsArea::Settings,
             PUBLISHING,
             "Themes",
             "How your public pages look",
@@ -108,7 +111,7 @@ static HUB_LINKS: LazyLock<[HubLink; 10]> = LazyLock::new(|| {
             Visibility::Everyone,
         ),
         link(
-            Hub::Settings,
+            SettingsArea::Settings,
             INVITATIONS,
             "Invites",
             "Invite people to join",
@@ -116,7 +119,7 @@ static HUB_LINKS: LazyLock<[HubLink; 10]> = LazyLock::new(|| {
             Visibility::InvitationIssuers,
         ),
         link(
-            Hub::Settings,
+            SettingsArea::Settings,
             SITE_ADMINISTRATION,
             "Configure Backups",
             "Scheduled backups and restore",
@@ -124,7 +127,7 @@ static HUB_LINKS: LazyLock<[HubLink; 10]> = LazyLock::new(|| {
             Visibility::Operators,
         ),
         link(
-            Hub::Settings,
+            SettingsArea::Settings,
             SITE_ADMINISTRATION,
             "Site Settings",
             "Site identity, base URL and Registration Policy",
@@ -132,7 +135,7 @@ static HUB_LINKS: LazyLock<[HubLink; 10]> = LazyLock::new(|| {
             Visibility::Operators,
         ),
         link(
-            Hub::Settings,
+            SettingsArea::Settings,
             SITE_ADMINISTRATION,
             "SMTP Relay",
             "Outgoing email delivery",
@@ -140,7 +143,7 @@ static HUB_LINKS: LazyLock<[HubLink; 10]> = LazyLock::new(|| {
             Visibility::Operators,
         ),
         link(
-            Hub::Settings,
+            SettingsArea::Settings,
             SITE_ADMINISTRATION,
             "WebSub",
             "Hub publishing for syndication feeds",
@@ -148,7 +151,7 @@ static HUB_LINKS: LazyLock<[HubLink; 10]> = LazyLock::new(|| {
             Visibility::Operators,
         ),
         link(
-            Hub::Account,
+            SettingsArea::Account,
             SIGN_IN,
             "Email",
             "Your address and its verification",
@@ -156,7 +159,7 @@ static HUB_LINKS: LazyLock<[HubLink; 10]> = LazyLock::new(|| {
             Visibility::Everyone,
         ),
         link(
-            Hub::Account,
+            SettingsArea::Account,
             SIGN_IN,
             "Passkeys",
             "Sign in securely with this device",
@@ -164,7 +167,7 @@ static HUB_LINKS: LazyLock<[HubLink; 10]> = LazyLock::new(|| {
             Visibility::Everyone,
         ),
         link(
-            Hub::Account,
+            SettingsArea::Account,
             SIGN_IN,
             "Sessions",
             "Where you are signed in, and app passwords",
@@ -178,45 +181,45 @@ static HUB_LINKS: LazyLock<[HubLink; 10]> = LazyLock::new(|| {
 /// source invalid rather than represent a runtime route condition.
 fn root_relative_url(path: &'static str) -> RootRelativeUrl {
     let Ok(url) = path.parse() else {
-        unreachable!("hub catalog contains only valid root-relative paths");
+        unreachable!("settings area catalog contains only valid root-relative paths");
     };
     url
 }
 
-/// A titled group of hub rows, in display order.
-pub struct HubGroup {
+/// A titled group of area rows, in display order.
+pub struct AreaGroup {
     pub title: &'static str,
-    pub links: Vec<&'static HubLink>,
+    pub links: Vec<&'static AreaLink>,
 }
 
-/// The Settings hub's groups for a signed-in viewer with this authority. Groups
+/// The Settings page's groups for a signed-in viewer with this authority. Groups
 /// with no visible rows are omitted rather than rendered empty.
 #[must_use]
-pub fn settings_groups(policy: RegistrationPolicy, is_operator: bool) -> Vec<HubGroup> {
-    groups(Hub::Settings, |visibility| match visibility {
+pub fn settings_groups(policy: RegistrationPolicy, is_operator: bool) -> Vec<AreaGroup> {
+    groups(SettingsArea::Settings, |visibility| match visibility {
         Visibility::Everyone => true,
         Visibility::InvitationIssuers => policy.may_issue_invitation(is_operator),
         Visibility::Operators => is_operator,
     })
 }
 
-/// The Account hub's groups; every signed-in viewer sees the same rows.
+/// The Account page's groups; every signed-in viewer sees the same rows.
 #[must_use]
-pub fn account_groups() -> Vec<HubGroup> {
-    groups(Hub::Account, |visibility| {
+pub fn account_groups() -> Vec<AreaGroup> {
+    groups(SettingsArea::Account, |visibility| {
         visibility == Visibility::Everyone
     })
 }
 
-fn groups(hub: Hub, visible: impl Fn(Visibility) -> bool) -> Vec<HubGroup> {
-    let mut groups: Vec<HubGroup> = Vec::new();
-    for link in HUB_LINKS.iter().filter(|link| link.hub == hub) {
+fn groups(area: SettingsArea, visible: impl Fn(Visibility) -> bool) -> Vec<AreaGroup> {
+    let mut groups: Vec<AreaGroup> = Vec::new();
+    for link in AREA_LINKS.iter().filter(|link| link.area == area) {
         if !visible(link.visibility) {
             continue;
         }
         match groups.last_mut() {
             Some(group) if group.title == link.group => group.links.push(link),
-            _ => groups.push(HubGroup {
+            _ => groups.push(AreaGroup {
                 title: link.group,
                 links: vec![link],
             }),
@@ -229,7 +232,7 @@ fn groups(hub: Hub, visible: impl Fn(Visibility) -> bool) -> Vec<HubGroup> {
 mod tests {
     use super::*;
 
-    fn hrefs(groups: &[HubGroup]) -> Vec<(&'static str, &str)> {
+    fn hrefs(groups: &[AreaGroup]) -> Vec<(&'static str, &str)> {
         groups
             .iter()
             .flat_map(|group| {
@@ -242,7 +245,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_hub_shows_members_only_their_own_preferences() {
+    fn settings_page_shows_members_only_their_own_preferences() {
         let groups = settings_groups(RegistrationPolicy::Closed, false);
         assert_eq!(
             hrefs(&groups),
@@ -251,7 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_hub_adds_site_administration_for_operators() {
+    fn settings_page_adds_site_administration_for_operators() {
         let groups = settings_groups(RegistrationPolicy::Closed, true);
         assert_eq!(
             hrefs(&groups),
@@ -286,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn account_hub_lists_sign_in_and_security() {
+    fn account_page_lists_sign_in_and_security() {
         assert_eq!(
             hrefs(&account_groups()),
             [
@@ -298,37 +301,61 @@ mod tests {
     }
 
     #[test]
-    fn owning_hub_is_exact_for_hubs_and_their_destinations() {
-        assert_eq!(Hub::owning("/settings"), Some(Hub::Settings));
-        assert_eq!(Hub::owning("/account"), Some(Hub::Account));
-        assert_eq!(Hub::owning("/profile"), Some(Hub::Settings));
-        assert_eq!(Hub::owning("/profile/email"), Some(Hub::Account));
-        assert_eq!(Hub::owning("/admin/websub"), Some(Hub::Settings));
-        assert_eq!(Hub::owning("/passkeys"), Some(Hub::Account));
-        assert_eq!(Hub::owning("/app"), None);
-        assert_eq!(Hub::owning("/settings/extra"), None);
-        assert_eq!(Hub::owning("/~alice"), None);
+    fn owning_area_is_exact_for_area_pages_and_their_destinations() {
+        assert_eq!(
+            SettingsArea::owning("/settings"),
+            Some(SettingsArea::Settings)
+        );
+        assert_eq!(
+            SettingsArea::owning("/account"),
+            Some(SettingsArea::Account)
+        );
+        assert_eq!(
+            SettingsArea::owning("/profile"),
+            Some(SettingsArea::Settings)
+        );
+        assert_eq!(
+            SettingsArea::owning("/profile/email"),
+            Some(SettingsArea::Account)
+        );
+        assert_eq!(
+            SettingsArea::owning("/admin/websub"),
+            Some(SettingsArea::Settings)
+        );
+        assert_eq!(
+            SettingsArea::owning("/passkeys"),
+            Some(SettingsArea::Account)
+        );
+        assert_eq!(SettingsArea::owning("/app"), None);
+        assert_eq!(SettingsArea::owning("/settings/extra"), None);
+        assert_eq!(SettingsArea::owning("/~alice"), None);
     }
 
     #[test]
-    fn hubs_are_private_routes() {
-        for hub in [Hub::Settings, Hub::Account] {
-            assert!(crate::app::PrivateDestination::parse(hub.path()).is_some());
+    fn area_pages_are_private_routes() {
+        for area in [SettingsArea::Settings, SettingsArea::Account] {
+            assert!(crate::app::PrivateDestination::parse(area.path()).is_some());
         }
     }
 
     #[test]
-    fn back_link_parent_excludes_the_hub_page_itself() {
-        assert_eq!(Hub::parent_of("/settings"), None);
-        assert_eq!(Hub::parent_of("/account"), None);
-        assert_eq!(Hub::parent_of("/themes"), Some(Hub::Settings));
-        assert_eq!(Hub::parent_of("/sessions"), Some(Hub::Account));
-        assert_eq!(Hub::parent_of("/drafts"), None);
+    fn back_link_parent_excludes_the_area_page_itself() {
+        assert_eq!(SettingsArea::parent_of("/settings"), None);
+        assert_eq!(SettingsArea::parent_of("/account"), None);
+        assert_eq!(
+            SettingsArea::parent_of("/themes"),
+            Some(SettingsArea::Settings)
+        );
+        assert_eq!(
+            SettingsArea::parent_of("/sessions"),
+            Some(SettingsArea::Account)
+        );
+        assert_eq!(SettingsArea::parent_of("/drafts"), None);
     }
 
     #[test]
     fn every_row_has_copy_and_belongs_to_a_routed_private_page() {
-        for link in HUB_LINKS.iter() {
+        for link in AREA_LINKS.iter() {
             assert!(!link.label.is_empty() && !link.description.is_empty());
             assert!(
                 crate::app::PrivateDestination::parse(link.href.as_ref()).is_some(),

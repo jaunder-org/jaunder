@@ -16,7 +16,11 @@ import { expectVisual } from "./visual";
 import { expectAccessible } from "./accessibility";
 import { navigateInApp } from "./navigate";
 import { openComposerFromSidebar } from "./posts";
-import { openHub, openHubDestination, signOutViaAccount } from "./hubs";
+import {
+  openArea,
+  openAreaDestination,
+  signOutViaAccount,
+} from "./settings-areas";
 
 test("register page shows form", async ({ page }) => {
   // Holdout (spec D6): proves /register renders.
@@ -177,7 +181,7 @@ test("authenticated private routes mount member views during in-app navigation",
   const page = await registeredPage("/sessions");
   await expect(page.locator(".j-topbar h1")).toHaveText("Sessions");
 
-  await openHubDestination(page, "/settings", {
+  await openAreaDestination(page, "/settings", {
     url: "/profile",
     ready: '.j-topbar h1:has-text("Profile")',
   });
@@ -237,9 +241,9 @@ test("direct login with valid credentials falls back to Home", async ({
   perf.mark("assertions_complete");
   await perf.log();
 
-  // The session is this user's: the Account hub names who is signed in.
-  await openHub(page, "/account", ".j-hub-identity");
-  await expect(page.locator(".j-hub-identity")).toContainText(user.username);
+  // The session is this user's: the Account page names who is signed in.
+  await openArea(page, "/account", ".j-area-identity");
+  await expect(page.locator(".j-area-identity")).toContainText(user.username);
 });
 
 test("confirmed password login returns to the exact private destination without a reload", async ({
@@ -395,7 +399,7 @@ test("logout page logs out", async ({ page, user }) => {
   await signInAs(page, user.username);
   await goto(page, "/app");
 
-  // Use the rendered Account hub Sign out link to avoid Firefox navigation
+  // Use the rendered Account page Sign out link to avoid Firefox navigation
   // abort races.
   await signOutViaAccount(page);
 
@@ -418,7 +422,7 @@ test("sidebar reverts to signed-out state after logout", async ({
   await expect(page.locator(SEL.accountControl)).toBeVisible();
   await expect(page.locator('.j-nav a[href="/app"]')).toHaveText("Home");
 
-  // Sign out through the Account hub and confirm the sidebar switches back.
+  // Sign out through the Account page and confirm the sidebar switches back.
   await signOutViaAccount(page);
   // Logout redirects to "/" via client-side pushState (#591); waitForURL is reliable.
   await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
@@ -454,7 +458,7 @@ test("authenticated sidebar exposes Home and no Local", async ({
   await waitForSelector(page, '.j-nav a[href="/drafts"]');
   await waitForSelector(page, '.j-nav a[href="/scheduled"]');
   // Home, Compose, Manage Posts, Drafts, Scheduled, History, Media and
-  // Audiences have hrefs; configuration lives behind the header hub controls
+  // Audiences have hrefs; configuration lives behind the header Settings and Account controls
   // (#1733).
   await waitForSelector(page, '.j-nav a[href="/audiences"]');
   await expect(page.locator(".j-sidebar")).not.toContainText("Sources");

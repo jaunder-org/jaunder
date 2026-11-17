@@ -10,8 +10,8 @@ use crate::icon::{self, Icons};
 /// and the reactive authenticated sidebar.
 ///
 /// The sidebar holds only the places where a User reads and writes Posts.
-/// Configuration destinations live on the Settings and Account hubs reached
-/// from the page-header corner controls (`crate::hub`, #1733).
+/// Configuration destinations live on the Settings and Account pages reached
+/// from the page-header corner controls (`crate::settings`, #1733).
 pub(super) struct NavItem {
     pub(super) key: &'static str,
     pub(super) label: &'static str,
@@ -338,7 +338,7 @@ mod tests {
     }
 
     #[test]
-    fn configuration_destinations_live_on_hubs_not_in_the_sidebar() {
+    fn configuration_destinations_live_on_settings_areas_not_in_the_sidebar() {
         for path in [
             "/themes",
             "/sessions",
@@ -351,7 +351,10 @@ mod tests {
             "/admin/websub",
         ] {
             assert_eq!(active_key(path), None, "{path}");
-            assert!(crate::hub::Hub::owning(path).is_some(), "{path}");
+            assert!(
+                crate::settings::SettingsArea::owning(path).is_some(),
+                "{path}"
+            );
         }
     }
 }

@@ -1,12 +1,12 @@
 /**
- * Internal: re-entry leaves an admin settings page for the Settings hub and
+ * Internal: re-entry leaves an admin settings page for the Settings page and
  * returns through its row, so remounting recreates the settings page Resource
  * and refetches server state. Per ADR-0111, both hops stay in-app behind
  * readiness barriers; reloading or collapsing this to one hop would not
  * exercise the lifecycle under test.
  */
 import type { Page } from "@playwright/test";
-import { openHubDestination } from "./hubs";
+import { openAreaDestination } from "./settings-areas";
 
 const ADMIN_SETTINGS_TARGETS = {
   site: { url: "/admin/site", ready: 'input[name="title"]' },
@@ -16,10 +16,10 @@ const ADMIN_SETTINGS_TARGETS = {
 
 type AdminSettingsTarget = keyof typeof ADMIN_SETTINGS_TARGETS;
 
-/** Remount a settings page through the Settings hub. */
+/** Remount a settings page through the Settings page. */
 export async function reenterAdminSettings(
   page: Page,
   target: AdminSettingsTarget,
 ): Promise<void> {
-  await openHubDestination(page, "/settings", ADMIN_SETTINGS_TARGETS[target]);
+  await openAreaDestination(page, "/settings", ADMIN_SETTINGS_TARGETS[target]);
 }

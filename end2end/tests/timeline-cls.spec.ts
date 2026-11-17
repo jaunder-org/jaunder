@@ -200,7 +200,7 @@ for (const route of ROUTES) {
           });
           await expectSemanticHero(p);
           if (signedIn) {
-            await expect(p.locator(".j-topbar .j-hub-controls")).toBeVisible({
+            await expect(p.locator(".j-topbar .j-area-controls")).toBeVisible({
               timeout: slowBrowserTimeoutMs(testInfo, 10_000),
             });
           }

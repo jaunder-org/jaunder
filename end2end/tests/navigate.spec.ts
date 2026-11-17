@@ -14,7 +14,7 @@
 
 import { expect } from "@playwright/test";
 import { test } from "./fixtures";
-import { openHubDestination } from "./hubs";
+import { openAreaDestination } from "./settings-areas";
 import { navigateInApp } from "./navigate";
 import { SEL } from "./selectors";
 
@@ -60,7 +60,7 @@ test("Compose sidebar navigation reaches the full composer without a document lo
   expect(loads).toBe(0);
 });
 
-test("Account hub navigation reaches session management without a document load", async ({
+test("Account page navigation reaches session management without a document load", async ({
   registeredPage,
 }) => {
   const page = await registeredPage("/app");
@@ -72,7 +72,7 @@ test("Account hub navigation reaches session management without a document load"
   const accountControl = page.locator(SEL.accountControl);
   await expect(accountControl).toBeVisible();
   await expect(accountControl).not.toHaveAttribute("aria-current", "page");
-  await openHubDestination(page, "/account", {
+  await openAreaDestination(page, "/account", {
     url: "/sessions",
     ready: "[data-app-passwords]",
   });

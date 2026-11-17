@@ -6,7 +6,7 @@ import {
   signInAsNewUser,
   waitForSelector,
 } from "./helpers";
-import { openHubDestination } from "./hubs";
+import { openAreaDestination } from "./settings-areas";
 import { redriveDeadLettersViaCli, seedDeadLettersViaTool } from "./seed";
 import { findPingWave, type CapturedPing } from "./websub";
 
@@ -113,9 +113,9 @@ test("operator understands, pages, redrives, and rejects stale WebSub work", asy
 
   const regenerationIds = await seedDeadLettersViaTool("regeneration", 51);
   const publicationIds = await seedDeadLettersViaTool("publication", 1);
-  // Leave through the Settings hub and return, remounting the WebSub page so
+  // Leave through the Settings page and return, remounting the WebSub page so
   // it re-reads the seeded dead letters.
-  await openHubDestination(page, "/settings", {
+  await openAreaDestination(page, "/settings", {
     url: "/admin/websub",
     ready: '[data-phase="regeneration"] tbody tr',
   });

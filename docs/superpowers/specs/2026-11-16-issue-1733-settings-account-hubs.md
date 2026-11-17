@@ -98,8 +98,8 @@ Proof to execute:
    - The controls carry `aria-current` on their hub and sub-pages.
    - An anonymous viewer sees no controls.
 3. **Layout shift.** The signed-in projector probes (`authed-cls`, and
-   `timeline-cls` on `/~<user>`) stay green with the header's right slot added
-   as a probe target.
+   `timeline-cls` on `/~<user>`) stay green with the header's sort control added
+   as a probe target, measured after the corner controls fill in.
 4. **`visual-proof`.**
    - Before/after pairs: Home (signed-in operator) and a public timeline, each
      at 1280×760 and 390×844.

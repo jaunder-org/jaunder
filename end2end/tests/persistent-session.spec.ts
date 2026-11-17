@@ -7,7 +7,7 @@ import {
   click,
 } from "./helpers";
 import { SEL } from "./selectors";
-import { openHub, SIGN_OUT_LINK } from "./hubs";
+import { openArea } from "./settings-areas";
 
 test("browser receives and uses a persistent Session cookie and logout clears it", async ({
   page,
@@ -51,12 +51,12 @@ test("browser receives and uses a persistent Session cookie and logout clears it
   try {
     await goto(nextPage, "/sessions", { timeout: firstNav });
     await expect(nextPage.locator(".j-topbar h1")).toHaveText("Sessions");
-    // The cookie-backed session is this user's: the Account hub names them.
-    await openHub(nextPage, "/account", ".j-hub-identity");
-    await expect(nextPage.locator(".j-hub-identity")).toContainText(
+    // The cookie-backed session is this user's: the Account page names them.
+    await openArea(nextPage, "/account", ".j-area-identity");
+    await expect(nextPage.locator(".j-area-identity")).toContainText(
       user.username,
     );
-    await click(nextPage, SIGN_OUT_LINK);
+    await click(nextPage, SEL.signOutLink);
     await nextPage.waitForURL(`${BASE_URL}/`);
     await expect
       .poll(async () =>

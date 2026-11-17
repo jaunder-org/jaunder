@@ -61,15 +61,15 @@ protocol surfaces, not mounted CSR entry points; they are out of scope here.
 
 **Paths and entry points:** the shared `ParentRoute` shell; first CSR mount and
 shell navigation; the page-header Settings and Account controls and their
-`/settings` and `/account` hubs.
+`/settings` and `/account` pages.
 
 **Evidence:** [`end2end/tests/theme.spec.ts`](../../end2end/tests/theme.spec.ts)
 checks the mounted root/theme behavior;
 [`end2end/tests/authed-flash.spec.ts`](../../end2end/tests/authed-flash.spec.ts)
 checks authenticated shell state after the CSR mount; and
-[`end2end/tests/hub.spec.ts`](../../end2end/tests/hub.spec.ts) checks the hub
-controls' placement and visibility, member/operator hub rows, back links,
-current-page marking, and Sign out.
+[`end2end/tests/settings-areas.spec.ts`](../../end2end/tests/settings-areas.spec.ts)
+checks the Settings and Account controls' placement and visibility,
+member/operator rows, back links, current-page marking, and Sign out.
 
 ### Public reading
 
@@ -244,7 +244,7 @@ presentation from the private site surface.
 
 ### Theme management
 
-**Paths and entry points:** `/themes`; the Settings hub's Themes row. Authors
+**Paths and entry points:** `/themes`; the Settings page's Themes row. Authors
 manage their own catalog. Operators can switch to the server-authorized site
 catalog. The private Studio route never admits a custom stylesheet into its own
 document; the real public preview is isolated.

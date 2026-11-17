@@ -296,23 +296,23 @@
 /* Settings/Account corner controls (#1733). Fixed sizes so the pre-paint
    reservation below (`html.authed`) matches them exactly. */
 .j-topbar {
-  --hub-control-size: 36px;
-  --hub-controls-gap: 6px;
-  --hub-controls-width: calc(
-    2 * var(--hub-control-size) + var(--hub-controls-gap)
+  --area-control-size: 36px;
+  --area-controls-gap: 6px;
+  --area-controls-width: calc(
+    2 * var(--area-control-size) + var(--area-controls-gap)
   );
 }
 
-.j-hub-controls {
+.j-area-controls {
   display: flex;
-  gap: var(--hub-controls-gap);
+  gap: var(--area-controls-gap);
   flex: none;
 }
 
-.j-hub-control {
+.j-area-control {
   box-sizing: border-box;
-  width: var(--hub-control-size);
-  height: var(--hub-control-size);
+  width: var(--area-control-size);
+  height: var(--area-control-size);
   display: grid;
   place-items: center;
   border: 1px var(--border-style) var(--line);
@@ -321,12 +321,12 @@
   color: var(--ink-soft);
 }
 
-.j-hub-control:hover {
+.j-area-control:hover {
   color: var(--ink);
   border-color: var(--muted-soft);
 }
 
-.j-hub-control[aria-current="page"] {
+.j-area-control[aria-current="page"] {
   background: var(--accent-soft);
   border-color: var(--accent);
   color: var(--accent-ink);
@@ -1670,18 +1670,18 @@
   margin-top: 2px;
 }
 
-/* ─── Settings and Account hubs (#1733) ─── */
-.j-hub-rows {
+/* ─── Settings and Account pages (#1733) ─── */
+.j-area-rows {
   list-style: none;
   margin: 0;
   padding: 0;
 }
 
-.j-hub-rows li + li {
+.j-area-rows li + li {
   border-top: 1px var(--border-style) var(--line-soft);
 }
 
-.j-hub-row {
+.j-area-row {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -1692,11 +1692,11 @@
   text-decoration: none;
 }
 
-.j-hub-row:hover {
+.j-area-row:hover {
   background: var(--surface-alt);
 }
 
-.j-hub-row-text {
+.j-area-row-text {
   flex: 1;
   min-width: 0;
   display: flex;
@@ -1704,28 +1704,28 @@
   gap: 2px;
 }
 
-.j-hub-row-label {
+.j-area-row-label {
   font-weight: 600;
 }
 
-.j-hub-row-description {
+.j-area-row-description {
   font-size: var(--fs-meta);
   color: var(--muted);
 }
 
-.j-hub-row-chevron {
+.j-area-row-chevron {
   color: var(--muted);
   font-size: 18px;
 }
 
-.j-hub-identity {
+.j-area-identity {
   display: flex;
   align-items: center;
   gap: 12px;
   margin-bottom: 20px;
 }
 
-.j-hub-identity-name {
+.j-area-identity-name {
   font-size: 16px;
   font-weight: 600;
 }
@@ -3003,9 +3003,9 @@ html.authed .j-anon-only {
   display: none;
 }
 
-html.authed .j-topbar-right:not(:has(> .j-hub-controls))::after {
+html.authed .j-topbar-right:not(:has(> .j-area-controls))::after {
   content: "";
-  width: var(--hub-controls-width);
-  height: var(--hub-control-size);
+  width: var(--area-controls-width);
+  height: var(--area-control-size);
   flex: none;
 }

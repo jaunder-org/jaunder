@@ -4,12 +4,12 @@ import { reenterAdminSettings } from "./admin-settings";
 import { bootCount, trackBoots } from "./bootBudget";
 import { test, expect } from "./fixtures";
 import { BASE_URL, goto, signInAs, stallServerFn } from "./helpers";
-import { openHub, openHubDestination } from "./hubs";
+import { openArea, openAreaDestination } from "./settings-areas";
 import { SEL } from "./selectors";
 
 test.describe.configure({ mode: "serial" });
 
-const smtpRow = SEL.hubRow("/admin/smtp");
+const smtpRow = SEL.areaRow("/admin/smtp");
 const smtpPage = { url: "/admin/smtp", ready: 'input[name="enabled"]' };
 const saveButton = 'button:has-text("Save SMTP Settings")';
 
@@ -32,9 +32,9 @@ async function saveSmtp(page: Page) {
 }
 
 async function disableSmtpIfEnabled(page: Page) {
-  // Leaving through the Settings hub and returning remounts the SMTP page, so
+  // Leaving through the Settings page and returning remounts the SMTP page, so
   // it re-reads the persisted settings.
-  await openHubDestination(page, "/settings", smtpPage);
+  await openAreaDestination(page, "/settings", smtpPage);
   const enabled = page.locator('input[name="enabled"]');
   await expect(enabled).toBeVisible();
   if (await enabled.isChecked()) {
@@ -55,7 +55,7 @@ test("member navigation hides SMTP and direct access is denied", async ({
 }) => {
   const page = await registeredPage("/admin/smtp");
   await expect(page.locator(SEL.error)).toBeVisible();
-  await openHub(page, "/settings", SEL.hubRow("/profile"));
+  await openArea(page, "/settings", SEL.areaRow("/profile"));
   await expect(page.locator(smtpRow)).toHaveCount(0);
 });
 
@@ -66,7 +66,7 @@ test("operator manages the complete SMTP relay lifecycle in one document", async
   trackBoots(page);
   await goto(page, "/admin/site");
 
-  await openHubDestination(page, "/settings", smtpPage);
+  await openAreaDestination(page, "/settings", smtpPage);
 
   const enabled = page.locator('input[name="enabled"]');
   const host = page.locator('input[name="host"]');

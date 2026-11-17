@@ -9,20 +9,20 @@ import {
   failServerFn,
   stallServerFn,
 } from "./helpers";
-import { openHub } from "./hubs";
+import { openArea } from "./settings-areas";
 import { navigateInApp } from "./navigate";
 import { SEL } from "./selectors";
 import { extractInviteCode } from "./mail";
 import { seedConfigViaTool } from "./seed";
 
-const INVITES_ROW = SEL.hubRow("/invites");
+const INVITES_ROW = SEL.areaRow("/invites");
 
-/** The Settings hub lists Invites exactly when this viewer may issue them. */
-async function expectInvitesHubRow(
+/** The Settings page lists Invites exactly when this viewer may issue them. */
+async function expectInvitesAreaRow(
   page: Page,
   visible: boolean,
 ): Promise<void> {
-  await openHub(page, "/settings", SEL.hubRow("/profile"));
+  await openArea(page, "/settings", SEL.areaRow("/profile"));
   await expect(page.locator(INVITES_ROW)).toHaveCount(visible ? 1 : 0);
 }
 
@@ -310,7 +310,7 @@ for (const policy of ["closed", "open"]) {
 
     await expect(page.locator('p:has-text("Page not found.")')).toBeVisible();
     await expect(page.locator('input[name="recipient_email"]')).toHaveCount(0);
-    await expectInvitesHubRow(page, false);
+    await expectInvitesAreaRow(page, false);
   });
 }
 
@@ -324,7 +324,7 @@ test("operator-invites denies members and hides navigation", async ({
 
   await expect(page.locator('p:has-text("Page not found.")')).toBeVisible();
   await expect(page.locator('input[name="recipient_email"]')).toHaveCount(0);
-  await expectInvitesHubRow(page, false);
+  await expectInvitesAreaRow(page, false);
 });
 
 test("member-invites members issue invitations without fetching the ledger", async ({
@@ -342,7 +342,7 @@ test("member-invites members issue invitations without fetching the ledger", asy
   await waitForSelector(page, 'input[name="recipient_email"]');
   expect(listRequests).toBe(0);
   await expect(page.locator(".j-page > ul")).toHaveCount(0);
-  await expectInvitesHubRow(page, true);
+  await expectInvitesAreaRow(page, true);
 });
 
 test("member-invites operators issue invitations and see the ledger", async ({
@@ -360,5 +360,5 @@ test("member-invites operators issue invitations and see the ledger", async ({
   await waitForSelector(page, 'input[name="recipient_email"]');
   await expect.poll(() => listRequests).toBe(1);
   await expect(page.locator(".j-page > ul")).toHaveCount(1);
-  await expectInvitesHubRow(page, true);
+  await expectInvitesAreaRow(page, true);
 });

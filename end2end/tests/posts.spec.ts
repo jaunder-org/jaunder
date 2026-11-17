@@ -36,7 +36,7 @@ import {
   selectComposerAudience,
   scrollHomeTo,
 } from "./posts";
-import { openHubDestination } from "./hubs";
+import { openAreaDestination } from "./settings-areas";
 import { navigateInApp } from "./navigate";
 import { mintAppPassword } from "./sessions";
 import { allowSecondBoot } from "./bootBudget";
@@ -818,7 +818,7 @@ test("Post headers use the current display name with a handle-only fallback", as
     `@${username}`,
   );
 
-  await openHubDestination(page, "/settings", {
+  await openAreaDestination(page, "/settings", {
     url: "/profile",
     ready: 'button:has-text("Update Profile")',
   });
@@ -841,7 +841,7 @@ test("Post headers use the current display name with a handle-only fallback", as
     `@${username}`,
   );
 
-  await openHubDestination(page, "/settings", {
+  await openAreaDestination(page, "/settings", {
     url: "/profile",
     ready: 'button:has-text("Update Profile")',
   });
