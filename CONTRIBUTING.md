@@ -122,7 +122,7 @@ For host PostgreSQL testing on macOS, use `just test-local` or
 Check platform output boundaries and native shell/package evaluation with:
 
 ```bash
-nix eval --impure --expr 'import ./nix/platform-contract.nix { flake = builtins.getFlake (toString ./.); }'
+nix eval --impure --expr 'import ./nix/platform-contract.nix { flake = builtins.getFlake ("git+file://" + toString ./.); }'
 ```
 
 Run this on the production `x86_64-linux` host and during periodic Apple Silicon
