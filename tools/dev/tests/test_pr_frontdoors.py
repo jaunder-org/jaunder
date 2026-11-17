@@ -1,5 +1,6 @@
 """PR land and cleanup front doors through `dev`, against scripted gh, git and
-cargo: never a real PR, merge or checkout cleanup.
+cargo: never a real PR, merge or checkout cleanup. One cleanup also runs
+against real Git in disposable repositories, never this checkout.
 
 They run the repository's scripts and jq, so only the filtered
 `checks.dev-python` source may skip them.
@@ -7,13 +8,15 @@ They run the repository's scripts and jq, so only the filtered
 
 import copy
 import json
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import REAL_GIT, Checkout, require
+from conftest import REAL_GIT, REPOSITORY, Checkout, require
 
 HEAD = "a" * 40
 MERGE = "b" * 40
@@ -483,3 +486,112 @@ def test_a_native_failure_stops_before_later_cleanup_steps(
     assert result.returncode != 0
     assert native.count() == index + 1
     assert result.stdout == b""
+
+
+def real_git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """Real Git with a fixture identity and no signing, so fixture commits
+    cannot pick up configuration from the managed checkout."""
+    return subprocess.run(
+        [REAL_GIT, "-c", "user.name=Cleanup fixture"]
+        + ["-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false"]
+        + ["-C", str(cwd), *args],
+        capture_output=True,
+        check=False,
+        text=True,
+        env=os.environ | {"LC_ALL": "C"},
+    )
+
+
+def real_git_ok(cwd: Path, *args: str) -> str:
+    result = real_git(cwd, *args)
+    assert result.returncode == 0, (args, result.stderr)
+    return result.stdout.strip()
+
+
+def test_disposable_native_git_cleanup_fetches_detaches_and_preserves_local_main(
+    tmp_path: Path,
+) -> None:
+    script = REPOSITORY / "scripts" / "pr-cleanup.sh"
+    require(script.is_file(), "the repository's scripts/pr-cleanup.sh")
+    require(shutil.which("jq") is not None, "jq")
+    upstream = tmp_path / "upstream"
+    clone = tmp_path / "clone"
+    real_git_ok(tmp_path, "init", "--initial-branch=main", str(upstream))
+    (upstream / "base.txt").write_text("base\n")
+    real_git_ok(upstream, "add", "base.txt")
+    real_git_ok(upstream, "commit", "-m", "fixture base")
+    base = real_git_ok(upstream, "rev-parse", "HEAD")
+    real_git_ok(tmp_path, "clone", "--no-hardlinks", str(upstream), str(clone))
+    real_git_ok(clone, "checkout", "-b", "issue-731-example")
+    (clone / "feature.txt").write_text("feature\n")
+    real_git_ok(clone, "add", "feature.txt")
+    real_git_ok(clone, "commit", "-m", "fixture feature")
+    head = real_git_ok(clone, "rev-parse", "HEAD")
+    real_git_ok(clone, "branch", "--set-upstream-to=origin/main")
+    # Only the upstream advances; the clone's main and origin/main stay at
+    # base until the cleanup script itself fetches.
+    real_git_ok(upstream, "fetch", str(clone), "issue-731-example")
+    real_git_ok(upstream, "merge", "--no-ff", "-m", "fixture merge", "FETCH_HEAD")
+    merged = real_git_ok(upstream, "rev-parse", "HEAD")
+    assert real_git_ok(clone, "rev-parse", "origin/main") == base
+    pr = tmp_path / "pr.json"
+    pr.write_text(
+        json.dumps(
+            {
+                "number": 731,
+                "state": "MERGED",
+                "baseRefName": "main",
+                "headRefName": "issue-731-example",
+                "headRefOid": head,
+                "mergedAt": "2026-11-08T00:00:00Z",
+                "mergeCommit": {"oid": merged},
+            }
+        )
+    )
+    # gh and cargo are fakes; no fake git is installed. Invalid repository
+    # redirects stay confined to the fixture if the script stops scrubbing them.
+    fakes = tmp_path / "fakes"
+    fakes.mkdir()
+    view = (
+        "pr view 731 --repo jaunder-org/jaunder --json "
+        "number,state,baseRefName,headRefName,headRefOid,mergedAt,mergeCommit"
+    )
+    for tool, body in [
+        ("gh", f'[[ "$*" == \'{view}\' ]]\njq -c . "$PR_FIXTURE"\n'),
+        ("cargo", '[[ "$*" == clean ]]\nprintf \'clean\\n\' >> "$CARGO_MARKER"\n'),
+    ]:
+        fake = fakes / tool
+        fake.write_text(f"#!{BASH}\nset -euo pipefail\n{body}")
+        fake.chmod(0o755)
+    marker = tmp_path / "cargo-called"
+    result = subprocess.run(
+        [BASH, str(script), "731", head, "unmanaged"],
+        cwd=clone,
+        env=os.environ
+        | {
+            "LC_ALL": "C",
+            "PATH": f"{fakes}{os.pathsep}{os.environ['PATH']}",
+            "PR_FIXTURE": str(pr),
+            "CARGO_MARKER": str(marker),
+            "GIT_DIR": str(tmp_path / "nonexistent"),
+            "GIT_INDEX_FILE": str(tmp_path / "foreign-index"),
+        },
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert (report["outcome"], report["head_sha"], report["merge_commit"]) == (
+        "cleaned",
+        head,
+        merged,
+    )
+    assert b"Deleted branch issue-731-example" in result.stderr
+    assert real_git_ok(clone, "branch", "--show-current") == ""
+    assert real_git_ok(clone, "rev-parse", "HEAD") == merged
+    assert real_git_ok(clone, "rev-parse", "origin/main") == merged
+    assert real_git_ok(clone, "rev-parse", "refs/heads/main") == base
+    ref = "refs/heads/issue-731-example"
+    assert real_git(clone, "show-ref", "--verify", "--quiet", ref).returncode == 1
+    assert marker.read_text() == "clean\n"

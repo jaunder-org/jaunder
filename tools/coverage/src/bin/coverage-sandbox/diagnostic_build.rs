@@ -586,7 +586,7 @@ fn served_module(root: &Path) -> Result<ServedModule> {
 }
 
 fn sha256(path: PathBuf) -> Result<String> {
-    Ok(crate::digest::lowercase_hex(Sha256::digest(fs::read(
+    Ok(coverage::digest::lowercase_hex(Sha256::digest(fs::read(
         path,
     )?)))
 }
@@ -746,7 +746,7 @@ mod tests {
         assert_eq!(success["served_module"]["path"], "assets/csr_bg-hash.wasm");
         assert_eq!(
             success["served_module"]["sha256"],
-            crate::digest::lowercase_hex(Sha256::digest(b"served"))
+            coverage::digest::lowercase_hex(Sha256::digest(b"served"))
         );
         write_instrumented_status(&status, 7).unwrap();
         let failure: serde_json::Value = read_json(&status).unwrap();

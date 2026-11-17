@@ -946,8 +946,8 @@ mod tests {
     fn normalizes_crap_paths_without_excluding_removed_build_dependency_sources() {
         let raw = r#"{
             "entries": [
-                {"file": "/build/source/tools/devtool/src/wasm_coverage.rs", "crap": 1.0},
-                {"file": "/build/source/tools/devtool/src/diagnostic_build.rs", "crap": 2.0},
+                {"file": "/build/source/tools/coverage/src/bin/coverage-sandbox/wasm.rs", "crap": 1.0},
+                {"file": "/build/source/tools/coverage/src/bin/coverage-sandbox/diagnostic_build.rs", "crap": 2.0},
                 {"file": "/build/source/server/src/a.rs", "crap": 4.0}
             ]
         }"#;
@@ -964,8 +964,8 @@ mod tests {
         assert_eq!(
             files,
             [
-                "tools/devtool/src/wasm_coverage.rs",
-                "tools/devtool/src/diagnostic_build.rs",
+                "tools/coverage/src/bin/coverage-sandbox/wasm.rs",
+                "tools/coverage/src/bin/coverage-sandbox/diagnostic_build.rs",
                 "server/src/a.rs"
             ]
         );

@@ -992,51 +992,68 @@ let
     vendorDir = toolsCargoVendorDir;
   };
 
-  # The in-sandbox dev tool. Offline coverage/doctest sandboxes run it from
-  # PATH instead of an in-sandbox `cargo run`, whose dependencies would not be
-  # vendored. The CSR shell is retained directly in toolsSrc for include_str!.
-  mkDevtoolBin =
+  # A tools executable that runs inside derivations (build sandboxes and VM
+  # guests). Offline sandboxes run it from PATH instead of an in-sandbox
+  # `cargo run`, whose dependencies would not be vendored. Each consumer takes
+  # only the executable it runs. The CSR shell is retained directly in toolsSrc
+  # for include_str!.
+  mkToolsBin =
     {
-      pname ? "devtool",
-      qualification ? false,
+      package,
+      bin ? package,
+      pname ? bin,
+      # Features change the dependency graph, so a featured build gets its own
+      # dependency build rather than the shared tools one.
+      features ? [ ],
+      # Native host libraries the executable links.
+      runtimeLibraries ? [ ],
     }:
     let
       cargoExtraArgs =
-        "${toolsArgs.cargoExtraArgs} -p devtool"
-        + pkgs.lib.optionalString qualification " --features qualification";
+        "${toolsArgs.cargoExtraArgs} -p ${package} --bin ${bin}"
+        + pkgs.lib.optionalString (features != [ ]) " --features ${pkgs.lib.concatStringsSep "," features}";
       tooling =
-        if qualification then mkToolingCargo (toolsArgs // { inherit cargoExtraArgs; }) else toolsBuild;
+        if features != [ ] then mkToolingCargo (toolsArgs // { inherit cargoExtraArgs; }) else toolsBuild;
+      patchRuntime = pkgs.stdenv.hostPlatform.isLinux && runtimeLibraries != [ ];
     in
     tooling.buildPackage {
       inherit cargoExtraArgs pname;
       doCheck = false;
-      passthru.toolingDependencies = tooling.cargoArtifacts;
       installPhase = ''
         mkdir -p $out/bin
-        cp target/release/devtool $out/bin/devtool
+        cp target/release/${bin} $out/bin/${bin}
       '';
       # `installPhase` copies a host-linked executable directly, bypassing
-      # Crane's normal cargo binary install path. Give the full producer an
-      # ELF runtime closure for its native host dependencies.
-      nativeBuildInputs =
-        toolsArgs.nativeBuildInputs
-        ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
-      postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-        patchelf --add-rpath \
-          "${
-            pkgs.lib.makeLibraryPath [
-              pkgs.openssl
-              pkgs.dav1d
-            ]
-          }" \
-          "$out/bin/devtool"
+      # Crane's normal cargo binary install path. Give a producer that links
+      # native host dependencies an ELF runtime closure for them.
+      nativeBuildInputs = toolsArgs.nativeBuildInputs ++ pkgs.lib.optionals patchRuntime [ pkgs.patchelf ];
+      postFixup = pkgs.lib.optionalString patchRuntime ''
+        patchelf --add-rpath "${pkgs.lib.makeLibraryPath runtimeLibraries}" "$out/bin/${bin}"
       '';
       doNotPostBuildInstallCargoBinaries = true;
     };
-  devtoolBin = mkDevtoolBin { };
-  qualificationDevtoolBin = mkDevtoolBin {
-    pname = "jaunder-system-artifact-qualification-devtool";
-    qualification = true;
+  hostRuntimeLibraries = [
+    pkgs.openssl
+    pkgs.dav1d
+  ];
+  coverageSandboxBin = mkToolsBin {
+    package = "coverage";
+    bin = "coverage-sandbox";
+  };
+  doctestsBin = mkToolsBin { package = "doctests"; };
+  perfProducerBin = mkToolsBin {
+    package = "perf-producer";
+    runtimeLibraries = hostRuntimeLibraries;
+  };
+  systemArtifactsBin = mkToolsBin {
+    package = "system-artifacts";
+    runtimeLibraries = hostRuntimeLibraries;
+  };
+  qualificationSystemArtifactsBin = mkToolsBin {
+    package = "system-artifacts";
+    pname = "jaunder-system-artifact-qualification-system-artifacts";
+    features = [ "qualification" ];
+    runtimeLibraries = hostRuntimeLibraries;
   };
 
   cargo-crap = pkgs.callPackage (
@@ -1206,7 +1223,7 @@ let
 
   mkCsrWasmBundle =
     {
-      devtool,
+      systemArtifacts,
       fixture ? null,
       wasm ? csrWasm,
       name ? "jaunder-csr-vite-bundle",
@@ -1219,7 +1236,7 @@ let
       dontNpmBuild = true;
       passthru.sourceAdmits = csrSourceAdmits;
       nativeBuildInputs = [
-        devtool
+        systemArtifacts
         pkgs.binaryen
         wasm-bindgen-cli
       ];
@@ -1234,7 +1251,7 @@ let
         mkdir -p "$input" "$system_artifacts"
         cp csr/index.html "$input/index.html"
         cp csr/entry.js "$input/entry.js"
-        devtool system-artifacts --out "$system_artifacts"${
+        system-artifacts --out "$system_artifacts"${
           pkgs.lib.optionalString (fixture != null) " --fixture ${fixture}"
         }
         CSR_VITE_PUBLIC_DIR="${../public}" bash scripts/build-csr-assets.sh \
@@ -1248,9 +1265,9 @@ let
         runHook postInstall
       '';
     };
-  csrWasmBundle = mkCsrWasmBundle { devtool = devtoolBin; };
+  csrWasmBundle = mkCsrWasmBundle { systemArtifacts = systemArtifactsBin; };
   csrDebugBundle = mkCsrWasmBundle {
-    devtool = devtoolBin;
+    systemArtifacts = systemArtifactsBin;
     wasm = csrDebugWasm;
     name = "jaunder-csr-debug-wasm-bundle";
   };
@@ -1267,7 +1284,7 @@ let
     else
       let
         csrBundle = mkCsrWasmBundle {
-          devtool = qualificationDevtoolBin;
+          systemArtifacts = qualificationSystemArtifactsBin;
           inherit fixture;
         };
       in
@@ -1299,7 +1316,8 @@ let
           pkgs.nodejs
           diagnosticToolchain
           diagnosticClang
-          devtoolBin
+          coverageSandboxBin
+          systemArtifactsBin
           pkgs.binaryen
           wasm-bindgen-cli
         ];
@@ -1324,7 +1342,7 @@ let
         ln -s ${csrViteNodeModules}/node_modules "$vite_project/node_modules"
         cp -r ${siteSrc}/. "$work/source"
         chmod -R u+w "$work/source"
-        devtool diagnostic-build prepare-source \
+        coverage-sandbox diagnostic-build prepare-source \
           --source "$work/source" \
           --minicov "${diagnosticMinicov}" \
           --runtime "${../tools/diagnostic-coverage-runtime}" \
@@ -1334,7 +1352,7 @@ let
         set +e
         (
           set -e
-          devtool diagnostic-build validate-llvm \
+          coverage-sandbox diagnostic-build validate-llvm \
             --rustc-version "$out/toolchain-rustc-vv.txt" \
             --clang-version "$out/toolchain-clang-version.txt"
           cd "$work/source"
@@ -1345,7 +1363,7 @@ let
           export CFLAGS_wasm32_unknown_unknown="--target=wasm32-unknown-unknown"
           cargo rustc -p csr --features diagnostic-coverage --target wasm32-unknown-unknown --release --lib --message-format=json-render-diagnostics -- -Cinstrument-coverage -Zno-profiler-runtime --emit=llvm-ir -C link-arg=--no-gc-sections -Zno-link > "$work/cargo-artifacts.jsonl"
           cp "$work/cargo-artifacts.jsonl" "$out/instrumented/cargo-artifacts.jsonl"
-          devtool diagnostic-build discover-root \
+          coverage-sandbox diagnostic-build discover-root \
             --target-release "$work/target/wasm32-unknown-unknown/release" \
             --root-ir "$work/root-ir" \
             --root-rlink "$work/root-rlink" \
@@ -1355,7 +1373,7 @@ let
           cp "$root_ir" "$out/instrumented/csr.ll"
           cp "$root_rlink" "$out/instrumented/csr.rlink"
           rustc --target wasm32-unknown-unknown -Zlink-only "$out/instrumented/csr.rlink"
-          devtool diagnostic-build retain-linked-wasm \
+          coverage-sandbox diagnostic-build retain-linked-wasm \
             --target-release "$work/target/wasm32-unknown-unknown/release" \
             --manifest "$out/instrumented/ir-manifest.json" \
             --retained-wasm "$out/instrumented/csr.wasm"
@@ -1363,24 +1381,24 @@ let
           system_artifacts="$work/system-artifacts"
           dist="$work/dist"
           mkdir -p "$input" "$system_artifacts"
-          devtool system-artifacts --out "$system_artifacts"
+          system-artifacts --out "$system_artifacts"
           CSR_VITE_PUBLIC_DIR="${../public}" bash "$vite_project/scripts/build-csr-assets.sh" \
             "$out/instrumented/csr.wasm" "$vite_project" "$input" "$system_artifacts" "$dist" "$work/wasm-bindgen.wasm"
           mkdir -p "$out/pkg"
           cp -a "$dist/." "$out/pkg/"
-          devtool diagnostic-build write-coverage-artifacts \
+          coverage-sandbox diagnostic-build write-coverage-artifacts \
             --metadata "$out/coverage-metadata.json" \
             --toolchain-identity "$out/toolchain-identity.json" \
             --minicov-version 0.3.8 \
             --input-wasm "$out/instrumented/csr.wasm" \
             --wasm-bindgen-wasm "$work/wasm-bindgen.wasm" \
             --wasm-opt-wasm "$input/csr_bg.wasm"
-          devtool diagnostic-build assert-coverage --metadata "$out/coverage-metadata.json"
+          coverage-sandbox diagnostic-build assert-coverage --metadata "$out/coverage-metadata.json"
         ) > "$out/pipeline.log" 2>&1
         pipeline_exit=$?
         set -e
 
-        devtool diagnostic-build write-instrumented-status \
+        coverage-sandbox diagnostic-build write-instrumented-status \
           --status "$out/status.json" \
           --pipeline-exit "$pipeline_exit"
       '';
@@ -1396,7 +1414,8 @@ let
           pkgs.stdenv.cc
           pkgs.nodejs
           diagnosticToolchain
-          devtoolBin
+          coverageSandboxBin
+          systemArtifactsBin
           pkgs.binaryen
           wasm-bindgen-cli
         ];
@@ -1419,12 +1438,12 @@ let
         system_artifacts="$work/system-artifacts"
         dist="$work/dist"
         mkdir -p "$input" "$system_artifacts"
-        devtool system-artifacts --out "$system_artifacts"
+        system-artifacts --out "$system_artifacts"
         CSR_VITE_PUBLIC_DIR="${../public}" bash "$vite_project/scripts/build-csr-assets.sh" \
           "$work/target/wasm32-unknown-unknown/release/csr.wasm" "$vite_project" "$input" "$system_artifacts" "$dist"
         mkdir -p "$out/pkg"
         cp -a "$dist/." "$out/pkg/"
-        devtool diagnostic-build write-baseline-status --status "$out/status.json"
+        coverage-sandbox diagnostic-build write-baseline-status --status "$out/status.json"
       '';
   diagnosticBaselineJaunderBin = mkJaunderBin {
     pname = "jaunder-diagnostic-wasm-coverage-baseline";
@@ -1531,7 +1550,10 @@ in
     sandboxArtifacts = mkSandboxArtifacts csrDebugBundle;
     sandboxArtifactsReleaseCsr = mkSandboxArtifacts csrWasmBundle;
     traced-run = tracedRunBin;
-    devtool = devtoolBin;
+    coverage-sandbox = coverageSandboxBin;
+    doctests = doctestsBin;
+    perf-producer = perfProducerBin;
+    system-artifacts = systemArtifactsBin;
     node-modules-setup = nodeModulesSetup;
     pg-run = pgRun;
     ux-sandbox = import ./ux-sandbox.nix {
@@ -1617,7 +1639,9 @@ in
       diagnosticCsrWasmBundle
       diagnosticBaselineCsrWasmBundle
       testSupportBin
-      devtoolBin
+      coverageSandboxBin
+      doctestsBin
+      perfProducerBin
       toolsBuild
       toolsDocTestSrc
       tracedRunBin

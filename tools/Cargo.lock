@@ -928,26 +928,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "devtool"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "common",
- "coverage",
- "doctests",
- "host",
- "jiff",
- "performance",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "storage",
- "tempfile",
- "tokio",
-]
-
-[[package]]
 name = "diagnostic-coverage-runtime"
 version = "0.1.0"
 dependencies = [
@@ -1001,6 +981,7 @@ name = "doctests"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
  "proc-macro2",
  "serde",
  "serde_json",
@@ -2982,6 +2963,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
+name = "perf-producer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "common",
+ "jiff",
+ "performance",
+ "serde",
+ "serde_json",
+ "storage",
+ "tokio",
+]
+
+[[package]]
 name = "performance"
 version = "0.1.0"
 dependencies = [
@@ -4325,6 +4321,15 @@ name = "syntastica-queries"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a39185b86d0392cc01484934e2e6dfad5126e953aa2b9bff4dacc703d7b018fb"
+
+[[package]]
+name = "system-artifacts"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "host",
+]
 
 [[package]]
 name = "system-deps"

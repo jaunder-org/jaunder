@@ -1,21 +1,21 @@
 //! Runs the workspace doctests and reconciles them against the scanned fence
 //! population, emitting the sentinel the `doctests-gate` derivation reads.
 //!
-//! Mirrors `coverage::emit`: always writes `out/status.json` and returns `Ok`, so
+//! Mirrors the coverage producer's emit: always writes `out/status.json` and returns `Ok`, so
 //! the Nix producer derivation can always realize `$out`. Gating is the consumer.
 
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+use crate::check::{Kind, ScannedFile, Violation, problems};
+use crate::status::DoctestStatus;
 use anyhow::{Context, Result};
-use doctests::check::{Kind, ScannedFile, Violation, problems};
-use doctests::status::DoctestStatus;
 
 /// The roots this producer scans — the shared workspace list, not a local copy, so
 /// the population the reconciliation asserts over cannot drift from the one
 /// scanned here.
-pub const SCAN_ROOTS: &[&str] = doctests::roots::WORKSPACE;
+pub const SCAN_ROOTS: &[&str] = crate::roots::WORKSPACE;
 
 /// The doctest invocation.
 ///
@@ -136,7 +136,7 @@ mod tests {
 
     #[test]
     fn the_scan_roots_are_the_shared_workspace_list() {
-        assert_eq!(SCAN_ROOTS, doctests::roots::WORKSPACE);
+        assert_eq!(SCAN_ROOTS, crate::roots::WORKSPACE);
         assert!(!SCAN_ROOTS.iter().any(|r| *r == "tools" || *r == "xtask"));
     }
 

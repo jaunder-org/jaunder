@@ -25,7 +25,9 @@ let
     leanDevAndTestProfile
     jaunderBin
     testSupportBin
-    devtoolBin
+    coverageSandboxBin
+    doctestsBin
+    perfProducerBin
     toolsBuild
     toolsDocTestSrc
     devBin
@@ -77,10 +79,10 @@ let
     assert (siteTargetSource "tools/performance/src/lib.rs");
     assert (wasmTestTargetSource "tools/performance/Cargo.toml");
     assert (wasmTestTargetSource "tools/performance/src/lib.rs");
-    assert !(siteTargetSource "tools/devtool/Cargo.toml");
+    assert !(siteTargetSource "tools/system-artifacts/Cargo.toml");
     assert !(siteTargetSource "tools/doctests/Cargo.toml");
     assert !(siteTargetSource "tools/diagnostic-coverage-runtime/Cargo.toml");
-    assert !(wasmTestTargetSource "tools/devtool/Cargo.toml");
+    assert !(wasmTestTargetSource "tools/system-artifacts/Cargo.toml");
     assert !(wasmTestTargetSource "tools/doctests/Cargo.toml");
     assert !(wasmTestTargetSource "tools/diagnostic-coverage-runtime/Cargo.toml");
     assert !(siteTargetSource "tools/qualification/src/lib.rs");
@@ -115,7 +117,7 @@ let
   coverageSrc =
     # Pure source-filter negative case: excluded auxiliary assets cannot perturb
     # coverage source identity.
-    assert !(coverageAuxiliarySource "tools/devtool/fixture.css");
+    assert !(coverageAuxiliarySource "tools/coverage/fixture.css");
     assert !(coverageAuxiliarySource "server/notes.txt");
     assert (coverageAuxiliarySource "server/tests/misc/backup_corpus/index.json");
     assert (coverageAuxiliarySource "storage/migrations/sqlite/0001_create_site_config.sql");
@@ -128,7 +130,7 @@ let
     assert (builtins.elem "ux-sandbox" coverageMembers);
     assert (cargoMemberSource coverageMembers (cargoSourcePath "ux-sandbox/Cargo.toml") "regular");
     assert (cargoMemberSource coverageMembers (cargoSourcePath "ux-sandbox/tests/public_command.rs") "regular");
-    assert !(builtins.elem "tools/devtool" coverageMembers);
+    assert !(builtins.elem "tools/system-artifacts" coverageMembers);
     assert !(builtins.elem "tools/coverage" coverageMembers);
     assert !(builtins.elem "tools/qualification" coverageMembers);
     assert !(builtins.elem "tools/host-proof" coverageMembers);
@@ -823,9 +825,9 @@ mkE2eCheck =
           # `jaunder site-config set` seed steps resolve bare `jaunder` here.
           jaunderBin
         ]
-        # Only performance producers run devtool in the guest; ordinary e2e
-        # lanes seed through test-support, so their guests do not install it.
-        ++ lib.optional (producer != null) devtoolBin;
+        # Only performance producers run perf-producer in the guest; ordinary
+        # e2e lanes seed through test-support, so their guests do not install it.
+        ++ lib.optional (producer != null) perfProducerBin;
         environment.etc."jaunder-otel-collector.yaml".source = ../end2end/otel-collector.yaml;
         environment.etc."jaunder-otel-processors.yaml".source = ./otel-processors.yaml;
 
@@ -1183,7 +1185,7 @@ mkPerformanceProducer =
         "browser_version": "not-applicable",
         "stable_derivation_identities": [
           { "name": "client", "identity": "${csrWasmBundle.drvPath}" },
-          { "name": "producer", "identity": "${devtoolBin.drvPath}" },
+          { "name": "producer", "identity": "${perfProducerBin.drvPath}" },
           { "name": "server", "identity": "${jaunderBin.drvPath}" },
         ],
       }
@@ -1195,7 +1197,7 @@ mkPerformanceProducer =
           + " > /var/lib/jaunder/performance/identity.json"
         )
         storage_status, storage_output = machine.execute(
-          "devtool performance storage --db ${backendPolicy.jaunderDb} --backend ${backend}"
+          "perf-producer storage --db ${backendPolicy.jaunderDb} --backend ${backend}"
           + " --manifest /var/lib/jaunder/performance/dataset-manifest-v1.json"
           + " --output /var/lib/jaunder/performance/fragments"
           + " --provisioning-us " + str(setup["provisioning_us"])
@@ -1205,7 +1207,7 @@ mkPerformanceProducer =
           + " --cpu-model " + shlex.quote(cpu_model)
           + " --database-version ${backendPolicy.package.version}"
           + " --stable-derivation-identity client=${csrWasmBundle.drvPath}"
-          + " --stable-derivation-identity producer=${devtoolBin.drvPath}"
+          + " --stable-derivation-identity producer=${perfProducerBin.drvPath}"
           + " --stable-derivation-identity server=${jaunderBin.drvPath} 2>&1"
         )
         machine.succeed(
@@ -1274,7 +1276,7 @@ mkPerformanceProducer =
           )
         else:
           browser_validation_status, browser_validation_output = machine.execute(
-            "devtool performance validate-browser"
+            "perf-producer validate-browser"
             + " --manifest /var/lib/jaunder/performance/dataset-manifest-v1.json"
             + " --input /var/lib/jaunder/performance/fragments/browser-${backend}-${selectedBrowser}-v1.json"
             + " --output /var/lib/jaunder/performance/fragments 2>&1"
@@ -1400,7 +1402,7 @@ mkWasmCoverageProducer =
         pkgs.sqlite
         testSupportBin
         diagnosticJaunderBin
-        devtoolBin
+        coverageSandboxBin
         pkgs.jq
       ];
       services.jaunder.enable = true;
@@ -1418,7 +1420,7 @@ mkWasmCoverageProducer =
       machine.succeed(
         "JAUNDER_WASM_COVERAGE_CSR=${self.packages.${system}.wasm-coverage-csr}"
         + " JAUNDER_WASM_COVERAGE_BROWSER=${browser}"
-        + " devtool wasm-coverage initialize"
+        + " coverage-sandbox wasm initialize"
       )
       machine.wait_for_unit("jaunder.service", timeout=60)
       machine.wait_for_open_port(3000, timeout=30)
@@ -1450,14 +1452,14 @@ mkWasmCoverageProducer =
       map_status, map_output = machine.execute(
         "JAUNDER_WASM_COVERAGE_CSR=${self.packages.${system}.wasm-coverage-csr}"
         + " JAUNDER_WASM_COVERAGE_INJECT_FAILURE=${failure}"
-        + " devtool wasm-coverage map --site-src ${siteSrc}",
+        + " coverage-sandbox wasm map --site-src ${siteSrc}",
         timeout=120,
       )
       print(map_output)
       machine.succeed(
         "JAUNDER_WASM_COVERAGE_PLAYWRIGHT_EXIT="
         + str(status)
-        + " devtool wasm-coverage finalize"
+        + " coverage-sandbox wasm finalize"
       )
       if "${failure}" == "early":
         machine.succeed(
@@ -2709,7 +2711,7 @@ mkWasmCoverageMeasurementProducer =
         JAUNDER_CSR_BUNDLE_DIR = "${csrWasmBundle}";
         JAUNDER_PUBLIC_DIR = "${../public}";
         nativeBuildInputs = hostArgs.nativeBuildInputs ++ [
-          devtoolBin
+          coverageSandboxBin
           cargo-crap
           pkgs.cargo-llvm-cov
           pkgs.cargo-nextest
@@ -2732,7 +2734,7 @@ mkWasmCoverageMeasurementProducer =
           # The producer emits checked stage evidence; the Nix gate and host coverage-check
           # consume its status and reports as separate authoritative boundaries.
           # A PostgreSQL start failure fails this build before the producer runs.
-          pg-run devtool coverage emit --out emit-out
+          pg-run coverage-sandbox emit --out emit-out
         '';
         installPhaseCommand = ''
           mkdir -p $out
@@ -2759,8 +2761,8 @@ mkWasmCoverageMeasurementProducer =
     # Belt-and-suspenders: this sandbox consumer validates completed producer
     # evidence through the shared Rust contract, while host coverage-check consumes its
     # reports separately. Its `jaunder-coverage-gate` name stays broad-filtered.
-    coverage-gate = nonSubstitutable (pkgs.runCommand "jaunder-coverage-gate" { nativeBuildInputs = [ devtoolBin ]; } ''
-      devtool coverage validate-status --status ${coverage}/status.json
+    coverage-gate = nonSubstitutable (pkgs.runCommand "jaunder-coverage-gate" { nativeBuildInputs = [ coverageSandboxBin ]; } ''
+      coverage-sandbox validate-status --status ${coverage}/status.json
       touch $out
     '');
   };
@@ -2920,8 +2922,8 @@ mkWasmCoverageMeasurementProducer =
     nativeBuildInputs = [ pkgs.stdenv.cc devBin toolchain ] ++ hostArgs.nativeBuildInputs;
     buildInputs = hostArgs.buildInputs;
     LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ];
-    JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
-    JAUNDER_DEVTOOL_TOOLS_CARGO_HOME = "${toolsOfflineCargoHome}";
+    JAUNDER_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
+    JAUNDER_TOOLS_CARGO_HOME = "${toolsOfflineCargoHome}";
   } ''
     cp --no-preserve=mode -r ${clippySource} src
     cd src
@@ -3632,8 +3634,8 @@ rust-format =
       # direct source filter alone does not promise cache isolation.
       # scoped-leptosfmt runs the pin through `dev` as well.
       nativeBuildInputs = [ devBin self.packages.${system}.repository-policy toolchain leptosfmt ];
-      JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
-      JAUNDER_DEVTOOL_TOOLS_CARGO_HOME = "${toolsOfflineCargoHome}";
+      JAUNDER_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
+      JAUNDER_TOOLS_CARGO_HOME = "${toolsOfflineCargoHome}";
     }
     ''
       cp --no-preserve=mode -r ${rustFormatSrc} src
@@ -3764,8 +3766,8 @@ static-code =
       # The server build script now links the host compiler, including native
       # decoding dependencies. Cargo executes it before any output fixup.
       LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ];
-      JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
-      JAUNDER_DEVTOOL_TOOLS_CARGO_HOME = "${toolsOfflineCargoHome}";
+      JAUNDER_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
+      JAUNDER_TOOLS_CARGO_HOME = "${toolsOfflineCargoHome}";
     }
     ''
       # Code checks retain their complete non-Markdown source population.
@@ -3792,7 +3794,7 @@ static-code =
 # `-p common -p macros` drops the three `#[cfg(feature = "sanitize")]`
 # fences in `common/src/render.rs`, because nothing in that package set
 # enables the feature. Under `--workspace`, unification enables it via
-# `storage`. The invocation is pinned by a unit test in devtool.
+# `storage`. The invocation is pinned by a unit test in the doctests crate.
 #
 # `--doc` runs OUTSIDE any llvm-cov instrumentation, so no profraw from
 # these tests reaches the coverage profile: doctests deliberately do not
@@ -3807,13 +3809,13 @@ doctests = craneLib.mkCargoDerivation (
     # `cargo test --doc` remains fully debuggable.
     CARGO_PROFILE_DEV_DEBUG = "0";
     CARGO_PROFILE_TEST_DEBUG = "0";
-    nativeBuildInputs = hostArgs.nativeBuildInputs ++ [ devtoolBin ];
+    nativeBuildInputs = hostArgs.nativeBuildInputs ++ [ doctestsBin ];
     buildPhaseCargoCommand = ''
       export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:''${LD_LIBRARY_PATH:-}"
       mkdir -p emit-out
-      # devtool always exits 0 after writing emit-out/status.json;
+      # The producer always exits 0 after writing emit-out/status.json;
       # the direct `dev` workflow gates through doctests-gate.
-      devtool doctests emit --out emit-out
+      doctests emit --out emit-out
     '';
     installPhaseCommand = ''
       mkdir -p $out

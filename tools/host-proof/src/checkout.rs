@@ -145,7 +145,7 @@ mod tests {
             "common/src/new.rs",
             "macros/src/new.rs",
             "storage/src/new.rs",
-            "tools/devtool/src/new.rs",
+            "tools/system-artifacts/src/new.rs",
             "csr/index.html",
             "csr/entry.js",
             "vite.config.js",

@@ -1,3 +1,4 @@
+pub mod digest;
 #[cfg(feature = "host")]
 pub mod host;
 pub mod pathnorm;

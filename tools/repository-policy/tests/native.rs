@@ -175,7 +175,7 @@ fn selected_native_source_excludes_product_and_other_tool_implementations() {
         task2Inputs = builtins.all (relative:
           tool.cargoSourceAdmits relative "regular"
           && builtins.pathExists (tool.src + "/${relative}")
-          && !(builtins.pathExists (p.devtool.src + "/${relative}"))
+          && !(builtins.pathExists (p.system-artifacts.src + "/${relative}"))
           && !(builtins.pathExists (p.jaunder.src + "/${relative}"))
           && !(builtins.pathExists (p.csrWasm.src + "/${relative}"))
           && !(builtins.pathExists (f.checks.${builtins.currentSystem}.wasm-tests.src + "/${relative}"))
@@ -189,11 +189,11 @@ fn selected_native_source_excludes_product_and_other_tool_implementations() {
         evaluation = tool.sourceAdmits "nix/repository-policy.nix" "regular";
         evaluationInCargo = tool.cargoSourceAdmits "nix/repository-policy.nix" "regular";
         productInNative = tool.sourceAdmits "server/src/main.rs" "regular";
-        devtoolInNative = tool.sourceAdmits "tools/devtool/src/main.rs" "regular";
+        toolsInNative = tool.sourceAdmits "tools/system-artifacts/src/main.rs" "regular";
         csrInNative = tool.sourceAdmits "csr/src/lib.rs" "regular";
         nativeInCsrAdmission = p.csrBundle.sourceAdmits "tools/repository-policy/src/checkout.rs" "regular";
         nativeFile = builtins.pathExists (tool.src + "/tools/repository-policy/src/checkout.rs");
-        nativeInDevtool = builtins.pathExists (p.devtool.src + "/tools/repository-policy/src/checkout.rs");
+        nativeInTools = builtins.pathExists (p.system-artifacts.src + "/tools/repository-policy/src/checkout.rs");
         nativeInProduct = builtins.pathExists (p.jaunder.src + "/tools/repository-policy/src/checkout.rs");
         nativeInCsr = builtins.pathExists (p.csrWasm.src + "/tools/repository-policy/src/checkout.rs");
         nativeInWasm = builtins.pathExists (f.checks.${builtins.currentSystem}.wasm-tests.src + "/tools/repository-policy/src/checkout.rs");
@@ -219,7 +219,7 @@ fn selected_native_source_excludes_product_and_other_tool_implementations() {
     let actual: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         actual,
-        serde_json::json!({"task2Inputs":true,"common":true,"macros":true,"native":true,"dependency":true,"test":true,"evaluation":true,"evaluationInCargo":false,"productInNative":false,"devtoolInNative":false,"csrInNative":false,"nativeInCsrAdmission":false,"nativeFile":true,"nativeInDevtool":false,"nativeInProduct":false,"nativeInCsr":false,"nativeInWasm":false})
+        serde_json::json!({"task2Inputs":true,"common":true,"macros":true,"native":true,"dependency":true,"test":true,"evaluation":true,"evaluationInCargo":false,"productInNative":false,"toolsInNative":false,"csrInNative":false,"nativeInCsrAdmission":false,"nativeFile":true,"nativeInTools":false,"nativeInProduct":false,"nativeInCsr":false,"nativeInWasm":false})
     );
 }
 #[test]

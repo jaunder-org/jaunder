@@ -1,25 +1,25 @@
-//! Internal in-sandbox dev tool. Runs inside the Nix coverage/e2e build
-//! sandboxes, where host-only tooling is unavailable. Subcommand tree is
-//! deliberately extensible: `coverage emit`, `wasm-coverage` and diagnostic build.
+//! Coverage producers and evidence gates that run inside Nix derivations,
+//! where host-only tooling is unavailable: the instrumented suite's emit and
+//! status validation, the browser WebAssembly coverage lifecycle and the
+//! diagnostic CSR build's artifact operations.
 
 use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-mod coverage;
 mod diagnostic_build;
-mod digest;
-mod doctests;
-#[cfg(feature = "performance")]
-mod performance;
-#[cfg(feature = "system-artifacts")]
-mod system_artifacts;
+mod emit;
+mod validate_status;
 mod vite_manifest;
-mod wasm_coverage;
+mod wasm;
 
 #[derive(Parser)]
-#[command(name = "devtool", about = "Jaunder in-sandbox dev tooling", version)]
+#[command(
+    name = "coverage-sandbox",
+    about = "Jaunder in-derivation coverage tooling",
+    version
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -27,41 +27,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Coverage pipeline subcommands.
-    #[command(subcommand)]
-    Coverage(CoverageCmd),
-    /// WebAssembly coverage evidence lifecycle for the Nix browser producers.
-    #[command(subcommand)]
-    WasmCoverage(WasmCoverageCmd),
-    /// Structured preparation and artifact recording for diagnostic CSR builds.
-    #[command(subcommand)]
-    DiagnosticBuild(DiagnosticBuildCmd),
-    /// Doctest gate subcommands.
-    #[command(subcommand)]
-    Doctests(DoctestsCmd),
-    /// Compile and stage the closed system-theme inventory independently of CSR output.
-    #[cfg(feature = "system-artifacts")]
-    SystemArtifacts(SystemArtifactsArgs),
-    #[cfg(feature = "performance")]
-    /// Versioned performance fragment producers and validators.
-    #[command(subcommand)]
-    Performance(Box<performance::PerformanceCmd>),
-}
-
-#[cfg(feature = "system-artifacts")]
-#[derive(clap::Args)]
-struct SystemArtifactsArgs {
-    /// Output directory for the staged inventory and packaged assets.
-    #[arg(long)]
-    out: PathBuf,
-    /// Internal qualification-only system styling fixture (`a`, `b-app`, or `b-theme`).
-    #[cfg(feature = "qualification")]
-    #[arg(long)]
-    fixture: Option<String>,
-}
-
-#[derive(Subcommand)]
-enum CoverageCmd {
     /// Run the instrumented suite and emit reports + status + diagnostics.
     Emit {
         /// Directory to write emitted artifacts into (defaults to CWD).
@@ -74,10 +39,16 @@ enum CoverageCmd {
         #[arg(long)]
         status: PathBuf,
     },
+    /// WebAssembly coverage evidence lifecycle for the Nix browser producers.
+    #[command(subcommand)]
+    Wasm(WasmCmd),
+    /// Structured preparation and artifact recording for diagnostic CSR builds.
+    #[command(subcommand)]
+    DiagnosticBuild(DiagnosticBuildCmd),
 }
 
 #[derive(Subcommand)]
-enum WasmCoverageCmd {
+enum WasmCmd {
     /// Create the sentinel status and retain the content-addressed served module.
     Initialize,
     /// Merge the browser profile and map it to original Rust source.
@@ -166,26 +137,14 @@ enum DiagnosticBuildCmd {
     },
 }
 
-#[derive(Subcommand)]
-enum DoctestsCmd {
-    /// Run the workspace doctests and emit the reconciliation status.
-    Emit {
-        /// Directory to write emitted artifacts into (defaults to CWD).
-        #[arg(long, default_value = ".")]
-        out: String,
-    },
-}
-
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Coverage(CoverageCmd::Emit { out }) => coverage::emit::run(&out),
-        Command::Coverage(CoverageCmd::ValidateStatus { status }) => {
-            coverage::validate_status::run(&status)
-        }
-        Command::WasmCoverage(WasmCoverageCmd::Initialize) => wasm_coverage::initialize(),
-        Command::WasmCoverage(WasmCoverageCmd::Map { site_src }) => wasm_coverage::map(&site_src),
-        Command::WasmCoverage(WasmCoverageCmd::Finalize) => wasm_coverage::finalize(),
+        Command::Emit { out } => emit::run(&out),
+        Command::ValidateStatus { status } => validate_status::run(&status),
+        Command::Wasm(WasmCmd::Initialize) => wasm::initialize(),
+        Command::Wasm(WasmCmd::Map { site_src }) => wasm::map(&site_src),
+        Command::Wasm(WasmCmd::Finalize) => wasm::finalize(),
         Command::DiagnosticBuild(DiagnosticBuildCmd::PrepareSource {
             source,
             minicov,
@@ -239,17 +198,6 @@ fn main() -> Result<()> {
         Command::DiagnosticBuild(DiagnosticBuildCmd::WriteBaselineStatus { status }) => {
             diagnostic_build::write_baseline_status(&status)
         }
-        Command::Doctests(DoctestsCmd::Emit { out }) => doctests::emit::run(&out),
-        #[cfg(feature = "system-artifacts")]
-        Command::SystemArtifacts(args) => {
-            #[cfg(feature = "qualification")]
-            let fixture = args.fixture.as_deref();
-            #[cfg(not(feature = "qualification"))]
-            let fixture = None;
-            system_artifacts::run(&args.out, fixture)
-        }
-        #[cfg(feature = "performance")]
-        Command::Performance(command) => performance::run(*command),
     }
 }
 
@@ -265,7 +213,7 @@ mod tests {
     fn diagnostic_coverage_metadata_cli_requires_all_identity_inputs() {
         assert!(
             Cli::try_parse_from([
-                "devtool",
+                "coverage-sandbox",
                 "diagnostic-build",
                 "write-coverage-artifacts",
                 "--metadata",
@@ -275,7 +223,7 @@ mod tests {
         );
         assert!(
             Cli::try_parse_from([
-                "devtool",
+                "coverage-sandbox",
                 "diagnostic-build",
                 "write-coverage-artifacts",
                 "--metadata",
@@ -297,28 +245,28 @@ mod tests {
 
     #[test]
     fn wasm_coverage_mapping_requires_an_explicit_source_root() {
-        assert!(Cli::try_parse_from(["devtool", "wasm-coverage", "map"]).is_err());
+        assert!(Cli::try_parse_from(["coverage-sandbox", "wasm", "map"]).is_err());
         assert!(matches!(
             Cli::try_parse_from([
-                "devtool",
-                "wasm-coverage",
+                "coverage-sandbox",
+                "wasm",
                 "map",
                 "--site-src",
                 "/source/site",
             ])
             .expect("mapping command parses")
             .command,
-            Command::WasmCoverage(WasmCoverageCmd::Map { site_src }) if site_src == Path::new("/source/site")
+            Command::Wasm(WasmCmd::Map { site_src }) if site_src == Path::new("/source/site")
         ));
     }
     #[test]
     fn coverage_emit_parses_the_producer_output_directory() {
-        let emit = Cli::try_parse_from(["devtool", "coverage", "emit", "--out", "coverage"])
+        let emit = Cli::try_parse_from(["coverage-sandbox", "emit", "--out", "coverage"])
             .expect("coverage emit");
         assert!(matches!(
             emit.command,
-            Command::Coverage(CoverageCmd::Emit { out }) if out == "coverage"
+            Command::Emit { out } if out == "coverage"
         ));
-        assert!(Cli::try_parse_from(["devtool", "coverage", "experiment-worker"]).is_err());
+        assert!(Cli::try_parse_from(["coverage-sandbox", "experiment-worker"]).is_err());
     }
 }

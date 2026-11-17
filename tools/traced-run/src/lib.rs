@@ -103,7 +103,7 @@ fn stream_of_with(
     if failed {
         let _ = writeln!(
             stderr,
-            "devtool: warning: devtool.run.stream_summary: ignored failure while summarizing captured output"
+            "traced-run: warning: traced-run.stream_summary: ignored failure while summarizing captured output"
         );
     }
     Stream {
@@ -365,7 +365,7 @@ mod tests {
     // fixture's ordinary scope-exit and panic-unwind cleanup.
     fn tmp() -> tempfile::TempDir {
         tempfile::Builder::new()
-            .prefix("devtool-run-test.")
+            .prefix("traced-run-test.")
             .tempdir()
             .unwrap()
     }
@@ -575,7 +575,7 @@ mod tests {
             assert_eq!(stream.bytes, if metadata_fails { 0 } else { 7 });
             assert_eq!(stream.lines, if metadata_fails { 9 } else { 0 });
             let warning = String::from_utf8(stderr).unwrap();
-            assert_eq!(warning.matches("devtool.run.stream_summary").count(), 1);
+            assert_eq!(warning.matches("traced-run.stream_summary").count(), 1);
             assert_eq!(warning.lines().count(), 1);
             assert!(!warning.contains("sensitive"));
         }
@@ -590,7 +590,7 @@ mod tests {
         );
         assert_eq!((stream.bytes, stream.lines), (0, 0));
         let warning = String::from_utf8(stderr).unwrap();
-        assert_eq!(warning.matches("devtool.run.stream_summary").count(), 1);
+        assert_eq!(warning.matches("traced-run.stream_summary").count(), 1);
         assert_eq!(warning.lines().count(), 1);
 
         let unreadable_fixture = tmp();
@@ -604,7 +604,7 @@ mod tests {
         );
         assert_eq!(stream.lines, 0);
         let warning = String::from_utf8(stderr).unwrap();
-        assert_eq!(warning.matches("devtool.run.stream_summary").count(), 1);
+        assert_eq!(warning.matches("traced-run.stream_summary").count(), 1);
         assert_eq!(warning.lines().count(), 1);
     }
 }

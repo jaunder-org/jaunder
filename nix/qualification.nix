@@ -14,5 +14,5 @@ let
 in
 assert package.sourceAdmits "tools/qualification/src/main.rs" "regular";
 assert package.sourceAdmits "docs/production-baseline.schema.json" "regular";
-assert !(package.sourceAdmits "tools/devtool/src/main.rs" "regular");
+assert !(package.sourceAdmits "tools/system-artifacts/src/main.rs" "regular");
 package

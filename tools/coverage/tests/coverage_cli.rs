@@ -1,4 +1,4 @@
-//! CLI-surface tests for `devtool coverage validate-status`.
+//! CLI-surface tests for the in-derivation coverage tool.
 
 use std::fs;
 use std::process::Command;
@@ -8,11 +8,11 @@ use coverage::status::{
     StageResult, StatusCategory,
 };
 
-const EXE: &str = env!("CARGO_BIN_EXE_devtool");
+const EXE: &str = env!("CARGO_BIN_EXE_coverage-sandbox");
 
 fn tmp() -> tempfile::TempDir {
     tempfile::Builder::new()
-        .prefix("devtool-coverage-cli-")
+        .prefix("coverage-sandbox-cli-")
         .tempdir()
         .unwrap()
 }
@@ -47,7 +47,7 @@ fn coverage_validate_status_accepts_only_complete_tests_ok_evidence() {
     fs::write(&complete, tests_ok_status().to_json()).unwrap();
     assert!(
         Command::new(EXE)
-            .args(["coverage", "validate-status", "--status"])
+            .args(["validate-status", "--status"])
             .arg(&complete)
             .status()
             .unwrap()
@@ -72,7 +72,7 @@ fn coverage_validate_status_accepts_only_complete_tests_ok_evidence() {
         let status = t.path().join(format!("{name}.json"));
         fs::write(&status, fixture).unwrap();
         let output = Command::new(EXE)
-            .args(["coverage", "validate-status", "--status"])
+            .args(["validate-status", "--status"])
             .arg(&status)
             .output()
             .unwrap();
@@ -81,5 +81,14 @@ fn coverage_validate_status_accepts_only_complete_tests_ok_evidence() {
             "{name} evidence must fail closed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+}
+
+#[test]
+fn every_in_derivation_route_is_available() {
+    for route in ["emit", "validate-status", "wasm", "diagnostic-build"] {
+        let output = Command::new(EXE).args([route, "--help"]).output().unwrap();
+        assert!(output.status.success(), "{route}: {output:?}");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("Usage:"));
     }
 }

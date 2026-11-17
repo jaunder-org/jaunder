@@ -9,7 +9,6 @@ let
     themeThumbnailEnvironment
     toolchain
     cargo-crap
-    devtoolBin
     tracedRunBin
     devShim
     devPythonCheck
@@ -40,9 +39,6 @@ let
       # distro git would load that OpenSSL into its older host glibc
       # process, which fails before Nix can fetch git inputs (#815).
       pkgs.git
-      # Standalone runner is the sole PATH provider; devtool provides
-      # independent in-sandbox commands.
-      devtoolBin
       tracedRunBin
       # The working tree's `dev` workflow runner.
       devShim
@@ -156,7 +152,7 @@ let
     TZDIR = "${pkgs.tzdata}/share/zoneinfo";
     # Host checks that spawn Cargo for the product workspace use the same
     # reviewed, offline dependency closure as the sandboxed static checks.
-    JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
+    JAUNDER_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
     # Host `dev static tsc` retains both pins after cd into another worktree,
     # where the IDE setup hook has not run.
     E2E_TYPES_NODE_MODULES = "${e2ePackage}/node_modules";

@@ -429,7 +429,7 @@ def test_build_csr_assembles_the_bundle_into_target_site(
     ]
     assert order[2].startswith(
         f"cargo run --locked --manifest-path {checkout.root}/tools/Cargo.toml "
-        "-p devtool -- system-artifacts --out "
+        "-p system-artifacts -- --out "
     )
     assert order[3].startswith(f"bash {checkout.root}/scripts/build-csr-assets.sh ")
 

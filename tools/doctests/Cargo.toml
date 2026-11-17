@@ -12,6 +12,7 @@ workspace = true
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 anyhow = "1.0.104"
+clap = { version = "4.6.6", features = ["derive"] }
 syn = { version = "2", features = ["full", "visit", "extra-traits"] }
 # `span-locations` is what makes a fence's SOURCE line readable: without it every
 # `Span::start()` reports line 0, so the reconciliation key against libtest's

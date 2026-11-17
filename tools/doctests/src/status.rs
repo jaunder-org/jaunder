@@ -1,5 +1,5 @@
-//! The in-sandbox doctest sentinel: what `devtool doctests emit` can report from
-//! inside the Nix producer derivation.
+//! The in-sandbox doctest sentinel: what the [`crate::emit`] producer can report
+//! from inside its Nix derivation.
 //!
 //! Written to `$out/status.json`; read by the `doctests-gate` consumer
 //! derivation. Mirrors `coverage::status` deliberately —

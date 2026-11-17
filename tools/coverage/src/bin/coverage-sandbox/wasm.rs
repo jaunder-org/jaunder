@@ -91,7 +91,7 @@ fn prepare_module(root: &Path, csr: &Path) -> Result<(PathBuf, Option<ServedModu
     let source_module = package.join(&wasm_path);
     let served_module = ServedModule {
         path: wasm_path.clone(),
-        sha256: crate::digest::lowercase_hex(Sha256::digest(fs::read(&source_module)?)),
+        sha256: coverage::digest::lowercase_hex(Sha256::digest(fs::read(&source_module)?)),
     };
     let module = root.join("module").join(&wasm_path);
     fs::create_dir_all(module.parent().expect("Vite WASM output has parent"))?;
@@ -301,7 +301,7 @@ fn artifact_at(root: &Path, path: &Path) -> Result<Artifact> {
             .context("artifact lies outside coverage root")?
             .display()
             .to_string(),
-        sha256: crate::digest::lowercase_hex(Sha256::digest(fs::read(path)?)),
+        sha256: coverage::digest::lowercase_hex(Sha256::digest(fs::read(path)?)),
     })
 }
 
@@ -390,7 +390,7 @@ mod tests {
         assert_eq!(served.as_ref().unwrap().path, "assets/csr_bg-hash.wasm");
         assert_eq!(
             served.as_ref().unwrap().sha256,
-            crate::digest::lowercase_hex(Sha256::digest(wasm))
+            coverage::digest::lowercase_hex(Sha256::digest(wasm))
         );
         assert_eq!(fs::read(module_path).unwrap(), wasm);
         assert_eq!(structural, Stage::passed());

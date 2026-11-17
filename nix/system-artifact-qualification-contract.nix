@@ -62,7 +62,7 @@ assert
   ) ([ ordinary.jaunder ] ++ packages);
 assert builtins.length (lib.unique (map (package: package.drvPath) packages)) == 3;
 assert builtins.length (lib.unique (map (package: package.csrBundle.drvPath) packages)) == 3;
-assert !(lib.hasInfix "--features qualification" ordinary.devtool.buildPhase);
+assert !(lib.hasInfix "--features qualification" ordinary.system-artifacts.buildPhase);
 assert !(lib.hasInfix "--system-artifact-fixture" ordinary.csrBundle.buildCommand);
 {
   acceptedFixtures = fixtures;

@@ -14,12 +14,14 @@
 //! - [`check`] holds the rules (the closed fence vocabulary, the companion rule)
 //!   and the bidirectional reconciliation between those two populations.
 //! - [`status`] is the sentinel the Nix producer writes and the gate consumes.
+//! - [`emit`] is that producer: it runs the doctests, reconciles, and writes the
+//!   sentinel.
 //! - [`roots`] is the one home for the scan roots.
 //!
 //! # The population
 //!
-//! `devtool doctests emit` runs `cargo test --workspace --doc` inside the Nix
-//! producer and reconciles the root workspace's roots, [`roots::WORKSPACE`].
+//! The producer runs `cargo test --workspace --doc` inside its Nix derivation
+//! and reconciles the root workspace's roots, [`roots::WORKSPACE`].
 //! The separate `tools/` workspace is deliberately outside the fence population:
 //! it has no doctests, and `checks.tools-doctests` runs its `cargo test --doc`
 //! without reconciliation. The roots module asserts that every tracked `.rs`
@@ -27,6 +29,7 @@
 //! belongs to neither.
 
 pub mod check;
+pub mod emit;
 pub mod fence;
 #[cfg(test)]
 mod harness;

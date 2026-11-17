@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::{Context, bail, ensure};
-use clap::{Args, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use common::{
     ids::{PostId, RevisionId},
     pagination::PageSize,
@@ -34,9 +34,16 @@ fn page_size() -> PageSize {
     PageSize::default()
 }
 
+#[derive(Parser)]
+#[command(name = "perf-producer")]
+struct Cli {
+    #[command(subcommand)]
+    command: PerformanceCmd,
+}
+
 /// Commands that produce or validate performance fragments.
 #[derive(Subcommand)]
-pub enum PerformanceCmd {
+enum PerformanceCmd {
     /// Measure the direct typed storage read paths.
     Storage(Box<StorageArgs>),
     /// Validate and atomically retain a browser-produced fragment.
@@ -44,7 +51,7 @@ pub enum PerformanceCmd {
 }
 
 #[derive(Clone, Copy, ValueEnum)]
-pub enum BackendArg {
+enum BackendArg {
     Sqlite,
     Postgres,
 }
@@ -59,7 +66,7 @@ impl From<BackendArg> for Backend {
 }
 
 #[derive(Args)]
-pub struct StorageArgs {
+struct StorageArgs {
     /// Existing fixture database URL.
     #[arg(long)]
     db: DbConnectOptions,
@@ -94,7 +101,7 @@ pub struct StorageArgs {
 }
 
 #[derive(Args)]
-pub struct ValidateBrowserArgs {
+struct ValidateBrowserArgs {
     /// Authoritative Task 2 dataset manifest.
     #[arg(long)]
     manifest: PathBuf,
@@ -106,8 +113,8 @@ pub struct ValidateBrowserArgs {
     output: Option<PathBuf>,
 }
 
-pub fn run(command: PerformanceCmd) -> anyhow::Result<()> {
-    match command {
+fn main() -> anyhow::Result<()> {
+    match Cli::parse().command {
         PerformanceCmd::Storage(args) => tokio::runtime::Runtime::new()?.block_on(storage(*args)),
         PerformanceCmd::ValidateBrowser(args) => validate_browser(args),
     }
@@ -116,7 +123,7 @@ pub fn run(command: PerformanceCmd) -> anyhow::Result<()> {
 async fn storage(args: StorageArgs) -> anyhow::Result<()> {
     ensure!(
         !cfg!(debug_assertions),
-        "storage performance measurements require a release devtool build"
+        "storage performance measurements require a release perf-producer build"
     );
     let manifest = read_manifest(&args.manifest)?;
     let backend = args.backend.into();

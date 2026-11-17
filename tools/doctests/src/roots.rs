@@ -1,7 +1,7 @@
 //! The scan roots, in one place so the population the gate *checks* cannot drift
-//! from the population it *scans*: `devtool` scans [`WORKSPACE`] inside the Nix
-//! producer, and this module's tests assert that every maintained `.rs` file
-//! has exactly one owner. Imported dependency sources have separate ownership;
+//! from the population it *scans*: the [`crate::emit`] producer scans
+//! [`WORKSPACE`] inside its Nix derivation, and this module's tests assert that
+//! every maintained `.rs` file has exactly one owner. Imported dependency sources have separate ownership;
 //! Cargo's workspace doctest runs do not execute them.
 //!
 //! A gate quietly shrinking its own reach is the failure ADR-0085 principle 6
@@ -96,7 +96,7 @@ mod tests {
     #[test]
     fn tools_is_outside_the_fence_population() {
         assert!(!WORKSPACE.contains(&"tools"));
-        assert_eq!(owner_count("tools/devtool/src/main.rs"), 1);
+        assert_eq!(owner_count("tools/doctests/src/main.rs"), 1);
     }
 
     #[test]

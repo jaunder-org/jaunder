@@ -26,8 +26,8 @@ SANDBOX_CARGO = {
     },
 }
 HOMES = {
-    "product": "JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME",
-    "tools": "JAUNDER_DEVTOOL_TOOLS_CARGO_HOME",
+    "product": "JAUNDER_PRODUCT_CARGO_HOME",
+    "tools": "JAUNDER_TOOLS_CARGO_HOME",
 }
 
 
@@ -87,7 +87,7 @@ def test_host_fmt_keeps_the_callers_cargo_environment(workflow: Workflow) -> Non
         "fmt",
         cwd=workflow.root / "sub",
         CARGO_NET_OFFLINE="host-policy",
-        JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME="sandbox-home",
+        JAUNDER_PRODUCT_CARGO_HOME="sandbox-home",
     )
     assert result.returncode == 0, result
     assert workflow.commands() == [["cargo", "fmt", "--check"]]
@@ -103,7 +103,7 @@ def test_sandbox_fix_drops_the_check_flag(workflow: Workflow) -> None:
         "fmt",
         "--fix",
         "--sandbox",
-        JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME="sandbox-home",
+        JAUNDER_PRODUCT_CARGO_HOME="sandbox-home",
     )
     assert result.returncode == 0, result
     assert workflow.commands() == [["cargo", "--offline", "fmt"]]
@@ -135,10 +135,8 @@ def test_sandbox_groups_admit_every_home_before_work_and_keep_their_order(
         group,
         "--fix",
         "--sandbox",
-        JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME="product-home"
-        if product is None
-        else product,
-        JAUNDER_DEVTOOL_TOOLS_CARGO_HOME="tools-home" if tools is None else tools,
+        JAUNDER_PRODUCT_CARGO_HOME="product-home" if product is None else product,
+        JAUNDER_TOOLS_CARGO_HOME="tools-home" if tools is None else tools,
     )
     if product is None:
         assert result.returncode == 0, result

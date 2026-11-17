@@ -273,7 +273,6 @@ FAKE_TOOLS = (
     "bash",
     "cargo",
     "nix",
-    "devtool",
     "prettier",
     "git",
     "scoped-leptosfmt",
