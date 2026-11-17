@@ -67,7 +67,6 @@ SOURCE_CONTRACTS = (
     "html-sink",
     "e2e-scaffold",
     "xlang-literal",
-    "no-just",
 )
 STATIC_CHECKS = (
     "static-docs",

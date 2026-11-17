@@ -655,6 +655,9 @@ the primary source for per-test timing comparisons across browsers. The report
 lands at `.xtask/diagnostics/e2e-<lane>/playwright-report-<lane>.json`.
 Chromium's unsplit producer uploads `e2e-diagnostics-<backend>-chromium`; each
 retained Firefox producer uploads `e2e-firefox-<backend>-<partition-or-shard>`.
+An artifact that uploads both `.xtask/diagnostics/` and `.xtask/run/` is rooted
+at `.xtask/`, so its contents sit under `diagnostics/` and `run/` (the report
+above is at `diagnostics/e2e-<lane>/playwright-report-<lane>.json`).
 
 The report is paired with `duration-budget-manifest-<lane>.json`; the copied
 report and manifest are the duration-pressure gate's source, not trace spans or

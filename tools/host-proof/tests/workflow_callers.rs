@@ -1,4 +1,4 @@
-//! The Git hooks and CI workflow call `dev` and keep each job's own verdict.
+//! The Git hooks and CI workflows call `dev` and keep each job's own verdict.
 use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf, process::Command};
 
 #[test]
@@ -138,5 +138,89 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
             "test \"$firefox_lanes\" = \"success\"",
             "test \"$firefox_reconcile\" = \"success\"",
         ])
+    );
+}
+
+/// Each named job runs a `dev` workflow, then summarises its trace into the step
+/// summary and uploads `.xtask/run/`, both diagnostic only.
+fn assert_jobs_keep_and_summarise_their_trace(source: &str, names: &[&str]) {
+    let workflow: serde_yaml::Value = serde_yaml::from_str(source).unwrap();
+    let run = |step: &serde_yaml::Value| {
+        step["run"]
+            .as_str()
+            .map(|run| run.split_whitespace().collect::<Vec<_>>().join(" "))
+    };
+    for name in names {
+        let steps = workflow["jobs"][name]["steps"].as_sequence().unwrap();
+        let first_workflow = steps
+            .iter()
+            .position(|step| run(step).is_some_and(|run| run.contains("-c dev ")))
+            .unwrap_or_else(|| panic!("{name}: no dev workflow"));
+        let uploads = steps
+            .iter()
+            .filter(|step| {
+                step["uses"]
+                    .as_str()
+                    .is_some_and(|uses| uses.starts_with("actions/upload-artifact@"))
+                    && step["with"]["path"]
+                        .as_str()
+                        .is_some_and(|path| path.lines().any(|line| line.trim() == ".xtask/run/"))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(uploads.len(), 1, "{name}: one trace upload");
+        assert_eq!(uploads[0]["if"].as_str(), Some("always()"), "{name}");
+        assert_eq!(
+            uploads[0]["with"]["include-hidden-files"].as_bool(),
+            Some(true),
+            "{name}"
+        );
+        assert_eq!(
+            uploads[0]["with"]["retention-days"].as_u64(),
+            Some(14),
+            "{name}"
+        );
+        let summaries = steps
+            .iter()
+            .enumerate()
+            .filter(|(_, step)| {
+                run(step).is_some_and(|run| run.contains("dev trace summary --markdown"))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(summaries.len(), 1, "{name}: one summary step");
+        let (index, summary) = summaries[0];
+        assert!(
+            index > first_workflow,
+            "{name}: the summary follows the workflow"
+        );
+        assert_eq!(summary["if"].as_str(), Some("always()"), "{name}");
+        let command = run(summary).unwrap();
+        assert!(
+            command.contains(">> \"$GITHUB_STEP_SUMMARY\"") && command.ends_with("|| true"),
+            "{name}: the summary is diagnostic only: {command}"
+        );
+    }
+}
+
+#[test]
+fn every_validation_and_e2e_job_keeps_its_trace_and_summarises_it_without_a_verdict() {
+    assert_jobs_keep_and_summarise_their_trace(
+        include_str!("../../../.github/workflows/ci.yml"),
+        &[
+            "validate-host",
+            "validate-hermetic",
+            "validate-test-checks",
+            "validate-coverage",
+            "e2e-chromium",
+            "e2e-firefox-lane",
+            "e2e-firefox-reconcile",
+        ],
+    );
+}
+
+#[test]
+fn the_performance_job_keeps_its_trace_and_summarises_it_without_a_verdict() {
+    assert_jobs_keep_and_summarise_their_trace(
+        include_str!("../../../.github/workflows/performance.yml"),
+        &["performance"],
     );
 }

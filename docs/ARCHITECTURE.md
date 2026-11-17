@@ -146,13 +146,13 @@ compatibility. PR/local/noncanonical evidence cannot seed it. Atomic publication
 is per file; stable-copy failure leaves the complete nonce result and reports
 failure.
 
-**Performance workflow decision status (issue #1894).** The implementation above
-is present in this source tree. Its
-[Just and Nix performance workflow ownership](adr/0241-performance-workflow-ownership.md)
-ADR remains proposed under the normal promotion process, as a narrow
-performance-specific clarification of ADR-0028; ADR-0141 workspace ownership and
-auxiliary host tests remain unchanged. Implementation in this tree is not a
-claim that this branch has shipped on `main`.
+**Performance workflow decision (issue #1894).** The
+[performance workflow ownership decision](adr/0241-performance-workflow-ownership.md)
+is accepted, as a narrow performance-specific clarification of ADR-0028;
+ADR-0141 workspace ownership and auxiliary host tests remain unchanged. Its
+`just perf*` front doors are now the `dev perf*` subcommands above
+([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)); the serial
+producer sequence and the host Rust performance command are unchanged.
 
 **Package-metadata ownership is deliberately partial.** The root
 `[workspace.package]` owns the version, edition, and license inherited by its
@@ -4357,11 +4357,11 @@ instantaneous PID state. The Nix daemon and shared build workers are not owned
 children. The separate `jaunder shut-down` 30-second wait/no-escalation contract
 remains ADR-0181.
 
-The design is recorded in the
-[standalone UX sandbox lifecycle decision](adr/0244-standalone-ux-sandbox-lifecycle.md),
-by draft path `docs/adr/0244-standalone-ux-sandbox-lifecycle.md`. The draft
-remains `proposed` until serialized post-merge numbering and promotion. It is a
-narrow ADR-0028 placement exception and partially supersedes
+The design is recorded in the accepted
+[standalone UX sandbox lifecycle decision](adr/0244-standalone-ux-sandbox-lifecycle.md);
+its `just sandbox` front door is now `dev sandbox`
+([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)). It is a narrow
+ADR-0028 placement exception and partially supersedes
 [host UX sandbox lifecycle](adr/0180-host-ux-sandbox-lifecycle.md) only for the
 sandbox owner and literal signal-escalation clause. The immutable Nix artifact
 selection further replaces mutable application artifact publication only in
@@ -4519,7 +4519,11 @@ That decision supersedes the Just-ownership parts of the
 [Just E2E workflow ownership](adr/0238-just-e2e-workflow-ownership.md),
 [qualification workflow ownership](adr/0239-qualification-workflow-ownership.md)
 and
-[Just frontdoors with a host-only PR observer](adr/0240-just-frontdoors-host-pr-observer.md);
+[Just frontdoors with a host-only PR observer](adr/0240-just-frontdoors-host-pr-observer.md),
+the `just perf*` front doors of the
+[performance workflow ownership decision](adr/0241-performance-workflow-ownership.md)
+and the `just sandbox` front door of the
+[standalone UX sandbox lifecycle decision](adr/0244-standalone-ux-sandbox-lifecycle.md);
 the workflows those decisions defined keep their names, arguments and steps as
 `dev` subcommands. Direct tools and concern-owned host executables in the
 `tools` workspace (`repository-policy`, `host-proof`, `coverage-check`,
@@ -4542,8 +4546,8 @@ On the host the devShells' `dev` shim runs the checkout's own `tools/dev/` with
 working tree's code; Nix checks run a `dev` package built from a filtered
 `tools/dev/` source, so an edit there rebuilds them. A `checks.dev-python`
 static check runs ruff, `mypy --strict` and pytest at 90% branch coverage over
-`tools/dev/`, and the `no-just` source contract keeps Just command text out of
-hooks, CI, Nix, scripts and tool sources.
+`tools/dev/`. Just is in no Nix input, so the gates passing proves that nothing
+needs it; no source check guards against its return.
 
 Each gate and each step is an OpenTelemetry span. A step span carries its
 `jaunder.status` (`ok`, `failed`, `signalled`), `process.exit.code`, its command

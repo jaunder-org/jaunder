@@ -43,6 +43,21 @@ jobs:
         run: >-
           nix develop .#ci --accept-flake-config -c dev perf-compare
           .xtask/performance/performance-result-v1.json
+      # Diagnostic only: the table never decides the job's result.
+      - name: Trace summary
+        if: always()
+        run:
+          nix develop .#ci --accept-flake-config -c sh -c 'dev trace summary
+          --markdown >> "$GITHUB_STEP_SUMMARY"' || true
+      - name: Upload performance trace
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: performance-trace
+          path: .xtask/run/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Upload performance result
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

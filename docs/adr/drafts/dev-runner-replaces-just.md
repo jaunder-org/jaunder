@@ -54,7 +54,12 @@ output-parking runner; its launcher, span, recorder and workflow-folding code is
 retired.
 
 This supersedes the Just-ownership parts of ADR-0237, ADR-0238, ADR-0239 and
-ADR-0240, and the traced-run span-mechanism constraint in milestone 33.
+ADR-0240, the `just perf`, `just perf-compare` and `just perf-import-baseline`
+front doors of [ADR-0241](../0241-performance-workflow-ownership.md), the
+`just sandbox` front door of
+[ADR-0244](../0244-standalone-ux-sandbox-lifecycle.md), and the traced-run
+span-mechanism constraint in milestone 33. Those workflows keep their names and
+arguments as `dev` subcommands.
 
 ## Consequences
 
@@ -67,7 +72,6 @@ ADR-0240, and the traced-run span-mechanism constraint in milestone 33.
 - Any edit to `tools/dev/` rebuilds the hermetic checks that run `dev`.
 - Behaviour tests that drove `just` with fake tools move to pytest against
   `dev`. Tests of Just itself and of Justfile text are deleted.
-- The `no-just` source contract fails if Just command text (an invocation, a
-  `Justfile` or `*.just` file name) reappears in `.githooks`, `.github`, `nix`,
-  `scripts` or the tools' sources.
+- No source check guards against Just's return. Just is in no Nix input, so the
+  gates passing proves that nothing needs it.
 - Adding OTLP export later is a configuration choice, not a redesign.
