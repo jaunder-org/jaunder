@@ -242,7 +242,8 @@ Review deliverable C covers the switch, the removal and the proof.
     - `scripts/issue-discover.sh` and `scripts/issue-metadata.sh`, replaced by
       `dev issue-discover` and `dev issue-create`/`issue-edit` (owner decision
       during deliverable B review)
-  - Add the committed `rg` guard from Acceptance 7 as a repository-policy check.
+  - Add the committed `rg` guard from Acceptance 7 as a repository-policy check
+    (later retired by the owner in Task 7a).
   - Update CONTRIBUTING.md, covering:
     - the gate commands
     - the observation and trace policy at `:941-947` and `:1165-1239`
@@ -255,6 +256,44 @@ Review deliverable C covers the switch, the removal and the proof.
     - the Rust coverage gate passes with no lowered threshold. If it drops, add
       Rust unit tests.
     - the `rg` guard is clean
+- [ ] **Task 7a: deliverable C review fixes.**
+  - Add ADR-0241 (`just perf*`) and ADR-0244 (`just sandbox`) to the ADR draft's
+    supersedes list and to its ARCHITECTURE projection. Fix the stale 0241 line
+    at `ARCHITECTURE.md:149-155`.
+  - Delete the `no-just` source contract (`no_just_check.rs`, its registration
+    and its `SOURCE_CONTRACTS` entry in `dev`). Remove its scope sentence from
+    the ADR draft, ARCHITECTURE.md and CONTRIBUTING. With Just in no Nix input,
+    the gates passing is the proof.
+  - Move the CI trace and summary assertions from `e2e_topology.rs` into
+    `workflow_callers.rs`.
+  - Upload `.xtask/run/` and add the trace summary step in `performance.yml`,
+    and note the artifact layout in `observability.md`.
+  - Verification: the pre-commit gate passes.
+- [ ] **Task 7b: #1959 and #1960.** As the spec says: delete `devtool check`;
+      `dev static ert` runs directly from `all` and from `static-ert`; delete
+      the `code` group; keep `all` and document its purpose.
+  - Verification: `nix build .#checks.x86_64-linux.static-ert` passes, and so do
+    the pre-commit gate and `dev static-all`.
+- [ ] **Task 7c: #1962.**
+  - The `csrBundle` step plus `wasm-audit budget --site-path`.
+  - Doctests: add a `tools-doctests` `craneLib.cargoDocTest` check, and add it
+    to `dev`'s Nix static checks. Prepush uses a `doctests-gate` Nix-check step.
+    Delete `doctest-check`, `host.rs` and `roots::HOST`.
+  - `git-index-safety` requests `dev nix-check static-docs`.
+  - Contract: `wasm-audit budget` requires `--site-path`.
+  - Verification:
+    - `nix build` of `tools-doctests` and `doctests-gate` passes
+    - a Markdown-only commit runs the static-docs request through `dev`
+    - `dev prepush` passes
+- [ ] **Task 7d: #1964.** test-local's steps in `dev` under the `flock`;
+      `host-proof csr-prerequisite`; delete host-proof `test-local` and
+      `steps/test_local.rs`. Port its behaviour tests to pytest: CFLAGS
+      handling, the explicit bundle root, a refused prerequisite, the lock held
+      for the whole run, and selector pass-through.
+  - Verification:
+    - `dev test-local -- -p common` passes
+    - a second concurrent `dev test-local` waits on the lock
+    - `dev check` passes
 - [ ] **Task 8: acceptance proof.**
   - Local runs:
     - `dev check` succeeds

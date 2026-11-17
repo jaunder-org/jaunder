@@ -199,6 +199,68 @@ lowering any threshold. Where it drops, Rust unit tests make up the gap.
 - Edits to `tools/dev/` rebuild the static checks.
 - We maintain two small span-record writers, one in Python and one in Rust.
 
+## Folded-in issues
+
+Approved 2026-11-16: four open Milestone 33 issues framed against Just are
+delivered here on `dev`, and close with this PR. #1961 (move the inline `perf`
+recipe body into a script) is already delivered by `perf.py` and closes as
+delivered.
+
+- **#1959: ERT without devtool.** Today the chain is `dev` → `devtool check ert`
+  → `dev static ert --sandbox` → Emacs, kept only for a timing line that `dev`'s
+  spans now provide. Delete `devtool check` and its `devtool-check-timing`
+  event, after confirming nothing consumes it. The `all` static group and the
+  `static-ert` Nix check run `dev static ert` directly, and `static-ert` drops
+  `devtoolBin`. This also removes the host use of `--sandbox` that the
+  deliverable C review found.
+- **#1960: unused static groups.** Delete the `code` group and its test. Keep
+  `all` (`dev static-all`), with its purpose stated in CONTRIBUTING: one command
+  that runs every host static leaf in order. The `devtool` build drops out of
+  `dev static-all` along with ERT's hop.
+- **#1962: hidden gate work becomes `dev` steps.**
+  1. `wasm-budget`: `dev` builds `csrBundle` as its own Nix step, with a cache
+     state, and passes the store path to `wasm-audit budget --site-path <p>`.
+     Without a path, the gate refuses to run.
+  2. Doctests move into crane; no host `cargo test --doc` remains (owner
+     decision 2026-11-17):
+     - `tools/` has no doctests, so checking its fences against its run proves
+       nothing. A plain `craneLib.cargoDocTest` check over the tools workspace
+       (`tools-doctests`) replaces the host `doctest-fences` step and does no
+       fence reconciliation.
+     - Prepush's host `workspace-doctests`, which duplicated `checks.doctests`,
+       becomes a `dev` Nix-check step on `checks.doctests` plus `doctests-gate`.
+     - The root workspace keeps its ADR-0095 reconciliation in
+       `checks.doctests`, because its `compile_fail` fences are real proofs.
+     - The `doctest-check` binary and `tools/doctests/src/host.rs` are deleted.
+       `roots::HOST` goes, and the ownership test records that `tools/` is
+       outside the fence population.
+  3. Pre-commit: `git-index-safety` keeps sole custody of the Git index
+     (ADR-0029): it snapshots, runs `dev precommit-*-host`, reconciles staging,
+     and still runs the post-check after a failure. Its hand-built
+     `nix build …static-docs` becomes `dev nix-check static-docs`, so all Nix
+     check flags have one definition (`steps.nix_check`), and the request shows
+     up as a step with a cache state. The `dev` → Rust → `dev` nesting stays,
+     because single-process index custody is deliberate, and the trace now shows
+     every level.
+- **#1964: test-local sequencing in `dev`.** The lock question is answered. The
+  lock is a checkout-local `flock` on `.xtask/host-artifacts.lock`, and only
+  test-local takes it. It stops a concurrent test-local in the same checkout
+  from replacing the `.xtask/csr-bundle` out-link, or the `target/debug/jaunder`
+  image worker, while a test run is using them. It stays. `dev` holds the same
+  `flock`, which is not inherited by children, across these steps:
+  1. CSR untracked-input admission
+  2. `nix build .#csrBundle` rooted at `.xtask/csr-bundle`, skipped when
+     `JAUNDER_CSR_BUNDLE_DIR` is set
+  3. `host-proof csr-prerequisite <root>` (validation stays in Rust)
+  4. `cargo build --locked -p jaunder --bin jaunder`, with `CFLAGS` set empty
+     when absent
+  5. `pg-run cargo nextest run …` with `JAUNDER_CSR_BUNDLE_DIR` and
+     `JAUNDER_TEST_EXECUTABLE` set
+
+  The checkout preparation and hook setup that test-local does today move to
+  `dev` too, so host-proof's `test-local` binary and `steps/test_local.rs` are
+  deleted. Selectors still pass through, and each step is its own span.
+
 ## Delivery
 
 One PR on top of #1958 and #1976, in staged commits that each pass the
@@ -210,6 +272,8 @@ pre-commit gate:
 4. the Nix/CI/hooks/caller switch, including host-proof OpenTelemetry
 5. deleting the Justfile, `recipes/` and Just from the devShell, retiring
    traced-run's span code, and updating the docs
+6. the folded-in issues: #1959 with #1960, then #1962, then #1964, one commit
+   each
 
 ## Acceptance
 
@@ -237,9 +301,9 @@ Proof to run:
 
 Deliverables to commit:
 
-7. No `just` remains on any devShell PATH. A committed `rg` check finds no
-   `just` command text (invocations, file names `Justfile`/`*.just`, or `just X`
-   help strings) in `.githooks`, `.github`, `nix`, `scripts` or `tools/*/src`.
+7. `pkgs.just` is in no Nix input, devShell or check. With that removed, passing
+   gates are the proof that nothing needs Just; there is no separate source
+   check (owner decision 2026-11-17, which retired the `no-just` contract).
 8. CONTRIBUTING.md (gate commands, observation and trace policy) and
    ARCHITECTURE.md are updated. The ADR draft is marked as superseding the
    Just-ownership decisions of ADR-0237/0238/0239/0240 and the traced-run span
@@ -248,7 +312,8 @@ Deliverables to commit:
 ## Boundaries
 
 - The content of each step and the set of gate steps stay the same, except for
-  the new Python checks. No new parallelism.
+  the new Python checks and the steps that the folded-in issues make visible. No
+  new parallelism.
 - Product telemetry, the E2E collector and the OTLP endpoints are unchanged.
 - `pg-run` is #1976's, and `dev` creates no span inside it.
 - The skills outside the repo (`jaunder-develop` policy that names `just …`
