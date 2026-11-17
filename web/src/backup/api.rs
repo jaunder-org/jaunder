@@ -9,6 +9,7 @@ use common::backup::{BackupConfig, BackupMode, BackupSchedule, DestinationPath, 
 use {
     crate::{
         auth,
+        backup::server::back_up_now_impl,
         error::{InternalError, from_write_scope_error},
     },
     leptos::prelude::*,
@@ -69,4 +70,12 @@ pub async fn update_settings(
         })
         .await
         .map_err(from_write_scope_error)
+}
+
+/// Writes one backup to the saved destination now and returns the written path.
+/// The run happens on its own task, so a client that disconnects mid-request
+/// cannot abandon a half-written backup.
+#[macros::server]
+pub async fn back_up_now() -> WebResult<String> {
+    back_up_now_impl().await
 }

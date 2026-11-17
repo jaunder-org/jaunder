@@ -1,4 +1,4 @@
-use crate::backup::{self, UpdateSettings};
+use crate::backup::{self, BackUpNow, UpdateSettings};
 use crate::error::WebError;
 use crate::forms::{self, Field, ValidatedBareInput, ValidatedInput};
 use crate::topbar::Topbar;
@@ -16,7 +16,12 @@ pub fn BackupSettingsPage() -> impl IntoView {
     // The same typed scope drives the form and its shell warning, so a settled
     // backup-settings mutation re-reads both persisted projections together.
     let settings = reactive::resource(move || warning.track(), backup::get_settings);
+    let backup_now = ServerAction::<BackUpNow>::new();
 
+    // The save feedback sits outside both Suspense boundaries so a save error
+    // stays visible even when the settings re-read after it fails. The Back Up
+    // Now card reads the same persisted settings, because it enables only for a
+    // *saved* destination; a failed read is already reported by the form's arm.
     view! {
         <Topbar title="Backup Settings" sub="Operations" />
         <div class="j-scroll">
@@ -36,27 +41,42 @@ pub fn BackupSettingsPage() -> impl IntoView {
                         }
                     })}
                 </Suspense>
-                {move || {
-                    update_action
-                        .value()
-                        .get()
-                        .and_then(|result: Result<MutationOutcome<()>, WebError>| {
-                            match crate::mutation_feedback::classify(
-                                result,
-                                "Save acknowledgement was lost; reload to verify the settings.",
-                            ) {
-                                crate::mutation_feedback::MutationFeedback::Confirmed(()) => None,
-                                crate::mutation_feedback::MutationFeedback::Error(message) => {
-                                    Some(message)
-                                }
-                            }
-                        })
-                        .map(|error| {
-                            view! { <p class="error j-settings-error">{error}</p> }
-                        })
-                }}
+                {settings_save_feedback(update_action)}
+                <Suspense fallback=|| ()>
+                    {move || Suspend::new(async move {
+                        settings
+                            .await
+                            .ok()
+                            .map(|settings| {
+                                backup_now_card(
+                                    settings.destination_path.map(|path| path.to_string()),
+                                    backup_now,
+                                )
+                            })
+                    })}
+                </Suspense>
             </div>
         </div>
+    }
+}
+
+fn settings_save_feedback(update_action: ServerAction<UpdateSettings>) -> impl IntoView {
+    move || {
+        update_action
+            .value()
+            .get()
+            .and_then(|result: Result<MutationOutcome<()>, WebError>| {
+                match crate::mutation_feedback::classify(
+                    result,
+                    "Save acknowledgement was lost; reload to verify the settings.",
+                ) {
+                    crate::mutation_feedback::MutationFeedback::Confirmed(()) => None,
+                    crate::mutation_feedback::MutationFeedback::Error(message) => Some(message),
+                }
+            })
+            .map(|error| {
+                view! { <p class="error j-settings-error">{error}</p> }
+            })
     }
 }
 
@@ -122,6 +142,9 @@ fn backup_settings_form(
             </div>
             <div class="j-form-body j-backup-form-body">
                 {backup_destination_field(destination)}
+                <p class="j-form-help j-backup-field-wide j-backup-note">
+                    "The schedule, and whether scheduled backups run at all, take effect after Jaunder restarts. Destination, retention and mode apply from the next backup."
+                </p>
                 <ValidatedInput<BackupSchedule>
                     label="Schedule"
                     name="schedule"
@@ -172,6 +195,74 @@ fn backup_settings_form(
                     on:click=submit
                 >
                     "Save Backup Settings"
+                </button>
+            </div>
+        </div>
+    }
+}
+
+/// Manual backup: writes one backup to the *saved* destination, so the button
+/// stays disabled until a destination has been persisted, not merely typed.
+fn backup_now_card(
+    destination: Option<String>,
+    backup_now: ServerAction<BackUpNow>,
+) -> impl IntoView {
+    let pending = backup_now.pending();
+    let destination_saved = destination.is_some();
+    // The body always says where the backup will go (or that nowhere is saved
+    // yet), keeping the head/body/actions card shape of the style guide.
+    let target = match destination {
+        Some(destination) => {
+            view! { <p class="j-form-help j-backup-note">"Writes to " <code>{destination}</code></p> }
+                .into_any()
+        }
+        None => {
+            view! { <p class="j-form-help j-backup-note">"Save a destination before backing up."</p> }
+                .into_any()
+        }
+    };
+    view! {
+        <div class="j-card j-backup-now">
+            <div class="j-card-head">
+                <div>
+                    <h2>"Back Up Now"</h2>
+                    <div class="j-sub">
+                        "Write one backup to the saved destination immediately."
+                    </div>
+                </div>
+            </div>
+            <div class="j-form-body">
+                {target}
+                {move || {
+                    backup_now
+                        .value()
+                        .get()
+                        .map(|result: Result<String, WebError>| match result {
+                            Ok(path) => {
+                                view! {
+                                    <p class="success j-backup-note j-backup-written">
+                                        "Backup written to " <code>{path}</code>
+                                    </p>
+                                }
+                                    .into_any()
+                            }
+                            Err(error) => {
+                                view! { <p class="error j-backup-note">{error.to_string()}</p> }
+                                    .into_any()
+                            }
+                        })
+                }}
+            </div>
+            <div class="j-form-actions">
+                <button
+                    type="button"
+                    class="j-btn is-primary"
+                    prop:disabled=move || !destination_saved || pending.get()
+                    on:click=move |_| {
+                        backup_now.dispatch(BackUpNow {});
+                    }
+                >
+                    {move || if pending.get() { "Backing Up\u{2026}" } else { "Back Up Now" }}
                 </button>
             </div>
         </div>

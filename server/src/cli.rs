@@ -357,16 +357,19 @@ pub enum Commands {
     /// Waits for that exact instance to exit and for its runtime identity to no
     /// longer name it, rather than merely reporting signal delivery. Refuses
     /// missing, malformed, dead, start-time-mismatched, or starting runtime
-    /// identities. On timeout, returns an error without escalation. Non-Linux
-    /// platforms should use normal terminal/service process control.
+    /// identities. Graceful shutdown takes a final backup when a backup
+    /// destination is saved, so completion can take minutes. On timeout, returns
+    /// an error without escalation. Non-Linux platforms should use normal
+    /// terminal/service process control.
     ShutDown {
         #[command(flatten)]
         storage: StorageArgs,
 
-        /// Maximum seconds to wait for full shutdown completion (default: 30).
+        /// Maximum seconds to wait for full shutdown completion, including the
+        /// final backup (default: 900).
         ///
         /// Timeout returns an error without sending an escalation signal.
-        #[arg(long, default_value = "30")]
+        #[arg(long, default_value = "900")]
         timeout: NonZeroU64,
     },
 
@@ -1649,7 +1652,7 @@ mod tests {
             unreachable!("parse yields Commands::ShutDown")
         };
         assert_eq!(storage.storage_path, PathBuf::from("./data"));
-        assert_eq!(timeout.get(), 30);
+        assert_eq!(timeout.get(), 900);
     }
 
     #[test]
@@ -1696,6 +1699,8 @@ mod tests {
             "starting",
             "timeout",
             "escalation",
+            "final backup",
+            "900",
             "Non-Linux",
         ] {
             assert!(help.contains(topic), "help must describe {topic}: {help}");

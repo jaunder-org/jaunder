@@ -11,6 +11,7 @@
     "auth::get_session",
     "auth::login",
     "auth::logout",
+    "backup::back_up_now",
     "backup::get_settings",
     "backup::is_warning_visible",
     "backup::update_settings",

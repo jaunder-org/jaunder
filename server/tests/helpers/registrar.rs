@@ -5,6 +5,7 @@ static REGISTRATIONS: LazyLock<()> = LazyLock::new(|| {
     server_fn::axum::register_explicit::<web::backup::IsWarningVisible>();
     server_fn::axum::register_explicit::<web::backup::GetSettings>();
     server_fn::axum::register_explicit::<web::backup::UpdateSettings>();
+    server_fn::axum::register_explicit::<web::backup::BackUpNow>();
     server_fn::axum::register_explicit::<web::registration::GetPolicy>();
     server_fn::axum::register_explicit::<web::registration::Register>();
     server_fn::axum::register_explicit::<web::auth::Login>();
@@ -125,4 +126,4 @@ pub fn ensure_server_fns_registered() {
 /// fn in `web/src`; this constant tracks the list; and
 /// `server_fn_wire::every_server_fn_path_is_api_vertical_ident_and_distinct`
 /// checks itself against the constant. Each link is short enough to keep honest.
-pub const REGISTERED_SERVER_FN_COUNT: usize = 106;
+pub const REGISTERED_SERVER_FN_COUNT: usize = 107;

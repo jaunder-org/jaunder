@@ -132,6 +132,18 @@ pub fn service_context_provider(
     }
 }
 
+/// Extends `services` with the backup runner the manual **Back Up Now**
+/// trigger reaches.
+pub fn with_backup_context(
+    services: impl Fn() + Clone + Send + Sync + 'static,
+    backup: Arc<dyn web::backup::ManualBackupRunner>,
+) -> impl Fn() + Clone + Send + Sync + 'static {
+    move || {
+        services();
+        provide_context(Arc::clone(&backup));
+    }
+}
+
 /// Captures the publisher's concrete service and web-facing capability.
 pub fn publisher_context_provider(
     publisher: Arc<crate::publisher::PublisherService>,
@@ -364,6 +376,33 @@ mod tests {
             ));
             expect_context::<Arc<dyn web::websub::WebsubPublisher>>();
             expect_context::<PostMediaOwnership>();
+        });
+    }
+
+    #[tokio::test]
+    async fn backup_context_extends_services_with_the_runner() {
+        let env = Backend::Sqlite.setup().await;
+        let backup: Arc<dyn web::backup::ManualBackupRunner> =
+            Arc::new(crate::backup::BackupRunner::new(
+                env.site_config(),
+                storage::test_support::sqlite_url(&env.base),
+                storage::StorageRuntimeConfig::default(),
+                env.base.path(),
+            ));
+        let services_ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let services = {
+            let services_ran = Arc::clone(&services_ran);
+            move || services_ran.store(true, std::sync::atomic::Ordering::SeqCst)
+        };
+        let provide = with_backup_context(services, Arc::clone(&backup));
+
+        Owner::new().with(|| {
+            provide();
+            assert!(services_ran.load(std::sync::atomic::Ordering::SeqCst));
+            assert!(Arc::ptr_eq(
+                &expect_context::<Arc<dyn web::backup::ManualBackupRunner>>(),
+                &backup,
+            ));
         });
     }
 }

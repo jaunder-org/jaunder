@@ -602,3 +602,168 @@ async fn session_propagates_storage_error_during_auth(#[case] backend: Backend) 
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
+
+fn backup_config(destination: &std::path::Path, retention_count: &str) -> BackupConfig {
+    BackupConfig {
+        destination_path: Some(destination.to_str().expect("utf-8 path").parse().unwrap()),
+        retention_count: retention_count.parse().unwrap(),
+        ..BackupConfig::default()
+    }
+}
+
+async fn operator_cookie(env: &storage::test_support::TestEnv) -> String {
+    create_operator_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie()
+}
+
+fn web_error(body: &str) -> web::error::WebError {
+    serde_json::from_str(body).unwrap_or_else(|error| panic!("{error}: {body}"))
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn operator_back_up_now_writes_a_backup_and_prunes_to_retention(#[case] backend: Backend) {
+    let destination = tempfile::TempDir::new().unwrap();
+    for name in ["backup-0001", "backup-0002"] {
+        let old = destination.path().join(name);
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("manifest.json"), "{}").unwrap();
+    }
+    let env = backend
+        .setup()
+        .backup(backup_config(destination.path(), "1"))
+        .await;
+    let app = make_app!(&env, &env.base);
+    let cookie = operator_cookie(&env).await;
+
+    let (status, body) = post_form(
+        app,
+        <web::backup::BackUpNow as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let written = std::path::PathBuf::from(serde_json::from_str::<String>(&body).unwrap());
+    assert_eq!(written.parent(), Some(destination.path()));
+    assert!(written.join("manifest.json").is_file());
+    let remaining: Vec<_> = std::fs::read_dir(destination.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(remaining, vec![written]);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn non_operator_cannot_back_up_now(#[case] backend: Backend) {
+    let destination = tempfile::TempDir::new().unwrap();
+    let env = backend
+        .setup()
+        .backup(backup_config(destination.path(), "7"))
+        .await;
+    let app = make_app!(&env, &env.base);
+    let cookie = create_user_and_session(
+        std::sync::Arc::clone(&env.users()),
+        std::sync::Arc::clone(&env.sessions()),
+        env.write_scope(),
+    )
+    .await
+    .cookie();
+
+    let (status, body) = post_form(
+        app,
+        <web::backup::BackUpNow as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert_eq!(web_error(&body), web::error::WebError::Unauthorized);
+    assert_eq!(std::fs::read_dir(destination.path()).unwrap().count(), 0);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn back_up_now_without_a_saved_destination_is_a_validation_error(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let app = make_app!(&env, &env.base);
+    let cookie = operator_cookie(&env).await;
+
+    let (status, body) = post_form(
+        app,
+        <web::backup::BackUpNow as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(
+        matches!(web_error(&body), web::error::WebError::Validation { .. }),
+        "body: {body}"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn back_up_now_while_a_backup_runs_is_a_conflict(#[case] backend: Backend) {
+    let destination = tempfile::TempDir::new().unwrap();
+    let env = backend
+        .setup()
+        .backup(backup_config(destination.path(), "7"))
+        .await;
+    let runner = crate::helpers::backup_runner(env.site_config(), &env.base, env.base.path());
+    let app = make_app!(&env, &env.base; backup_runner = runner.clone());
+    let cookie = operator_cookie(&env).await;
+    let running = runner.wait_for_run_slot().await;
+
+    let (status, body) = post_form(
+        app,
+        <web::backup::BackUpNow as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
+    drop(running);
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert_eq!(
+        web_error(&body),
+        web::error::WebError::conflict("a backup is already running")
+    );
+    assert_eq!(std::fs::read_dir(destination.path()).unwrap().count(), 0);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn back_up_now_failure_returns_a_generic_server_error(#[case] backend: Backend) {
+    let blocker = tempfile::NamedTempFile::new().unwrap();
+    let env = backend
+        .setup()
+        .backup(backup_config(&blocker.path().join("backups"), "7"))
+        .await;
+    let app = make_app!(&env, &env.base);
+    let cookie = operator_cookie(&env).await;
+
+    let (status, body) = post_form(
+        app,
+        <web::backup::BackUpNow as ServerFn>::PATH,
+        "",
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert_eq!(
+        web_error(&body),
+        web::error::WebError::server_message("server operation failed")
+    );
+}

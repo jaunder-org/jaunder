@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
 import { reenterAdminSettings } from "./admin-settings";
 import { test, expect } from "./fixtures";
 import { goto, signInAs, waitForSelector } from "./helpers";
@@ -241,5 +243,60 @@ test("backup warning banner revalidates in place after relevant settings saves",
       ),
       saveButton.click(),
     ]);
+  }
+});
+
+// #1936: Back Up Now writes one backup to the *saved* destination and shows the written
+// path; with no destination saved the button stays disabled. The destination lives under
+// the server's own storage root, the one directory the launcher guarantees it can write.
+test("back up now writes to the saved destination and is disabled without one", async ({
+  page,
+}) => {
+  const storage = process.env.JAUNDER_STORAGE_PATH;
+  expect(
+    storage,
+    "launcher supplies the server's writable storage root",
+  ).toBeTruthy();
+  const backupRoot = resolve(storage!, `e2e-backups-${randomUUID()}`);
+
+  await signInAs(page, "testoperator");
+  await goto(page, "/admin/backups");
+  await waitForSelector(page, 'input[name="destination_path"]');
+
+  const destination = page.locator('input[name="destination_path"]');
+  const saveButton = page.locator('button:has-text("Save Backup Settings")');
+  const backUpNow = page.locator('button:has-text("Back Up Now")');
+  const initialDestination = await destination.inputValue();
+  const saveDestination = async (value: string) => {
+    await destination.fill(value);
+    await Promise.all([
+      page.waitForResponse((response) =>
+        response.url().includes("/api/backup/update_settings"),
+      ),
+      page.waitForResponse((response) =>
+        response.url().includes("/api/backup/get_settings"),
+      ),
+      saveButton.click(),
+    ]);
+  };
+
+  try {
+    await saveDestination("");
+    await expect(backUpNow).toBeDisabled();
+
+    await saveDestination(backupRoot);
+    await expect(backUpNow).toBeEnabled();
+    await Promise.all([
+      page.waitForResponse((response) =>
+        response.url().includes("/api/backup/back_up_now"),
+      ),
+      backUpNow.click(),
+    ]);
+    await expect(page.locator(".j-backup-written")).toContainText(
+      `${backupRoot}/backup-`,
+    );
+  } finally {
+    // Restore the shared fixture's persisted destination for later tests.
+    await saveDestination(initialDestination);
   }
 });

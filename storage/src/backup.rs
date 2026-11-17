@@ -17,9 +17,11 @@ pub use common::backup::BackupMode;
 pub(crate) use digest::lowercase_hex;
 pub use error::BackupError;
 pub use format::BackupManifest;
-#[cfg(any(test, feature = "test-support"))]
-pub use orchestration::restore_backup_paused_after_import;
 pub use orchestration::{BackupExportOptions, BackupRestoreOptions, export_backup, restore_backup};
+#[cfg(any(test, feature = "test-support"))]
+pub use orchestration::{
+    export_backup_paused_before_archive_publish, restore_backup_paused_after_import,
+};
 pub(crate) use restore_bind::{
     BINARY_WIRE_KEY, RestoreBinary, RestoreBindValue, RestoreBoolean, RestoreInteger, RestoreJson,
     RestoreReal, RestoreText, comparable_instant_nullability, is_binary_column,
