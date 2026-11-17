@@ -835,14 +835,14 @@ ignored. Nix checks run a `dev` package built from a filtered `tools/dev/`
 source, so any edit there rebuilds them. The Rust host commands are
 concern-owned executables in the `tools` workspace — `repository-policy`
 (`repository-docs`, `source-contracts`, `git-index-safety`), `host-proof`
-(`test-local`, `e2e-local`, `e2e-evidence`, `trace-analysis`, `wasm-audit`,
-`source-diagnostics`), `coverage` (`coverage-check`, nondefault `host` feature)
-and `qualification` (`qualification-host`). `dev` runs them with locked Cargo
-from the active checkout; CI's E2E verifier and the production-baseline
-workflows use their Nix outputs (`packages.host-proof`,
-`nix run .#qualification-host`). Host tools run only on the host, never inside
-derivations. Runtime paths belong to the active checkout, not the tool's store
-build directory.
+(`e2e-local`, `e2e-evidence`, `trace-analysis`, `wasm-audit`,
+`source-diagnostics`, and `test-local`'s `admit-inputs` and `csr-prerequisite`),
+`coverage` (`coverage-check`, nondefault `host` feature) and `qualification`
+(`qualification-host`). `dev` runs them with locked Cargo from the active
+checkout; CI's E2E verifier and the production-baseline workflows use their Nix
+outputs (`packages.host-proof`, `nix run .#qualification-host`). Host tools run
+only on the host, never inside derivations. Runtime paths belong to the active
+checkout, not the tool's store build directory.
 
 Each host tool prints exactly one JSON report on stdout (`host_tool::report`:
 `command`, `ok`, `duration_ms`,
@@ -1775,28 +1775,51 @@ dev test-local -p jaunder
 dev test-local -p storage site_config_primitives_round_trip
 ```
 
-Before compiling or running product tests, `test-local` owns the checkout-local
-`.xtask/host-artifacts.lock` through consumer compilation and resolves one
-absolute `JAUNDER_CSR_BUNDLE_DIR`. Without an explicit input it realizes the
-native-platform `.#csrBundle` from the evaluated checkout and validates the
-complete immutable output (not the incomplete `.#site`). Nix and the configured
-Cachix substituter own artifact identity/reuse; no cached test verdict is used.
-The ordinary `.xtask/csr-bundle` Nix GC root stays protected by the host
-artifact lock through worker compilation and nextest execution. Relevant
-nonignored untracked source/producer/Nix inputs are refused: use `git add -N` or
-`git add` to include them in the Git flake snapshot. Nothing is staged
-automatically; tracked dirty and intent-to-add inputs participate, unrelated
-notes do not. Admission, realization or validation failure prevents consumers,
-without fallback to an older root or `target/site`.
+`test-local` is a `dev` step sequence, each step its own span in the run's trace
+(`dev trace summary`):
+
+1. `hooks-path` points `core.hooksPath` at `.githooks`.
+2. `host-artifacts-lock` waits for the checkout-local
+   `.xtask/host-artifacts.lock` (an exclusive `flock`, held by `dev` itself in a
+   descriptor no child inherits) and keeps it until the run ends.
+3. `csr-admission` (`host-proof admit-inputs .#csrBundle.sourceAdmits`) refuses
+   relevant nonignored untracked source/producer/Nix inputs: use `git add -N` or
+   `git add` to include them in the Git flake snapshot. Nothing is staged
+   automatically; tracked dirty and intent-to-add inputs participate, unrelated
+   notes do not.
+4. `csr-bundle` realizes the native-platform `.#csrBundle` from the evaluated
+   checkout as the GC root `.xtask/gcroots/csr-bundle` (not the incomplete
+   `.#site`), recording its cache state. Nix and the configured Cachix
+   substituter own artifact identity/reuse; no cached test verdict is used.
+5. `csr-prerequisite` (`host-proof csr-prerequisite <root>`) validates the
+   complete immutable output and prints its absolute root.
+6. `image-worker` builds `target/debug/jaunder` with `CFLAGS` set empty when
+   absent (an inherited value is kept), which storage and seeding tests start
+   even when nextest selects only storage.
+7. `nextest` runs `pg-run cargo nextest run <args>` (`--workspace` without args)
+   with `JAUNDER_CSR_BUNDLE_DIR` set to the verified root and
+   `JAUNDER_TEST_EXECUTABLE` to the image worker.
+
+An explicit `JAUNDER_CSR_BUNDLE_DIR` skips steps 3 and 4; step 5 validates it
+instead. The first failing step stops the run, so admission, realization or
+validation failure prevents compilation, without fallback to an older root or
+`target/site`.
+
+The lock guards the bundle's GC root and the image worker: without it a
+concurrent `test-local` in the same checkout could repoint the root (leaving the
+store path a running test uses collectable) or rebuild `target/debug/jaunder`
+while tests start it. It stays, and it is per checkout: other worktrees have
+their own roots and `target` directories. A second `test-local` in the same
+checkout waits in `host-artifacts-lock` until the first finishes.
 
 This prerequisite is release-built, so browser debug assertions are omitted and
 a first cache miss can be expensive. Host tests and the actual image worker
 remain debug-built and execute freshly. `check` and `prepush` share this lane.
 Ordinary `e2e-local` uses the source-consistent immutable Nix artifact set
 (described under [Running e2e tests locally](#running-e2e-tests-locally));
-sandbox uses its own per-invocation set. Standalone `build-csr` and `test-local`
-retain their existing CSR producer/lock paths. Product-test work remains
-host-native and invokes no Nix check derivations.
+sandbox uses its own per-invocation set. Standalone `build-csr` keeps its own
+CSR producer, and `test-local` its lock. Product-test work remains host-native
+and invokes no Nix check derivations.
 
 The same lane builds the locked host `jaunder` executable and supplies its
 absolute path as `JAUNDER_TEST_EXECUTABLE` to storage and seeding tests that

@@ -34,7 +34,6 @@ use opentelemetry_sdk::{
 use serde::{Serialize, Serializer};
 
 const TRACE_DIR: &str = "JAUNDER_TRACE_DIR";
-const EXIT_CODE: &str = "process.exit.code";
 const STATUS: &str = "jaunder.status";
 
 /// Joins the caller's `dev` run, if there is one, for the rest of the process.
@@ -93,19 +92,8 @@ pub(crate) fn phase(name: impl Into<Cow<'static, str>>) -> Phase {
 
 impl Phase {
     pub fn finish(self, ok: bool) {
-        self.end(vec![status(ok)]);
-    }
-
-    pub fn exited(self, code: i32) {
-        self.end(vec![
-            KeyValue::new(EXIT_CODE, i64::from(code)),
-            status(code == 0),
-        ]);
-    }
-
-    fn end(self, attributes: Vec<KeyValue>) {
         let span = self.context.span();
-        span.set_attributes(attributes);
+        span.set_attribute(status(ok));
         span.end();
     }
 }
@@ -248,6 +236,8 @@ impl Serialize for Attributes<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const EXIT_CODE: &str = "process.exit.code";
     use opentelemetry::trace::{Span as _, TraceId, TracerProvider as _};
     use opentelemetry_sdk::trace::IdGenerator;
 

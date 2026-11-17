@@ -1,61 +1,19 @@
-//! test-local joins a `dev` run's trace without changing its report or status.
+//! csr-prerequisite joins a `dev` run's trace without changing its output or status.
 use std::{fs, path::Path, process::Command};
 
 const TRACE_ID: &str = "0af7651916cd43dd8448eb211c80319c";
 const CALLER_SPAN: &str = "00f067aa0ba902b7";
 
-/// Keeps git, run directly or by test-local, to the fixture: no inherited
-/// `GIT_*` override (as set inside a Git hook) and none of the developer's
-/// own configuration or templates.
-fn isolate<'a>(command: &'a mut Command, home: &Path) -> &'a mut Command {
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("GIT_") {
-            command.env_remove(key);
-        }
-    }
-    command
-        .env("HOME", home)
-        .env("XDG_CONFIG_HOME", home.join(".config"))
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        // Temp roots may live inside the real checkout in CI.
-        .env("GIT_CEILING_DIRECTORIES", home.parent().unwrap())
-}
-
-/// A fixture directory: `checkout/` (a Git checkout), `home/` and `bundle/`.
+/// A temporary directory holding the bundle and, when traced, the run directory.
 struct Fixture {
     temp: tempfile::TempDir,
 }
 
 impl Fixture {
     fn new() -> Self {
-        let fixture = Self {
+        Self {
             temp: tempfile::tempdir().unwrap(),
-        };
-        let root = fixture.root();
-        fs::create_dir(&root).unwrap();
-        fs::create_dir(fixture.home()).unwrap();
-        assert!(
-            isolate(
-                host_proof::git::at(&root).args(["init", "--quiet"]),
-                &fixture.home()
-            )
-            .status()
-            .unwrap()
-            .success()
-        );
-        fs::write(root.join("flake.nix"), "{}").unwrap();
-        fs::create_dir(root.join("tools")).unwrap();
-        fs::write(root.join("tools/Cargo.toml"), "").unwrap();
-        fixture
-    }
-
-    fn root(&self) -> std::path::PathBuf {
-        self.temp.path().join("checkout")
-    }
-
-    fn home(&self) -> std::path::PathBuf {
-        self.temp.path().join("home")
+        }
     }
 
     /// A CSR bundle whose Vite manifest is valid but which has no system
@@ -75,19 +33,17 @@ impl Fixture {
     }
 
     fn invoke(&self, bundle: &Path, trace: &[(&str, &str)]) -> std::process::Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_test-local"));
-        isolate(&mut command, &self.home())
-            .current_dir(self.root())
+        Command::new(env!("CARGO_BIN_EXE_csr-prerequisite"))
+            .arg(bundle)
             .env_remove("JAUNDER_TRACE_DIR")
             .env_remove("TRACEPARENT")
             .env_remove("TRACESTATE")
-            .env("JAUNDER_CSR_BUNDLE_DIR", bundle)
             .envs(trace.iter().copied())
-            .args(["--", "-p", "storage", "private-filter"]);
-        command.output().unwrap()
+            .output()
+            .unwrap()
     }
 
-    /// Runs test-local inside the caller's step; returns its span records.
+    /// Runs csr-prerequisite inside the caller's step; returns its span records.
     fn traced(&self, bundle: &Path) -> Vec<serde_json::Value> {
         let run = self.temp.path().join("run.trace.d");
         fs::create_dir(&run).unwrap();
@@ -100,11 +56,10 @@ impl Fixture {
             ],
         );
         assert_eq!(output.status.code(), Some(1));
-        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(report["command"], "test-local");
+        assert!(output.stdout.is_empty());
         let text = record_file(&run);
         // Spans carry names and outcomes, never arguments or environment.
-        assert!(!text.contains("private"));
+        assert!(!text.contains("bundle"));
         text.lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
@@ -139,32 +94,17 @@ fn phases_nest_under_the_callers_step() {
     let records = fixture.traced(&fixture.bundle_without_inventory());
 
     assert!(records.iter().all(|record| record["trace_id"] == TRACE_ID));
-    let command = span(&records, "xtask.command", "start");
-    assert_eq!(command["parent_id"], CALLER_SPAN);
-    assert!(command.get("attributes").is_none());
-    for (child, parent) in [
-        ("xtask.checkout", "xtask.command"),
-        ("xtask.hooks", "xtask.command"),
-        ("xtask.dispatch", "xtask.command"),
-        ("xtask.artifact-lock-wait", "xtask.dispatch"),
-        ("test-local-csr-prerequisite", "xtask.dispatch"),
-        ("xtask.csr-manifest-check", "test-local-csr-prerequisite"),
-        ("xtask.csr-inventory-check", "test-local-csr-prerequisite"),
-    ] {
+    for name in ["xtask.csr-manifest-check", "xtask.csr-inventory-check"] {
         assert_eq!(
-            span(&records, child, "start")["parent_id"],
-            span(&records, parent, "start")["span_id"],
-            "{child} under {parent}"
+            span(&records, name, "start")["parent_id"],
+            CALLER_SPAN,
+            "{name} under the caller's step"
         );
         assert_eq!(
-            span(&records, child, "end")["span_id"],
-            span(&records, child, "start")["span_id"]
+            span(&records, name, "end")["span_id"],
+            span(&records, name, "start")["span_id"]
         );
     }
-    assert_eq!(
-        span(&records, "xtask.command", "end")["attributes"],
-        serde_json::json!({"process.exit.code": 1, "jaunder.status": "failed"})
-    );
     // The validation phases run one after the other, the second failing.
     assert!(
         span(&records, "xtask.csr-manifest-check", "end")["time_ns"].as_u64()
@@ -173,7 +113,6 @@ fn phases_nest_under_the_callers_step() {
     for (name, status) in [
         ("xtask.csr-manifest-check", "ok"),
         ("xtask.csr-inventory-check", "failed"),
-        ("test-local-csr-prerequisite", "failed"),
     ] {
         assert_eq!(
             span(&records, name, "end")["attributes"],
@@ -202,30 +141,28 @@ fn csr_validation_stops_at_its_first_failed_phase() {
     );
 }
 
-/// The report with its timings zeroed: everything tracing must leave alone.
-fn report_without_timings(stdout: &[u8]) -> serde_json::Value {
-    let mut report: serde_json::Value = serde_json::from_slice(stdout).unwrap();
-    report["duration_ms"] = 0.into();
-    for step in report["steps"].as_array_mut().unwrap() {
-        step["duration_ms"] = 0.into();
-    }
-    report
+#[test]
+fn a_missing_root_is_refused_on_stderr() {
+    let fixture = Fixture::new();
+    let output = fixture.invoke(&fixture.temp.path().join("missing"), &[]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("csr-prerequisite: resolving CSR bundle root"),
+        "{stderr}"
+    );
 }
 
 #[test]
-fn tracing_never_changes_the_report_or_status() {
+fn tracing_never_changes_the_output_or_status() {
     let fixture = Fixture::new();
     let bundle = fixture.bundle_without_inventory();
-    // The first run installs the checkout's hooks and says so on stderr; the
-    // runs compared below all start with them installed.
-    fixture.invoke(&bundle, &[]);
     let untraced = fixture.invoke(&bundle, &[]);
     assert_eq!(untraced.status.code(), Some(1));
-    let untraced_report = report_without_timings(&untraced.stdout);
-    // The run reached CSR validation's phases, not an earlier refusal.
-    assert_eq!(
-        untraced_report["steps"].as_array().unwrap().last().unwrap()["name"],
-        "test-local-csr-prerequisite"
+    assert!(
+        String::from_utf8_lossy(&untraced.stderr).contains("invalid system artifacts"),
+        "the run reached CSR validation's second phase"
     );
 
     let run = fixture.temp.path().join("run.trace.d");
@@ -242,18 +179,14 @@ fn tracing_never_changes_the_report_or_status() {
     ] {
         let output = fixture.invoke(&bundle, &trace);
         assert_eq!(output.status, untraced.status, "{trace:?}");
-        assert_eq!(
-            report_without_timings(&output.stdout),
-            untraced_report,
-            "{trace:?}"
-        );
+        assert_eq!(output.stdout, untraced.stdout, "{trace:?}");
         assert_eq!(output.stderr, untraced.stderr, "{trace:?}");
     }
     assert!(!record_file(&run).is_empty());
 
     let unwritable = fixture.invoke(&bundle, &[("JAUNDER_TRACE_DIR", blocked.to_str().unwrap())]);
     assert_eq!(unwritable.status, untraced.status);
-    assert_eq!(report_without_timings(&unwritable.stdout), untraced_report);
+    assert_eq!(unwritable.stdout, untraced.stdout);
     let stderr = String::from_utf8_lossy(&unwritable.stderr);
     let (warnings, rest): (Vec<_>, Vec<_>) = stderr
         .lines()

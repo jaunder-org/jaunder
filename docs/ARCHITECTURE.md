@@ -4365,8 +4365,8 @@ ADR-0028 placement exception and partially supersedes
 [host UX sandbox lifecycle](adr/0180-host-ux-sandbox-lifecycle.md) only for the
 sandbox owner and literal signal-escalation clause. The immutable Nix artifact
 selection further replaces mutable application artifact publication only in
-sandbox and `e2e-local`; `test-local`, its separate artifact-lock use, and
-manual `dev build-csr`/`target/site` remain unchanged. The separate helper
+sandbox and `e2e-local`; `test-local`, its checkout-local artifact lock, and
+manual `dev build-csr`/`target/site` keep their own paths. The separate helper
 bootstrap now uses its Nix package, without changing application selection,
 persistence, profiles, reset/recovery, admission or application lock contracts.
 ADR-0058's host-floor boundary is unchanged.
@@ -5209,16 +5209,22 @@ this code execute?_ ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)):
   `dev` renders the human view from it (`tools/dev/jaunder_dev/report.py`). The
   production-baseline workflows return plain status instead
   ([qualification carveout](adr/0239-qualification-workflow-ownership.md)).
-- **`tools/host-proof`** — focused host proof (ADR-0246): direct `test-local`,
-  `e2e-local` and `trace-analysis` executables behind the matching `dev`
-  commands; trace analysis carries its rendered tables in the report's `report`
-  field. Each prints exactly one JSON report on stdout (steps, outcomes,
-  durations, details, verdict) and sends child output to stderr; its exit status
-  is the verdict. `dev` renders the human step view; there is no sidecar,
-  `--json` flag or completion sentinel. host-proof joins the calling `dev` run's
-  trace through `TRACEPARENT`/`TRACESTATE` and `JAUNDER_TRACE_DIR`, writing its
-  own span records with the Rust OpenTelemetry SDK
-  ([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)).
+- **`tools/host-proof`** — focused host proof (ADR-0246): direct `e2e-local` and
+  `trace-analysis` executables behind the matching `dev` commands; trace
+  analysis carries its rendered tables in the report's `report` field. Each
+  prints exactly one JSON report on stdout (steps, outcomes, durations, details,
+  verdict) and sends child output to stderr; its exit status is the verdict.
+  `dev` renders the human step view; there is no sidecar, `--json` flag or
+  completion sentinel. host-proof joins the calling `dev` run's trace through
+  `TRACEPARENT`/`TRACESTATE` and `JAUNDER_TRACE_DIR`, writing its own span
+  records with the Rust OpenTelemetry SDK
+  ([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)). Its
+  `admit-inputs` and `csr-prerequisite` executables are steps of
+  `dev test-local`, which sequences CSR admission, the `.#csrBundle` build, CSR
+  validation, the image worker build and `pg-run cargo nextest` itself, holding
+  the checkout-local `flock` on `.xtask/host-artifacts.lock` for the whole run
+  so a concurrent `test-local` in the same checkout cannot repoint the bundle's
+  GC root or rebuild the image worker under running tests.
 - **`tools/devtool`** — the tool that must also run inside Nix build sandboxes,
   where `nix` and the host tools are unavailable; `devtool coverage emit`
   produces coverage artifacts into `$out` for exfiltration
@@ -5530,13 +5536,13 @@ checker registry, runner, supervisor or replacement omnibus:
   interfaces, the single-process `git-index-safety` owner, shared checkout
   admission and best-effort `core.hooksPath` preparation (every host tool calls
   it before its workload).
-- `tools/host-tool` — the shared host-tool report contract and compile-cache
-  environment.
+- `tools/host-tool` — the shared host-tool report contract.
 - `tools/qualification` — `qualification-host` behind the four
   `dev production-baseline-*` commands.
-- `tools/host-proof` — focused proof (`test-local`, `e2e-local`), artifact-only
-  e2e verdicts (`e2e-evidence`) and host diagnostics (`trace-analysis`,
-  `wasm-audit`, `source-diagnostics`).
+- `tools/host-proof` — focused proof (`e2e-local`, and `test-local`'s
+  `admit-inputs` and `csr-prerequisite` steps), artifact-only e2e verdicts
+  (`e2e-evidence`) and host diagnostics (`trace-analysis`, `wasm-audit`,
+  `source-diagnostics`).
 - `tools/coverage` (nondefault `host` feature) — `coverage-check` policy,
   benchmark, source probe, Emacs Lisp, WASM coverage and mutation evidence.
 - `scripts/pg-run.py` (Nix package `pg-run`) — throwaway PostgreSQL.

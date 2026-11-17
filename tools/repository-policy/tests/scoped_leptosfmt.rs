@@ -3,6 +3,8 @@ use std::{fs, path::Path, process::Command};
 
 /// Keeps every Git the fixture, `dev`'s shim or `dev` runs to the fixture: a
 /// hook's exported repository overrides and the caller's configuration stay out.
+/// The fixture's `dev` traces nothing, so it neither joins a calling gate's
+/// trace nor starts a run of its own.
 fn isolated(command: &mut Command) -> &mut Command {
     for (name, _) in std::env::vars_os() {
         if name.to_string_lossy().starts_with("GIT_") {
@@ -12,6 +14,9 @@ fn isolated(command: &mut Command) -> &mut Command {
     command
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("JAUNDER_TRACE_DIR", "")
+        .env_remove("TRACEPARENT")
+        .env_remove("TRACESTATE")
 }
 
 fn adapter(root: &Path, mode: &str) -> Command {

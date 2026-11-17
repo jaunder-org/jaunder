@@ -245,11 +245,12 @@ delivered.
 - **#1964: test-local sequencing in `dev`.** The lock question is answered. The
   lock is a checkout-local `flock` on `.xtask/host-artifacts.lock`, and only
   test-local takes it. It stops a concurrent test-local in the same checkout
-  from replacing the `.xtask/csr-bundle` out-link, or the `target/debug/jaunder`
-  image worker, while a test run is using them. It stays. `dev` holds the same
-  `flock`, which is not inherited by children, across these steps:
+  from replacing the `.xtask/gcroots/csr-bundle` out-link, or the
+  `target/debug/jaunder` image worker, while a test run is using them. It stays.
+  `dev` holds the same `flock`, which is not inherited by children, across these
+  steps:
   1. CSR untracked-input admission
-  2. `nix build .#csrBundle` rooted at `.xtask/csr-bundle`, skipped when
+  2. `nix build .#csrBundle` rooted at `.xtask/gcroots/csr-bundle`, skipped when
      `JAUNDER_CSR_BUNDLE_DIR` is set
   3. `host-proof csr-prerequisite <root>` (validation stays in Rust)
   4. `cargo build --locked -p jaunder --bin jaunder`, with `CFLAGS` set empty

@@ -1,7 +1,7 @@
 //! Immutable host-native artifact selection and server-session lifecycle.
 
 use std::ffi::OsString;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -327,46 +327,6 @@ fn start_process(command: Command, stderr: File) -> anyhow::Result<Process> {
     )
 }
 
-/// Checkout-local artifact ownership, released when the owner finishes rather
-/// than when an unrelated fork finally closes its inherited descriptor.
-#[derive(Debug)]
-pub(crate) struct HostArtifactBuildLock {
-    file: File,
-}
-
-impl Drop for HostArtifactBuildLock {
-    fn drop(&mut self) {
-        if let Err(error) = self.file.unlock() {
-            use std::io::Write;
-
-            // Drop must also work during unwinding. Report the failure without
-            // panicking; closing the file remains the fallback release path.
-            let _ = writeln!(
-                std::io::stderr(),
-                "cannot unlock host artifact build lock: {error}"
-            );
-        }
-    }
-}
-
-pub(crate) fn host_artifact_build_lock() -> anyhow::Result<HostArtifactBuildLock> {
-    host_artifact_build_lock_at(Path::new("."))
-}
-
-fn host_artifact_build_lock_at(root: &Path) -> anyhow::Result<HostArtifactBuildLock> {
-    let path = root.join(".xtask/host-artifacts.lock");
-    fs::create_dir_all(path.parent().expect("artifact lock has a parent"))?;
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&path)?;
-    file.lock()
-        .with_context(|| format!("locking {}", path.display()))?;
-    Ok(HostArtifactBuildLock { file })
-}
-
 /// Parse Jaunder's runtime-info JSON when it belongs to the expected child.
 fn base_url_from_runtime(json: &str, expected_identity: (u32, Option<u64>)) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(json).ok()?;
@@ -551,61 +511,6 @@ mod tests {
             drop(prepared);
             assert!(!retained.exists());
         }
-    }
-
-    #[cfg(unix)]
-    fn assert_child_cannot_lock(lock_path: &Path) {
-        const CHILD_TEST: &str = "steps::host_server::tests::child_lock_probe";
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", CHILD_TEST, "--nocapture"])
-            .env("JAUNDER_TEST_HOST_ARTIFACT_LOCK_PROBE", lock_path)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "child-process lock probe failed:\n{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn child_lock_probe() {
-        let Some(lock_path) = std::env::var_os("JAUNDER_TEST_HOST_ARTIFACT_LOCK_PROBE") else {
-            return;
-        };
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(lock_path)
-            .unwrap();
-        match file.try_lock() {
-            Err(std::fs::TryLockError::WouldBlock) => {}
-            Err(error) => panic!("child lock probe could not check exclusion: {error}"),
-            Ok(()) => panic!("child lock probe unexpectedly acquired the held artifact lock"),
-        }
-    }
-
-    // test-local still depends on the shared guard; this is not e2e ownership.
-    #[test]
-    #[cfg(unix)]
-    fn shared_artifact_guard_excludes_peers_and_releases_on_unwind() {
-        let temp = tempfile::tempdir().unwrap();
-        let lock = host_artifact_build_lock_at(temp.path()).unwrap();
-        let path = temp.path().join(".xtask/host-artifacts.lock");
-        assert_child_cannot_lock(&path);
-        let unwind = std::panic::catch_unwind(move || {
-            let _lock = lock;
-            panic!("controlled owner unwind");
-        });
-        assert!(unwind.is_err());
-        let peer = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .unwrap();
-        peer.try_lock().unwrap();
     }
 
     #[test]

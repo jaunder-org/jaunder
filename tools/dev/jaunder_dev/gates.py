@@ -6,13 +6,14 @@ JSON report are shown through `report.render`; their exit status stays the
 verdict.
 """
 
+import fcntl
 import os
 import platform
 from enum import StrEnum
 from pathlib import Path
 
-from jaunder_dev import e2e, report, static, steps
-from jaunder_dev.checkout import clean_tree
+from jaunder_dev import e2e, report, static, steps, trace
+from jaunder_dev.checkout import clean_tree, traced_git
 from jaunder_dev.commands import (
     COVERAGE_CHECK,
     HOST_PROOF,
@@ -20,6 +21,7 @@ from jaunder_dev.commands import (
     REPOSITORY_POLICY,
     SOURCE_CONTRACT,
 )
+from jaunder_dev.spans import STATUS, Status
 from jaunder_dev.static import Mode
 
 
@@ -234,12 +236,54 @@ def host_tests() -> None:
     steps.run("pytest", ["pytest", "tools/dev"])
 
 
+# Held for the whole of test-local: a concurrent test-local in this checkout
+# would otherwise replace the CSR bundle root or the image worker while a run's
+# tests still use them.
+HOST_ARTIFACTS_LOCK = ".xtask/host-artifacts.lock"
+
+
 def test_local(nextest_args: tuple[str, ...] = ()) -> None:
-    steps.run(
-        "test-local",
-        [*HOST_PROOF, "test-local", "--", *nextest_args],
-        report.render,
-    )
+    """Focused host-native tests against a verified CSR bundle and image worker.
+
+    JAUNDER_CSR_BUNDLE_DIR names a bundle to use instead of building one.
+    `nextest_args` select tests; none run the whole workspace.
+    """
+    traced_git("hooks-path", "config", "core.hooksPath", ".githooks")
+    Path(HOST_ARTIFACTS_LOCK).parent.mkdir(parents=True, exist_ok=True)
+    # Python opens files non-inheritable, so no step's child (or a daemon it
+    # leaves behind, such as the sccache server) holds the lock past this run.
+    with open(HOST_ARTIFACTS_LOCK, "a") as lock:
+        with trace.tracer().start_as_current_span("host-artifacts-lock") as span:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            span.set_attribute(STATUS, Status.OK)
+        bundle = os.environ.get("JAUNDER_CSR_BUNDLE_DIR")
+        if bundle is None:
+            steps.run(
+                "csr-admission",
+                [*HOST_PROOF, "admit-inputs", "--", ".#csrBundle.sourceAdmits"],
+            )
+            steps.nix_build("csr-bundle", ".#csrBundle")
+            bundle = f"{steps.GCROOTS}/csr-bundle"
+        root = steps.text(
+            "csr-prerequisite", [*HOST_PROOF, "csr-prerequisite", "--", bundle]
+        )
+        # Storage and seeding tests start the application worker, so it is
+        # built even when nextest selects only storage. aws-lc-sys keys its
+        # FORTIFY_SOURCE handling on CFLAGS being present: set it empty when
+        # absent and keep an inherited value unchanged.
+        steps.run(
+            "image-worker",
+            ["cargo", "build", "--locked", "-p", "jaunder", "--bin", "jaunder"],
+            environment={"CFLAGS": os.environ.get("CFLAGS", "")},
+        )
+        steps.run(
+            "nextest",
+            ["pg-run", "cargo", "nextest", "run", *(nextest_args or ("--workspace",))],
+            environment={
+                "JAUNDER_CSR_BUNDLE_DIR": root,
+                "JAUNDER_TEST_EXECUTABLE": str(Path.cwd() / "target/debug/jaunder"),
+            },
+        )
 
 
 def platform_contract() -> None:

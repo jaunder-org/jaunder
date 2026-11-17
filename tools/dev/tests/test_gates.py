@@ -179,7 +179,15 @@ STATIC = [
     ]
 ]
 CLEAN = commands("git status --porcelain --untracked-files=all")
-TEST_LOCAL = commands(f"{CARGO_RUN} -p host-proof --bin test-local --")
+TEST_LOCAL = commands(
+    "git config core.hooksPath .githooks",
+    f"{CARGO_RUN} -p host-proof --bin admit-inputs -- .#csrBundle.sourceAdmits",
+    "nix build -L --accept-flake-config --out-link .xtask/gcroots/csr-bundle "
+    ".#csrBundle",
+    f"{CARGO_RUN} -p host-proof --bin csr-prerequisite -- .xtask/gcroots/csr-bundle",
+    "cargo build --locked -p jaunder --bin jaunder",
+    "pg-run cargo nextest run --workspace",
+)
 
 # The bundle is its own Nix step; the budget measures the output it linked.
 WASM_BUDGET = commands(
@@ -376,7 +384,7 @@ def test_dirty_fix_check_reaches_its_doctests_without_admission(
     result = workflow.dev("check")
     assert result.returncode == 0, result
     assert workflow.commands() == CHECK
-    assert not any(argv[0] == "git" for argv in workflow.commands())
+    assert CLEAN[0] not in workflow.commands()
 
 
 # Every gate and lane whose failures the hooks and CI depend on.
@@ -445,7 +453,7 @@ def test_the_wasm_budget_never_runs_without_its_bundle(workflow: Workflow) -> No
     assert "wasm-budget" not in workflow.checkout.merged()
 
 
-@pytest.mark.parametrize("failure", ["", " ".join(TEST_LOCAL[0])])
+@pytest.mark.parametrize("failure", ["", " ".join(TEST_LOCAL[-1])])
 def test_producer_cleanup_finishes_before_dev_returns(
     workflow: Workflow, failure: str
 ) -> None:

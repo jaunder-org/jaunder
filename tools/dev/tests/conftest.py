@@ -162,7 +162,8 @@ class Checkout:
 # exact) and exits 17 when its command line equals $FAIL_COMMAND; otherwise a
 # host tool that reports prints a minimal report with no steps. Fake Git
 # refuses inherited repository overrides with 23, answers checkout discovery
-# from the real Git, and reports a dirty tree while `dirty-status` exists.
+# from the real Git, and reports a dirty tree while `dirty-status` exists. The
+# CSR prerequisite prints its root under `/verified`.
 # Nix cache probes fail, so Nix steps record no cache source; a build's
 # out-link points at a fake store path named after the link.
 FAKE = r"""#!/bin/sh
@@ -214,7 +215,7 @@ if [ "$name" = git ]; then
         fi ;;
     esac
 fi
-if [ "$name $*" = "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p host-proof --bin test-local --" ]; then
+if [ "$name $*" = "pg-run cargo nextest run --workspace" ]; then
     touch producer-resource
     trap 'sleep 0.2; rm producer-resource; printf "cleaned\n" >> producer-cleanup' EXIT
 fi
@@ -223,6 +224,9 @@ if [ "$name $*" = "${FAIL_COMMAND-}" ]; then
     exit 17
 fi
 case "$name $*" in
+  'cargo run '*' -p host-proof --bin csr-prerequisite -- '*)
+    for root; do :; done
+    printf '/verified%s\n' "$root" ;;
   'cargo run '*' -p host-proof --bin '*|'cargo run '*' --bin coverage-check '*|'bash scripts/e2e-workflow producer '*)
     printf '{"steps":[]}\n' ;;
 esac

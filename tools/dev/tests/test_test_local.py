@@ -1,215 +1,265 @@
-"""`dev test-local`: host-proof as a traced step, its report rendered."""
+"""`dev test-local`: its steps, in order, under the checkout's artifact lock."""
 
+import fcntl
 import json
+import os
+import subprocess
+import time
+from pathlib import Path
+from typing import Any
 
 import pytest
 from conftest import Checkout
 
-from jaunder_dev import report
-
-# Reports and their exact rendering.
-REPORT = {
-    "command": "test-local",
-    "ok": False,
-    "duration_ms": 2042,
-    "steps": [
-        {"name": "fast", "ok": True, "skipped": False, "duration_ms": 999},
-        {
-            "name": "slow",
-            "ok": True,
-            "skipped": False,
-            "duration_ms": 1000,
-            "detail": "verified CSR bundle /nix/store/x",
-        },
-        {"name": "blank", "ok": True, "skipped": False, "duration_ms": 3, "detail": ""},
-        {"name": "skipped", "ok": False, "skipped": True, "duration_ms": 0},
-        {
-            "name": "broken",
-            "ok": False,
-            "skipped": False,
-            "duration_ms": 12,
-            "detail": "line one\nline two — ü",
-        },
-    ],
-    "report": "table\n  row",
-}
-RENDERED = (
-    "table\n"
-    "  row\n"
-    "[ ok ] fast\n"
-    "[ ok ] slow (1000 ms) — verified CSR bundle /nix/store/x\n"
-    "[ ok ] blank — \n"
-    "[skip] skipped (0 ms)\n"
-    "[FAIL] broken (12 ms) — line one\n"
-    "line two — ü\n"
-)
-PLAIN = {
-    "command": "test-local",
-    "ok": True,
-    "duration_ms": 5,
-    "steps": [{"name": "test-local", "ok": True, "skipped": False, "duration_ms": 5}],
-}
-
-HOST_PROOF = [
-    "run",
-    "--locked",
-    "--quiet",
-    "--manifest-path",
-    "tools/Cargo.toml",
-    "-p",
-    "host-proof",
-    "--bin",
-    "test-local",
-    "--",
+CARGO_RUN = "cargo run --locked --quiet --manifest-path tools/Cargo.toml"
+LOCK = ".xtask/host-artifacts.lock"
+STEPS = [
+    "hooks-path",
+    "host-artifacts-lock",
+    "csr-admission",
+    "csr-bundle",
+    "csr-prerequisite",
+    "image-worker",
+    "nextest",
 ]
 
-# A stand-in for `cargo run … test-local`: it joins the trace with one span,
-# records what it was given, and prints a report.
-FAKE_HOST_PROOF = """\
+# Host-proof's helpers, the image worker build and nextest (behind the fake
+# pg-run). The helpers fail as ADMIT_CODE and PREREQUISITE_CODE say; the
+# prerequisite prints its resolved root. The build records CFLAGS. nextest
+# records what it was given, and while `hold` exists it removes it, says it
+# is `holding` and waits for `release`.
+CARGO = """\
 import json
-pathlib.Path("argv.json").write_text(json.dumps(sys.argv[1:]))
-pathlib.Path("env.json").write_text(json.dumps({
-    key: os.environ.get(key)
-    for key in ("RUSTC_WRAPPER", "CARGO_INCREMENTAL", "SCCACHE_BASEDIRS")
-}))
-_, trace_id, parent_id, _ = os.environ["TRACEPARENT"].split("-")
-record = {"trace_id": trace_id, "span_id": "2222222222222222",
-          "parent_id": parent_id, "name": "xtask.command"}
-start = time.time_ns()
-with open(pathlib.Path(os.environ["JAUNDER_TRACE_DIR"], f"{os.getpid()}-f.jsonl"), "a") as out:
-    out.write(json.dumps({"kind": "start", **record, "time_ns": start}) + "\\n")
-    out.write(json.dumps({"kind": "end", **record, "time_ns": start + 1000,
-                          "attributes": {"jaunder.status": "ok"}}) + "\\n")
-print(os.environ["REPORT"])
-print("host-proof progress", file=sys.stderr)
-sys.exit(int(os.environ["HOST_PROOF_CODE"]))
+args = sys.argv[1:]
+if args[0] == "run":
+    binary = args[args.index("--bin") + 1]
+    root = args[args.index("--") + 1:]
+    code = int(os.environ.get(
+        "ADMIT_CODE" if binary == "admit-inputs" else "PREREQUISITE_CODE", "0"))
+    if code:
+        print(f"{binary}: refused", file=sys.stderr)
+        sys.exit(code)
+    if binary == "csr-prerequisite":
+        print(os.path.realpath(root[0]))
+elif args[0] == "build":
+    pathlib.Path("cflags.json").write_text(json.dumps(os.environ.get("CFLAGS")))
+else:
+    lock = os.stat(".xtask/host-artifacts.lock")
+    inherited = False
+    for fd in range(3, 256):
+        try:
+            found = os.fstat(fd)
+        except OSError:
+            continue
+        inherited |= (found.st_dev, found.st_ino) == (lock.st_dev, lock.st_ino)
+    pathlib.Path("nextest.json").write_text(json.dumps({
+        "args": args,
+        "bundle": os.environ.get("JAUNDER_CSR_BUNDLE_DIR"),
+        "executable": os.environ.get("JAUNDER_TEST_EXECUTABLE"),
+        "wrapper": os.environ.get("RUSTC_WRAPPER"),
+        "inherited": inherited,
+    }))
+    if os.path.exists("hold"):
+        os.remove("hold")
+        pathlib.Path("holding").touch()
+        while not os.path.exists("release"):
+            time.sleep(0.02)
 """
+# A build links its out-link to $BUNDLE, or fails with NIX_BUILD_CODE; cache
+# probes fail, so the step records no cache source.
+NIX = """\
+if sys.argv[1] != "build":
+    sys.exit(1)
+code = int(os.environ.get("NIX_BUILD_CODE", "0"))
+if code:
+    sys.exit(code)
+link = sys.argv[sys.argv.index("--out-link") + 1]
+if os.path.lexists(link):
+    os.remove(link)
+os.symlink(os.environ["BUNDLE"], link)
+"""
+PG_RUN = "os.execvp(sys.argv[1], sys.argv[1:])"
 
 
-@pytest.mark.parametrize(
-    ("document", "rendered"),
-    [(REPORT, RENDERED), (PLAIN, "[ ok ] test-local\n")],
+@pytest.fixture
+def local(checkout: Checkout) -> Checkout:
+    checkout.tool("cargo", CARGO)
+    checkout.tool("nix", NIX)
+    checkout.tool("pg-run", PG_RUN)
+    (checkout.root.parent / "bundle").mkdir()
+    return checkout
+
+
+def environment(checkout: Checkout, **extra: str) -> dict[str, str]:
+    """The run's environment; CFLAGS and the bundle root only as `extra` sets them."""
+    environment = checkout.environment(
+        BUNDLE=str(checkout.root.parent / "bundle"), **extra
+    )
+    for key in ("CFLAGS", "JAUNDER_CSR_BUNDLE_DIR"):
+        if key not in extra:
+            environment.pop(key, None)
+    return environment
+
+
+def run_test_local(
+    checkout: Checkout, *args: str, **extra: str
+) -> subprocess.CompletedProcess[bytes]:
+    return checkout.run(
+        checkout.command("test-local", *args), environment(checkout, **extra)
+    )
+
+
+def order(checkout: Checkout) -> list[str]:
+    return checkout.order().splitlines()
+
+
+def nextest(checkout: Checkout) -> dict[str, Any]:
+    observed: dict[str, Any] = json.loads((checkout.root / "nextest.json").read_text())
+    return observed
+
+
+BUNDLE_BUILD = (
+    "nix build -L --accept-flake-config --out-link .xtask/gcroots/csr-bundle "
+    ".#csrBundle"
 )
-def test_report_renders_as_step_report_jq_does(
-    document: dict[str, object], rendered: str
-) -> None:
-    assert report.render(json.dumps(document).encode()) == rendered
+PREREQUISITE = f"{CARGO_RUN} -p host-proof --bin csr-prerequisite --"
 
 
-# ADR-0247: a tool prints exactly one report, so empty output is not one.
-NOT_REPORTS = [
-    b"",
-    b" \n",
-    b"not a report\n",
-    b"1\n",
-    b'"text"\n',
-    b"[]\n",
-    b'{"command": "test-local"}\n',
-    b'{"steps": 5}\n',
-    b'{"steps": [{"name": "no outcome"}]}\n',
-]
-
-
-@pytest.mark.parametrize("output", NOT_REPORTS)
-def test_output_that_is_not_a_report_cannot_be_rendered(output: bytes) -> None:
-    assert report.render(output) is None
-
-
-@pytest.mark.parametrize("output", NOT_REPORTS)
-def test_a_successful_step_without_a_report_fails_closed(
-    checkout: Checkout, output: bytes
-) -> None:
-    checkout.tool(
-        "cargo",
-        f"sys.stdout.buffer.write({output!r}); print('progress', file=sys.stderr)",
-    )
-    result = checkout.dev("test-local")
-    # Every nonempty output that is not a report fails with status 5.
-    assert result.returncode == 5, result
-    assert result.stdout == output
-    assert result.stderr == (
-        b"progress\ndev: test-local: output is not a step report\n"
-    )
-    step = checkout.merged()["test-local"]["args"]
-    assert (step["jaunder.status"], step["process.exit.code"]) == ("failed", 5)
-
-
-def test_a_failed_tool_keeps_its_own_status_without_a_report(
-    checkout: Checkout,
-) -> None:
-    checkout.tool("cargo", "print('not a report'); sys.exit(3)")
-    result = checkout.dev("test-local")
-    assert result.returncode == 3
-    assert result.stdout == b"not a report\n"
-    assert result.stderr == b""
-
-
-@pytest.mark.parametrize("code", [0, 1, 2])
-def test_test_local_runs_host_proof_as_a_traced_step(
-    checkout: Checkout, code: int
-) -> None:
-    checkout.tool("cargo", FAKE_HOST_PROOF)
-    args = ["-p", "storage", "a b", "$(touch pwned)", "--", "--nocapture"]
-
-    result = checkout.dev(
-        "test-local",
-        "--",
-        *args,
-        cwd=checkout.root / "sub",
-        REPORT=json.dumps(REPORT),
-        HOST_PROOF_CODE=str(code),
-    )
-
-    assert result.returncode == code, result
-    assert result.stdout.decode() == RENDERED
-    assert result.stderr == b"host-proof progress\n"
-    assert json.loads((checkout.root / "argv.json").read_text()) == [
-        *HOST_PROOF,
-        *args,
+def expected_order(*nextest_args: str) -> list[str]:
+    return [
+        f"{CARGO_RUN} -p host-proof --bin admit-inputs -- .#csrBundle.sourceAdmits",
+        BUNDLE_BUILD,
+        f"{PREREQUISITE} .xtask/gcroots/csr-bundle",
+        "cargo build --locked -p jaunder --bin jaunder",
+        " ".join(["pg-run", "cargo", "nextest", "run", *nextest_args]),
+        " ".join(["cargo", "nextest", "run", *nextest_args]),
     ]
-    environment = json.loads((checkout.root / "env.json").read_text())
-    assert environment["RUSTC_WRAPPER"] == "sccache"
-    assert environment["CARGO_INCREMENTAL"] == "0"
-    assert environment["SCCACHE_BASEDIRS"] == str(checkout.root.resolve())
-    assert not (checkout.root / "pwned").exists()
-
-    slices = checkout.merged()
-    gate = slices["dev test-local"]
-    step = slices["test-local"]
-    host_proof = slices["xtask.command"]
-    assert step["args"]["parent_id"] == gate["args"]["span_id"]
-    assert host_proof["args"]["parent_id"] == step["args"]["span_id"]
-    assert host_proof["args"]["trace_id"] == gate["args"]["trace_id"]
-    assert step["args"]["process.exit.code"] == code
-    assert gate["args"]["jaunder.status"] == ("ok" if code == 0 else "failed")
 
 
-def test_test_local_without_selectors_passes_none(checkout: Checkout) -> None:
-    checkout.tool("cargo", FAKE_HOST_PROOF)
-    result = checkout.dev("test-local", REPORT=json.dumps(PLAIN), HOST_PROOF_CODE="0")
+def test_each_step_runs_in_order_as_a_span_of_the_gate(local: Checkout) -> None:
+    result = run_test_local(local)
     assert result.returncode == 0, result
-    assert result.stdout == b"[ ok ] test-local\n"
-    assert json.loads((checkout.root / "argv.json").read_text()) == HOST_PROOF
+    # Nix's cache probes run before its build and are not part of the order.
+    assert [line for line in order(local) if " eval " not in line] == expected_order(
+        "--workspace"
+    )
+    slices = local.merged()
+    gate = slices["dev test-local"]["args"]["span_id"]
+    for name in STEPS:
+        assert slices[name]["args"]["parent_id"] == gate, name
+    starts = [slices[name]["ts"] for name in STEPS]
+    assert starts == sorted(starts)
+    hooks = subprocess.run(
+        ["git", "-C", str(local.root), "config", "core.hooksPath"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert hooks.stdout == ".githooks\n"
 
 
-SELECTORS = ["-p", "storage", "foo", "--", "--nocapture", "--help"]
+def test_nextest_gets_the_verified_bundle_and_the_built_worker(
+    local: Checkout,
+) -> None:
+    result = run_test_local(local)
+    assert result.returncode == 0, result
+    assert nextest(local) == {
+        "args": ["nextest", "run", "--workspace"],
+        "bundle": os.path.realpath(local.root.parent / "bundle"),
+        "executable": str(local.root.resolve() / "target" / "debug" / "jaunder"),
+        "wrapper": "sccache",
+        "inherited": False,
+    }
+
+
+SELECTORS = ["-p", "storage", "a b", "$(touch pwned)", "--", "--nocapture"]
 
 
 @pytest.mark.parametrize("separator", [[], ["--"]])
-def test_test_local_forwards_selectors_with_or_without_a_leading_separator(
-    checkout: Checkout, separator: list[str]
+def test_selectors_pass_through_unchanged_without_the_workspace_default(
+    local: Checkout, separator: list[str]
 ) -> None:
     # Only a leading `--` is dropped; a later one belongs to nextest.
-    checkout.tool("cargo", FAKE_HOST_PROOF)
-    result = checkout.dev(
-        "test-local",
-        *separator,
-        *SELECTORS,
-        REPORT=json.dumps(PLAIN),
-        HOST_PROOF_CODE="0",
-    )
+    result = run_test_local(local, *separator, *SELECTORS)
     assert result.returncode == 0, result
-    assert json.loads((checkout.root / "argv.json").read_text()) == [
-        *HOST_PROOF,
-        *SELECTORS,
-    ]
+    assert nextest(local)["args"] == ["nextest", "run", *SELECTORS]
+    assert not (local.root / "pwned").exists()
+
+
+def test_an_explicit_bundle_root_is_verified_without_building_one(
+    local: Checkout,
+) -> None:
+    explicit = local.root.parent / "explicit"
+    explicit.mkdir()
+    result = run_test_local(local, JAUNDER_CSR_BUNDLE_DIR=str(explicit))
+    assert result.returncode == 0, result
+    lines = order(local)
+    assert not any(line.startswith("nix ") for line in lines), lines
+    assert lines[0] == f"{PREREQUISITE} {explicit}"
+    assert nextest(local)["bundle"] == os.path.realpath(explicit)
+    assert "csr-bundle" not in local.merged()
+
+
+@pytest.mark.parametrize(
+    ("inherited", "expected"),
+    [
+        (None, ""),
+        ("", ""),
+        ("-O2 -fstack-protector", "-O2 -fstack-protector"),
+    ],
+)
+def test_the_worker_build_sets_missing_cflags_empty_and_keeps_an_existing_value(
+    local: Checkout, inherited: str | None, expected: str
+) -> None:
+    extra = {} if inherited is None else {"CFLAGS": inherited}
+    result = run_test_local(local, **extra)
+    assert result.returncode == 0, result
+    assert json.loads((local.root / "cflags.json").read_text()) == expected
+
+
+@pytest.mark.parametrize(
+    ("failure", "last"),
+    [
+        ({"ADMIT_CODE": "3"}, "admit-inputs"),
+        ({"NIX_BUILD_CODE": "4"}, "nix build"),
+        ({"PREREQUISITE_CODE": "1"}, "csr-prerequisite"),
+    ],
+)
+def test_a_refused_bundle_stops_before_any_compilation(
+    local: Checkout, failure: dict[str, str], last: str
+) -> None:
+    result = run_test_local(local, **failure)
+    assert result.returncode == int(next(iter(failure.values()))), result
+    lines = [line for line in order(local) if " eval " not in line]
+    assert last in lines[-1], lines
+    assert not any(line.startswith("cargo build") for line in lines)
+    assert not (local.root / "nextest.json").exists()
+
+
+def wait_for(path: Path) -> None:
+    deadline = time.monotonic() + 30
+    while not path.exists():
+        assert time.monotonic() < deadline, f"{path} never appeared"
+        time.sleep(0.02)
+
+
+def test_the_lock_is_held_for_the_whole_run_so_a_second_run_waits(
+    local: Checkout,
+) -> None:
+    (local.root / "hold").touch()
+    command = local.command("test-local", "-p", "common")
+    first = subprocess.Popen(command, cwd=local.root, env=environment(local))
+    wait_for(local.root / "holding")
+    with open(local.root / LOCK) as probe, pytest.raises(BlockingIOError):
+        fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    second = subprocess.Popen(command, cwd=local.root, env=environment(local))
+    time.sleep(0.5)
+    assert second.poll() is None
+    assert len([line for line in order(local) if "admit-inputs" in line]) == 1
+
+    (local.root / "release").touch()
+    assert first.wait(timeout=60) == 0
+    assert second.wait(timeout=60) == 0
+    lines = [line for line in order(local) if " eval " not in line]
+    assert lines == expected_order("-p", "common") * 2

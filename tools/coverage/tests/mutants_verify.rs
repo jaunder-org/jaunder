@@ -2,9 +2,10 @@
 #![cfg(feature = "host")]
 
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 fn verify(fixture: Option<&Path>, status: i32) -> Output {
@@ -63,7 +64,13 @@ exit "$PRODUCER_STATUS"
         .env("TMPDIR_MUTANTS", temp.path().join("scratch"))
         .env("FIXTURE", fixture.unwrap_or(Path::new("")))
         .env("PRODUCER_STATUS", status.to_string())
-        .env("CHECK_BIN", binary);
+        .env("CHECK_BIN", binary)
+        // The script runs the real `dev` in the real checkout: tracing off,
+        // so it neither nests in a calling gate's trace nor leaves a root run
+        // in `.xtask/run`.
+        .env("JAUNDER_TRACE_DIR", "")
+        .env_remove("TRACEPARENT")
+        .env_remove("TRACESTATE");
     // Normal startup touches Git hooks; never inherit a hook's index or
     // repository redirection into that startup.
     for key in [
@@ -95,6 +102,34 @@ fn assert_non_verification(output: Output) {
 #[test]
 fn invalid_argument_without_artifacts_is_not_verification() {
     assert_non_verification(verify(None, 1));
+}
+
+/// The real checkout's root runs whose spans include `dev coverage-check`.
+fn coverage_check_runs(root: &Path) -> BTreeSet<PathBuf> {
+    let Ok(entries) = fs::read_dir(root.join(".xtask/run")) else {
+        return BTreeSet::new();
+    };
+    entries
+        .map(|entry| entry.unwrap().path())
+        .filter(|run| run.extension().is_some_and(|extension| extension == "d"))
+        .filter(|run| {
+            fs::read_dir(run).unwrap().any(|file| {
+                fs::read_to_string(file.unwrap().path())
+                    .is_ok_and(|records| records.contains("\"dev coverage-check\""))
+            })
+        })
+        .collect()
+}
+
+#[test]
+fn verification_leaves_no_trace_in_the_real_checkout() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap();
+    let before = coverage_check_runs(root);
+    assert_non_verification(verify(None, 1));
+    assert_eq!(coverage_check_runs(root), before);
 }
 
 #[test]

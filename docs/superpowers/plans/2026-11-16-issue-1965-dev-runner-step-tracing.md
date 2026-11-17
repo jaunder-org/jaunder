@@ -285,7 +285,7 @@ Review deliverable C covers the switch, the removal and the proof.
     - `nix build` of `tools-doctests` and `doctests-gate` passes
     - a Markdown-only commit runs the static-docs request through `dev`
     - `dev prepush` passes
-- [ ] **Task 7d: #1964.** test-local's steps in `dev` under the `flock`;
+- [x] **Task 7d: #1964.** test-local's steps in `dev` under the `flock`;
       `host-proof csr-prerequisite`; delete host-proof `test-local` and
       `steps/test_local.rs`. Port its behaviour tests to pytest: CFLAGS
       handling, the explicit bundle root, a refused prerequisite, the lock held

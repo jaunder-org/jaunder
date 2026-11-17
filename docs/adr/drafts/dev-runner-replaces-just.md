@@ -67,6 +67,16 @@ Work a gate performs is a visible `dev` step, not hidden inside a tool
   requests them as steps. `checks.tools-doctests` runs the `tools/` workspace's
   `cargo test --doc` without reconciliation. The host `doctest-fences` and
   `workspace-doctests` steps and the `doctest-check` executable are retired.
+- `dev test-local` sequences its own steps
+  ([#1964](https://github.com/jaunder-org/jaunder/issues/1964)): hook path, CSR
+  input admission, the `.#csrBundle` Nix step, CSR validation, the image worker
+  build and `pg-run cargo nextest`. Admission and validation stay in Rust as the
+  small `host-proof admit-inputs` and `host-proof csr-prerequisite` executables.
+  `dev` holds the checkout-local `flock` on `.xtask/host-artifacts.lock`, in a
+  descriptor no child inherits, for the whole sequence. The lock stays: it stops
+  a concurrent `test-local` in the same checkout from repointing the bundle's GC
+  root or rebuilding `target/debug/jaunder` while a run's tests use them.
+  host-proof's `test-local` executable is retired.
 
 This supersedes the Just-ownership parts of ADR-0237, ADR-0238, ADR-0239 and
 ADR-0240, the `just perf`, `just perf-compare` and `just perf-import-baseline`
@@ -86,7 +96,9 @@ It also amends three decisions:
   no longer runs host `workspace-doctests`. It requests the Nix doctest producer
   and gate, so it is no longer free of Nix derivations.
 - [ADR-0247](../0247-host-tool-json-report-contract.md)'s list of host tools:
-  `doctest-check` is gone.
+  `doctest-check` and `test-local` are gone. `admit-inputs` and
+  `csr-prerequisite` render no verdict report: a refusal is their exit status
+  and stderr, and `csr-prerequisite` prints only the root it verified.
 
 ## Consequences
 

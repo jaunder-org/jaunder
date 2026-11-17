@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, ensure};
 
 /// Resolve one absolute input and compose the existing build-contract validators.
-pub(crate) fn validate(root: &Path) -> anyhow::Result<PathBuf> {
+pub fn validate(root: &Path) -> anyhow::Result<PathBuf> {
     let root = root
         .canonicalize()
         .with_context(|| format!("resolving CSR bundle root {}", root.display()))?;

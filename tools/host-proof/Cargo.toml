@@ -9,8 +9,12 @@ publish.workspace = true
 workspace = true
 
 [[bin]]
-name = "test-local"
-path = "src/bin/test-local.rs"
+name = "admit-inputs"
+path = "src/bin/admit-inputs.rs"
+
+[[bin]]
+name = "csr-prerequisite"
+path = "src/bin/csr-prerequisite.rs"
 
 [[bin]]
 name = "e2e-local"
