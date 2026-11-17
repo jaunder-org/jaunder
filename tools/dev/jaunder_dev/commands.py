@@ -14,7 +14,6 @@ CARGO_RUN = (
     "--manifest-path",
     "tools/Cargo.toml",
 )
-DEVTOOL = (*CARGO_RUN, "-p", "devtool", "--bin", "devtool", "--")
 REPOSITORY_POLICY = (*CARGO_RUN, "-p", "repository-policy", "--bin")
 SOURCE_CONTRACT = (*REPOSITORY_POLICY, "source-contracts", "--")
 HOST_PROOF = (*CARGO_RUN, "-p", "host-proof", "--bin")

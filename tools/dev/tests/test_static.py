@@ -125,7 +125,6 @@ GROUPS = {
         "scoped-leptosfmt fix",
         "cargo --offline fmt --manifest-path tools/Cargo.toml --all",
     ],
-    "code": [*CODE, *SANDBOX_CLIPPY],
     "all": [
         "cargo --offline fmt",
         "scoped-leptosfmt fix",
@@ -134,7 +133,7 @@ GROUPS = {
         *CODE[1:],
         "tsc --noEmit -p end2end/tsconfig.json",
         *SANDBOX_CLIPPY,
-        "devtool check ert",
+        "emacs --batch -Q -l elisp/scripts/run-tests.el",
     ],
 }
 
@@ -244,7 +243,6 @@ def test_a_leaf_keeps_its_streams(workflow: Workflow) -> None:
         ["static", "bogus"],
         ["static", "fmt", "verify"],
         ["static", "fmt", "--check"],
-        ["static", "ert-request"],
     ],
 )
 def test_unknown_static_arguments_are_refused_before_any_work(

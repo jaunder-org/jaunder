@@ -3536,14 +3536,13 @@ static-ert =
   in
   nonSubstitutable (pkgs.runCommand "static-ert"
     {
-      # devtool requests ERT through `dev`.
-      nativeBuildInputs = [ devtoolBin devBin emacsForCi pkgs.git ];
+      nativeBuildInputs = [ devBin emacsForCi pkgs.git ];
       TZDIR = "${pkgs.tzdata}/share/zoneinfo";
     }
     ''
       cp --no-preserve=mode -r ${staticErtSrc} src
       cd src
-      devtool check ert
+      dev static ert --sandbox
       touch $out
     '');
 # Elisp formatter verification and warning-as-error byte-compilation share one

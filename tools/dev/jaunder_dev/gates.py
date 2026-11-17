@@ -15,7 +15,6 @@ from jaunder_dev import e2e, report, static, steps
 from jaunder_dev.checkout import clean_tree
 from jaunder_dev.commands import (
     COVERAGE_CHECK,
-    DEVTOOL,
     DOCTEST_CHECK,
     HOST_PROOF,
     NIX_LOCK_FLAGS,
@@ -136,15 +135,11 @@ def leptosfmt(mode: Mode) -> None:
 
 
 def static_all(mode: Mode) -> None:
-    """Every static check, with devtool and the adapter built from this checkout."""
+    """Every host static leaf in order, with the adapter built from this checkout."""
     path = _build_tools(
         "static-all-build",
         "-p",
-        "devtool",
-        "-p",
         "repository-policy",
-        "--bin",
-        "devtool",
         "--bin",
         "scoped-leptosfmt",
     )
@@ -213,9 +208,7 @@ def compile_checks(mode: Mode) -> None:
 
 def elisp_checks(mode: Mode) -> None:
     static.run("byte-compile", mode)
-    # devtool times the ERT request; `cargo run` builds it from current source.
-    fix = ["--fix"] if mode is Mode.FIX else []
-    steps.run("ert", [*DEVTOOL, "check", "ert", *fix])
+    static.run("ert", mode)
 
 
 # Shared steps of the gates.

@@ -21,13 +21,7 @@ fn command_capture_is_not_a_devtool_route() {
 
 #[test]
 fn sandbox_tooling_routes_remain_available() {
-    for route in [
-        "coverage",
-        "wasm-coverage",
-        "diagnostic-build",
-        "doctests",
-        "check",
-    ] {
+    for route in ["coverage", "wasm-coverage", "diagnostic-build", "doctests"] {
         let output = Command::new(env!("CARGO_BIN_EXE_devtool"))
             .args([route, "--help"])
             .output()

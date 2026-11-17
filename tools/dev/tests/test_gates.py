@@ -125,11 +125,10 @@ def compile_checks() -> Commands:
     ]
 
 
-def elisp_checks(mode: str) -> Commands:
-    fix = " --fix" if mode == "fix" else ""
+def elisp_checks() -> Commands:
     return commands(
         "emacs --batch -Q -l elisp/scripts/byte-compile.el",
-        f"{CARGO_RUN} -p devtool --bin devtool -- check ert{fix}",
+        "emacs --batch -Q -l elisp/scripts/run-tests.el",
     )
 
 
@@ -139,7 +138,7 @@ def host(mode: str, shared_docs: bool = False) -> Commands:
         *docs_shape(),
         *source_contracts(),
         *compile_checks(),
-        *elisp_checks(mode),
+        *elisp_checks(),
     ]
 
 
@@ -276,7 +275,7 @@ GROUPS: list[tuple[list[str], Commands]] = [
     (["docs-shape"], docs_shape()),
     (["source-contracts"], source_contracts()),
     (["compile-checks"], compile_checks()),
-    (["elisp-checks"], elisp_checks("verify")),
+    (["elisp-checks"], elisp_checks()),
     (["source-contract", "html-sink"], [source_contract("html-sink")]),
     *(
         (args, expected)
@@ -284,7 +283,7 @@ GROUPS: list[tuple[list[str], Commands]] = [
         for args, expected in [
             (["format", mode], format_checks(mode)),
             (["compile-checks", mode], compile_checks()),
-            (["elisp-checks", mode], elisp_checks(mode)),
+            (["elisp-checks", mode], elisp_checks()),
         ]
     ),
 ]
@@ -470,29 +469,6 @@ def test_leptosfmt_runs_the_adapter_this_checkout_built(workflow: Workflow) -> N
         assert result.returncode == 0, result
         assert workflow.commands() == format_checks(mode)[1:2]
         assert (workflow.root / "built-adapter").read_text() == f"{mode}\n"
-
-
-DEVTOOL_LAUNCH = f"{CARGO_RUN} -p devtool --bin devtool -- check ert"
-# Stands in for `cargo run`: each launch runs the checkout's current devtool
-# source, so a launch can only show an edit if nothing between `dev` and the
-# source caches a build.
-FAKE_CARGO = f"""\
-if " ".join(sys.argv[1:]) == "{DEVTOOL_LAUNCH.removeprefix("cargo ")}":
-    exec(pathlib.Path("tools/devtool.py").read_text())
-"""
-
-
-def test_the_devtool_launch_reflects_current_source(workflow: Workflow) -> None:
-    workflow.checkout.tool("cargo", FAKE_CARGO)
-    devtool = workflow.root / "tools" / "devtool.py"
-    devtool.parent.mkdir()
-    for version in ["first", "edited"]:
-        devtool.write_text(
-            f'pathlib.Path("source-version").write_text("{version}"); sys.exit(17)\n'
-        )
-        result = workflow.dev("elisp-checks")
-        assert result.returncode == 17
-        assert (workflow.root / "source-version").read_text() == version
 
 
 @pytest.mark.parametrize("code", [0, 1, 23])

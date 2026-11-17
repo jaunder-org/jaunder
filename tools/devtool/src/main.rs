@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-mod check;
 mod coverage;
 mod diagnostic_build;
 mod digest;
@@ -40,8 +39,6 @@ enum Command {
     /// Doctest gate subcommands.
     #[command(subcommand)]
     Doctests(DoctestsCmd),
-    /// Observe the retained fixed ERT request.
-    Check(CheckArgs),
     /// Compile and stage the closed system-theme inventory independently of CSR output.
     #[cfg(feature = "system-artifacts")]
     SystemArtifacts(SystemArtifactsArgs),
@@ -49,15 +46,6 @@ enum Command {
     /// Versioned performance fragment producers and validators.
     #[command(subcommand)]
     Performance(Box<performance::PerformanceCmd>),
-}
-
-#[derive(clap::Args)]
-struct CheckArgs {
-    /// Retained timing consumer: `ert`.
-    name: String,
-    /// Auto-fix (the formatters) instead of verifying.
-    #[arg(long)]
-    fix: bool,
 }
 
 #[cfg(feature = "system-artifacts")]
@@ -252,7 +240,6 @@ fn main() -> Result<()> {
             diagnostic_build::write_baseline_status(&status)
         }
         Command::Doctests(DoctestsCmd::Emit { out }) => doctests::emit::run(&out),
-        Command::Check(args) => check::run(&args.name, args.fix),
         #[cfg(feature = "system-artifacts")]
         Command::SystemArtifacts(args) => {
             #[cfg(feature = "qualification")]

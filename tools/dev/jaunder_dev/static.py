@@ -232,9 +232,6 @@ LEAVES = {
     "prettier-css": _prettier("**/*.css"),
 }
 
-# Only the `all` group requests ERT through devtool, which times the request.
-_ERT_REQUEST = _fixed("", "devtool", "check", "ert")
-
 # The Clippy units, in the order every caller runs them.
 CLIPPY = [
     "product-core-clippy",
@@ -249,19 +246,8 @@ GROUPS = {
         "Rust formatting: fmt, leptosfmt and tools-fmt.",
         ["fmt", "leptosfmt", "tools-fmt"],
     ),
-    "code": (
-        "Elisp, ast-grep, cargo-deny and Clippy checks.",
-        [
-            "elisp-fmt",
-            "ast-grep-tests",
-            "no-full-reload",
-            "byte-compile",
-            "cargo-deny",
-            *CLIPPY,
-        ],
-    ),
     "all": (
-        "Every static check, ERT through devtool last.",
+        "Every host static check in order, ERT last.",
         [
             "fmt",
             "leptosfmt",
@@ -273,7 +259,7 @@ GROUPS = {
             "tsc",
             "cargo-deny",
             *CLIPPY,
-            "ert-request",
+            "ert",
         ],
     ),
 }
@@ -281,10 +267,7 @@ GROUPS = {
 
 def _members(name: str) -> list[tuple[str, Leaf]]:
     if name in GROUPS:
-        return [
-            (member, _ERT_REQUEST if member == "ert-request" else LEAVES[member])
-            for member in GROUPS[name][1]
-        ]
+        return [(member, LEAVES[member]) for member in GROUPS[name][1]]
     return [(name, LEAVES[name])]
 
 

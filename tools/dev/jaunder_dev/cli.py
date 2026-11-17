@@ -188,7 +188,7 @@ def tsc(mode: Mode) -> None:
 @cli.command("static-all")
 @mode_argument
 def static_all(mode: Mode) -> None:
-    """Every static check, with devtool and the adapter built from this checkout."""
+    """Every host static leaf in order, with the adapter built from this checkout."""
     _gate(lambda: gates.static_all(mode))
 
 

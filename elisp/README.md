@@ -68,8 +68,8 @@ emacs --batch -Q -l elisp/scripts/format.el -f jaunder-fmt-fix
 ```
 
 The pure suite and format steps run automatically as the `ert` and `elisp-fmt`
-steps in `dev check` and `dev validate` — both via `devtool check` — and,
-through the same implementation, as part of the `static-checks` Nix check (so
+steps in `dev check` and `dev validate` — both `dev static` leaves — and,
+through the same leaves, in the `static-ert` and `static-elisp` Nix checks (so
 `nix flake check` covers them too).
 
 ## Diagnostics

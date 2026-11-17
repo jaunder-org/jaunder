@@ -277,9 +277,8 @@ def test_e2e_reconcile_runs_the_built_verifier_on_artifacts_only(
 
 STATIC_ALL = [
     words(
-        "cargo build --locked --quiet --manifest-path tools/Cargo.toml -p devtool "
-        "-p repository-policy --bin devtool --bin scoped-leptosfmt --target-dir "
-        "tools/target"
+        "cargo build --locked --quiet --manifest-path tools/Cargo.toml "
+        "-p repository-policy --bin scoped-leptosfmt --target-dir tools/target"
     ),
     words("cargo fmt --check"),
     words("scoped-leptosfmt verify"),
@@ -307,22 +306,16 @@ STATIC_ALL = [
         "cargo clippy --manifest-path tools/Cargo.toml --workspace --all-targets "
         "--features doctests/host,coverage/host -- -D warnings"
     ),
-    words("devtool check ert"),
+    words("emacs --batch -Q -l elisp/scripts/run-tests.el"),
 ]
 
 
 def test_static_all_runs_every_static_check_with_tools_built_here(
     workflow: Workflow,
 ) -> None:
-    built = workflow.root / "tools" / "target" / "debug"
-    built.mkdir(parents=True)
-    devtool = built / "devtool"
-    devtool.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" > built-devtool\n")
-    devtool.chmod(0o755)
     result = workflow.dev("static-all")
     assert result.returncode == 0, result
-    assert workflow.commands() == STATIC_ALL[:-1]
-    assert (workflow.root / "built-devtool").read_text() == "check ert\n"
+    assert workflow.commands() == STATIC_ALL
     result = workflow.dev("static-all", "fix", failure="cargo fmt")
     assert result.returncode == 17
     assert workflow.commands() == [STATIC_ALL[0], words("cargo fmt")]

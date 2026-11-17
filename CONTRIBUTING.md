@@ -234,22 +234,21 @@ Playwright override, preserves unrelated directory entries, and unlinks a stale
 destination symlink without touching its referent.
 
 Host and hermetic callers use the named checks of `dev static` for formatting,
-Prettier, ast-grep, byte-compilation, cargo-deny and the six Clippy units.
+Prettier, ast-grep, byte-compilation, cargo-deny, ERT and the six Clippy units.
 `dev static <name>` runs one check in Verify mode; `--fix` repairs where the
 check has an autofix, and `--sandbox` runs it in place, offline against the
-Cargo homes a Nix check provides, admitting every home before any work. `code`,
+Cargo homes a Nix check provides, admitting every home before any work.
 `rust-format` and `all` are fixed groups of checks. `dev leptosfmt` builds its
-narrow adapter from the current checkout before running the `leptosfmt` check,
-and `dev static-all [fix|verify]` builds the current checkout's devtool and
-adapter before running the ordered `all` group (dependencies must already be
-available). Only ERT retains a devtool timing consumer, launched with locked
-Cargo from the checkout, not the shell's prebuilt devtool. Every `dev` call sets
-the host Cargo compile-cache policy (`RUSTC_WRAPPER=sccache`,
-`CARGO_INCREMENTAL=0`, and sorted, canonical Git worktree roots in
-`SCCACHE_BASEDIRS`, including the current root) and clears inherited `GIT_*`
-overrides before calling Git. Discovery failure retains the current root and
-Git's diagnostic. This environment reaches the devtool bootstrap and its
-compiling children as well as direct Cargo steps; it adds no resource limits.
+narrow adapter from the current checkout before running the `leptosfmt` check.
+`dev static-all [fix|verify]` is one command that runs every host static leaf in
+order, ERT last: it builds the current checkout's adapter, then runs the `all`
+group (dependencies must already be available). Every `dev` call sets the host
+Cargo compile-cache policy (`RUSTC_WRAPPER=sccache`, `CARGO_INCREMENTAL=0`, and
+sorted, canonical Git worktree roots in `SCCACHE_BASEDIRS`, including the
+current root) and clears inherited `GIT_*` overrides before calling Git.
+Discovery failure retains the current root and Git's diagnostic. This
+environment reaches the checkout's tool builds and their compiling children as
+well as direct Cargo steps; it adds no resource limits.
 
 All `dev` gate workflows fail fast: the first failed required step stops later
 ordinary checks, and `dev` exits with that step's status. Prepush's clean-tree
@@ -2162,10 +2161,10 @@ server-function coverage verification to `dev validate-no-e2e`.
   formatting, cargo-deny, and repository scanners), executed with existing
   offline Cargo homes. It requests the narrow Clippy aggregate once; that
   aggregate depends on six independently buildable terminal verdicts and
-  executes no lint itself. `dev static-all` preserves the ordered,
-  duplicate-free union of TypeScript, Rust-format, code, and ERT, including the
-  six Clippy units in code; Prettier is outside this inventory and called
-  directly by `dev`/Nix.
+  executes no lint itself. `dev static-all` runs the ordered, duplicate-free
+  union of TypeScript, Rust formatting, Elisp, ast-grep, cargo-deny, the six
+  Clippy units and ERT; Prettier is outside this inventory and called directly
+  by `dev`/Nix.
 - `checks.x86_64-linux.static-elisp` — shared `elisp-fmt` Verify followed by
   shared `byte-compile`, over the complete non-Markdown Elisp source tree in a
   writable copy. The sandbox `dev` package, `emacsForCi`, and `TZDIR` replace
@@ -2182,21 +2181,17 @@ server-function coverage verification to `dev validate-no-e2e`.
   the direct census filter and may invalidate the leaf. It is non-substitutable,
   may reuse a valid local output, and is requested once by hermetic static
   validation; the standalone host `dev static-all` population is unchanged.
-- `checks.x86_64-linux.static-ert` — `devtool check ert`, the standalone pure
-  runner over the complete non-Markdown Elisp tree, in a writable copy, with the
-  sandbox `dev` package, existing `emacsForCi`, Git and timezone inputs. The
-  separate combined pure/live coverage producer below is unchanged. Hermetic
-  validation requests `static-docs`, `static-typescript`, `rust-format`,
-  `static-code`, `static-elisp`, `static-e2e-census`, and `static-ert`, in that
-  order. The ERT leaf is non-substitutable but may reuse a valid local output.
-  ERT's schema-2 `timing_scope=request` event measures the fixed
-  `dev static ert` request, including startup, not exact Emacs execution. The
-  retained host utility parser admits only current captured ERT stderr;
-  missing/malformed/ambiguous evidence stays unavailable and never changes
-  workload status. TSC's old devtool child event is retired; `dev tsc` is traced
-  like every other `dev` step. No new Nix child-timing collector is introduced.
-  Retained logs are never timing inputs; Nix request duration and output reuse
-  do not prove fresh builder execution.
+- `checks.x86_64-linux.static-ert` — `dev static ert --sandbox`, the standalone
+  pure runner over the complete non-Markdown Elisp tree, in a writable copy,
+  with the sandbox `dev` package, existing `emacsForCi`, Git and timezone
+  inputs. The separate combined pure/live coverage producer below is unchanged.
+  Hermetic validation requests `static-docs`, `static-typescript`,
+  `rust-format`, `static-code`, `static-elisp`, `static-e2e-census`, and
+  `static-ert`, in that order. The ERT leaf is non-substitutable but may reuse a
+  valid local output. ERT and TSC are traced like every other `dev` step; the
+  old devtool timing events are retired. No new Nix child-timing collector is
+  introduced. Retained logs are never timing inputs; Nix request duration and
+  output reuse do not prove fresh builder execution.
 - `checks.x86_64-linux.wasm-tests` — `wasm-bindgen-test` cases executed in
   headless Nix-store Chromium through the matching Nix-store chromedriver. This
   is behavioral pass/fail execution for irreducible browser code, not wasm line

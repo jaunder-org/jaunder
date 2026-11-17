@@ -4535,11 +4535,10 @@ shell; composition is ordinary Python, a gate stops at its first failing step
 and exits with that child's status, and there is no gate-wide result contract.
 Each host tool prints its own single JSON step report on stdout, which `dev`
 renders, and its exit status is the verdict. `dev static <name>` supplies
-formatting, Prettier, ast-grep, byte-compilation, cargo-deny, TSC and the six
-Clippy definitions to host and hermetic consumers; ERT alone retains the
-existing devtool timer around its fixed `dev static ert` check. The obsolete
-static catalog and duplicate Leptosfmt source are retired, not all devtool
-endpoints.
+formatting, Prettier, ast-grep, byte-compilation, cargo-deny, TSC, ERT and the
+six Clippy definitions to host and hermetic consumers. The obsolete static
+catalog, duplicate Leptosfmt source and `devtool check` are retired, not all
+devtool endpoints.
 
 On the host the devShells' `dev` shim runs the checkout's own `tools/dev/` with
 `python -P` under the pinned interpreter, so hooks and gates always run the
@@ -4776,16 +4775,14 @@ non-Markdown Elisp source tree in a writable copy. The sandbox `dev` package,
 offline Cargo home, Node/Playwright, or Git. The verdict is non-substitutable,
 while valid local output reuse remains possible. This selected change does not
 certify unrelated family coupling or discharge the recorded source-invalidation
-deferrals. `static-ert` runs `devtool check ert` over its own complete
-population, invoking only the fixed `dev static ert` check. Its existing
-monotonic observer emits one schema-2 request event, including `dev` startup,
-not exact Emacs-child time. TSC's old devtool child event is retired; `dev tsc`
-is traced like any other step. The combined pure/live coverage producer is
-unchanged. The obsolete devtool static catalog, group/all selectors and
-duplicate Leptosfmt adapter are retired; the fixed `code`, `rust-format` and
-independent `all` groups preserve those populations. `dev static-all` builds
-current-checkout timing/scoping owners before calling `all`; full devtool
-retirement remains separate.
+deferrals. `static-ert` runs `dev static ert --sandbox` directly over its own
+complete population. The old devtool ERT and TSC timing events are retired; both
+are traced like any other `dev` step. The combined pure/live coverage producer
+is unchanged. The obsolete devtool static catalog, group/all selectors and
+duplicate Leptosfmt adapter are retired; the fixed `rust-format` and independent
+`all` groups preserve those populations. `dev static-all` builds the
+current-checkout Leptosfmt adapter, then runs every host static leaf in order;
+full devtool retirement remains separate.
 
 `dev validate-no-e2e` requests the independent static checks `dev` defines
 before the Nix test surfaces. ADR-0178 established the original
@@ -5251,11 +5248,10 @@ dependency.
   OpenTelemetry spans
   ([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md);
   [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)).
-- **`devtool check ert [--fix]`** retains only the fixed ERT request timing
-  consumer; it has no autofix. Static argv now lives in `dev static`, including
-  TSC's shared host/hermetic check, which `dev tsc` runs after setup.
-  `rust-format` and `code` are fixed groups there; `dev static-all [fix|verify]`
-  builds the current checkout's timing/scoping owners before invoking the
+- **Static argv lives in `dev static`**, including ERT and TSC's shared
+  host/hermetic check, which `dev tsc` runs after setup; `devtool check` is
+  retired. `rust-format` is a fixed group there; `dev static-all [fix|verify]`
+  builds the current checkout's Leptosfmt adapter before invoking the
   independent ordered `all` composition. The obsolete devtool group/all/sandbox
   selectors, Cargo builders and duplicate Leptosfmt implementation are removed.
   The host verify ladder calls the shared `dev static` checks, preserving
