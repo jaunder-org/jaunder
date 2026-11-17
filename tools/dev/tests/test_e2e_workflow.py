@@ -30,6 +30,10 @@ if [[ $1 == build ]]; then
   if [[ -f $EVENTS.kept-note ]]; then
     while IFS= read -r note; do printf '%s\\n' "$note" >&2; done < "$EVENTS.kept-note"
   fi
+  if [[ -n ${{PRODUCER_SECONDS-}} ]]; then
+    sleep "$PRODUCER_SECONDS"
+    echo "finished $lane" >> "$EVENTS"
+  fi
   if [[ ${{BUILD_STATUS:-23}} == 0 ]]; then
     while [[ $1 != --out-link ]]; do shift; done
     ln -sfn "$OUTPUT" "$2"
@@ -167,6 +171,22 @@ def test_an_early_producer_failure_still_settles_every_lane_and_both_reconciliat
     for lane in [LANE, "postgres-firefox-serial-special"]:
         log = e2e.root / ".xtask" / "diagnostics" / f"e2e-{lane}" / "build.log"
         assert f"producer exit {failure}" in log.read_text()
+
+
+def most_at_once(lines: list[str]) -> int:
+    running = peak = 0
+    for line in lines:
+        running += line.startswith("producer ") - line.startswith("finished ")
+        peak = max(peak, running)
+    return peak
+
+
+@pytest.mark.parametrize(("jobs", "capped"), [("", True), ("8", False)])
+def test_local_e2e_runs_at_most_three_vms_unless_told_otherwise(
+    e2e: E2E, jobs: str, capped: bool
+) -> None:
+    e2e.run("e2e", *([jobs] if jobs else []), status="23", PRODUCER_SECONDS="1")
+    assert (most_at_once(e2e.events().splitlines()) <= 3) == capped
 
 
 @pytest.mark.parametrize("identity", ["unknown", "sqlite-firefox-unsplit", "all"])

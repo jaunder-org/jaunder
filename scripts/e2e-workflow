@@ -17,7 +17,9 @@ if [[ ${1-} == all ]]; then
   lanes=$(jq -er '[.lanes[] | select(.enabled) | .identity] | .[]' "$catalog")
   backends=$(jq -er '[.lanes[] | select(.enabled and .browser == "firefox") | .backend] | unique | .[]' "$catalog")
   enabled=$(jq '[.lanes[] | select(.enabled)] | length' "$catalog")
-  jobs=${2:-$enabled}
+  # Locally at most three VMs by default: the peak before #1890, when each
+  # backend's three Firefox lanes ran together.
+  jobs=${2:-3}
   [[ $jobs =~ ^[1-9][0-9]*$ ]] || { echo 'jobs must be positive' >&2; exit 2; }
   jobs=$(jq -n --argjson requested "$jobs" --argjson enabled "$enabled" '[$requested, $enabled] | min')
   # xargs owns bounded admission; normalize child failures so exit 255 cannot

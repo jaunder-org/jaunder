@@ -10,7 +10,7 @@ from jaunder_dev import report, steps
 def run_all(jobs: str) -> None:
     """Every producer, then reconciliation of both backends.
 
-    `jobs` bounds concurrent producers; empty runs every enabled lane at once.
+    `jobs` bounds concurrent producers; empty means the script's default of 3.
     """
     steps.run("e2e", ["bash", "scripts/e2e-workflow", "all", jobs])
 

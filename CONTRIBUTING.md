@@ -701,11 +701,12 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
 
 #### Bounding full local E2E fan-out
 
-`dev e2e <N>` bounds producer admission with ordinary `xargs -P`. Choose it from
-actual admitted CPU/RAM capacity. Omission uses the enabled lane count, not a
-host-capacity guarantee; larger bounds cannot start more work than there are
-enabled lanes. Invalid bounds fail before producers start. Full `dev validate`
-uses the ordinary default; `dev validate-no-e2e` omits E2E.
+`dev e2e <N>` bounds producer admission with ordinary `xargs -P`. Omission runs
+at most three producers, and so three NixOS VMs, at once: the local peak before
+#1890, when each backend's three Firefox lanes ran together. Raise it only from
+actual admitted CPU/RAM capacity; larger bounds cannot start more work than
+there are enabled lanes. Invalid bounds fail before producers start. Full
+`dev validate` uses the ordinary default; `dev validate-no-e2e` omits E2E.
 
 A producer failure does not discard pending lanes. All producers settle before
 both Firefox reconciliations run. The helper normalizes producer failures for
