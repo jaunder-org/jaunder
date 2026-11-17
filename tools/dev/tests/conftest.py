@@ -350,10 +350,14 @@ def isolated_from_the_callers_git(
     A Git hook exports GIT_DIR and friends. Left in place, `git init` on a
     throwaway checkout would reinitialise the caller's repository instead,
     and `dev` would resolve its checkout root there. The developer's own
-    configuration (templates, hooks, identity) stays out as well.
+    configuration (templates, hooks, identity) stays out as well, and
+    discovery stops at the test's directory: a fixture repository whose `.git`
+    is missing must not resolve to a repository enclosing the temporary
+    directory, as the checkout does when it holds pytest's base directory.
     """
     for key in [key for key in os.environ if key.startswith("GIT_")]:
         monkeypatch.delenv(key)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
