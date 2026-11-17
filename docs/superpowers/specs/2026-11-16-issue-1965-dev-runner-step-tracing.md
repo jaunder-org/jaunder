@@ -324,6 +324,11 @@ delivered.
 - **Coverage threshold as enforced.** "90% branch coverage" means what
   `tools/dev/pyproject.toml` enforces: coverage.py `fail_under = 90` with
   `branch = true`, a combined statement-and-branch figure.
+- **E2E producer builds record no cache state (deferred to #1999).** Every Nix
+  build `dev` runs as a step records `jaunder.cache`. `scripts/e2e-workflow`
+  builds the producers itself, inside the `dev e2e-producer` step, and keeps its
+  failed-build diagnostics with `--keep-failed`, `--json` and a tee'd log that
+  `steps.nix_build` cannot express simply.
 - **Defaults kept.** Prepush keeps building the root doctests (`checks.doctests`
   plus `doctests-gate`). The static-docs request's log and excerpt files under
   `.xtask/diagnostics/static-docs` are dropped: the request is an ordinary
