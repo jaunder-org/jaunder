@@ -207,7 +207,7 @@ fn browser_fragment() -> Result<Value> {
     )?)?)
 }
 
-// These fixtures exercise the public validation leaves that `dev perf` calls, not
+// These fixtures exercise the public validation leaves the workflow calls, not
 // another implementation of the shared fragment or selection policies.
 fn write_producer_evidence(root: &Path, backend: Backend, browser: Option<Browser>) -> Result<()> {
     let envelope = support::fragment(DatasetProfile::Small, backend, browser)?;
@@ -678,7 +678,7 @@ fn publication_failure_never_truncates_either_destination() -> Result<()> {
     let output = fixture.run(true)?;
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("publishing"));
-    // Publication is atomic per file, as in xtask, not a two-file transaction.
+    // Publication is atomic per file, not a two-file transaction.
     let complete: performance::RunEnvelope = serde_json::from_slice(&fs::read(fixture.result())?)?;
     performance::validate_run(&complete)?;
     assert!(fixture.stable().is_dir());

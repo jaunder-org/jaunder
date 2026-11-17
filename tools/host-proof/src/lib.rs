@@ -1,6 +1,6 @@
 //! Focused host proof: the `e2e-local` executable and its private host
 //! lifecycle algorithms (ADR-0246), host diagnostics, and the CSR input checks
-//! `dev test-local` runs as steps. Each verdict executable prints one JSON
+//! host tests depend on. Each verdict executable prints one JSON
 //! report on stdout.
 
 pub mod audit_wasm;

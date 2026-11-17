@@ -5,11 +5,8 @@ import { withTimedAction } from "./actions";
  * The body attribute the CSR client sets once `mount_to_body` has run — the
  * suite's "app is mounted and interactive" signal. Counterpart of the literal in
  * `csr/src/lib.rs`'s `mark_ready` inline JS; the two must agree or every e2e test
- * times out. Declared once here so a rename touches one place (#251).
- *
- * The agreement is enforced by the `xlang-literal` gate
- * (`xtask/src/steps/xlang_literal_check.rs`): renaming this constant's value
- * without renaming the Rust one fails `dev check` (#767).
+ * times out. Declared once here so a rename touches one place (#251); a
+ * rename of this value must rename the Rust one too (#767).
  */
 export const MOUNTED_ATTR = "data-mounted";
 

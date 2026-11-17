@@ -1,6 +1,5 @@
-//! `trace-analysis` — manual OTel trace diagnostics; not part of
-//! `check`/`validate`. Prints one JSON report on stdout whose `report` field
-//! holds the rendered tables (`dev trace-analysis …` shows them).
+//! `trace-analysis` — manual OTel trace diagnostics. Prints one JSON report on
+//! stdout whose `report` field holds the rendered tables.
 
 use std::path::PathBuf;
 

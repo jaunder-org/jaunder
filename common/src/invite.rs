@@ -20,8 +20,8 @@ use crate::token::{self, InvalidTokenShape};
 /// redacting `Debug`, `AsRef<str>`, `TryFrom<String>`, and the validating serde
 /// bridge — but no `Display`/`Deref`/owned-`String`/`PartialEq`. It exists only to be
 /// validated (client-side per ADR-0065, and again on the wire at deserialize), travel
-/// client→server, and be converted into `host::invite::InviteCode`. An xtask gate pins
-/// it to `#[server]` parameter positions so a raw code is never sent back to a client.
+/// client→server, and be converted into `host::invite::InviteCode`. It appears only
+/// in `#[server]` parameter positions so a raw code is never sent back to a client.
 #[derive(Clone, StrNewtype)]
 #[str_newtype(secret, serde)]
 pub struct ProfferedInviteCode(String);

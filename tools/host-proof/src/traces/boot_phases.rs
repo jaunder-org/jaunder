@@ -1,4 +1,4 @@
-//! `dev trace-analysis boot-phases` — median boot-phase decomposition per
+//! `trace-analysis boot-phases` — median boot-phase decomposition per
 //! `(source, project, cacheWarmth)` (#818, spec D8/AC18).
 //!
 //! `analyze` computes maxima and means; AC13 is entirely medians, so this is its

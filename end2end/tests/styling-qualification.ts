@@ -1,4 +1,4 @@
-// Private consumer of xtask's fixed styling qualification protocol.
+// Private consumer of the fixed styling qualification protocol.
 import { createHash, randomUUID } from "node:crypto";
 import {
   expect,

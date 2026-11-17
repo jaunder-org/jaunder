@@ -15,7 +15,7 @@
 (require 'undercover)
 
 (defconst jaunder-coverage--schema "elisp-coverage-v1"
-  "The producer schema consumed by `xtask::elisp_coverage'.")
+  "The schema version of the coverage artifacts this producer writes.")
 
 (defun jaunder-coverage--source-files (root)
   "Return sorted flat production source files below ROOT.

@@ -15,7 +15,7 @@ anyhow = "1.0.104"
 syn = { version = "2", features = ["full", "visit", "extra-traits"] }
 # `span-locations` is what makes a fence's SOURCE line readable: without it every
 # `Span::start()` reports line 0, so the reconciliation key against libtest's
-# `(line N)` collapses. Same reason `xtask` enables it.
+# `(line N)` collapses.
 proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
 
 [dev-dependencies]

@@ -1,6 +1,6 @@
 //! `admit-inputs <source-admits>`: refuse the checkout when a Git flake would
 //! omit an untracked input that the selected output declares, such as
-//! `.#csrBundle.sourceAdmits` before `dev test-local` builds the CSR bundle.
+//! `.#csrBundle.sourceAdmits` before the CSR bundle is built.
 
 use std::path::Path;
 use std::process::ExitCode;

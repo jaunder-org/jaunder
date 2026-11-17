@@ -1,5 +1,5 @@
 //! The PR cleanup script against real Git in disposable repositories. gh and
-//! cargo are fakes; never clean this checkout. The `dev pr-land`/`pr-cleanup`
+//! cargo are fakes; never clean this checkout. The `pr-land`/`pr-cleanup`
 //! fixture proofs are in `tools/dev/tests/test_pr_frontdoors.py`.
 
 use serde_json::{Value, json};

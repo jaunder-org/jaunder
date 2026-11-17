@@ -2,7 +2,7 @@
 //!
 //! Two gates express exemptions this way, and they share exactly this primitive —
 //! "is there a `<token>` marker on this source line, and what reason does it give" —
-//! and nothing above it. The coverage gate (in xtask) hands in a line from
+//! and nothing above it. The coverage policy hands in a line from
 //! an `llvm-cov` text report and recognizes `cov:ignore`; the ident-keyed XSS gates
 //! ([`crate::source_contracts::ident_gate`]) hand in a line from the file itself, located by a
 //! `syn` span, and recognize `<gate-step>:allow`. This generic helper deliberately

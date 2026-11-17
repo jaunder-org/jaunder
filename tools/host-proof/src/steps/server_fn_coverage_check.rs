@@ -377,7 +377,7 @@ mod tests {
     // on trust. Per-fn orphan *counts* are NOT preserved by the dedup — the
     // committed snapshot's counts come from the full capture.
 
-    /// xtask's tests run with the crate dir as cwd, so repo-relative artifact
+    /// Cargo runs tests with the crate dir as cwd, so repo-relative artifact
     /// paths have to be resolved explicitly.
     fn repo_root() -> std::path::PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -421,9 +421,9 @@ mod tests {
     /// is attributed through, and the lane would look dead for the wrong reason.
     /// The derived endpoint matches what a real run actually requested (#714).
     ///
-    /// This is the only live verification that the macro's derivation and xtask's
-    /// copy of the same rule agree. A mechanical cross-check is impossible: xtask
-    /// is its own workspace with no `web` dependency, so it can never read
+    /// This is the only live verification that the macro's derivation and this
+    /// crate's copy of the same rule agree. A mechanical cross-check is impossible:
+    /// the tools workspace has no `web` dependency, so it can never read
     /// `ServerFn::PATH`. What it *can* do is compare its computed value against
     /// URIs a browser actually requested, which is ground truth produced by the
     /// macro's real expansion rather than a second statement of the rule.

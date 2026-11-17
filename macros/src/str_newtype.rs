@@ -67,7 +67,7 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
     };
     if opts.secret {
         // The tight secret surface; `secret, serde` re-opens the serde bridge for an
-        // inbound wire value (its inbound-only role is enforced by an xtask gate).
+        // inbound wire value; such a type is only ever received, never sent.
         let trailer = secret_trailer(name, generics);
         let serde = if opts.serde {
             serde_impls(name, generics)

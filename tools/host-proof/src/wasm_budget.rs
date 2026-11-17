@@ -20,7 +20,7 @@ use serde::Serialize;
 /// changed.
 pub const WASM_RAW_ACHIEVED_BYTES: u64 = 4_009_656;
 
-/// The ceiling `dev validate` enforces.
+/// The shipped wasm size ceiling.
 ///
 /// Decimal 5 MB, not 5 MiB: #1750 accepts additional feature headroom.
 /// See ADR-0106's amendment for the tradeoff; the achieved baseline stays historical.

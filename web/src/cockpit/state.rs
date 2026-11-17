@@ -137,7 +137,7 @@ mod tests {
     /// A Home-page fetcher that records whether it ran. **One** helper shared by the
     /// positive and negative cases rather than a stub inline per test: an inline stub
     /// in a "must not fetch" test is by construction never executed, so its own body
-    /// would sit uncovered — which the coverage gate correctly reports and which no
+    /// would sit uncovered — correctly reported as such, and which no
     /// marker should paper over. Sharing it also makes the negative assertions mean
     /// something, since the same instrumented fetcher is demonstrably capable of
     /// running.

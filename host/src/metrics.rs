@@ -646,7 +646,7 @@ mod tests {
     /// exporter lives in this single test.
     ///
     /// `global::set_meter_provider` is process-global and install-once in effect.
-    /// Under `cargo nextest` — what the repo's gate runs — each test is its own
+    /// Under `cargo nextest` each test is its own
     /// process and this is unremarkable; under plain `cargo test` a second
     /// installing test in the same process would race this one. Adding emitters
     /// here rather than adding a second test keeps that hazard at one.

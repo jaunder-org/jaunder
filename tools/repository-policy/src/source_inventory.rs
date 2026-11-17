@@ -152,8 +152,7 @@ fn check(web_src: &Path, snapshot_path: &Path) -> std::result::Result<Option<Str
     Err(violations.join("\n"))
 }
 
-/// The static lane over the repo's real snapshot. Runs in `check` and
-/// `dev validate-no-e2e`.
+/// The static lane over the repo's real snapshot.
 pub fn run() -> std::result::Result<Option<String>, String> {
     check(Path::new(WEB_SRC), Path::new(SNAPSHOT_PATH))
 }

@@ -402,10 +402,8 @@ export type TraceCapture = {
  *  the mark *names* cannot drift, because there is only ever one copy of them.
  *
  *  The prefix is the exception — it is spelled here and in
- *  `client::perf::MARK_PREFIX`, because no import crosses into Node. That one
- *  duplication is checked by the `xlang-literal` gate
- *  (`xtask/src/steps/xlang_literal_check.rs`), which also covers `MOUNTED_ATTR`
- *  and its Rust counterpart (#767). */
+ *  `client::perf::MARK_PREFIX`, because no import crosses into Node, and the
+ *  two spellings must agree (#767). */
 const MARK_PREFIX = "jaunder.";
 
 const TOP_SLOW_RESOURCE_LIMIT = 20;

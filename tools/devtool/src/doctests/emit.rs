@@ -13,7 +13,8 @@ use doctests::check::{Kind, ScannedFile, Violation, problems};
 use doctests::status::DoctestStatus;
 
 /// The roots this producer scans — the shared workspace list, not a local copy, so
-/// the population `xtask` asserts over cannot drift from the one scanned here.
+/// the population the reconciliation asserts over cannot drift from the one
+/// scanned here.
 pub const SCAN_ROOTS: &[&str] = doctests::roots::WORKSPACE;
 
 /// The doctest invocation.

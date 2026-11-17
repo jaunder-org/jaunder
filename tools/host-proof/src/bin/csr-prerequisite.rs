@@ -1,5 +1,5 @@
 //! `csr-prerequisite <root>`: validate a CSR bundle for startup-capable host
-//! tests and print its resolved root, which `dev test-local` hands to nextest.
+//! tests and print its resolved root, for the test run to use.
 
 use std::path::PathBuf;
 use std::process::ExitCode;

@@ -488,7 +488,7 @@ export function navigationTopTelemetryFrom(
  *
  * The server adopts an inbound traceparent as its request span's parent
  * (`make_request_span`), so each server request span ends up carrying this test's
- * span id — the structural join the flow-coverage gate walks (#681). Without it,
+ * span id — the structural join browser-flow coverage walks (#681). Without it,
  * `playwright.config.ts` supplies one run-wide traceparent shared by every test,
  * and the suite runs `fullyParallel`, so hits could not be attributed to a test at
  * all.

@@ -44,8 +44,8 @@ pub(crate) struct Derived {
 ///
 /// Matched **relative to the [`WEB_SRC`] marker** rather than from the start of the
 /// path, so a `--remap-path-prefix` build (Nix) derives the same vertical as a host
-/// build. Mirrors `xtask/src/web_server_fns.rs`'s `vertical_of`, which keys the
-/// gates on the same rule.
+/// build. Mirrors `tools/repository-policy/src/web_server_fns.rs`'s `vertical_of`;
+/// the two must apply the same rule.
 fn vertical_of(file: &str, ident: &syn::Ident) -> Result<String, syn::Error> {
     let Some((_, relative)) = file.split_once(WEB_SRC) else {
         return Err(syn::Error::new(

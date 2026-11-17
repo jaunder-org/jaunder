@@ -1487,7 +1487,7 @@ mod tests {
     ///
     /// **One helper, not a stub inline per test.** The "must not fetch" case asserts
     /// precisely that this body never executes, so an inline stub there would be an
-    /// uncovered region by construction — the coverage gate reports that, correctly,
+    /// uncovered region by construction — correctly reported as such,
     /// and a `cov:ignore` would be papering over it. Sharing the closure with the case
     /// where the fetch *does* run covers the body once, and strengthens the negative
     /// assertion into a real observation: the very same instrumented closure is

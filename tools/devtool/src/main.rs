@@ -1,5 +1,5 @@
 //! Internal in-sandbox dev tool. Runs inside the Nix coverage/e2e build
-//! sandboxes where `xtask` (host-only) is unavailable. Subcommand tree is
+//! sandboxes, where host-only tooling is unavailable. Subcommand tree is
 //! deliberately extensible: `coverage emit`, `wasm-coverage` and diagnostic build.
 
 use std::path::PathBuf;

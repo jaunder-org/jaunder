@@ -2,10 +2,10 @@
 
 ;;; Commentary:
 ;; Byte-compiles every package module (the flat elisp/*.el files) with all
-;; byte-compiler warnings promoted to errors, so any warning fails the gate.
+;; byte-compiler warnings promoted to errors, so any warning fails the run.
 ;; Output goes to a throwaway temp dir — no .elc is left in the tree.
-;; Self-locating via `load-file-name' so it works from the repo root (the
-;; shared `dev static byte-compile' leaf) and from the nix store (`static-elisp').
+;; Self-locating via `load-file-name' so it works from the repo root and from
+;; the nix store.
 
 ;;; Code:
 

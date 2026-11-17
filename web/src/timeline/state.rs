@@ -4,7 +4,7 @@
 //! ungated and coverage-measured; the bundle is exercised under a reactive `Owner`
 //! (the `web::reactive` / `forms::Field` / `tags::input_state` convention), which
 //! is what makes its transitions testable at all — in the wasm-only
-//! `component.rs` they would be invisible to the coverage gate (#671).
+//! `component.rs` they would be invisible to host coverage (#671).
 //!
 //! `component.rs` keeps only what cannot run on the host: `Effect::new` and
 //! `spawn_local`.
@@ -51,7 +51,7 @@ impl LoadStatus {
 }
 
 /// What the gate should paint right now — one decision derived here once, not
-/// re-derived per page inside a view closure where the coverage gate cannot see
+/// re-derived per page inside a view closure where host coverage cannot see
 /// it (#671).
 ///
 /// Failure is **not** a variant here: it travels on `WebResult`'s error axis, so
@@ -772,8 +772,8 @@ mod tests {
     }
 
     // `NoIdentity` is only *matched* in the wasm gate body, so without this its
-    // derive line would be an uncovered host line — and the coverage gate forbids a
-    // marker here. Same reason for `TimelinePaint`'s `Debug`: `assert_eq!` formats
+    // derive line would be an uncovered host line — and no coverage exemption
+    // marker is allowed here. Same reason for `TimelinePaint`'s `Debug`: `assert_eq!` formats
     // only on FAILURE, so the tests above never invoke it.
     #[test]
     fn no_identity_variants_are_distinct_and_copyable() {

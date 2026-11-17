@@ -68,7 +68,7 @@ mod tests {
         }
     }
 
-    /// `^[a-z_][a-z0-9_]*::[a-z0-9_]+$` — hand-rolled because `xtask` has no
+    /// `^[a-z_][a-z0-9_]*::[a-z0-9_]+$` — hand-rolled because this crate has no
     /// `regex` dependency and one shape assertion does not justify adding one.
     fn is_qualified(name: &str) -> bool {
         let Some((vertical, ident)) = name.split_once("::") else {
