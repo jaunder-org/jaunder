@@ -107,10 +107,8 @@ impl BackupRunner {
         match self.run_once(trigger).await {
             Ok(Some(_)) => {}
             Ok(None) => {
-                tracing::info!(
-                    trigger = trigger.name(),
-                    "backup skipped: no destination is saved"
-                );
+                let trigger = trigger.name();
+                tracing::info!(trigger, "backup skipped: no destination is saved");
             }
             Err(error) => error::report_swallowed(
                 error::ErrorKind::Storage,
@@ -155,11 +153,9 @@ impl BackupRunner {
         let pruned = prune_backups(destination_root, config.retention_count.value())?;
         metrics::backup_bytes(backup_size_bytes(&destination_path));
         metrics::backup_pruned(u64::try_from(pruned).unwrap_or(u64::MAX));
-        tracing::info!(
-            path = %destination_path.display(),
-            trigger = trigger.name(),
-            "backup complete"
-        );
+        let path = destination_path.display();
+        let trigger = trigger.name();
+        tracing::info!(%path, trigger, "backup complete");
         Ok(destination_path)
     }
 }
@@ -180,9 +176,11 @@ impl ManualBackupRunner for BackupRunner {
             let _slot = slot;
             runner.run_once(BackupTrigger::Manual).await
         });
+        // A panicked job is a failure like any other.
         match job
             .await
-            .map_err(|error| ManualBackupError::Failed(error.into()))?
+            .map_err(anyhow::Error::from)
+            .and_then(std::convert::identity)
         {
             Ok(Some(path)) => Ok(path.display().to_string()),
             Ok(None) => Err(ManualBackupError::NoDestination),
@@ -998,7 +996,7 @@ mod tests {
         drop(guard);
 
         let Err(ManualBackupError::Failed(error)) = result else {
-            panic!("a failed manual backup must return its failure");
+            unreachable!("a failed manual backup must return its failure");
         };
         assert_eq!(error.to_string(), "server.backup.manual_run");
         assert!(!trace_text(&output).contains("swallowed"));

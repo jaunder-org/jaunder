@@ -636,11 +636,7 @@ fn request_service_context(
         theme_manager,
         secure_cookies,
     );
-    let backup = crate::context::backup_context_provider(services.backup);
-    move || {
-        request_services();
-        backup();
-    }
+    crate::context::with_backup_context(request_services, services.backup)
 }
 
 fn compose_server_router(
@@ -2647,10 +2643,10 @@ mod tests {
 
         nix::sys::signal::raise(nix::sys::signal::Signal::SIGTERM).expect("send SIGTERM");
 
-        let Ok(result) = tokio::time::timeout(Duration::from_secs(30), &mut command).await else {
-            let _ = abort_and_join(&mut command).await;
-            panic!("cmd_serve must complete after SIGTERM");
-        };
+        // On timeout the panic drops the test runtime, which cancels the task.
+        let result = tokio::time::timeout(Duration::from_secs(30), command)
+            .await
+            .expect("cmd_serve must complete after SIGTERM");
         assert!(
             !runtime_path.exists(),
             "completed cmd_serve must remove its runtime identity"

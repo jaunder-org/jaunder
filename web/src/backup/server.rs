@@ -76,12 +76,10 @@ mod tests {
         assert_eq!(error.kind(), ErrorKind::Internal);
         assert_eq!(error.public_message(), "server operation failed");
         assert_eq!(error.context(), [("backup.trigger", "manual".to_owned())]);
+        let operator_message = error.operator_message();
         assert!(
-            error
-                .operator_message()
-                .contains("server.backup.manual_run: destination unwritable"),
-            "operator message: {}",
-            error.operator_message()
+            operator_message.contains("server.backup.manual_run: destination unwritable"),
+            "operator message: {operator_message}"
         );
     }
 }
