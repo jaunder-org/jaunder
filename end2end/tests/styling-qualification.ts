@@ -12,6 +12,7 @@ import { BASE_URL, goto, login, TEST_PASSWORD } from "./helpers";
 import { composePost, followPermalink, openComposerFromSidebar } from "./posts";
 import { seedSandboxProfileViaTool, seedUserViaTool } from "./seed";
 import { uploadMedia } from "./media-helpers";
+import { SEL } from "./selectors";
 
 type Surface = "local" | "author-permalink" | "home";
 type Asset = {
@@ -212,7 +213,7 @@ export class StylingSession {
           "data-jaunder-private",
           "true",
         );
-        await expect(page.locator("a[href='/logout']")).toBeVisible();
+        await expect(page.locator(SEL.accountControl)).toBeVisible();
       } else {
         await expect(page.locator(".j-root")).toHaveAttribute(
           "data-theme",

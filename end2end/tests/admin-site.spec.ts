@@ -1,6 +1,7 @@
 import { reenterAdminSettings } from "./admin-settings";
 import { test, expect } from "./fixtures";
 import { click, goto, signInAs, waitForSelector } from "./helpers";
+import { openAreaDestination, signOutViaAccount } from "./settings-areas";
 import { navigateInApp } from "./navigate";
 import { SEL } from "./selectors";
 import { seedConfigViaTool } from "./seed";
@@ -50,7 +51,7 @@ test("admin site settings page loads, changes, and clears Local identity", async
   );
 
   // Local uses the persisted identity after the operator signs out.
-  await click(page, "a[href='/logout']");
+  await signOutViaAccount(page);
   await expect(page).toHaveURL(/\/$/);
   await expect(page.locator('[data-jaunder-part="site-title"]')).toHaveText(
     "Changed Test Site",
@@ -113,7 +114,7 @@ test("Site Settings clears a persisted Local tagline", async ({ page }) => {
   await reenterAdminSettings(page, "site");
   await expect(page.locator('input[name="tagline"]')).toHaveValue("");
 
-  await click(page, "a[href='/logout']");
+  await signOutViaAccount(page);
   await expect(page).toHaveURL(/\/$/);
   await expect(page.locator('[data-jaunder-part="site-title"]')).toHaveText(
     title,
@@ -346,14 +347,10 @@ test("site base URL warning banner revalidates in place after relevant settings 
     expect(homeChromeBox.y).toBeGreaterThanOrEqual(
       warningBox.y + warningBox.height,
     );
-    await navigateInApp(
-      page,
-      () => click(page, '.j-nav a[href="/admin/site"]'),
-      {
-        url: "/admin/site",
-        ready: 'input[name="base_url"]',
-      },
-    );
+    await openAreaDestination(page, "/settings", {
+      url: "/admin/site",
+      ready: 'input[name="base_url"]',
+    });
 
     let expectedSiteWarnings = siteWarningRequests;
     const expectedBackupWarnings = backupWarningRequests;

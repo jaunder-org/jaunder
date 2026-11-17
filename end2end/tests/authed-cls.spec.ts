@@ -15,7 +15,7 @@ import { signInAsNewUser } from "./helpers";
 import { createPostViaApi } from "./posts";
 import { expectNoShiftAcrossMount } from "./layout-shift";
 
-test("authed owner: Actions trigger is additive (no content shift)", async ({
+test("authed owner: Actions trigger and Settings and Account controls are additive (no content shift)", async ({
   page,
 }, testInfo) => {
   // signInAsNewUser (not the registeredPage fixture) so we get the username to
@@ -40,9 +40,19 @@ test("authed owner: Actions trigger is additive (no content shift)", async ({
       // The RENDERED body div (`posts/render.rs:212`) — not SEL.postBody, which is
       // the composer textarea.
       { name: "post-body", locator: ownPost(p).locator(".j-post-body") },
+      // The header's sort control precedes the Settings/Account corner controls
+      // (#1733); the pre-paint `html.authed` reservation keeps it still when
+      // they fill in.
+      {
+        name: "sort-control",
+        locator: p.locator(".j-topbar .j-timeline-order"),
+      },
     ],
     afterMount: async (p) => {
       await expect(p.locator(".j-post-action-trigger")).toBeVisible({
+        timeout: slowBrowserTimeoutMs(testInfo, 10_000),
+      });
+      await expect(p.locator(".j-topbar .j-area-controls")).toBeVisible({
         timeout: slowBrowserTimeoutMs(testInfo, 10_000),
       });
     },

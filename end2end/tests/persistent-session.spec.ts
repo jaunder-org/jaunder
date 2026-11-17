@@ -7,6 +7,7 @@ import {
   click,
 } from "./helpers";
 import { SEL } from "./selectors";
+import { openArea } from "./settings-areas";
 
 test("browser receives and uses a persistent Session cookie and logout clears it", async ({
   page,
@@ -19,7 +20,7 @@ test("browser receives and uses a persistent Session cookie and logout clears it
   );
   const started = Math.floor(Date.now() / 1000);
   await fillLoginForm(page, user.username, user.password);
-  await waitForSelector(page, SEL.logoutLink);
+  await waitForSelector(page, SEL.accountControl);
   const response = await loginResponse;
   expect(response.ok()).toBe(true);
   const cookies = await page.context().cookies(BASE_URL);
@@ -50,8 +51,12 @@ test("browser receives and uses a persistent Session cookie and logout clears it
   try {
     await goto(nextPage, "/sessions", { timeout: firstNav });
     await expect(nextPage.locator(".j-topbar h1")).toHaveText("Sessions");
-    await expect(nextPage.locator(".j-sb-foot")).toContainText(user.username);
-    await click(nextPage, SEL.logoutLink);
+    // The cookie-backed session is this user's: the Account page names them.
+    await openArea(nextPage, "/account", ".j-area-identity");
+    await expect(nextPage.locator(".j-area-identity")).toContainText(
+      user.username,
+    );
+    await click(nextPage, SEL.signOutLink);
     await nextPage.waitForURL(`${BASE_URL}/`);
     await expect
       .poll(async () =>

@@ -40,6 +40,8 @@ graph TD
 
     subgraph Authenticated authoring
         home["Home<br/>/app"]
+        settings["Settings page<br/>/settings"]
+        account["Account page<br/>/account"]
         logout["/logout"]
         profile["/profile"]
         profileEmail["/profile/email"]
@@ -73,6 +75,8 @@ graph TD
     shell --> siteTag
     shell --> userTag
     shell --> home
+    shell --> settings
+    shell --> account
     shell --> logout
     shell --> profile
     shell --> profileEmail
@@ -98,9 +102,15 @@ graph TD
     home -->|sidebar| drafts
     home -->|sidebar| audiences
     home -->|sidebar| media
-    home -->|operator sidebar| adminBackups
-    home -->|operator sidebar| adminSite
-    home -->|sign out| logout
+    home -->|Settings control| settings
+    home -->|Account control| account
+    settings -->|row| profile
+    settings -->|row, when invitations allowed| invites
+    settings -->|operator row| adminBackups
+    settings -->|operator row| adminSite
+    account -->|row| profileEmail
+    account -->|row| sessions
+    account -->|Sign out| logout
 
     publicUser -->|Timeline links| publicPost
     publicUser -->|Tag chips| userTag
@@ -135,13 +145,13 @@ canonical navigation target.
 
 ## Mounted route declarations
 
-| Region                  | Mounted route declarations                                                                                                                                                                                          | Current document                                                                                                                                                 |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Shared shell            | `route:<shell>`                                                                                                                                                                                                     | [`application-shell-and-boot-state.md`](application-shell-and-boot-state.md)                                                                                     |
-| Anonymous reading       | `route:/`, `route:/login`, `route:/:username`, `route:/~:username/:year/:month/:day/:slug`, `route:/tags/:tag`, `route:/:username/tags/:tag`                                                                        | [`public-reading.md`](public-reading.md), [`tag-browsing.md`](tag-browsing.md)                                                                                   |
-| Authenticated authoring | `route:/app`, `route:/logout`, `route:/profile`, `route:/profile/email`, `route:/sessions`, `route:/audiences`, `route:/invites`, `route:/posts/new`, `route:/drafts`, `route:/posts/:post_id/edit`, `route:/media` | [`authenticated-cockpit.md`](authenticated-cockpit.md), [`app-password-management.md`](app-password-management.md), [`media-management.md`](media-management.md) |
-| Token-in-URL journeys   | `route:/register`, `route:/verify-email`, `route:/forgot-password`, `route:/reset-password`                                                                                                                         | Current docs                                                                                                                                                     |
-| Administration          | `route:/admin/backups`, `route:/admin/site`                                                                                                                                                                         | [`administration.md`](administration.md)                                                                                                                         |
+| Region                  | Mounted route declarations                                                                                                                                                                                                                               | Current document                                                                                                                                                 |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Shared shell            | `route:<shell>`                                                                                                                                                                                                                                          | [`application-shell-and-boot-state.md`](application-shell-and-boot-state.md)                                                                                     |
+| Anonymous reading       | `route:/`, `route:/login`, `route:/:username`, `route:/~:username/:year/:month/:day/:slug`, `route:/tags/:tag`, `route:/:username/tags/:tag`                                                                                                             | [`public-reading.md`](public-reading.md), [`tag-browsing.md`](tag-browsing.md)                                                                                   |
+| Authenticated authoring | `route:/app`, `route:/settings`, `route:/account`, `route:/logout`, `route:/profile`, `route:/profile/email`, `route:/sessions`, `route:/audiences`, `route:/invites`, `route:/posts/new`, `route:/drafts`, `route:/posts/:post_id/edit`, `route:/media` | [`authenticated-cockpit.md`](authenticated-cockpit.md), [`app-password-management.md`](app-password-management.md), [`media-management.md`](media-management.md) |
+| Token-in-URL journeys   | `route:/register`, `route:/verify-email`, `route:/forgot-password`, `route:/reset-password`                                                                                                                                                              | Current docs                                                                                                                                                     |
+| Administration          | `route:/admin/backups`, `route:/admin/site`                                                                                                                                                                                                              | [`administration.md`](administration.md)                                                                                                                         |
 
 Canonical user URLs keep the tilde in rendered links (`/~:username`,
 `/~:username/tags/:tag`, and the full permalink pattern), but the mounted user

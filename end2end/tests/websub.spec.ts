@@ -6,7 +6,7 @@ import {
   signInAsNewUser,
   waitForSelector,
 } from "./helpers";
-import { navigateInApp } from "./navigate";
+import { openAreaDestination } from "./settings-areas";
 import { redriveDeadLettersViaCli, seedDeadLettersViaTool } from "./seed";
 import { findPingWave, type CapturedPing } from "./websub";
 
@@ -113,19 +113,12 @@ test("operator understands, pages, redrives, and rejects stale WebSub work", asy
 
   const regenerationIds = await seedDeadLettersViaTool("regeneration", 51);
   const publicationIds = await seedDeadLettersViaTool("publication", 1);
-  await navigateInApp(
-    page,
-    () => click(page, 'a.j-nav-item[href="/admin/site"]'),
-    { url: "/admin/site", ready: 'input[name="title"]' },
-  );
-  await navigateInApp(
-    page,
-    () => click(page, 'a.j-nav-item[href="/admin/websub"]'),
-    {
-      url: "/admin/websub",
-      ready: '[data-phase="regeneration"] tbody tr',
-    },
-  );
+  // Leave through the Settings page and return, remounting the WebSub page so
+  // it re-reads the seeded dead letters.
+  await openAreaDestination(page, "/settings", {
+    url: "/admin/websub",
+    ready: '[data-phase="regeneration"] tbody tr',
+  });
 
   await expect(regeneration.locator("tbody tr")).toHaveCount(50);
   await expect(

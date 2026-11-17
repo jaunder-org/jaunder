@@ -88,6 +88,13 @@
 }
 
 /* ─── reset ─── */
+/* `.j-root` is exactly one viewport tall; the user agent's default 8px body
+   margin would push it past the window and give every page a stray 16px
+   document scroll. */
+body {
+  margin: 0;
+}
+
 .j-root {
   all: initial;
 }
@@ -291,6 +298,57 @@
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+/* Settings/Account corner controls (#1733). Fixed sizes so the pre-paint
+   reservation below (`html.authed`) matches them exactly. */
+.j-topbar {
+  --area-control-size: 36px;
+  --area-controls-gap: 6px;
+  --area-controls-width: calc(
+    2 * var(--area-control-size) + var(--area-controls-gap)
+  );
+}
+
+.j-area-controls {
+  display: flex;
+  gap: var(--area-controls-gap);
+  flex: none;
+}
+
+.j-area-control {
+  box-sizing: border-box;
+  width: var(--area-control-size);
+  height: var(--area-control-size);
+  display: grid;
+  place-items: center;
+  border: 1px var(--border-style) var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink-soft);
+}
+
+.j-area-control:hover {
+  color: var(--ink);
+  border-color: var(--muted-soft);
+}
+
+.j-area-control[aria-current="page"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.j-topbar-back {
+  display: inline-block;
+  margin-bottom: 2px;
+  font-size: var(--fs-meta);
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.j-topbar-back:hover {
+  color: var(--ink);
 }
 
 .j-scroll {
@@ -1325,6 +1383,10 @@
   z-index: 1;
   top: anchor(top);
   left: anchor(left);
+  /* The trusted layer sits above the themed surface; once a Post's header has
+     scrolled out of view its trigger must not float over the masthead and its
+     Settings/Account controls. */
+  position-visibility: anchors-visible;
   width: 72px;
   height: 32px;
   pointer-events: auto;
@@ -1617,6 +1679,66 @@
   font-size: 12px;
   color: var(--muted);
   margin-top: 2px;
+}
+
+/* ─── Settings and Account pages (#1733) ─── */
+.j-area-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.j-area-rows li + li {
+  border-top: 1px var(--border-style) var(--line-soft);
+}
+
+.j-area-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 12px 18px;
+  box-sizing: border-box;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.j-area-row:hover {
+  background: var(--surface-alt);
+}
+
+.j-area-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.j-area-row-label {
+  font-weight: 600;
+}
+
+.j-area-row-description {
+  font-size: var(--fs-meta);
+  color: var(--muted);
+}
+
+.j-area-row-chevron {
+  color: var(--muted);
+  font-size: 18px;
+}
+
+.j-area-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.j-area-identity-name {
+  font-size: 16px;
+  font-weight: 600;
 }
 
 .j-websub-recovery-guidance,
@@ -2878,8 +3000,11 @@
    CSR fill causes no visible reflow:
    - the anon-only Sign in / Register CTA on `/` is hidden for the owner (it never
      paints, so no flash);
-   - the authed sidebar footer's height is reserved so the avatar row filling in
-     doesn't shift the sidebar.
+   - the masthead reserves the Settings/Account corner controls' width so they
+     fill in without moving the page's own header actions (#1733). The reserve
+     is a pseudo-element that steps aside once the real controls exist; after an
+     in-app logout (the class is not cleared without a reload) it leaves only
+     empty space, never an overlap.
    The own-post action-column gutter is deliberately NOT reserved here: ownership
    is decided client-side from the marker (unknown at the anonymous projector
    paint), so a per-post reserve can't be pre-painted, and reserving it on every
@@ -2889,6 +3014,9 @@ html.authed .j-anon-only {
   display: none;
 }
 
-html.authed .j-sb-foot {
-  min-height: 44px;
+html.authed .j-topbar-right:not(:has(> .j-area-controls))::after {
+  content: "";
+  width: var(--area-controls-width);
+  height: var(--area-control-size);
+  flex: none;
 }

@@ -7,6 +7,7 @@ import {
   signInAsNewUser,
   waitForMount,
 } from "./helpers";
+import { openAreaDestination } from "./settings-areas";
 import { navigateInApp } from "./navigate";
 import { allowSecondBoot } from "./bootBudget";
 import { fetchFeedContaining } from "./feeds";
@@ -25,15 +26,16 @@ const DEFAULT_AUDIENCE_SAVE = 'button:has-text("Save Default Audience")';
 const CONTENT_LICENSE = "select#content-license";
 const CONTENT_LICENSE_SAVE = 'button:has-text("Save Content License")';
 
-// #21: Settings is the authenticated user's in-app route to the profile page.
-// The link assertion catches a disabled or misdirected sidebar item; the router
-// transition exercises the route a user actually takes without a second boot.
+// #21: Settings is the authenticated user's in-app route to the profile page
+// (#1733: the header Settings control, then the Settings page's profile row). The link
+// assertion catches a disabled or misdirected control; the router transitions
+// exercise the route a user actually takes without a second boot.
 test("Settings navigates to profile", async ({ registeredPage }) => {
   const page = await registeredPage("/app");
   const settings = page.getByRole("link", { name: "Settings" });
 
-  await expect(settings).toHaveAttribute("href", "/profile");
-  await navigateInApp(page, () => settings.click(), {
+  await expect(settings).toHaveAttribute("href", "/settings");
+  await openAreaDestination(page, "/settings", {
     url: "/profile",
     ready: UPDATE_BUTTON,
   });
@@ -57,14 +59,13 @@ test("Profile presents Username as a read-only field", async ({ page }) => {
 });
 
 const APP_LINK = 'a[href="/app"]';
-const SETTINGS_LINK = 'a[href="/profile"]';
 
 async function reenterProfile(page: Page): Promise<void> {
   await navigateInApp(page, () => page.click(APP_LINK), {
     url: "/app",
     ready: SEL.postBody,
   });
-  await navigateInApp(page, () => page.click(SETTINGS_LINK), {
+  await openAreaDestination(page, "/settings", {
     url: "/profile",
     ready: UPDATE_BUTTON,
   });

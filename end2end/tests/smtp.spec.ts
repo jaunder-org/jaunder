@@ -3,19 +3,14 @@ import { expectAccessible } from "./accessibility";
 import { reenterAdminSettings } from "./admin-settings";
 import { bootCount, trackBoots } from "./bootBudget";
 import { test, expect } from "./fixtures";
-import {
-  BASE_URL,
-  goto,
-  signInAs,
-  stallServerFn,
-  waitForSelector,
-} from "./helpers";
-import { navigateInApp } from "./navigate";
+import { BASE_URL, goto, signInAs, stallServerFn } from "./helpers";
+import { openArea, openAreaDestination } from "./settings-areas";
 import { SEL } from "./selectors";
 
 test.describe.configure({ mode: "serial" });
 
-const smtpLink = 'a.j-nav-item[href="/admin/smtp"]';
+const smtpRow = SEL.areaRow("/admin/smtp");
+const smtpPage = { url: "/admin/smtp", ready: 'input[name="enabled"]' };
 const saveButton = 'button:has-text("Save SMTP Settings")';
 
 async function expectNoStoredSecret(page: Page, secret: string) {
@@ -37,20 +32,9 @@ async function saveSmtp(page: Page) {
 }
 
 async function disableSmtpIfEnabled(page: Page) {
-  if (new URL(page.url()).pathname === "/admin/smtp") {
-    await navigateInApp(
-      page,
-      () => page.click('a.j-nav-item[href="/admin/site"]'),
-      {
-        url: "/admin/site",
-        ready: 'input[name="title"]',
-      },
-    );
-  }
-  await navigateInApp(page, () => page.click(smtpLink), {
-    url: "/admin/smtp",
-    ready: 'input[name="enabled"]',
-  });
+  // Leaving through the Settings page and returning remounts the SMTP page, so
+  // it re-reads the persisted settings.
+  await openAreaDestination(page, "/settings", smtpPage);
   const enabled = page.locator('input[name="enabled"]');
   await expect(enabled).toBeVisible();
   if (await enabled.isChecked()) {
@@ -63,15 +47,16 @@ test("anonymous SMTP route redirects to Login", async ({ page }) => {
   await goto(page, "/admin/smtp");
   await page.waitForURL(`${BASE_URL}/login?return_to=%2Fadmin%2Fsmtp`);
   await expect(page.locator(SEL.username)).toBeVisible();
-  await expect(page.locator(smtpLink)).toHaveCount(0);
+  await expect(page.locator('a[href="/admin/smtp"]')).toHaveCount(0);
 });
 
 test("member navigation hides SMTP and direct access is denied", async ({
   registeredPage,
 }) => {
   const page = await registeredPage("/admin/smtp");
-  await expect(page.locator(smtpLink)).toHaveCount(0);
   await expect(page.locator(SEL.error)).toBeVisible();
+  await openArea(page, "/settings", SEL.areaRow("/profile"));
+  await expect(page.locator(smtpRow)).toHaveCount(0);
 });
 
 test("operator manages the complete SMTP relay lifecycle in one document", async ({
@@ -80,12 +65,8 @@ test("operator manages the complete SMTP relay lifecycle in one document", async
   await signInAs(page, "testoperator");
   trackBoots(page);
   await goto(page, "/admin/site");
-  await waitForSelector(page, smtpLink);
 
-  await navigateInApp(page, () => page.click(smtpLink), {
-    url: "/admin/smtp",
-    ready: 'input[name="enabled"]',
-  });
+  await openAreaDestination(page, "/settings", smtpPage);
 
   const enabled = page.locator('input[name="enabled"]');
   const host = page.locator('input[name="host"]');

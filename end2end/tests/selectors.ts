@@ -32,8 +32,17 @@ export const SEL = {
   error: ".error",
   /** Generic form submit button. */
   submit: 'button[type="submit"]',
-  /** Logout link — present only once auth state is confirmed. */
-  logoutLink: 'a[href="/logout"]',
+  /** The page-header Account control (#1733) — rendered only for a signed-in
+   * viewer, so it is the signed-in / login-success signal. */
+  accountControl: 'a.j-area-control[href="/account"]',
+  /** A page-header Settings or Account control (#1733), by its page path. */
+  areaControl: (area: "/settings" | "/account") =>
+    `a.j-area-control[href="${area}"]`,
+  /** A Settings or Account page row linking to `href` (#1733). */
+  areaRow: (href: string) => `a.j-area-row[href="${href}"]`,
+  /** The Account page's Sign out link; it exists nowhere else in the app
+   *  chrome. */
+  signOutLink: 'a.j-btn[href="/logout"]',
   /** Login/register username field. */
   username: 'input[name="username"]',
   /** Login/register password field. */

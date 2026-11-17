@@ -39,6 +39,7 @@ pub mod registration;
 /// rather than under the wasm-only `app` module that consumes it.
 pub mod route_segments;
 pub mod sessions;
+pub mod settings;
 pub mod sidebar;
 pub mod site;
 pub mod smtp;

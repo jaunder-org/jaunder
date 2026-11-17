@@ -9,9 +9,22 @@ import {
   failServerFn,
   stallServerFn,
 } from "./helpers";
+import { openArea } from "./settings-areas";
+import { navigateInApp } from "./navigate";
 import { SEL } from "./selectors";
 import { extractInviteCode } from "./mail";
 import { seedConfigViaTool } from "./seed";
+
+const INVITES_ROW = SEL.areaRow("/invites");
+
+/** The Settings page lists Invites exactly when this viewer may issue them. */
+async function expectInvitesAreaRow(
+  page: Page,
+  visible: boolean,
+): Promise<void> {
+  await openArea(page, "/settings", SEL.areaRow("/profile"));
+  await expect(page.locator(INVITES_ROW)).toHaveCount(visible ? 1 : 0);
+}
 
 const registerCtaObservedKey = "__jaunderRegisterCtaObserved";
 
@@ -75,8 +88,11 @@ for (const policy of ["operator_invites", "member_invites"]) {
     // Under either invitation policy, the operator sends an invite to this test's
     // mailbox recipient through the /invites UI.
     await signInAs(page, "testoperator");
-    await goto(page, "/invites");
-    await expect(page.locator('a[href="/invites"]')).toBeVisible();
+    await goto(page, "/settings");
+    await navigateInApp(page, () => click(page, INVITES_ROW), {
+      url: "/invites",
+      ready: 'input[name="recipient_email"]',
+    });
     await page.fill('input[name="recipient_email"]', user.email);
     await page.fill('input[name="expires_in_hours"]', "37");
     await click(page, SEL.submit);
@@ -105,7 +121,7 @@ for (const policy of ["operator_invites", "member_invites"]) {
       // fails fast with its message rather than burning the whole timeout.
       const outcome = await Promise.race([
         invitee
-          .waitForSelector(SEL.logoutLink, { timeout: 10_000 })
+          .waitForSelector(SEL.accountControl, { timeout: 10_000 })
           .then(() => "ok"),
         invitee
           .waitForSelector(SEL.error, { timeout: 10_000 })
@@ -294,7 +310,7 @@ for (const policy of ["closed", "open"]) {
 
     await expect(page.locator('p:has-text("Page not found.")')).toBeVisible();
     await expect(page.locator('input[name="recipient_email"]')).toHaveCount(0);
-    await expect(page.locator('a[href="/invites"]')).toHaveCount(0);
+    await expectInvitesAreaRow(page, false);
   });
 }
 
@@ -308,7 +324,7 @@ test("operator-invites denies members and hides navigation", async ({
 
   await expect(page.locator('p:has-text("Page not found.")')).toBeVisible();
   await expect(page.locator('input[name="recipient_email"]')).toHaveCount(0);
-  await expect(page.locator('a[href="/invites"]')).toHaveCount(0);
+  await expectInvitesAreaRow(page, false);
 });
 
 test("member-invites members issue invitations without fetching the ledger", async ({
@@ -324,9 +340,9 @@ test("member-invites members issue invitations without fetching the ledger", asy
   await goto(page, "/invites");
 
   await waitForSelector(page, 'input[name="recipient_email"]');
-  await expect(page.locator('a[href="/invites"]')).toBeVisible();
   expect(listRequests).toBe(0);
   await expect(page.locator(".j-page > ul")).toHaveCount(0);
+  await expectInvitesAreaRow(page, true);
 });
 
 test("member-invites operators issue invitations and see the ledger", async ({
@@ -342,7 +358,7 @@ test("member-invites operators issue invitations and see the ledger", async ({
   await goto(page, "/invites");
 
   await waitForSelector(page, 'input[name="recipient_email"]');
-  await expect(page.locator('a[href="/invites"]')).toBeVisible();
   await expect.poll(() => listRequests).toBe(1);
   await expect(page.locator(".j-page > ul")).toHaveCount(1);
+  await expectInvitesAreaRow(page, true);
 });

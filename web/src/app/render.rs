@@ -222,7 +222,7 @@ fn feed_label(surface: &common::feed::FeedSurface) -> String {
 /// layout the reactive `App`/`AppShell` produces for an anonymous viewer (the
 /// sidebar, the main region, and the per-route `<main>` content), so removing
 /// `#app` and mounting the CSR app on boot causes no reflow. The authed extras
-/// (footer avatar, authed nav, trusted Actions disclosures) layer on top
+/// (authed nav, header Settings/Account controls, trusted Actions disclosures) layer on top
 /// reactively once `current_user` resolves (that is #181, and needs no
 /// coincidence).
 /// `BackupBanner` renders nothing for an anonymous viewer, so it is omitted here.

@@ -9,6 +9,7 @@ import {
 import { goto, waitForSelector } from "./helpers";
 import { pollUntil } from "./polling";
 import { applySeededSession } from "./seed";
+import { SEL } from "./selectors";
 
 const LOCAL_WARNING = "jaunder swallowed browser error";
 const TELEMETRY_PATH = "/api/client-telemetry";
@@ -368,10 +369,10 @@ test("session marker read failure reports before authenticated recovery", async 
   });
   await applySeededSession(page.context(), user);
   await goto(page, "/app", { timeout: firstNav });
-  await waitForSelector(page, "a[href='/logout']");
+  await waitForSelector(page, SEL.accountControl);
   const warning = await warningPromise;
 
   expect(warning.text()).toBe(LOCAL_WARNING);
   expect(warning.text()).not.toContain("injected marker text");
-  await expect(page.locator("a[href='/logout']")).toBeVisible();
+  await expect(page.locator(SEL.accountControl)).toBeVisible();
 });

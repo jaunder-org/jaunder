@@ -14,6 +14,7 @@
 
 import { expect } from "@playwright/test";
 import { test } from "./fixtures";
+import { openAreaDestination } from "./settings-areas";
 import { navigateInApp } from "./navigate";
 import { SEL } from "./selectors";
 
@@ -59,7 +60,7 @@ test("Compose sidebar navigation reaches the full composer without a document lo
   expect(loads).toBe(0);
 });
 
-test("Sessions sidebar navigation reaches session management without a document load", async ({
+test("Account page navigation reaches session management without a document load", async ({
   registeredPage,
 }) => {
   const page = await registeredPage("/app");
@@ -68,14 +69,15 @@ test("Sessions sidebar navigation reaches session management without a document 
     loads += 1;
   });
 
-  const sessionsLink = page.locator('a[href="/sessions"]');
-  await expect(sessionsLink).toHaveText("Sessions");
-  await navigateInApp(page, () => sessionsLink.click(), {
+  const accountControl = page.locator(SEL.accountControl);
+  await expect(accountControl).toBeVisible();
+  await expect(accountControl).not.toHaveAttribute("aria-current", "page");
+  await openAreaDestination(page, "/account", {
     url: "/sessions",
     ready: "[data-app-passwords]",
   });
   await expect(page.locator(SEL.topbarHeading)).toHaveText("Sessions");
-  await expect(sessionsLink).toHaveClass(/is-active/);
+  await expect(accountControl).toHaveAttribute("aria-current", "page");
   expect(loads).toBe(0);
 });
 

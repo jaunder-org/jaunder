@@ -25,7 +25,7 @@ test("sessions page revokes another browser session", async ({
     const otherPage = await otherContext.newPage();
     await signInAs(otherPage, username, REVOKED_SESSION_LABEL);
     await goto(otherPage, "/profile");
-    await waitForSelector(otherPage, SEL.logoutLink);
+    await waitForSelector(otherPage, SEL.accountControl);
 
     await goto(page, "/sessions");
 
@@ -47,7 +47,7 @@ test("sessions page revokes another browser session", async ({
       () => click(otherPage, '.j-nav a[href="/app"]'),
       { url: "/login?return_to=%2Fapp", ready: SEL.username },
     );
-    await expect(otherPage.locator(SEL.logoutLink)).toHaveCount(0);
+    await expect(otherPage.locator(SEL.accountControl)).toHaveCount(0);
   } finally {
     await otherContext.close();
   }

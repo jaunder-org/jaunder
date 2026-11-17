@@ -14,13 +14,13 @@ import {
   setAndVerifyEmail,
   waitForSelector,
 } from "./helpers";
+import { openAreaDestination, signOutViaAccount } from "./settings-areas";
 import { navigateInApp } from "./navigate";
 import { SEL } from "./selectors";
 import { applySeededSession, seedConfigViaTool } from "./seed";
 import { installVirtualAuthenticator } from "./virtual-authenticator";
 
 const PASSKEY_PAGE = '[data-test="passkeys-page"]';
-const PASSKEYS_LINK = '[data-test="passkeys-nav-link"]';
 const PASSKEY_LOGIN = '[data-test="passkey-login-button"]';
 const PASSKEYS_LIST = '[data-test="passkey-credentials-list"]';
 
@@ -132,7 +132,7 @@ test("Chromium passkeys enroll, authenticate discoverably, refresh metadata, and
 
     // The primary authenticator must establish a real cookie-backed session
     // through discoverable authentication before it is replaced by the backup.
-    await click(page, SEL.logoutLink);
+    await signOutViaAccount(page);
     await page.waitForURL(`${BASE_URL}/`);
     allowSecondBoot(
       page,
@@ -142,7 +142,7 @@ test("Chromium passkeys enroll, authenticate discoverably, refresh metadata, and
     await goto(page, `/login?return_to=${encodeURIComponent(passkeyReturn)}`);
     await waitForSelector(page, PASSKEY_LOGIN);
     await click(page, PASSKEY_LOGIN);
-    await waitForSelector(page, SEL.logoutLink);
+    await waitForSelector(page, SEL.accountControl);
     await expect(page).toHaveURL(`${BASE_URL}${passkeyReturn}`);
     await expect(
       page.locator('[data-test="passkey-credential"]', {
@@ -154,7 +154,7 @@ test("Chromium passkeys enroll, authenticate discoverably, refresh metadata, and
     // counter. The prior assertion advanced the durable high-water mark, so this
     // proves the server accepts a cryptographically valid counter anomaly.
     await authenticator.setCredentialSignCount(primaryCredentials[0]!, -1);
-    await click(page, SEL.logoutLink);
+    await signOutViaAccount(page);
     await page.waitForURL(`${BASE_URL}/`);
     allowSecondBoot(
       page,
@@ -163,8 +163,8 @@ test("Chromium passkeys enroll, authenticate discoverably, refresh metadata, and
     await goto(page, "/login");
     await waitForSelector(page, PASSKEY_LOGIN);
     await click(page, PASSKEY_LOGIN);
-    await waitForSelector(page, SEL.logoutLink);
-    await navigateInApp(page, () => click(page, PASSKEYS_LINK), {
+    await waitForSelector(page, SEL.accountControl);
+    await openAreaDestination(page, "/account", {
       url: "/passkeys",
       ready: PASSKEYS_LIST,
     });
@@ -192,7 +192,7 @@ test("Chromium passkeys enroll, authenticate discoverably, refresh metadata, and
     const siblingPage = await siblingContext.newPage();
     await signInAs(siblingPage, user.username, "Passkey sibling session");
     await goto(siblingPage, "/");
-    await waitForSelector(siblingPage, SEL.logoutLink);
+    await waitForSelector(siblingPage, SEL.accountControl);
 
     const primary = page.locator('[data-test="passkey-credential"]', {
       hasText: "Primary laptop",
@@ -207,7 +207,7 @@ test("Chromium passkeys enroll, authenticate discoverably, refresh metadata, and
     await expect(page.locator(PASSKEYS_LIST)).not.toContainText(
       "Primary laptop",
     );
-    await expect(page.locator(SEL.logoutLink)).toBeVisible();
+    await expect(page.locator(SEL.accountControl)).toBeVisible();
 
     // A sibling tab retains its client-side SessionContext until a server
     // boundary. A document navigation proves the durable Session was revoked.
@@ -218,7 +218,7 @@ test("Chromium passkeys enroll, authenticate discoverably, refresh metadata, and
     await goto(siblingPage, "/app");
     await siblingPage.waitForURL(`${BASE_URL}/login?return_to=%2Fapp`);
     await waitForSelector(siblingPage, SEL.username);
-    await expect(siblingPage.locator(SEL.logoutLink)).toHaveCount(0);
+    await expect(siblingPage.locator(SEL.accountControl)).toHaveCount(0);
 
     const backupCredentials = await authenticator.credentials();
     expect(backupCredentials).toHaveLength(1);
@@ -227,7 +227,7 @@ test("Chromium passkeys enroll, authenticate discoverably, refresh metadata, and
     // A document navigation keeps the target-scoped CDP authenticator attached
     // while proving its resident credential identifies the account without an
     // allow-list.
-    await click(page, SEL.logoutLink);
+    await signOutViaAccount(page);
     await page.waitForURL(`${BASE_URL}/`);
     allowSecondBoot(
       page,
@@ -236,9 +236,9 @@ test("Chromium passkeys enroll, authenticate discoverably, refresh metadata, and
     await goto(page, "/login");
     await waitForSelector(page, PASSKEY_LOGIN);
     await click(page, PASSKEY_LOGIN);
-    await waitForSelector(page, SEL.logoutLink);
+    await waitForSelector(page, SEL.accountControl);
 
-    await navigateInApp(page, () => click(page, PASSKEYS_LINK), {
+    await openAreaDestination(page, "/account", {
       url: "/passkeys",
       ready: PASSKEYS_LIST,
     });
@@ -264,8 +264,8 @@ test("Chromium passkeys enroll, authenticate discoverably, refresh metadata, and
       ready: SEL.username,
     });
     await click(page, PASSKEY_LOGIN);
-    await waitForSelector(page, SEL.logoutLink);
-    await navigateInApp(page, () => click(page, PASSKEYS_LINK), {
+    await waitForSelector(page, SEL.accountControl);
+    await openAreaDestination(page, "/account", {
       url: "/passkeys",
       ready: PASSKEYS_LIST,
     });
@@ -306,10 +306,10 @@ test("anonymous passkeys route redirects to Login", async ({ page }) => {
   await expect(page.locator(PASSKEY_PAGE)).toHaveCount(0);
 });
 
-test("authenticated sidebar reaches passkeys", async ({ page, user }) => {
+test("authenticated Account page reaches passkeys", async ({ page, user }) => {
   await signInAs(page, user.username);
   await goto(page, "/app");
-  await navigateInApp(page, () => click(page, PASSKEYS_LINK), {
+  await openAreaDestination(page, "/account", {
     url: "/passkeys",
     ready: PASSKEY_PAGE,
   });
@@ -360,7 +360,7 @@ test("password login remains available when passkeys are unsupported", async ({
   ).toHaveText("Passkeys are not supported by this browser.");
 
   await fillLoginForm(page, user.username, user.password);
-  await waitForSelector(page, SEL.logoutLink);
+  await waitForSelector(page, SEL.accountControl);
 });
 
 test("passkey login reports a browser-authenticator cancellation", async ({
