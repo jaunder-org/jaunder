@@ -1775,6 +1775,7 @@ mkWasmCoverageMeasurementProducer =
     assert sqliteStack.config.services.jaunder.db == "sqlite:/var/lib/jaunder/data/jaunder.db";
     assert minimalModule.config.services.jaunder.trustedProxies == [ ];
     assert !(minimalEnabledModule.config.systemd.services.jaunder.environment ? JAUNDER_TRUSTED_PROXIES);
+    assert minimalEnabledModule.config.systemd.services.jaunder.serviceConfig.TimeoutStopSec == "15min";
     assert minimalTrustedProxyModule.config.systemd.services.jaunder.environment.JAUNDER_TRUSTED_PROXIES == "192.0.2.10,2001:db8::/32";
     assert minimalTrustedProxyTypeFails;
     assert sqliteStack.config.services.jaunder.trustedProxies == [ "127.0.0.1/32" ];

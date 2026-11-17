@@ -523,7 +523,7 @@ without restarting that operation. Cleanup requires direct-child reap and an
 explicit empty-group report; an unconfirmed stop retains the group and
 application guards with diagnostics rather than polling/retrying. This is not a
 universal OS guarantee and does not change `jaunder shut-down`'s independent
-30-second wait and refusal to escalate.
+900-second wait and refusal to escalate.
 
 Run one admitted operational Jaunder command against a named workspace after
 `--`:

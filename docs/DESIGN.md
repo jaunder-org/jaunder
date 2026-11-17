@@ -483,6 +483,14 @@ application data: `jaunder backup` and `jaunder restore` neither include nor
 recover it. Back up the telemetry stores separately if their retained evidence
 is required.
 
+Every graceful stop of `jaunder.service` — `systemctl stop`/restart, or
+`nixos-rebuild switch` restarting it — writes one final Jaunder backup when a
+backup destination is saved, so the unit sets `TimeoutStopSec = "15min"`. A
+backup that takes longer needs a larger
+`systemd.services.jaunder.serviceConfig.TimeoutStopSec`; systemd otherwise kills
+the stop midway, which leaves an ignored work directory rather than a counted
+backup. The `/admin/backups` page also offers **Back Up Now**.
+
 VictoriaTraces is upstream work in progress. This stack supports fresh
 deployment and same-version restart, not compatible on-disk upgrades or stable
 third-party query APIs.

@@ -1,14 +1,19 @@
-//! Background backup worker subsystem: the scheduled job that exports the
-//! database + media to the configured destination, plus retention pruning.
+//! The backup runner and its triggers: the scheduled worker, the operator's
+//! manual **Back Up Now**, and the final backup taken during graceful shutdown.
+//! Every trigger runs the same job — export the database + media to the saved
+//! destination, then prune to the retention count — one run at a time.
 //! Self-contained (no router coupling); split out of the crate root per §1.7.
 
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::scheduled_worker::{ScheduledWorkerGuard, WorkTracker};
+use async_trait::async_trait;
 use flate2::read::GzDecoder;
+use tokio::sync::{Mutex, OwnedMutexGuard};
 use tokio_cron_scheduler::{Job, JobScheduler};
 
 use common::backup::BackupConfig;
@@ -18,45 +23,204 @@ use storage::{
     BackupExportOptions, BackupManifest, BackupMode, DbConnectOptions, SiteConfigStorage,
     StorageRuntimeConfig,
 };
+use web::backup::{ManualBackupError, ManualBackupRunner};
 
-/// Starts the background backup worker if configured.
+/// What started a backup run; it names the run in logs and failure reports.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum BackupTrigger {
+    Scheduled,
+    Shutdown,
+    Manual,
+}
+
+impl BackupTrigger {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Scheduled => "scheduled",
+            Self::Shutdown => "shutdown",
+            Self::Manual => "manual",
+        }
+    }
+
+    fn failure_context(self) -> &'static str {
+        match self {
+            Self::Scheduled => "server.backup.scheduled_run",
+            Self::Shutdown => "server.backup.shutdown_run",
+            Self::Manual => "server.backup.manual_run",
+        }
+    }
+}
+
+/// Exclusive right to run a backup. Export already serializes on the database
+/// lock, but pruning and the manual trigger's refusal need the runner's own
+/// guard, held across export *and* prune.
+pub struct BackupRunSlot {
+    _running: OwnedMutexGuard<()>,
+}
+
+/// The one backup job shared by every trigger. Each run reads the saved
+/// settings when it starts, so destination, retention and mode changes apply
+/// to the next run without a restart.
+#[derive(Clone)]
+pub struct BackupRunner {
+    site_config: Arc<dyn SiteConfigStorage>,
+    database: DbConnectOptions,
+    runtime: StorageRuntimeConfig,
+    media_path: PathBuf,
+    running: Arc<Mutex<()>>,
+}
+
+impl BackupRunner {
+    #[must_use]
+    pub fn new(
+        site_config: Arc<dyn SiteConfigStorage>,
+        database: DbConnectOptions,
+        runtime: StorageRuntimeConfig,
+        storage_path: &Path,
+    ) -> Self {
+        Self {
+            site_config,
+            database,
+            runtime,
+            media_path: storage_path.join("media"),
+            running: Arc::new(Mutex::new(())),
+        }
+    }
+
+    /// Waits until no other backup is running and claims the run slot.
+    pub async fn wait_for_run_slot(&self) -> BackupRunSlot {
+        BackupRunSlot {
+            _running: Arc::clone(&self.running).lock_owned().await,
+        }
+    }
+
+    /// The backup settings as currently saved.
+    async fn saved_config(&self) -> anyhow::Result<BackupConfig> {
+        Ok(self.site_config.get_backup_config().await?)
+    }
+
+    /// Runs one backup for a trigger nobody awaits: waits its turn behind any
+    /// backup in progress, skips when no destination is saved, and reports and
+    /// swallows a failure so it never tears down the scheduler or the stop.
+    pub(crate) async fn run_unattended(&self, trigger: BackupTrigger) {
+        let _slot = self.wait_for_run_slot().await;
+        match self.run_once(trigger).await {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                tracing::info!(
+                    trigger = trigger.name(),
+                    "backup skipped: no destination is saved"
+                );
+            }
+            Err(error) => error::report_swallowed(
+                error::ErrorKind::Storage,
+                error::ErrorClass::Transient,
+                trigger.failure_context(),
+                error::SwallowedSource::Error(error.as_ref()),
+            ),
+        }
+    }
+
+    /// Runs one backup with the slot already held. `Ok(None)` means no
+    /// destination is saved, so nothing was attempted.
+    async fn run_once(&self, trigger: BackupTrigger) -> anyhow::Result<Option<PathBuf>> {
+        let config = self.saved_config().await?;
+        let Some(destination_root) = config.destination_path.as_deref().map(PathBuf::from) else {
+            return Ok(None);
+        };
+        let started = std::time::Instant::now();
+        let result = self.write_backup(&destination_root, &config, trigger).await;
+        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        metrics::backup_duration_ms(elapsed_ms);
+        metrics::backup_run(backup_result_metric(result.is_ok()));
+        result.map(Some)
+    }
+
+    async fn write_backup(
+        &self,
+        destination_root: &Path,
+        config: &BackupConfig,
+        trigger: BackupTrigger,
+    ) -> anyhow::Result<PathBuf> {
+        fs::create_dir_all(destination_root)?;
+        let destination_path = unused_backup_path(destination_root, config.mode).await;
+        storage::export_backup(BackupExportOptions {
+            database: &self.database,
+            runtime: &self.runtime,
+            media_path: &self.media_path,
+            destination_path: &destination_path,
+            mode: config.mode,
+        })
+        .await?;
+        let pruned = prune_backups(destination_root, config.retention_count.value())?;
+        metrics::backup_bytes(backup_size_bytes(&destination_path));
+        metrics::backup_pruned(u64::try_from(pruned).unwrap_or(u64::MAX));
+        tracing::info!(
+            path = %destination_path.display(),
+            trigger = trigger.name(),
+            "backup complete"
+        );
+        Ok(destination_path)
+    }
+}
+
+#[async_trait]
+impl ManualBackupRunner for BackupRunner {
+    /// Refuses rather than queues when another backup is running: the operator
+    /// is waiting on this request, and the run in progress already captures the
+    /// current state.
+    async fn run_manual_backup(&self) -> Result<String, ManualBackupError> {
+        let slot = Arc::clone(&self.running)
+            .try_lock_owned()
+            .map_err(|_| ManualBackupError::AlreadyRunning)?;
+        let runner = self.clone();
+        // The job runs on its own task so a client disconnect, which drops this
+        // request future, cannot abandon a half-written backup.
+        let job = tokio::spawn(async move {
+            let _slot = slot;
+            runner.run_once(BackupTrigger::Manual).await
+        });
+        match job
+            .await
+            .map_err(|error| ManualBackupError::Failed(error.into()))?
+        {
+            Ok(Some(path)) => Ok(path.display().to_string()),
+            Ok(None) => Err(ManualBackupError::NoDestination),
+            Err(error) => Err(ManualBackupError::Failed(
+                error
+                    .context(BackupTrigger::Manual.failure_context())
+                    .into(),
+            )),
+        }
+    }
+}
+
+/// Starts the scheduled backup worker when a destination is saved at startup.
+/// The cron expression and the worker's enablement are fixed here; each run
+/// still reads the rest of the saved settings when it starts.
 ///
 /// # Errors
 ///
 /// Returns an error if the site configuration cannot be loaded, or if the
 /// job scheduler fails to start.
 pub(crate) async fn start_backup_worker(
-    site_config: Arc<dyn SiteConfigStorage>,
-    database: DbConnectOptions,
-    runtime: StorageRuntimeConfig,
-    storage_path: PathBuf,
+    runner: BackupRunner,
 ) -> anyhow::Result<Option<ScheduledWorkerGuard>> {
-    let config = site_config.get_backup_config().await?;
-    let Some(destination_root) = config.destination_path.as_deref().map(PathBuf::from) else {
+    let config = runner.saved_config().await?;
+    if config.destination_path.is_none() {
         tracing::warn!("backup worker disabled: backup.destination_path is not configured");
         return Ok(None);
-    };
+    }
 
     let scheduler = JobScheduler::new().await?;
     let tracker = WorkTracker::default();
     let job_tracker = tracker.clone();
     let schedule = config.schedule.to_string();
     let job = Job::new_async(schedule.as_str(), move |_uuid, _lock| {
-        let database = database.clone();
-        let runtime = runtime.clone();
-        let media_path = storage_path.join("media");
-        let destination_root = destination_root.clone();
-        let config = config.clone();
+        let runner = runner.clone();
         let tracker = job_tracker.clone();
         Box::pin(tracker.run(async move {
-            run_scheduled_backup_logged(
-                &database,
-                &runtime,
-                &media_path,
-                &destination_root,
-                &config,
-            )
-            .await;
+            runner.run_unattended(BackupTrigger::Scheduled).await;
         }))
     })?;
     scheduler.add(job).await?;
@@ -65,28 +229,18 @@ pub(crate) async fn start_backup_worker(
         .map(Some)
 }
 
-async fn run_scheduled_backup(
-    database: &DbConnectOptions,
-    runtime: &StorageRuntimeConfig,
-    media_path: &Path,
-    destination_root: &Path,
-    config: &BackupConfig,
-) -> anyhow::Result<PathBuf> {
-    fs::create_dir_all(destination_root)?;
-    let destination_path = backup_path_for_mode(destination_root, config.mode);
-    storage::export_backup(BackupExportOptions {
-        database,
-        runtime,
-        media_path,
-        destination_path: &destination_path,
-        mode: config.mode,
-    })
-    .await?;
-    let pruned = prune_backups(destination_root, config.retention_count.value())?;
-    metrics::backup_bytes(backup_size_bytes(&destination_path));
-    metrics::backup_pruned(u64::try_from(pruned).unwrap_or(u64::MAX));
-    tracing::info!(path = %destination_path.display(), "scheduled backup complete");
-    Ok(destination_path)
+/// A timestamped backup path not already taken. Names have one-second
+/// resolution and export refuses an existing path; because runs are
+/// serialized, a taken name only means a run finished earlier this second, so
+/// waiting for the clock to move on (at most a second) yields a fresh name.
+async fn unused_backup_path(destination_root: &Path, mode: BackupMode) -> PathBuf {
+    loop {
+        let path = backup_path_for_mode(destination_root, mode);
+        if !path.exists() {
+            return path;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 /// Total on-disk size of a backup artifact: the file length for an archive, or
@@ -172,34 +326,6 @@ fn finish_backup_size(size: u64, error: Option<std::io::Error>) -> u64 {
         );
     }
     size
-}
-
-/// Runs one scheduled backup and logs any failure, swallowing the error so a
-/// transient backup failure never tears the scheduler down. Extracted from the
-/// job closure so both the success and failure paths can be exercised directly
-/// from a test, rather than depending on the cron scheduler firing (whose
-/// background-thread execution is awkward to observe under coverage).
-async fn run_scheduled_backup_logged(
-    database: &DbConnectOptions,
-    runtime: &StorageRuntimeConfig,
-    media_path: &Path,
-    destination_root: &Path,
-    config: &BackupConfig,
-) {
-    let started = std::time::Instant::now();
-    let result =
-        run_scheduled_backup(database, runtime, media_path, destination_root, config).await;
-    let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    metrics::backup_duration_ms(elapsed_ms);
-    metrics::backup_run(backup_result_metric(result.is_ok()));
-    if let Err(error) = result {
-        error::report_swallowed(
-            error::ErrorKind::Storage,
-            error::ErrorClass::Transient,
-            "server.backup.scheduled_run",
-            error::SwallowedSource::Error(error.as_ref()),
-        );
-    }
 }
 
 /// Maps a backup run's success flag to its bounded `result` attribute.
@@ -343,7 +469,6 @@ fn archive_entry_is_manifest(path: &Path) -> bool {
 mod tests {
     use super::*;
     use crate::test_support::{migrated_sqlite_db, site_config};
-    use common::test_support::{parse_destination_path, parse_retention_count};
     use host::config_key::SiteConfigKey;
     use storage::test_support::{confirmed, sqlite_write_scope};
     use tempfile::TempDir;
@@ -558,122 +683,122 @@ mod tests {
         assert_eq!(timestamp, None);
     }
 
+    /// Saves one site-config value through the production write path.
+    async fn save_setting(
+        pool: &sqlx::SqlitePool,
+        cfg: &Arc<dyn SiteConfigStorage>,
+        key: SiteConfigKey,
+        value: &str,
+    ) {
+        let config = Arc::clone(cfg);
+        let value = value.to_owned();
+        confirmed(
+            sqlite_write_scope(pool.clone())
+                .run(move |transaction| {
+                    Box::pin(async move { config.set(transaction, key, &value).await })
+                })
+                .await
+                .expect("save setting"),
+        );
+    }
+
+    /// A runner over a fresh migrated database whose storage directory holds
+    /// one media file, plus the pool and site config for saving settings.
+    struct RunnerFixture {
+        temp: TempDir,
+        db: DbConnectOptions,
+        pool: sqlx::SqlitePool,
+        site_config: Arc<dyn SiteConfigStorage>,
+        runner: BackupRunner,
+    }
+
+    impl RunnerFixture {
+        async fn new() -> Self {
+            let temp = TempDir::new().expect("temp dir");
+            let (db, pool) = migrated_sqlite_db(temp.path()).await;
+            let storage_path = temp.path().join("storage");
+            let media_path = storage_path.join("media");
+            std::fs::create_dir_all(&media_path).expect("media dir");
+            std::fs::write(media_path.join("file.txt"), "media").expect("media file");
+            let site_config = site_config(&pool);
+            let runner = BackupRunner::new(
+                Arc::clone(&site_config),
+                db.clone(),
+                StorageRuntimeConfig::default(),
+                &storage_path,
+            );
+            Self {
+                temp,
+                db,
+                pool,
+                site_config,
+                runner,
+            }
+        }
+
+        async fn save(&self, key: SiteConfigKey, value: &str) {
+            save_setting(&self.pool, &self.site_config, key, value).await;
+        }
+
+        async fn save_destination(&self, destination: &Path) {
+            self.save(
+                SiteConfigKey::BackupDestinationPath,
+                destination.to_str().expect("utf-8 path"),
+            )
+            .await;
+        }
+    }
+
+    fn manifest_backups(root: &Path) -> Vec<PathBuf> {
+        let mut backups: Vec<PathBuf> = std::fs::read_dir(root)
+            .expect("read destination")
+            .map(|entry| entry.expect("entry").path())
+            .filter(|path| path.join("manifest.json").is_file())
+            .collect();
+        backups.sort();
+        backups
+    }
+
     #[tokio::test]
     async fn backup_worker_disabled_without_destination_path() {
-        let storage = TempDir::new().expect("temp dir");
-        let (db, pool) = migrated_sqlite_db(storage.path()).await;
-        let scheduler = start_backup_worker(
-            site_config(&pool),
-            db,
-            StorageRuntimeConfig::default(),
-            storage.path().to_path_buf(),
-        )
-        .await
-        .expect("worker start");
+        let fixture = RunnerFixture::new().await;
+        let scheduler = start_backup_worker(fixture.runner.clone())
+            .await
+            .expect("worker start");
 
         assert!(scheduler.is_none());
     }
 
     #[tokio::test]
     async fn backup_worker_starts_when_destination_is_configured() {
-        let storage = TempDir::new().expect("temp dir");
-        let (db, pool) = migrated_sqlite_db(storage.path()).await;
-        let cfg = site_config(&pool);
-        let destination_path = storage.path().join("backups");
-        let scope = sqlite_write_scope(pool.clone());
-        let config = Arc::clone(&cfg);
-        confirmed(
-            scope
-                .run(move |transaction| {
-                    Box::pin(async move {
-                        config
-                            .set(
-                                transaction,
-                                SiteConfigKey::BackupDestinationPath,
-                                destination_path.to_str().expect("utf-8 path"),
-                            )
-                            .await
-                    })
-                })
-                .await
-                .expect("set destination"),
-        );
-        let scope = sqlite_write_scope(pool.clone());
-        let config = Arc::clone(&cfg);
-        confirmed(
-            scope
-                .run(move |transaction| {
-                    Box::pin(async move {
-                        config
-                            .set(transaction, SiteConfigKey::BackupSchedule, "0 0 0 1 1 *")
-                            .await
-                    })
-                })
-                .await
-                .expect("set schedule"),
-        );
+        let fixture = RunnerFixture::new().await;
+        fixture
+            .save_destination(&fixture.temp.path().join("backups"))
+            .await;
+        fixture
+            .save(SiteConfigKey::BackupSchedule, "0 0 0 1 1 *")
+            .await;
 
-        let scheduler = start_backup_worker(
-            cfg,
-            db,
-            StorageRuntimeConfig::default(),
-            storage.path().to_path_buf(),
-        )
-        .await
-        .expect("worker start");
+        let scheduler = start_backup_worker(fixture.runner.clone())
+            .await
+            .expect("worker start");
 
         assert!(scheduler.is_some());
     }
 
     #[tokio::test]
     async fn backup_worker_executes_scheduled_backup() {
-        let temp = TempDir::new().expect("temp dir");
-        let (db, pool) = migrated_sqlite_db(temp.path()).await;
-        let cfg = site_config(&pool);
-        let storage_path = temp.path().join("storage");
-        let media_path = storage_path.join("media");
-        std::fs::create_dir_all(&media_path).expect("media dir");
-        std::fs::write(media_path.join("file.txt"), "media").expect("media file");
-        let destination_path = temp.path().join("scheduled-backups");
-        let destination_path_for_config = destination_path.clone();
-        let scope = sqlite_write_scope(pool.clone());
-        let config = Arc::clone(&cfg);
-        confirmed(
-            scope
-                .run(move |transaction| {
-                    Box::pin(async move {
-                        config
-                            .set(
-                                transaction,
-                                SiteConfigKey::BackupDestinationPath,
-                                destination_path_for_config.to_str().expect("utf-8 path"),
-                            )
-                            .await
-                    })
-                })
-                .await
-                .expect("set destination"),
-        );
-        let scope = sqlite_write_scope(pool.clone());
-        let config = Arc::clone(&cfg);
-        confirmed(
-            scope
-                .run(move |transaction| {
-                    Box::pin(async move {
-                        config
-                            .set(transaction, SiteConfigKey::BackupSchedule, "*/1 * * * * *")
-                            .await
-                    })
-                })
-                .await
-                .expect("set schedule"),
-        );
+        let fixture = RunnerFixture::new().await;
+        let destination_path = fixture.temp.path().join("scheduled-backups");
+        fixture.save_destination(&destination_path).await;
+        fixture
+            .save(SiteConfigKey::BackupSchedule, "*/1 * * * * *")
+            .await;
 
-        let mut scheduler =
-            start_backup_worker(cfg, db, StorageRuntimeConfig::default(), storage_path)
-                .await
-                .expect("worker start")
-                .expect("scheduler enabled");
+        let mut scheduler = start_backup_worker(fixture.runner.clone())
+            .await
+            .expect("worker start")
+            .expect("scheduler enabled");
 
         let mut found_manifest = false;
         for _ in 0..30 {
@@ -694,94 +819,189 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_scheduled_backup_writes_backup_and_prunes_old_ones() {
-        let temp = TempDir::new().expect("temp dir");
-        // `run_scheduled_backup` opens its own connection via `db`; we just need
-        // the schema in place, so the migrated pool is dropped immediately.
-        let (db, _pool) = migrated_sqlite_db(temp.path()).await;
-
-        let media = temp.path().join("media");
-        std::fs::create_dir(&media).expect("media dir");
-        std::fs::write(media.join("file.txt"), "media").expect("media file");
-
-        let destination_root = temp.path().join("backups");
+    async fn manual_backup_writes_backup_and_prunes_to_retention() {
+        let fixture = RunnerFixture::new().await;
+        let destination_root = fixture.temp.path().join("backups");
         for name in ["backup-0001", "backup-0002"] {
             let backup = destination_root.join(name);
             std::fs::create_dir_all(&backup).expect("old backup dir");
             std::fs::write(backup.join("manifest.json"), "{}").expect("manifest");
         }
+        fixture.save_destination(&destination_root).await;
+        fixture.save(SiteConfigKey::BackupRetentionCount, "1").await;
 
-        let config = BackupConfig {
-            destination_path: Some(parse_destination_path(&destination_root.to_string_lossy())),
-            schedule: "0 0 0 1 1 *".parse().expect("valid schedule"),
-            retention_count: parse_retention_count("1"),
-            mode: BackupMode::Directory,
-        };
-        let written = run_scheduled_backup(
-            &db,
-            &StorageRuntimeConfig::default(),
-            &media,
-            &destination_root,
-            &config,
-        )
-        .await
-        .expect("scheduled backup");
+        let written = PathBuf::from(
+            fixture
+                .runner
+                .run_manual_backup()
+                .await
+                .expect("manual backup"),
+        );
 
         assert!(written.join("manifest.json").is_file());
         assert!(written.join("media").join("file.txt").is_file());
-        assert!(!destination_root.join("backup-0001").exists());
-        assert!(!destination_root.join("backup-0002").exists());
+        assert_eq!(manifest_backups(&destination_root), vec![written]);
     }
 
     #[tokio::test]
-    async fn run_scheduled_backup_logged_runs_success_path_and_swallows_errors() {
-        let temp = TempDir::new().expect("temp dir");
-        let (db, _pool) = migrated_sqlite_db(temp.path()).await;
-        let media = temp.path().join("media");
-        std::fs::create_dir(&media).expect("media dir");
+    async fn back_to_back_runs_within_one_second_get_distinct_names() {
+        let fixture = RunnerFixture::new().await;
+        let destination_root = fixture.temp.path().join("backups");
+        fixture.save_destination(&destination_root).await;
 
-        // Success: a writable destination produces a backup directory.
-        let ok_root = temp.path().join("ok-backups");
-        let ok_config = BackupConfig {
-            destination_path: Some(parse_destination_path(&ok_root.to_string_lossy())),
-            schedule: "0 0 0 1 1 *".parse().expect("valid schedule"),
-            retention_count: parse_retention_count("1"),
-            mode: BackupMode::Directory,
-        };
-        run_scheduled_backup_logged(
-            &db,
-            &StorageRuntimeConfig::default(),
-            &media,
-            &ok_root,
-            &ok_config,
-        )
-        .await;
+        let first = fixture.runner.run_manual_backup().await.expect("first");
+        let second = fixture.runner.run_manual_backup().await.expect("second");
+
+        assert_ne!(first, second);
+        assert_eq!(
+            manifest_backups(&destination_root),
+            vec![PathBuf::from(first), PathBuf::from(second)]
+        );
+    }
+
+    #[tokio::test]
+    async fn unused_backup_path_waits_for_the_next_second_when_the_name_is_taken() {
+        let temp = TempDir::new().expect("temp dir");
+        let taken = backup_path_for_mode(temp.path(), BackupMode::Directory);
+        std::fs::create_dir(&taken).expect("taken name");
+
+        let fresh = unused_backup_path(temp.path(), BackupMode::Directory).await;
+
+        assert_ne!(fresh, taken);
+        assert!(!fresh.exists());
+    }
+
+    #[tokio::test]
+    async fn each_run_reads_settings_saved_after_the_runner_was_built() {
+        let fixture = RunnerFixture::new().await;
+        assert!(matches!(
+            fixture.runner.run_manual_backup().await,
+            Err(ManualBackupError::NoDestination)
+        ));
+
+        let destination_root = fixture.temp.path().join("later-backups");
+        fixture.save_destination(&destination_root).await;
+        fixture.save(SiteConfigKey::BackupMode, "archive").await;
+        let written = fixture.runner.run_manual_backup().await.expect("backup");
+
+        assert!(written.ends_with(".tar.gz"), "written: {written}");
+        assert!(Path::new(&written).starts_with(&destination_root));
+        assert!(Path::new(&written).is_file());
+    }
+
+    #[tokio::test]
+    async fn manual_backup_is_refused_while_another_run_holds_the_slot() {
+        let fixture = RunnerFixture::new().await;
+        fixture
+            .save_destination(&fixture.temp.path().join("backups"))
+            .await;
+        let slot = fixture.runner.wait_for_run_slot().await;
+
+        let refused = fixture.runner.run_manual_backup().await;
+
+        assert!(matches!(refused, Err(ManualBackupError::AlreadyRunning)));
+        drop(slot);
+        fixture.runner.run_manual_backup().await.expect("free slot");
+    }
+
+    #[tokio::test]
+    async fn unattended_run_waits_for_the_slot_instead_of_skipping() {
+        let fixture = RunnerFixture::new().await;
+        let destination_root = fixture.temp.path().join("backups");
+        fixture.save_destination(&destination_root).await;
+        let slot = fixture.runner.wait_for_run_slot().await;
+        let runner = fixture.runner.clone();
+        let mut waiting = tokio::spawn(async move {
+            runner.run_unattended(BackupTrigger::Shutdown).await;
+        });
         assert!(
-            ok_root.exists(),
-            "successful scheduled backup should create the destination"
+            tokio::time::timeout(Duration::from_millis(50), &mut waiting)
+                .await
+                .is_err(),
+            "an unattended run must wait while the slot is held"
         );
 
-        // Failure: the destination's parent is a regular file, so create_dir_all
-        // fails; the error must be logged and swallowed (no panic, nothing written).
-        let blocker = temp.path().join("blocker");
+        drop(slot);
+        waiting.await.expect("unattended run");
+
+        assert_eq!(manifest_backups(&destination_root).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn interrupted_archive_run_leaves_nothing_pruning_counts() {
+        let fixture = RunnerFixture::new().await;
+        let destination_root = fixture.temp.path().join("backups");
+        std::fs::create_dir_all(&destination_root).expect("destination");
+        let destination = backup_path_for_mode(&destination_root, BackupMode::Archive);
+
+        storage::export_backup_paused_before_archive_publish(
+            BackupExportOptions {
+                database: &fixture.db,
+                runtime: &StorageRuntimeConfig::default(),
+                media_path: &fixture.temp.path().join("storage").join("media"),
+                destination_path: &destination,
+                mode: BackupMode::Archive,
+            },
+            || {
+                // A run killed here leaves only its work directory behind.
+                assert!(!destination.exists());
+                assert_eq!(prune_backups(&destination_root, 0).expect("prune"), 0);
+                assert_eq!(
+                    latest_successful_backup_timestamp(&destination_root).expect("scan"),
+                    None
+                );
+            },
+        )
+        .await
+        .expect("archive export");
+
+        assert!(destination.is_file());
+    }
+
+    #[tokio::test]
+    async fn unattended_runs_skip_without_destination_and_report_failures_by_trigger() {
+        let fixture = RunnerFixture::new().await;
+        let (guard, output) = trace_capture();
+        fixture
+            .runner
+            .run_unattended(BackupTrigger::Scheduled)
+            .await;
+        drop(guard);
+        let trace = trace_text(&output);
+        assert!(trace.contains("backup skipped"), "trace: {trace}");
+        assert!(!trace.contains("swallowed"), "trace: {trace}");
+
+        // The destination's parent is a regular file, so create_dir_all fails;
+        // the error is reported under the trigger's context and swallowed.
+        let blocker = fixture.temp.path().join("blocker");
         std::fs::write(&blocker, "x").expect("write blocker");
         let bad_root = blocker.join("backups");
-        let bad_config = BackupConfig {
-            destination_path: Some(parse_destination_path(&bad_root.to_string_lossy())),
-            ..ok_config
-        };
+        fixture.save_destination(&bad_root).await;
+        for trigger in [BackupTrigger::Scheduled, BackupTrigger::Shutdown] {
+            let (guard, output) = trace_capture();
+            fixture.runner.run_unattended(trigger).await;
+            drop(guard);
+            assert_one_report(&trace_text(&output), trigger.failure_context());
+        }
+        assert!(!bad_root.exists(), "failed backup writes nothing");
+    }
+
+    #[tokio::test]
+    async fn manual_backup_failure_is_returned_not_swallowed() {
+        let fixture = RunnerFixture::new().await;
+        let blocker = fixture.temp.path().join("blocker");
+        std::fs::write(&blocker, "x").expect("write blocker");
+        fixture.save_destination(&blocker.join("backups")).await;
+
         let (guard, output) = trace_capture();
-        run_scheduled_backup_logged(
-            &db,
-            &StorageRuntimeConfig::default(),
-            &media,
-            &bad_root,
-            &bad_config,
-        )
-        .await;
+        let result = fixture.runner.run_manual_backup().await;
         drop(guard);
-        assert!(!bad_root.exists(), "failed scheduled backup writes nothing");
-        assert_one_report(&trace_text(&output), "server.backup.scheduled_run");
+
+        let Err(ManualBackupError::Failed(error)) = result else {
+            panic!("a failed manual backup must return its failure");
+        };
+        assert_eq!(error.to_string(), "server.backup.manual_run");
+        assert!(!trace_text(&output).contains("swallowed"));
     }
 
     #[test]

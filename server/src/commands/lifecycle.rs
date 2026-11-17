@@ -19,6 +19,7 @@ use jiff::Timestamp;
 use tokio::{net::TcpListener, sync::oneshot::Receiver, task::JoinHandle};
 
 use super::support;
+use crate::backup::BackupRunner;
 use crate::cli::StorageArgs;
 use crate::create_router_with_trusted_proxies;
 use crate::feed::worker::FeedWorker;
@@ -30,11 +31,11 @@ use crate::scheduled_worker::ScheduledWorkerGuard;
 #[cfg(test)]
 use host::config_key::SiteConfigKey;
 use storage::{
-    AudienceStorage, DatabaseLockGuard, DbConnectOptions, DbPoolObserver, EmailVerificationStorage,
-    FeedCacheStorage, FeedEventStorage, InstanceId, InviteStorage, MediaContentLocks, MediaManager,
-    MediaStorage, PasswordResetStorage, PostMediaOwnership, PostStorage, PublisherStorage,
-    SessionStorage, SiteConfigStorage, StorageRuntimeConfig, SubscriptionStorage,
-    ThemeAssetManager, ThemeManager, ThemeStorage, UserConfigStorage, UserStorage, WriteScope,
+    AudienceStorage, DatabaseLockGuard, DbPoolObserver, EmailVerificationStorage, FeedCacheStorage,
+    FeedEventStorage, InstanceId, InviteStorage, MediaContentLocks, MediaManager, MediaStorage,
+    PasswordResetStorage, PostMediaOwnership, PostStorage, PublisherStorage, SessionStorage,
+    SiteConfigStorage, StorageRuntimeConfig, SubscriptionStorage, ThemeAssetManager, ThemeManager,
+    ThemeStorage, UserConfigStorage, UserStorage, WriteScope,
 };
 
 /// Focused storage handles minted once by the serve composition root.
@@ -272,14 +273,13 @@ pub struct PreparedServer {
     /// Owns the OS-backed startup lock and removes the runtime-info file on drop.
     runtime_guard: RuntimeGuard,
     pub saturation_metrics: Option<PreparedSaturationMetrics>,
+    /// Takes the final backup once everything else has drained.
+    backup: BackupRunner,
 }
 
 struct BackgroundWorkerSetup {
     maintenance: DatabaseMaintenance,
-    backup_site_config: Arc<dyn SiteConfigStorage>,
-    database: DbConnectOptions,
-    runtime: StorageRuntimeConfig,
-    storage_path: PathBuf,
+    backup: BackupRunner,
     feed_worker: FeedWorker,
     feed_interval: Duration,
 }
@@ -310,14 +310,7 @@ impl BackgroundWorkers {
             .maintenance
             .start(maintenance::DATABASE_MAINTENANCE_INTERVAL)
             .await?;
-        let mut backup = match crate::backup::start_backup_worker(
-            setup.backup_site_config,
-            setup.database,
-            setup.runtime,
-            setup.storage_path,
-        )
-        .await
-        {
+        let mut backup = match crate::backup::start_backup_worker(setup.backup).await {
             Ok(scheduler) => scheduler,
             Err(error) => {
                 maintenance.stop();
@@ -619,12 +612,43 @@ struct ServeHttpPolicy {
     trusted_proxies: crate::trusted_proxy::TrustedProxyConfig,
 }
 
+/// Server-owned services the serve composition root hands to request context.
+/// Like `ServeHttpPolicy`, it never leaves the composition root (ADR-0016).
+struct ServeRequestServices {
+    mailer: Arc<dyn common::mailer::MailSender>,
+    backup: Arc<dyn web::backup::ManualBackupRunner>,
+}
+
+fn request_service_context(
+    services: ServeRequestServices,
+    content_locks: Arc<MediaContentLocks>,
+    media_manager: Arc<MediaManager>,
+    theme_asset_manager: Arc<ThemeAssetManager>,
+    theme_manager: Arc<storage::ThemeManager>,
+    secure_cookies: bool,
+) -> impl Fn() + Clone + Send + Sync + 'static {
+    let request_services = crate::context::service_context_provider(
+        services.mailer,
+        content_locks,
+        media_manager,
+        theme_asset_manager,
+        Arc::new(ThemeOperationCoordinator::new()),
+        theme_manager,
+        secure_cookies,
+    );
+    let backup = crate::context::backup_context_provider(services.backup);
+    move || {
+        request_services();
+        backup();
+    }
+}
+
 fn compose_server_router(
     factory: &storage::StorageFactory,
     system_inventory: Arc<host::system_theme::SystemArtifactInventory>,
     storage_path: PathBuf,
     instance_id: &InstanceId,
-    mailer: Arc<dyn common::mailer::MailSender>,
+    services: ServeRequestServices,
     http_policy: ServeHttpPolicy,
     preparer: Arc<host::image_privacy::UploadPreparer>,
 ) -> (Router, Arc<MediaManager>) {
@@ -672,12 +696,11 @@ fn compose_server_router(
         crate::context::theme_context_provider(Arc::clone(&dependencies.themes), system_inventory),
         crate::context::post_media_ownership_context_provider(ownership.clone()),
         publisher_context(Arc::clone(&publisher), dependencies),
-        crate::context::service_context_provider(
-            mailer,
+        request_service_context(
+            services,
             Arc::clone(&locks),
             Arc::clone(&manager),
             asset_manager,
-            Arc::new(ThemeOperationCoordinator::new()),
             manager_themes,
             http_policy.prod,
         ),
@@ -768,19 +791,13 @@ async fn install_and_reconcile_system_artifacts(
 
 fn prepare_background_worker_setup(
     maintenance: DatabaseMaintenance,
-    backup_site_config: Arc<dyn SiteConfigStorage>,
-    database: DbConnectOptions,
-    runtime: StorageRuntimeConfig,
-    storage_path: PathBuf,
+    backup: BackupRunner,
     feed_worker: FeedWorker,
     feed_interval: Duration,
 ) -> BackgroundWorkerSetup {
     BackgroundWorkerSetup {
         maintenance,
-        backup_site_config,
-        database,
-        runtime,
-        storage_path,
+        backup,
         feed_worker,
         feed_interval,
     }
@@ -789,7 +806,7 @@ fn prepare_background_worker_setup(
 fn prepare_background_worker_setup_from_dependencies(
     dependencies: &ServeStorage,
     storage: &StorageArgs,
-    runtime: StorageRuntimeConfig,
+    backup: BackupRunner,
     capture: Option<&ServeCapturePaths>,
 ) -> BackgroundWorkerSetup {
     let maintenance = database_maintenance(
@@ -815,15 +832,7 @@ fn prepare_background_worker_setup_from_dependencies(
         Arc::clone(&dependencies.feed_events),
         crate::websub::default_client(websub_capture),
     );
-    prepare_background_worker_setup(
-        maintenance,
-        Arc::clone(&dependencies.site_config),
-        storage.db.clone(),
-        runtime,
-        storage.storage_path.clone(),
-        feed_worker,
-        feed_interval,
-    )
+    prepare_background_worker_setup(maintenance, backup, feed_worker, feed_interval)
 }
 /// Performs all of [`cmd_serve`]'s setup — open the database (auto-initializing
 /// in dev), start the backup and feed workers, build the router, and bind the
@@ -895,8 +904,18 @@ async fn prepare_server_with_trusted_proxies(
         Arc::new(storage.storage_path.clone()),
     )
     .await?;
-    let worker_setup =
-        prepare_background_worker_setup_from_dependencies(&dependencies, storage, runtime, capture);
+    let backup = BackupRunner::new(
+        Arc::clone(&dependencies.site_config),
+        storage.db.clone(),
+        runtime,
+        &storage.storage_path,
+    );
+    let worker_setup = prepare_background_worker_setup_from_dependencies(
+        &dependencies,
+        storage,
+        backup.clone(),
+        capture,
+    );
     let saturation_metrics = prepare_saturation_metrics(
         Arc::clone(&dependencies.site_config),
         Arc::clone(&dependencies.feed_events),
@@ -917,7 +936,10 @@ async fn prepare_server_with_trusted_proxies(
         system_inventory,
         storage.storage_path.clone(),
         &instance_id,
-        mailer,
+        ServeRequestServices {
+            mailer,
+            backup: Arc::new(backup.clone()),
+        },
         ServeHttpPolicy {
             prod,
             trace_parent_enabled: otel_tracing_enabled,
@@ -943,6 +965,7 @@ async fn prepare_server_with_trusted_proxies(
         upload_manager,
         runtime_guard,
         saturation_metrics,
+        backup,
     })
 }
 
@@ -1185,6 +1208,7 @@ pub(crate) async fn cmd_serve_with_trusted_proxies(
         upload_manager,
         runtime_guard,
         saturation_metrics,
+        backup,
     } = prepare_server_with_trusted_proxies(
         storage,
         bind,
@@ -1236,6 +1260,13 @@ pub(crate) async fn cmd_serve_with_trusted_proxies(
         "server.maintenance.shutdown",
     );
     merge_worker_shutdown(&mut serve_result, backup_shutdown, "server.backup.shutdown");
+    // The final backup runs after every other writer has stopped, while the
+    // SIGINT forced-exit supervisor stays live (a second SIGINT still aborts a
+    // long backup) and the storage lock stays held (no second server can start
+    // on this storage meanwhile). Its failure is reported, never the stop's.
+    backup
+        .run_unattended(crate::backup::BackupTrigger::Shutdown)
+        .await;
     #[cfg(unix)]
     shutdown_supervisor.abort_and_join().await;
     drop(workers);
@@ -1615,10 +1646,12 @@ mod tests {
                 password_resets,
                 Arc::clone(&feed_events),
             ),
-            backup_site_config,
-            database: storage.db.clone(),
-            runtime: StorageRuntimeConfig::default(),
-            storage_path: storage.storage_path.clone(),
+            backup: BackupRunner::new(
+                backup_site_config,
+                storage.db.clone(),
+                StorageRuntimeConfig::default(),
+                &storage.storage_path,
+            ),
             feed_worker: FeedWorker::new(
                 posts,
                 feed_cache,
@@ -2571,14 +2604,10 @@ mod tests {
         assert!(!path.exists(), "runtime.json removed after {signal:?}");
     }
 
+    /// Runs `cmd_serve` on `storage` until it publishes a ready runtime identity,
+    /// sends it SIGTERM, and returns its completed result.
     #[cfg(unix)]
-    #[tokio::test]
-    async fn cmd_serve_handles_sigterm_immediately_after_ready_publication() {
-        let temp = TempDir::new().expect("temp dir");
-        let storage = sqlite_storage_args(&temp);
-        storage::open_database(&storage.db, &StorageRuntimeConfig::default())
-            .await
-            .expect("initialize test database");
+    async fn serve_until_sigterm(storage: StorageArgs) -> anyhow::Result<()> {
         let runtime_path = runtime_file::canonical_runtime_path(&storage.storage_path);
         let telemetry = test_telemetry(Some("http://127.0.0.1:4317"));
         let bind = "127.0.0.1:0".parse().expect("bind address");
@@ -2618,18 +2647,91 @@ mod tests {
 
         nix::sys::signal::raise(nix::sys::signal::Signal::SIGTERM).expect("send SIGTERM");
 
-        if let Ok(result) = tokio::time::timeout(Duration::from_secs(5), &mut command).await {
-            result
-                .expect("cmd_serve task must not panic")
-                .expect("cmd_serve must gracefully shut down");
-        } else {
+        let Ok(result) = tokio::time::timeout(Duration::from_secs(30), &mut command).await else {
             let _ = abort_and_join(&mut command).await;
             panic!("cmd_serve must complete after SIGTERM");
-        }
+        };
         assert!(
             !runtime_path.exists(),
             "completed cmd_serve must remove its runtime identity"
         );
+        result.expect("cmd_serve task must not panic")
+    }
+
+    /// Initializes the test database and saves `destination` as the backup
+    /// destination.
+    #[cfg(unix)]
+    async fn initialize_with_backup_destination(storage: &StorageArgs, destination: &Path) {
+        let factory = storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("initialize test database");
+        let site_config = factory.site_config();
+        let destination = destination.to_str().expect("utf-8 path").to_owned();
+        confirmed(
+            factory
+                .write_scope()
+                .run(move |transaction| {
+                    Box::pin(async move {
+                        site_config
+                            .set(
+                                transaction,
+                                SiteConfigKey::BackupDestinationPath,
+                                &destination,
+                            )
+                            .await
+                    })
+                })
+                .await
+                .expect("save backup destination"),
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cmd_serve_handles_sigterm_immediately_after_ready_publication() {
+        let temp = TempDir::new().expect("temp dir");
+        let storage = sqlite_storage_args(&temp);
+        storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("initialize test database");
+
+        serve_until_sigterm(storage)
+            .await
+            .expect("cmd_serve must gracefully shut down");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn graceful_stop_with_saved_destination_takes_one_final_backup() {
+        let temp = TempDir::new().expect("temp dir");
+        let storage = sqlite_storage_args(&temp);
+        let destination = temp.path().join("backups");
+        initialize_with_backup_destination(&storage, &destination).await;
+
+        serve_until_sigterm(storage)
+            .await
+            .expect("cmd_serve must gracefully shut down");
+
+        let backups: Vec<PathBuf> = fs::read_dir(&destination)
+            .expect("shutdown backup destination")
+            .map(|entry| entry.expect("entry").path())
+            .collect();
+        assert_eq!(backups.len(), 1, "backups: {backups:?}");
+        assert!(backups[0].join("manifest.json").is_file());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn graceful_stop_completes_when_the_final_backup_fails() {
+        let temp = TempDir::new().expect("temp dir");
+        let storage = sqlite_storage_args(&temp);
+        let blocker = temp.path().join("blocker");
+        fs::write(&blocker, "x").expect("write blocker");
+        initialize_with_backup_destination(&storage, &blocker.join("backups")).await;
+
+        serve_until_sigterm(storage)
+            .await
+            .expect("a failed final backup must not fail the stop");
     }
 
     #[cfg(unix)]

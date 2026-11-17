@@ -513,6 +513,27 @@ preserved to Postgres's microsecond timestamp resolution, but dump _bytes_ are
 not canonicalized across backends
 ([ADR-0054](adr/0054-backup-test-homing-and-uniform-restore-failure.md)).
 
+**One backup runner, three triggers.** Inside `jaunder serve`, every backup goes
+through one `BackupRunner` (`server/src/backup.rs`) built at the serve
+composition root: the cron-scheduled worker, the operator's **Back Up Now**
+(`backup::back_up_now`, reaching the runner through the web-defined
+`ManualBackupRunner` trait provided as request context), and a final backup in
+the graceful-shutdown drain. A run-at-a-time guard spans export and retention
+pruning; the manual trigger is refused while it is held, the scheduled and
+shutdown triggers wait for it. Each run reads the saved destination, retention
+and mode when it starts — only the cron expression and the scheduled worker's
+enablement are fixed at startup — and waits for the next second when its
+one-second-resolution name is already taken. The manual run executes on its own
+task so a client disconnect cannot abandon it. An archive export stages its
+contents and partial archive inside one work directory that pruning and the
+last-success scan never count, and publishes the archive by atomic rename. The
+shutdown backup runs whenever a destination is saved, after HTTP, uploads and
+every worker have drained, with the storage lock still held and the SIGINT
+forced-exit supervisor still live; its failure is reported and swallowed. The
+NixOS unit's `TimeoutStopSec = 15min` and `jaunder shut-down`'s 900-second
+default wait make room for it
+([graceful shutdown takes a final backup](adr/drafts/graceful-shutdown-takes-a-final-backup.md)).
+
 ### Idempotent post creation
 
 Post creation accepts an optional client-supplied
@@ -2884,8 +2905,11 @@ external escalation, that completion follows the ordinary graceful drain; the
 command cannot infer an external forced-exit cause. Missing, malformed, stale,
 mismatched, and port-zero identities are refused without mutation. Repeated
 SIGTERM is non-escalating so concurrent automation joins the same drain; a
-further SIGINT retains interactive forced exit. The bounded wait never escalates
-on timeout. No administration secret or network control channel exists
+further SIGINT retains interactive forced exit. Because graceful shutdown takes
+a final backup, the wait defaults to 900 seconds
+([graceful shutdown takes a final backup](adr/drafts/graceful-shutdown-takes-a-final-backup.md),
+amending ADR-0181's 30-second default). The bounded wait never escalates on
+timeout. No administration secret or network control channel exists
 ([identity-verified local shutdown](adr/0181-identity-verified-local-shutdown.md)).
 
 - `SystemArtifactInventory` (`host/src/system_theme.rs`) carries canonical
@@ -4352,8 +4376,9 @@ unconfirmed stop/wait logs diagnostics and retains process/group and application
 guards rather than polling/retrying or releasing storage. This is not a
 universal OS guarantee or a claim that ProcessKit is defective based on an
 instantaneous PID state. The Nix daemon and shared build workers are not owned
-children. The separate `jaunder shut-down` 30-second wait/no-escalation contract
-remains ADR-0181.
+children. The separate `jaunder shut-down` wait/no-escalation contract remains
+ADR-0181, with the 900-second default wait from
+[graceful shutdown takes a final backup](adr/drafts/graceful-shutdown-takes-a-final-backup.md).
 
 The design is recorded in the
 [standalone UX sandbox lifecycle decision](adr/0244-standalone-ux-sandbox-lifecycle.md),

@@ -101,6 +101,9 @@ let
             ExecStart = "${jaunderBin}/bin/jaunder serve";
             Restart = "on-failure";
             RestartSec = "2s";
+            # Graceful stop takes a final backup; systemd's 90 s default would
+            # SIGKILL a large one midway.
+            TimeoutStopSec = "15min";
           };
         };
       };

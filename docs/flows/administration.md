@@ -23,6 +23,7 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#administration`
 | `endpoint:/api/backup/is_warning_visible`         | Covered | Drives the soft shell warning when scheduled backups still lack a destination.                     |
 | `endpoint:/api/backup/get_settings`               | Covered | Seeds the backup configuration form with the persisted schedule, destination, retention, and mode. |
 | `endpoint:/api/backup/update_settings`            | Covered | Persists typed backup settings updates from the backups page.                                      |
+| `endpoint:/api/backup/back_up_now`                | Covered | Writes one backup to the saved destination immediately and returns the written path.               |
 | `endpoint:/api/smtp/get_settings`                 | Covered | Seeds the secret-free SMTP relay form and reports only whether a password exists.                  |
 | `endpoint:/api/smtp/update_settings`              | Covered | Atomically persists operator-managed relay settings and paired credential intent.                  |
 | `endpoint:/api/websub/get_websub_settings`        | Covered | Seeds the configured hub form from the coherent publisher snapshot.                                |
@@ -51,9 +52,14 @@ persisted Media Upload Capability. The Site Default Audience is only a fallback
 for future Posts without an explicit Audience Selection or User override. One
 Site Settings save validates all three identity values before dispatching their
 atomic aggregate mutation; a blank tagline clears it. `/admin/backups` owns
-storage destination, schedule, retention, and backup mode; `/admin/smtp` owns
-persisted outbound relay and paired credential intent; and `/admin/websub` owns
-the publisher hub plus regeneration and publication dead-letter recovery.
+storage destination, schedule, retention, and backup mode, plus **Back Up Now**:
+an immediate backup to the saved destination that shows the written path. It is
+disabled while a backup request is pending and until a destination is saved, and
+a backup already in progress refuses it as a conflict. Destination, retention,
+and mode apply from the next backup; the schedule, and whether scheduled backups
+run at all, take effect after a restart. `/admin/smtp` owns persisted outbound
+relay and paired credential intent; and `/admin/websub` owns the publisher hub
+plus regeneration and publication dead-letter recovery.
 
 For Passkeys, the canonical base URL is a credential-binding WebAuthn origin:
 its exact origin is checked by the browser and its hostname is the RP ID.
@@ -64,5 +70,5 @@ hostname cannot be changed or unset through the site form, aggregate
 configuration, or CLI; the guard deliberately permits a scheme or port change
 because it compares hostname only. To move to another hostname, delete every
 Passkey first. Password login and email reset remain the recovery route, and a
-password reset does not delete Passkeys. Runtime mailer reload, execution of
-backup jobs, and publisher delivery live outside this CSR flow.
+password reset does not delete Passkeys. Runtime mailer reload, scheduled and
+shutdown backups, and publisher delivery live outside this CSR flow.

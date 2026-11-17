@@ -45,6 +45,18 @@ and upload discovery is hidden. It is independent of maximum file size and user
 quota. _Avoid_: upload limit (a byte limit is a quantity, not a capability), web
 uploads (the policy is cross-protocol), magic zero.
 
+### Backups
+
+**Backup Destination**: The operator-saved directory under which every backup is
+written and retention pruning runs. A backup can only run once one is saved.
+_Avoid_: backup path (that names one written backup), backup target (the table
+set a backup covers).
+
+**Backup Trigger**: What starts a backup run — the cron schedule, an operator's
+**Back Up Now**, or a graceful shutdown. Every trigger runs the same job through
+the one **Backup Runner**, which allows a single run at a time. _Avoid_: backup
+job type, backup mode (that names directory versus archive output).
+
 ### Presentation
 
 **Local**: The public, viewer-independent web timeline at `/`, containing

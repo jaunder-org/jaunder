@@ -132,6 +132,13 @@ pub fn service_context_provider(
     }
 }
 
+/// Captures the backup runner the manual **Back Up Now** trigger reaches.
+pub fn backup_context_provider(
+    backup: Arc<dyn web::backup::ManualBackupRunner>,
+) -> impl Fn() + Clone + Send + Sync + 'static {
+    move || provide_context(Arc::clone(&backup))
+}
+
 /// Captures the publisher's concrete service and web-facing capability.
 pub fn publisher_context_provider(
     publisher: Arc<crate::publisher::PublisherService>,
@@ -364,6 +371,27 @@ mod tests {
             ));
             expect_context::<Arc<dyn web::websub::WebsubPublisher>>();
             expect_context::<PostMediaOwnership>();
+        });
+    }
+
+    #[tokio::test]
+    async fn backup_context_provider_publishes_the_runner() {
+        let env = Backend::Sqlite.setup().await;
+        let backup: Arc<dyn web::backup::ManualBackupRunner> =
+            Arc::new(crate::backup::BackupRunner::new(
+                env.site_config(),
+                storage::test_support::sqlite_url(&env.base),
+                storage::StorageRuntimeConfig::default(),
+                env.base.path(),
+            ));
+        let provide = backup_context_provider(Arc::clone(&backup));
+
+        Owner::new().with(|| {
+            provide();
+            assert!(Arc::ptr_eq(
+                &expect_context::<Arc<dyn web::backup::ManualBackupRunner>>(),
+                &backup,
+            ));
         });
     }
 }

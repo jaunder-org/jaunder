@@ -64,11 +64,33 @@ fn mirror_themes(
 pub async fn export_backup(
     options: BackupExportOptions<'_>,
 ) -> Result<BackupManifest, BackupError> {
+    export_backup_with_before_archive_publish(options, || {}).await
+}
+
+/// Test seam for observing an archive export in its most complete unpublished
+/// state, just before the finished archive takes its final name — the state a
+/// run killed at its last moment would leave behind. Never used by production.
+///
+/// # Errors
+///
+/// Returns `Err(BackupError)` if the backup export fails.
+#[cfg(any(test, feature = "test-support"))]
+pub async fn export_backup_paused_before_archive_publish(
+    options: BackupExportOptions<'_>,
+    before_publish: impl FnOnce(),
+) -> Result<BackupManifest, BackupError> {
+    export_backup_with_before_archive_publish(options, before_publish).await
+}
+
+async fn export_backup_with_before_archive_publish(
+    options: BackupExportOptions<'_>,
+    before_publish: impl FnOnce(),
+) -> Result<BackupManifest, BackupError> {
     let _database_lock =
         DatabaseLockGuard::acquire(media_content_root(options.media_path)?).await?;
     match options.mode {
         BackupMode::Directory => export_directory_backup(options).await,
-        BackupMode::Archive => export_archive_backup(options).await,
+        BackupMode::Archive => export_archive_backup(options, before_publish).await,
     }
 }
 
@@ -158,18 +180,26 @@ async fn restore_backup_with_after_import(
 
 async fn export_archive_backup(
     options: BackupExportOptions<'_>,
+    before_publish: impl FnOnce(),
 ) -> Result<BackupManifest, BackupError> {
     archive::ensure_absent(options.destination_path)?;
-    let staging = archive::TemporaryBackupDirectory::near(options.destination_path)?;
+    // An unfinished run's files stay in one work directory that pruning never
+    // counts; the archive takes its final name only by atomic rename
+    // (docs/adr/drafts/graceful-shutdown-takes-a-final-backup.md).
+    let work = archive::TemporaryBackupDirectory::near(options.destination_path)?;
+    let staging = work.path().join("staging");
     let manifest = export_directory_backup(BackupExportOptions {
         database: options.database,
         runtime: options.runtime,
         media_path: options.media_path,
-        destination_path: staging.path(),
+        destination_path: &staging,
         mode: BackupMode::Archive,
     })
     .await?;
-    archive::write_tar_gz(staging.path(), options.destination_path)?;
+    let partial_archive = work.path().join("archive.partial");
+    archive::write_tar_gz(&staging, &partial_archive)?;
+    before_publish();
+    fs::rename(&partial_archive, options.destination_path)?;
     Ok(manifest)
 }
 

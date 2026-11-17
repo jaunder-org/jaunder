@@ -1896,6 +1896,18 @@
   grid-column: 1 / -1;
 }
 
+.j-backup-note {
+  margin: 0;
+}
+
+.j-backup-now {
+  margin-top: 20px;
+}
+
+.j-backup-note code {
+  overflow-wrap: anywhere;
+}
+
 .j-settings-loading,
 .j-settings-error {
   margin: 0;

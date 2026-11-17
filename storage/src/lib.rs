@@ -65,13 +65,13 @@ pub mod test_support;
 pub use account_mutations::*;
 pub use audiences::*;
 pub use backend::*;
-#[cfg(any(test, feature = "test-support"))]
-pub use backup::restore_backup_paused_after_import;
 pub use backup::{
     BackupError, BackupExportOptions, BackupManifest, BackupMode, BackupRestoreOptions,
     BackupRestoreOutcome, RestoreValidationIssue, RestoreValidationReport, export_backup,
     restore_backup,
 };
+#[cfg(any(test, feature = "test-support"))]
+pub use backup::{export_backup_paused_before_archive_publish, restore_backup_paused_after_import};
 pub use database_lock::DatabaseLockGuard;
 pub use db::*;
 pub use email::*;

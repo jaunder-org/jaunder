@@ -54,6 +54,7 @@ wire_contract! {
     web::auth::GetSession => "auth" / "get_session",
     web::auth::Login => "auth" / "login",
     web::auth::Logout => "auth" / "logout",
+    web::backup::BackUpNow => "backup" / "back_up_now",
     web::backup::GetSettings => "backup" / "get_settings",
     web::backup::IsWarningVisible => "backup" / "is_warning_visible",
     web::backup::UpdateSettings => "backup" / "update_settings",

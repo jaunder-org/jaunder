@@ -50,6 +50,34 @@ pub fn prepare_app(
     build(storage_path)
 }
 
+/// The backup runner a test app provides by default: the test environment's
+/// own database, the app's storage directory, and settings from `site_config`.
+pub fn backup_runner(
+    site_config: std::sync::Arc<dyn storage::SiteConfigStorage>,
+    base: &storage::test_support::TestBase,
+    storage_path: &std::path::Path,
+) -> jaunder::backup::BackupRunner {
+    jaunder::backup::BackupRunner::new(
+        site_config,
+        test_database(base),
+        storage::StorageRuntimeConfig::default(),
+        storage_path,
+    )
+}
+
+/// Connect options for the database behind a `Backend::setup` test base,
+/// chosen by the backend of the base's own pool.
+fn test_database(base: &storage::test_support::TestBase) -> storage::DbConnectOptions {
+    match base.pool() {
+        storage::test_support::CloseablePool::Sqlite(_) => storage::test_support::sqlite_url(base),
+        storage::test_support::CloseablePool::Postgres(_) => {
+            storage::test_support::recorded_postgres_url(base)
+                .parse()
+                .expect("recorded Postgres URL")
+        }
+    }
+}
+
 /// Admits the canonical catalog before normal app-test composition, just as
 /// startup does. Fault-injected request scopes remain separate from admission.
 pub async fn install_app_system_inventory(
@@ -82,6 +110,10 @@ pub async fn install_app_system_inventory(
 macro_rules! make_app {
     (@auth_scope $default:expr) => { $default };
     (@auth_scope $default:expr, $scope:expr) => { $scope };
+    (@backup_runner $site_config:expr, $env_base:expr, $storage_path:expr, $runner:expr) => { $runner };
+    (@backup_runner $site_config:expr, $env_base:expr, $storage_path:expr) => {
+        $crate::helpers::backup_runner($site_config, $env_base, $storage_path)
+    };
     (@preparer $preparer:expr) => { $preparer };
     (@preparer) => {
         host::image_privacy::UploadPreparer::new(std::path::PathBuf::from(env!("CARGO_BIN_EXE_jaunder")))
@@ -95,9 +127,38 @@ macro_rules! make_app {
             preparer = $preparer
         )
     };
+    ($env:expr, $storage:expr; backup_runner = $backup_runner:expr) => {
+        make_app!(
+            @build $storage, &($env).base, ($env).write_scope(),
+            storage::InstanceId::new(),
+            storage::test_support::noop_mailer(),
+            false,
+            std::sync::Arc::new(
+                jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new(),
+            );
+            site_config = ($env).site_config(),
+            passkeys = ($env).passkeys(),
+            users = ($env).users(),
+            sessions = ($env).sessions(),
+            invites = ($env).invites(),
+            email_verifications = ($env).email_verifications(),
+            password_resets = ($env).password_resets(),
+            posts = ($env).posts(),
+            write_scope = ($env).write_scope(),
+            subscriptions = ($env).subscriptions(),
+            audiences = ($env).audiences(),
+            media = ($env).media(),
+            user_config = ($env).user_config(),
+            themes = ($env).themes(),
+            feed_cache = ($env).feed_cache(),
+            feed_events = ($env).feed_events(),
+            publisher = ($env).publisher(),
+            backup_runner = $backup_runner,
+        )
+    };
     ($env:expr, $storage:expr) => {
         make_app!(
-            @build $storage, ($env).write_scope(),
+            @build $storage, &($env).base, ($env).write_scope(),
             storage::InstanceId::new(),
             storage::test_support::noop_mailer(),
             false,
@@ -125,7 +186,7 @@ macro_rules! make_app {
     };
     ($env:expr, $storage:expr; override_mailer = $mailer:expr) => {
         make_app!(
-            @build $storage, ($env).write_scope(),
+            @build $storage, &($env).base, ($env).write_scope(),
             storage::InstanceId::new(),
             $mailer,
             false,
@@ -171,7 +232,7 @@ macro_rules! make_app {
         $(, preparer = $preparer:expr)?
     ) => {
         make_app!(
-            @build $storage, ($env).write_scope(), $instance_id, $mailer, $secure_cookies, $resolver;
+            @build $storage, &($env).base, ($env).write_scope(), $instance_id, $mailer, $secure_cookies, $resolver;
             site_config = ($env).site_config(),
             passkeys = ($env).passkeys(),
             users = ($env).users(),
@@ -193,7 +254,7 @@ macro_rules! make_app {
         )
     };
     ($env:expr, $storage:expr; override_write_scope = $write_scope:expr $(, auth_write_scope = $auth_write_scope:expr)?) => {
-        make_app!(@build $storage, ($env).write_scope(), storage::InstanceId::new(), storage::test_support::noop_mailer(), false, std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
+        make_app!(@build $storage, &($env).base, ($env).write_scope(), storage::InstanceId::new(), storage::test_support::noop_mailer(), false, std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
             site_config = ($env).site_config(), passkeys = ($env).passkeys(), users = ($env).users(), sessions = ($env).sessions(),
             invites = ($env).invites(), email_verifications = ($env).email_verifications(),
             password_resets = ($env).password_resets(), posts = ($env).posts(),
@@ -205,7 +266,7 @@ macro_rules! make_app {
         )
     };
     ($env:expr, $storage:expr; override_sessions = $sessions:expr) => {
-        make_app!(@build $storage, ($env).write_scope(), storage::InstanceId::new(), storage::test_support::noop_mailer(), false, std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
+        make_app!(@build $storage, &($env).base, ($env).write_scope(), storage::InstanceId::new(), storage::test_support::noop_mailer(), false, std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
             site_config = ($env).site_config(), passkeys = ($env).passkeys(), users = ($env).users(), sessions = $sessions,
             invites = ($env).invites(), email_verifications = ($env).email_verifications(),
             password_resets = ($env).password_resets(), posts = ($env).posts(),
@@ -216,7 +277,7 @@ macro_rules! make_app {
         )
     };
     ($env:expr, $storage:expr; override_site_config = $site_config:expr) => {
-        make_app!(@build $storage, ($env).write_scope(), storage::InstanceId::new(), storage::test_support::noop_mailer(), false, std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
+        make_app!(@build $storage, &($env).base, ($env).write_scope(), storage::InstanceId::new(), storage::test_support::noop_mailer(), false, std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
             site_config = $site_config, passkeys = ($env).passkeys(), users = ($env).users(), sessions = ($env).sessions(),
             invites = ($env).invites(), email_verifications = ($env).email_verifications(),
             password_resets = ($env).password_resets(), posts = ($env).posts(),
@@ -227,7 +288,7 @@ macro_rules! make_app {
         )
     };
     ($env:expr, $storage:expr; override_feed_cache = $feed_cache:expr) => {
-        make_app!(@build $storage, ($env).write_scope(), storage::InstanceId::new(), storage::test_support::noop_mailer(), false, std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
+        make_app!(@build $storage, &($env).base, ($env).write_scope(), storage::InstanceId::new(), storage::test_support::noop_mailer(), false, std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
             site_config = ($env).site_config(), passkeys = ($env).passkeys(), users = ($env).users(), sessions = ($env).sessions(),
             invites = ($env).invites(), email_verifications = ($env).email_verifications(),
             password_resets = ($env).password_resets(), posts = ($env).posts(),
@@ -238,7 +299,7 @@ macro_rules! make_app {
         )
     };
     ($env:expr, $storage:expr; override_posts_and_publisher = $posts:expr, $publisher:expr) => {
-        make_app!(@build $storage, ($env).write_scope(), storage::InstanceId::new(), storage::test_support::noop_mailer(), false, std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
+        make_app!(@build $storage, &($env).base, ($env).write_scope(), storage::InstanceId::new(), storage::test_support::noop_mailer(), false, std::sync::Arc::new(jaunder::media_ownership::LiveMediaReferenceOwnershipResolver::new());
             site_config = ($env).site_config(), passkeys = ($env).passkeys(), users = ($env).users(), sessions = ($env).sessions(),
             invites = ($env).invites(), email_verifications = ($env).email_verifications(),
             password_resets = ($env).password_resets(), posts = $posts,
@@ -249,7 +310,7 @@ macro_rules! make_app {
         )
     };
     (
-        @build $storage:expr, $startup_write_scope:expr,
+        @build $storage:expr, $env_base:expr, $startup_write_scope:expr,
         $instance_id:expr, $mailer:expr, $secure_cookies:expr, $resolver:expr;
         site_config = $site_config:expr,
         passkeys = $passkeys:expr,
@@ -270,6 +331,7 @@ macro_rules! make_app {
         publisher = $publisher:expr,
         $(auth_write_scope = $auth_write_scope:expr,)?
         $(preparer = $preparer:expr,)?
+        $(backup_runner = $backup_runner:expr,)?
     ) => {{
         let themes: std::sync::Arc<dyn storage::ThemeStorage> = $themes;
         let application_stylesheet_url = $crate::helpers::install_app_system_inventory(
@@ -342,6 +404,9 @@ macro_rules! make_app {
                 std::sync::Arc::clone(&content_locks),
             ));
             let system_inventory = std::sync::Arc::new(host::system_theme::compile_system_artifact_inventory().expect("compile test startup inventory"));
+            let backup_runner: std::sync::Arc<dyn web::backup::ManualBackupRunner> = std::sync::Arc::new(
+                make_app!(@backup_runner site_config.clone(), $env_base, &storage_path $(, $backup_runner)?),
+            );
             let provide_contexts = {
                 let users = users.clone();
                 let sessions = sessions.clone();
@@ -366,6 +431,7 @@ macro_rules! make_app {
                 let theme_operation_coordinator = theme_operation_coordinator.clone();
                 let theme_manager = theme_manager.clone();
                 let mailer = mailer.clone();
+                let backup_runner = backup_runner.clone();
                 move || {
                     leptos::prelude::provide_context::<std::sync::Arc<dyn storage::UserStorage>>(users.clone());
                     leptos::prelude::provide_context::<std::sync::Arc<dyn storage::SessionStorage>>(sessions.clone());
@@ -393,6 +459,7 @@ macro_rules! make_app {
                         ),
                     );
                     leptos::prelude::provide_context::<std::sync::Arc<dyn web::site::SiteIdentityPublisher>>(identity_publisher);
+                    leptos::prelude::provide_context(backup_runner.clone());
                     leptos::prelude::provide_context(post_media_ownership.clone());
                     jaunder::context::provide_media_content_locks_context(&content_locks);
                     jaunder::context::provide_mailer_context(&mailer);
