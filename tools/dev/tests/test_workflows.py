@@ -209,6 +209,29 @@ def test_report_tools_fail_closed_without_a_report(
     assert result.stderr == f"dev: {command}: output is not a step report\n".encode()
 
 
+@pytest.mark.parametrize("help_args", [["--help"], ["-h"], ["report", "--help"]])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "wasm-audit",
+        "source-diagnostics",
+        "trace-analysis",
+        "e2e-local",
+        "coverage-check",
+    ],
+)
+def test_report_tools_show_their_help_unchanged(
+    checkout: Checkout, command: str, help_args: list[str]
+) -> None:
+    checkout.tool("cargo", 'print("Usage: tool [OPTIONS]")')
+    result = checkout.dev(command, *help_args)
+    assert (result.returncode, result.stdout, result.stderr) == (
+        0,
+        b"Usage: tool [OPTIONS]\n",
+        b"",
+    )
+
+
 # The front door forwards explicit local originals only. Nothing is bootstrapped and nothing but the
 # trace run directory (`.xtask/run`, which `dev` writes for every run) appears.
 ORG_TOOL = """\

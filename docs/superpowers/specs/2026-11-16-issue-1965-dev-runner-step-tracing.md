@@ -134,8 +134,9 @@ into `dev`.
 **Summary.** `dev trace summary [PATH]` defaults to the latest run. It reads the
 span records from a run directory, including one downloaded from CI. It prints
 the slowest spans with their depth, status and cache, plus each parent's
-untraced time. Overlapping children are not summed. `--markdown` prints the same
-table for `$GITHUB_STEP_SUMMARY`.
+untraced time. Every span that did not end `ok` (failed, signalled, incomplete)
+is listed as well, however short. Overlapping children are not summed.
+`--markdown` prints the same table for `$GITHUB_STEP_SUMMARY`.
 
 **CI.** Every validation and E2E job uploads `.xtask/run/` with `if: always()`,
 hidden files included and 14-day retention. Each job appends the summary to its

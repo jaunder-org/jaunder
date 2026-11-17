@@ -4,7 +4,7 @@ Arguments always travel as argv elements, never through a shell string. The
 tools own every decision: nothing here infers approval or ownership.
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from jaunder_dev import report, steps
 from jaunder_dev.commands import (
@@ -39,13 +39,21 @@ def pg_run(args: Sequence[str]) -> None:
     steps.run("pg-run", ["pg-run", *args])
 
 
+def _report(args: Sequence[str]) -> Callable[[bytes], str | None] | None:
+    """How a report tool's output is shown: rendered, or as-is when it is help.
+
+    Asked for help, the tool prints its usage instead of a report.
+    """
+    return None if {"--help", "-h"} & set(args) else report.render
+
+
 def coverage_check(args: Sequence[str]) -> None:
-    steps.run("coverage-check", [*COVERAGE_CHECK, *args], report.render)
+    steps.run("coverage-check", [*COVERAGE_CHECK, *args], _report(args))
 
 
 def host_proof_report(binary: str, args: Sequence[str]) -> None:
     """A host-proof diagnostic whose one JSON report is shown rendered."""
-    steps.run(binary, [*HOST_PROOF, binary, "--", *args], report.render)
+    steps.run(binary, [*HOST_PROOF, binary, "--", *args], _report(args))
 
 
 def pr_watch(args: Sequence[str]) -> None:

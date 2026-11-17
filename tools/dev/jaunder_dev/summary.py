@@ -1,4 +1,8 @@
-"""`dev trace summary`: a run's slowest spans, read from its span records."""
+"""`dev trace summary`: a run's slowest spans, read from its span records.
+
+Every span that did not end `ok` is listed too, however short: the step that
+stopped a run is the row a reader looks for first.
+"""
 
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -7,9 +11,11 @@ from pathlib import Path
 import click
 
 from jaunder_dev import spans
-from jaunder_dev.spans import RunSpan
+from jaunder_dev.spans import RunSpan, Status
 
+# The slowest spans shown; unsuccessful spans are shown beyond it.
 LIMIT = 20
+_UNSUCCESSFUL = {Status.FAILED, Status.SIGNALLED, Status.INCOMPLETE}
 
 
 @dataclass(frozen=True)
@@ -71,7 +77,12 @@ def rows(directory: Path) -> list[Row]:
         )
         for span in run
     ]
-    return sorted(table, key=lambda row: row.duration_ns, reverse=True)[:LIMIT]
+    slowest_first = sorted(table, key=lambda row: row.duration_ns, reverse=True)
+    return [
+        row
+        for rank, row in enumerate(slowest_first)
+        if rank < LIMIT or row.status in _UNSUCCESSFUL
+    ]
 
 
 def _seconds(nanoseconds: int | None) -> str:

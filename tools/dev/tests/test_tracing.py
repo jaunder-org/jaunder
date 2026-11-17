@@ -190,6 +190,40 @@ def test_summary_does_not_sum_overlapping_children(
     )
 
 
+def test_summary_lists_every_unsuccessful_span_beyond_the_slowest(
+    checkout: Checkout, tmp_path: Path
+) -> None:
+    # Twenty-five slow `ok` steps, and short steps that ended badly or carry no
+    # status, all shorter than every slow one.
+    slow = [f"slow{index}" for index in range(25)]
+    short = {"failed": "failed", "signalled": "signalled", "unknown": None}
+    records: list[dict[str, Any]] = [start("gate", None, 0)]
+    for index, span in enumerate(slow):
+        records.append(start(span, "gate", 0))
+        records.append(end(span, "gate", 1_000 + index, **{"jaunder.status": "ok"}))
+    for duration, (span, status) in zip([10, 9, 8], short.items()):
+        records.append(start(span, "gate", 0))
+        attributes = {} if status is None else {"jaunder.status": status}
+        records.append(end(span, "gate", duration, **attributes))
+    # No end record: it is incomplete, ending with its parent.
+    records.append(start("killed", "gate", 9_995))
+    records.append(end("gate", None, 10_000, **{"jaunder.status": "failed"}))
+    write_records(tmp_path / "run.trace.d", *records)
+
+    result = checkout.dev("trace", "summary", str(tmp_path / "run.trace.d"))
+    assert result.returncode == 0, result
+    names = [line.rsplit(" ", 1)[-1] for line in result.stdout.decode().splitlines()]
+    # The slowest twenty, then the unsuccessful spans, slowest first.
+    assert names == [
+        "Span",
+        "gate",
+        *reversed(slow[-19:]),
+        "failed",
+        "signalled",
+        "killed",
+    ]
+
+
 def test_summary_defaults_to_the_latest_run(checkout: Checkout) -> None:
     missing = checkout.dev("trace", "summary")
     assert missing.returncode == 1

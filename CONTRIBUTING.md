@@ -1237,11 +1237,11 @@ the records into `.xtask/run/<run_id>.trace.json` (Chrome trace JSON) with span
 ids in `args` and overlapping siblings on separate tracks. Open that file at
 <https://ui.perfetto.dev>. `dev trace summary [PATH] [--markdown]` reads a run
 directory (the latest under `.xtask/run/` by default, or one downloaded from CI)
-and prints the slowest spans with depth, status, cache and each parent's
-untraced time; overlapping children are not summed. Spans go only to these
-files; `dev` exports nothing over OTLP. Inside a Nix check the trace lands in
-the build directory and is discarded; the host-side Nix step records the cache
-result.
+and prints the slowest spans, plus every span that did not end `ok`, with depth,
+status, cache and each parent's untraced time; overlapping children are not
+summed. Spans go only to these files; `dev` exports nothing over OTLP. Inside a
+Nix check the trace lands in the build directory and is discarded; the host-side
+Nix step records the cache result.
 
 Tracing never changes a step's exit status, stdout or stderr. If the trace
 directory cannot be written, `dev` warns once on stderr and otherwise behaves

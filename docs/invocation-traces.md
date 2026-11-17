@@ -11,10 +11,11 @@ dev test-local -p storage site_config_primitives_round_trip
 Each process in the run writes span records under
 `.xtask/run/<run_id>.trace.d/`. When the run ends, `dev` merges them into
 `.xtask/run/<run_id>.trace.json`, a Chrome trace JSON file. `dev trace summary`
-prints the latest run's slowest spans, and `dev trace summary <dir>` reads a
-named run directory. Open the JSON file at <https://ui.perfetto.dev> (or use
-Perfetto's Open trace file control) to see the timeline. Copy traces you want to
-keep beyond the worktree out of `.xtask/run/`, which is local run history.
+prints the latest run's slowest spans and every span that did not end `ok`
+(failed, signalled, incomplete), and `dev trace summary <dir>` reads a named run
+directory. Open the JSON file at <https://ui.perfetto.dev> (or use Perfetto's
+Open trace file control) to see the timeline. Copy traces you want to keep
+beyond the worktree out of `.xtask/run/`, which is local run history.
 
 Each of `test-local`'s steps is a span under `dev test-local`: `hooks-path`
 (only when `core.hooksPath` needs writing), `host-artifacts-lock` (the wait for
