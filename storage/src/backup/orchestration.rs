@@ -185,7 +185,7 @@ async fn export_archive_backup(
     archive::ensure_absent(options.destination_path)?;
     // An unfinished run's files stay in one work directory that pruning never
     // counts; the archive takes its final name only by atomic rename
-    // (docs/adr/drafts/graceful-shutdown-takes-a-final-backup.md).
+    // (docs/adr/0250-graceful-shutdown-takes-a-final-backup.md).
     let work = archive::TemporaryBackupDirectory::near(options.destination_path)?;
     let staging = work.path().join("staging");
     let manifest = export_directory_backup(BackupExportOptions {

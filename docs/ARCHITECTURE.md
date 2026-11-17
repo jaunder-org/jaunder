@@ -532,7 +532,7 @@ every worker have drained, with the storage lock still held and the SIGINT
 forced-exit supervisor still live; its failure is reported and swallowed. The
 NixOS unit's `TimeoutStopSec = 15min` and `jaunder shut-down`'s 900-second
 default wait make room for it
-([graceful shutdown takes a final backup](adr/drafts/graceful-shutdown-takes-a-final-backup.md)).
+([graceful shutdown takes a final backup](adr/0250-graceful-shutdown-takes-a-final-backup.md)).
 
 ### Idempotent post creation
 
@@ -2907,7 +2907,7 @@ mismatched, and port-zero identities are refused without mutation. Repeated
 SIGTERM is non-escalating so concurrent automation joins the same drain; a
 further SIGINT retains interactive forced exit. Because graceful shutdown takes
 a final backup, the wait defaults to 900 seconds
-([graceful shutdown takes a final backup](adr/drafts/graceful-shutdown-takes-a-final-backup.md),
+([graceful shutdown takes a final backup](adr/0250-graceful-shutdown-takes-a-final-backup.md),
 amending ADR-0181's 30-second default). The bounded wait never escalates on
 timeout. No administration secret or network control channel exists
 ([identity-verified local shutdown](adr/0181-identity-verified-local-shutdown.md)).
@@ -4378,7 +4378,7 @@ universal OS guarantee or a claim that ProcessKit is defective based on an
 instantaneous PID state. The Nix daemon and shared build workers are not owned
 children. The separate `jaunder shut-down` wait/no-escalation contract remains
 ADR-0181, with the 900-second default wait from
-[graceful shutdown takes a final backup](adr/drafts/graceful-shutdown-takes-a-final-backup.md).
+[graceful shutdown takes a final backup](adr/0250-graceful-shutdown-takes-a-final-backup.md).
 
 The design is recorded in the
 [standalone UX sandbox lifecycle decision](adr/0244-standalone-ux-sandbox-lifecycle.md),
