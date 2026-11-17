@@ -1,7 +1,7 @@
 //! Git helpers shared by the tools: a `git -C` that hook overrides cannot
 //! redirect, tracked-file and config queries, and the `core.hooksPath`
 //! installation of checkout admission. Index custody is `dev`'s
-//! (`tools/dev/jaunder_dev/index.py`), not this module's.
+//! (`tools/dev/dev/index.py`), not this module's.
 
 use std::path::Path;
 use std::process::Command;

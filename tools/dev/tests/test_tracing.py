@@ -7,7 +7,7 @@ from typing import Any
 
 from conftest import Checkout
 
-from jaunder_dev import chrome
+from dev import chrome
 
 KILL_PARENT = "os.kill(os.getppid(), signal.SIGKILL); sys.exit()"
 

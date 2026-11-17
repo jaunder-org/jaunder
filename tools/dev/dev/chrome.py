@@ -3,8 +3,8 @@
 import json
 from pathlib import Path
 
-from jaunder_dev import spans
-from jaunder_dev.spans import RunSpan
+from dev import spans
+from dev.spans import RunSpan
 
 
 def tracks(run: list[RunSpan]) -> dict[str, int]:

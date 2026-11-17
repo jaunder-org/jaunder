@@ -749,11 +749,11 @@ let
     ]
   );
   # The prepush docs admission compares these files' worktree bytes with the
-  # index (`_static_docs_input` in tools/dev/jaunder_dev/index.py): keep the two
+  # index (`_static_docs_input` in tools/dev/dev/index.py): keep the two
   # selections in step.
   devPackageFiles = pkgs.lib.fileset.unions [
     ../tools/dev/pyproject.toml
-    (pkgs.lib.fileset.fileFilter (file: file.hasExt "py") ../tools/dev/jaunder_dev)
+    (pkgs.lib.fileset.fileFilter (file: file.hasExt "py") ../tools/dev/dev)
   ];
   devSrc = pkgs.lib.fileset.toSource {
     root = ../tools/dev;
@@ -768,13 +768,13 @@ let
   };
   # Sandbox callers run this build of `dev`; `checks.dev-python` runs its tests.
   devBin = pkgs.python3Packages.buildPythonApplication {
-    pname = "jaunder-dev";
+    pname = "dev";
     version = "0.1.0";
     pyproject = true;
     src = devSrc;
     build-system = [ pkgs.python3Packages.setuptools ];
     dependencies = devPythonDeps pkgs.python3Packages;
-    pythonImportsCheck = [ "jaunder_dev" ];
+    pythonImportsCheck = [ "dev" ];
     meta.mainProgram = "dev";
   };
   # Host callers run the working tree's `dev`, as hooks and gates must, with no
@@ -787,7 +787,7 @@ let
     runtimeInputs = [ pkgs.git ];
     text = ''
       root=$(git rev-parse --show-toplevel)
-      exec ${devPython}/bin/python -P -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from jaunder_dev.__main__ import main; main()' "$root/tools/dev" "$@"
+      exec ${devPython}/bin/python -P -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from dev.__main__ import main; main()' "$root/tools/dev" "$@"
     '';
   };
 
@@ -832,7 +832,7 @@ let
     || csrViteSourceFilter path type
     # `dev build-csr` drives the host bundle build: the runner's package source.
     || relative == "tools/dev/pyproject.toml"
-    || (pkgs.lib.hasPrefix "tools/dev/jaunder_dev/" relative && pkgs.lib.hasSuffix ".py" relative)
+    || (pkgs.lib.hasPrefix "tools/dev/dev/" relative && pkgs.lib.hasSuffix ".py" relative)
     # Nix expressions and the lock select producer/toolchain/native dependencies,
     # even when they are not copied into either Cargo source tree.
     || relative == "flake.nix"

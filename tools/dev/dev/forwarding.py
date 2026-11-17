@@ -6,8 +6,8 @@ tools own every decision: nothing here infers approval or ownership.
 
 from collections.abc import Callable, Sequence
 
-from jaunder_dev import report, steps
-from jaunder_dev.commands import (
+from dev import report, steps
+from dev.commands import (
     CARGO_RUN,
     COVERAGE_CHECK,
     HOST_PROOF,

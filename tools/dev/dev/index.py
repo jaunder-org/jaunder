@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import NoReturn
 
-from jaunder_dev import steps
+from dev import steps
 
 # Index modes of regular files, the only ones auto-staging and the narrow
 # route accept.
@@ -487,7 +487,7 @@ def _static_docs_input(path: bytes) -> bool:
         or path in (b".prettierrc.json", b".prettierignore")
         # The `dev` build the check runs (`devSrc` in nix/packages.nix).
         or path == b"tools/dev/pyproject.toml"
-        or (path.startswith(b"tools/dev/jaunder_dev/") and path.endswith(b".py"))
+        or (path.startswith(b"tools/dev/dev/") and path.endswith(b".py"))
     )
 
 

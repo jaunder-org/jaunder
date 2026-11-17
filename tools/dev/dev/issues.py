@@ -22,8 +22,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
 
-from jaunder_dev import steps
-from jaunder_dev.checkout import traced_git
+from dev import steps
+from dev.checkout import traced_git
 
 REPO = "jaunder-org/jaunder"
 PROJECT = "PVT_kwDOECw7os4BblPP"

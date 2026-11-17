@@ -5,7 +5,7 @@ import json
 import pytest
 from conftest import Checkout
 
-from jaunder_dev import report
+from dev import report
 
 # Reports and their exact rendering.
 REPORT = {

@@ -14,8 +14,8 @@ import pytest
 from conftest import REAL_GIT, Workflow
 from test_gates import CHECK_NO_TEST, PREPUSH_SHARES_DOCS, STATIC_DOCS, docs_shape
 
-from jaunder_dev import index
-from jaunder_dev.index import PathStatus, Reason, Refused, Snapshot
+from dev import index
+from dev.index import PathStatus, Reason, Refused, Snapshot
 
 shared_docs = pytest.mark.skipif(
     not PREPUSH_SHARES_DOCS, reason="the shared docs verdict is x86_64-linux only"
@@ -873,7 +873,7 @@ def test_the_docs_input_selector_matches_only_the_requests_sources() -> None:
         b".prettierignore",
         b"docs/.prettierignore",
         b"tools/dev/pyproject.toml",
-        b"tools/dev/jaunder_dev/static.py",
+        b"tools/dev/dev/static.py",
     ]:
         assert index._static_docs_input(path), path
     for path in [
@@ -1038,7 +1038,7 @@ def test_the_markdown_admission_needs_byte_identical_staged_markdown(
                 "docs/nested/.prettierignore": "*.tmp\r\n",
             },
         ),
-        ("*.py text eol=crlf\n", {"tools/dev/jaunder_dev/static.py": "CHECK = 1\r\n"}),
+        ("*.py text eol=crlf\n", {"tools/dev/dev/static.py": "CHECK = 1\r\n"}),
     ],
 )
 def test_a_clean_but_converting_checkout_is_never_admitted(

@@ -5,7 +5,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from jaunder_dev import steps
+from dev import steps
 
 
 def build(profile: str) -> None:

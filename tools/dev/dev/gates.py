@@ -11,15 +11,15 @@ import os
 from enum import StrEnum
 from pathlib import Path
 
-from jaunder_dev import e2e, index, report, static, steps
-from jaunder_dev.checkout import clean_tree
-from jaunder_dev.commands import (
+from dev import e2e, index, report, static, steps
+from dev.checkout import clean_tree
+from dev.commands import (
     COVERAGE_CHECK,
     HOST_PROOF,
     REPOSITORY_POLICY,
     SOURCE_CONTRACT,
 )
-from jaunder_dev.static import Mode
+from dev.static import Mode
 
 
 class Docs(StrEnum):

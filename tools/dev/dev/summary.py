@@ -10,8 +10,8 @@ from pathlib import Path
 
 import click
 
-from jaunder_dev import spans
-from jaunder_dev.spans import RunSpan, Status
+from dev import spans
+from dev.spans import RunSpan, Status
 
 # The slowest spans shown; unsuccessful spans are shown beyond it.
 LIMIT = 20

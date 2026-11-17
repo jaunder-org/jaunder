@@ -3,7 +3,7 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "jaunder-dev"
+name = "dev"
 version = "0.1.0"
 description = "Jaunder developer, hook, CI and sandbox workflows with step tracing"
 requires-python = ">=3.14"
@@ -11,10 +11,10 @@ requires-python = ">=3.14"
 dependencies = ["click", "opentelemetry-api", "opentelemetry-sdk"]
 
 [project.scripts]
-dev = "jaunder_dev.__main__:main"
+dev = "dev.__main__:main"
 
 [tool.setuptools]
-packages = ["jaunder_dev"]
+packages = ["dev"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -27,11 +27,11 @@ addopts = ["-p", "no:cacheprovider", "-n", "auto"]
 # the host and in the Nix check.
 [tool.ruff]
 
-# The CLI tests drive `python -m jaunder_dev` as a real process, so coverage
+# The CLI tests drive `python -m dev` as a real process, so coverage
 # follows them into subprocesses.
 [tool.coverage.run]
 branch = true
-source = ["jaunder_dev"]
+source = ["dev"]
 patch = ["subprocess"]
 
 [tool.coverage.report]

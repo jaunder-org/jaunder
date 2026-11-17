@@ -114,7 +114,7 @@ def test_nix_check_takes_exactly_one_check(checkout: Checkout, args: list[str]) 
 def test_a_named_package_build_records_its_step_and_cache(checkout: Checkout) -> None:
     checkout.tool("nix", FAKE_NIX_STORE)
     gate = (
-        "from pathlib import Path; from jaunder_dev import steps; "
+        "from pathlib import Path; from dev import steps; "
         'sys.exit(steps.gate(Path.cwd(), "dev demo", '
         'lambda: steps.nix_build("bundle", ".#demo")))'
     )
@@ -135,7 +135,7 @@ def build(
     """Runs `steps.nix_build(<call>)` as a gate's one step, printing its result."""
     checkout.tool("nix", FAKE_NIX_STORE)
     gate = (
-        "from pathlib import Path; from jaunder_dev import steps; "
+        "from pathlib import Path; from dev import steps; "
         'sys.exit(steps.gate(Path.cwd(), "dev demo", '
         f"lambda: print(steps.nix_build({call}))))"
     )

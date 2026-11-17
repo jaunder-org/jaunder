@@ -153,7 +153,7 @@ mod tests {
             "package-lock.json",
             "scripts/build-csr-assets.sh",
             "tools/dev/pyproject.toml",
-            "tools/dev/jaunder_dev/new.py",
+            "tools/dev/dev/new.py",
             "server/assets/jaunder.css",
             "host/system_theme_sources/new.css",
             "storage/migrations/new.sql",

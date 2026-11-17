@@ -45,7 +45,7 @@ def require(present: bool, prerequisite: str) -> None:
 # joins this interpreter's sys.path alone, never PYTHONPATH, so every step's
 # child inherits the caller's environment unchanged.
 LAUNCH = "import sys; sys.path.insert(0, sys.argv.pop(1)); "
-DEV = "from jaunder_dev.__main__ import main; main()"
+DEV = "from dev.__main__ import main; main()"
 
 
 def launch(code: str, *args: str) -> list[str]:

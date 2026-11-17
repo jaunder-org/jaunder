@@ -8,7 +8,7 @@ from typing import Any
 
 import click
 
-from jaunder_dev import (
+from dev import (
     checkout,
     csr,
     e2e,
@@ -21,8 +21,8 @@ from jaunder_dev import (
     steps,
     summary,
 )
-from jaunder_dev.gates import Docs
-from jaunder_dev.static import Mode
+from dev.gates import Docs
+from dev.static import Mode
 
 
 def _gate(body: Callable[[], None], sandbox: bool = False) -> None:

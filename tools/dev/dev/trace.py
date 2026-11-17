@@ -30,7 +30,7 @@ from opentelemetry.trace import NoOpTracer, Tracer
 from opentelemetry.trace import Span as ApiSpan
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
-from jaunder_dev import chrome
+from dev import chrome
 
 TRACE_DIR = "JAUNDER_TRACE_DIR"
 CARRIER_KEYS = ("TRACEPARENT", "TRACESTATE")
@@ -203,7 +203,7 @@ def run(root: Path, name: str) -> Iterator[ApiSpan]:
         parent = _PROPAGATOR.extract(os.environ, getter=EnvironmentGetter())
     writer = RecordWriter(directory, warn)
     provider = recording_provider(writer)
-    _current = _Run(provider.get_tracer("jaunder_dev"), directory)
+    _current = _Run(provider.get_tracer("dev"), directory)
     try:
         with _current.tracer.start_as_current_span(name, context=parent) as span:
             yield span

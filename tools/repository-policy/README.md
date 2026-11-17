@@ -7,7 +7,7 @@ This auxiliary package currently owns the Task 1 boundaries of issue #1898:
 
 Git/index custody (the precommit snapshot, staging reconciliation and the shared
 `static-docs` admission and post-check) belongs to `dev` itself
-(`tools/dev/jaunder_dev/index.py`), not to this package.
+(`tools/dev/dev/index.py`), not to this package.
 
 `dev` uses locked Cargo from the active checkout. The separate native Nix output
 is `.#repository-policy`; it provides the binaries and never runs them during

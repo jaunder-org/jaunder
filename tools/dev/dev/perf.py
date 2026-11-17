@@ -11,8 +11,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from jaunder_dev import steps
-from jaunder_dev.commands import PERF_DATA
+from dev import steps
+from dev.commands import PERF_DATA
 
 SELECT_PRODUCERS = (
     'let flake = builtins.getFlake ("git+file://" + toString ./.); '

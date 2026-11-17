@@ -12,7 +12,7 @@ from pathlib import Path
 
 import click
 
-from jaunder_dev import steps
+from dev import steps
 
 
 def untraced_git(*args: str) -> subprocess.CompletedProcess[str]:

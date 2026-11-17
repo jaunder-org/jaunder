@@ -4572,15 +4572,15 @@ telemetry is unchanged.
 The auxiliary repository-policy package owns the fixed documentation policies
 (`repository-docs`), fixed Rust/TypeScript source contracts and informational
 17-cell census (`source-contracts`). The single-process Git/index safety owner
-is `dev precommit`/`dev prepush` itself (`tools/dev/jaunder_dev/index.py`), not
-this package. `dev` retains their independent verdicts and order; the binaries
-do not select a workflow or emit an omnibus result envelope. Shared source
-inventory, marker and server-function contracts have one canonical home, reused
-by the remaining runtime coverage consumer rather than cloned.
-`dev census [--json]` is informational: candidates and unavailable capabilities
-are not gate failures; failed collection remains nonzero with completed cells
-retained. The explicit-file `dev org-timezone-manifest` artifact command reuses
-common Org/timezone types and bypasses checkout/hook bootstrap. The narrow
+is `dev precommit`/`dev prepush` itself (`tools/dev/dev/index.py`), not this
+package. `dev` retains their independent verdicts and order; the binaries do not
+select a workflow or emit an omnibus result envelope. Shared source inventory,
+marker and server-function contracts have one canonical home, reused by the
+remaining runtime coverage consumer rather than cloned. `dev census [--json]` is
+informational: candidates and unavailable capabilities are not gate failures;
+failed collection remains nonzero with completed cells retained. The
+explicit-file `dev org-timezone-manifest` artifact command reuses common
+Org/timezone types and bypasses checkout/hook bootstrap. The narrow
 scoped-Leptosfmt adapter is the formatter exception, not a general process
 runner.
 
@@ -4706,18 +4706,18 @@ reconciliation in the same process as the host checks, not in the shell hook.
 `.githooks/pre-push` calls `dev prepush`. Verify workflows share `dev`'s direct
 clean-tree Git-status admission and refuse dirty or unavailable state before
 expensive work. That simple check is not raw/index docs admission or precommit
-reconciliation, which are `dev`'s index custody
-(`tools/dev/jaunder_dev/index.py`). Only that custody honours the `GIT_*`
-repository overrides a hook exports; every step, including cargo test, nextest
-and pytest, runs without them, so a test's scratch `git init` cannot
-reinitialise the hooked repository. There is no `dev` `--allow-dirty` option;
-`SKIP_PRE_PUSH=1` remains a deliberate hook escape. The hook proves the fast
-local lane ran on the committed tip with no uncommitted files hiding; CI remains
-the non-bypassable hermetic authority; prepush's shared `static-docs` leaf and
-its Nix doctest producer and gate are the deliberate exceptions to its otherwise
-host-only gate ([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)
-amends the #1117 supplement). Every repository-policy host tool self-heals
-`core.hooksPath` to the tracked, relative `.githooks` before its workload
+reconciliation, which are `dev`'s index custody (`tools/dev/dev/index.py`). Only
+that custody honours the `GIT_*` repository overrides a hook exports; every
+step, including cargo test, nextest and pytest, runs without them, so a test's
+scratch `git init` cannot reinitialise the hooked repository. There is no `dev`
+`--allow-dirty` option; `SKIP_PRE_PUSH=1` remains a deliberate hook escape. The
+hook proves the fast local lane ran on the committed tip with no uncommitted
+files hiding; CI remains the non-bypassable hermetic authority; prepush's shared
+`static-docs` leaf and its Nix doctest producer and gate are the deliberate
+exceptions to its otherwise host-only gate
+([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md) amends the #1117
+supplement). Every repository-policy host tool self-heals `core.hooksPath` to
+the tracked, relative `.githooks` before its workload
 (`tools/repository-policy/src/checkout.rs`: `ensure_hooks_installed`, the one
 owner of that repair); `dev` itself, precommit and test-local included, does not
 touch it. `SKIP_PRE_COMMIT=1` / `SKIP_PRE_PUSH=1` are deliberate local escapes;
@@ -5224,7 +5224,7 @@ this code execute?_ ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)):
   optional rendered `report` text and optional structured `evidence`). The
   shared argument parser points fd 1 at stderr and reserves the real stdout for
   that report, so child output goes to stderr; the exit status is the verdict.
-  `dev` renders the human view from it (`tools/dev/jaunder_dev/report.py`). The
+  `dev` renders the human view from it (`tools/dev/dev/report.py`). The
   production-baseline workflows return plain status instead
   ([qualification carveout](adr/0239-qualification-workflow-ownership.md)).
 - **`tools/host-proof`** — focused host proof (ADR-0246): direct `e2e-local` and

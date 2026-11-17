@@ -26,8 +26,8 @@ from typing import Any
 
 from opentelemetry.trace import Span
 
-from jaunder_dev import trace
-from jaunder_dev.spans import CACHE, COMMAND_LINE, EXIT_CODE, STATUS, Cache, Status
+from dev import trace
+from dev.spans import CACHE, COMMAND_LINE, EXIT_CODE, STATUS, Cache, Status
 
 _HANDLED = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
 

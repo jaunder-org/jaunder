@@ -4,7 +4,7 @@ from pathlib import Path
 
 from opentelemetry.sdk.trace.id_generator import IdGenerator
 
-from jaunder_dev import trace
+from dev import trace
 
 GOLDEN = Path(__file__).parent / "golden" / "span-records.jsonl"
 

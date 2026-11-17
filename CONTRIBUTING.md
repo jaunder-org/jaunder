@@ -195,7 +195,7 @@ rejected because that workspace defines gate behavior and repository scanners
 that require their full product, documentation, CI, and e2e input populations.
 
 Precommit retains Fix-mode formatting and keeps single-process custody of the
-Git index in `dev` itself (`tools/dev/jaunder_dev/index.py`): it re-stages only
+Git index in `dev` itself (`tools/dev/dev/index.py`): it re-stages only
 formatter/check mutations on already-staged tracked paths without pre-existing
 unstaged changes. It always takes its after-snapshot and reconciles once,
 including after a narrow-surface failure; mixed tracked paths, newly-created
@@ -862,8 +862,8 @@ Each host tool prints exactly one JSON report on stdout (`host_tool::report`:
 optional rendered `report` text and optional structured `evidence`). The shared
 argument parser points fd 1 at stderr and reserves the real stdout for that
 report, so child output goes to stderr; the exit status is the verdict. `dev`
-renders the human view from that report (`tools/dev/jaunder_dev/report.py`);
-output that is not a report fails the step. There is no `--json` flag,
+renders the human view from that report (`tools/dev/dev/report.py`); output that
+is not a report fails the step. There is no `--json` flag,
 `.xtask/last-result.json` sidecar or completion sentinel. Elisp artifact lifting
 remains alongside its consumer algorithm (`coverage-check elisp-consume`);
 doctests run only in Nix (`checks.doctests`, `checks.tools-doctests`). The E2E

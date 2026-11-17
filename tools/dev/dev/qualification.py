@@ -8,8 +8,8 @@ harness, and runs only as its own Nix output.
 
 import click
 
-from jaunder_dev import steps
-from jaunder_dev.checkout import clean_tree, traced_git
+from dev import steps
+from dev.checkout import clean_tree, traced_git
 
 ORIGINS = (
     "https://github.com/jaunder-org/jaunder.git",

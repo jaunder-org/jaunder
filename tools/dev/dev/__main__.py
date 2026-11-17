@@ -1,4 +1,4 @@
-from jaunder_dev.cli import cli
+from dev.cli import cli
 
 
 def main() -> None:
