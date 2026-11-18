@@ -163,7 +163,7 @@ mod tests {
     fn approved_paths_include_only_declared_source_roots() {
         assert!(is_approved_path("server/src/lib.rs"));
         assert!(is_approved_path("xtask/src/lib.rs"));
-        assert!(is_approved_path("tools/devtool/src/main.rs"));
+        assert!(is_approved_path("tools/system-artifacts/src/main.rs"));
         assert!(is_approved_path("end2end/tests/a.spec.ts"));
         assert!(is_approved_path("elisp/jaunder.el"));
         assert!(is_approved_path("Cargo.toml"));

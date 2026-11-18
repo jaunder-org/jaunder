@@ -69,10 +69,9 @@ coverage-check mutants-verify --package <package> --file <file> --output <artifa
 
 The output root contains `mutants.out/`. Native validation errors and launcher
 failures propagate as nonzero caller exits. `.mutants-loop/verify.sh` runs it
-with locked Cargo from the checkout
-(`cargo run --locked --manifest-path tools/Cargo.toml -p coverage --features host --bin coverage-check`)
-under `scripts/run-report`, which renders its single JSON report; cold builds
-are real costs, while warm invocations reuse existing Cargo build artifacts.
+through `dev coverage-check`, which builds it with locked Cargo from the
+checkout and renders its single JSON report; cold builds are real costs, while
+warm invocations reuse existing Cargo build artifacts.
 
 ## Files here
 

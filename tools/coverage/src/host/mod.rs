@@ -3,11 +3,10 @@
 //! Lisp coverage reconciliation, Playwright/WASM coverage evidence and
 //! mutation-evidence verification. None of this runs inside Nix.
 
-mod digest;
 pub mod elisp;
 pub mod mutants;
 pub mod nix;
 pub mod policy;
 pub mod wasm_evidence;
 
-pub(crate) use digest::lowercase_hex;
+pub(crate) use crate::digest::lowercase_hex;

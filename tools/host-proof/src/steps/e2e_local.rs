@@ -1,4 +1,4 @@
-//! Host e2e loop driver (#249): `just e2e-local` OWNS the whole loop —
+//! Host e2e loop driver (#249): this driver OWNS the whole loop —
 //! select immutable server/seed artifacts, start `jaunder serve` on an ephemeral port with
 //! the VM's capture env, discover the port from the canonical
 //! `<storage>/runtime.json`, seed via the shared `test-support seed-e2e`, run

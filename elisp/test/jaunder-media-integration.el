@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 ;; Exercises media upload + content-src substitution end-to-end against a real
-;; server (harness, ADR-0035).  Runs via `cargo xtask elisp-integration'.
+;; server (harness, ADR-0035).  Runs via `elisp/scripts/run-integration-tests.el'.
 
 ;;; Code:
 

@@ -1,4 +1,4 @@
-//! Fixed documentation operations; composition and population ordering belong to Just.
+//! Fixed documentation operations; composition and population ordering belong to `dev`.
 use std::path::Path;
 
 /// One independent documentation policy, never a workflow selection.

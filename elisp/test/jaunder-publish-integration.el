@@ -1,7 +1,7 @@
 ;;; jaunder-publish-integration.el --- live publish tests -*- lexical-binding: t; -*-
 ;;; Commentary:
 ;; End-to-end publish flow against a real server (harness, ADR-0035).
-;; Runs via `cargo xtask elisp-integration'.  Each post lives in its own tempdir
+;; Runs via `elisp/scripts/run-integration-tests.el'.  Each post lives in its own tempdir
 ;; registered in `jaunder-blogs' (pointing at the harness's live server), so the
 ;; publish commands resolve the blog by directory the way real usage does.
 ;;; Code:

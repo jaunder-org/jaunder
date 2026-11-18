@@ -420,8 +420,8 @@ For contributors changing Jaunder's theme implementation, the focused platform
 checks are:
 
 ```sh
-traced-run -- just test-local -p host theme_package
-traced-run -- just e2e-local theme-management.spec.ts
+traced-run -- dev test-local -p host theme_package
+traced-run -- dev e2e-local theme-management.spec.ts
 ```
 
 These commands test Jaunder itself. Studio import and preview remain the

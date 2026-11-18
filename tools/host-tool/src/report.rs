@@ -1,6 +1,6 @@
 //! The host tool result contract: one JSON document on stdout, the process
 //! status as the verdict. Human views are derived from the JSON by callers
-//! (`scripts/step-report.jq`).
+//! (`dev`'s renderer in `tools/dev/dev/report.py`).
 
 use std::io::Write;
 use std::sync::{Mutex, OnceLock};

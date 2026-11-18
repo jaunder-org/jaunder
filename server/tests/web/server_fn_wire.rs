@@ -1,8 +1,9 @@
 //! The wire contract of every `#[macros::server]` fn (#714).
 //!
 //! These read `ServerFn::PATH` off the **generated types** rather than off source,
-//! so they hold even if xtask's `syn` enumeration breaks. That matters more than it
-//! sounds: every server-fn gate reports "no problems" on an empty enumeration, so a
+//! so they hold even if a `syn` enumeration of the source breaks. That matters more
+//! than it sounds: every source-level server-fn rule reports "no problems" on an
+//! empty enumeration, so a
 //! predicate that stops matching is a silent green across all of them. This file is
 //! the assertion that does not depend on that machinery working.
 //!

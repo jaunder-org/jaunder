@@ -9,7 +9,7 @@ use super::{crap, exempt, gate, report};
 use host_tool::report::StepResult;
 use repository_policy::git;
 
-/// Apply only host source policy to realized text + CRAP reports. The Just
+/// Apply only host source policy to realized text + CRAP reports. The `dev`
 /// workflow must pass the hard Nix producer-status gate before invoking this leaf.
 pub fn run(out_dir: &Path) -> StepResult {
     run_inner(out_dir).unwrap_or_else(coverage_failure_step)

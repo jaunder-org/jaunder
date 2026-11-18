@@ -141,7 +141,7 @@ mod tests {
         /// finding it anywhere in the span's fields proves a leak.
         const SECRET_PREFIX: &str = "secret-fragment";
 
-        /// #511: the source-static gate cannot tell whether `#[server]`'s expansion
+        /// #511: static source analysis cannot tell whether `#[server]`'s expansion
         /// actually wraps the server-side body, so one site is pinned at runtime —
         /// the span exists, carries its derived name, records the recordable
         /// argument, and never carries the skipped one's value.
@@ -167,7 +167,7 @@ mod tests {
 
             // Asserted over collected values rather than an `expect`/`else panic!`, so
             // every line here executes on the passing path — a diagnostic-only branch
-            // would read as uncovered to the coverage gate.
+            // would read as uncovered.
             let captured = lock(&captured);
             let names: Vec<&str> = captured.spans.iter().map(|s| s.name.as_str()).collect();
             assert!(

@@ -25,7 +25,14 @@ let
     leanDevAndTestProfile
     jaunderBin
     testSupportBin
-    devtoolBin
+    coverageSandboxBin
+    doctestsBin
+    perfProducerBin
+    toolsBuild
+    toolsDocTestSrc
+    devBin
+    devPythonCheck
+    devCheckSrc
     cargo-crap
     wasm-bindgen-cli
     wasmTestWebdriverConfig
@@ -72,10 +79,10 @@ let
     assert (siteTargetSource "tools/performance/src/lib.rs");
     assert (wasmTestTargetSource "tools/performance/Cargo.toml");
     assert (wasmTestTargetSource "tools/performance/src/lib.rs");
-    assert !(siteTargetSource "tools/devtool/Cargo.toml");
+    assert !(siteTargetSource "tools/system-artifacts/Cargo.toml");
     assert !(siteTargetSource "tools/doctests/Cargo.toml");
     assert !(siteTargetSource "tools/diagnostic-coverage-runtime/Cargo.toml");
-    assert !(wasmTestTargetSource "tools/devtool/Cargo.toml");
+    assert !(wasmTestTargetSource "tools/system-artifacts/Cargo.toml");
     assert !(wasmTestTargetSource "tools/doctests/Cargo.toml");
     assert !(wasmTestTargetSource "tools/diagnostic-coverage-runtime/Cargo.toml");
     assert !(siteTargetSource "tools/qualification/src/lib.rs");
@@ -91,8 +98,6 @@ let
   coverageAuxiliarySource =
     relative:
     relative == ".config/nextest.toml"
-    # Performance and sandbox regressions exercise the real production Just recipes.
-    || relative == "Justfile"
     || relative == "csr/index.html"
     || pkgs.lib.hasPrefix "server/assets/" relative
     || pkgs.lib.hasPrefix "storage/migrations/" relative
@@ -112,22 +117,20 @@ let
   coverageSrc =
     # Pure source-filter negative case: excluded auxiliary assets cannot perturb
     # coverage source identity.
-    assert !(coverageAuxiliarySource "tools/devtool/fixture.css");
+    assert !(coverageAuxiliarySource "tools/coverage/fixture.css");
     assert !(coverageAuxiliarySource "server/notes.txt");
     assert (coverageAuxiliarySource "server/tests/misc/backup_corpus/index.json");
     assert (coverageAuxiliarySource "storage/migrations/sqlite/0001_create_site_config.sql");
     assert (coverageAuxiliarySource "server/assets/jaunder.css");
     assert (coverageAuxiliarySource "csr/index.html");
-    assert (coverageAuxiliarySource "Justfile");
     assert (coverageAuxiliarySource "host/system_theme_sources/studio/theme.json");
     assert (coverageAuxiliarySource "host/system_theme_sources/studio/style.css");
     assert (coverageAuxiliarySource "testdata/theme-repository/minimal/preview.png");
     assert !(coverageAuxiliarySource "testdata/unrelated.png");
-    assert (coverageAuxiliarySource "Justfile");
     assert (builtins.elem "ux-sandbox" coverageMembers);
     assert (cargoMemberSource coverageMembers (cargoSourcePath "ux-sandbox/Cargo.toml") "regular");
     assert (cargoMemberSource coverageMembers (cargoSourcePath "ux-sandbox/tests/public_command.rs") "regular");
-    assert !(builtins.elem "tools/devtool" coverageMembers);
+    assert !(builtins.elem "tools/system-artifacts" coverageMembers);
     assert !(builtins.elem "tools/coverage" coverageMembers);
     assert !(builtins.elem "tools/qualification" coverageMembers);
     assert !(builtins.elem "tools/host-proof" coverageMembers);
@@ -822,9 +825,9 @@ mkE2eCheck =
           # `jaunder site-config set` seed steps resolve bare `jaunder` here.
           jaunderBin
         ]
-        # Only performance producers run devtool in the guest; ordinary e2e
-        # lanes seed through test-support, so their guests do not install it.
-        ++ lib.optional (producer != null) devtoolBin;
+        # Only performance producers run perf-producer in the guest; ordinary
+        # e2e lanes seed through test-support, so their guests do not install it.
+        ++ lib.optional (producer != null) perfProducerBin;
         environment.etc."jaunder-otel-collector.yaml".source = ../end2end/otel-collector.yaml;
         environment.etc."jaunder-otel-processors.yaml".source = ./otel-processors.yaml;
 
@@ -927,7 +930,7 @@ mkE2eCheck =
   });
 
 # Cache-busting salt for e2e measurement runs (#792). Nix caches the e2e
-# check derivations, so a repeated `just trace-analysis run` returns a
+# check derivations, so a repeated `dev trace-analysis run` returns a
 # CACHED result rather than re-running the suite — silently handing back
 # traces from whenever it was last built, possibly on a CI runner under
 # unknown load. Set this to a distinct value per measurement run to force
@@ -1067,7 +1070,7 @@ e2eWorkers4ControlPackages = mkE2eControlPackages 4 6144 4;
 # name says so.
 #
 # NOT part of the gate — built on demand by
-# `just trace-analysis run --single-worker` (see docs/observability.md).
+# `dev trace-analysis run --single-worker` (see docs/observability.md).
 # They keep the default 2 GB VM, since one worker fits where two Firefox
 # workers would OOM it (#61). Note workers=1 also drops chromium's
 # whole-test scale to 1.0 from the gate's 1.5 (firefox takes
@@ -1182,7 +1185,7 @@ mkPerformanceProducer =
         "browser_version": "not-applicable",
         "stable_derivation_identities": [
           { "name": "client", "identity": "${csrWasmBundle.drvPath}" },
-          { "name": "producer", "identity": "${devtoolBin.drvPath}" },
+          { "name": "producer", "identity": "${perfProducerBin.drvPath}" },
           { "name": "server", "identity": "${jaunderBin.drvPath}" },
         ],
       }
@@ -1194,7 +1197,7 @@ mkPerformanceProducer =
           + " > /var/lib/jaunder/performance/identity.json"
         )
         storage_status, storage_output = machine.execute(
-          "devtool performance storage --db ${backendPolicy.jaunderDb} --backend ${backend}"
+          "perf-producer storage --db ${backendPolicy.jaunderDb} --backend ${backend}"
           + " --manifest /var/lib/jaunder/performance/dataset-manifest-v1.json"
           + " --output /var/lib/jaunder/performance/fragments"
           + " --provisioning-us " + str(setup["provisioning_us"])
@@ -1204,7 +1207,7 @@ mkPerformanceProducer =
           + " --cpu-model " + shlex.quote(cpu_model)
           + " --database-version ${backendPolicy.package.version}"
           + " --stable-derivation-identity client=${csrWasmBundle.drvPath}"
-          + " --stable-derivation-identity producer=${devtoolBin.drvPath}"
+          + " --stable-derivation-identity producer=${perfProducerBin.drvPath}"
           + " --stable-derivation-identity server=${jaunderBin.drvPath} 2>&1"
         )
         machine.succeed(
@@ -1273,7 +1276,7 @@ mkPerformanceProducer =
           )
         else:
           browser_validation_status, browser_validation_output = machine.execute(
-            "devtool performance validate-browser"
+            "perf-producer validate-browser"
             + " --manifest /var/lib/jaunder/performance/dataset-manifest-v1.json"
             + " --input /var/lib/jaunder/performance/fragments/browser-${backend}-${selectedBrowser}-v1.json"
             + " --output /var/lib/jaunder/performance/fragments 2>&1"
@@ -1294,7 +1297,7 @@ mkPerformanceProducer =
     '';
   };
 
-# Nix owns selection and the producer installable descriptions. Just consumes
+# Nix owns selection and the producer installable descriptions. `dev perf` consumes
 # this ordered list one installable at a time so measurement VMs never overlap.
 selectPerformanceProducers =
   {
@@ -1399,7 +1402,7 @@ mkWasmCoverageProducer =
         pkgs.sqlite
         testSupportBin
         diagnosticJaunderBin
-        devtoolBin
+        coverageSandboxBin
         pkgs.jq
       ];
       services.jaunder.enable = true;
@@ -1417,7 +1420,7 @@ mkWasmCoverageProducer =
       machine.succeed(
         "JAUNDER_WASM_COVERAGE_CSR=${self.packages.${system}.wasm-coverage-csr}"
         + " JAUNDER_WASM_COVERAGE_BROWSER=${browser}"
-        + " devtool wasm-coverage initialize"
+        + " coverage-sandbox wasm initialize"
       )
       machine.wait_for_unit("jaunder.service", timeout=60)
       machine.wait_for_open_port(3000, timeout=30)
@@ -1449,14 +1452,14 @@ mkWasmCoverageProducer =
       map_status, map_output = machine.execute(
         "JAUNDER_WASM_COVERAGE_CSR=${self.packages.${system}.wasm-coverage-csr}"
         + " JAUNDER_WASM_COVERAGE_INJECT_FAILURE=${failure}"
-        + " devtool wasm-coverage map --site-src ${siteSrc}",
+        + " coverage-sandbox wasm map --site-src ${siteSrc}",
         timeout=120,
       )
       print(map_output)
       machine.succeed(
         "JAUNDER_WASM_COVERAGE_PLAYWRIGHT_EXIT="
         + str(status)
-        + " devtool wasm-coverage finalize"
+        + " coverage-sandbox wasm finalize"
       )
       if "${failure}" == "early":
         machine.succeed(
@@ -2691,12 +2694,6 @@ mkWasmCoverageMeasurementProducer =
         src = coverageSrc;
         inherit cargoArtifacts;
         pname = "jaunder-coverage";
-        # Just's embedded recipe shebangs are not at the start of a shell file,
-        # so patchShebangs cannot make these production recipes sandbox-safe.
-        postPatch = (hostArgs.postPatch or "") + ''
-          substituteInPlace Justfile \
-            --replace-fail '#!/usr/bin/env bash' '#!${pkgs.bash}/bin/bash'
-        '';
         # Source-based coverage uses LLVM's embedded coverage map
         # (-Cinstrument-coverage), not DWARF, so dropping debuginfo
         # shrinks the instrumented test binaries dramatically with no
@@ -2715,15 +2712,13 @@ mkWasmCoverageMeasurementProducer =
         JAUNDER_CSR_BUNDLE_DIR = "${csrWasmBundle}";
         JAUNDER_PUBLIC_DIR = "${../public}";
         nativeBuildInputs = hostArgs.nativeBuildInputs ++ [
-          devtoolBin
+          coverageSandboxBin
           cargo-crap
           pkgs.cargo-llvm-cov
           pkgs.cargo-nextest
           pkgs.exiftool
-          # Performance fixtures need Git provenance and jq; sandbox fixtures
-          # exercise the public Just front door and its literal argv.
+          # Performance fixtures need Git provenance and jq.
           pkgs.git
-          pkgs.just
           pkgs.jq
           pkgs.bash
           pkgs.coreutils
@@ -2740,7 +2735,7 @@ mkWasmCoverageMeasurementProducer =
           # The producer emits checked stage evidence; the Nix gate and host coverage-check
           # consume its status and reports as separate authoritative boundaries.
           # A PostgreSQL start failure fails this build before the producer runs.
-          pg-run devtool coverage emit --out emit-out
+          pg-run coverage-sandbox emit --out emit-out
         '';
         installPhaseCommand = ''
           mkdir -p $out
@@ -2767,8 +2762,8 @@ mkWasmCoverageMeasurementProducer =
     # Belt-and-suspenders: this sandbox consumer validates completed producer
     # evidence through the shared Rust contract, while host coverage-check consumes its
     # reports separately. Its `jaunder-coverage-gate` name stays broad-filtered.
-    coverage-gate = nonSubstitutable (pkgs.runCommand "jaunder-coverage-gate" { nativeBuildInputs = [ devtoolBin ]; } ''
-      devtool coverage validate-status --status ${coverage}/status.json
+    coverage-gate = nonSubstitutable (pkgs.runCommand "jaunder-coverage-gate" { nativeBuildInputs = [ coverageSandboxBin ]; } ''
+      coverage-sandbox validate-status --status ${coverage}/status.json
       touch $out
     '');
   };
@@ -2856,8 +2851,6 @@ mkWasmCoverageMeasurementProducer =
     else
     sqlxSqlitePatchSource path
     || type == "directory"
-    # traced-run all-target tests embed these maintained workflow owners.
-    || path == "${toString ../.}/Justfile"
     # Qualification compiles in its evidence schema; its tests embed .gitignore.
     || path == "${toString ../.}/docs/production-baseline.schema.json"
     || path == "${toString ../.}/.gitignore"
@@ -2882,7 +2875,6 @@ mkWasmCoverageMeasurementProducer =
               "/.rustfmt.toml"
               "/.prettierrc.json"
               "/.prettierignore"
-              "/recipes/static.just"
               "/sgconfig.yml"
             ]
             || builtins.any (directory: pkgs.lib.hasInfix "/${directory}/" path) (workspaceMembers ++ [
@@ -2900,10 +2892,8 @@ mkWasmCoverageMeasurementProducer =
   clippySource = pkgs.lib.cleanSourceWith {
     src = craneLib.path ../.;
     filter =
-      assert clippySourceFilter "${toString ../.}/recipes/static.just" "regular";
       assert clippySourceFilter "${toString ../.}/Cargo.toml" "regular";
       assert clippySourceFilter "${toString ../.}/tools/Cargo.lock" "regular";
-      assert clippySourceFilter "${toString ../.}/Justfile" "regular";
       assert clippySourceFilter "${toString ../.}/.github/workflows/ci.yml" "regular";
       assert clippySourceFilter "${toString ../.}/.github/workflows/performance.yml" "regular";
       assert clippySourceFilter "${toString ../.}/server/build.rs" "regular";
@@ -2928,16 +2918,17 @@ mkWasmCoverageMeasurementProducer =
       ];
       clippySourceFilter;
   };
+  # `dev` arrives as its own filtered build, so tools/dev/ edits rebuild these.
   mkClippyLeaf = name: nonSubstitutable (pkgs.runCommand name {
-    nativeBuildInputs = [ pkgs.stdenv.cc pkgs.just toolchain ] ++ hostArgs.nativeBuildInputs;
+    nativeBuildInputs = [ pkgs.stdenv.cc devBin toolchain ] ++ hostArgs.nativeBuildInputs;
     buildInputs = hostArgs.buildInputs;
     LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ];
-    JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
-    JAUNDER_DEVTOOL_TOOLS_CARGO_HOME = "${toolsOfflineCargoHome}";
+    JAUNDER_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
+    JAUNDER_TOOLS_CARGO_HOME = "${toolsOfflineCargoHome}";
   } ''
     cp --no-preserve=mode -r ${clippySource} src
     cd src
-    just --justfile recipes/static.just --working-directory . ${name} verify sandbox
+    dev static ${name} --sandbox
     touch $out
   '');
 in
@@ -2961,7 +2952,7 @@ in
         }
       );
 # The e2e aggregate: a symlinkJoin of every browser/backend `e2e-*`
-# check, exposed as `checks.e2e`; Just uses the individual lane producers.
+# check, exposed as `checks.e2e`; `dev` uses the individual lane producers.
 # Adding a new browser/backend combo automatically joins it here. Its
 # `jaunder-e2e*` name keeps it out of the cachix push, so building it
 # always realizes the underlying VM checks rather than substituting a
@@ -3052,7 +3043,7 @@ e2eGateChecks
     }
   );
 
-  # Optional browser/backend join; Just preserves individual producer verdicts.
+  # Optional browser/backend join; `dev` preserves individual producer verdicts.
   # `e2e-checks` aggregates every browser/backend `checks.e2e-*` combo
   # (now 4); they are independent derivations realized in parallel up
   # to the host `max-jobs` (CI's install-nix-action sets `max-jobs =
@@ -3404,7 +3395,7 @@ clippy-aggregate = nonSubstitutable (pkgs.runCommand "clippy-aggregate" { } ''
   test -e ${self.checks.${system}.tools-clippy}
   touch $out
 '');
-# Documentation formatting needs only the shared recipe and pinned tools.
+# Documentation formatting needs only the shared `dev` check and pinned tools.
 static-docs =
   let
     staticDocsSrc = pkgs.lib.cleanSourceWith {
@@ -3423,18 +3414,17 @@ static-docs =
           || pkgs.lib.hasSuffix ".md" path
           || pkgs.lib.hasSuffix "/.prettierrc.json" path
           || pkgs.lib.hasSuffix "/.prettierignore" path
-          || relative == "recipes/prettier.just"
         );
     };
   in
   pkgs.runCommand "static-docs"
     {
-      nativeBuildInputs = [ pkgs.just pkgs.prettier ];
+      nativeBuildInputs = [ devBin pkgs.prettier ];
     }
     ''
       cp --no-preserve=mode -r ${staticDocsSrc} src
       cd src
-      just --justfile recipes/prettier.just --working-directory . prettier-markdown
+      dev static prettier-markdown --sandbox
       touch $out
     '';
 # Exercise link safety with fixtures and both real dependency pins.
@@ -3456,7 +3446,6 @@ static-typescript =
         relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
       in
       type == "directory"
-      || relative == "recipes/static.just"
       || (
         pkgs.lib.hasPrefix "end2end/" relative
         && (
@@ -3472,7 +3461,6 @@ static-typescript =
     staticTypeScriptSrc = pkgs.lib.cleanSourceWith {
       src = craneLib.path ../.;
       filter =
-        assert staticTypeScriptSourceFilter "${toString ../.}/recipes/static.just" "regular";
         assert staticTypeScriptSourceFilter "${toString ../.}/end2end/tests/example.ts" "regular";
         assert staticTypeScriptSourceFilter "${toString ../.}/end2end/tests/example.tsx" "regular";
         assert staticTypeScriptSourceFilter "${toString ../.}/end2end/types/example.d.ts" "regular";
@@ -3487,8 +3475,9 @@ static-typescript =
   nonSubstitutable (
     pkgs.runCommand "static-typescript"
       {
+        # `dev` arrives as its own filtered build, so tools/dev/ edits rebuild this.
         nativeBuildInputs = [
-          pkgs.just
+          devBin
           pkgs.nodejs
           pkgs.typescript
         ];
@@ -3500,10 +3489,45 @@ static-typescript =
         cp --no-preserve=mode -r ${staticTypeScriptSrc} src
         cd src
         ${nodeModulesSetup}/bin/setup-e2e-node-modules "$E2E_TYPES_NODE_MODULES" "$E2E_PLAYWRIGHT_TEST"
-        just --justfile recipes/static.just --working-directory . tsc
+        dev static tsc --sandbox
         touch $out
       ''
   );
+# `dev`'s own quality gate: formatting, lint, strict types, and its tests at
+# 100% statement and branch coverage, subprocesses included.
+dev-python = nonSubstitutable (
+  pkgs.runCommand "dev-python"
+    {
+      nativeBuildInputs = [
+        devPythonCheck
+        pkgs.ruff
+        # The CLI tests run `dev` inside throwaway Git checkouts.
+        pkgs.git
+      ];
+      # Only here may tests skip for the repository scripts, jq or Nix that
+      # this filtered source and sandbox lack; elsewhere their absence fails.
+      JAUNDER_DEV_PYTHON_CHECK = "1";
+    }
+    ''
+      cp --no-preserve=mode -r ${devCheckSrc} src
+      cd src
+      ruff format --check .
+      ruff check .
+      mypy --strict .
+      coverage run -m pytest -q
+      coverage combine
+      coverage report
+      touch $out
+    ''
+);
+# The tools workspace's doctests, a plain `cargo test --doc` over a source in
+# which every tools member is real (`toolsDocTestSrc`), reusing the shared tools
+# dependency build. `tools/` has no doctests and sits outside the ADR-0095 fence
+# population, so nothing is reconciled here.
+tools-doctests = toolsBuild.docTest {
+  pname = "jaunder-tools-doctests";
+  src = toolsDocTestSrc;
+};
 # Standalone pure ERT verdict. The combined pure/live coverage producer is separate.
 static-ert =
   let
@@ -3512,12 +3536,10 @@ static-ert =
         relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
       in
       type == "directory"
-      || relative == "recipes/static.just"
       || (pkgs.lib.hasPrefix "elisp/" relative && !(pkgs.lib.hasSuffix ".md" path));
     staticErtSrc = pkgs.lib.cleanSourceWith {
       src = craneLib.path ../.;
       filter =
-        assert staticErtSourceFilter "${toString ../.}/recipes/static.just" "regular";
         assert staticErtSourceFilter "${toString ../.}/elisp/test/new-test.el" "regular";
         assert staticErtSourceFilter "${toString ../.}/elisp/test/fixture.bin" "regular";
         assert !(staticErtSourceFilter "${toString ../.}/elisp/README.md" "regular");
@@ -3527,17 +3549,17 @@ static-ert =
   in
   nonSubstitutable (pkgs.runCommand "static-ert"
     {
-      nativeBuildInputs = [ devtoolBin pkgs.just emacsForCi pkgs.git ];
+      nativeBuildInputs = [ devBin emacsForCi pkgs.git ];
       TZDIR = "${pkgs.tzdata}/share/zoneinfo";
     }
     ''
       cp --no-preserve=mode -r ${staticErtSrc} src
       cd src
-      devtool check ert
+      dev static ert --sandbox
       touch $out
     '');
 # Elisp formatter verification and warning-as-error byte-compilation share one
-# narrow leaf; Just owns both command definitions on host and in Nix.
+# narrow leaf; `dev` owns both command definitions on host and in Nix.
 static-elisp =
   let
     staticElispSourceFilter =
@@ -3545,13 +3567,11 @@ static-elisp =
       let
         relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
       in
-      (type == "directory" && (toString path == toString ../. || relative == "recipes" || relative == "elisp" || pkgs.lib.hasPrefix "elisp/" relative))
-      || relative == "recipes/static.just"
+      (type == "directory" && (toString path == toString ../. || relative == "elisp" || pkgs.lib.hasPrefix "elisp/" relative))
       || (pkgs.lib.hasPrefix "elisp/" relative && !(pkgs.lib.hasSuffix ".md" path));
     staticElispSrc = pkgs.lib.cleanSourceWith {
       src = craneLib.path ../.;
       filter =
-        assert staticElispSourceFilter (cargoSourcePath "recipes/static.just") "regular";
         assert staticElispSourceFilter (cargoSourcePath "elisp/scripts/format.el") "regular";
         assert staticElispSourceFilter (cargoSourcePath "elisp/scripts/byte-compile.el") "regular";
         assert staticElispSourceFilter (cargoSourcePath "elisp/test/jaunder-publish-test.el") "regular";
@@ -3565,14 +3585,14 @@ static-elisp =
   in
   nonSubstitutable (pkgs.runCommand "static-elisp"
     {
-      nativeBuildInputs = [ pkgs.just emacsForCi ];
+      nativeBuildInputs = [ devBin emacsForCi ];
       TZDIR = "${pkgs.tzdata}/share/zoneinfo";
     }
     ''
       cp --no-preserve=mode -r ${staticElispSrc} src
       cd src
-      just --justfile recipes/static.just --working-directory . elisp-fmt
-      just --justfile recipes/static.just --working-directory . byte-compile
+      dev static elisp-fmt --sandbox
+      dev static byte-compile --sandbox
       touch $out
     '');
 # Cargo fmt's product/tools populations overlap. Keep their shared verdict and
@@ -3599,13 +3619,12 @@ rust-format =
           "/rustfmt.toml"
           "/leptosfmt.toml"
         ]
-        || relative == "recipes/static.just"
         || pkgs.lib.hasPrefix ".cargo/" relative
       );
     rustFormatSrc = pkgs.lib.cleanSourceWith {
       src = craneLib.path ../.;
       filter =
-        assert rustFormatSourceFilter (cargoSourcePath "recipes/static.just") "regular";
+        assert rustFormatSourceFilter (cargoSourcePath "web/src/lib.rs") "regular";
         assert !(rustFormatSourceFilter (cargoSourcePath "docs/ARCHITECTURE.md") "regular");
         rustFormatSourceFilter;
     };
@@ -3614,14 +3633,15 @@ rust-format =
     {
       # These bring their real transitive source/vendor/build closures; the
       # direct source filter alone does not promise cache isolation.
-      nativeBuildInputs = [ pkgs.just self.packages.${system}.repository-policy toolchain leptosfmt ];
-      JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
-      JAUNDER_DEVTOOL_TOOLS_CARGO_HOME = "${toolsOfflineCargoHome}";
+      # scoped-leptosfmt runs the pin through `dev` as well.
+      nativeBuildInputs = [ devBin self.packages.${system}.repository-policy toolchain leptosfmt ];
+      JAUNDER_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
+      JAUNDER_TOOLS_CARGO_HOME = "${toolsOfflineCargoHome}";
     }
     ''
       cp --no-preserve=mode -r ${rustFormatSrc} src
       cd src
-      just --justfile recipes/static.just --working-directory . rust-format verify sandbox
+      dev static rust-format --sandbox
       touch $out
     '');
 static-e2e-census =
@@ -3694,8 +3714,6 @@ static-code =
                 "/.rustfmt.toml"
                 "/.prettierrc.json"
                 "/.prettierignore"
-                "/recipes/prettier.just"
-                "/recipes/static.just"
                 "/sgconfig.yml"
               ]
               || builtins.any (directory: pkgs.lib.hasInfix "/${directory}/" path) (workspaceMembers ++ [
@@ -3718,8 +3736,6 @@ static-code =
           && staticCodeSourceFilter (cargoSourcePath "${member}/src/main.rs") "regular"
         ) workspaceMembers;
         assert staticCodeSourceFilter (cargoSourcePath "ux-sandbox/tests/lifecycle.rs") "regular";
-        assert staticCodeSourceFilter "/source/recipes/prettier.just" "regular";
-        assert staticCodeSourceFilter "/source/recipes/static.just" "regular";
         assert staticCodeSourceFilter "/source/xtask/theme.css" "regular";
         assert staticCodeSourceFilter "/source/nix/otel-processors.yaml" "regular";
         assert staticCodeSourceFilter "/source/xtask" "directory";
@@ -3742,7 +3758,7 @@ static-code =
         toolchain
         pkgs.cargo-deny
         pkgs.ast-grep
-        pkgs.just
+        devBin
         pkgs.prettier
         pkgs.nodejs
         pkgs.typescript
@@ -3751,8 +3767,8 @@ static-code =
       # The server build script now links the host compiler, including native
       # decoding dependencies. Cargo executes it before any output fixup.
       LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ];
-      JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
-      JAUNDER_DEVTOOL_TOOLS_CARGO_HOME = "${toolsOfflineCargoHome}";
+      JAUNDER_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
+      JAUNDER_TOOLS_CARGO_HOME = "${toolsOfflineCargoHome}";
     }
     ''
       # Code checks retain their complete non-Markdown source population.
@@ -3760,11 +3776,11 @@ static-code =
       cd src
       # Residual Code verdicts; Rust-format and TypeScript have separate leaves,
       # while Clippy is requested once below through its own aggregate.
-      just --justfile recipes/prettier.just --working-directory . prettier-end2end
-      just --justfile recipes/prettier.just --working-directory . prettier-css
-      just --justfile recipes/static.just --working-directory . ast-grep-tests
-      just --justfile recipes/static.just --working-directory . no-full-reload
-      just --justfile recipes/static.just --working-directory . cargo-deny verify sandbox
+      dev static prettier-end2end --sandbox
+      dev static prettier-css --sandbox
+      dev static ast-grep-tests --sandbox
+      dev static no-full-reload --sandbox
+      dev static cargo-deny --sandbox
       test -e ${self.checks.${system}.clippy-aggregate}
       touch $out
     '');
@@ -3779,7 +3795,7 @@ static-code =
 # `-p common -p macros` drops the three `#[cfg(feature = "sanitize")]`
 # fences in `common/src/render.rs`, because nothing in that package set
 # enables the feature. Under `--workspace`, unification enables it via
-# `storage`. The invocation is pinned by a unit test in devtool.
+# `storage`. The invocation is pinned by a unit test in the doctests crate.
 #
 # `--doc` runs OUTSIDE any llvm-cov instrumentation, so no profraw from
 # these tests reaches the coverage profile: doctests deliberately do not
@@ -3794,13 +3810,13 @@ doctests = craneLib.mkCargoDerivation (
     # `cargo test --doc` remains fully debuggable.
     CARGO_PROFILE_DEV_DEBUG = "0";
     CARGO_PROFILE_TEST_DEBUG = "0";
-    nativeBuildInputs = hostArgs.nativeBuildInputs ++ [ devtoolBin ];
+    nativeBuildInputs = hostArgs.nativeBuildInputs ++ [ doctestsBin ];
     buildPhaseCargoCommand = ''
       export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:''${LD_LIBRARY_PATH:-}"
       mkdir -p emit-out
-      # devtool always exits 0 after writing emit-out/status.json;
-      # the direct Just workflow gates through doctests-gate.
-      devtool doctests emit --out emit-out
+      # The producer always exits 0 after writing emit-out/status.json;
+      # the direct `dev` workflow gates through doctests-gate.
+      doctests emit --out emit-out
     '';
     installPhaseCommand = ''
       mkdir -p $out

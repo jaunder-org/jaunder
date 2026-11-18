@@ -56,7 +56,7 @@ pub enum PointKind {
     Synthetic,
 }
 
-/// A concise, structured rejection suitable for a later xtask orchestration layer.
+/// A concise, structured rejection suitable for a caller's orchestration layer.
 #[derive(Debug, PartialEq, Eq)]
 pub enum CoverageError {
     Artifact { path: PathBuf, message: String },

@@ -41,7 +41,7 @@ enum Command {
     /// Measure the baseline and instrumented diagnostic bundles during a
     /// coordinated quiet host window; numbers are invalid under competing load.
     #[command(
-        after_help = "EXAMPLES:\n  just coverage-check wasm-measure --quiescent-window '2026-09-06 coordinated window'"
+        after_help = "EXAMPLES:\n  dev coverage-check wasm-measure --quiescent-window '2026-09-06 coordinated window'"
     )]
     WasmMeasure {
         #[arg(long, value_parser = nonempty)]

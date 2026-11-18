@@ -4,8 +4,8 @@
 ;; `jaunder-fmt-fix' reindents every .el under elisp/ in place;
 ;; `jaunder-fmt-check' exits non-zero if any is not canonically formatted.
 ;; Uses built-in emacs-lisp-mode indentation + trailing-whitespace removal.
-;; Self-locating via `load-file-name' (repo root under xtask, nix store under
-;; the hermetic check).
+;; Self-locating via `load-file-name', so it works from the repo root and from
+;; the nix store.
 
 ;;; Code:
 

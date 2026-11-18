@@ -9,8 +9,9 @@ let
     themeThumbnailEnvironment
     toolchain
     cargo-crap
-    devtoolBin
     tracedRunBin
+    devShim
+    devPythonCheck
     emacsForCi
     leptosfmt
     wasm-bindgen-cli
@@ -20,7 +21,7 @@ let
     appOfflineCargoHome
     ;
 
-  # Everything `just validate` needs on the host (toolchain + the
+  # Everything `dev validate` needs on the host (toolchain + the
   # static-check tools) plus what the Nix checks pull anyway — so the CI
   # shell shares those store paths rather than adding cost.
   ciInputs =
@@ -38,22 +39,21 @@ let
       # distro git would load that OpenSSL into its older host glibc
       # process, which fails before Nix can fetch git inputs (#815).
       pkgs.git
-      # Standalone runner is the sole PATH provider; devtool provides
-      # independent in-sandbox commands.
-      devtoolBin
       tracedRunBin
+      # The working tree's `dev` workflow runner.
+      devShim
       nodeModulesSetup
-      # Throwaway PostgreSQL for `just pg-run`, test-local and mutants.
+      # Throwaway PostgreSQL for `dev pg-run`, test-local and mutants.
       pgRun
       emacsForCi
       pkgs.jq
-      # Just producers invoke Nix directly.
+      # `dev` producers invoke Nix directly.
       pkgs.nix
       # Independent metadata reads in upload privacy tests, never a runtime editor.
       pkgs.exiftool
       leptosfmt
       # Rust's wasm32-unknown-unknown target invokes the generic `lld` driver on
-      # Darwin; `just e2e-local` owns the CSR wasm build, so the shell it
+      # Darwin; `dev e2e-local` owns the CSR wasm build, so the shell it
       # runs in must provide the linker instead of relying on a host install.
       pkgs.lld
       pkgs.nodejs
@@ -62,13 +62,15 @@ let
       pkgs.dav1d
       pkgs.playwright-test
       pkgs.postgresql_18
-      # `just e2e-local` supervises this pinned collector for its
+      # `dev e2e-local` supervises this pinned collector for its
       # shared VM/host JSONL trace pipeline.
       pkgs.opentelemetry-collector-contrib
       pkgs.prettier
       # host-proof's executable NixOS-test-script regressions run the generated
-      # Python helper under the same pinned interpreter as CI and developers.
-      pkgs.python3
+      # Python helper under the same pinned interpreter as CI and developers;
+      # this environment of it also carries `dev`'s libraries and test tools.
+      devPythonCheck
+      pkgs.ruff
       pkgs.sqlite
       pkgs.typescript
       # Theme-package export assertions use this pinned ZIP reader on the host.
@@ -79,8 +81,6 @@ let
       pkgs.sccache
       # `wasm-opt`, run by the shared locked Vite pipeline after `wasm-bindgen` (#836).
       pkgs.binaryen
-      # The standalone and host-server CSR build callers share this recipe.
-      pkgs.just
       wasm-bindgen-cli
     ];
 
@@ -91,17 +91,17 @@ let
     pkgs.bash
     pkgs.coreutils
     pkgs.findutils
-    pkgs.just
     pkgs.nix
     pkgs.cargo
     pkgs.git
     tracedRunBin
+    devShim
     pkgs.jq
     pkgs.openssl
     pkgs.dav1d
   ];
 
-  # Interactive-only tools that `just validate` never invokes and no
+  # Interactive-only tools that `dev validate` never invokes and no
   # Nix check pulls (the language servers are the bulk). Kept out of
   # `devShells.ci` so CI does not download/build them.
   devOnly = [
@@ -110,7 +110,7 @@ let
     pkgs.cargo-generate
     pkgs.cargo-mutants
     pkgs.sqlx-cli
-    # Just issue/PR frontdoors and the read-only observer use `gh`. Host-only
+    # `dev` issue/PR frontdoors and the read-only observer use `gh`. Host-only
     # manual commands — no Nix check or CI job runs them — so this stays
     # out of `ciInputs`, like the other interactive tooling here.
     pkgs.gh
@@ -143,7 +143,7 @@ let
     RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
     LC_ALL = "C.UTF-8";
     TZ = "UTC";
-    # The host `ert` step (run via `nix develop .#ci -c just …`)
+    # The host `ert` step (run via `nix develop .#ci -c dev …`)
     # computes timezone->UTC from IANA zone names, which need a zone
     # database for `encode-time` to resolve. A clean CI runner has none
     # in this shell, so provide it deterministically rather than relying
@@ -152,8 +152,8 @@ let
     TZDIR = "${pkgs.tzdata}/share/zoneinfo";
     # Host checks that spawn Cargo for the product workspace use the same
     # reviewed, offline dependency closure as the sandboxed static checks.
-    JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
-    # Just's TSC workflow retains both pins after cd into another worktree,
+    JAUNDER_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
+    # Host `dev static tsc` retains both pins after cd into another worktree,
     # where the IDE setup hook has not run.
     E2E_TYPES_NODE_MODULES = "${e2ePackage}/node_modules";
     E2E_PLAYWRIGHT_TEST = "${pkgs.playwright-test}/lib/node_modules/@playwright/test";
@@ -189,7 +189,7 @@ let
   };
 in
 {
-  # Lean shell used by CI (`nix develop .#ci -c just ci-validate-host`).
+  # Lean shell used by CI (`nix develop .#ci -c dev ci-validate-host`).
   ci = pkgs.mkShell (shellEnv // { buildInputs = ciInputs; });
   # The scheduled mutation-testing job, and nothing else. `cargo-mutants`
   # stays out of `ciInputs` on purpose: every PR job enters `.#ci`, and

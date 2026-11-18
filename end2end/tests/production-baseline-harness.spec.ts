@@ -825,7 +825,7 @@ test("production baseline host bridge preserves one browser context", async ({
   setTestBudget(PRODUCTION_BASELINE_HARNESS_BUDGET_MS);
   test.skip(
     !statePath || !coordinator,
-    "only xtask supplies restricted baseline coordinator",
+    "requires the restricted baseline coordinator",
   );
   if (!statePath || !coordinator) return;
   const styling =

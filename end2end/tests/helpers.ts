@@ -11,8 +11,8 @@
  *   of `page.goto` / `page.click` / `page.waitForSelector` directly.  The
  *   wrappers record timing via `withTimedAction` so every navigation and
  *   interaction appears in the OTEL trace.  A `page.goto` anywhere under
- *   `end2end/tests` other than this module fails the `e2e-goto-wrapper` xtask
- *   check, unless the site carries a `// e2e-goto-wrapper:allow <reason>`
+ *   `end2end/tests` other than this module is not allowed, unless the site
+ *   carries a `// e2e-goto-wrapper:allow <reason>`
  *   marker on the line directly above it (ADR-0094).
  *
  * - **Move within the app with `navigateInApp`** (`./navigate`), not with a

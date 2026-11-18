@@ -20,12 +20,10 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join("artifacts/bin")).unwrap();
         fs::create_dir(root.path().join("bin")).unwrap();
-        for name in ["cargo", "just"] {
-            executable(
-                &root.path().join("bin").join(name),
-                "#!/bin/sh\nprintf '%s\\n' unexpected >> build-calls\nexit 97\n",
-            );
-        }
+        executable(
+            &root.path().join("bin/cargo"),
+            "#!/bin/sh\nprintf '%s\\n' unexpected >> build-calls\nexit 97\n",
+        );
         executable(&root.path().join("bin/git"), "#!/bin/sh\nexit 0\n");
         executable(
             &root.path().join("bin/nix"),

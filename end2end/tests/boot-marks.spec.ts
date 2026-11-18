@@ -1,5 +1,5 @@
 // Use the traced fixture for both the pure diagnostic cases and live harvests.
-// The `traced-context` gate forbids upstream `test` imports: every test owns an
+// Upstream `test` imports are not allowed: every test owns an
 // `e2e.test` span, including pure cases, so browser work cannot become silently
 // unattributable. The merge invariant is still proven by pure logic (#818).
 import { test, expect } from "./fixtures";

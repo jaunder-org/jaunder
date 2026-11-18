@@ -1,8 +1,8 @@
-//! The in-sandbox doctest sentinel: what `devtool doctests emit` can report from
-//! inside the Nix producer derivation.
+//! The in-sandbox doctest sentinel: what the [`crate::emit`] producer can report
+//! from inside its Nix derivation.
 //!
-//! Written to `$out/status.json`; read by both the `doctests-gate` consumer
-//! derivation and the host `xtask` step. Mirrors `coverage::status` deliberately —
+//! Written to `$out/status.json`; read by the `doctests-gate` consumer
+//! derivation. Mirrors `coverage::status` deliberately —
 //! same producer-always-succeeds shape, same kebab-case wire spelling — but with
 //! its own file and its own vocabulary, so a doctest failure never has to be
 //! squeezed into a field that means "nextest test ids".

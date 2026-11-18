@@ -1,0 +1,4 @@
+{"kind":"start","trace_id":"0af7651916cd43dd8448eb211c80319c","span_id":"00f067aa0ba902b7","parent_id":null,"name":"dev static tsc","time_ns":1000}
+{"kind":"start","trace_id":"0af7651916cd43dd8448eb211c80319c","span_id":"1111111111111111","parent_id":"00f067aa0ba902b7","name":"tsc","time_ns":2000}
+{"kind":"end","trace_id":"0af7651916cd43dd8448eb211c80319c","span_id":"1111111111111111","parent_id":"00f067aa0ba902b7","name":"tsc","time_ns":8000,"attributes":{"process.command_line":"tsc --noEmit -p end2end/tsconfig.json","process.exit.code":2,"jaunder.status":"failed"}}
+{"kind":"end","trace_id":"0af7651916cd43dd8448eb211c80319c","span_id":"00f067aa0ba902b7","parent_id":null,"name":"dev static tsc","time_ns":9000,"attributes":{"process.exit.code":2,"jaunder.status":"failed"}}

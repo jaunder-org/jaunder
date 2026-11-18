@@ -1,5 +1,4 @@
 //! The host tool contract shared by concern-owned executables (ADR-0246): the
-//! single JSON stdout report and the multi-checkout sccache compile environment.
+//! single JSON stdout report.
 
-pub mod compile_cache;
 pub mod report;

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde_yaml::Value;
 
 #[test]
-fn workflow_uses_native_just_and_github_failure_guards_for_evidence_retention() -> Result<()> {
+fn workflow_uses_dev_and_github_failure_guards_for_evidence_retention() -> Result<()> {
     let workflow: Value =
         serde_yaml::from_str(include_str!("../../../.github/workflows/performance.yml"))?;
     let steps = workflow["jobs"]["performance"]["steps"]
@@ -20,12 +20,12 @@ fn workflow_uses_native_just_and_github_failure_guards_for_evidence_retention() 
     assert!(measure < compare && compare < upload);
     assert_eq!(
         steps[measure]["run"].as_str(),
-        Some("nix develop .#ci --accept-flake-config -c just perf medium")
+        Some("nix develop .#ci --accept-flake-config -c dev perf medium")
     );
     assert_eq!(
         steps[compare]["run"].as_str(),
         Some(
-            "nix develop .#ci --accept-flake-config -c just perf-compare .xtask/performance/performance-result-v1.json"
+            "nix develop .#ci --accept-flake-config -c dev perf-compare .xtask/performance/performance-result-v1.json"
         )
     );
     // GitHub owns execution conditions: a failed required measurement must not
@@ -61,7 +61,6 @@ fn workflow_uses_native_just_and_github_failure_guards_for_evidence_retention() 
     );
     for step in steps {
         if let Some(run) = step["run"].as_str() {
-            assert!(!run.contains("cargo xtask perf"));
             assert!(!run.contains("perf-import-baseline"));
         }
     }

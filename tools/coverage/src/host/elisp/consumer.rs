@@ -19,7 +19,7 @@ use super::{
 ///
 /// `artifact_dir` is the directory containing `lcov.info`, `summary.txt`, and
 /// `status.json` (normally `$out/elisp-coverage`). The explicit paths keep this
-/// seam deterministic and independent of xtask command/orchestration state.
+/// seam deterministic and independent of the caller's orchestration state.
 pub fn consume(repo_root: &Path, artifact_dir: &Path) -> Result<CoverageReport, CoverageError> {
     let status_path = artifact_dir.join("status.json");
     let summary_path = artifact_dir.join("summary.txt");

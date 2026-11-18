@@ -1,6 +1,5 @@
-//! `trace-analysis` — manual OTel trace diagnostics; not part of
-//! `check`/`validate`. Prints one JSON report on stdout whose `report` field
-//! holds the rendered tables (`just trace-analysis …` shows them).
+//! `trace-analysis` — manual OTel trace diagnostics. Prints one JSON report on
+//! stdout whose `report` field holds the rendered tables.
 
 use std::path::PathBuf;
 
@@ -21,9 +20,9 @@ enum Command {
     /// slowest spans, per-test/-project hotspots and trace totals.
     #[command(after_help = "EXAMPLES:\n  \
         # trace files extracted from a capture-<backend>-<browser>-unsplit.tar.gz bundle (capture/otel-traces.jsonl):\n  \
-        just trace-analysis analyze sqlite-otel-traces.jsonl postgres-otel-traces.jsonl\n  \
-        just trace-analysis analyze --top 40 --project firefox trace-a.jsonl trace-b.jsonl\n  \
-        just trace-analysis analyze --trace 1111...1111 traces.jsonl")]
+        dev trace-analysis analyze sqlite-otel-traces.jsonl postgres-otel-traces.jsonl\n  \
+        dev trace-analysis analyze --top 40 --project firefox trace-a.jsonl trace-b.jsonl\n  \
+        dev trace-analysis analyze --trace 1111...1111 traces.jsonl")]
     Analyze {
         /// Rows per ranked table (default 25). The cache-warmth, per-project, and
         /// long-task-by-project tables always print every row.
@@ -47,10 +46,10 @@ enum Command {
     /// Build the `{sqlite,postgres}×{chromium,firefox}` e2e VM checks and analyze
     /// their exported OTel traces in one step.
     #[command(after_help = "EXAMPLES:\n  \
-        just trace-analysis run\n  \
-        just trace-analysis run --top 40\n  \
-        just trace-analysis run --single-worker\n  \
-        just trace-analysis run --browser firefox")]
+        dev trace-analysis run\n  \
+        dev trace-analysis run --top 40\n  \
+        dev trace-analysis run --single-worker\n  \
+        dev trace-analysis run --browser firefox")]
     Run {
         /// Rows per ranked table (default 25), forwarded to the analysis.
         #[arg(long, default_value_t = 25, value_parser = clap::value_parser!(u64).range(1..))]
@@ -71,7 +70,7 @@ enum Command {
     /// `mount_done.startTime` exactly; the Node-side `commitToMountMs` and the
     /// skew between the two frames are reported but never decomposed.
     #[command(after_help = "EXAMPLES:\n  \
-        just trace-analysis boot-phases sqlite-chromium.jsonl sqlite-firefox.jsonl")]
+        dev trace-analysis boot-phases sqlite-chromium.jsonl sqlite-firefox.jsonl")]
     BootPhases {
         /// One or more `otel-traces.jsonl` files.
         #[arg(required = true)]

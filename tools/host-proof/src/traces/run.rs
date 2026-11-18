@@ -1,4 +1,4 @@
-//! `just trace-analysis run` — build the e2e VM checks and analyze their traces.
+//! `trace-analysis run` — build the e2e VM checks and analyze their traces.
 //!
 //! Host orchestrator (ADR-0028): nix-builds the `{sqlite,postgres}×{chromium,firefox}`
 //! e2e checks (or their `-single-worker` package variants), extracts each combo's

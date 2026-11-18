@@ -1,8 +1,10 @@
 //! `wasm-audit report` — measure frontend bundle download weight.
 //!
-//! Host-side analysis tool (ADR-0028): it shells out to `nix build .#csrBundle`
-//! and sizes the manifest-selected identity artifacts. Pure size/format helpers
-//! are unit-tested; the `nix`/filesystem I/O lives in `run`/`resolve_site_path`.
+//! Host-side analysis tool (ADR-0028): it sizes the manifest-selected identity
+//! artifacts of a CSR bundle root. Only interactive `report` without a path
+//! shells out to `nix build .#csrBundle` ([`resolve_site_path`]); the budget gate
+//! is always handed the root its caller built. Pure size/format helpers are
+//! unit-tested; the `nix`/filesystem I/O lives in `run`/`resolve_site_path`.
 
 use std::{fs, path::Path};
 
@@ -79,10 +81,10 @@ pub fn render_table(report: &AuditReport) -> String {
     s
 }
 
-/// Resolve the `.#csrBundle` output to audit. Returns `explicit` verbatim when
-/// set (audit a prebuilt bundle root, e.g. in CI or while iterating); otherwise
-/// runs the deterministic `nix build .#csrBundle` and parses its store path
-/// (shared [`nix_build::build_out_path`]).
+/// Resolve the `.#csrBundle` output an interactive `report` audits. Returns
+/// `explicit` verbatim when set (a prebuilt bundle root); otherwise runs the
+/// deterministic `nix build .#csrBundle` and parses its store path (shared
+/// [`nix_build::build_out_path`]).
 pub fn resolve_site_path(explicit: Option<&str>) -> Result<String> {
     match explicit {
         Some(p) => Ok(p.to_string()),
@@ -96,10 +98,10 @@ fn bundle_outputs(root: &Path) -> Result<CsrViteOutputs> {
         .with_context(|| format!("resolving Vite CSR outputs under {}", root.display()))
 }
 
-/// Resolve and measure the manifest-selected WASM and emitted JavaScript assets.
-pub fn run(site_path: Option<&str>) -> Result<AuditReport> {
-    let site_path = resolve_site_path(site_path)?;
-    let root = Path::new(&site_path);
+/// Measure the manifest-selected WASM and emitted JavaScript assets under the
+/// bundle root `site_path`.
+pub fn run(site_path: &str) -> Result<AuditReport> {
+    let root = Path::new(site_path);
     let outputs = bundle_outputs(root)?;
     let mut runtime_outputs = vec![outputs.wasm.as_str()];
     runtime_outputs.extend(
@@ -141,7 +143,7 @@ pub fn run(site_path: Option<&str>) -> Result<AuditReport> {
         });
     }
     Ok(AuditReport {
-        site_path,
+        site_path: site_path.to_string(),
         artifacts,
     })
 }
@@ -192,7 +194,7 @@ pub fn render_breakdown(report: &BreakdownReport) -> String {
     s.push_str(&format!("artifact: {}\n", report.artifact));
     s.push_str(&format!(
         "total: {} — this is the unstripped pre-wasm-bindgen artifact, \
-         NOT the shipped bundle size (see `just wasm-audit report` for that)\n",
+         NOT the shipped bundle size (see `dev wasm-audit report` for that)\n",
         format_bytes(report.total_bytes)
     ));
     s.push('\n');
@@ -318,7 +320,7 @@ mod tests {
     fn audit_reports_emitted_vite_sidecar_sizes_and_checks_optimized_wasm() {
         let root = tempfile::tempdir().unwrap();
         let outputs = fixture_bundle(root.path());
-        let report = run(Some(root.path().to_str().unwrap())).unwrap();
+        let report = run(root.path().to_str().unwrap()).unwrap();
         assert_eq!(report.artifacts.len(), 2);
         let wasm = report
             .artifacts
@@ -425,12 +427,20 @@ mod tests {
     }
 
     #[test]
+    fn an_explicit_report_root_is_used_verbatim() {
+        assert_eq!(
+            resolve_site_path(Some("/nix/store/prebuilt-site")).unwrap(),
+            "/nix/store/prebuilt-site"
+        );
+    }
+
+    #[test]
     fn run_errors_when_a_vite_manifest_output_is_missing() {
         let root = tempfile::tempdir().unwrap();
         let outputs = fixture_bundle(root.path());
         std::fs::remove_file(root.path().join(&outputs.wasm)).unwrap();
 
-        let error = run(Some(root.path().to_str().unwrap())).unwrap_err();
+        let error = run(root.path().to_str().unwrap()).unwrap_err();
         let chain = format!("{error:#}");
         assert!(
             chain.contains(&outputs.wasm) && chain.contains("Vite output file is missing"),
@@ -444,7 +454,7 @@ mod tests {
         let outputs = fixture_bundle(root.path());
         let named = crate::wasm_symbols::tests_support::named_module();
         std::fs::write(root.path().join(outputs.wasm), named).unwrap();
-        let error = run(Some(root.path().to_str().unwrap())).unwrap_err();
+        let error = run(root.path().to_str().unwrap()).unwrap_err();
         assert!(error.to_string().contains("carries a wasm name section"));
     }
 }

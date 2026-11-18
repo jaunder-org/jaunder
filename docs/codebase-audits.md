@@ -55,8 +55,8 @@ signal can have a legitimate explanation.
 Run the complete read-only census from the repository root:
 
 ```bash
-just census
-just census --json
+dev census
+dev census --json
 ```
 
 The compact output and JSON describe the same ordered signal sections and

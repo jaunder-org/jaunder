@@ -4,9 +4,9 @@ Host-only, read-only GitHub PR evidence observation. From the checkout's
 devShell:
 
 ```sh
-just pr-watch 731
-just pr-watch 731 --once
-just pr-watch 731 --until merged
+dev pr-watch 731
+dev pr-watch 731 --once
+dev pr-watch 731 --until merged
 ```
 
 Omit the number to resolve the open PR for the current branch. The default polls
@@ -45,14 +45,14 @@ These inputs neither authorize nor perform mutation.
 
 `--observed-queued-head <SHA>` carries positive live same-head queued readback
 from the separate native action. It requires and must equal `--expected-head`;
-missing/mismatched expected head refuses before observation. Just supplies this
+missing/mismatched expected head refuses before observation. `dev` supplies this
 input ONLY after positive queued readback, never from an arm alone or guesswork.
 Existing `Progress` preserves a dequeue before observer establishment. No
 default behavior, classifier/poller or mutation capability changes.
 
 After recorded exact PR/head human approval, the separate frontdoor is
-`just pr-land <PR> <approved-head-SHA> [--reenqueue]`. Recovery additionally
-requires explicit one-shot authorization. Just captures the historical URL from
+`dev pr-land <PR> <approved-head-SHA> [--reenqueue]`. Recovery additionally
+requires explicit one-shot authorization. `dev` captures the historical URL from
 live ejection preflight, asks this SAME classifier for one-snapshot readiness
 with only that run acknowledged, makes ONE head-bound native call, verifies
 arm/queue/merged readback, then observes the same head. No retries or second
@@ -63,5 +63,5 @@ JSON.
 The former xtask PR frontdoor/report envelope is retired with the xtask
 workspace. The privileged ADR promoter is the separate `tools/adr-promoter`
 package. Unmanaged cleanup is separate:
-`just pr-cleanup <PR> <exact-head-SHA> unmanaged`; never invoke for
+`dev pr-cleanup <PR> <exact-head-SHA> unmanaged`; never invoke for
 managed/uncertain ownership. See CONTRIBUTING for full guards.

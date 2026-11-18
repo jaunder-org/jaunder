@@ -1,4 +1,4 @@
-//! CRAP threshold gate over the CRAP report `devtool coverage emit` produces.
+//! CRAP threshold gate over the coverage producer's CRAP report.
 //! Any function whose CRAP score exceeds a fixed threshold FAILS, unless an
 //! in-source `crap:allow` override within the function's span waives it. Stateless
 //! — there is no committed manifest or history comparison.

@@ -122,7 +122,7 @@ pub fn ensure_server_fns_registered() {
 /// would then enumerate **zero** entries and pass, which is the fail-open this
 /// whole area exists to prevent.
 ///
-/// So the chain is: the registrar gate proves this list covers every `#[server]`
+/// So the chain is: `server_fn_registrar_check` proves this list covers every `#[server]`
 /// fn in `web/src`; this constant tracks the list; and
 /// `server_fn_wire::every_server_fn_path_is_api_vertical_ident_and_distinct`
 /// checks itself against the constant. Each link is short enough to keep honest.

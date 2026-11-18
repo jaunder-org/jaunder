@@ -20,7 +20,7 @@ Collector endpoint. The end-to-end test runner also emits correlated traces.
     exporter)
   - lifted per lane inside `capture-<lane>.tar.gz` (the same bundle that carries
     `diag.log` and the mail/websub JSONL — see below)
-- `just e2e-local` supervises the same collector pipeline on the host, using
+- `dev e2e-local` supervises the same collector pipeline on the host, using
   per-lifecycle ephemeral OTLP receivers. After Jaunder and Playwright finish,
   it flushes the collector, retains the complete capture at
   `.xtask/e2e-local/<run-id>/<browser>/capture/`, and prints the exact
@@ -305,13 +305,13 @@ traced-run -- otelcol-contrib validate --config end2end/otel-collector.yaml --co
 ```
 
 For a changed browser flow, use the supported focused SQLite loop, for example
-`traced-run -- just e2e-local auth.spec.ts`. This builds and validates current
+`traced-run -- dev e2e-local auth.spec.ts`. This builds and validates current
 CSR assets and exercises a real server/Collector/browser lifecycle; it is not
 PostgreSQL parity, complete CSR lint, authoritative source coverage or a full
-matrix. Use `traced-run -- just e2e-producer postgres-chromium-unsplit` for that
+matrix. Use `traced-run -- dev e2e-producer postgres-chromium-unsplit` for that
 backend's full hermetic Chromium lane. Firefox requires all three
-`just e2e-producer` lanes and `just e2e-reconcile` per backend, not a
-serial-special result alone; `just e2e` owns the complete workflow. The complete
+`dev e2e-producer` lanes and `dev e2e-reconcile` per backend, not a
+serial-special result alone; `dev e2e` owns the complete workflow. The complete
 commands and final validation ladder remain in
 [CONTRIBUTING](../CONTRIBUTING.md#running-e2e-tests-locally).
 
@@ -400,23 +400,23 @@ snapshot field, publishing no datapoint rather than zero or a partial value.
 
 ## End-to-End Tracing Layers
 
-### Host command-run traces (#1858)
+### Host command-run traces (#1858, #1965)
 
-`traced-run --name LABEL -- PROGRAM [ARG ...]` can emit a separate
-Perfetto-compatible Chrome Trace Event JSON artifact at
-`.xtask/run/<opaque-run-id>.trace.json`. Only explicitly named `traced-run`
-invocations (including `traced-run --launcher --name test-local` around
-host-proof's `test-local`) contribute spans; inherited context does not
-attribute arbitrary child processes. Their time is opaque within the nearest
-participating parent span. The artifact is process timing, not OpenTelemetry
-request attribution, and does not change `xtask.command`.
+Every `dev` command records its gate and each step as an OpenTelemetry span.
+Each process in the run, including host-proof, writes start and end span records
+under `.xtask/run/<run_id>.trace.d/`; host-proof joins through
+`TRACEPARENT`/`TRACESTATE` and `JAUNDER_TRACE_DIR`
+([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)). When the root
+`dev` process ends it merges the records into one Perfetto-compatible Chrome
+Trace Event JSON file, `.xtask/run/<run_id>.trace.json`, and marks a span with
+no end record or no parent as `incomplete`. A child process that does not join
+is opaque time inside the step that started it. These spans are process timing,
+written only to files: they are not OpenTelemetry request attribution and are
+never exported over OTLP.
 
-`--launcher` execution uses inherited stdout/stderr without wrapper JSON or
-output capture files. If a normal captured `traced-run` wraps a launcher, that
-outer runner owns parked output and the result summary; interactive streaming is
-not promised on that path. Trace finalization is best-effort: a hard kill before
-root finalization can leave per-writer records without a complete merged trace,
-and descendants that outlive the root are not collected. This trace is
+Tracing never changes a step's exit status, stdout or stderr; a trace directory
+that cannot be written produces one warning on stderr. `traced-run -- PROGRAM`
+remains a separate output-parking runner and records no spans. This trace is
 diagnostic evidence, not a performance claim.
 
 ### What is a span and what is an attribute (#794)
@@ -527,7 +527,7 @@ load total for an e2e trace corpus is therefore:
 sum(e2e.test.navigation_count) + sum(e2e.page.navigation_count)
 ```
 
-`just trace-analysis analyze` treats `e2e.test` and `e2e.page` spans carrying
+`dev trace-analysis analyze` treats `e2e.test` and `e2e.page` spans carrying
 `e2e.navigation_top_json` as navigation-bearing for URL/phase and boot-coverage
 reports. Sections that say `e2e.test` alone remain default-page-only.
 
@@ -565,7 +565,7 @@ and the test may end before `load`; asynchronous WASM boot also need not finish
 before `load`. Reconcile the complete executed population rather than trusting
 the presence of a few captured marks.
 
-Coverage is reported per `(source, project)` by `just trace-analysis analyze` —
+Coverage is reported per `(source, project)` by `dev trace-analysis analyze` —
 navigations, mounted, full mark sets, and dropped records — and the E2E VM gate
 now fails closed on every successful backend×browser combo when the report's
 executed project population and its trace evidence do not reconcile. The
@@ -655,6 +655,9 @@ the primary source for per-test timing comparisons across browsers. The report
 lands at `.xtask/diagnostics/e2e-<lane>/playwright-report-<lane>.json`.
 Chromium's unsplit producer uploads `e2e-diagnostics-<backend>-chromium`; each
 retained Firefox producer uploads `e2e-firefox-<backend>-<partition-or-shard>`.
+An artifact that uploads both `.xtask/diagnostics/` and `.xtask/run/` is rooted
+at `.xtask/`, so its contents sit under `diagnostics/` and `run/` (the report
+above is at `diagnostics/e2e-<lane>/playwright-report-<lane>.json`).
 
 The report is paired with `duration-budget-manifest-<lane>.json`; the copied
 report and manifest are the duration-pressure gate's source, not trace spans or
@@ -751,10 +754,10 @@ name in one module.
 **Two lanes, and neither is sufficient alone.** Traces exist only in the e2e
 lane; fast feedback only in the static one.
 
-- **Static** (`just check`, `just validate-no-e2e`): committed snapshot + `syn`
+- **Static** (`dev check`, `dev validate-no-e2e`): committed snapshot + `syn`
   inventory. No capture, so a new `#[server]` fn with no flow reddens the build
   without an e2e run.
-- **E2e** (`just e2e`, or `just e2e-producer sqlite-chromium-unsplit`): derives
+- **E2e** (`dev e2e`, or `dev e2e-producer sqlite-chromium-unsplit`): derives
   the snapshot from that successful producer's selected immutable Nix output and
   fails on any difference; it never regenerates automatically.
 
@@ -771,15 +774,15 @@ hash/size and retention checks, and host population/trace checks remain required
 test is browser- or backend-conditional — so one combo drops no coverage.
 
 For intentional regeneration after adding a flow, run
-`just e2e-regenerate-coverage`. It supplies the successful producer selection
-and explicit artifact arguments internally, checks the evidence and rewrites
-only the snapshot. Ordinary verification never regenerates. See
+`dev e2e-regenerate-coverage`. It supplies the successful producer selection and
+explicit artifact arguments internally, checks the evidence and rewrites only
+the snapshot. Ordinary verification never regenerates. See
 [the flow-coverage workflow](../CONTRIBUTING.md#testing).
 
 `server-fns.json` is the sole generated server-fn coverage artifact.
 `regenerate` writes it; `verify` recomputes and compares it. Per-test
 attribution remains internal to extraction and is not persisted. Note that a
-second `just e2e-producer sqlite-chromium-unsplit` on an unchanged tree replays
+second `dev e2e-producer sqlite-chromium-unsplit` on an unchanged tree replays
 the cached Nix derivation in seconds and re-lifts the same capture, so it cannot
 be used to confirm that a regenerated artifact is stable — that is a statement
 about _different_ runs, and `nix build --rebuild` is what forces one.
@@ -861,15 +864,15 @@ installed its hook). See `docs/adr/` for the app-driven scoped-capture decision.
 
 ## Analysis
 
-Use `just trace-analysis analyze` on one or more artifact files, for example:
+Use `dev trace-analysis analyze` on one or more artifact files, for example:
 
 ```bash
 # Local e2e-local capture; use the exact path printed by the command.
-just trace-analysis analyze \
+dev trace-analysis analyze \
   .xtask/e2e-local/<run-id>/chromium/capture/otel-traces.jsonl
 
 # VM captures are extracted from capture-<lane>.tar.gz; traces run does this.
-just trace-analysis analyze \
+dev trace-analysis analyze \
   sqlite-otel-traces.jsonl \
   postgres-otel-traces.jsonl
 ```
@@ -966,7 +969,7 @@ The CSR client emits `performance.mark`s at its boot boundaries via
   measured is not the binary being shipped, which quietly invalidates every
   number they produce.
 
-**Measure from `traces run`, never from `just validate`.** `validate` builds the
+**Measure from `traces run`, never from `dev validate`.** `validate` builds the
 `e2e-checks` aggregate, so nix realizes the four combo derivations
 **concurrently** — four VMs at two workers each on one host. `traces run` builds
 them one at a time (`traces/run.rs`'s nested loop). Measured 2026-08-05 on the
@@ -982,7 +985,7 @@ sessions — was on the box.
 To build both e2e VM checks and immediately analyze the produced traces, use:
 
 ```bash
-just trace-analysis run --top 25
+dev trace-analysis run --top 25
 ```
 
 When the question is what a single navigation costs rather than what the suite
@@ -990,7 +993,7 @@ costs, use the single-worker packages — one worker, so no contention distorts
 the per-navigation numbers:
 
 ```bash
-just trace-analysis run --single-worker --top 25
+dev trace-analysis run --single-worker --top 25
 ```
 
 Optional filters:
@@ -1004,10 +1007,10 @@ Optional filters:
   left.
 - `--browser chromium|firefox` restricts the run to one browser (default: both).
   Use this (not `--project`) to focus one browser, e.g. when debugging Firefox
-  timeout pressure: `just trace-analysis run --browser firefox`.
+  timeout pressure: `dev trace-analysis run --browser firefox`.
 
-(`just trace-analysis analyze` additionally accepts `--project NAME` to focus
-one browser/project when analyzing already-collected trace files directly.)
+(`dev trace-analysis analyze` additionally accepts `--project NAME` to focus one
+browser/project when analyzing already-collected trace files directly.)
 
 ### Backend axis: suite wall-clock versus server cost
 
@@ -1075,17 +1078,17 @@ measurement; keep its cost separate when interpreting navigation traces.
 
 ## WASM Bundle Audit
 
-Use `just wasm-audit report` to measure frontend bundle size from the
+Use `dev wasm-audit report` to measure frontend bundle size from the
 deterministic Nix `.#csrBundle` build output:
 
 ```bash
-just wasm-audit report
+dev wasm-audit report
 ```
 
 This reports raw, gzip, and brotli sizes for the manifest-selected WASM and JS
 identity assets. Host-proof's `wasm-audit` prints one JSON report on stdout (the
-rendered table in `report`, measurements in `evidence`); the recipe derives the
-human view.
+rendered table in `report`, measurements in `evidence`); `dev` renders the human
+view.
 
 Useful options:
 

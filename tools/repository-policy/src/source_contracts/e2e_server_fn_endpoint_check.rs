@@ -13,10 +13,10 @@
 //! Oxc; comments are not a population member. Dynamic helper templates such as
 //! `` `**/api/${endpoint}` `` are ignored because they carry no concrete endpoint.
 //!
-//! **Source of truth.** The server-fn set is xtask's existing `#[macros::server]`
+//! **Source of truth.** The server-fn set is this crate's `#[macros::server]`
 //! inventory and ADR-0082 derivation. `server/tests/web/server_fn_wire.rs` remains
 //! the independent proof that real macro-generated `ServerFn::PATH` values match
-//! that derivation; xtask still cannot link `web` and read those constants directly.
+//! that derivation; this crate cannot link `web` and read those constants directly.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;

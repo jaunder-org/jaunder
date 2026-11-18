@@ -278,8 +278,7 @@ pub(crate) fn post_content(view: &PostView) -> Markup {
             p class="j-post-summary" data-jaunder-part="post-summary" { (summary) }
         }
         // The one place trusted HTML enters the markup layer. `rendered_html` is a
-        // `RenderedHtml`, so the door is the only way to spell this and the
-        // `raw-html-door` gate accounts for it.
+        // `RenderedHtml`, so the door is the only way to spell this.
         div class="j-post-body" data-jaunder-part="post-body" { (Markup::from_rendered_html(view.rendered_html)) }
         footer class="j-post-foot" data-jaunder-part="post-footer" {
             (taglist::render(view.tags, view.tag_ctx))

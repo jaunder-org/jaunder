@@ -123,7 +123,7 @@ fn runtime_matrix_equals_enabled_catalog_and_reconciliation_waits_for_all_produc
         .find(|step| {
             step["run"]
                 .as_str()
-                .is_some_and(|s| s.contains("just e2e-reconcile"))
+                .is_some_and(|s| s.contains("dev e2e-reconcile"))
         })
         .unwrap();
     assert_eq!(reconcile["if"].as_str(), Some("always()"));

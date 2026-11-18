@@ -1,7 +1,8 @@
 //! `validate`'s wasm size budget (#836).
 //!
 //! Reads the same measurement `audit-wasm` produces for the shipped artifact, so
-//! the gate and the tool can never disagree about what the bundle weighs.
+//! the gate and the tool can never disagree about what the bundle weighs. The
+//! caller builds the bundle and names its root; the gate never runs Nix.
 
 use anyhow::Result;
 
@@ -9,27 +10,16 @@ use crate::audit_wasm::{self, AuditReport};
 use crate::report::{CommandResult, StepResult};
 use crate::wasm_budget;
 
-pub fn run(result: &mut CommandResult) {
-    run_with(
-        result,
-        || audit_wasm::resolve_site_path(None),
-        |site_path| audit_wasm::run(Some(site_path)),
-    );
+pub fn run(result: &mut CommandResult, site_path: &str) {
+    run_with(result, site_path, audit_wasm::run);
 }
 
 pub(crate) fn run_with(
     result: &mut CommandResult,
-    build: impl FnOnce() -> Result<String>,
+    site_path: &str,
     audit: impl FnOnce(&str) -> Result<AuditReport>,
 ) {
-    let site_path = match build() {
-        Ok(site_path) => site_path,
-        Err(error) => {
-            result.push(StepResult::fail("wasm-budget").detail(format!("{error:#}")));
-            return;
-        }
-    };
-    let step = match audit(&site_path) {
+    let step = match audit(site_path) {
         Err(error) => StepResult::fail("wasm-budget").detail(format!("{error:#}")),
         Ok(report) => {
             let raw_bytes = report
@@ -73,7 +63,7 @@ pub(crate) fn run_with(
 #[cfg(test)]
 mod tests {
     use super::run_with;
-    use crate::audit_wasm::{self, ArtifactMetrics, AuditReport};
+    use crate::audit_wasm::{ArtifactMetrics, AuditReport};
     use crate::report::CommandResult;
     use crate::wasm_budget::WASM_RAW_CEILING_BYTES;
 
@@ -93,14 +83,10 @@ mod tests {
     fn wasm_budget_verdict_has_no_discarded_report_metadata() {
         for bytes in [1, WASM_RAW_CEILING_BYTES, WASM_RAW_CEILING_BYTES + 1] {
             let mut result = CommandResult::new("check-leaf");
-            run_with(
-                &mut result,
-                || Ok("/fixture/csr-bundle".to_owned()),
-                |path| {
-                    assert_eq!(path, "/fixture/csr-bundle");
-                    Ok(report_with_wasm(bytes))
-                },
-            );
+            run_with(&mut result, "/fixture/csr-bundle", |path| {
+                assert_eq!(path, "/fixture/csr-bundle");
+                Ok(report_with_wasm(bytes))
+            });
             let step = result.steps.last().expect("wasm budget step");
             assert_eq!(step.ok, bytes <= WASM_RAW_CEILING_BYTES);
             assert!(step.detail.as_ref().unwrap().contains(&bytes.to_string()));
@@ -109,60 +95,28 @@ mod tests {
     }
 
     #[test]
-    fn failed_build_or_audit_keeps_the_original_diagnostic() {
-        for fail_build in [true, false] {
-            let mut result = CommandResult::new("check-leaf");
-            run_with(
-                &mut result,
-                || {
-                    if fail_build {
-                        Err(anyhow::anyhow!("nix build failed"))
-                    } else {
-                        Ok("/fixture/csr-bundle".to_owned())
-                    }
-                },
-                |_| {
-                    assert!(!fail_build, "failed build must not audit artifacts");
-                    Err(anyhow::anyhow!("reading artifact failed"))
-                },
-            );
-            let step = result.steps.last().unwrap();
-            assert!(!step.ok);
-            assert_eq!(
-                step.detail.as_deref(),
-                Some(if fail_build {
-                    "nix build failed"
-                } else {
-                    "reading artifact failed"
-                })
-            );
-        }
+    fn failed_audit_keeps_the_original_diagnostic() {
+        let mut result = CommandResult::new("check-leaf");
+        run_with(&mut result, "/fixture/csr-bundle", |_| {
+            Err(anyhow::anyhow!("reading artifact failed"))
+        });
+        let step = result.steps.last().unwrap();
+        assert!(!step.ok);
+        assert_eq!(step.detail.as_deref(), Some("reading artifact failed"));
     }
 
     #[test]
     fn missing_wasm_is_not_a_passing_budget() {
         let mut result = CommandResult::new("check-leaf");
-        run_with(
-            &mut result,
-            || Ok("/fixture/csr-bundle".to_owned()),
-            |_| {
-                let mut report = report_with_wasm(1);
-                report.artifacts.clear();
-                Ok(report)
-            },
-        );
+        run_with(&mut result, "/fixture/csr-bundle", |_| {
+            let mut report = report_with_wasm(1);
+            report.artifacts.clear();
+            Ok(report)
+        });
         assert!(!result.ok);
         assert_eq!(
             result.steps[0].detail.as_deref(),
             Some("audit-wasm reported no .wasm artifact")
-        );
-    }
-
-    #[test]
-    fn explicit_audit_path_is_not_a_gate_step() {
-        assert_eq!(
-            audit_wasm::resolve_site_path(Some("/nix/store/prebuilt-site")).unwrap(),
-            "/nix/store/prebuilt-site"
         );
     }
 }

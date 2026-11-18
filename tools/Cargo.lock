@@ -928,26 +928,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "devtool"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "common",
- "coverage",
- "doctests",
- "host",
- "jiff",
- "performance",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "storage",
- "tempfile",
- "tokio",
-]
-
-[[package]]
 name = "diagnostic-coverage-runtime"
 version = "0.1.0"
 dependencies = [
@@ -1002,14 +982,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "host-tool",
  "proc-macro2",
- "repository-policy",
  "serde",
  "serde_json",
  "syn 2.0.119",
  "tempfile",
- "xshell",
 ]
 
 [[package]]
@@ -1601,11 +1578,12 @@ dependencies = [
  "host",
  "host-tool",
  "jiff",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "processkit",
  "regex",
  "repository-policy",
  "rustc-demangle",
- "rustix",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -1613,8 +1591,6 @@ dependencies = [
  "tar",
  "tempfile",
  "tokio",
- "tracing",
- "tracing-subscriber",
  "url",
  "wasm-encoder",
  "wasmparser",
@@ -1630,7 +1606,6 @@ dependencies = [
  "rustix",
  "serde",
  "serde_json",
- "tempfile",
 ]
 
 [[package]]
@@ -2988,6 +2963,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
+name = "perf-producer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "common",
+ "jiff",
+ "performance",
+ "serde",
+ "serde_json",
+ "storage",
+ "tokio",
+]
+
+[[package]]
 name = "performance"
 version = "0.1.0"
 dependencies = [
@@ -4333,6 +4323,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a39185b86d0392cc01484934e2e6dfad5126e953aa2b9bff4dacc703d7b018fb"
 
 [[package]]
+name = "system-artifacts"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "host",
+]
+
+[[package]]
 name = "system-deps"
 version = "7.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4732,9 +4731,7 @@ checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
 name = "traced-run"
 version = "0.1.0"
 dependencies = [
- "nix",
  "processkit",
- "rustix",
  "serde",
  "serde_json",
  "signal-hook",

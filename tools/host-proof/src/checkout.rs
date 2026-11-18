@@ -7,12 +7,7 @@ pub fn prepare() -> anyhow::Result<()> {
 
 /// Best-effort hook preparation follows checkout admission.
 pub fn ensure_hooks_installed() {
-    let phase =
-        crate::invocation_trace::active().then(|| crate::invocation_trace::phase("xtask.hooks"));
-    let ok = repository_policy::checkout::ensure_hooks_installed("host-proof");
-    if let Some(phase) = phase {
-        phase.finish(ok);
-    }
+    repository_policy::checkout::ensure_hooks_installed("host-proof");
 }
 
 #[cfg(test)]
@@ -150,14 +145,15 @@ mod tests {
             "common/src/new.rs",
             "macros/src/new.rs",
             "storage/src/new.rs",
-            "tools/devtool/src/new.rs",
+            "tools/system-artifacts/src/new.rs",
             "csr/index.html",
             "csr/entry.js",
             "vite.config.js",
             "package.json",
             "package-lock.json",
             "scripts/build-csr-assets.sh",
-            "Justfile",
+            "tools/dev/pyproject.toml",
+            "tools/dev/dev/new.py",
             "server/assets/jaunder.css",
             "host/system_theme_sources/new.css",
             "storage/migrations/new.sql",
@@ -171,7 +167,14 @@ mod tests {
         ];
         let candidates = relevant
             .iter()
-            .chain(["notes.md", "server/src/unrelated.rs"].iter())
+            .chain(
+                [
+                    "notes.md",
+                    "server/src/unrelated.rs",
+                    "tools/dev/tests/test_new.py",
+                ]
+                .iter(),
+            )
             .map(|path| Candidate {
                 path: (*path).into(),
                 kind: "regular",

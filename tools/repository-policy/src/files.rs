@@ -20,18 +20,32 @@ use std::path::{Path, PathBuf};
 /// fail-closed gate, and a tree we cannot enumerate could hide the very thing being
 /// policed.
 pub fn with_extension(root: &Path, ext: &str) -> std::io::Result<Vec<PathBuf>> {
+    matching(root, &|path| path.extension().is_some_and(|e| e == ext))
+}
+
+/// Every file under `root`, recursively, whatever its name. Sorted and fail-closed
+/// like [`with_extension`], for gates that police text in any kind of file.
+pub fn every(root: &Path) -> std::io::Result<Vec<PathBuf>> {
+    matching(root, &|_| true)
+}
+
+fn matching(root: &Path, keep: &dyn Fn(&Path) -> bool) -> std::io::Result<Vec<PathBuf>> {
     let mut out = Vec::new();
-    collect(root, ext, &mut out)?;
+    collect(root, keep, &mut out)?;
     out.sort();
     Ok(out)
 }
 
-fn collect(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+fn collect(
+    dir: &Path,
+    keep: &dyn Fn(&Path) -> bool,
+    out: &mut Vec<PathBuf>,
+) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let path = entry?.path();
         if path.is_dir() {
-            collect(&path, ext, out)?;
-        } else if path.extension().is_some_and(|e| e == ext) {
+            collect(&path, keep, out)?;
+        } else if keep(&path) {
             out.push(path);
         }
     }
@@ -71,6 +85,21 @@ mod tests {
             with_extension(tmp.path(), "ts").expect("walks").is_empty(),
             "`.mts` is not `.ts` — a suffix match would widen every gate's scope"
         );
+    }
+
+    #[test]
+    fn every_collects_all_nested_files_sorted() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        tree(tmp.path());
+        assert_eq!(
+            every(tmp.path()).expect("walks"),
+            vec![
+                tmp.path().join("a.rs"),
+                tmp.path().join("nested/b.rs"),
+                tmp.path().join("skip.txt"),
+            ]
+        );
+        assert!(every(&tmp.path().join("absent")).is_err());
     }
 
     #[test]

@@ -1,11 +1,12 @@
-//! Focused host proof: the direct `test-local` and `e2e-local` executables
-//! and the private host lifecycle algorithms they share
-//! (ADR-0246). Each executable prints one JSON report on stdout.
+//! Focused host proof: the `e2e-local` executable and its private host
+//! lifecycle algorithms (ADR-0246), host diagnostics, and the CSR input checks
+//! host tests depend on. Each verdict executable prints one JSON
+//! report on stdout.
 
 pub mod audit_wasm;
 pub mod cache_safety;
 pub mod checkout;
-pub use host_tool::{compile_cache, report};
+pub use host_tool::report;
 pub mod e2e;
 pub mod e2e_evidence;
 mod e2e_ownership;
@@ -13,11 +14,10 @@ mod e2e_provenance;
 pub mod git {
     pub use repository_policy::git::{at, toplevel};
 }
-pub mod invocation_trace;
 pub mod nix_build;
 pub mod playwright_report;
 mod server_fn_coverage;
-mod sh;
+pub mod span_records;
 #[cfg(test)]
 mod test_support;
 pub mod traces;
@@ -34,6 +34,5 @@ pub mod steps {
     mod host_signals;
     mod process;
     pub mod server_fn_coverage_check;
-    pub mod test_local;
     pub mod wasm_budget;
 }

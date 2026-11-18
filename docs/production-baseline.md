@@ -1,19 +1,19 @@
 # Production baseline harness
 
-Four root Just commands expose the opt-in, host-side production baseline and
-styling workflows: `production-baseline-discover <revision>`,
+Four `dev` commands expose the opt-in, host-side production baseline and styling
+workflows: `production-baseline-discover <revision>`,
 `production-baseline-accept <source> <target>`,
 `production-baseline-qualify-styling`, and `production-baseline-smoke`.
 Qualification deploys immutable `packages.jaunder` revisions through the
 supported NixOS module; smoke instead uses the mutable current checkout. These
-commands are not part of `just check`, pre-push, CI, or `nix flake check`.
+commands are not part of `dev check`, pre-push, CI, or `nix flake check`.
 
 ## Prerequisites
 
-Run Just from the repository's Nix development environment. Ordinary
+Run `dev` from the repository's Nix development environment. Ordinary
 discovery/acceptance require a clean checkout whose canonical `origin` is
 `jaunder-org/jaunder`, with the current harness `HEAD` and requested product
-commits available upstream. Just captures the full harness `HEAD`, resolves
+commits available upstream. `dev` captures the full harness `HEAD`, resolves
 product revision expressions with Git, and rejects equal resolved acceptance
 commits and an empty acceptance target. It checks origin and performs one
 `git fetch --quiet --no-write-fetch-head --refetch origin <commits>` over the
@@ -23,7 +23,7 @@ origin serves the objects, not named-branch reachability, at the cost of larger
 transfers and normal Git maintenance. A locally committed but unpushed harness
 `HEAD` must refuse before lifecycle work.
 
-The host binds Just's expected harness SHA to its independently admitted clean
+The host binds `dev`'s expected harness SHA to its independently admitted clean
 `SourcePin` before Nix harness admission or lifecycle mutation; it does not
 repeat product expression resolution, origin validation or upstream fetch.
 Styling also requires a clean checkout and expected-HEAD binding, but uses its
@@ -47,14 +47,14 @@ alongside another baseline command: the command holds one host lease.
 Run discovery against the source revision selected for the qualification:
 
 ```bash
-traced-run -- just production-baseline-discover <revision>
+traced-run -- dev production-baseline-discover <revision>
 ```
 
 Run acceptance with source and target expressions resolving to distinct commits
 available upstream (full SHAs are also accepted):
 
 ```bash
-traced-run -- just production-baseline-accept <source> <target>
+traced-run -- dev production-baseline-accept <source> <target>
 ```
 
 Acceptance qualification is explicitly **non-release** evidence. Issue #1419
@@ -98,7 +98,7 @@ target; those require separately executed proofs before positive qualification.
 Run the source-pinned, current-format styling release-transition proof with:
 
 ```bash
-traced-run -- just production-baseline-qualify-styling
+traced-run -- dev production-baseline-qualify-styling
 ```
 
 This local-only qualification uses three canonical fixture packages, retained
@@ -113,7 +113,7 @@ production, #1419 release-candidate or milestone acceptance.
 ## Mutable local smoke
 
 ```bash
-traced-run -- just production-baseline-smoke
+traced-run -- dev production-baseline-smoke
 ```
 
 Smoke runs the SQLite/PostgreSQL VM lifecycle against the mutable current
@@ -123,7 +123,7 @@ evidence. A successful smoke is a lifecycle diagnostic, not qualification.
 
 ## Topology and immutable identity
 
-Just/Git owns public workflow selection, ordinary input normalization and
+`dev`/Git owns public workflow selection, ordinary input normalization and
 ordered fail-fast preflight. The focused host `qualification-host` executable
 (`tools/qualification`, run by `nix run .#qualification-host`) receives full
 immutable product IDs and the expected harness SHA, invokes Nix and manages the

@@ -138,8 +138,8 @@ mod tests {
 
     #[test]
     fn vector_5_a_crate_with_no_lib_target_yields_no_doctests() {
-        // cargo collects doctests from lib targets only — tools/devtool has
-        // src/main.rs and no src/lib.rs, so a fence there could never run.
+        // cargo collects doctests from lib targets only — a crate with
+        // src/main.rs and no src/lib.rs has fences that could never run.
         let (_dir, out) = run_bin_fixture("bin_only", BIN_ONLY);
         assert!(run_entries(&out).is_empty(), "{out}");
     }

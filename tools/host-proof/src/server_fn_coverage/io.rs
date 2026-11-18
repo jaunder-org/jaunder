@@ -26,7 +26,7 @@ pub fn coverage_from_jsonl(jsonl: &str, inventory: &[ServerFn]) -> Result<Covera
     if spans.is_empty() {
         bail!(
             "the e2e capture contains no spans — refusing to treat an empty capture as \
-             full coverage; re-run `just e2e-producer sqlite-chromium-unsplit`"
+             full coverage; re-run `dev e2e-producer sqlite-chromium-unsplit`"
         );
     }
     Ok(extract(&spans, inventory))
@@ -37,7 +37,7 @@ pub fn coverage_from_jsonl(jsonl: &str, inventory: &[ServerFn]) -> Result<Covera
 pub fn coverage_from_capture(tarball: &Path, inventory: &[ServerFn]) -> Result<Coverage> {
     if !tarball.exists() {
         bail!(
-            "no e2e capture at {} — run `just e2e-producer sqlite-chromium-unsplit` first (coverage is \
+            "no e2e capture at {} — run `dev e2e-producer sqlite-chromium-unsplit` first (coverage is \
              derived from that combo's traces, per the spec's D6)",
             tarball.display()
         );

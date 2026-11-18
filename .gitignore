@@ -8,7 +8,7 @@ pkg
 
 # Tool crates live in the tools/ workspace, separate from the app workspace so
 # their edits don't bust the app/coverage caches. Ignore any build dir under it;
-# tools/Cargo.lock IS committed (devtool is a binary built reproducibly by Nix).
+# tools/Cargo.lock IS committed (its executables are built reproducibly by Nix).
 /tools/target/
 tools/**/target/
 
@@ -20,6 +20,9 @@ node_modules/
 test-results/
 end2end/playwright-report/
 playwright/.cache/
+
+# Python bytecode from running `dev` out of the checkout
+__pycache__/
 
 # Various bits of detritus
 /result
@@ -35,9 +38,8 @@ mutants.out.old/
 
 /coverage-report.txt
 
-# xtask sidecar / GC roots — unanchored: `cargo xtask e2e-local` runs as
-# cargo-leptos's `end2end-cmd` from `end2end/`, so the sidecar can also land in
-# `end2end/.xtask/` (not just the repo root).
+# `dev` traces, `traced-run` output and GC roots — unanchored, so a tool run
+# from a subdirectory such as `end2end/` is covered as well as the repo root.
 .xtask/
 
 # Subagent-driven-development scratch (briefs, ledger, review packages)

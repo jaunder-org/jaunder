@@ -264,8 +264,7 @@ mod tests {
     fn every_key_round_trips_its_dotted_form() {
         for key in SiteConfigKey::VARIANTS {
             // Bound rather than inlined into the assert's message: a message argument is
-            // only evaluated when the assert fails, which the coverage gate reads as an
-            // uncovered line.
+            // only evaluated when the assert fails, which would leave an uncovered line.
             let dotted = key.as_ref();
             assert_eq!(SiteConfigKey::from_str(dotted).ok().as_ref(), Some(key));
             assert!(dotted.contains('.'), "{dotted} must be namespace.name");

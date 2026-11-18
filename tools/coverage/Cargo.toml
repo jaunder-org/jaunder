@@ -12,30 +12,31 @@ workspace = true
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 anyhow = "1.0.104"
+clap = { version = "4.6.6", features = ["derive"] }
 quick-xml = "0.42.0"
+sha2 = "0.11.0"
 tempfile = { version = "3.27.0", optional = true }
 # Host-run evidence consumers (`coverage-check`); the sandbox producer omits them.
-clap = { version = "4.6.6", features = ["derive"], optional = true }
 flate2 = { version = "1.1.10", optional = true }
 host = { path = "../../host", optional = true }
 jiff = { version = "0.2.35", default-features = false, features = ["std"], optional = true }
 proc-macro2 = { version = "1.0.107", features = ["span-locations"], optional = true }
 host-tool = { path = "../host-tool", optional = true }
 repository-policy = { path = "../repository-policy", optional = true }
-sha2 = { version = "0.11.0", optional = true }
 syn = { version = "2", features = ["full", "visit", "extra-traits"], optional = true }
 tar = { version = "0.4.46", optional = true }
 
+[dev-dependencies]
+tempfile = "3.27.0"
+
 [features]
 host = [
-  "dep:clap",
   "dep:flate2",
   "dep:host",
   "dep:jiff",
   "dep:proc-macro2",
   "dep:host-tool",
   "dep:repository-policy",
-  "dep:sha2",
   "dep:syn",
   "dep:tar",
   "dep:tempfile",

@@ -12,7 +12,7 @@ import { SEL } from "./selectors";
 const REVOKED_SESSION_LABEL = "Revoked session e2e";
 
 // Browser-flow coverage for `sessions::revoke` (#707): server tests already pin
-// ownership and token-death semantics, but the coverage gate needs a real
+// ownership and token-death semantics, but browser-flow coverage needs a real
 // traced browser request from the Sessions UI.
 test("sessions page revokes another browser session", async ({
   page,

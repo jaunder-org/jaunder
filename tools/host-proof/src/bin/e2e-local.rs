@@ -10,7 +10,7 @@ use host_proof::steps::e2e_local::{self, E2eLocalBrowser};
 /// Focused browser proof: use a spec or file:line selector while iterating.
 ///
 /// Rerun the same focused command after a fix. Use representative hermetic
-/// `just e2e-producer <identity>` proof when backend/browser parity, release-build
+/// `dev e2e-producer <identity>` proof when backend/browser parity, release-build
 /// behavior or the hermetic environment is load-bearing; local proof does not
 /// replace CI/full validation.
 ///
@@ -104,7 +104,7 @@ mod tests {
             "same focused command",
             "hermetic",
             "parity",
-            "just e2e-producer",
+            "dev e2e-producer",
         ] {
             assert!(help.contains(phrase), "missing {phrase:?}: {help}");
         }

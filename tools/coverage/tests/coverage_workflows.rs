@@ -1,10 +1,10 @@
-//! Exercise the real Just entrypoints without realizing expensive Nix producers.
+//! The coverage policy leaf reports without orchestrating Nix or cargo. The
+//! `dev` coverage workflows are tested in `tools/dev/tests/`.
 #![cfg(feature = "host")]
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Command;
 
 struct Workflow {
     root: tempfile::TempDir,
@@ -18,18 +18,9 @@ impl Workflow {
             .output()
             .unwrap();
         assert!(git.status.success());
-        let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(2)
-            .unwrap();
-        fs::copy(repo.join("Justfile"), root.path().join("Justfile")).unwrap();
-        fs::create_dir(root.path().join("scripts")).unwrap();
-        for script in ["scripts/run-report", "scripts/step-report.jq"] {
-            fs::copy(repo.join(script), root.path().join(script)).unwrap();
-        }
         fs::write(
             root.path().join(".git/info/exclude"),
-            "Justfile\nbin/\nrecord\n.xtask/\nscripts/\n",
+            "bin/\nrecord\n.xtask/\n",
         )
         .unwrap();
         fs::create_dir(root.path().join("bin")).unwrap();
@@ -37,39 +28,12 @@ impl Workflow {
             let path = root.path().join("bin").join(program);
             fs::write(
                 &path,
-                format!(
-                    "#!/usr/bin/env bash\nset -eu\nprintf '%s\\n' \"{program} $*\" >> record\ncase \"$*\" in *\"${{FAIL_MATCH:-never-match}}\"*) exit 23;; esac\n"
-                ),
+                format!("#!/usr/bin/env bash\nprintf '%s\\n' \"{program} $*\" >> record\n"),
             )
             .unwrap();
             fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
         }
         Self { root }
-    }
-
-    fn run(&self, recipe: &str, fail: &str) -> Output {
-        let mut command = Command::new("just");
-        command
-            .arg(recipe)
-            .current_dir(self.root.path())
-            .env("FAIL_MATCH", fail)
-            .env(
-                "PATH",
-                format!(
-                    "{}:{}",
-                    self.root.path().join("bin").display(),
-                    std::env::var("PATH").unwrap()
-                ),
-            );
-        for key in [
-            "GIT_DIR",
-            "GIT_WORK_TREE",
-            "GIT_INDEX_FILE",
-            "GIT_COMMON_DIR",
-        ] {
-            command.env_remove(key);
-        }
-        command.output().unwrap()
     }
 
     fn record(&self) -> String {
@@ -128,89 +92,4 @@ fn coverage_policy_cli_is_a_non_orchestrating_report_leaf() {
             "the policy leaf must never run Nix or cargo"
         );
     }
-}
-
-#[test]
-fn workflows_stop_on_each_nonzero_boundary() {
-    for (recipe, failure, expected_commands) in [
-        ("coverage", "--out-link", 1),
-        ("coverage", "coverage-gate", 2),
-        ("coverage", "coverage-check -- policy", 3),
-        ("doctests", "--out-link", 1),
-        ("doctests", "doctests-gate", 2),
-    ] {
-        let workflow = Workflow::new();
-        let output = workflow.run(recipe, failure);
-        assert!(!output.status.success(), "{recipe}: {failure}");
-        assert_eq!(
-            workflow.record().lines().count(),
-            expected_commands,
-            "{recipe}: {failure}"
-        );
-        assert!(String::from_utf8_lossy(&output.stderr).contains("23"));
-    }
-}
-
-#[test]
-fn doctests_runs_producer_then_gate_without_host_policy() {
-    let workflow = Workflow::new();
-    let output = workflow.run("doctests", "never-match");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        workflow.record(),
-        concat!(
-            "nix build --no-update-lock-file --no-write-lock-file -L .#checks.x86_64-linux.doctests --out-link .xtask/gcroots/doctests\n",
-            "nix build --no-update-lock-file --no-write-lock-file -L .#checks.x86_64-linux.doctests-gate --no-link\n",
-        )
-    );
-}
-
-#[test]
-fn public_workflows_refuse_dirty_or_unavailable_git_status() {
-    for recipe in ["coverage", "doctests"] {
-        for staged in [false, true] {
-            let workflow = Workflow::new();
-            fs::write(workflow.root.path().join("dirty"), "changed").unwrap();
-            if staged {
-                assert!(
-                    repository_policy::git::at(workflow.root.path())
-                        .args(["add", "dirty"])
-                        .status()
-                        .unwrap()
-                        .success()
-                );
-            }
-            assert!(!workflow.run(recipe, "never-match").status.success());
-            assert_eq!(workflow.record(), "");
-        }
-        let workflow = Workflow::new();
-        let git = workflow.root.path().join("bin/git");
-        fs::write(&git, "#!/usr/bin/env bash\nexit 24\n").unwrap();
-        fs::set_permissions(git, fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(!workflow.run(recipe, "never-match").status.success());
-        assert_eq!(workflow.record(), "");
-    }
-}
-
-#[test]
-fn coverage_runs_producer_then_gate_then_policy() {
-    let workflow = Workflow::new();
-    let output = workflow.run("coverage", "never-match");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        workflow.record(),
-        concat!(
-            "nix build --no-update-lock-file --no-write-lock-file -L .#checks.x86_64-linux.coverage --out-link .xtask/gcroots/coverage\n",
-            "nix build --no-update-lock-file --no-write-lock-file -L .#checks.x86_64-linux.coverage-gate --no-link\n",
-            "cargo run --locked --quiet --manifest-path tools/Cargo.toml -p coverage --features host --bin coverage-check -- policy --out .xtask/gcroots/coverage\n",
-        )
-    );
 }

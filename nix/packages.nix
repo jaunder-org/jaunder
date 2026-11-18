@@ -413,7 +413,6 @@ let
       # sandboxed library builds never compile them, so they must not invalidate.
       && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/coverage/src/host/" path)
       && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/coverage/tests/" path)
-      && path != "${toString (craneLib.path ../.)}/tools/doctests/src/host.rs"
       && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/doctests/tests/" path)
       && (
         (pkgs.lib.hasSuffix ".sql" path)
@@ -729,6 +728,69 @@ let
     meta.mainProgram = "adr-promoter";
   };
 
+  # The `dev` workflow runner. The host shim and the sandbox package share one
+  # dependency list; its quality check adds only the test tools.
+  devPythonDeps = ps: [
+    ps.click
+    ps.opentelemetry-api
+    ps.opentelemetry-sdk
+  ];
+  devPython = pkgs.python3.withPackages devPythonDeps;
+  devPythonCheck = pkgs.python3.withPackages (
+    ps:
+    devPythonDeps ps
+    ++ [
+      ps.coverage
+      ps.mypy
+      ps.pytest
+      # The suite drives `dev` as real processes; spreading it over the
+      # available cores keeps it short enough for every commit's gate.
+      ps.pytest-xdist
+    ]
+  );
+  # The prepush docs admission compares these files' worktree bytes with the
+  # index (`_static_docs_input` in tools/dev/dev/index.py): keep the two
+  # selections in step.
+  devPackageFiles = pkgs.lib.fileset.unions [
+    ../tools/dev/pyproject.toml
+    (pkgs.lib.fileset.fileFilter (file: file.hasExt "py") ../tools/dev/dev)
+  ];
+  devSrc = pkgs.lib.fileset.toSource {
+    root = ../tools/dev;
+    fileset = devPackageFiles;
+  };
+  devCheckSrc = pkgs.lib.fileset.toSource {
+    root = ../tools/dev;
+    fileset = pkgs.lib.fileset.unions [
+      devPackageFiles
+      (pkgs.lib.fileset.fileFilter (file: file.hasExt "py" || file.hasExt "jsonl") ../tools/dev/tests)
+    ];
+  };
+  # Sandbox callers run this build of `dev`; `checks.dev-python` runs its tests.
+  devBin = pkgs.python3Packages.buildPythonApplication {
+    pname = "dev";
+    version = "0.1.0";
+    pyproject = true;
+    src = devSrc;
+    build-system = [ pkgs.python3Packages.setuptools ];
+    dependencies = devPythonDeps pkgs.python3Packages;
+    pythonImportsCheck = [ "dev" ];
+    meta.mainProgram = "dev";
+  };
+  # Host callers run the working tree's `dev`, as hooks and gates must, with no
+  # package rebuild after an edit under tools/dev/. The checkout's tools/dev
+  # joins this interpreter's sys.path alone, not PYTHONPATH, so every step's
+  # child inherits the caller's environment unchanged (tools/dev/tests/conftest.py
+  # launches `dev` the same way).
+  devShim = pkgs.writeShellApplication {
+    name = "dev";
+    runtimeInputs = [ pkgs.git ];
+    text = ''
+      root=$(git rev-parse --show-toplevel)
+      exec ${devPython}/bin/python -P -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from dev.__main__ import main; main()' "$root/tools/dev" "$@"
+    '';
+  };
+
   # The auxiliary tools workspace is separate from the product workspace
   # (ADR-0141): its lockfile and cargo artifacts stay independent, while the
   # performance producer links the selected typed product-storage closure.
@@ -757,7 +819,6 @@ let
       && !(pkgs.lib.hasPrefix "tools/host-proof/" relative && relative != "tools/host-proof/Cargo.toml")
       && !(pkgs.lib.hasPrefix "tools/coverage/src/host/" relative)
       && !(pkgs.lib.hasPrefix "tools/coverage/tests/" relative)
-      && relative != "tools/doctests/src/host.rs"
       && !(pkgs.lib.hasPrefix "tools/doctests/tests/" relative)
       && craneLib.filterCargoSources path type
     );
@@ -769,9 +830,11 @@ let
     siteSourceFilter path type
     || toolsSourceFilter path type
     || csrViteSourceFilter path type
+    # `dev build-csr` drives the host bundle build: the runner's package source.
+    || relative == "tools/dev/pyproject.toml"
+    || (pkgs.lib.hasPrefix "tools/dev/dev/" relative && pkgs.lib.hasSuffix ".py" relative)
     # Nix expressions and the lock select producer/toolchain/native dependencies,
     # even when they are not copied into either Cargo source tree.
-    || relative == "Justfile"
     || relative == "flake.nix"
     || relative == "flake.lock"
     || pkgs.lib.hasPrefix "nix/" relative;
@@ -818,6 +881,37 @@ let
         "tools/repository-policy"
         "tools/qualification"
         "tools/host-proof"
+      ];
+  # `checks.tools-doctests` documents every tools member, so the members toolsSrc
+  # carries as placeholders are real here, with the files their libraries compile
+  # in. Only product members outside the tools closure stay placeholders.
+  toolsDocTestSrc =
+    let
+      hostRunMembers = [
+        "tools/repository-policy"
+        "tools/qualification"
+        "tools/host-proof"
+      ];
+    in
+    withWorkspacePlaceholders "jaunder-tools-doctests-source"
+      (pkgs.lib.cleanSourceWith {
+        src = craneLib.path ../.;
+        filter =
+          path: type:
+          let
+            relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
+          in
+          toolsSourceFilter path type
+          || cargoMemberSource hostRunMembers path type
+          # Compiled into the qualification library (production_baseline.rs).
+          || relative == "docs/production-baseline.schema.json";
+      })
+      [
+        "client"
+        "csr"
+        "server"
+        "test-support"
+        "web"
       ];
   toolsBaseArgs = {
     src = toolsSrc;
@@ -898,51 +992,68 @@ let
     vendorDir = toolsCargoVendorDir;
   };
 
-  # The in-sandbox dev tool. Offline coverage/doctest sandboxes run it from
-  # PATH instead of an in-sandbox `cargo run`, whose dependencies would not be
-  # vendored. The CSR shell is retained directly in toolsSrc for include_str!.
-  mkDevtoolBin =
+  # A tools executable that runs inside derivations (build sandboxes and VM
+  # guests). Offline sandboxes run it from PATH instead of an in-sandbox
+  # `cargo run`, whose dependencies would not be vendored. Each consumer takes
+  # only the executable it runs. The CSR shell is retained directly in toolsSrc
+  # for include_str!.
+  mkToolsBin =
     {
-      pname ? "devtool",
-      qualification ? false,
+      package,
+      bin ? package,
+      pname ? bin,
+      # Features change the dependency graph, so a featured build gets its own
+      # dependency build rather than the shared tools one.
+      features ? [ ],
+      # Native host libraries the executable links.
+      runtimeLibraries ? [ ],
     }:
     let
       cargoExtraArgs =
-        "${toolsArgs.cargoExtraArgs} -p devtool"
-        + pkgs.lib.optionalString qualification " --features qualification";
+        "${toolsArgs.cargoExtraArgs} -p ${package} --bin ${bin}"
+        + pkgs.lib.optionalString (features != [ ]) " --features ${pkgs.lib.concatStringsSep "," features}";
       tooling =
-        if qualification then mkToolingCargo (toolsArgs // { inherit cargoExtraArgs; }) else toolsBuild;
+        if features != [ ] then mkToolingCargo (toolsArgs // { inherit cargoExtraArgs; }) else toolsBuild;
+      patchRuntime = pkgs.stdenv.hostPlatform.isLinux && runtimeLibraries != [ ];
     in
     tooling.buildPackage {
       inherit cargoExtraArgs pname;
       doCheck = false;
-      passthru.toolingDependencies = tooling.cargoArtifacts;
       installPhase = ''
         mkdir -p $out/bin
-        cp target/release/devtool $out/bin/devtool
+        cp target/release/${bin} $out/bin/${bin}
       '';
       # `installPhase` copies a host-linked executable directly, bypassing
-      # Crane's normal cargo binary install path. Give the full producer an
-      # ELF runtime closure for its native host dependencies.
-      nativeBuildInputs =
-        toolsArgs.nativeBuildInputs
-        ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.patchelf ];
-      postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-        patchelf --add-rpath \
-          "${
-            pkgs.lib.makeLibraryPath [
-              pkgs.openssl
-              pkgs.dav1d
-            ]
-          }" \
-          "$out/bin/devtool"
+      # Crane's normal cargo binary install path. Give a producer that links
+      # native host dependencies an ELF runtime closure for them.
+      nativeBuildInputs = toolsArgs.nativeBuildInputs ++ pkgs.lib.optionals patchRuntime [ pkgs.patchelf ];
+      postFixup = pkgs.lib.optionalString patchRuntime ''
+        patchelf --add-rpath "${pkgs.lib.makeLibraryPath runtimeLibraries}" "$out/bin/${bin}"
       '';
       doNotPostBuildInstallCargoBinaries = true;
     };
-  devtoolBin = mkDevtoolBin { };
-  qualificationDevtoolBin = mkDevtoolBin {
-    pname = "jaunder-system-artifact-qualification-devtool";
-    qualification = true;
+  hostRuntimeLibraries = [
+    pkgs.openssl
+    pkgs.dav1d
+  ];
+  coverageSandboxBin = mkToolsBin {
+    package = "coverage";
+    bin = "coverage-sandbox";
+  };
+  doctestsBin = mkToolsBin { package = "doctests"; };
+  perfProducerBin = mkToolsBin {
+    package = "perf-producer";
+    runtimeLibraries = hostRuntimeLibraries;
+  };
+  systemArtifactsBin = mkToolsBin {
+    package = "system-artifacts";
+    runtimeLibraries = hostRuntimeLibraries;
+  };
+  qualificationSystemArtifactsBin = mkToolsBin {
+    package = "system-artifacts";
+    pname = "jaunder-system-artifact-qualification-system-artifacts";
+    features = [ "qualification" ];
+    runtimeLibraries = hostRuntimeLibraries;
   };
 
   cargo-crap = pkgs.callPackage (
@@ -1112,7 +1223,7 @@ let
 
   mkCsrWasmBundle =
     {
-      devtool,
+      systemArtifacts,
       fixture ? null,
       wasm ? csrWasm,
       name ? "jaunder-csr-vite-bundle",
@@ -1125,7 +1236,7 @@ let
       dontNpmBuild = true;
       passthru.sourceAdmits = csrSourceAdmits;
       nativeBuildInputs = [
-        devtool
+        systemArtifacts
         pkgs.binaryen
         wasm-bindgen-cli
       ];
@@ -1140,7 +1251,7 @@ let
         mkdir -p "$input" "$system_artifacts"
         cp csr/index.html "$input/index.html"
         cp csr/entry.js "$input/entry.js"
-        devtool system-artifacts --out "$system_artifacts"${
+        system-artifacts --out "$system_artifacts"${
           pkgs.lib.optionalString (fixture != null) " --fixture ${fixture}"
         }
         CSR_VITE_PUBLIC_DIR="${../public}" bash scripts/build-csr-assets.sh \
@@ -1154,9 +1265,9 @@ let
         runHook postInstall
       '';
     };
-  csrWasmBundle = mkCsrWasmBundle { devtool = devtoolBin; };
+  csrWasmBundle = mkCsrWasmBundle { systemArtifacts = systemArtifactsBin; };
   csrDebugBundle = mkCsrWasmBundle {
-    devtool = devtoolBin;
+    systemArtifacts = systemArtifactsBin;
     wasm = csrDebugWasm;
     name = "jaunder-csr-debug-wasm-bundle";
   };
@@ -1173,7 +1284,7 @@ let
     else
       let
         csrBundle = mkCsrWasmBundle {
-          devtool = qualificationDevtoolBin;
+          systemArtifacts = qualificationSystemArtifactsBin;
           inherit fixture;
         };
       in
@@ -1205,7 +1316,8 @@ let
           pkgs.nodejs
           diagnosticToolchain
           diagnosticClang
-          devtoolBin
+          coverageSandboxBin
+          systemArtifactsBin
           pkgs.binaryen
           wasm-bindgen-cli
         ];
@@ -1230,7 +1342,7 @@ let
         ln -s ${csrViteNodeModules}/node_modules "$vite_project/node_modules"
         cp -r ${siteSrc}/. "$work/source"
         chmod -R u+w "$work/source"
-        devtool diagnostic-build prepare-source \
+        coverage-sandbox diagnostic-build prepare-source \
           --source "$work/source" \
           --minicov "${diagnosticMinicov}" \
           --runtime "${../tools/diagnostic-coverage-runtime}" \
@@ -1240,7 +1352,7 @@ let
         set +e
         (
           set -e
-          devtool diagnostic-build validate-llvm \
+          coverage-sandbox diagnostic-build validate-llvm \
             --rustc-version "$out/toolchain-rustc-vv.txt" \
             --clang-version "$out/toolchain-clang-version.txt"
           cd "$work/source"
@@ -1251,7 +1363,7 @@ let
           export CFLAGS_wasm32_unknown_unknown="--target=wasm32-unknown-unknown"
           cargo rustc -p csr --features diagnostic-coverage --target wasm32-unknown-unknown --release --lib --message-format=json-render-diagnostics -- -Cinstrument-coverage -Zno-profiler-runtime --emit=llvm-ir -C link-arg=--no-gc-sections -Zno-link > "$work/cargo-artifacts.jsonl"
           cp "$work/cargo-artifacts.jsonl" "$out/instrumented/cargo-artifacts.jsonl"
-          devtool diagnostic-build discover-root \
+          coverage-sandbox diagnostic-build discover-root \
             --target-release "$work/target/wasm32-unknown-unknown/release" \
             --root-ir "$work/root-ir" \
             --root-rlink "$work/root-rlink" \
@@ -1261,7 +1373,7 @@ let
           cp "$root_ir" "$out/instrumented/csr.ll"
           cp "$root_rlink" "$out/instrumented/csr.rlink"
           rustc --target wasm32-unknown-unknown -Zlink-only "$out/instrumented/csr.rlink"
-          devtool diagnostic-build retain-linked-wasm \
+          coverage-sandbox diagnostic-build retain-linked-wasm \
             --target-release "$work/target/wasm32-unknown-unknown/release" \
             --manifest "$out/instrumented/ir-manifest.json" \
             --retained-wasm "$out/instrumented/csr.wasm"
@@ -1269,24 +1381,24 @@ let
           system_artifacts="$work/system-artifacts"
           dist="$work/dist"
           mkdir -p "$input" "$system_artifacts"
-          devtool system-artifacts --out "$system_artifacts"
+          system-artifacts --out "$system_artifacts"
           CSR_VITE_PUBLIC_DIR="${../public}" bash "$vite_project/scripts/build-csr-assets.sh" \
             "$out/instrumented/csr.wasm" "$vite_project" "$input" "$system_artifacts" "$dist" "$work/wasm-bindgen.wasm"
           mkdir -p "$out/pkg"
           cp -a "$dist/." "$out/pkg/"
-          devtool diagnostic-build write-coverage-artifacts \
+          coverage-sandbox diagnostic-build write-coverage-artifacts \
             --metadata "$out/coverage-metadata.json" \
             --toolchain-identity "$out/toolchain-identity.json" \
             --minicov-version 0.3.8 \
             --input-wasm "$out/instrumented/csr.wasm" \
             --wasm-bindgen-wasm "$work/wasm-bindgen.wasm" \
             --wasm-opt-wasm "$input/csr_bg.wasm"
-          devtool diagnostic-build assert-coverage --metadata "$out/coverage-metadata.json"
+          coverage-sandbox diagnostic-build assert-coverage --metadata "$out/coverage-metadata.json"
         ) > "$out/pipeline.log" 2>&1
         pipeline_exit=$?
         set -e
 
-        devtool diagnostic-build write-instrumented-status \
+        coverage-sandbox diagnostic-build write-instrumented-status \
           --status "$out/status.json" \
           --pipeline-exit "$pipeline_exit"
       '';
@@ -1302,7 +1414,8 @@ let
           pkgs.stdenv.cc
           pkgs.nodejs
           diagnosticToolchain
-          devtoolBin
+          coverageSandboxBin
+          systemArtifactsBin
           pkgs.binaryen
           wasm-bindgen-cli
         ];
@@ -1325,12 +1438,12 @@ let
         system_artifacts="$work/system-artifacts"
         dist="$work/dist"
         mkdir -p "$input" "$system_artifacts"
-        devtool system-artifacts --out "$system_artifacts"
+        system-artifacts --out "$system_artifacts"
         CSR_VITE_PUBLIC_DIR="${../public}" bash "$vite_project/scripts/build-csr-assets.sh" \
           "$work/target/wasm32-unknown-unknown/release/csr.wasm" "$vite_project" "$input" "$system_artifacts" "$dist"
         mkdir -p "$out/pkg"
         cp -a "$dist/." "$out/pkg/"
-        devtool diagnostic-build write-baseline-status --status "$out/status.json"
+        coverage-sandbox diagnostic-build write-baseline-status --status "$out/status.json"
       '';
   diagnosticBaselineJaunderBin = mkJaunderBin {
     pname = "jaunder-diagnostic-wasm-coverage-baseline";
@@ -1427,7 +1540,7 @@ in
     jaunder = jaunderBin;
     site = site;
     # The pre-wasm-bindgen, unstripped wasm. Exposed so
-    # `just wasm-audit report --breakdown` has an artifact that still
+    # `dev wasm-audit report --breakdown` has an artifact that still
     # carries a name section: `wasm-opt` strips names from the shipped
     # bundle, so the shipped file cannot be attributed to crates (#836).
     inherit csrWasm;
@@ -1437,7 +1550,10 @@ in
     sandboxArtifacts = mkSandboxArtifacts csrDebugBundle;
     sandboxArtifactsReleaseCsr = mkSandboxArtifacts csrWasmBundle;
     traced-run = tracedRunBin;
-    devtool = devtoolBin;
+    coverage-sandbox = coverageSandboxBin;
+    doctests = doctestsBin;
+    perf-producer = perfProducerBin;
+    system-artifacts = systemArtifactsBin;
     node-modules-setup = nodeModulesSetup;
     pg-run = pgRun;
     ux-sandbox = import ./ux-sandbox.nix {
@@ -1457,6 +1573,7 @@ in
     qualification-host = qualificationHostBin;
     host-proof = hostProofBin;
     adr-promoter = adrPromoter;
+    dev = devBin;
     # The out-of-process e2e seed helper (ADR-0046). Exposed so it is
     # directly buildable/verifiable; it is placed only on the e2e VM PATH,
     # never in the prod artifact or the NixOS module.
@@ -1522,8 +1639,16 @@ in
       diagnosticCsrWasmBundle
       diagnosticBaselineCsrWasmBundle
       testSupportBin
-      devtoolBin
+      coverageSandboxBin
+      doctestsBin
+      perfProducerBin
+      toolsBuild
+      toolsDocTestSrc
       tracedRunBin
+      devBin
+      devShim
+      devPythonCheck
+      devCheckSrc
       cargo-crap
       wasm-bindgen-cli
       wasmTestWebdriverConfig

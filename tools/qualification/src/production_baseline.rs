@@ -1712,7 +1712,7 @@ impl Drop for BehaviorSession {
     }
 }
 
-/// Just supplies immutable IDs after its Git preflight. No inputs deliberately
+/// `dev` supplies immutable IDs after its Git preflight. No inputs deliberately
 /// selects mutable smoke; a harness without product inputs selects local styling.
 pub fn run_leaf(
     expected_harness: Option<&str>,

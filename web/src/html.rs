@@ -6,7 +6,7 @@
 //! `Markup` is the only thing that composes into a `maud::html!` unescaped. Escaping
 //! is therefore not a rule anyone has to remember (#333): text interpolated into
 //! `html!` is escaped by the macro, and the one way to emit raw HTML is
-//! [`Markup::from_rendered_html`], which the `raw-html-door` gate pins to this file.
+//! [`Markup::from_rendered_html`], which lives only in this file.
 //!
 //! **Non-reactive markup only — no leptos reactivity**, so `reactive_graph` never
 //! sits on the public request path (the #173 escape, ADR-0040). maud preserves that
@@ -54,9 +54,9 @@ impl Markup {
 
     /// Carry an already-sanitized [`RenderedHtml`] into the markup layer unescaped.
     ///
-    /// **This is the crate's one raw door.** The `raw-html-door` static check fails
-    /// the build on any other `PreEscaped` under `web/src`, including inside macro
-    /// bodies, so a second door has to argue for itself in review.
+    /// **This is the crate's one raw door.** No other `PreEscaped` is allowed under
+    /// `web/src`, including inside macro bodies, so a second door has to argue for
+    /// itself in review.
     #[must_use]
     pub(crate) fn from_rendered_html(html: &RenderedHtml) -> Self {
         // XSS SAFETY: `RenderedHtml`'s invariant is established by sanitization
@@ -65,8 +65,8 @@ impl Markup {
         // Because `Markup` already stores the rendered string, wrapping in
         // `PreEscaped` and unwrapping is a no-op on the bytes. It is kept because it
         // is what "this string is markup, not text" is *spelled* as in maud, and it
-        // is the token the `raw-html-door` gate keys on — which is what catches the
-        // real hazard, a `PreEscaped(user_input)` appearing anywhere else in `web`.
+        // is the one raw-HTML token `web` permits here — so the real hazard, a
+        // `PreEscaped(user_input)` anywhere else in `web`, stays visible.
         // raw-html-door:allow re-wraps a RenderedHtml whose safety sanitization established (ADR-0079)
         Self(PreEscaped(html.as_ref()).into_string())
     }
