@@ -1,15 +1,15 @@
-# ADR-DRAFT: A Python `dev` runner with OpenTelemetry tracing replaces Just
+# ADR-0251: A Python `dev` runner with OpenTelemetry tracing replaces Just
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-16
 - Issue: [#1965](https://github.com/jaunder-org/jaunder/issues/1965)
 
 ## Context
 
-[ADR-0237](../0237-just-owned-gate-workflows.md),
-[ADR-0238](../0238-just-e2e-workflow-ownership.md),
-[ADR-0239](../0239-qualification-workflow-ownership.md) and
-[ADR-0240](../0240-just-frontdoors-host-pr-observer.md) made the root `Justfile`
+[ADR-0237](0237-just-owned-gate-workflows.md),
+[ADR-0238](0238-just-e2e-workflow-ownership.md),
+[ADR-0239](0239-qualification-workflow-ownership.md) and
+[ADR-0240](0240-just-frontdoors-host-pr-observer.md) made the root `Justfile`
 and `recipes/*.just` the owner of developer, hook, CI and sandbox workflows.
 Milestone 33 then asked for per-step timing, outcome and cache evidence. The
 plan was to extend traced-run's custom span mechanism, which passes context in
@@ -130,28 +130,28 @@ replaced. The executables are on no devShell PATH; host workflows reach
 
 This supersedes the Just-ownership parts of ADR-0237, ADR-0238, ADR-0239 and
 ADR-0240, the `just perf`, `just perf-compare` and `just perf-import-baseline`
-front doors of [ADR-0241](../0241-performance-workflow-ownership.md), the
+front doors of [ADR-0241](0241-performance-workflow-ownership.md), the
 `just sandbox` front door of
-[ADR-0244](../0244-standalone-ux-sandbox-lifecycle.md), and the traced-run
+[ADR-0244](0244-standalone-ux-sandbox-lifecycle.md), and the traced-run
 span-mechanism constraint in milestone 33. Those workflows keep their names and
 arguments as `dev` subcommands.
 
 It also amends these decisions:
 
-- [ADR-0095](../0095-doctest-gate-enumerates-the-fence-population.md)'s host
-  half: `tools/` leaves the fence population. It has no doctests, so its plain
-  Nix doctest run proves what reconciliation would. Only the root workspace is
+- [ADR-0095](0095-doctest-gate-enumerates-the-fence-population.md)'s host half:
+  `tools/` leaves the fence population. It has no doctests, so its plain Nix
+  doctest run proves what reconciliation would. Only the root workspace is
   reconciled, as before.
-- [ADR-0029](../0029-git-enforced-verify-gate.md)'s #1117 supplement: `prepush`
-  no longer runs host `workspace-doctests`. It requests the Nix doctest producer
+- [ADR-0029](0029-git-enforced-verify-gate.md)'s #1117 supplement: `prepush` no
+  longer runs host `workspace-doctests`. It requests the Nix doctest producer
   and gate, so it is no longer free of Nix derivations.
-- [ADR-0029](../0029-git-enforced-verify-gate.md)'s #1079 and #1863 supplements:
+- [ADR-0029](0029-git-enforced-verify-gate.md)'s #1079 and #1863 supplements:
   the single-process index custody they describe is preserved, but it lives in
   `dev` on the `git` CLI rather than in Rust, and it now reads the hook's index
   (a temporary one included) rather than clearing the hook's overrides.
-- [ADR-0246](../0246-retire-xtask-devtool-endpoints.md)'s repository-policy
-  home: it no longer owns `git-index-safety`.
-- [ADR-0247](../0247-host-tool-json-report-contract.md)'s list of host tools:
+- [ADR-0246](0246-retire-xtask-devtool-endpoints.md)'s repository-policy home:
+  it no longer owns `git-index-safety`.
+- [ADR-0247](0247-host-tool-json-report-contract.md)'s list of host tools:
   `doctest-check` and `test-local` are gone. `admit-inputs` and
   `csr-prerequisite` render no verdict report: a refusal is their exit status
   and stderr, and `csr-prerequisite` prints only the root it verified. Its human
@@ -159,17 +159,17 @@ It also amends these decisions:
   `scripts/step-report.jq` and `scripts/run-report` are deleted. The shared
   multi-checkout compile-cache environment moves from `tools/host-tool` into
   `dev` (`tools/dev/dev/checkout.py`), which sets it for every host step.
-- [ADR-0028](../0028-devtool-vs-xtask-boundary.md)'s devtool/xtask boundary:
+- [ADR-0028](0028-devtool-vs-xtask-boundary.md)'s devtool/xtask boundary:
   superseded. Both crates are gone. The litmus test it recorded, _where must
   this code execute?_, still separates the executables above, which run inside
   derivations, from the host concern tools, which never do.
-- [ADR-0028](../0028-devtool-vs-xtask-boundary.md)'s #1858 addendum: traced-run
-  no longer writes Chrome JSON process spans and has no launcher mode, and
+- [ADR-0028](0028-devtool-vs-xtask-boundary.md)'s #1858 addendum: traced-run no
+  longer writes Chrome JSON process spans and has no launcher mode, and
   `scripts/cargo-xtask` is deleted. traced-run keeps only captured
   single-program execution; `dev`'s OpenTelemetry spans replace the process
   spans and their recorded-entry links.
-- [ADR-0052](../0052-devtool-unifies-static-checks.md) and
-  [ADR-0146](../0146-devtool-owns-compiling-static-check-definitions.md):
+- [ADR-0052](0052-devtool-unifies-static-checks.md) and
+  [ADR-0146](0146-devtool-owns-compiling-static-check-definitions.md):
   `devtool check` is gone. Its last use, `devtool check ert`, was kept only for
   its `devtool-check-timing` event; both are deleted. `dev static` owns every
   static check definition, ERT included, and its spans give the timing.

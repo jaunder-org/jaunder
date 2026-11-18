@@ -80,8 +80,8 @@ One sibling tree is outside the root workspace as its own cargo workspace:
 host-side dev/CI commands live in its concern packages rather than a separate
 driver workspace, and each executable that runs inside a Nix derivation lives in
 the crate that owns its logic
-([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)). `performance`
-is the pure versioned dataset, producer-artifact, statistics, and comparison
+([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)). `performance` is
+the pure versioned dataset, producer-artifact, statistics, and comparison
 library shared by sandbox producers and host analysis under
 [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md). The same auxiliary package
 provides the host-only `perf-data` CLI for evidence policy; the Nix performance
@@ -155,7 +155,7 @@ failure.
 is accepted, as a narrow performance-specific clarification of ADR-0028;
 ADR-0141 workspace ownership and auxiliary host tests remain unchanged. Its
 `just perf*` front doors are now the `dev perf*` subcommands above
-([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)); the serial
+([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)); the serial
 producer sequence and the host Rust performance command are unchanged.
 
 **Package-metadata ownership is deliberately partial.** The root
@@ -3260,7 +3260,7 @@ and generated secrets remain restricted and ignored.
 The
 [Just qualification workflow ownership decision](adr/0239-qualification-workflow-ownership.md)
 records this split; its workflows are now `dev` commands
-([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)). Actual
+([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)). Actual
 qualification still requires executed Nix-selected harness/VM evidence; source
 migration and native host tests are not qualification results. Procedures and
 explicit non-claims live in
@@ -4240,7 +4240,7 @@ Focused workflow/failure proofs do not establish a full VM/browser matrix pass.
 See the
 [Just E2E workflow ownership decision](adr/0238-just-e2e-workflow-ownership.md),
 whose workflow `dev` now owns
-([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)).
+([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)).
 
 `end2end/playwright.config.ts` is the one config, loaded verbatim by both the VM
 and the host loop ([ADR-0051](adr/0051-single-playwright-config.md)). Chromium's
@@ -4388,7 +4388,7 @@ ADR-0181, with the 900-second default wait from
 The design is recorded in the accepted
 [standalone UX sandbox lifecycle decision](adr/0244-standalone-ux-sandbox-lifecycle.md);
 its `just sandbox` front door is now `dev sandbox`
-([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)). It is a narrow
+([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)). It is a narrow
 ADR-0028 placement exception and partially supersedes
 [host UX sandbox lifecycle](adr/0180-host-ux-sandbox-lifecycle.md) only for the
 sandbox owner and literal signal-escalation clause. The immutable Nix artifact
@@ -4540,7 +4540,7 @@ boundary.
 `dev`, a Python package in `tools/dev/` built on click and the OpenTelemetry
 API/SDK, owns developer, hook, local-validation, CI-lane and Nix-sandbox
 workflow composition
-([Python `dev` runner replaces Just](adr/drafts/dev-runner-replaces-just.md)).
+([Python `dev` runner replaces Just](adr/0251-dev-runner-replaces-just.md)).
 That decision supersedes the Just-ownership parts of the
 [Just-owned gate workflow decision](adr/0237-just-owned-gate-workflows.md),
 [Just E2E workflow ownership](adr/0238-just-e2e-workflow-ownership.md),
@@ -4566,7 +4566,7 @@ ast-grep, byte-compilation, cargo-deny, TSC, ERT and the six Clippy definitions
 to host and hermetic consumers. The obsolete static catalog, duplicate Leptosfmt
 source and the compiled static-check command are retired. The remaining
 in-derivation endpoints moved into the crates that own their logic
-([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)).
+([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)).
 
 On the host the devShells' `dev` shim runs the checkout's own `tools/dev/` with
 `python -P` under the pinned interpreter, so hooks and gates always run the
@@ -4629,7 +4629,7 @@ The explicit local workflows are:
   `doctests`/`doctests-gate`.
 - **`dev precommit`** is the hook entrypoint. It keeps single-process custody of
   the Git index itself, on the `git` CLI
-  ([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md) moves it from
+  ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md) moves it from
   Rust, preserving [ADR-0029](adr/0029-git-enforced-verify-gate.md)'s
   single-process custody). Before gate work it classifies the complete pre-run
   dirty-tree snapshot. The narrow `staged-markdown-only` class requires a
@@ -4744,7 +4744,7 @@ hook proves the fast local lane ran on the committed tip with no uncommitted
 files hiding; CI remains the non-bypassable hermetic authority; prepush's shared
 `static-docs` leaf and its Nix doctest producer and gate are the deliberate
 exceptions to its otherwise host-only gate
-([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md) amends the #1117
+([Python `dev` runner](adr/0251-dev-runner-replaces-just.md) amends the #1117
 supplement). Every repository-policy host tool self-heals `core.hooksPath` to
 the tracked, relative `.githooks` before its workload
 (`tools/repository-policy/src/checkout.rs`: `ensure_hooks_installed`, the one
@@ -5161,7 +5161,7 @@ population; `prepush`, `check` and validation request them as `dev` steps.
 `tools/` is deliberately outside the fence population
 (`tools/doctests/src/roots.rs`): it has no doctests, and `checks.tools-doctests`
 runs its `cargo test --doc` without reconciliation
-([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md) amends ADR-0095's
+([Python `dev` runner](adr/0251-dev-runner-replaces-just.md) amends ADR-0095's
 host half). Doctests feed no coverage: `llvm-cov --doctests` is unstable, so
 `--doc` runs outside instrumentation.
 
@@ -5240,7 +5240,7 @@ executable lives in the crate that owns its logic, and a single litmus test —
 _where must this code execute?_ — separates the executables that run inside Nix
 derivations from the host-only ones
 ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md), its in-sandbox crate
-dissolved by the [Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)
+dissolved by the [Python `dev` runner](adr/0251-dev-runner-replaces-just.md)
 decision):
 
 - **Host concern packages** — the host-side dev/CI commands, each owned by the
@@ -5269,7 +5269,7 @@ decision):
   completion sentinel. Only its `csr-prerequisite` executable joins the calling
   `dev` run's trace, through `TRACEPARENT`/`TRACESTATE` and `JAUNDER_TRACE_DIR`,
   writing its validation phases as span records with the Rust OpenTelemetry SDK
-  ([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)). Its
+  ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)). Its
   `admit-inputs` and `csr-prerequisite` executables are steps of
   `dev test-local`, which sequences CSR admission, the `.#csrBundle` build, CSR
   validation, the image worker build and `pg-run cargo nextest` itself, holding
@@ -5280,7 +5280,7 @@ decision):
   sandboxes or VM guests, where `nix` and the host tools are unavailable. Each
   is its own Nix package, built from the shared tools source and dependency
   build, and each derivation takes only the executable it runs
-  ([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)):
+  ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)):
   `coverage-sandbox` (`tools/coverage`: `emit` produces coverage artifacts into
   `$out` for exfiltration, `validate-status` gates them, `wasm` drives the
   browser WebAssembly coverage lifecycle, and `diagnostic-build` records the
@@ -5323,7 +5323,7 @@ the sole command-capture interface.
   child's code. It records no spans: its former `--name`/`--launcher` span
   mechanism, recorder and workflow folding are retired in favour of `dev`'s
   OpenTelemetry spans
-  ([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md);
+  ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md);
   [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)).
 - **Static argv lives in `dev static`**, including ERT and TSC's shared
   host/hermetic check; the compiled static-check command is retired. On the host
@@ -5618,9 +5618,9 @@ experiment-only two-worker coverage endpoints (`coverage emit --experiment`,
 comparison harness are retired by operator decision; a future partitioning
 experiment rebuilds its own harness. The production producer and build endpoints
 live in the crates that own them
-([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)). #1864's
-distinct verdicts and #1933's selected passive observations/retention remain
-separately owned.
+([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)). #1864's distinct
+verdicts and #1933's selected passive observations/retention remain separately
+owned.
 
 ## Documentation & decision process
 
@@ -5682,7 +5682,7 @@ Issue #1896 has approved a replacement ownership design, recorded in the
 proposed
 [Just frontdoors with a host-only PR observer decision](adr/0240-just-frontdoors-host-pr-observer.md).
 Implemented, and now as `dev` commands
-([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)), these are the
+([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)), these are the
 ordinary issue/PR frontdoors, using `gh`/`git` for operations and a
 purpose-specific read-only `tools/pr-observer/` host binary for polling and
 evidence classification. Its approval-bearing land and caller-owned unmanaged

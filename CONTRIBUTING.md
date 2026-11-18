@@ -828,7 +828,7 @@ consumes fails the test.
 ### Local checks: `dev`
 
 `dev`, the Python package in `tools/dev/`
-([Python `dev` runner](docs/adr/drafts/dev-runner-replaces-just.md)), owns
+([Python `dev` runner](docs/adr/0251-dev-runner-replaces-just.md)), owns
 developer, hook, CI and Nix-sandbox workflows. Each workflow is a `dev`
 subcommand (`dev check`, `dev test-local -- -p storage foo`,
 `dev ci-validate-host`, `dev static tsc --sandbox`). It invokes the pinned tools
@@ -1215,9 +1215,9 @@ Jaunder uses OpenTelemetry for deep performance analysis (see
 #### Observation and traces
 
 Every `dev` command records a trace of its run
-([Python `dev` runner](docs/adr/drafts/dev-runner-replaces-just.md)). The gate
-is the root span and each step is a child span, nested as the gates compose.
-Child processes join through the OpenTelemetry environment carrier
+([Python `dev` runner](docs/adr/0251-dev-runner-replaces-just.md)). The gate is
+the root span and each step is a child span, nested as the gates compose. Child
+processes join through the OpenTelemetry environment carrier
 (`TRACEPARENT`/`TRACESTATE`) plus `JAUNDER_TRACE_DIR`, which names the run
 directory; the root is the `dev` process that finds `JAUNDER_TRACE_DIR` unset.
 `host-proof csr-prerequisite`, a step of `dev test-local`, writes its validation
