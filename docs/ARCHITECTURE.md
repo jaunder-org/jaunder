@@ -2540,9 +2540,9 @@ consumer requires an exact project-set match with the trace-derived evidence, so
 a project-wide capture blackout cannot disappear from the denominator and an
 unexpected project cannot inflate it. Artifacts are still copied before a
 Playwright failure is propagated. Per-lane trace validation follows a successful
-VM result; distributed Firefox reconciliation runs after all producers even when
-a producer failed, consuming every recoverable artifact while the producer's
-primary failure remains visible
+VM result; each backend/browser reconciliation runs after all producers even
+when a producer failed, consuming every recoverable artifact while the
+producer's primary failure remains visible
 ([Playwright report population authority](adr/0165-playwright-report-defines-trace-gate-population.md)).
 
 ### Measurement frames are not mixed

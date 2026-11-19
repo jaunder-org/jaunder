@@ -1062,8 +1062,9 @@ mkE2eControlPackages = workers: vmMemory: vmCores:
 e2eWorkers2ControlPackages = mkE2eControlPackages 2 3072 2;
 e2eWorkers4ControlPackages = mkE2eControlPackages 4 6144 4;
 
-# Single-worker variants: same combos as the gate checks but pinned to
-# workers=1, so per-navigation timings are free of worker contention.
+# Single-worker variants: the disabled unsplit catalog lanes (every
+# backend/browser, unsharded) pinned to workers=1, so per-navigation timings
+# are free of worker contention.
 # That isolation is their whole purpose — use them when the question is
 # "what does one navigation cost", not "what does the suite cost". The
 # worker count is the ONLY difference from the gate combos (#792), and the

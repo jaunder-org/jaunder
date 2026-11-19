@@ -30,9 +30,11 @@ the existing `chromium-visual` snapshot baselines through
 Firefox unsplit lanes. Their remaining consumer is the set of single-worker
 diagnostic packages. The unsplit Chromium Playwright projects also stay, for
 host-local `dev e2e-local`, production-baseline qualification and the
-wasm-coverage producers. Total enabled lanes: 8 → 12, which uses up the
-single-hex `traceDigit` space (16 values). Any future lane will need a format
-change.
+wasm-coverage producers. Total enabled lanes: 8 → 12, so the catalog holds 16
+lanes. The single-hex `traceDigit` space has only 15 usable values, because `0`
+expands to the invalid all-zero trace id. So the field becomes `traceSeed`: one
+or two non-zero hex digits, repeated to fill the ids. The catalog check requires
+the expanded ids to be distinct.
 
 Rejected alternative: two lanes per backend (ordinary + serial-special). It adds
 only two jobs, but the ordinary lane would run ~850 s on AWS instead of ~450 s,
@@ -86,7 +88,9 @@ from a registered `/nix/store` output, then compares the capture with
    supported workflows that reach it both re-run all three SQLite/Chromium
    producers in the same invocation before reading their artifacts:
    - `dev e2e` / `dev validate` runs coverage after every producer settles.
-   - `dev e2e-regenerate-coverage` regenerates the snapshot from the union.
+   - `dev e2e-regenerate-coverage` runs the pair's producers together
+     (`scripts/e2e-workflow pair sqlite chromium`), then regenerates the
+     snapshot from the union.
 
    There is no separate coverage command. Each producer deletes its own earlier
    files before it builds, so a lane re-run replaces that lane's evidence. A

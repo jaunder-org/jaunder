@@ -73,8 +73,9 @@ current.
 ## Consequences
 
 - Good: No Chromium lane carries the serial tail together with the whole
-  parallel suite. Every lane has headroom under the shared cap, and the
-  PostgreSQL/Chromium timeout exception is gone.
+  parallel suite, so every lane is expected to run well under the shared cap (to
+  be confirmed by CI measurement on #1969), and the PostgreSQL/Chromium timeout
+  exception is gone.
 - Good: The catalog, census, reconciliation and CI rules no longer special-case
   a browser.
 - Cost: CI runs twelve producer VMs instead of eight and four reconciliation

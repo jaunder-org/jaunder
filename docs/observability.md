@@ -665,12 +665,12 @@ inconsistent input fails closed after diagnostics are captured. The gate
 evaluates every reported attempt, including retries: any attempt at **80% or
 more** of its effective whole-test timeout fails, even if a later retry passes.
 
-Firefox adds one backend-level host reconciliation after all three lane
+Each backend/browser pair adds one host reconciliation after its three lane
 producers settle. It consumes the independent unsharded census plus every
 lane-qualified report, manifest, phase sidecar, and capture; it rejects missing
 or duplicate source identities, swapped shard evidence, failed phases, partial
 traces, and incomplete retry/duration populations. The reconciliation artifact
-is only its verdict log (`.xtask/firefox-reconcile.log`, the human view of
+is only its verdict log (`.xtask/reconcile.log`, the human view of
 `e2e-evidence reconcile`'s JSON report): producer artifacts already retain the
 full diagnostics, so operators should inspect the named failed lane rather than
 a duplicated aggregate bundle.

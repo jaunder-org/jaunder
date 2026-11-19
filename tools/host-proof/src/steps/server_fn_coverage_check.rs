@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::server_fn_coverage::io::{
     SNAPSHOT_PATH, WEB_SRC, coverage_from_captures, inventory, write_snapshot,
@@ -66,7 +66,7 @@ fn compare_rendered(
     if committed == rendered {
         return Ok(format!("{covered} covered; snapshot current"));
     }
-    anyhow::bail!(
+    bail!(
         "{} is out of date with this run's traces — regenerate it with `{REGENERATE_CMD}` and commit the result",
         snapshot_path.display()
     )

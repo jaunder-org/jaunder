@@ -70,10 +70,11 @@
 // supersets include `web::` spans that are not server fns at all) is the right
 // trade: a superset cannot lose a hit.
 //
-// Re-running it needs a capture from a passing
-// `dev e2e-producer sqlite-chromium-unsplit` —
-// `.xtask/diagnostics/e2e-sqlite-chromium-unsplit/capture-sqlite-chromium-unsplit.tar.gz`,
-// member `capture/otel-traces.jsonl`. Byte-identical output requires the same capture;
+// Re-running it needs a capture from a passing SQLite/Chromium lane, e.g.
+// `dev e2e-producer sqlite-chromium-ordinary-1-of-2` —
+// `.xtask/diagnostics/e2e-<lane>/capture-<lane>.tar.gz`, member
+// `capture/otel-traces.jsonl`; reduce each SQLite/Chromium lane's capture to
+// cover the whole population. Byte-identical output requires the same capture;
 // a fresh run produces different span ids, so regenerating the fixture means
 // regenerating the snapshot from the same capture too.
 
