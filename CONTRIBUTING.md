@@ -1667,12 +1667,15 @@ editing does not erase pre-existing links. Do not supply closed prerequisites or
 substitute prose for native links.
 
 Both operations add/retain the issue in Jaunder Backlog (#1), set its explicit
-Priority, and verify exact issue metadata/body and Backlog/Priority readback.
-They do not change claim Status. Stdout contains the verified issue JSON plus
-its Backlog item; progress/failures go to stderr. Native `gh`/GitHub owns
-mutation semantics. A nonzero result can follow partial application: inspect the
-printed issue URL before retrying; no rollback or automatic duplicate issue
-creation is attempted. Invalid/partial/API responses cannot produce success.
+Priority, and verify exact issue metadata/body and Backlog/Priority readback. An
+issue already in the Backlog keeps its one existing item. A failed `item-add`
+(as when project automation adds a new issue at the same moment) continues, with
+a stderr note, only when the issue then has exactly one Backlog item. They do
+not change claim Status. Stdout contains the verified issue JSON plus its
+Backlog item; progress/failures go to stderr. Native `gh`/GitHub owns mutation
+semantics. A nonzero result can follow partial application: inspect the printed
+issue URL before retrying; no rollback or automatic duplicate issue creation is
+attempted. Invalid/partial/API responses cannot produce success.
 
 The three `dev` frontdoors replaced the former xtask issue dispatch/report
 helpers. They compose native `gh`/`git` calls; they do not add a general command

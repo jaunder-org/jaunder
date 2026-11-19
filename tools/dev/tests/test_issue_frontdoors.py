@@ -15,7 +15,7 @@ from conftest import Checkout
 # Records each call and answers from the scripted replies in order. Inventory
 # replies model `gh --paginate --slurp`, never an unpaginated request.
 GH = f"""#!{sys.executable}
-import fnmatch, json, os, pathlib, sys
+import fnmatch, json, os, pathlib, signal, sys
 fixture = pathlib.Path(os.environ["FIXTURE"])
 args = sys.argv[1:]
 data = sys.stdin.read() if " --input - " in f" {{' '.join(args)}} " else ""
@@ -39,8 +39,10 @@ if "raw" in replies[n]:
     sys.stdout.write(replies[n]["raw"])
 else:
     print(json.dumps(replies[n].get("body"), separators=(",", ":")))
+if replies[n].get("killed"):
+    os.kill(os.getpid(), signal.SIGTERM)
 if replies[n].get("exit", 0):
-    print("simulated gh failure", file=sys.stderr)
+    print(replies[n].get("stderr", "simulated gh failure"), file=sys.stderr)
     sys.exit(replies[n]["exit"])
 """
 DECISIONS = ["fix(tooling): preserve metadata", "Task", "3", "P2", "tooling,dx"]
@@ -340,6 +342,65 @@ def test_create_applies_explicit_metadata_and_checks_readback(
     }
     assert "item-add" in calls[2]["args"]
     assert "be01f9da" in calls[3]["args"]
+
+
+# `item-add` racing the project's own auto-add of a new issue (#2007).
+ALREADY_EXISTS = {
+    "exit": 7,
+    "stderr": "GraphQL: Content already exists in this project (addProjectV2ItemById)",
+}
+RACED_ITEM = {"id": "PVTI_1", "project": {"id": PROJECT}, "priority": None}
+
+
+def raced(listing: Any) -> list[Any]:
+    """The create replies with `item-add` failing, then the Backlog listing."""
+    replies = responses()
+    replies[2:3] = [ALREADY_EXISTS, listing]
+    return replies
+
+
+def test_an_issue_added_to_the_backlog_concurrently_uses_that_item(
+    tracker: Tracker,
+) -> None:
+    tracker.reply(raced(project_items([RACED_ITEM])))
+    result = tracker.mutate("issue-create")
+    assert result.returncode == 0, result
+    assert json.loads(result.stdout)["backlog"]["id"] == "PVTI_1"
+    assert (
+        b"dev: issue-create: item-add failed; using existing Backlog item PVTI_1\n"
+        in result.stderr
+    )
+    calls = tracker.calls()
+    assert calls[3]["args"][:4] == ["api", "graphql", "-F", "number=731"]
+    assert calls[4]["args"][:2] == ["project", "item-edit"]
+    assert calls[4]["args"][calls[4]["args"].index("--id") + 1] == "PVTI_1"
+
+
+@pytest.mark.parametrize(
+    ("listing", "code"),
+    [
+        (project_items([]), 7),
+        (project_items([RACED_ITEM, RACED_ITEM | {"id": "PVTI_2"}]), 5),
+    ],
+)
+def test_a_failed_add_without_exactly_one_backlog_item_fails(
+    tracker: Tracker, listing: Any, code: int
+) -> None:
+    tracker.reply(raced(listing))
+    result = tracker.mutate("issue-create")
+    assert result.returncode == code
+    assert result.stdout == b""
+    assert not any("item-edit" in call["args"] for call in tracker.calls())
+
+
+def test_a_signalled_add_does_not_fall_back(tracker: Tracker) -> None:
+    replies = raced(project_items([RACED_ITEM]))
+    replies[2] = {"killed": 1}
+    tracker.reply(replies)
+    result = tracker.mutate("issue-create")
+    assert result.returncode == 128 + 15
+    assert result.stdout == b""
+    assert len(tracker.calls()) == 3, "no listing or edit after the signal"
 
 
 def test_success_reports_the_readback_and_names_the_issue_to_verify(
