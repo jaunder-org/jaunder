@@ -94,6 +94,7 @@ jobs:
         with:
           name: generated-theme-thumbnail
           path: ${{ runner.temp }}/jaunder-theme-thumbnail.png
+          # A failure before thumbnail generation legitimately leaves no file.
           if-no-files-found: ignore
           retention-days: 14
 

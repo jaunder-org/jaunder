@@ -210,7 +210,9 @@ fn assert_jobs_keep_and_summarise_their_trace(source: &str, names: &[&str]) {
         let command = run(summary).unwrap();
         assert!(
             command.contains(">> \"$GITHUB_STEP_SUMMARY\"")
-                && command.contains("|| echo \"::warning::"),
+                && command.ends_with(
+                    "|| echo \"::warning::Trace summary unavailable, see this step's log\""
+                ),
             "{name}: the summary warns instead of failing: {command}"
         );
         assert_summary_warns_without_a_trace(name, summary["run"].as_str().unwrap());
@@ -261,12 +263,14 @@ fn lane_evidence_warns_when_empty_and_still_fails_the_lane_on_upload_failure() {
         .as_sequence()
         .unwrap()
         .iter()
-        .find(|step| step["with"]["path"].as_str() == Some(".xtask/diagnostics/"))
-        .unwrap();
-    assert_eq!(evidence["with"]["if-no-files-found"].as_str(), Some("warn"));
-    // The reconcile job downloads this as producer evidence, so its upload
-    // failure stays the lane's.
-    assert!(evidence["continue-on-error"].is_null());
+        .filter(|step| step["name"].as_str() == Some("Upload lane-qualified e2e evidence"))
+        .collect::<Vec<_>>();
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(
+        evidence[0]["with"]["if-no-files-found"].as_str(),
+        Some("warn")
+    );
+    assert!(evidence[0]["continue-on-error"].is_null());
 }
 
 #[test]
