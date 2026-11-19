@@ -2164,12 +2164,14 @@ assumed to seed dev-profile clippy. Stable identity is not proof of compiler
 freshness or local/remote realization reuse.
 
 Artifact compatibility includes compiler, target, profile, resolved features,
-flags and native inputs; incompatible work must rebuild. Dependency preparations
-are cacheable build inputs, distinct from substitution-resistant verdict
-outputs. Substitution resistance does not force locally valid outputs to rerun;
-CI must preserve actual executing-verdict evidence rather than infer it from
-availability. Cache legitimate build inputs aggressively, but execute tests
-afresh; cached test verdicts are not execution evidence.
+flags and native inputs; incompatible work must rebuild. Cache legitimate build
+inputs aggressively. Static verdicts (formatting, lint, Clippy, type checks,
+ERT, census, `dev-python`) are deterministic and input-addressed, so a stamp
+substituted for an identical derivation is acceptable. Coverage and e2e verdicts
+must execute for every ref and are never substituted: the Cachix `pushFilter`
+keeps them out of the cache in CI, where install-nix-action's
+`always-allow-substitutes = true` overrides their `nonSubstitutable` wrapper
+([substitutable static verdicts](docs/adr/drafts/substitutable-static-verdicts.md)).
 
 `dev` gate workflows return process status and parked logs, not the historical
 JSON invalidation envelope. The Nix source filters assert representative
@@ -2189,8 +2191,7 @@ server-function coverage verification to `dev validate-no-e2e`.
   sandbox `dev` package and pinned compiler, its own validation verdict, and
   explicit dependency setup. The filtered `tools/dev/` source is admitted
   alongside the narrow direct TypeScript/config/manifest population, which still
-  has the accepted whole-end2end transitive coupling through `e2ePackage`. The
-  leaf is non-substitutable, but valid local outputs can be reused.
+  has the accepted whole-end2end transitive coupling through `e2ePackage`.
 - `checks.x86_64-linux.rust-format` — `dev static rust-format --sandbox`:
   product `fmt`, scoped `leptosfmt`, then `tools-fmt --all`. Product/tools Cargo
   populations overlap, so these share one verdict. Flake checks select it, and
@@ -2218,27 +2219,25 @@ server-function coverage verification to `dev validate-no-e2e`.
   shared `byte-compile`, over the complete non-Markdown Elisp source tree in a
   writable copy. The sandbox `dev` package, `emacsForCi`, and `TZDIR` replace
   the former compiled build dependency. It needs no offline Cargo home,
-  Node/Playwright, or Git. The verdict is non-substitutable, but valid local
-  output reuse remains possible. This selected change does not certify every
-  family coupling or discharge the separately recorded invalidation deferrals.
+  Node/Playwright, or Git. This selected change does not certify every family
+  coupling or discharge the separately recorded invalidation deferrals.
 - `checks.x86_64-linux.static-e2e-census` — Nix's `setup-e2e-node-modules`
   followed by `node end2end/e2eCensusContract.ts`, preserving the existing
   census population independently of `tsc`. Its direct sources are the
   non-Markdown `end2end` tree (Playwright config/projects, tests, fixtures,
   helpers, and module-load assets) plus the census script. The existing
   `e2ePackage` supplies the transitive pinned npm closure, which is broader than
-  the direct census filter and may invalidate the leaf. It is non-substitutable,
-  may reuse a valid local output, and is requested once by hermetic static
-  validation; the standalone host `dev static-all` population is unchanged.
+  the direct census filter and may invalidate the leaf. It is requested once by
+  hermetic static validation; the standalone host `dev static-all` population is
+  unchanged.
 - `checks.x86_64-linux.static-ert` — `dev static ert --sandbox`, the standalone
   pure runner over the complete non-Markdown Elisp tree, in a writable copy,
   with the sandbox `dev` package, existing `emacsForCi`, Git and timezone
   inputs. The separate combined pure/live coverage producer below is unchanged.
   Hermetic validation requests `static-docs`, `static-typescript`,
   `rust-format`, `static-code`, `static-elisp`, `static-e2e-census`,
-  `static-ert`, `dev-python` and `tools-doctests`, in that order. The ERT leaf
-  is non-substitutable but may reuse a valid local output. ERT and TSC are
-  traced like every other `dev` step; the old compiled timing events are
+  `static-ert`, `dev-python` and `tools-doctests`, in that order. ERT and TSC
+  are traced like every other `dev` step; the old compiled timing events are
   retired. No new Nix child-timing collector is introduced. Retained logs are
   never timing inputs; Nix request duration and output reuse do not prove fresh
   builder execution.

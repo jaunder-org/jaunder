@@ -48,10 +48,14 @@ let
     emacsSrc
     emacsForCi
     ;
-  # Verdict outputs must not be substituted; build/dependency artifacts may be.
-  # These flags do not rerun outputs already valid in the local store. CI must
-  # retain executing-verdict evidence rather than infer execution from availability.
-  # Coverage/e2e flags are also checked by the existing cache-safety probe.
+  # Only coverage and e2e verdicts are barred from substitution. A static
+  # verdict is a deterministic function of its inputs, so a substituted stamp
+  # for an identical derivation is acceptable (docs/adr/drafts/
+  # substitutable-static-verdicts.md). These flags guard local builds and do not
+  # rerun outputs already valid in the local store. In CI, install-nix-action
+  # sets `always-allow-substitutes = true`, which overrides them; there the
+  # setup-ci Cachix `pushFilter` keeps these verdicts out of the cache. The
+  # cache-safety probe checks both.
   nonSubstitutable =
     derivation:
     if derivation ? overrideAttrs then
@@ -2919,7 +2923,7 @@ mkWasmCoverageMeasurementProducer =
       clippySourceFilter;
   };
   # `dev` arrives as its own filtered build, so tools/dev/ edits rebuild these.
-  mkClippyLeaf = name: nonSubstitutable (pkgs.runCommand name {
+  mkClippyLeaf = name: pkgs.runCommand name {
     nativeBuildInputs = [ pkgs.stdenv.cc devBin toolchain ] ++ hostArgs.nativeBuildInputs;
     buildInputs = hostArgs.buildInputs;
     LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ];
@@ -2930,7 +2934,7 @@ mkWasmCoverageMeasurementProducer =
     cd src
     dev static ${name} --sandbox
     touch $out
-  '');
+  '';
 in
 {
 
@@ -3386,7 +3390,7 @@ web-no-server-clippy = mkClippyLeaf "web-no-server-clippy";
 client-host-clippy = mkClippyLeaf "client-host-clippy";
 wasm-clippy = mkClippyLeaf "wasm-clippy";
 tools-clippy = mkClippyLeaf "tools-clippy";
-clippy-aggregate = nonSubstitutable (pkgs.runCommand "clippy-aggregate" { } ''
+clippy-aggregate = pkgs.runCommand "clippy-aggregate" { } ''
   test -e ${self.checks.${system}.product-core-clippy}
   test -e ${self.checks.${system}.web-server-clippy}
   test -e ${self.checks.${system}.web-no-server-clippy}
@@ -3394,7 +3398,7 @@ clippy-aggregate = nonSubstitutable (pkgs.runCommand "clippy-aggregate" { } ''
   test -e ${self.checks.${system}.wasm-clippy}
   test -e ${self.checks.${system}.tools-clippy}
   touch $out
-'');
+'';
 # Documentation formatting needs only the shared `dev` check and pinned tools.
 static-docs =
   let
@@ -3428,14 +3432,14 @@ static-docs =
       touch $out
     '';
 # Exercise link safety with fixtures and both real dependency pins.
-node-modules-setup = nonSubstitutable (pkgs.runCommand "node-modules-setup-test"
+node-modules-setup = pkgs.runCommand "node-modules-setup-test"
   { nativeBuildInputs = [ pkgs.bash pkgs.coreutils pkgs.diffutils ]; }
   ''
     bash ${./tests/node-modules-setup.sh} ${nodeModulesSetup}/bin/setup-e2e-node-modules \
       ${e2ePackage}/node_modules \
       ${pkgs.playwright-test}/lib/node_modules/@playwright/test
     touch $out
-  '');
+  '';
 # Keep the compiler project explicit; dependencies still come from the existing
 # whole-end2end e2ePackage, whose broader invalidation coupling is intentional.
 static-typescript =
@@ -3472,54 +3476,50 @@ static-typescript =
         staticTypeScriptSourceFilter;
     };
   in
-  nonSubstitutable (
-    pkgs.runCommand "static-typescript"
-      {
-        # `dev` arrives as its own filtered build, so tools/dev/ edits rebuild this.
-        nativeBuildInputs = [
-          devBin
-          pkgs.nodejs
-          pkgs.typescript
-        ];
-        E2E_TYPES_NODE_MODULES = "${e2ePackage}/node_modules";
-        E2E_PLAYWRIGHT_TEST = "${pkgs.playwright-test}/lib/node_modules/@playwright/test";
-      }
-      ''
-        # Provisioning owns ignored node_modules, not the checkout source filter.
-        cp --no-preserve=mode -r ${staticTypeScriptSrc} src
-        cd src
-        ${nodeModulesSetup}/bin/setup-e2e-node-modules "$E2E_TYPES_NODE_MODULES" "$E2E_PLAYWRIGHT_TEST"
-        dev static tsc --sandbox
-        touch $out
-      ''
-  );
-# `dev`'s own quality gate: formatting, lint, strict types, and its tests at
-# 100% statement and branch coverage, subprocesses included.
-dev-python = nonSubstitutable (
-  pkgs.runCommand "dev-python"
+  pkgs.runCommand "static-typescript"
     {
+      # `dev` arrives as its own filtered build, so tools/dev/ edits rebuild this.
       nativeBuildInputs = [
-        devPythonCheck
-        pkgs.ruff
-        # The CLI tests run `dev` inside throwaway Git checkouts.
-        pkgs.git
+        devBin
+        pkgs.nodejs
+        pkgs.typescript
       ];
-      # Only here may tests skip for the repository scripts, jq or Nix that
-      # this filtered source and sandbox lack; elsewhere their absence fails.
-      JAUNDER_DEV_PYTHON_CHECK = "1";
+      E2E_TYPES_NODE_MODULES = "${e2ePackage}/node_modules";
+      E2E_PLAYWRIGHT_TEST = "${pkgs.playwright-test}/lib/node_modules/@playwright/test";
     }
     ''
-      cp --no-preserve=mode -r ${devCheckSrc} src
+      # Provisioning owns ignored node_modules, not the checkout source filter.
+      cp --no-preserve=mode -r ${staticTypeScriptSrc} src
       cd src
-      ruff format --check .
-      ruff check .
-      mypy --strict .
-      coverage run -m pytest -q
-      coverage combine
-      coverage report
+      ${nodeModulesSetup}/bin/setup-e2e-node-modules "$E2E_TYPES_NODE_MODULES" "$E2E_PLAYWRIGHT_TEST"
+      dev static tsc --sandbox
       touch $out
-    ''
-);
+    '';
+# `dev`'s own quality gate: formatting, lint, strict types, and its tests at
+# 100% statement and branch coverage, subprocesses included.
+dev-python = pkgs.runCommand "dev-python"
+  {
+    nativeBuildInputs = [
+      devPythonCheck
+      pkgs.ruff
+      # The CLI tests run `dev` inside throwaway Git checkouts.
+      pkgs.git
+    ];
+    # Only here may tests skip for the repository scripts, jq or Nix that
+    # this filtered source and sandbox lack; elsewhere their absence fails.
+    JAUNDER_DEV_PYTHON_CHECK = "1";
+  }
+  ''
+    cp --no-preserve=mode -r ${devCheckSrc} src
+    cd src
+    ruff format --check .
+    ruff check .
+    mypy --strict .
+    coverage run -m pytest -q
+    coverage combine
+    coverage report
+    touch $out
+  '';
 # The tools workspace's doctests, a plain `cargo test --doc` over a source in
 # which every tools member is real (`toolsDocTestSrc`), reusing the shared tools
 # dependency build. `tools/` has no doctests and sits outside the ADR-0095 fence
@@ -3547,7 +3547,7 @@ static-ert =
         staticErtSourceFilter;
     };
   in
-  nonSubstitutable (pkgs.runCommand "static-ert"
+  pkgs.runCommand "static-ert"
     {
       nativeBuildInputs = [ devBin emacsForCi pkgs.git ];
       TZDIR = "${pkgs.tzdata}/share/zoneinfo";
@@ -3557,7 +3557,7 @@ static-ert =
       cd src
       dev static ert --sandbox
       touch $out
-    '');
+    '';
 # Elisp formatter verification and warning-as-error byte-compilation share one
 # narrow leaf; `dev` owns both command definitions on host and in Nix.
 static-elisp =
@@ -3583,7 +3583,7 @@ static-elisp =
         staticElispSourceFilter;
     };
   in
-  nonSubstitutable (pkgs.runCommand "static-elisp"
+  pkgs.runCommand "static-elisp"
     {
       nativeBuildInputs = [ devBin emacsForCi ];
       TZDIR = "${pkgs.tzdata}/share/zoneinfo";
@@ -3594,7 +3594,7 @@ static-elisp =
       dev static elisp-fmt --sandbox
       dev static byte-compile --sandbox
       touch $out
-    '');
+    '';
 # Cargo fmt's product/tools populations overlap. Keep their shared verdict and
 # the scoped Leptos formatter together, without compiling the residual checks.
 rust-format =
@@ -3629,7 +3629,7 @@ rust-format =
         rustFormatSourceFilter;
     };
   in
-  nonSubstitutable (pkgs.runCommand "rust-format"
+  pkgs.runCommand "rust-format"
     {
       # These bring their real transitive source/vendor/build closures; the
       # direct source filter alone does not promise cache isolation.
@@ -3643,7 +3643,7 @@ rust-format =
       cd src
       dev static rust-format --sandbox
       touch $out
-    '');
+    '';
 static-e2e-census =
   let
     censusSourceFilter = path: type:
@@ -3664,7 +3664,7 @@ static-e2e-census =
         censusSourceFilter;
     };
   in
-  nonSubstitutable (pkgs.runCommand "static-e2e-census"
+  pkgs.runCommand "static-e2e-census"
     {
       nativeBuildInputs = [ pkgs.nodejs pkgs.playwright-test ];
       E2E_TYPES_NODE_MODULES = "${e2ePackage}/node_modules";
@@ -3677,7 +3677,7 @@ static-e2e-census =
       ${nodeModulesSetup}/bin/setup-e2e-node-modules "$E2E_TYPES_NODE_MODULES" "$E2E_PLAYWRIGHT_TEST"
       node end2end/e2eCensusContract.ts
       touch $out
-    '');
+    '';
 static-code =
   # Force the optional performance surface in the existing static gate so
   # shared VM-wrapper changes cannot silently leave measurement producers stale.
@@ -3748,7 +3748,7 @@ static-code =
         staticCodeSourceFilter;
     };
   in
-  nonSubstitutable (pkgs.runCommand "static-code"
+  pkgs.runCommand "static-code"
     {
       nativeBuildInputs = [
         pkgs.stdenv.cc
@@ -3783,7 +3783,7 @@ static-code =
       dev static cargo-deny --sandbox
       test -e ${self.checks.${system}.clippy-aggregate}
       touch $out
-    '');
+    '';
 # Doctests: the one suite nextest structurally cannot run, so the
 # `coverage` check above never sees them (#763). The producer runs
 # `cargo test --workspace --doc` AND reconciles what ran against the
