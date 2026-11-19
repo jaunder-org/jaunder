@@ -81,15 +81,17 @@ from a registered `/nix/store` output, then compares the capture with
    Only then does it union the three captures' `covered` and `orphans` maps and
    compare the rendered snapshot byte-for-byte. A missing lane, or a failed or
    partial one, fails coverage.
-3. CI runs this inside the `sqlite/chromium` reconcile job. Locally there are
-   only two entry points, and both re-run all three SQLite/Chromium producers in
-   the same invocation before reading their artifacts:
+3. Coverage verification is part of the `dev e2e-reconcile sqlite chromium`
+   verdict. CI runs it in the `sqlite/chromium` reconcile job. Locally, the two
+   supported workflows that reach it both re-run all three SQLite/Chromium
+   producers in the same invocation before reading their artifacts:
    - `dev e2e` / `dev validate` runs coverage after every producer settles.
    - `dev e2e-regenerate-coverage` regenerates the snapshot from the union.
 
-   There is no standalone local coverage command. Each producer deletes its own
-   earlier files before it builds, so artifacts left over from an older manual
-   run cannot enter the union.
+   There is no separate coverage command. Each producer deletes its own earlier
+   files before it builds, so a lane re-run replaces that lane's evidence. A
+   manual `dev e2e-reconcile` over hand-assembled artifacts is a diagnostic, not
+   the supported proof.
 
 Cost accepted: two existing rules are relaxed.
 
