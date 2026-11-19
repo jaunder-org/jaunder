@@ -1,6 +1,6 @@
-//! The one application-route catalog, including access classification and safe
-//! private return destinations. The router expands this catalog too, so adding a
-//! route cannot bypass either policy.
+//! The one application-route catalog, including access classification, safe
+//! private return destinations, and lookups of individual routes. The router
+//! expands this catalog too, so adding a route cannot bypass either policy.
 
 use common::root_relative_url::RootRelativeUrl;
 use url::Url;

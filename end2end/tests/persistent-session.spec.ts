@@ -64,9 +64,10 @@ test("browser receives and uses a persistent Session cookie and logout clears it
     const pendingApi = new Set<Request>();
     let logouts = 0;
     nextPage.on("request", (request) => {
-      if (!new URL(request.url()).pathname.startsWith("/api/")) return;
+      const path = new URL(request.url()).pathname;
+      if (!path.startsWith("/api/")) return;
       pendingApi.add(request);
-      if (request.url().endsWith("/api/auth/logout")) logouts += 1;
+      if (path === "/api/auth/logout") logouts += 1;
     });
     const settle = (request: Request) => pendingApi.delete(request);
     nextPage.on("requestfinished", settle);
