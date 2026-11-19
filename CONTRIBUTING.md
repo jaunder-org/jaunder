@@ -2165,12 +2165,13 @@ freshness or local/remote realization reuse.
 
 Artifact compatibility includes compiler, target, profile, resolved features,
 flags and native inputs; incompatible work must rebuild. Cache legitimate build
-inputs aggressively. Static verdicts (formatting, lint, Clippy, type checks,
-ERT, census, `dev-python`) are deterministic and input-addressed, so a stamp
-substituted for an identical derivation is acceptable. Coverage and e2e verdicts
-must execute for every ref and are never substituted: the Cachix `pushFilter`
-keeps them out of the cache in CI, where install-nix-action's
-`always-allow-substitutes = true` overrides their `nonSubstitutable` wrapper
+inputs aggressively. Every other Nix verdict, for example formatting, lint,
+Clippy, type checks, ERT, the census, doctests and `dev-python`, is sandboxed
+and input-addressed, so a stamp substituted for an identical derivation is
+acceptable. Coverage and e2e verdicts are never substituted, and CI executes
+them for every ref: the Cachix `pushFilter` keeps them out of the cache in CI,
+where install-nix-action's `always-allow-substitutes = true` overrides their
+`nonSubstitutable` wrapper
 ([substitutable static verdicts](docs/adr/drafts/substitutable-static-verdicts.md)).
 
 `dev` gate workflows return process status and parked logs, not the historical

@@ -19,30 +19,41 @@ them.
 [ADR-0077](../0077-adopt-github-merge-queue.md) kept "never trust a cached green
 check" and credited that property to the `pushFilter`.
 [ADR-0192](../0192-split-ci-non-e2e-validation-lanes.md) bars only the final
-coverage and e2e verdicts from Cachix. Enforcing execution for the static
-verdicts as well was measured. The hermetic lane takes 108 s with the stamps
-substituted (run 44383337174) and 1333 s with them built (run 44357084032).
-`static-code`, whose six Clippy leaves compile without cached artifacts, took
-707 s of that, and `dev-python` 84 s. Enforcement would add about 15
+coverage and e2e verdicts from Cachix.
+
+The rejected alternative was to enforce execution by setting
+`always-allow-substitutes = false` on the runner. Its cost was measured from the
+hermetic lane, which takes 108 s with its stamps substituted (run 44383337174)
+and 1333 s with them built (run 44357084032). Of the 1333 s, `static-code`,
+whose six Clippy leaves compile without cached artifacts, took 707 s,
+`tools-doctests` 420 s and `dev-python` 84 s. `tools-doctests` was never
+wrapped, but the runner-wide setting would also stop its substitution, along
+with that of every nixpkgs trivial builder that sets `allowSubstitutes = false`.
+The trivial-builder cost was not measured. Enforcement would add about 15
 runner-minutes to every run whose inputs are unchanged: post-merge push runs,
 ADR-promoter PRs, docs-only PRs and reruns.
 
 ## Decision
 
-A static verdict is a deterministic function of its inputs. Its derivation is
-input-addressed, so the same derivation hash means the same sources, toolchain
-and configuration. A passing stamp fetched for that exact derivation is
-acceptable evidence. Static verdicts carry no substitution guard.
+Static verdicts run in the Nix sandbox and are input-addressed: the same
+derivation hash means the same sources, toolchain and configuration. Some of
+them, such as ERT and `dev-python`'s pytest, do run tests. A passing stamp
+fetched for that exact derivation is still acceptable evidence, because
+rerunning identical sandboxed inputs was measured as not worth its cost. Static
+verdicts carry no substitution guard.
 
-Coverage and e2e verdicts may never be substituted: they must execute for every
-ref. Their `nonSubstitutable` wrapper guards local builds. In CI the setup-ci
-`pushFilter` enforces the rule, because the installer's
-`always-allow-substitutes = true` overrides the wrapper there. Removing the
-`pushFilter` exclusion, or adding a static verdict to it, needs a new decision.
+Coverage and e2e verdicts may never be substituted:
+[ADR-0192](../0192-split-ci-non-e2e-validation-lanes.md) requires them per ref,
+and CI executes them for every ref. Their `nonSubstitutable` wrapper guards
+local builds, where a valid local output for an identical derivation may still
+be reused. In CI the setup-ci `pushFilter` enforces the rule, because the
+installer's `always-allow-substitutes = true` overrides the wrapper there.
+Removing the `pushFilter` exclusion, or adding a static verdict to it, needs a
+new decision.
 
-This clarifies ADR-0077's "never trust a cached green check": it applies to
-coverage and e2e, whose results depend on runtime behaviour, not to static
-verdicts for identical inputs.
+This clarifies ADR-0077's "never trust a cached green check": it applies to the
+coverage and e2e verdicts that ADR-0192 requires per ref, not to static verdicts
+for identical inputs.
 
 ## Consequences
 
