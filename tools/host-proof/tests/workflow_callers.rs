@@ -167,6 +167,18 @@ fn assert_jobs_keep_and_summarise_their_trace(source: &str, names: &[&str]) {
             .collect::<Vec<_>>();
         assert_eq!(uploads.len(), 1, "{name}: one trace upload");
         assert_eq!(uploads[0]["if"].as_str(), Some("always()"), "{name}");
+        // An empty upload warns and a failed one annotates the run, but neither
+        // decides the job's result.
+        assert_eq!(
+            uploads[0]["continue-on-error"].as_bool(),
+            Some(true),
+            "{name}"
+        );
+        assert_eq!(
+            uploads[0]["with"]["if-no-files-found"].as_str(),
+            Some("warn"),
+            "{name}"
+        );
         assert_eq!(
             uploads[0]["with"]["include-hidden-files"].as_bool(),
             Some(true),
@@ -197,10 +209,64 @@ fn assert_jobs_keep_and_summarise_their_trace(source: &str, names: &[&str]) {
         assert_eq!(summary["if"].as_str(), Some("always()"), "{name}");
         let command = run(summary).unwrap();
         assert!(
-            command.contains(">> \"$GITHUB_STEP_SUMMARY\"") && command.ends_with("|| true"),
-            "{name}: the summary is diagnostic only: {command}"
+            command.contains(">> \"$GITHUB_STEP_SUMMARY\"")
+                && command.contains("|| echo \"::warning::"),
+            "{name}: the summary warns instead of failing: {command}"
         );
+        assert_summary_warns_without_a_trace(name, summary["run"].as_str().unwrap());
     }
+}
+
+/// Runs a summary step as the runner does, with `nix develop` failing the way
+/// `dev trace summary` does when `.xtask/run/` holds no trace: the step must
+/// annotate the run and still succeed.
+fn assert_summary_warns_without_a_trace(name: &str, command: &str) {
+    let fixture = tempfile::tempdir().unwrap();
+    let nix = fixture.path().join("nix");
+    fs::write(
+        &nix,
+        "#!/bin/sh\necho 'Error: no traced runs' >&2\nexit 1\n",
+    )
+    .unwrap();
+    fs::set_permissions(&nix, fs::Permissions::from_mode(0o755)).unwrap();
+    let output = Command::new("bash")
+        .args(["-e", "-o", "pipefail", "-c", command])
+        .current_dir(fixture.path())
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                fixture.path().display(),
+                std::env::var("PATH").unwrap()
+            ),
+        )
+        .env("GITHUB_STEP_SUMMARY", fixture.path().join("summary.md"))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{name}: {output:?}");
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .lines()
+            .any(|line| line.starts_with("::warning::")),
+        "{name}: no warning annotation"
+    );
+}
+
+#[test]
+fn lane_evidence_warns_when_empty_and_still_fails_the_lane_on_upload_failure() {
+    let workflow: serde_yaml::Value =
+        serde_yaml::from_str(include_str!("../../../.github/workflows/ci.yml")).unwrap();
+    let evidence = workflow["jobs"]["e2e-lane"]["steps"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .find(|step| step["with"]["path"].as_str() == Some(".xtask/diagnostics/"))
+        .unwrap();
+    assert_eq!(evidence["with"]["if-no-files-found"].as_str(), Some("warn"));
+    // The reconcile job downloads this as producer evidence, so its upload
+    // failure stays the lane's.
+    assert!(evidence["continue-on-error"].is_null());
 }
 
 #[test]

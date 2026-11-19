@@ -1267,7 +1267,8 @@ child killed by signal n closes its spans as `signalled` with exit status 128+n.
 Every CI validation and E2E job uploads `.xtask/run/` with `if: always()`,
 hidden files included, for **14 days**, and appends
 `dev trace summary --markdown` to its step summary. The summary is diagnostic
-only and decides no job's result. Missing files and upload failure warn visibly
+only and decides no job's result; when the job left no readable trace the step
+adds a warning annotation instead. Missing files and upload failure warn visibly
 without changing the workload verdict; required producer evidence and aggregate
 checks remain authoritative, and optional diagnostics do not certify
 completeness. Native CI logs keep their existing 14-day policy.

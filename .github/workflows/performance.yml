@@ -43,7 +43,7 @@ jobs:
         if: always()
         run:
           nix develop .#ci --accept-flake-config -c sh -c 'dev trace summary
-          --markdown >> "$GITHUB_STEP_SUMMARY"' || true
+          --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace summary unavailable, see this step's log"
       - name: Compare committed baseline
         if: >-
           success() && hashFiles('tools/performance/baseline-v1.json') != ''
@@ -52,12 +52,13 @@ jobs:
           .xtask/performance/performance-result-v1.json
       - name: Upload performance trace
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: performance-trace
           path: .xtask/run/
           include-hidden-files: true
-          if-no-files-found: ignore
+          if-no-files-found: warn
           retention-days: 14
       - name: Upload performance result
         if: always()

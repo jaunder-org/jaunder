@@ -67,10 +67,13 @@ absent.
   observes a `::warning::` line on stdout and exit status 0.
 - A workflow test asserts the Firefox lane evidence upload uses
   `if-no-files-found: warn` and has no `continue-on-error`.
-- `tools/traced-run/tests/hermetic_diagnostics.rs` keeps its hermetic-verdict
-  assertions (the `dev ci-validate-hermetic` run line and the aggregate's
-  `needs.validate-hermetic.result` check); only the removed step's assertions
-  and its upload-failure test go.
+- The hermetic-verdict checks stay locked: the `dev ci-validate-hermetic` run
+  line and the aggregate's `needs.validate-hermetic.result` check are asserted
+  by
+  `ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars`
+  in `workflow_callers.rs`. `tools/traced-run/tests/hermetic_diagnostics.rs`,
+  whose remaining assertions duplicated those or locked the removed step, is
+  deleted.
 - The PR's CI run is green, showing the job results are unaffected.
 
 ## Boundaries
