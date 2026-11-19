@@ -234,6 +234,41 @@ def _add_blocker(operation: _Operation, number: str, blocker: str) -> None:
         operation.fail(VIOLATED, f"blocker {blocker} missing from readback")
 
 
+def _add_to_backlog(operation: _Operation, url: str) -> str:
+    """The issue's Backlog item id, adding the issue if it is not there.
+
+    `item-add` answers an existing item for an issue already in the project,
+    but fails if project automation adds a new issue at the same moment. A
+    failed add therefore uses the issue's one Backlog item when there is one;
+    with none, or when the add was signalled, the failure stands.
+    """
+    try:
+        item = operation.gh(
+            "project",
+            "item-add",
+            "1",
+            "--owner",
+            "jaunder-org",
+            "--url",
+            url,
+            "--format",
+            "json",
+        )
+    except steps.StepFailed as failure:
+        if failure.signalled:
+            raise
+        backlog = _backlog_items(operation, operation.number, "Priority", "listing")
+        if not backlog:
+            raise
+        if len(backlog) > 1:
+            operation.fail(ERROR, "ambiguous Backlog item")
+        return str(backlog[0]["id"])
+    item_id = _get(item, "id")
+    if not (isinstance(item_id, str) and item_id):
+        operation.fail(NOTHING_SELECTED, "project item has no id")
+    return item_id
+
+
 def _finish(
     operation: _Operation,
     request: _Request,
@@ -250,20 +285,7 @@ def _finish(
     if url != ISSUE_URL + operation.number:
         operation.fail(NOTHING_SELECTED, "issue URL does not name this issue")
     print(f"Verify issue #{operation.number}: {url}", file=sys.stderr, flush=True)
-    item = operation.gh(
-        "project",
-        "item-add",
-        "1",
-        "--owner",
-        "jaunder-org",
-        "--url",
-        url,
-        "--format",
-        "json",
-    )
-    item_id = _get(item, "id")
-    if not (isinstance(item_id, str) and item_id):
-        operation.fail(NOTHING_SELECTED, "project item has no id")
+    item_id = _add_to_backlog(operation, url)
     priority = operation.gh(
         "project",
         "item-edit",
