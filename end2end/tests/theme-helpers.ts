@@ -267,6 +267,7 @@ export async function withSiteThemeSelection(
   const project = test.info().project;
   expect([
     "chromium-admin-site",
+    "chromium-special-global-configuration",
     "firefox-admin-site",
     "firefox-special-global-configuration",
     "webkit-theme",

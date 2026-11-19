@@ -17,6 +17,9 @@ type Use<T> = (value: T) => Promise<void>;
 // wins because Firefox's browser scale already absorbs measured contention.
 const slowBrowserTimeoutScale = 2.2;
 const slowBrowserFirstNavigationScale = 2.6;
+// The parallel Chromium projects of the unsplit graph and of the split lanes
+// keep the unscaled Chromium budget.
+const unscaledChromiumProjects = ["chromium", "chromium-ordinary"];
 
 function workerContentionScale(testInfo: TestInfo): number {
   const resolved = testInfo.config.workers;
@@ -31,8 +34,9 @@ export function slowBrowserTimeoutMs(
   testInfo: TestInfo,
   chromiumBudgetMs: number,
 ): number {
-  const browserScale =
-    testInfo.project.name === "chromium" ? 1.0 : slowBrowserTimeoutScale;
+  const browserScale = unscaledChromiumProjects.includes(testInfo.project.name)
+    ? 1.0
+    : slowBrowserTimeoutScale;
   return Math.ceil(
     chromiumBudgetMs * Math.max(browserScale, workerContentionScale(testInfo)),
   );
@@ -42,10 +46,9 @@ export function slowBrowserFirstNavigationTimeoutMs(
   testInfo: TestInfo,
   chromiumBudgetMs: number,
 ): number {
-  const browserScale =
-    testInfo.project.name === "chromium"
-      ? 1.0
-      : slowBrowserFirstNavigationScale;
+  const browserScale = unscaledChromiumProjects.includes(testInfo.project.name)
+    ? 1.0
+    : slowBrowserFirstNavigationScale;
   return Math.ceil(
     chromiumBudgetMs * Math.max(browserScale, workerContentionScale(testInfo)),
   );

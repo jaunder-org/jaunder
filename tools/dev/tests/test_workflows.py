@@ -310,6 +310,31 @@ def test_e2e_reconcile_runs_the_built_verifier_on_artifacts_only(
     ] * 3
 
 
+def test_e2e_regenerate_coverage_produces_the_pair_then_regenerates(
+    checkout: Checkout,
+) -> None:
+    verifier = checkout.root.parent / "host-proof"
+    (verifier / "bin").mkdir(parents=True)
+    evidence = verifier / "bin" / "e2e-evidence"
+    evidence.write_text(
+        '#!/bin/sh\necho "$*" >> "$EVENTS"\n'
+        'printf \'{"steps":[{"name":"%s","ok":true,"duration_ms":1}]}\' "$1"\n'
+    )
+    evidence.chmod(0o755)
+    checkout.tool("nix", store_nix(str(verifier)))
+    # The pair's producers are recorded, not run.
+    checkout.tool("bash", "")
+    events = checkout.root / "events"
+    result = checkout.dev("e2e-regenerate-coverage", EVENTS=str(events))
+    assert result.returncode == 0, result
+    order = checkout.order().splitlines()
+    pair = order.index("bash scripts/e2e-workflow pair sqlite chromium")
+    build = next(i for i, line in enumerate(order) if ".#host-proof" in line)
+    assert pair < build, order
+    tail = "--catalog end2end/e2e-lanes.json --diagnostics-root .xtask/diagnostics"
+    assert events.read_text().splitlines() == [f"server-fn-coverage regenerate {tail}"]
+
+
 STATIC_ALL = [
     words("cargo fmt --check"),
     words(

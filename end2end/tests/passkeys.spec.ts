@@ -23,6 +23,11 @@ import { installVirtualAuthenticator } from "./virtual-authenticator";
 const PASSKEY_PAGE = '[data-test="passkeys-page"]';
 const PASSKEY_LOGIN = '[data-test="passkey-login-button"]';
 const PASSKEYS_LIST = '[data-test="passkey-credentials-list"]';
+// The serial site-settings project in the unsplit graph and in the split lane.
+const CHROMIUM_SITE_SETTINGS_PROJECTS = [
+  "chromium-admin-site",
+  "chromium-special-global-configuration",
+];
 
 async function exposeNonSuccessfulWebAuthn(page: Page): Promise<void> {
   await page.addInitScript(() => {
@@ -82,7 +87,7 @@ test("Chromium passkeys enroll, authenticate discoverably, refresh metadata, and
   setTestBudget(90_000);
   test.skip(
     browserName !== "chromium" ||
-      testInfo.project.name !== "chromium-admin-site",
+      !CHROMIUM_SITE_SETTINGS_PROJECTS.includes(testInfo.project.name),
     "real resident-key ceremonies run in the serial Chromium site-settings project",
   );
 
