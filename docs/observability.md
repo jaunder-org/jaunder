@@ -406,7 +406,7 @@ Every `dev` command records its gate and each step as an OpenTelemetry span.
 Each process in the run, including host-proof, writes start and end span records
 under `.xtask/run/<run_id>.trace.d/`; host-proof joins through
 `TRACEPARENT`/`TRACESTATE` and `JAUNDER_TRACE_DIR`
-([Python `dev` runner](adr/drafts/dev-runner-replaces-just.md)). When the root
+([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)). When the root
 `dev` process ends it merges the records into one Perfetto-compatible Chrome
 Trace Event JSON file, `.xtask/run/<run_id>.trace.json`, and marks a span with
 no end record or no parent as `incomplete`. A child process that does not join
