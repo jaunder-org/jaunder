@@ -6,7 +6,7 @@ mod seed;
 pub use seed::decode_projector_seed;
 
 mod route_policy;
-pub use route_policy::PrivateDestination;
+pub use route_policy::{PrivateDestination, is_logout_route};
 
 mod render;
 pub use render::{

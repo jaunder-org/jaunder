@@ -13,7 +13,7 @@ use common::{MutationOutcome, password::PasswordShape, username::Username};
 use leptos::prelude::*;
 use leptos_router::{
     NavigateOptions,
-    hooks::{use_navigate, use_query_map},
+    hooks::{use_location, use_navigate, use_query_map},
 };
 
 /// Login page.
@@ -295,9 +295,13 @@ async fn authenticate_passkey() -> PasskeyAuthentication {
 #[component]
 pub fn LogoutPage() -> impl IntoView {
     let logout_action = ServerAction::<Logout>::new();
+    let location = use_location();
 
+    // Sign out only at the Logout route: the redirect to `/` briefly mounts this
+    // page again, and that copy must not send a second logout (#2003).
     Effect::new(move |_| {
-        logout_action.dispatch(Logout {});
+        crate::app::is_logout_route(&location.pathname.get_untracked())
+            .then(|| logout_action.dispatch(Logout {}));
     });
 
     // On logout, clear the shared session (#591): resets the reactive signal (chrome
