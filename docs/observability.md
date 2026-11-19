@@ -308,11 +308,10 @@ For a changed browser flow, use the supported focused SQLite loop, for example
 `traced-run -- dev e2e-local auth.spec.ts`. This builds and validates current
 CSR assets and exercises a real server/Collector/browser lifecycle; it is not
 PostgreSQL parity, complete CSR lint, authoritative source coverage or a full
-matrix. Use `traced-run -- dev e2e-producer postgres-chromium-unsplit` for that
-backend's full hermetic Chromium lane. Firefox requires all three
-`dev e2e-producer` lanes and `dev e2e-reconcile` per backend, not a
-serial-special result alone; `dev e2e` owns the complete workflow. The complete
-commands and final validation ladder remain in
+matrix. A backend/browser pair's full hermetic proof requires all three of its
+`dev e2e-producer` lanes and `dev e2e-reconcile <backend> <browser>`, not one
+shard or the serial-special result alone; `dev e2e` owns the complete workflow.
+The complete commands and final validation ladder remain in
 [CONTRIBUTING](../CONTRIBUTING.md#running-e2e-tests-locally).
 
 Inspect actual records and complete captures, not only acknowledgments. A live
@@ -652,12 +651,11 @@ out as a lane-qualified flat artifact alongside the OTEL traces:
 
 It records every test's title, project, status, retries, and duration. This is
 the primary source for per-test timing comparisons across browsers. The report
-lands at `.xtask/diagnostics/e2e-<lane>/playwright-report-<lane>.json`.
-Chromium's unsplit producer uploads `e2e-diagnostics-<backend>-chromium`; each
-retained Firefox producer uploads `e2e-firefox-<backend>-<partition-or-shard>`.
-An artifact that uploads both `.xtask/diagnostics/` and `.xtask/run/` is rooted
-at `.xtask/`, so its contents sit under `diagnostics/` and `run/` (the report
-above is at `diagnostics/e2e-<lane>/playwright-report-<lane>.json`).
+lands at `.xtask/diagnostics/e2e-<lane>/playwright-report-<lane>.json`. Each
+producer uploads its evidence as `e2e-lane-<lane>` (rooted at
+`.xtask/diagnostics/`, so the report is at
+`e2e-<lane>/playwright-report-<lane>.json`) and its traces separately as
+`e2e-trace-<lane>`.
 
 The report is paired with `duration-budget-manifest-<lane>.json`; the copied
 report and manifest are the duration-pressure gate's source, not trace spans or
@@ -757,33 +755,35 @@ lane; fast feedback only in the static one.
 - **Static** (`dev check`, `dev validate-no-e2e`): committed snapshot + `syn`
   inventory. No capture, so a new `#[server]` fn with no flow reddens the build
   without an e2e run.
-- **E2e** (`dev e2e`, or `dev e2e-producer sqlite-chromium-unsplit`): derives
-  the snapshot from that successful producer's selected immutable Nix output and
-  fails on any difference; it never regenerates automatically.
+- **E2e** (`dev e2e`, or `dev e2e-reconcile sqlite chromium <root>`): after the
+  SQLite/Chromium pair reconciles, derives the snapshot from the union of its
+  three lanes' lifted captures and fails on any difference; it never regenerates
+  automatically.
 
-**Regeneration is explicit and per-lane only.** Every output is lane-qualified.
-The SQLite/Chromium producer remains the sole empirical source in local and CI
-workflows. It passes the selected successful output and capture explicitly;
-verification neither builds a VM nor guesses an output from an old root or a
-lifted diagnostics directory. Nix retains the existing finalization, archive
-hash/size and retention checks, and host population/trace checks remain required
-([Just E2E workflow ownership](adr/0238-just-e2e-workflow-ownership.md)).
+**Regeneration is explicit.** Every output is lane-qualified. The reconciled
+SQLite/Chromium lanes are the sole empirical source in local and CI workflows
+([split Chromium E2E lanes](adr/drafts/split-chromium-e2e-lanes.md)).
+Verification never builds a VM. It reads only lifted `e2e-<lane>` directories,
+and only after reconciliation proves the exact lane set, a complete disjoint
+population and a successful phase sidecar per lane. Each capture is extracted on
+its own, because span ids are unique only within one lane, and the per-lane
+coverage is unioned. Nix retains the existing finalization, archive hash/size
+and retention checks.
 
-`sqlite × chromium` is authoritative because `chromium`'s `testIgnore` and
-`chromium-admin`'s `testMatch` are exact complements over all spec files and no
-test is browser- or backend-conditional — so one combo drops no coverage.
+SQLite/Chromium is authoritative because the Chromium split projects partition
+every spec file exactly once and no test is browser- or backend-conditional — so
+one pair drops no coverage.
 
 For intentional regeneration after adding a flow, run
-`dev e2e-regenerate-coverage`. It supplies the successful producer selection and
-explicit artifact arguments internally, checks the evidence and rewrites only
-the snapshot. Ordinary verification never regenerates. See
-[the flow-coverage workflow](../CONTRIBUTING.md#testing).
+`dev e2e-regenerate-coverage`. It freshly runs the three SQLite/Chromium
+producers, reconciles them and rewrites only the snapshot. Ordinary verification
+never regenerates. See [the flow-coverage workflow](../CONTRIBUTING.md#testing).
 
 `server-fns.json` is the sole generated server-fn coverage artifact.
 `regenerate` writes it; `verify` recomputes and compares it. Per-test
 attribution remains internal to extraction and is not persisted. Note that a
-second `dev e2e-producer sqlite-chromium-unsplit` on an unchanged tree replays
-the cached Nix derivation in seconds and re-lifts the same capture, so it cannot
+second run of the SQLite/Chromium producers on an unchanged tree replays the
+cached Nix derivations in seconds and re-lifts the same captures, so it cannot
 be used to confirm that a regenerated artifact is stable — that is a statement
 about _different_ runs, and `nix build --rebuild` is what forces one.
 

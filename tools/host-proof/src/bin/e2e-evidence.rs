@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use host_proof::e2e::{E2eBackend, ProducerCapture};
+use host_proof::e2e::{E2eBackend, E2eBrowser, LiftedEvidence};
 use host_proof::report::{CommandResult, StepResult};
 
 #[derive(Parser)]
@@ -26,15 +26,15 @@ enum Command {
         #[arg(long)]
         artifacts: PathBuf,
     },
-    /// Reconcile one backend's already-lifted retained Firefox lane evidence
-    /// without invoking Nix. `diagnostics_root` contains `e2e-<lane>` directories.
+    /// Reconcile one `{backend, browser}` pair's already-lifted split lane
+    /// evidence without invoking Nix.
     Reconcile {
         #[arg(value_enum)]
         backend: E2eBackend,
-        #[arg(long)]
-        diagnostics_root: PathBuf,
-        #[arg(long)]
-        catalog: PathBuf,
+        #[arg(value_enum)]
+        browser: E2eBrowser,
+        #[command(flatten)]
+        evidence: LiftedEvidence,
     },
     /// Trace-derived `#[server]` fn flow coverage (#681): which server entry
     /// points the e2e suite actually drives.
@@ -44,10 +44,11 @@ enum Command {
 
 #[derive(Subcommand)]
 enum ServerFnCoverage {
-    /// Explicitly regenerate the committed snapshot from selected producer evidence.
-    Regenerate(ProducerCapture),
-    /// Compare selected producer evidence with the committed snapshot.
-    Verify(ProducerCapture),
+    /// Explicitly regenerate the committed snapshot from the reconciled
+    /// SQLite/Chromium lanes.
+    Regenerate(LiftedEvidence),
+    /// Compare the reconciled SQLite/Chromium lanes with the committed snapshot.
+    Verify(LiftedEvidence),
 }
 
 fn verdict(name: &str, outcome: Result<String, String>) -> CommandResult {
@@ -72,15 +73,17 @@ fn main() {
         ),
         Command::Reconcile {
             backend,
-            catalog,
-            diagnostics_root,
+            browser,
+            evidence,
         } => verdict(
             "e2e-reconcile",
-            host_proof::e2e_evidence::reconcile_files(
+            host_proof::e2e_evidence::reconciled_lanes(
                 backend.as_str(),
-                &catalog,
-                &diagnostics_root,
-            ),
+                browser.as_str(),
+                &evidence.catalog,
+                &evidence.diagnostics_root,
+            )
+            .map(|(verdict, _)| verdict),
         ),
         Command::ServerFnCoverage(command) => {
             let (name, inputs, regenerate) = match &command {
@@ -91,7 +94,7 @@ fn main() {
             };
             verdict(
                 name,
-                host_proof::steps::server_fn_coverage_check::from_producer(inputs, regenerate)
+                host_proof::steps::server_fn_coverage_check::from_reconciled(inputs, regenerate)
                     .map_err(|error| format!("{error:#}")),
             )
         }
@@ -112,7 +115,7 @@ mod tests {
             "e2e-evidence",
             "verify",
             "--lane",
-            "sqlite-chromium-unsplit",
+            "sqlite-chromium-ordinary-1-of-2",
             "--catalog",
             "lanes.json",
             "--artifacts",
@@ -120,6 +123,26 @@ mod tests {
         ])
         .unwrap();
         assert!(matches!(cli.command, Command::Verify { .. }));
+    }
+
+    #[test]
+    fn reconcile_requires_a_backend_and_a_browser() {
+        let base = ["--diagnostics-root", "root", "--catalog", "lanes.json"];
+        assert!(
+            Cli::try_parse_from(
+                ["e2e-evidence", "reconcile", "sqlite"]
+                    .into_iter()
+                    .chain(base)
+            )
+            .is_err()
+        );
+        let cli = Cli::try_parse_from(
+            ["e2e-evidence", "reconcile", "sqlite", "chromium"]
+                .into_iter()
+                .chain(base),
+        )
+        .unwrap();
+        assert!(matches!(cli.command, Command::Reconcile { .. }));
     }
 
     #[test]
@@ -133,12 +156,8 @@ mod tests {
                 "e2e-evidence",
                 "server-fn-coverage",
                 action,
-                "--capture",
-                "capture.tar.gz",
-                "--producer-output",
-                "/nix/store/selected",
-                "--lane",
-                "sqlite-chromium-unsplit",
+                "--diagnostics-root",
+                ".xtask/diagnostics",
                 "--catalog",
                 "lanes.json",
             ])

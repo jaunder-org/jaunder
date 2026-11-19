@@ -103,13 +103,10 @@ fn evaluated_e2e_lanes() -> serde_json::Value {
 fn e2e_vm_deadline_accounts_for_the_full_lifecycle() {
     let lanes = evaluated_e2e_lanes();
     let lanes = lanes.as_object().expect("lane map");
-    assert_eq!(lanes.len(), 8);
+    assert_eq!(lanes.len(), 12);
+    // Every production lane shares one suite cap and deadline (#1985).
+    let (suite, deadline) = (1500, 1920);
     for (name, lane) in lanes {
-        let (suite, deadline) = if name == "e2e-postgres-chromium-unsplit" {
-            (1800, 2220)
-        } else {
-            (1500, 1920)
-        };
         assert_eq!(lane["globalTimeout"], deadline, "{name}");
         let script = lane["testScript"].as_str().expect("VM test script");
         let syntax = std::process::Command::new("python3")
@@ -147,12 +144,8 @@ print(json.dumps(sorted(timeouts)))
         );
         let timeouts: Vec<u64> =
             serde_json::from_slice(&syntax.stdout).expect("browser execution timeouts");
-        let expected = if name.contains("firefox") {
-            vec![1500, suite]
-        } else {
-            vec![suite]
-        };
-        assert_eq!(timeouts, expected, "{name}");
+        // Every split lane runs its independent census preflight, then the suite.
+        assert_eq!(timeouts, vec![1500, suite], "{name}");
         assert!(timeouts.iter().all(|timeout| *timeout < deadline), "{name}");
     }
     for (producer, suite, deadline, accepted) in [
@@ -207,7 +200,7 @@ fn e2e_panic_gate_verifies_the_lane_qualified_journal() {
 #[test]
 fn e2e_result_capture_helper_exercises_source_transport_and_failure_precedence() {
     let lanes = evaluated_e2e_lanes();
-    let helper = lanes["e2e-sqlite-chromium-unsplit"]["testScript"]
+    let helper = lanes["e2e-sqlite-chromium-ordinary-1-of-2"]["testScript"]
         .as_str()
         .expect("evaluated VM script");
     let node_binary = std::process::Command::new("which")
@@ -319,14 +312,14 @@ with tempfile.TemporaryDirectory() as root:
   assert "operation guest-to-output copy" in errors[0]
 
   try:
-    assert_capture_outcome(9, ["ancillary lift failed"], "sqlite-chromium-unsplit")
+    assert_capture_outcome(9, ["ancillary lift failed"], "sqlite-chromium-ordinary-1-of-2")
   except AssertionError as error:
     assert "Playwright failed (exit 9)" in str(error)
     assert "capture retention failed" not in str(error)
   else:
     raise AssertionError("Playwright failure was lost")
   try:
-    assert_capture_outcome(0, ["required lift failed"], "sqlite-chromium-unsplit")
+    assert_capture_outcome(0, ["required lift failed"], "sqlite-chromium-ordinary-1-of-2")
   except AssertionError as error:
     assert "capture retention failed" in str(error)
   else:
@@ -477,7 +470,10 @@ fn assert_seed_timeout_harness(
     expected_token: &str,
     forbidden_stage: &str,
 ) {
-    for identity in ["sqlite-chromium-unsplit", "postgres-chromium-unsplit"] {
+    for identity in [
+        "sqlite-chromium-ordinary-1-of-2",
+        "postgres-chromium-ordinary-1-of-2",
+    ] {
         assert_seed_timeout_result(
             run_seed_timeout_harness(timed_out_command, identity),
             timed_out_command,

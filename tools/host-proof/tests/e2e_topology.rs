@@ -50,9 +50,10 @@ fn runtime_matrix_equals_enabled_catalog_and_reconciliation_waits_for_all_produc
             )
         })
         .collect::<std::collections::BTreeMap<_, _>>();
-    let emitted = ["chromium", "firefox"]
-        .into_iter()
-        .flat_map(|browser| values[browser].as_array().unwrap())
+    let emitted = values["lanes"]
+        .as_array()
+        .unwrap()
+        .iter()
         .map(|item| item["lane"].as_str().unwrap())
         .collect::<BTreeSet<_>>();
     let enabled = catalog["lanes"]
@@ -63,40 +64,38 @@ fn runtime_matrix_equals_enabled_catalog_and_reconciliation_waits_for_all_produc
         .map(|lane| lane["identity"].as_str().unwrap())
         .collect::<BTreeSet<_>>();
     assert_eq!(emitted, enabled);
-    assert_eq!(emitted.len(), 8);
-    assert_eq!(
-        values["backends"],
-        serde_json::json!(["postgres", "sqlite"])
-    );
-    for backend in ["sqlite", "postgres"] {
-        assert_eq!(
-            values["firefox"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|lane| lane["backend"] == backend)
-                .count(),
-            3
-        );
+    assert_eq!(emitted.len(), 12);
+    let mut pairs = Vec::new();
+    for backend in ["postgres", "sqlite"] {
+        for browser in ["chromium", "firefox"] {
+            pairs.push(serde_json::json!({"backend": backend, "browser": browser}));
+            assert_eq!(
+                values["lanes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|lane| lane["backend"] == backend && lane["browser"] == browser)
+                    .count(),
+                3
+            );
+        }
     }
+    assert_eq!(values["reconciles"], serde_json::Value::Array(pairs));
     let ci: serde_yaml::Value =
         serde_yaml::from_slice(&std::fs::read(repo().join(".github/workflows/ci.yml")).unwrap())
             .unwrap();
     // GitHub Actions uses the YAML 1.2 string key, not a YAML 1.1 boolean.
     assert!(ci["on"].as_mapping().is_some());
     let jobs = &ci["jobs"];
-    assert_eq!(
-        jobs["e2e-firefox-reconcile"]["if"].as_str(),
-        Some("always()")
-    );
+    assert_eq!(jobs["e2e-reconcile"]["if"].as_str(), Some("always()"));
     assert!(
-        jobs["e2e-firefox-reconcile"]["needs"]
+        jobs["e2e-reconcile"]["needs"]
             .as_sequence()
             .unwrap()
             .iter()
-            .any(|v| v.as_str() == Some("e2e-firefox-lane"))
+            .any(|v| v.as_str() == Some("e2e-lane"))
     );
-    for name in ["e2e-chromium", "e2e-firefox-lane", "e2e-firefox-reconcile"] {
+    for name in ["e2e-lane", "e2e-reconcile"] {
         assert!(
             jobs["e2e-gate"]["needs"]
                 .as_sequence()
@@ -115,9 +114,7 @@ fn runtime_matrix_equals_enabled_catalog_and_reconciliation_waits_for_all_produc
         );
     }
     assert_eq!(jobs["e2e-gate"]["if"].as_str(), Some("always()"));
-    let steps = jobs["e2e-firefox-reconcile"]["steps"]
-        .as_sequence()
-        .unwrap();
+    let steps = jobs["e2e-reconcile"]["steps"].as_sequence().unwrap();
     let reconcile = steps
         .iter()
         .find(|step| {
@@ -139,7 +136,33 @@ fn runtime_projection_rejects_duplicate_identity_bad_shards_and_cross_lane_depen
     let mut dependency = base.clone();
     dependency["experimentalProjectDependencies"]["firefox-ordinary"] =
         serde_json::json!(["firefox-special-visual"]);
-    for broken in [duplicate, shards, dependency] {
+    let mut chromium_dependency = base.clone();
+    chromium_dependency["experimentalProjectDependencies"]["chromium-ordinary"] =
+        serde_json::json!(["chromium-special-visual"]);
+    // An enabled unsplit lane, or a Chromium split missing its serial lane.
+    let mut unsplit = base.clone();
+    unsplit["lanes"][0]["enabled"] = true.into();
+    let mut missing_special = base.clone();
+    for lane in missing_special["lanes"].as_array_mut().unwrap() {
+        if lane["identity"] == "sqlite-chromium-serial-special" {
+            lane["enabled"] = false.into();
+        }
+    }
+    // Seeds that expand to the same trace id, or to the invalid all-zero id.
+    let mut colliding_seed = base.clone();
+    colliding_seed["lanes"][1]["traceSeed"] = "11".into();
+    let mut zero_seed = base.clone();
+    zero_seed["lanes"][0]["traceSeed"] = "00".into();
+    for broken in [
+        duplicate,
+        shards,
+        dependency,
+        chromium_dependency,
+        unsplit,
+        missing_special,
+        colliding_seed,
+        zero_seed,
+    ] {
         let output = project(&broken);
         assert!(!output.status.success(), "malformed catalog accepted");
     }

@@ -149,16 +149,8 @@ FORWARDED: list[tuple[list[str], Commands]] = [
     (["e2e"], [["bash", "scripts/e2e-workflow", "all", ""]]),
     (["e2e", "3"], [["bash", "scripts/e2e-workflow", "all", "3"]]),
     (
-        ["e2e-producer", "sqlite-chromium-unsplit"],
-        [["bash", "scripts/e2e-workflow", "producer", "sqlite-chromium-unsplit"]],
-    ),
-    (
-        ["e2e-regenerate-coverage"],
-        [
-            words(
-                "bash scripts/e2e-workflow producer sqlite-chromium-unsplit regenerate"
-            )
-        ],
+        ["e2e-producer", "sqlite-chromium-ordinary-1-of-2"],
+        [words("bash scripts/e2e-workflow producer sqlite-chromium-ordinary-1-of-2")],
     ),
     (
         ["pr-land", "731", "f" * 40],
@@ -286,32 +278,36 @@ def test_e2e_reconcile_runs_the_built_verifier_on_artifacts_only(
     (verifier / "bin").mkdir(parents=True)
     evidence = verifier / "bin" / "e2e-evidence"
     evidence.write_text(
-        '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$EVENTS"\n'
-        'printf \'{"steps":[{"name":"reconcile","ok":true,"duration_ms":1}]}\'\n'
+        '#!/bin/sh\necho "$*" >> "$EVENTS"\n'
+        'printf \'{"steps":[{"name":"%s","ok":true,"duration_ms":1}]}\' "$1"\n'
     )
     evidence.chmod(0o755)
     checkout.tool("nix", store_nix(str(verifier)))
-    for args, artifacts in [
-        ([], ".xtask/diagnostics"),
-        (["downloaded artifacts"], "downloaded artifacts"),
+    tail = "--catalog end2end/e2e-lanes.json --diagnostics-root"
+    for browser, args, artifacts in [
+        ("firefox", [], ".xtask/diagnostics"),
+        ("firefox", ["downloaded artifacts"], "downloaded artifacts"),
+        ("chromium", [], ".xtask/diagnostics"),
     ]:
         events = checkout.root / "events"
-        result = checkout.dev("e2e-reconcile", "sqlite", *args, EVENTS=str(events))
+        events.unlink(missing_ok=True)
+        result = checkout.dev(
+            "e2e-reconcile", "sqlite", browser, *args, EVENTS=str(events)
+        )
         assert result.returncode == 0, result
-        assert result.stdout == b"[ ok ] reconcile\n"
-        assert events.read_text().splitlines() == [
-            "reconcile",
-            "sqlite",
-            "--catalog",
-            "end2end/e2e-lanes.json",
-            "--diagnostics-root",
-            artifacts,
-        ]
+        expected = [f"reconcile sqlite {browser} {tail} {artifacts}"]
+        rendered = b"[ ok ] reconcile\n"
+        # The SQLite/Chromium verdict includes coverage over the same artifacts.
+        if browser == "chromium":
+            expected.append(f"server-fn-coverage verify {tail} {artifacts}")
+            rendered += b"[ ok ] server-fn-coverage\n"
+        assert events.read_text().splitlines() == expected
+        assert result.stdout == rendered
         assert checkout.merged()["host-proof"]["args"]["jaunder.cache"] == "reused"
         shutil.rmtree(checkout.root / ".xtask" / "run")
     assert [line for line in checkout.order().splitlines() if " build " in line] == [
         "nix build -L --accept-flake-config --print-out-paths --no-link .#host-proof"
-    ] * 2
+    ] * 3
 
 
 STATIC_ALL = [
@@ -443,6 +439,7 @@ def test_build_csr_assembles_the_bundle_into_target_site(
         ["e2e", "1", "2"],
         ["e2e-producer"],
         ["e2e-reconcile"],
+        ["e2e-reconcile", "sqlite"],
         ["issue-discover"],
         ["issue-create", "title", "Task", "3", "P2", "tooling"],
         ["issue-edit", "731", "title", "Task", "3", "P2", "tooling"],

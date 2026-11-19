@@ -44,7 +44,15 @@
       "equivalentTo": "packages.x86_64-linux.e2e-checks"
     },
     {
-      "attr": "checks.x86_64-linux.e2e-postgres-chromium-unsplit",
+      "attr": "checks.x86_64-linux.e2e-postgres-chromium-ordinary-1-of-2",
+      "classification": "final"
+    },
+    {
+      "attr": "checks.x86_64-linux.e2e-postgres-chromium-ordinary-2-of-2",
+      "classification": "final"
+    },
+    {
+      "attr": "checks.x86_64-linux.e2e-postgres-chromium-serial-special",
       "classification": "final"
     },
     {
@@ -60,7 +68,15 @@
       "classification": "final"
     },
     {
-      "attr": "checks.x86_64-linux.e2e-sqlite-chromium-unsplit",
+      "attr": "checks.x86_64-linux.e2e-sqlite-chromium-ordinary-1-of-2",
+      "classification": "final"
+    },
+    {
+      "attr": "checks.x86_64-linux.e2e-sqlite-chromium-ordinary-2-of-2",
+      "classification": "final"
+    },
+    {
+      "attr": "checks.x86_64-linux.e2e-sqlite-chromium-serial-special",
       "classification": "final"
     },
     {
@@ -86,16 +102,26 @@
       "sourceFamily": "e2e-package"
     },
     {
+      "attr": "packages.x86_64-linux.e2e-postgres-chromium-ordinary-1-of-2-driver",
+      "classification": "support",
+      "sourceFamily": "e2e-driver"
+    },
+    {
+      "attr": "packages.x86_64-linux.e2e-postgres-chromium-ordinary-2-of-2-driver",
+      "classification": "support",
+      "sourceFamily": "e2e-driver"
+    },
+    {
+      "attr": "packages.x86_64-linux.e2e-postgres-chromium-serial-special-driver",
+      "classification": "support",
+      "sourceFamily": "e2e-driver"
+    },
+    {
       "attr": "packages.x86_64-linux.e2e-postgres-chromium-single-worker",
       "classification": "final"
     },
     {
       "attr": "packages.x86_64-linux.e2e-postgres-chromium-single-worker-driver",
-      "classification": "support",
-      "sourceFamily": "e2e-driver"
-    },
-    {
-      "attr": "packages.x86_64-linux.e2e-postgres-chromium-unsplit-driver",
       "classification": "support",
       "sourceFamily": "e2e-driver"
     },
@@ -142,16 +168,26 @@
       "sourceFamily": "e2e-driver"
     },
     {
+      "attr": "packages.x86_64-linux.e2e-sqlite-chromium-ordinary-1-of-2-driver",
+      "classification": "support",
+      "sourceFamily": "e2e-driver"
+    },
+    {
+      "attr": "packages.x86_64-linux.e2e-sqlite-chromium-ordinary-2-of-2-driver",
+      "classification": "support",
+      "sourceFamily": "e2e-driver"
+    },
+    {
+      "attr": "packages.x86_64-linux.e2e-sqlite-chromium-serial-special-driver",
+      "classification": "support",
+      "sourceFamily": "e2e-driver"
+    },
+    {
       "attr": "packages.x86_64-linux.e2e-sqlite-chromium-single-worker",
       "classification": "final"
     },
     {
       "attr": "packages.x86_64-linux.e2e-sqlite-chromium-single-worker-driver",
-      "classification": "support",
-      "sourceFamily": "e2e-driver"
-    },
-    {
-      "attr": "packages.x86_64-linux.e2e-sqlite-chromium-unsplit-driver",
       "classification": "support",
       "sourceFamily": "e2e-driver"
     },

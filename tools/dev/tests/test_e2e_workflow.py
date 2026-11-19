@@ -1,7 +1,7 @@
 """The E2E workflow through `dev`, against fake Nix and a fake verifier.
 
 `scripts/e2e-workflow` settles every producer, lifts only its own evidence and
-reconciles both backends. It needs the repository's script, lane catalog and
+reconciles every backend/browser pair; SQLite/Chromium also verifies coverage. It needs the repository's script, lane catalog and
 jq programs, a real Nix store for immutable outputs, and jq, so only the
 filtered `checks.dev-python` source may skip it.
 """
@@ -51,7 +51,10 @@ if [[ -e $EVENTS.fail-reconcile && $1 == reconcile ]]; then exit 31; fi
 if [[ -n ${{REAL_VERIFIER-}} ]]; then exec "$REAL_VERIFIER" "$@"; fi
 printf '{{"steps":[{{"name":"%s","ok":true,"duration_ms":1}}]}}\\n' "$1"
 """
-LANE = "sqlite-chromium-unsplit"
+LANE = "sqlite-chromium-ordinary-1-of-2"
+COVERAGE_LANES = 3
+LANES = 12
+PAIRS = ["sqlite chromium", "sqlite firefox", "postgres chromium", "postgres firefox"]
 MARKER = f"producer-input-{LANE}.json"
 
 
@@ -152,7 +155,7 @@ def capture_only() -> Path:
         ("18446744073709551615", "23"),
     ],
 )
-def test_an_early_producer_failure_still_settles_every_lane_and_both_reconciliations(
+def test_an_early_producer_failure_still_settles_every_lane_and_every_reconciliation(
     e2e: E2E, jobs: str, failure: str
 ) -> None:
     e2e.diagnostics.mkdir(parents=True)
@@ -161,11 +164,16 @@ def test_an_early_producer_failure_still_settles_every_lane_and_both_reconciliat
     result = e2e.run("e2e", *([jobs] if jobs else []), status=failure)
     assert result.returncode != 0
     lines = e2e.events().splitlines()
-    assert sum(line.startswith("producer ") for line in lines) == 8, lines
+    assert sum(line.startswith("producer ") for line in lines) == LANES, lines
     assert "producer postgres-firefox-serial-special" in lines
-    assert any("reconcile sqlite" in line for line in lines[8:])
-    assert any("reconcile postgres" in line for line in lines[8:])
-    assert "server-fn-coverage" not in e2e.events()
+    for pair in PAIRS:
+        assert any(f"reconcile {pair}" in line for line in lines[LANES:]), pair
+    # Only the SQLite/Chromium reconciliation goes on to coverage, after it.
+    coverage = [
+        i for i, line in enumerate(lines) if "server-fn-coverage verify" in line
+    ]
+    reconcile = lines.index(next(l for l in lines if "reconcile sqlite chromium" in l))
+    assert len(coverage) == 1 and coverage[0] == reconcile + 1, lines
     assert not e2e.capture.exists(), "a failed producer reused stale evidence"
     assert (e2e.root / ".xtask" / "not-owned-keep").read_text() == "keep"
     for lane in [LANE, "postgres-firefox-serial-special"]:
@@ -203,11 +211,11 @@ def test_a_reconciliation_failure_blocks_even_when_every_producer_succeeds(
     (e2e.root / "events.fail-reconcile").write_text("")
     assert e2e.run("e2e", output=capture_only(), status="0").returncode != 0
     lines = e2e.events().splitlines()
-    assert sum(line.startswith("producer ") for line in lines) == 8
-    assert sum("verifier reconcile" in line for line in lines) == 2
-    assert sum("server-fn-coverage verify" in line for line in lines) == 1
-    assert "regenerate" not in e2e.events()
-    assert sum("verifier verify" in line for line in lines) == 7
+    assert sum(line.startswith("producer ") for line in lines) == LANES
+    assert sum("verifier reconcile" in line for line in lines) == len(PAIRS)
+    # Coverage never runs over unreconciled lanes.
+    assert "server-fn-coverage" not in e2e.events()
+    assert sum("verifier verify" in line for line in lines) == LANES
 
 
 def test_a_successful_producer_keeps_its_root_and_lifts_the_selected_output(
@@ -221,35 +229,25 @@ def test_a_successful_producer_keeps_its_root_and_lifts_the_selected_output(
     assert result.returncode == 0, result
     assert e2e.capture.read_text() == "current diagnostic"
     assert (e2e.root / ".xtask" / "gcroots" / f"e2e-{LANE}").readlink() == selected
-    assert (
-        f"--capture {selected}/capture-{LANE}.tar.gz --producer-output {selected}"
-        in e2e.events()
-    )
-    assert "--capture .xtask/diagnostics" not in e2e.events()
-    assert result.stdout == b"[ ok ] server-fn-coverage\n", "the report is rendered"
+    assert f"verify --lane {LANE}" in e2e.events()
+    assert f"--artifacts {selected}" in e2e.events()
+    assert "server-fn-coverage" not in e2e.events(), "producers never own coverage"
+    assert result.stdout == b"[ ok ] verify\n", "the report is rendered"
 
 
-@pytest.mark.parametrize(
-    ("args", "status", "action"),
-    [
-        (["e2e-regenerate-coverage"], "0", "regenerate"),
-        (["e2e-regenerate-coverage"], "23", ""),
-        (["e2e-producer", LANE], "0", "verify"),
-    ],
-)
-def test_regeneration_needs_success_and_the_authoritative_lane_verifies_once(
-    e2e: E2E, args: list[str], status: str, action: str
+@pytest.mark.parametrize("status", ["0", "23"])
+def test_regeneration_freshly_produces_the_coverage_lanes_and_needs_their_success(
+    e2e: E2E, status: str
 ) -> None:
-    result = e2e.run(*args, output=capture_only(), status=status)
+    result = e2e.run("e2e-regenerate-coverage", output=capture_only(), status=status)
     assert (result.returncode == 0) == (status == "0"), result
-    events = e2e.events()
-    assert "verifier verify" not in events
-    if action:
-        assert events.count(f"server-fn-coverage {action}") == 1, events
-    else:
-        assert "server-fn-coverage" not in events
-    if action != "regenerate":
-        assert "regenerate" not in events
+    lines = e2e.events().splitlines()
+    produced = [line for line in lines if line.startswith("producer ")]
+    assert len(produced) == COVERAGE_LANES, lines
+    assert all(line.startswith("producer sqlite-chromium-") for line in produced)
+    regenerated = sum("server-fn-coverage regenerate" in line for line in lines)
+    assert regenerated == (1 if status == "0" else 0), lines
+    assert "server-fn-coverage verify" not in e2e.events()
 
 
 def test_an_optional_provenance_copy_failure_only_warns(e2e: E2E) -> None:
@@ -262,7 +260,7 @@ def test_an_optional_provenance_copy_failure_only_warns(e2e: E2E) -> None:
     assert b"warning: optional attribution" in result.stderr
     assert MARKER.encode() in result.stderr
     assert e2e.capture.read_text() == "current diagnostic"
-    assert "server-fn-coverage verify" in e2e.events()
+    assert "verifier verify" in e2e.events()
     assert (selected / MARKER).is_file()
 
 
@@ -319,7 +317,9 @@ def test_a_failed_producer_recovers_only_its_logged_build_and_lane(e2e: E2E) -> 
     unrelated = kept(e2e.root, "nix-999999-1234567890")
     diagnostics = current / "emit-out" / "diagnostics"
     (diagnostics / f"capture-{LANE}.tar.gz").write_text("current failed diagnostic")
-    (diagnostics / "capture-postgres-chromium-unsplit.tar.gz").write_text("other lane")
+    (diagnostics / "capture-postgres-chromium-ordinary-1-of-2.tar.gz").write_text(
+        "other lane"
+    )
     stale = unrelated / "emit-out" / "diagnostics" / f"playwright-report-{LANE}.json"
     stale.write_text("stale unrelated report")
     e2e.diagnostics.mkdir(parents=True)
@@ -333,7 +333,9 @@ def test_a_failed_producer_recovers_only_its_logged_build_and_lane(e2e: E2E) -> 
     assert result.returncode == 23
     assert e2e.capture.read_text() == "current failed diagnostic"
     assert not (e2e.diagnostics / f"playwright-report-{LANE}.json").exists()
-    assert not (e2e.diagnostics / "capture-postgres-chromium-unsplit.tar.gz").exists()
+    assert not (
+        e2e.diagnostics / "capture-postgres-chromium-ordinary-1-of-2.tar.gz"
+    ).exists()
     assert stale.is_file()
     assert "verifier" not in e2e.events()
 
@@ -377,16 +379,34 @@ BUILD_VERIFIER = (
 )
 
 
-@pytest.mark.parametrize("args", [["e2e-producer", LANE], ["e2e-regenerate-coverage"]])
-def test_missing_successful_evidence_fails_the_real_verifier(
-    e2e: E2E, args: list[str]
-) -> None:
+def test_missing_successful_evidence_fails_the_real_lane_verifier(e2e: E2E) -> None:
     require(VERIFIER.is_file(), f"{VERIFIER}; build it with `{BUILD_VERIFIER}`")
     result = e2e.run(
-        *args, output=capture_only(), status="0", REAL_VERIFIER=str(VERIFIER)
+        "e2e-producer",
+        LANE,
+        output=capture_only(),
+        status="0",
+        REAL_VERIFIER=str(VERIFIER),
     )
     assert result.returncode != 0
-    assert "verifier verify" not in e2e.events()
-    assert "server-fn-coverage" in e2e.events()
+    assert "verifier verify" in e2e.events()
     assert b"reading report" in result.stdout
+
+
+def test_regeneration_never_reaches_unverified_lanes_with_the_real_verifier(
+    e2e: E2E,
+) -> None:
+    # The real lane verifier rejects the evidence-less producers, so the pair
+    # fails before regeneration; the Rust verifier separately refuses
+    # unreconciled lanes (`coverage_refuses_unreconciled_lane_evidence`).
+    require(VERIFIER.is_file(), f"{VERIFIER}; build it with `{BUILD_VERIFIER}`")
+    result = e2e.run(
+        "e2e-regenerate-coverage",
+        output=capture_only(),
+        status="0",
+        REAL_VERIFIER=str(VERIFIER),
+    )
+    assert result.returncode != 0
+    assert "verifier verify" in e2e.events()
+    assert "server-fn-coverage" not in e2e.events()
     assert not (e2e.root / "docs" / "coverage" / "server-fns.json").exists()

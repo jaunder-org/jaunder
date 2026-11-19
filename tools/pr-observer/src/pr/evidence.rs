@@ -615,7 +615,7 @@ mod tests {
         ];
         let mut replies = vec![
             serde_json::json!({"total_count":1,"workflow_runs":[{"id":1,"head_sha":"head","run_attempt":1,"status":"completed","path":files[0]}]}),
-            serde_json::json!({"total_count":1,"jobs":[{"id":1011,"check_run_url":"https://api.github.com/repos/o/r/check-runs/11","name":"e2e (sqlite/chromium)"}]}),
+            serde_json::json!({"total_count":1,"jobs":[{"id":1011,"check_run_url":"https://api.github.com/repos/o/r/check-runs/11","name":"e2e (sqlite-chromium-ordinary-1-of-2)"}]}),
         ];
         for file in files {
             let source =

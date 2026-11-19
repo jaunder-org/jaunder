@@ -95,25 +95,17 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
     assert!(source.contains(".xtask/gcroots/elisp-coverage-producer/elisp-coverage/"));
     assert_eq!(
         jobs["e2e-gate"]["needs"],
-        serde_yaml::to_value([
-            "e2e-catalog",
-            "e2e-chromium",
-            "e2e-firefox-lane",
-            "e2e-firefox-reconcile",
-        ])
-        .unwrap()
+        serde_yaml::to_value(["e2e-catalog", "e2e-lane", "e2e-reconcile"]).unwrap()
     );
     assert_eq!(jobs["e2e-gate"]["if"], "always()");
-    for producer in ["e2e-chromium", "e2e-firefox-lane"] {
-        assert_eq!(
-            jobs[producer]["needs"],
-            serde_yaml::to_value(["e2e-catalog"]).unwrap()
-        );
-    }
-    let reconcile = &jobs["e2e-firefox-reconcile"];
+    assert_eq!(
+        jobs["e2e-lane"]["needs"],
+        serde_yaml::to_value(["e2e-catalog"]).unwrap()
+    );
+    let reconcile = &jobs["e2e-reconcile"];
     assert_eq!(
         reconcile["needs"],
-        serde_yaml::to_value(["e2e-catalog", "e2e-firefox-lane"]).unwrap()
+        serde_yaml::to_value(["e2e-catalog", "e2e-lane"]).unwrap()
     );
     assert_eq!(reconcile["if"], "always()");
     let lines = jobs["e2e-gate"]["steps"]
@@ -125,9 +117,8 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
         .map(str::trim)
         .collect::<std::collections::BTreeSet<_>>();
     for binding in [
-        "chromium=\"${{ needs.e2e-chromium.result }}\"",
-        "firefox_lanes=\"${{ needs.e2e-firefox-lane.result }}\"",
-        "firefox_reconcile=\"${{ needs.e2e-firefox-reconcile.result }}\"",
+        "lanes=\"${{ needs.e2e-lane.result }}\"",
+        "reconcile=\"${{ needs.e2e-reconcile.result }}\"",
     ] {
         assert!(lines.contains(binding), "aggregate missing {binding}");
     }
@@ -139,9 +130,8 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
             .collect::<std::collections::BTreeSet<_>>(),
         std::collections::BTreeSet::from([
             "test \"${{ needs.e2e-catalog.result }}\" = \"success\"",
-            "test \"$chromium\" = \"success\"",
-            "test \"$firefox_lanes\" = \"success\"",
-            "test \"$firefox_reconcile\" = \"success\"",
+            "test \"$lanes\" = \"success\"",
+            "test \"$reconcile\" = \"success\"",
         ])
     );
 }
@@ -222,9 +212,8 @@ fn every_validation_and_e2e_job_keeps_its_trace_and_summarises_it_without_a_verd
             "validate-hermetic",
             "validate-test-checks",
             "validate-coverage",
-            "e2e-chromium",
-            "e2e-firefox-lane",
-            "e2e-firefox-reconcile",
+            "e2e-lane",
+            "e2e-reconcile",
         ],
     );
 }

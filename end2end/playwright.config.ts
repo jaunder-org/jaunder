@@ -186,6 +186,57 @@ export default defineConfig({
         launchOptions: chromiumLaunchOptions,
       },
     },
+    // Split Chromium lanes select only these projects, with the same filters
+    // and in-lane ordering as the unsplit Chromium graph above.
+    experimentalProject({
+      name: "chromium-ordinary",
+      testIgnore: ignoreUnavailableSpecializedSpecs(
+        /(admin-site|backup|smtp|theme|theme-management|theme-presentation|responsive-shell|post-image-fit|invite|media|passkeys|timeline-cls|production-baseline-flow)\.spec\.ts/,
+      ),
+      grepInvert: visualTag,
+      use: {
+        ...devices["Desktop Chrome"],
+        launchOptions: chromiumLaunchOptions,
+        ...productionBaselineTls,
+      },
+    }),
+    experimentalProject({
+      name: "chromium-special-visual",
+      testIgnore: ignoreUnavailableSpecializedSpecs(
+        /(admin-site|backup|smtp|invite|media|production-baseline-flow)\.spec\.ts/,
+      ),
+      grep: visualTag,
+      retries: 0,
+      // Reuse the reviewed `chromium-visual` baselines (see firefox-special-visual).
+      snapshotPathTemplate:
+        "{snapshotDir}/{testFilePath}-snapshots/{arg}-chromium-visual-{platform}{ext}",
+      use: {
+        ...devices["Desktop Chrome"],
+        launchOptions: chromiumLaunchOptions,
+      },
+    }),
+    experimentalProject({
+      name: "chromium-special-global-configuration",
+      testMatch:
+        /(admin-site|backup|smtp|theme|theme-management|theme-presentation|responsive-shell|post-image-fit|media|passkeys|timeline-cls|production-baseline-flow)\.spec\.ts/,
+      grepInvert: visualTag,
+      fullyParallel: false,
+      workers: 1,
+      use: {
+        ...devices["Desktop Chrome"],
+        launchOptions: chromiumLaunchOptions,
+      },
+    }),
+    experimentalProject({
+      name: "chromium-special-invite",
+      testMatch: /invite\.spec\.ts/,
+      grepInvert: visualTag,
+      fullyParallel: false,
+      use: {
+        ...devices["Desktop Chrome"],
+        launchOptions: chromiumLaunchOptions,
+      },
+    }),
     {
       name: "firefox-visual",
       testIgnore: ignoreUnavailableSpecializedSpecs(

@@ -1,6 +1,10 @@
 {
   "schemaVersion": 1,
   "experimentalProjectDependencies": {
+    "chromium-ordinary": [],
+    "chromium-special-visual": [],
+    "chromium-special-global-configuration": ["chromium-special-visual"],
+    "chromium-special-invite": ["chromium-special-global-configuration"],
     "firefox-ordinary": [],
     "firefox-special-visual": [],
     "firefox-special-global-configuration": ["firefox-special-visual"],
@@ -12,16 +16,16 @@
       "browser": "chromium",
       "partition": "unsplit",
       "identity": "sqlite-chromium-unsplit",
-      "traceDigit": "1",
+      "traceSeed": "1",
       "projects": ["chromium", "chromium-admin"],
-      "enabled": true
+      "enabled": false
     },
     {
       "backend": "sqlite",
       "browser": "firefox",
       "partition": "unsplit",
       "identity": "sqlite-firefox-unsplit",
-      "traceDigit": "2",
+      "traceSeed": "2",
       "projects": ["firefox", "firefox-admin"],
       "enabled": false
     },
@@ -30,16 +34,16 @@
       "browser": "chromium",
       "partition": "unsplit",
       "identity": "postgres-chromium-unsplit",
-      "traceDigit": "3",
+      "traceSeed": "3",
       "projects": ["chromium", "chromium-admin"],
-      "enabled": true
+      "enabled": false
     },
     {
       "backend": "postgres",
       "browser": "firefox",
       "partition": "unsplit",
       "identity": "postgres-firefox-unsplit",
-      "traceDigit": "4",
+      "traceSeed": "4",
       "projects": ["firefox", "firefox-admin"],
       "enabled": false
     },
@@ -50,7 +54,7 @@
       "shardIndex": 1,
       "shardCount": 2,
       "identity": "sqlite-firefox-ordinary-1-of-2",
-      "traceDigit": "5",
+      "traceSeed": "5",
       "projects": ["firefox-ordinary"],
       "enabled": true
     },
@@ -61,7 +65,7 @@
       "shardIndex": 2,
       "shardCount": 2,
       "identity": "sqlite-firefox-ordinary-2-of-2",
-      "traceDigit": "6",
+      "traceSeed": "6",
       "projects": ["firefox-ordinary"],
       "enabled": true
     },
@@ -70,7 +74,7 @@
       "browser": "firefox",
       "partition": "serial-special",
       "identity": "sqlite-firefox-serial-special",
-      "traceDigit": "7",
+      "traceSeed": "7",
       "projects": [
         "firefox-special-visual",
         "firefox-special-global-configuration",
@@ -85,7 +89,7 @@
       "shardIndex": 1,
       "shardCount": 2,
       "identity": "postgres-firefox-ordinary-1-of-2",
-      "traceDigit": "8",
+      "traceSeed": "8",
       "projects": ["firefox-ordinary"],
       "enabled": true
     },
@@ -96,7 +100,7 @@
       "shardIndex": 2,
       "shardCount": 2,
       "identity": "postgres-firefox-ordinary-2-of-2",
-      "traceDigit": "9",
+      "traceSeed": "9",
       "projects": ["firefox-ordinary"],
       "enabled": true
     },
@@ -105,11 +109,81 @@
       "browser": "firefox",
       "partition": "serial-special",
       "identity": "postgres-firefox-serial-special",
-      "traceDigit": "a",
+      "traceSeed": "a",
       "projects": [
         "firefox-special-visual",
         "firefox-special-global-configuration",
         "firefox-special-invite"
+      ],
+      "enabled": true
+    },
+    {
+      "backend": "sqlite",
+      "browser": "chromium",
+      "partition": "ordinary",
+      "shardIndex": 1,
+      "shardCount": 2,
+      "identity": "sqlite-chromium-ordinary-1-of-2",
+      "traceSeed": "b",
+      "projects": ["chromium-ordinary"],
+      "enabled": true
+    },
+    {
+      "backend": "sqlite",
+      "browser": "chromium",
+      "partition": "ordinary",
+      "shardIndex": 2,
+      "shardCount": 2,
+      "identity": "sqlite-chromium-ordinary-2-of-2",
+      "traceSeed": "c",
+      "projects": ["chromium-ordinary"],
+      "enabled": true
+    },
+    {
+      "backend": "sqlite",
+      "browser": "chromium",
+      "partition": "serial-special",
+      "identity": "sqlite-chromium-serial-special",
+      "traceSeed": "d",
+      "projects": [
+        "chromium-special-visual",
+        "chromium-special-global-configuration",
+        "chromium-special-invite"
+      ],
+      "enabled": true
+    },
+    {
+      "backend": "postgres",
+      "browser": "chromium",
+      "partition": "ordinary",
+      "shardIndex": 1,
+      "shardCount": 2,
+      "identity": "postgres-chromium-ordinary-1-of-2",
+      "traceSeed": "e",
+      "projects": ["chromium-ordinary"],
+      "enabled": true
+    },
+    {
+      "backend": "postgres",
+      "browser": "chromium",
+      "partition": "ordinary",
+      "shardIndex": 2,
+      "shardCount": 2,
+      "identity": "postgres-chromium-ordinary-2-of-2",
+      "traceSeed": "f",
+      "projects": ["chromium-ordinary"],
+      "enabled": true
+    },
+    {
+      "backend": "postgres",
+      "browser": "chromium",
+      "partition": "serial-special",
+      "identity": "postgres-chromium-serial-special",
+      "traceSeed": "12",
+      "projects": [
+        "chromium-special-visual",
+        "chromium-special-global-configuration",
+        "chromium-special-invite"
       ],
       "enabled": true
     }

@@ -347,14 +347,23 @@ pub fn verify_lane(identity: &str, catalog: &Path, root: &Path) -> Result<String
     ))
 }
 
-pub fn reconcile_files(backend: &str, catalog: &Path, root: &Path) -> Result<String, String> {
+/// Reconcile one `{backend, browser}` pair's lifted split lanes, returning their
+/// verdict and evidence only when every lane and the population union verified.
+pub fn reconciled_lanes(
+    backend: &str,
+    browser: &str,
+    catalog: &Path,
+    root: &Path,
+) -> Result<(String, Vec<LaneEvidence>), String> {
     let lanes = crate::e2e_ownership::read_catalog(catalog)?;
     let evidence = lanes
         .iter()
-        .filter(|lane| lane.enabled && lane.backend == backend && lane.browser == "firefox")
+        .filter(|lane| lane.enabled && lane.backend == backend && lane.browser == browser)
         .map(|lane| lane_evidence(&lane.identity, &root.join(format!("e2e-{}", lane.identity))))
         .collect::<Vec<_>>();
-    reconcile(backend, "firefox", &lanes, &evidence).map_err(|errors| errors.join("\n"))
+    let verdict =
+        reconcile(backend, browser, &lanes, &evidence).map_err(|errors| errors.join("\n"))?;
+    Ok((verdict, evidence))
 }
 
 #[cfg(test)]
@@ -455,6 +464,41 @@ pub(crate) mod tests {
                 }
             })
             .collect()
+    }
+
+    #[test]
+    fn lifted_lanes_reconcile_only_for_their_own_browser() {
+        // Lay the fixture out as producers lift it: `<root>/e2e-<lane>/<files>`.
+        let temp = tempfile::tempdir().unwrap();
+        let catalog_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../end2end/e2e-lanes.json");
+        for item in fixture(&temp.path().join("fixture")) {
+            let lifted = super::lane_evidence(
+                &item.identity,
+                &temp
+                    .path()
+                    .join("lifted")
+                    .join(format!("e2e-{}", item.identity)),
+            );
+            fs::create_dir_all(lifted.census.parent().unwrap()).unwrap();
+            for (from, to) in [
+                (&item.census, &lifted.census),
+                (&item.report, &lifted.report),
+                (&item.lane_manifest, &lifted.lane_manifest),
+                (&item.duration_manifest, &lifted.duration_manifest),
+                (&item.capture, &lifted.capture),
+                (&item.phase, &lifted.phase),
+            ] {
+                fs::copy(from, to).unwrap();
+            }
+        }
+        let lifted = temp.path().join("lifted");
+        let (_, lanes) =
+            super::reconciled_lanes("sqlite", "firefox", &catalog_path, &lifted).unwrap();
+        assert_eq!(lanes.len(), 3);
+        assert!(lanes.iter().all(|lane| lane.capture.exists()));
+        // The same root holds no Chromium lanes, so that pair must not reconcile.
+        assert!(super::reconciled_lanes("sqlite", "chromium", &catalog_path, &lifted).is_err());
     }
 
     fn errors(evidence: &[LaneEvidence]) -> Vec<String> {
