@@ -262,7 +262,14 @@ def _add_to_backlog(operation: _Operation, url: str) -> str:
             raise
         if len(backlog) > 1:
             operation.fail(ERROR, "ambiguous Backlog item")
-        return str(backlog[0]["id"])
+        item_id = str(backlog[0]["id"])
+        print(
+            f"dev: {operation.command}: item-add failed; "
+            f"using existing Backlog item {item_id}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return item_id
     item_id = _get(item, "id")
     if not (isinstance(item_id, str) and item_id):
         operation.fail(NOTHING_SELECTED, "project item has no id")

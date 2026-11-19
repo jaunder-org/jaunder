@@ -40,7 +40,7 @@ if "raw" in replies[n]:
 else:
     print(json.dumps(replies[n].get("body"), separators=(",", ":")))
 if replies[n].get("killed"):
-    os.kill(os.getpid(), signal.SIGKILL)
+    os.kill(os.getpid(), signal.SIGTERM)
 if replies[n].get("exit", 0):
     print(replies[n].get("stderr", "simulated gh failure"), file=sys.stderr)
     sys.exit(replies[n]["exit"])
@@ -346,10 +346,10 @@ def test_create_applies_explicit_metadata_and_checks_readback(
 
 # `item-add` racing the project's own auto-add of a new issue (#2007).
 ALREADY_EXISTS = {
-    "exit": 1,
+    "exit": 7,
     "stderr": "GraphQL: Content already exists in this project (addProjectV2ItemById)",
 }
-ITEM = {"id": "PVTI_1", "project": {"id": PROJECT}, "priority": None}
+RACED_ITEM = {"id": "PVTI_1", "project": {"id": PROJECT}, "priority": None}
 
 
 def raced(listing: Any) -> list[Any]:
@@ -362,10 +362,14 @@ def raced(listing: Any) -> list[Any]:
 def test_an_issue_added_to_the_backlog_concurrently_uses_that_item(
     tracker: Tracker,
 ) -> None:
-    tracker.reply(raced(project_items([ITEM])))
+    tracker.reply(raced(project_items([RACED_ITEM])))
     result = tracker.mutate("issue-create")
     assert result.returncode == 0, result
     assert json.loads(result.stdout)["backlog"]["id"] == "PVTI_1"
+    assert (
+        b"dev: issue-create: item-add failed; using existing Backlog item PVTI_1\n"
+        in result.stderr
+    )
     calls = tracker.calls()
     assert calls[3]["args"][:4] == ["api", "graphql", "-F", "number=731"]
     assert calls[4]["args"][:2] == ["project", "item-edit"]
@@ -374,7 +378,10 @@ def test_an_issue_added_to_the_backlog_concurrently_uses_that_item(
 
 @pytest.mark.parametrize(
     ("listing", "code"),
-    [(project_items([]), 1), (project_items([ITEM, ITEM | {"id": "PVTI_2"}]), 5)],
+    [
+        (project_items([]), 7),
+        (project_items([RACED_ITEM, RACED_ITEM | {"id": "PVTI_2"}]), 5),
+    ],
 )
 def test_a_failed_add_without_exactly_one_backlog_item_fails(
     tracker: Tracker, listing: Any, code: int
@@ -387,11 +394,11 @@ def test_a_failed_add_without_exactly_one_backlog_item_fails(
 
 
 def test_a_signalled_add_does_not_fall_back(tracker: Tracker) -> None:
-    replies = raced(project_items([ITEM]))
+    replies = raced(project_items([RACED_ITEM]))
     replies[2] = {"killed": 1}
     tracker.reply(replies)
     result = tracker.mutate("issue-create")
-    assert result.returncode == 128 + 9
+    assert result.returncode == 128 + 15
     assert result.stdout == b""
     assert len(tracker.calls()) == 3, "no listing or edit after the signal"
 
