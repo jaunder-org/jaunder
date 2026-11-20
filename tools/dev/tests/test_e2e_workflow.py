@@ -41,7 +41,7 @@ if [[ $1 == build ]]; then
   fi
   if [[ ${{BUILD_STATUS:-23}} == 0 ]]; then
     while [[ $1 != --out-link ]]; do shift; done
-    ln -sfn "$OUTPUT" "$2"
+    ln -sfn "${{GCROOT_DECOY:-$OUTPUT}}" "$2"
     printf '[{{"outputs":{{"out":"%s"}}}}]\\n' "$OUTPUT"
   fi
   exit "${{BUILD_STATUS:-23}}"
@@ -273,6 +273,22 @@ def test_a_producer_records_its_output_cache_then_builds_and_runs_the_verifier(
         spans[name]["ts"] for name in ["e2e-producer", "host-proof", "e2e-evidence"]
     ]
     assert starts == sorted(starts)
+
+
+def test_the_verifier_reads_this_builds_selected_output_never_the_gc_root(
+    e2e: E2E,
+) -> None:
+    selected = capture_only()
+    result = e2e.run(
+        "e2e-producer",
+        LANE,
+        output=selected,
+        status="0",
+        GCROOT_DECOY=str(e2e.root / "decoy"),
+    )
+    assert result.returncode == 0, result
+    assert f"--artifacts {selected}\n" in e2e.events()
+    assert "decoy" not in e2e.events()
 
 
 def test_a_failed_producer_records_no_cache_and_builds_no_verifier(e2e: E2E) -> None:

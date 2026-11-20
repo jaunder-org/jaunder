@@ -31,6 +31,10 @@ driver**, not branches inside the config:
 - reporter — the config defaults to `[['line'], ['json', …]]` (CI needs a
   machine-readable report); the host driver overrides with
   `--reporter=html,line` for interactive use.
+  > **Update (#2011):** the default is now `[['list'], ['json', …]]`. Without a
+  > TTY, `list` prints one line per finished attempt, so a VM lane killed by its
+  > timeout keeps per-test results in its build log. The host override and this
+  > decision are unchanged.
 - `PLAYWRIGHT_HTML_OPEN=never` — so a red host run doesn't spawn a blocking
   report server.
 - `JAUNDER_E2E_WORKERS=1` on the host — the host `cargo xtask e2e-local` serves
