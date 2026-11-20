@@ -78,9 +78,10 @@ jobs:
         if: always()
         run:
           nix develop .#ci --accept-flake-config -c sh -c 'dev trace
-          summary --markdown >> "$GITHUB_STEP_SUMMARY"' || true
+          summary --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace summary unavailable, see this step's log"
       - name: Upload host validation diagnostics
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v7.0.1
         with:
           name: validate-host-diagnostics
@@ -88,7 +89,7 @@ jobs:
             .xtask/diagnostics/
             .xtask/run/
           include-hidden-files: true
-          if-no-files-found: ignore
+          if-no-files-found: warn
           retention-days: 14
 
   validate-hermetic:
@@ -107,9 +108,8 @@ jobs:
         if: always()
         run:
           nix develop .#ci --accept-flake-config -c sh -c 'dev trace
-          summary --markdown >> "$GITHUB_STEP_SUMMARY"' || true
+          summary --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace summary unavailable, see this step's log"
       - name: Upload hermetic validation diagnostics
-        id: hermetic-diagnostics
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@v7.0.1
@@ -121,10 +121,6 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
-      - name: Warn on hermetic diagnostics upload failure
-        if: always() && steps.hermetic-diagnostics.outcome == 'failure'
-        run: |
-          echo "::warning::Hermetic diagnostics upload failed; workload verdict remains authoritative"
 
   validate-test-checks:
     name: Validation test checks
@@ -151,9 +147,10 @@ jobs:
         if: always()
         run:
           nix develop .#ci --accept-flake-config -c sh -c 'dev trace
-          summary --markdown >> "$GITHUB_STEP_SUMMARY"' || true
+          summary --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace summary unavailable, see this step's log"
       - name: Upload test checks validation diagnostics
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v7.0.1
         with:
           name: validate-test-checks-diagnostics
@@ -162,7 +159,7 @@ jobs:
             .xtask/gcroots/elisp-coverage-producer/elisp-coverage/
             .xtask/run/
           include-hidden-files: true
-          if-no-files-found: ignore
+          if-no-files-found: warn
           retention-days: 14
 
   validate-coverage:
@@ -211,7 +208,7 @@ jobs:
         if: always()
         run:
           nix develop .#ci --accept-flake-config -c sh -c 'dev trace
-          summary --markdown >> "$GITHUB_STEP_SUMMARY"' || true
+          summary --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace summary unavailable, see this step's log"
       - name: Capture coverage storage final snapshot
         if: always()
         continue-on-error: true
@@ -252,10 +249,12 @@ jobs:
         with:
           name: validate-coverage-storage-snapshot
           path: .xtask/coverage-storage-snapshot.txt
+          # Written by best-effort probe steps that may not have run.
           if-no-files-found: ignore
           retention-days: 14
       - name: Upload coverage validation diagnostics
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v7.0.1
         with:
           name: validate-coverage-diagnostics
@@ -265,7 +264,7 @@ jobs:
             .xtask/gcroots/coverage/diagnostics/
             .xtask/run/
           include-hidden-files: true
-          if-no-files-found: ignore
+          if-no-files-found: warn
           retention-days: 14
 
   validate-no-e2e:
@@ -369,7 +368,7 @@ jobs:
         if: always()
         run:
           nix develop .#ci-e2e --accept-flake-config -c sh -c 'dev trace
-          summary --markdown >> "$GITHUB_STEP_SUMMARY"' || true
+          summary --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace summary unavailable, see this step's log"
       - name: E2E disk observation (after producer)
         if: always()
         run: |
@@ -419,6 +418,7 @@ jobs:
         with:
           name: e2e-storage-snapshot-${{ matrix.lane }}
           path: .xtask/lane-storage-snapshot.txt
+          # Written by best-effort probe steps that may not have run.
           if-no-files-found: ignore
           retention-days: 14
       - name: Upload lane-qualified e2e evidence
@@ -427,18 +427,21 @@ jobs:
         with:
           name: e2e-lane-${{ matrix.lane }}
           path: .xtask/diagnostics/
-          if-no-files-found: ignore
+          # Producer evidence for the reconcile job: an upload failure stays
+          # the lane's.
+          if-no-files-found: warn
           retention-days: 14
       # A separate artifact: the reconcile job merges every lane's evidence
       # artifact into one diagnostics root, where traces do not belong.
       - name: Upload lane traces
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v7.0.1
         with:
           name: e2e-trace-${{ matrix.lane }}
           path: .xtask/run/
           include-hidden-files: true
-          if-no-files-found: ignore
+          if-no-files-found: warn
           retention-days: 14
       - name: E2E disk observation (final)
         if: always()
@@ -483,9 +486,10 @@ jobs:
         if: always()
         run:
           nix develop .#ci-e2e --accept-flake-config -c sh -c 'dev trace
-          summary --markdown >> "$GITHUB_STEP_SUMMARY"' || true
+          summary --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace summary unavailable, see this step's log"
       - name: Upload reconciliation diagnostics
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v7.0.1
         with:
           name: e2e-reconcile-${{ matrix.backend }}-${{ matrix.browser }}
@@ -493,7 +497,7 @@ jobs:
             .xtask/reconcile.log
             .xtask/run/
           include-hidden-files: true
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
 
   e2e-gate:
