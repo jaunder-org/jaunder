@@ -1268,8 +1268,9 @@ them.
 
 The root span also records its runner where the machine exposes it:
 `host.cpu.model.name` (`/proc/cpuinfo`), `jaunder.host.nproc` (the CPUs `dev`
-may use) and `cloud.provider` (`aws` or `azure`, from the DMI system vendor; a
-local Hyper-V machine reads as `azure`). In CI, setup-ci's first step exports
+may use, by Python's `os.process_cpu_count()`: the affinity mask `nproc` counts)
+and `cloud.provider` (`aws` or `azure`, from the DMI system vendor; a local
+Hyper-V machine reads as `azure`). In CI, setup-ci's first step exports
 `JAUNDER_CI_JOB_START_NS`, which the root records as `jaunder.ci.job_start_ns`.
 Neither elapsed time nor a missing `cache` attribute proves a fresh build,
 substitution or newly executed Nix builder work. Nested or overlapping spans are

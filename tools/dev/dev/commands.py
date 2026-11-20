@@ -29,6 +29,8 @@ class Tool:
             "--quiet",
             "--manifest-path",
             "tools/Cargo.toml",
+            # Cargo's default, named so an inherited CARGO_TARGET_DIR cannot
+            # move the binary away from `path`.
             "--target-dir",
             TOOLS_TARGET,
             "-p",

@@ -87,8 +87,8 @@ def _link_e2e_node_modules() -> steps.Environment:
 def _build_scoped_leptosfmt() -> steps.Environment:
     """Builds the scoped adapter from this checkout, not a stale one on PATH;
     returns a PATH that runs it first, for leptosfmt to find."""
-    (built,) = steps.tool(SCOPED_LEPTOSFMT)
-    directory = Path.cwd() / Path(built).parent
+    steps.tool(SCOPED_LEPTOSFMT)
+    directory = Path.cwd() / Path(SCOPED_LEPTOSFMT.path).parent
     return {"PATH": f"{directory}:{os.environ.get('PATH', '')}"}
 
 

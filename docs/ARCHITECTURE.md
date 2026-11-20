@@ -4601,13 +4601,14 @@ their own `<bin>-build` steps and run from `tools/target/debug`, and test runs
 compile in `--no-run` build steps first, so a tool or test span never times the
 compiler. The root span records its runner (CPU model, usable CPUs, cloud
 provider from the DMI vendor) and, in CI, the job's start from setup-ci, which
-`dev trace summary` shows as a `before dev` row. A `substituted` static verdict
-is expected: static verdicts are sandboxed and input-addressed, so a stamp
-fetched for an identical derivation counts. Coverage and e2e verdicts are never
-substituted. Their `nonSubstitutable` wrapper guards local builds. In CI the
-setup-ci Cachix `pushFilter` keeps them out of the cache, because
-install-nix-action's `always-allow-substitutes = true` overrides the wrapper
-there
+`dev trace summary` shows as a `before dev` row
+([dev trace step accounting](adr/drafts/dev-trace-step-accounting.md)). A
+`substituted` static verdict is expected: static verdicts are sandboxed and
+input-addressed, so a stamp fetched for an identical derivation counts. Coverage
+and e2e verdicts are never substituted. Their `nonSubstitutable` wrapper guards
+local builds. In CI the setup-ci Cachix `pushFilter` keeps them out of the
+cache, because install-nix-action's `always-allow-substitutes = true` overrides
+the wrapper there
 ([substitutable static verdicts](adr/0252-substitutable-static-verdicts.md)).
 Child processes join through `TRACEPARENT`/`TRACESTATE` plus
 `JAUNDER_TRACE_DIR`; the root is the `dev` process that finds the latter unset.

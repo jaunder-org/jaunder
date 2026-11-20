@@ -114,19 +114,18 @@ def summarize(directory: Path) -> Summary:
         )
         for span in run
     ]
-    roots = [span for span in run if span.parent_id is None]
-    before = [row for row in map(_before_dev, roots) if row is not None]
-    slowest_first = sorted(
-        [*table, *before], key=lambda row: row.duration_ns, reverse=True
-    )
-    pinned = {id(row) for row in before}
+    slowest_first = sorted(table, key=lambda row: row.duration_ns, reverse=True)
     shown = [
         row
         for rank, row in enumerate(slowest_first)
-        if rank < LIMIT or row.status in _UNSUCCESSFUL or id(row) in pinned
+        if rank < LIMIT or row.status in _UNSUCCESSFUL
     ]
+    roots = [span for span in run if span.parent_id is None]
+    # Shown beyond the limit, among the spans by duration.
+    before = [row for row in map(_before_dev, roots) if row is not None]
+    ranked = sorted([*shown, *before], key=lambda row: row.duration_ns, reverse=True)
     described = [line for line in map(_runner, roots) if line is not None]
-    return Summary(described[0] if described else None, shown)
+    return Summary(described[0] if described else None, ranked)
 
 
 def _seconds(nanoseconds: int | None) -> str:
