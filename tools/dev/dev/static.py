@@ -14,6 +14,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from dev import steps
+from dev.commands import SCOPED_LEPTOSFMT
 
 
 class Mode(StrEnum):
@@ -85,26 +86,10 @@ def _link_e2e_node_modules() -> steps.Environment:
 
 def _build_scoped_leptosfmt() -> steps.Environment:
     """Builds the scoped adapter from this checkout, not a stale one on PATH;
-    returns a PATH that runs it first."""
-    steps.run(
-        "scoped-leptosfmt-build",
-        [
-            "cargo",
-            "build",
-            "--locked",
-            "--quiet",
-            "--manifest-path",
-            "tools/Cargo.toml",
-            "-p",
-            "repository-policy",
-            "--bin",
-            "scoped-leptosfmt",
-            "--target-dir",
-            "tools/target",
-        ],
-    )
-    built = Path.cwd() / "tools" / "target" / "debug"
-    return {"PATH": f"{built}:{os.environ.get('PATH', '')}"}
+    returns a PATH that runs it first, for leptosfmt to find."""
+    steps.tool(SCOPED_LEPTOSFMT)
+    directory = Path.cwd() / Path(SCOPED_LEPTOSFMT.path).parent
+    return {"PATH": f"{directory}:{os.environ.get('PATH', '')}"}
 
 
 def _prettier(population: str) -> Leaf:

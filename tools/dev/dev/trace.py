@@ -29,7 +29,7 @@ from opentelemetry.trace import NoOpTracer, Tracer
 from opentelemetry.trace import Span as ApiSpan
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
-from dev import chrome
+from dev import chrome, runner
 
 TRACE_DIR = "JAUNDER_TRACE_DIR"
 CARRIER_KEYS = ("TRACEPARENT", "TRACESTATE")
@@ -192,6 +192,8 @@ def run(root: Path, name: str) -> Iterator[ApiSpan]:
     _current = _Run(provider.get_tracer("dev"), directory)
     try:
         with _current.tracer.start_as_current_span(name, context=parent) as span:
+            if inherited is None:
+                span.set_attributes(runner.attributes(os.environ))
             yield span
     finally:
         provider.shutdown()

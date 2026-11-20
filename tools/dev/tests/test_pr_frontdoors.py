@@ -23,7 +23,9 @@ MERGE = "b" * 40
 HISTORICAL = "https://github.com/jaunder-org/jaunder/actions/runs/42"
 BASH = shutil.which("bash") or "/bin/sh"
 # Each native call must be the next scripted one. Checkout discovery and the
-# worktree listing that `dev` itself makes go to the real Git unrecorded.
+# worktree listing that `dev` itself makes go to the real Git unrecorded. The
+# observer's build only appends to `builds`: the fixture already put the
+# scripted observer where the build leaves it.
 NATIVE = f"""#!{BASH}
 set -euo pipefail
 tool=${{0##*/}}
@@ -32,6 +34,7 @@ if [[ "$tool $*" == 'git worktree list --porcelain' ]]; then printf 'worktree %s
 if [[ "$tool" == git ]]; then
     [[ -z "${{GIT_DIR+x}}${{GIT_WORK_TREE+x}}${{GIT_INDEX_FILE+x}}${{GIT_OBJECT_DIRECTORY+x}}${{GIT_COMMON_DIR+x}}${{GIT_NAMESPACE+x}}" ]] || {{ echo 'Git redirect not scrubbed' >&2; exit 23; }}
 fi
+if [[ "$tool $1" == 'cargo build' ]]; then printf '%s\\n' "$*" >> "$FIXTURE/builds"; exit 0; fi
 args=$(jq -cn --args '$ARGS.positional' -- "$@")
 jq -cn --arg tool "$tool" --argjson args "$args" '{{tool:$tool,args:$args}}' >> "$FIXTURE/calls"
 n=$(<"$FIXTURE/index"); printf '%s' "$((n+1))" > "$FIXTURE/index"
@@ -83,6 +86,10 @@ def native(checkout: Checkout) -> Native:
     checkout.from_repository("scripts/pr-land.sh", "scripts/pr-cleanup.sh")
     for tool in ["gh", "git", "cargo"]:
         checkout.executable(tool, NATIVE)
+    observer = checkout.root / "tools" / "target" / "debug" / "pr-observer"
+    observer.parent.mkdir(parents=True)
+    observer.write_text(NATIVE)
+    observer.chmod(0o755)
     # pr-land.sh observes through `dev pr-watch`.
     checkout.dev_on_path()
     return Native(checkout)
@@ -111,8 +118,7 @@ def live(armed: bool) -> dict[str, Any]:
 
 
 def observation(outcome: str, recovery: bool, once: bool) -> dict[str, Any]:
-    args = ["run", "--locked", "--quiet", "--manifest-path", "tools/Cargo.toml"]
-    args += ["-p", "pr-observer", "--", "watch", "731"]
+    args = ["watch", "731"]
     args += ["--once"] if once else ["--until", "merged"]
     args += ["--expected-head", HEAD]
     if recovery:
@@ -126,7 +132,7 @@ def observation(outcome: str, recovery: bool, once: bool) -> dict[str, Any]:
         "events": [],
     }
     return {
-        "tool": "cargo",
+        "tool": "pr-observer",
         "args": args,
         "exit": 0 if outcome in ("merged", "ready-to-land") else 1,
         "text": json.dumps(report),
@@ -186,6 +192,15 @@ def test_an_approved_land_makes_one_head_bound_action_then_observes(
     assert native.count() == len(calls)
     report = json.loads(result.stdout)
     assert (report["outcome"], report["head_sha"]) == ("merged", HEAD)
+    # Each observation is its own `dev pr-watch`, which builds the observer.
+    observations = [call for call in calls if call["tool"] == "pr-observer"]
+    builds = (native.checkout.root.parent / "builds").read_text().splitlines()
+    assert builds == [
+        (
+            "build --locked --quiet --manifest-path tools/Cargo.toml "
+            "--target-dir tools/target -p pr-observer --bin pr-observer"
+        )
+    ] * len(observations)
 
 
 ADVERSE = ["pending", "blocked", "conflicted", "checks-failed", "ejected"]

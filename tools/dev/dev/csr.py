@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 
 from dev import steps
+from dev.commands import SYSTEM_ARTIFACTS
 
 
 def build(profile: str) -> None:
@@ -40,21 +41,8 @@ def build(profile: str) -> None:
         for name in ["index.html", "entry.js"]:
             shutil.copy(checkout / "csr" / name, project / "csr")
         (project / "node_modules").symlink_to(f"{vite_tools}/node_modules")
-        steps.run(
-            "system-artifacts",
-            [
-                "cargo",
-                "run",
-                "--locked",
-                "--manifest-path",
-                f"{checkout}/tools/Cargo.toml",
-                "-p",
-                "system-artifacts",
-                "--",
-                "--out",
-                str(system_artifacts),
-            ],
-        )
+        generate = steps.tool(SYSTEM_ARTIFACTS)
+        steps.run("system-artifacts", [*generate, "--out", str(system_artifacts)])
         steps.run(
             "csr-assets",
             [

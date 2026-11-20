@@ -11,9 +11,6 @@ import sys
 import pytest
 from conftest import PACKAGE, REGISTERED_LONG_AGO, Checkout, Workflow
 
-CARGO_RUN = "cargo run --locked --quiet --manifest-path tools/Cargo.toml"
-HOST_PROOF = f"{CARGO_RUN} -p host-proof --bin"
-PERF_DATA = f"{CARGO_RUN} -p performance --bin perf-data --"
 SHELL_SYNTAX = "a b ; touch pwned $(touch pwned)"
 
 Commands = list[list[str]]
@@ -21,6 +18,18 @@ Commands = list[list[str]]
 
 def words(line: str, *tail: str) -> list[str]:
     return [*line.split(" "), *tail]
+
+
+def build(package: str, binary: str, *features: str) -> list[str]:
+    """A tools-workspace binary's build step; the fake build leaves the fake
+    as the binary, which then records itself under the binary's name."""
+    return words(
+        "cargo build --locked --quiet --manifest-path tools/Cargo.toml "
+        f"--target-dir tools/target -p {package}",
+        *(["--features", ",".join(features)] if features else []),
+        "--bin",
+        binary,
+    )
 
 
 FORWARDED: list[tuple[list[str], Commands]] = [
@@ -42,11 +51,8 @@ FORWARDED: list[tuple[list[str], Commands]] = [
     (
         ["census", "--json", SHELL_SYNTAX],
         [
-            words(
-                f"{CARGO_RUN} -p repository-policy --bin source-contracts -- census",
-                "--json",
-                SHELL_SYNTAX,
-            )
+            build("repository-policy", "source-contracts"),
+            ["source-contracts", "census", "--json", SHELL_SYNTAX],
         ],
     ),
     (
@@ -61,37 +67,28 @@ FORWARDED: list[tuple[list[str], Commands]] = [
     (
         ["census", "--json", "--", "--"],
         [
-            words(
-                f"{CARGO_RUN} -p repository-policy --bin source-contracts -- census",
-                "--json",
-                "--",
-                "--",
-            )
+            build("repository-policy", "source-contracts"),
+            ["source-contracts", "census", "--json", "--", "--"],
         ],
     ),
     (
         ["org-timezone-manifest", "--", "-x.org"],
         [
-            words(
-                f"{CARGO_RUN} -p repository-policy --bin org-timezone-manifest -- --",
-                "-x.org",
-            )
+            build("repository-policy", "org-timezone-manifest"),
+            ["org-timezone-manifest", "--", "-x.org"],
         ],
     ),
     (
         ["coverage-check", "probe-source", "--help"],
         [
-            words(
-                f"{CARGO_RUN} -p coverage --features host --bin coverage-check --",
-                "probe-source",
-                "--help",
-            )
+            build("coverage", "coverage-check", "host"),
+            ["coverage-check", "probe-source", "--help"],
         ],
     ),
     *(
         (
             [binary, "--flag", SHELL_SYNTAX],
-            [words(f"{HOST_PROOF} {binary} --", "--flag", SHELL_SYNTAX)],
+            [build("host-proof", binary), [binary, "--flag", SHELL_SYNTAX]],
         )
         for binary in [
             "wasm-audit",
@@ -103,49 +100,42 @@ FORWARDED: list[tuple[list[str], Commands]] = [
     (
         ["e2e-local", "--browser", "firefox", "end2end/tests/auth.spec.ts:12"],
         [
-            words(
-                f"{HOST_PROOF} e2e-local --",
-                "--browser",
-                "firefox",
-                "end2end/tests/auth.spec.ts:12",
-            )
+            build("host-proof", "e2e-local"),
+            words("e2e-local --browser firefox end2end/tests/auth.spec.ts:12"),
         ],
     ),
     (
         ["pr-watch", "731", "--once", "--expected-head", "f" * 40],
         [
-            words(
-                f"{CARGO_RUN} -p pr-observer -- watch",
-                "731",
-                "--once",
-                "--expected-head",
-                "f" * 40,
-            )
+            build("pr-observer", "pr-observer"),
+            words("pr-observer watch 731 --once --expected-head", "f" * 40),
         ],
     ),
     (
         ["org-timezone-manifest", "a.org", SHELL_SYNTAX],
         [
-            words(
-                f"{CARGO_RUN} -p repository-policy --bin org-timezone-manifest -- --",
-                "a.org",
-                SHELL_SYNTAX,
-            )
+            build("repository-policy", "org-timezone-manifest"),
+            ["org-timezone-manifest", "--", "a.org", SHELL_SYNTAX],
         ],
     ),
     (
         ["adr-format"],
         [
-            words(
-                f"{CARGO_RUN} -p repository-policy --bin repository-docs -- adr-format"
-            )
+            build("repository-policy", "repository-docs"),
+            words("repository-docs adr-format"),
         ],
     ),
     (
         ["perf-compare", "candidate evidence.json"],
-        [words(f"{PERF_DATA} compare --result", "candidate evidence.json")],
+        [
+            build("performance", "perf-data"),
+            words("perf-data compare --result", "candidate evidence.json"),
+        ],
     ),
-    (["perf-import-baseline", "42"], [words(f"{PERF_DATA} import-baseline 42")]),
+    (
+        ["perf-import-baseline", "42"],
+        [build("performance", "perf-data"), words("perf-data import-baseline 42")],
+    ),
     (["e2e"], [["bash", "scripts/e2e-workflow", "all", ""]]),
     (["e2e", "3"], [["bash", "scripts/e2e-workflow", "all", "3"]]),
     (
@@ -166,10 +156,13 @@ FORWARDED: list[tuple[list[str], Commands]] = [
 
 SELECTED = "/nix/store/0000-selected"
 VERIFIER_NIX = r"""#!/bin/sh
-case "$1" in eval|path-info) exit 1 ;; esac
+case "$1 $2" in 'path-info --derivation') ;; eval*|path-info*) exit 1 ;; esac
 printf '%s\037' nix "$@" >> "$FAKE_LOG"
 printf '\036' >> "$FAKE_LOG"
-case "$*" in *'.#host-proof') printf '%s\n' "$VERIFIER_OUT" ;; esac
+case "$*" in
+  'path-info --derivation '*) printf '/nix/store/fake-host-proof.drv\n' ;;
+  *'.#host-proof') printf '%s\n' "$VERIFIER_OUT" ;;
+esac
 """
 VERIFIER = r"""#!/bin/sh
 printf '%s\037' e2e-evidence "$@" >> "$FAKE_LOG"
@@ -197,6 +190,7 @@ def test_a_producer_builds_then_verifies_the_output_its_build_selected(
     assert result.returncode == 0, result
     assert workflow.commands() == [
         ["bash", "scripts/e2e-workflow", "producer", lane],
+        words("nix path-info --derivation --accept-flake-config .#host-proof"),
         words(
             "nix build -L --accept-flake-config --print-out-paths --no-link .#host-proof"
         ),
@@ -236,7 +230,8 @@ def test_a_forwarded_tool_keeps_its_streams_and_status(
 def test_report_tools_fail_closed_without_a_report(
     checkout: Checkout, command: str, output: bytes
 ) -> None:
-    checkout.tool("cargo", f"sys.stdout.buffer.write({output!r})")
+    checkout.tool("cargo", "")
+    checkout.built(command, f"sys.stdout.buffer.write({output!r})")
     result = checkout.dev(command, "budget")
     assert result.returncode == 1
     assert result.stdout == output
@@ -257,7 +252,8 @@ def test_report_tools_fail_closed_without_a_report(
 def test_report_tools_show_their_help_unchanged(
     checkout: Checkout, command: str, help_args: list[str]
 ) -> None:
-    checkout.tool("cargo", 'print("Usage: tool [OPTIONS]")')
+    checkout.tool("cargo", "")
+    checkout.built(command, 'print("Usage: tool [OPTIONS]")')
     result = checkout.dev(command, *help_args)
     assert (result.returncode, result.stdout, result.stderr) == (
         0,
@@ -269,7 +265,7 @@ def test_report_tools_show_their_help_unchanged(
 # The front door forwards explicit local originals only. Nothing is bootstrapped and nothing but the
 # trace run directory (`.xtask/run`, which `dev` writes for every run) appears.
 ORG_TOOL = """\
-files = sys.argv[sys.argv.index("--") + 2:]
+files = sys.argv[sys.argv.index("--") + 1:]
 reports = [{"file": name} for name in files if pathlib.Path(name).is_file()]
 print(json.dumps({"mappings": reports}))
 sys.exit(0 if len(reports) == len(files) else 1)
@@ -279,7 +275,8 @@ sys.exit(0 if len(reports) == len(files) else 1)
 def test_org_timezone_manifest_forwards_originals_without_bootstrap(
     checkout: Checkout,
 ) -> None:
-    checkout.tool("cargo", "import json\n" + ORG_TOOL)
+    checkout.tool("cargo", "")
+    checkout.built("org-timezone-manifest", "import json\n" + ORG_TOOL)
     name = "local ; touch unexpected.org"
     text = "#+PROPERTY: JAUNDER_ID 7\n#+PROPERTY: JAUNDER_DATE_TZ UTC\n"
     (checkout.root / name).write_text(text)
@@ -303,7 +300,9 @@ def store_nix(output: str) -> str:
     its store long ago."""
     return (
         "import json\n"
-        'if sys.argv[1] == "path-info":\n'
+        'if "--derivation" in sys.argv:\n'
+        '    print("/nix/store/fake.drv")\n'
+        'elif sys.argv[1] == "path-info":\n'
         f"    entry = {{'ultimate': False, 'registrationTime': {REGISTERED_LONG_AGO}}}\n"
         "    print(json.dumps({sys.argv[-1]: entry}))\n"
         "else:\n"
@@ -377,10 +376,7 @@ def test_e2e_regenerate_coverage_produces_the_pair_then_regenerates(
 
 STATIC_ALL = [
     words("cargo fmt --check"),
-    words(
-        "cargo build --locked --quiet --manifest-path tools/Cargo.toml "
-        "-p repository-policy --bin scoped-leptosfmt --target-dir tools/target"
-    ),
+    build("repository-policy", "scoped-leptosfmt"),
     words("scoped-leptosfmt verify"),
     words("emacs --batch -Q -l elisp/scripts/format.el -f jaunder-fmt-check"),
     words("cargo fmt --manifest-path tools/Cargo.toml --all --check"),
@@ -452,6 +448,7 @@ def test_build_csr_assembles_the_bundle_into_target_site(
     stale.write_text("old")
     checkout.tool("nix", store_nix("/vite-tools"))
     checkout.tool("cargo", "")
+    checkout.built("system-artifacts", "")
     checkout.tool("bash", CSR_ASSETS)
     args = [profile] if profile == "release" else []
     result = checkout.dev("build-csr", *args)
@@ -488,11 +485,9 @@ def test_build_csr_assembles_the_bundle_into_target_site(
             ]
         ),
     ]
-    assert order[2].startswith(
-        f"cargo run --locked --manifest-path {checkout.root}/tools/Cargo.toml "
-        "-p system-artifacts -- --out "
-    )
-    assert order[3].startswith(f"bash {checkout.root}/scripts/build-csr-assets.sh ")
+    assert order[2] == " ".join(build("system-artifacts", "system-artifacts"))
+    assert order[3].startswith("system-artifacts --out ")
+    assert order[4].startswith(f"bash {checkout.root}/scripts/build-csr-assets.sh ")
 
 
 @pytest.mark.parametrize(

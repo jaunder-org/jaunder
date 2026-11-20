@@ -13,6 +13,11 @@ inputs:
 runs:
   using: composite
   steps:
+    # First, so a root `dev` span can show the job's time before it
+    # (`jaunder.ci.job_start_ns`). Only "Set up job" and checkout precede it.
+    - name: Mark the job start for dev traces
+      shell: bash
+      run: echo "JAUNDER_CI_JOB_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
     - uses: cachix/install-nix-action@v31
       with:
         extra_nix_config: |
@@ -29,7 +34,7 @@ runs:
         # proves which support outputs could be admitted; the measured decision
         # report records why the broad boundary remains.
         pushFilter: "jaunder-coverage|jaunder-e2e"
-    # Host tools run through `cargo run` from the tools workspace, so cachix
+    # Host tools are built from the tools workspace by `dev`, so cachix
     # can't cover them; cache their compiled deps between runs.
     - name: Cache host tools build
       uses: actions/cache@v6

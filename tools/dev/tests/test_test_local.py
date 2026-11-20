@@ -12,50 +12,61 @@ from typing import Any
 import pytest
 from conftest import Checkout
 
-CARGO_RUN = "cargo run --locked --quiet --manifest-path tools/Cargo.toml"
 LOCK = ".xtask/host-artifacts.lock"
 STEPS = [
     "host-artifacts-lock",
+    "admit-inputs-build",
     "csr-admission",
     "csr-bundle",
+    "csr-prerequisite-build",
     "csr-prerequisite",
     "image-worker",
+    "nextest-build",
     "nextest",
 ]
 
-# Host-proof's helpers, the image worker build and nextest (behind the fake
-# pg-run). The helpers fail as ADMIT_CODE and PREREQUISITE_CODE say; with
-# DAEMON set, admission first leaves behind a daemon that keeps every
-# inheritable descriptor, its pid in `daemon.pid`. The prerequisite prints its
-# resolved root. The build records CFLAGS. nextest records what it was given,
-# and while `hold` exists it removes it, says it is `holding` and waits for
-# `release`.
+# Host-proof's helpers, as their builds leave them. They fail as ADMIT_CODE
+# and PREREQUISITE_CODE say; with DAEMON set, admission first leaves behind a
+# daemon that keeps every inheritable descriptor, its pid in `daemon.pid`. The
+# prerequisite prints its resolved root.
+TOOL = """\
+binary = pathlib.Path(sys.argv[0]).name
+if binary == "admit-inputs" and os.environ.get("DAEMON"):
+    daemon = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=False,
+        start_new_session=True,
+    )
+    pathlib.Path("daemon.pid").write_text(str(daemon.pid))
+code = int(os.environ.get(
+    "ADMIT_CODE" if binary == "admit-inputs" else "PREREQUISITE_CODE", "0"))
+if code:
+    print(f"{binary}: refused", file=sys.stderr)
+    sys.exit(code)
+if binary == "csr-prerequisite":
+    print(os.path.realpath(sys.argv[1]))
+"""
+# The helpers' builds, the image worker build and nextest (behind the fake
+# pg-run). A helper build does nothing. Every other Cargo command records its
+# arguments and Cargo environment in `cargo.jsonl`. nextest's run records what
+# it was given, and while `hold` exists it removes it, says it is `holding`
+# and waits for `release`.
 CARGO = """\
 import json
 args = sys.argv[1:]
-if args[0] == "run":
-    binary = args[args.index("--bin") + 1]
-    root = args[args.index("--") + 1:]
-    if binary == "admit-inputs" and os.environ.get("DAEMON"):
-        daemon = subprocess.Popen(
-            [sys.executable, "-c", "import time; time.sleep(60)"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=False,
-            start_new_session=True,
-        )
-        pathlib.Path("daemon.pid").write_text(str(daemon.pid))
-    code = int(os.environ.get(
-        "ADMIT_CODE" if binary == "admit-inputs" else "PREREQUISITE_CODE", "0"))
-    if code:
-        print(f"{binary}: refused", file=sys.stderr)
-        sys.exit(code)
-    if binary == "csr-prerequisite":
-        print(os.path.realpath(root[0]))
-elif args[0] == "build":
-    pathlib.Path("cflags.json").write_text(json.dumps(os.environ.get("CFLAGS")))
-else:
+if "--target-dir" in args:
+    sys.exit()
+with open("cargo.jsonl", "a") as records:
+    records.write(json.dumps({
+        "args": args,
+        "CFLAGS": os.environ.get("CFLAGS"),
+        "JAUNDER_CSR_BUNDLE_DIR": os.environ.get("JAUNDER_CSR_BUNDLE_DIR"),
+        "JAUNDER_TEST_EXECUTABLE": os.environ.get("JAUNDER_TEST_EXECUTABLE"),
+    }) + "\\n")
+if args[0] != "build" and "--no-run" not in args:
     lock = os.stat(".xtask/host-artifacts.lock")
     inherited = False
     for fd in range(3, 256):
@@ -77,9 +88,13 @@ else:
         while not os.path.exists("release"):
             time.sleep(0.02)
 """
-# A build links its out-link to $BUNDLE, or fails with NIX_BUILD_CODE. It
-# prints no output path, so the step records no cache source.
+# An evaluation prints a derivation. A build links its out-link to $BUNDLE, or
+# fails with NIX_BUILD_CODE. It prints no output path, so the step records no
+# cache source.
 NIX = """\
+if "--derivation" in sys.argv:
+    print("/nix/store/fake-csr-bundle.drv")
+    sys.exit()
 code = int(os.environ.get("NIX_BUILD_CODE", "0"))
 if code:
     sys.exit(code)
@@ -96,6 +111,8 @@ def local(checkout: Checkout) -> Checkout:
     checkout.tool("cargo", CARGO)
     checkout.tool("nix", NIX)
     checkout.tool("pg-run", PG_RUN)
+    for helper in ["admit-inputs", "csr-prerequisite"]:
+        checkout.built(helper, TOOL)
     (checkout.root.parent / "bundle").mkdir()
     return checkout
 
@@ -128,28 +145,47 @@ def nextest(checkout: Checkout) -> dict[str, Any]:
     return observed
 
 
+def cargo(checkout: Checkout) -> list[dict[str, Any]]:
+    """Each recorded Cargo command: its arguments and Cargo environment."""
+    lines = (checkout.root / "cargo.jsonl").read_text().splitlines()
+    return [json.loads(line) for line in lines]
+
+
+BUNDLE_EVAL = "nix path-info --derivation --accept-flake-config .#csrBundle"
 BUNDLE_BUILD = (
     "nix build -L --accept-flake-config --print-out-paths --out-link .xtask/gcroots/csr-bundle "
     ".#csrBundle"
 )
-PREREQUISITE = f"{CARGO_RUN} -p host-proof --bin csr-prerequisite --"
+HOST_PROOF_BUILD = (
+    "cargo build --locked --quiet --manifest-path tools/Cargo.toml "
+    "--target-dir tools/target -p host-proof --bin"
+)
+WORKER_BUILD = "cargo build --locked -p jaunder --bin jaunder"
+NEXTEST_BUILD = "cargo nextest run --no-run --workspace"
 
 
 def expected_order(*nextest_args: str) -> list[str]:
+    """The run's commands; without hand-typed arguments the tests compile
+    first as their own step."""
+    run = nextest_args or ("--workspace",)
     return [
-        f"{CARGO_RUN} -p host-proof --bin admit-inputs -- .#csrBundle.sourceAdmits",
+        f"{HOST_PROOF_BUILD} admit-inputs",
+        "admit-inputs .#csrBundle.sourceAdmits",
+        BUNDLE_EVAL,
         BUNDLE_BUILD,
-        f"{PREREQUISITE} .xtask/gcroots/csr-bundle",
-        "cargo build --locked -p jaunder --bin jaunder",
-        " ".join(["pg-run", "cargo", "nextest", "run", *nextest_args]),
-        " ".join(["cargo", "nextest", "run", *nextest_args]),
+        f"{HOST_PROOF_BUILD} csr-prerequisite",
+        "csr-prerequisite .xtask/gcroots/csr-bundle",
+        WORKER_BUILD,
+        *([] if nextest_args else [NEXTEST_BUILD]),
+        " ".join(["pg-run", "cargo", "nextest", "run", *run]),
+        " ".join(["cargo", "nextest", "run", *run]),
     ]
 
 
 def test_each_step_runs_in_order_as_a_span_of_the_gate(local: Checkout) -> None:
     result = run_test_local(local)
     assert result.returncode == 0, result
-    assert order(local) == expected_order("--workspace")
+    assert order(local) == expected_order()
     slices = local.merged()
     gate = slices["dev test-local"]["args"]["span_id"]
     for name in STEPS:
@@ -184,6 +220,49 @@ def test_selectors_pass_through_unchanged_without_the_workspace_default(
     assert result.returncode == 0, result
     assert nextest(local)["args"] == ["nextest", "run", *SELECTORS]
     assert not (local.root / "pwned").exists()
+    # Hand-typed arguments may hold run options --no-run refuses, so the
+    # tests compile in their run.
+    assert order(local) == expected_order(*SELECTORS)
+    assert [record["args"] for record in cargo(local)] == [
+        WORKER_BUILD.split(" ")[1:],
+        ["nextest", "run", *SELECTORS],
+    ]
+    assert "nextest-build" not in local.merged()
+
+
+@pytest.mark.parametrize("inherited", [None, "-O2"])
+def test_the_tests_compile_apart_from_their_run_in_its_environment(
+    local: Checkout, inherited: str | None
+) -> None:
+    extra = {} if inherited is None else {"CFLAGS": inherited}
+    result = run_test_local(local, **extra)
+    assert result.returncode == 0, result
+    records = cargo(local)
+    assert [record.pop("args") for record in records] == [
+        WORKER_BUILD.split(" ")[1:],
+        NEXTEST_BUILD.split(" ")[1:],
+        ["nextest", "run", "--workspace"],
+    ]
+    # One environment for every Cargo step, so none rebuilds another's work.
+    assert (
+        records
+        == [
+            {
+                "CFLAGS": inherited or "",
+                "JAUNDER_CSR_BUNDLE_DIR": os.path.realpath(
+                    local.root.parent / "bundle"
+                ),
+                "JAUNDER_TEST_EXECUTABLE": str(
+                    local.root.resolve() / "target" / "debug" / "jaunder"
+                ),
+            }
+        ]
+        * 3
+    )
+    # Only the run needs the database.
+    lines = order(local)
+    assert lines[lines.index(NEXTEST_BUILD) - 1] == WORKER_BUILD
+    assert not any(line.startswith("pg-run") and "--no-run" in line for line in lines)
 
 
 def test_an_explicit_bundle_root_is_verified_without_building_one(
@@ -195,7 +274,10 @@ def test_an_explicit_bundle_root_is_verified_without_building_one(
     assert result.returncode == 0, result
     lines = order(local)
     assert not any(line.startswith("nix ") for line in lines), lines
-    assert lines[0] == f"{PREREQUISITE} {explicit}"
+    assert lines[:2] == [
+        f"{HOST_PROOF_BUILD} csr-prerequisite",
+        f"csr-prerequisite {explicit}",
+    ]
     assert nextest(local)["bundle"] == os.path.realpath(explicit)
     assert "csr-bundle" not in local.merged()
 
@@ -214,7 +296,9 @@ def test_the_worker_build_sets_missing_cflags_empty_and_keeps_an_existing_value(
     extra = {} if inherited is None else {"CFLAGS": inherited}
     result = run_test_local(local, **extra)
     assert result.returncode == 0, result
-    assert json.loads((local.root / "cflags.json").read_text()) == expected
+    (worker, *_) = cargo(local)
+    assert worker["args"] == WORKER_BUILD.split(" ")[1:]
+    assert worker["CFLAGS"] == expected
 
 
 @pytest.mark.parametrize(
@@ -231,8 +315,9 @@ def test_a_refused_bundle_stops_before_any_compilation(
     result = run_test_local(local, **failure)
     assert result.returncode == int(next(iter(failure.values()))), result
     lines = order(local)
-    assert last in lines[-1], lines
-    assert not any(line.startswith("cargo build") for line in lines)
+    assert lines[-1].startswith(last), lines
+    # Only the helpers were built: no Cargo compilation of the workspace.
+    assert not (local.root / "cargo.jsonl").exists()
     assert not (local.root / "nextest.json").exists()
 
 
@@ -256,7 +341,8 @@ def test_the_lock_is_held_for_the_whole_run_so_a_second_run_waits(
     second = subprocess.Popen(command, cwd=local.root, env=environment(local))
     time.sleep(0.5)
     assert second.poll() is None
-    assert len([line for line in order(local) if "admit-inputs" in line]) == 1
+    admissions = [line for line in order(local) if line.startswith("admit-inputs ")]
+    assert len(admissions) == 1
 
     (local.root / "release").touch()
     assert first.wait(timeout=60) == 0

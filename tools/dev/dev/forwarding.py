@@ -8,11 +8,11 @@ from collections.abc import Callable, Sequence
 
 from dev import report, steps
 from dev.commands import (
-    CARGO_RUN,
     COVERAGE_CHECK,
-    HOST_PROOF,
-    REPOSITORY_POLICY,
+    PR_OBSERVER,
     SOURCE_CONTRACT,
+    host_proof,
+    repository_policy,
 )
 
 
@@ -24,14 +24,12 @@ def sandbox(args: Sequence[str]) -> None:
 
 
 def census(args: Sequence[str]) -> None:
-    steps.run("census", [*SOURCE_CONTRACT, "census", *args])
+    steps.run("census", [*steps.tool(SOURCE_CONTRACT), "census", *args])
 
 
 def org_timezone_manifest(files: Sequence[str]) -> None:
-    steps.run(
-        "org-timezone-manifest",
-        [*REPOSITORY_POLICY, "org-timezone-manifest", "--", "--", *files],
-    )
+    manifest = steps.tool(repository_policy("org-timezone-manifest"))
+    steps.run("org-timezone-manifest", [*manifest, "--", *files])
 
 
 def pg_run(args: Sequence[str]) -> None:
@@ -48,16 +46,16 @@ def _report(args: Sequence[str]) -> Callable[[bytes], str | None] | None:
 
 
 def coverage_check(args: Sequence[str]) -> None:
-    steps.run("coverage-check", [*COVERAGE_CHECK, *args], _report(args))
+    steps.run("coverage-check", [*steps.tool(COVERAGE_CHECK), *args], _report(args))
 
 
 def host_proof_report(binary: str, args: Sequence[str]) -> None:
     """A host-proof diagnostic whose one JSON report is shown rendered."""
-    steps.run(binary, [*HOST_PROOF, binary, "--", *args], _report(args))
+    steps.run(binary, [*steps.tool(host_proof(binary)), *args], _report(args))
 
 
 def pr_watch(args: Sequence[str]) -> None:
-    steps.run("pr-watch", [*CARGO_RUN, "-p", "pr-observer", "--", "watch", *args])
+    steps.run("pr-watch", [*steps.tool(PR_OBSERVER), "watch", *args])
 
 
 def pr_land(number: str, expected_head: str, mode: str) -> None:
