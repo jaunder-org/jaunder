@@ -4582,7 +4582,14 @@ Each gate and each step is an OpenTelemetry span. A step span carries its
 line capped at 1 KiB and, for Nix build steps only (every Nix build `dev` runs
 as a step), `jaunder.cache`: `reused` when the build's top-level output path was
 already valid before the build, otherwise `built` or `substituted` by
-`nix path-info`'s `ultimate` flag. It describes only that top-level output.
+`nix path-info`'s `ultimate` flag. It describes only that top-level output. A
+`substituted` static verdict is expected: static verdicts are sandboxed and
+input-addressed, so a stamp fetched for an identical derivation counts. Coverage
+and e2e verdicts are never substituted. Their `nonSubstitutable` wrapper guards
+local builds. In CI the setup-ci Cachix `pushFilter` keeps them out of the
+cache, because install-nix-action's `always-allow-substitutes = true` overrides
+the wrapper there
+([substitutable static verdicts](adr/drafts/substitutable-static-verdicts.md)).
 Child processes join through `TRACEPARENT`/`TRACESTATE` plus
 `JAUNDER_TRACE_DIR`; the root is the `dev` process that finds the latter unset.
 Every process, including host-proof through the Rust OpenTelemetry SDK, appends
@@ -4713,6 +4720,9 @@ automatic CI step
 ([on-demand source probes](adr/0227-on-demand-source-invalidation-probes.md));
 the Nix derivation-identity matrix probe is retired
 ([retired matrix probe](adr/0248-retire-nix-source-invalidation-matrix-probe.md)).
+Static verdicts in these lanes may be substituted from Cachix for an identical
+derivation; the coverage and e2e verdicts never are
+([substitutable static verdicts](adr/drafts/substitutable-static-verdicts.md)).
 A result-only `Validate (no e2e)` job requires all four lanes, preserving the
 stable branch-protection context. Local `dev validate-no-e2e` composes the same
 required surfaces in success-path order
@@ -4830,8 +4840,8 @@ terminal leaves run lint and the aggregate does not rerun it. `static-elisp`
 runs the shared `elisp-fmt` Verify and `byte-compile` checks over the complete
 non-Markdown Elisp source tree in a writable copy. The sandbox `dev` package,
 `emacsForCi` and `TZDIR` replace its former compiled build input. It needs no
-offline Cargo home, Node/Playwright, or Git. The verdict is non-substitutable,
-while valid local output reuse remains possible. This selected change does not
+offline Cargo home, Node/Playwright, or Git. Like every static verdict, it may
+be substituted for an identical derivation. This selected change does not
 certify unrelated family coupling or discharge the recorded source-invalidation
 deferrals. `static-ert` runs `dev static ert --sandbox` directly over its own
 complete population. The old compiled ERT and TSC timing events are retired;
@@ -4901,18 +4911,17 @@ The TypeScript leaf sets up those dependencies before `dev static tsc --sandbox`
 with the sandbox `dev` package and pinned TypeScript. Its direct filter admits
 the filtered `tools/dev/` source, TypeScript sources, `tsconfig.json`, and
 dependency manifests, but the existing `e2ePackage` still makes all `end2end/`
-changes transitive inputs. It is non-substitutable, without forcing valid local
-outputs to rerun. `static-code` retains TypeScript formatting, but no longer
-owns the census command. `static-e2e-census` runs the same setup executable
-followed by `node end2end/e2eCensusContract.ts`, with a direct non-Markdown
-`end2end` source filter that includes Playwright configuration, selected tests,
-helpers, fixtures, and module-load assets. It is independently requested by
-hermetic validation; its existing `e2ePackage` dependency remains a broader
-transitive input, so its source/dependency changes may also invalidate the
-census leaf. The existing whole-end2end `e2ePackage` also remains a transitive
-input to TypeScript; no TypeScript input-isolation claim follows. The TypeScript
-and census leaves refine the historical partition while preserving the
-population split recorded in
+changes transitive inputs. `static-code` retains TypeScript formatting, but no
+longer owns the census command. `static-e2e-census` runs the same setup
+executable followed by `node end2end/e2eCensusContract.ts`, with a direct
+non-Markdown `end2end` source filter that includes Playwright configuration,
+selected tests, helpers, fixtures, and module-load assets. It is independently
+requested by hermetic validation; its existing `e2ePackage` dependency remains a
+broader transitive input, so its source/dependency changes may also invalidate
+the census leaf. The existing whole-end2end `e2ePackage` also remains a
+transitive input to TypeScript; no TypeScript input-isolation claim follows. The
+TypeScript and census leaves refine the historical partition while preserving
+the population split recorded in
 ([ADR-0178](adr/0178-split-hermetic-static-check-boundaries.md)). The
 independently landed Rust-format boundary remains intact; the splits do not
 equate distinct formatter or Clippy populations, permanently defer further
