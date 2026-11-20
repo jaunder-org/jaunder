@@ -13,7 +13,7 @@ use common::{MutationOutcome, password::PasswordShape, username::Username};
 use leptos::prelude::*;
 use leptos_router::{
     NavigateOptions,
-    hooks::{use_navigate, use_query_map},
+    hooks::{use_location, use_navigate, use_query_map},
 };
 
 /// Login page.
@@ -295,22 +295,25 @@ async fn authenticate_passkey() -> PasskeyAuthentication {
 #[component]
 pub fn LogoutPage() -> impl IntoView {
     let logout_action = ServerAction::<Logout>::new();
+    let location = use_location();
 
+    // Sign out only at the Logout route: the redirect to `/` briefly mounts this
+    // page again, and that copy must not send a second logout (#2003).
     Effect::new(move |_| {
-        logout_action.dispatch(Logout {});
+        if crate::app::is_logout_route(&location.pathname.get_untracked()) {
+            logout_action.dispatch(Logout {});
+        }
     });
 
     // On logout, clear the shared session (#591): resets the reactive signal (chrome
     // goes anonymous without a reload) and removes the advisory marker (#181,
     // ADR-0044). The server clears the real cookie.
     Effect::new(move |_| {
-        if let Some(Ok(outcome)) = logout_action.value().get() {
-            match outcome {
-                MutationOutcome::Confirmed(()) | MutationOutcome::CommitIndeterminate(()) => {
-                    super::clear_session();
-                    super::use_session().reconcile.refetch();
-                }
-            }
+        if let Some(Ok(MutationOutcome::Confirmed(()) | MutationOutcome::CommitIndeterminate(()))) =
+            logout_action.value().get()
+        {
+            super::clear_session();
+            super::use_session().reconcile.refetch();
         }
     });
 

@@ -1,3 +1,4 @@
+import type { Request } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import {
   BASE_URL,
@@ -6,6 +7,7 @@ import {
   waitForSelector,
   click,
 } from "./helpers";
+import { navigateInApp } from "./navigate";
 import { SEL } from "./selectors";
 import { openArea } from "./settings-areas";
 
@@ -56,8 +58,27 @@ test("browser receives and uses a persistent Session cookie and logout clears it
     await expect(nextPage.locator(".j-area-identity")).toContainText(
       user.username,
     );
-    await click(nextPage, SEL.signOutLink);
-    await nextPage.waitForURL(`${BASE_URL}/`);
+    // Sign-out ends in a tail of requests from `/`. Closing the page while one
+    // is still being sent drops its traceparent, which orphans the server fn in
+    // the coverage snapshot (#2003), so the page closes only once all settle.
+    const pendingApi = new Set<Request>();
+    let logouts = 0;
+    nextPage.on("request", (request) => {
+      const path = new URL(request.url()).pathname;
+      if (!path.startsWith("/api/")) return;
+      pendingApi.add(request);
+      if (path === "/api/auth/logout") logouts += 1;
+    });
+    const settle = (request: Request) => pendingApi.delete(request);
+    nextPage.on("requestfinished", settle);
+    nextPage.on("requestfailed", settle);
+    await navigateInApp(nextPage, () => click(nextPage, SEL.signOutLink), {
+      url: "/",
+      ready: '.j-topbar h1:has-text("Jaunder")',
+    });
+    await expect.poll(() => pendingApi.size).toBe(0);
+    // One sign-out is one logout, not a second dispatch after the redirect.
+    expect(logouts).toBe(1);
     await expect
       .poll(async () =>
         (await page.context().cookies(BASE_URL)).some(
