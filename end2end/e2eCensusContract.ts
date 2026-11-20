@@ -1,12 +1,8 @@
 import { readFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import path from "node:path";
-import {
-  type Topology,
-  gatedBrowsers,
-  projectName,
-  roles,
-} from "./e2eProjects";
+import type { Topology } from "./e2eProjects";
 
 type CensusTest = {
   file: string;
@@ -16,6 +12,11 @@ type CensusTest = {
 };
 type Census = { schema_version: 1; complete: true; tests: CensusTest[] };
 const root = path.dirname(path.resolve(process.argv[1]));
+// This script runs under plain `node` (type stripping), whose resolver needs
+// the `.ts` extension that this tsconfig does not let an import path carry.
+const { gatedBrowsers, projectName, roles } = createRequire(
+  path.resolve(process.argv[1]),
+)("./e2eProjects.ts") as typeof import("./e2eProjects");
 const playwrightCli =
   process.env.JAUNDER_E2E_PLAYWRIGHT_CLI ?? "node_modules/.bin/playwright";
 function fail(message: string): never {
