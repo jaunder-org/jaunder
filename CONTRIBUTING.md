@@ -2184,7 +2184,7 @@ acceptable. Coverage and e2e verdicts are never substituted, and CI executes
 them for every ref: the Cachix `pushFilter` keeps them out of the cache in CI,
 where install-nix-action's `always-allow-substitutes = true` overrides their
 `nonSubstitutable` wrapper
-([substitutable static verdicts](docs/adr/drafts/substitutable-static-verdicts.md)).
+([substitutable static verdicts](docs/adr/0252-substitutable-static-verdicts.md)).
 
 `dev` gate workflows return process status and parked logs, not the historical
 JSON invalidation envelope. The Nix source filters assert representative

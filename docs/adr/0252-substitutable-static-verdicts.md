@@ -1,6 +1,6 @@
-# ADR-DRAFT: Static verdicts may be substituted; coverage and e2e may not
+# ADR-0252: Static verdicts may be substituted; coverage and e2e may not
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-19
 - Issue: [#2004](https://github.com/jaunder-org/jaunder/issues/2004)
 
@@ -16,9 +16,9 @@ except the `jaunder-coverage|jaunder-e2e` `pushFilter`. So the static stamps
 reached Cachix, and run 44383337174 fetched seven of them instead of running
 them.
 
-[ADR-0077](../0077-adopt-github-merge-queue.md) kept "never trust a cached green
+[ADR-0077](0077-adopt-github-merge-queue.md) kept "never trust a cached green
 check" and credited that property to the `pushFilter`.
-[ADR-0192](../0192-split-ci-non-e2e-validation-lanes.md) bars only the final
+[ADR-0192](0192-split-ci-non-e2e-validation-lanes.md) bars only the final
 coverage and e2e verdicts from Cachix.
 
 The rejected alternative was to enforce execution by setting
@@ -43,10 +43,10 @@ rerunning identical sandboxed inputs was measured as not worth its cost. Static
 verdicts carry no substitution guard.
 
 Coverage and e2e verdicts may never be substituted:
-[ADR-0192](../0192-split-ci-non-e2e-validation-lanes.md) requires them per ref,
-and CI executes them for every ref. Their `nonSubstitutable` wrapper guards
-local builds, where a valid local output for an identical derivation may still
-be reused. In CI the setup-ci `pushFilter` enforces the rule, because the
+[ADR-0192](0192-split-ci-non-e2e-validation-lanes.md) requires them per ref, and
+CI executes them for every ref. Their `nonSubstitutable` wrapper guards local
+builds, where a valid local output for an identical derivation may still be
+reused. In CI the setup-ci `pushFilter` enforces the rule, because the
 installer's `always-allow-substitutes = true` overrides the wrapper there.
 Removing the `pushFilter` exclusion, or adding a static verdict to it, needs a
 new decision.
