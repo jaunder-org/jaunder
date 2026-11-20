@@ -235,7 +235,7 @@ case "$name $*" in
   'cargo run '*' -p host-proof --bin csr-prerequisite -- '*)
     for root; do :; done
     printf '/verified%s\n' "$root" ;;
-  'cargo run '*' -p host-proof --bin '*|'cargo run '*' --bin coverage-check '*|'bash scripts/e2e-workflow producer '*)
+  'cargo run '*' -p host-proof --bin '*|'cargo run '*' --bin coverage-check '*)
     printf '{"steps":[]}\n' ;;
 esac
 """

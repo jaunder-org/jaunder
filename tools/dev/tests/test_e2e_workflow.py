@@ -19,6 +19,11 @@ BASH = shutil.which("bash") or "/bin/sh"
 NIX = shutil.which("nix")
 FAKE_NIX = f"""#!{BASH}
 set -eu
+if [[ $1 == path-info ]]; then
+  # The selected output was registered long before this run: reused.
+  printf '{{"%s":{{"registrationTime":0,"ultimate":true}}}}\\n' "${{!#}}"
+  exit 0
+fi
 if [[ $* == *".#host-proof"* ]]; then
   printf '%s\\n' "$EVIDENCE_OUT"
   exit 0
@@ -36,7 +41,7 @@ if [[ $1 == build ]]; then
   fi
   if [[ ${{BUILD_STATUS:-23}} == 0 ]]; then
     while [[ $1 != --out-link ]]; do shift; done
-    ln -sfn "$OUTPUT" "$2"
+    ln -sfn "${{GCROOT_DECOY:-$OUTPUT}}" "$2"
     printf '[{{"outputs":{{"out":"%s"}}}}]\\n' "$OUTPUT"
   fi
   exit "${{BUILD_STATUS:-23}}"
@@ -248,6 +253,57 @@ def test_regeneration_freshly_produces_the_coverage_lanes_and_needs_their_succes
     regenerated = sum("server-fn-coverage regenerate" in line for line in lines)
     assert regenerated == (1 if status == "0" else 0), lines
     assert "server-fn-coverage verify" not in e2e.events()
+
+
+def test_a_producer_records_its_output_cache_then_builds_and_runs_the_verifier(
+    e2e: E2E,
+) -> None:
+    result = e2e.run("e2e-producer", LANE, output=capture_only(), status="0")
+    assert result.returncode == 0, result
+    spans = e2e.checkout.merged()
+    producer = spans["e2e-producer"]["args"]
+    assert producer["jaunder.cache"] == "reused", "an already valid output"
+    assert (
+        producer["process.command_line"] == f"bash scripts/e2e-workflow producer {LANE}"
+    )
+    assert spans["host-proof"]["args"]["jaunder.status"] == "ok"
+    evidence = spans["e2e-evidence"]["args"]["process.command_line"]
+    assert evidence.startswith(f"{e2e.root.parent}/evidence-out/bin/e2e-evidence ")
+    starts = [
+        spans[name]["ts"] for name in ["e2e-producer", "host-proof", "e2e-evidence"]
+    ]
+    assert starts == sorted(starts)
+
+
+def test_the_verifier_reads_this_builds_selected_output_never_the_gc_root(
+    e2e: E2E,
+) -> None:
+    selected = capture_only()
+    result = e2e.run(
+        "e2e-producer",
+        LANE,
+        output=selected,
+        status="0",
+        GCROOT_DECOY=str(e2e.root / "decoy"),
+    )
+    assert result.returncode == 0, result
+    assert f"--artifacts {selected}\n" in e2e.events()
+    assert "decoy" not in e2e.events()
+
+
+def test_a_failed_producer_records_no_cache_and_builds_no_verifier(e2e: E2E) -> None:
+    result = e2e.run("e2e-producer", LANE, status="23")
+    assert result.returncode == 23
+    spans = e2e.checkout.merged()
+    assert "jaunder.cache" not in spans["e2e-producer"]["args"]
+    assert "host-proof" not in spans
+
+
+def test_the_script_takes_no_coverage_action(e2e: E2E) -> None:
+    argv = ["bash", "scripts/e2e-workflow", "producer", LANE, "regenerate"]
+    result = e2e.checkout.run(argv, e2e.checkout.environment())
+    assert result.returncode == 2
+    assert e2e.events() == ""
 
 
 def test_an_optional_provenance_copy_failure_only_warns(e2e: E2E) -> None:

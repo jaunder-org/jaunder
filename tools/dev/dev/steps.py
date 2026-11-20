@@ -247,8 +247,10 @@ def _run(
     render: Callable[[bytes], str | None] | None = None,
     stdin: bytes | None = None,
     refusal: Refusal | None = None,
+    realizes: Callable[[], str] | None = None,
 ) -> bytes:
     with _step(name, argv) as span:
+        start = int(time.time())
         code, signalled, output = _supervise(argv, capture, environment, stdin)
         if render is not None:
             rendered = render(output)
@@ -268,6 +270,8 @@ def _run(
                 print(reason, file=sys.stderr, flush=True)
                 code = 1
         _record_outcome(span, code, signalled)
+        if realizes is not None and not code:
+            _record_cache(span, realizes(), start)
     if code:
         raise StepFailed(code, signalled)
     return output
@@ -278,15 +282,18 @@ def run(
     argv: Sequence[str],
     render: Callable[[bytes], str | None] | None = None,
     environment: Environment | None = None,
+    realizes: Callable[[], str] | None = None,
 ) -> None:
     """Runs one step; raises StepFailed so the gate stops at the first failure.
 
     With `render`, the step's stdout is shown as `render` presents it, whatever
     the step's status; output it cannot render is shown unchanged and fails a
     step that otherwise succeeded. `environment` changes only this step's
-    environment.
+    environment. `realizes`, for a step that runs a Nix build itself, returns
+    the output path that build selected once the step succeeds; the step then
+    records its `jaunder.cache` as `nix_build` does.
     """
-    _run(name, argv, render is not None, environment, render)
+    _run(name, argv, render is not None, environment, render, realizes=realizes)
 
 
 def output(
@@ -368,6 +375,14 @@ def output_source(entry: Mapping[str, Any] | None, start: int) -> Cache | None:
     return Cache.BUILT if entry.get("ultimate") else Cache.SUBSTITUTED
 
 
+def _record_cache(span: Span, path: str, start: int) -> None:
+    """Records `jaunder.cache` for a successful step's output, if a query can tell."""
+    with contextlib.suppress(_QueryFailed):
+        cache = output_source(_store_entry(path), start)
+        if cache is not None:
+            span.set_attribute(CACHE, cache)
+
+
 def nix_build(
     name: str,
     installable: str,
@@ -399,10 +414,7 @@ def nix_build(
                 code = 1
         _record_outcome(span, code, signalled)
         if code == 0 and len(paths.splitlines()) == 1:
-            with contextlib.suppress(_QueryFailed):
-                cache = output_source(_store_entry(paths), start)
-                if cache is not None:
-                    span.set_attribute(CACHE, cache)
+            _record_cache(span, paths, start)
     if code:
         raise StepFailed(code, signalled)
     return paths
