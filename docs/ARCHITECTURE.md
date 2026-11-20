@@ -4589,7 +4589,7 @@ and e2e verdicts are never substituted. Their `nonSubstitutable` wrapper guards
 local builds. In CI the setup-ci Cachix `pushFilter` keeps them out of the
 cache, because install-nix-action's `always-allow-substitutes = true` overrides
 the wrapper there
-([substitutable static verdicts](adr/drafts/substitutable-static-verdicts.md)).
+([substitutable static verdicts](adr/0252-substitutable-static-verdicts.md)).
 Child processes join through `TRACEPARENT`/`TRACESTATE` plus
 `JAUNDER_TRACE_DIR`; the root is the `dev` process that finds the latter unset.
 Every process, including host-proof through the Rust OpenTelemetry SDK, appends
@@ -4722,8 +4722,8 @@ the Nix derivation-identity matrix probe is retired
 ([retired matrix probe](adr/0248-retire-nix-source-invalidation-matrix-probe.md)).
 Static verdicts in these lanes may be substituted from Cachix for an identical
 derivation; the coverage and e2e verdicts never are
-([substitutable static verdicts](adr/drafts/substitutable-static-verdicts.md)).
-A result-only `Validate (no e2e)` job requires all four lanes, preserving the
+([substitutable static verdicts](adr/0252-substitutable-static-verdicts.md)). A
+result-only `Validate (no e2e)` job requires all four lanes, preserving the
 stable branch-protection context. Local `dev validate-no-e2e` composes the same
 required surfaces in success-path order
 ([split non-e2e validation lanes](adr/0192-split-ci-non-e2e-validation-lanes.md);
