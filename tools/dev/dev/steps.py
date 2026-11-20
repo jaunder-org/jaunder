@@ -281,7 +281,8 @@ def _run(
                 code = 1
         _record_outcome(span, code, signalled)
         if realizes is not None and not code:
-            _record_cache(span, realizes(), start)
+            with contextlib.suppress(_QueryFailed):
+                _record_cache(span, realizes(), start)
     if code:
         raise StepFailed(code, signalled)
     return output
@@ -441,12 +442,15 @@ def output_source(entry: Mapping[str, Any] | None, start: int) -> Cache | None:
     return Cache.BUILT if entry.get("ultimate") else Cache.SUBSTITUTED
 
 
-def _record_cache(span: Span, path: str, start: int) -> None:
-    """Records `jaunder.cache` for a successful step's output, if a query can tell."""
-    with contextlib.suppress(_QueryFailed):
-        cache = output_source(_store_entry(path), start)
-        if cache is not None:
-            span.set_attribute(CACHE, cache)
+def _record_cache(span: Span, path: str, start: int) -> Cache | None:
+    """Records `jaunder.cache` for a successful step's output, if it can tell.
+
+    Returns what it recorded; a failed query raises `_QueryFailed`.
+    """
+    cache = output_source(_store_entry(path), start)
+    if cache is not None:
+        span.set_attribute(CACHE, cache)
+    return cache
 
 
 def nix_build(
@@ -489,10 +493,7 @@ def nix_build(
             if len(paths.splitlines()) == 1:
                 span.set_attribute(NIX_OUTPUT, paths)
                 with contextlib.suppress(_QueryFailed):
-                    cache = output_source(_store_entry(paths), start)
-                    if cache is not None:
-                        span.set_attribute(CACHE, cache)
-                    if cache is not Cache.REUSED:
+                    if _record_cache(span, paths, start) is not Cache.REUSED:
                         fetched = _fetched_bytes(derivation, start)
                         span.set_attribute(FETCHED_BYTES, fetched)
         except StepFailed as failure:
