@@ -360,7 +360,7 @@ def test_a_markdown_change_checks_markdown_then_requests_the_docs_verdict(
     assert stderr(result) == (
         "precommit-staging: no staged fixes\nshared-static-docs-state: unchanged\n"
     )
-    assert repo.workflow.commands() == [*MARKDOWN_HOST, STATIC_DOCS]
+    assert repo.workflow.commands() == [*MARKDOWN_HOST, *STATIC_DOCS]
     slices = repo.workflow.checkout.merged()
     gate = slices["dev precommit"]["args"]["span_id"]
     for phase in [
@@ -428,6 +428,9 @@ def prepush_fixture(repo: Repo, request: str) -> None:
     repo.commit()
     repo.tool(
         "nix",
+        "if '--derivation' in sys.argv:\n"
+        "    print('/nix/store/fake-static-docs.drv')\n"
+        "    sys.exit()\n"
         "if sys.argv[1] != 'build':\n    sys.exit(1)\n"
         "with open('request-args', 'w') as recorded:\n"
         "    recorded.write('\\n'.join(sys.argv[1:]) + '\\n')\n" + request,
@@ -463,7 +466,8 @@ def test_prepush_passes_on_a_clean_request(repo: Repo) -> None:
     assert result.returncode == 0, result
     assert b"[ ok ] prepush-docs\n" in result.stdout
     assert stderr(result) == "shared-static-docs-state: unchanged\n"
-    assert (repo.root / "request-args").read_text().splitlines() == STATIC_DOCS[1:]
+    request = STATIC_DOCS[-1][1:]
+    assert (repo.root / "request-args").read_text().splitlines() == request
 
 
 @shared_docs

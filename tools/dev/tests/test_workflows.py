@@ -156,10 +156,13 @@ FORWARDED: list[tuple[list[str], Commands]] = [
 
 SELECTED = "/nix/store/0000-selected"
 VERIFIER_NIX = r"""#!/bin/sh
-case "$1" in eval|path-info) exit 1 ;; esac
+case "$1 $2" in 'path-info --derivation') ;; eval*|path-info*) exit 1 ;; esac
 printf '%s\037' nix "$@" >> "$FAKE_LOG"
 printf '\036' >> "$FAKE_LOG"
-case "$*" in *'.#host-proof') printf '%s\n' "$VERIFIER_OUT" ;; esac
+case "$*" in
+  'path-info --derivation '*) printf '/nix/store/fake-host-proof.drv\n' ;;
+  *'.#host-proof') printf '%s\n' "$VERIFIER_OUT" ;;
+esac
 """
 VERIFIER = r"""#!/bin/sh
 printf '%s\037' e2e-evidence "$@" >> "$FAKE_LOG"
@@ -187,6 +190,7 @@ def test_a_producer_builds_then_verifies_the_output_its_build_selected(
     assert result.returncode == 0, result
     assert workflow.commands() == [
         ["bash", "scripts/e2e-workflow", "producer", lane],
+        words("nix path-info --derivation --accept-flake-config .#host-proof"),
         words(
             "nix build -L --accept-flake-config --print-out-paths --no-link .#host-proof"
         ),
@@ -296,7 +300,9 @@ def store_nix(output: str) -> str:
     its store long ago."""
     return (
         "import json\n"
-        'if sys.argv[1] == "path-info":\n'
+        'if "--derivation" in sys.argv:\n'
+        '    print("/nix/store/fake.drv")\n'
+        'elif sys.argv[1] == "path-info":\n'
         f"    entry = {{'ultimate': False, 'registrationTime': {REGISTERED_LONG_AGO}}}\n"
         "    print(json.dumps({sys.argv[-1]: entry}))\n"
         "else:\n"

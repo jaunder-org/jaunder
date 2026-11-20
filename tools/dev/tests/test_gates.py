@@ -88,13 +88,25 @@ INDEX_QUERIES = commands(
     "git diff --cached --raw -z --no-abbrev --no-renames",
     "git ls-files --stage -z",
 )
+
+
+def nix_build(
+    installable: str, link: str, flags: str = "--accept-flake-config"
+) -> Commands:
+    """A Nix build step's children: the evaluation, then the build."""
+    return commands(
+        f"nix path-info --derivation {flags} {installable}",
+        f"nix build -L {flags} --print-out-paths {link} {installable}",
+    )
+
+
 # The shared docs request leaves flake.lock as committed.
-STATIC_DOCS = commands(
-    "nix build -L --accept-flake-config --no-update-lock-file --no-write-lock-file "
-    "--print-out-paths --out-link .xtask/gcroots/static-docs "
-    ".#checks.x86_64-linux.static-docs"
-)[0]
-PREPUSH_DOCS = [*INDEX_QUERIES, STATIC_DOCS, *INDEX_QUERIES]
+STATIC_DOCS = nix_build(
+    ".#checks.x86_64-linux.static-docs",
+    "--out-link .xtask/gcroots/static-docs",
+    "--accept-flake-config --no-update-lock-file --no-write-lock-file",
+)
+PREPUSH_DOCS = [*INDEX_QUERIES, *STATIC_DOCS, *INDEX_QUERIES]
 
 
 def format_checks(mode: str, shared_docs: bool = False) -> Commands:
@@ -189,11 +201,10 @@ def host_tests() -> Commands:
     )
 
 
-def nix(check: str) -> list[str]:
-    return commands(
-        f"nix build -L --accept-flake-config --print-out-paths --out-link .xtask/gcroots/{check} "
-        f".#checks.x86_64-linux.{check}"
-    )[0]
+def nix(check: str) -> Commands:
+    return nix_build(
+        f".#checks.x86_64-linux.{check}", f"--out-link .xtask/gcroots/{check}"
+    )
 
 
 PLATFORM = [
@@ -204,7 +215,7 @@ PLATFORM = [
     'import ./nix/platform-contract.nix { flake = builtins.getFlake ("git+file://" + toString ./.); }',
 ]
 STATIC = [
-    nix(check)
+    argv
     for check in [
         "static-docs",
         "static-typescript",
@@ -216,36 +227,42 @@ STATIC = [
         "dev-python",
         "tools-doctests",
     ]
+    for argv in nix(check)
 ]
 CLEAN = commands("git status --porcelain --untracked-files=all")
-TEST_LOCAL = commands(
-    build("host-proof", "admit-inputs"),
-    "admit-inputs .#csrBundle.sourceAdmits",
-    "nix build -L --accept-flake-config --print-out-paths --out-link .xtask/gcroots/csr-bundle "
-    ".#csrBundle",
-    build("host-proof", "csr-prerequisite"),
-    "csr-prerequisite .xtask/gcroots/csr-bundle",
-    "cargo build --locked -p jaunder --bin jaunder",
-    "cargo nextest run --no-run --workspace",
-    "pg-run cargo nextest run --workspace",
-)
+CSR_BUNDLE = nix_build(".#csrBundle", "--out-link .xtask/gcroots/csr-bundle")
+TEST_LOCAL = [
+    *commands(
+        build("host-proof", "admit-inputs"), "admit-inputs .#csrBundle.sourceAdmits"
+    ),
+    *CSR_BUNDLE,
+    *commands(
+        build("host-proof", "csr-prerequisite"),
+        "csr-prerequisite .xtask/gcroots/csr-bundle",
+        "cargo build --locked -p jaunder --bin jaunder",
+        "cargo nextest run --no-run --workspace",
+        "pg-run cargo nextest run --workspace",
+    ),
+]
 
 # The bundle is its own Nix step; the budget measures the output it linked.
-WASM_BUDGET = commands(
-    "nix build -L --accept-flake-config --print-out-paths --out-link .xtask/gcroots/csr-bundle "
-    ".#csrBundle",
-    build("host-proof", "wasm-audit"),
-    "wasm-audit budget --site-path /nix/store/fake-csr-bundle",
-)
+WASM_BUDGET = [
+    *CSR_BUNDLE,
+    *commands(
+        build("host-proof", "wasm-audit"),
+        "wasm-audit budget --site-path /nix/store/fake-csr-bundle",
+    ),
+]
 E2E = [["bash", "scripts/e2e-workflow", "all", ""]]
 
 
 def producer_and_gate(check: str) -> Commands:
-    flags = "nix build -L --no-update-lock-file --no-write-lock-file"
-    return commands(
-        f"{flags} --print-out-paths --out-link .xtask/gcroots/{check} .#checks.x86_64-linux.{check}",
-        f"{flags} --print-out-paths --no-link .#checks.x86_64-linux.{check}-gate",
-    )
+    flags = "--no-update-lock-file --no-write-lock-file"
+    installable = f".#checks.x86_64-linux.{check}"
+    return [
+        *nix_build(installable, f"--out-link .xtask/gcroots/{check}", flags),
+        *nix_build(f"{installable}-gate", "--no-link", flags),
+    ]
 
 
 COVERAGE_CHECK_BUILD = build("coverage", "coverage-check", "host")
@@ -258,15 +275,15 @@ COVERAGE = [
 DOCTESTS = producer_and_gate("doctests")
 # A lane that ran the coverage policy already built its tool.
 ELISP_AFTER_COVERAGE = [
-    nix("elisp-coverage-producer"),
+    *nix("elisp-coverage-producer"),
     *commands("coverage-check elisp-consume"),
 ]
 ELISP = [
-    nix("elisp-coverage-producer"),
+    *nix("elisp-coverage-producer"),
     *commands(COVERAGE_CHECK_BUILD, "coverage-check elisp-consume"),
 ]
 CHECK_NO_TEST = [*host("fix"), *host_tests()]
-CHECK = [*CHECK_NO_TEST, *TEST_LOCAL, nix("wasm-tests"), *DOCTESTS]
+CHECK = [*CHECK_NO_TEST, *TEST_LOCAL, *nix("wasm-tests"), *DOCTESTS]
 PREPUSH = [
     *CLEAN,
     *host("verify", PREPUSH_SHARES_DOCS),
@@ -281,7 +298,7 @@ VALIDATE_NO_E2E = [
     *HOST_LANE,
     *HERMETIC,
     *host_tests(),
-    nix("wasm-tests"),
+    *nix("wasm-tests"),
     *COVERAGE,
     *DOCTESTS,
     *ELISP_AFTER_COVERAGE,
@@ -294,7 +311,7 @@ GATES: dict[str, Commands] = {
     "validate": [*VALIDATE_NO_E2E, *E2E],
     "ci-validate-host": [*CLEAN, *HOST_LANE, *host_tests()],
     "ci-validate-hermetic": [*CLEAN, *HERMETIC],
-    "ci-validate-test-checks": [*CLEAN, nix("wasm-tests"), *DOCTESTS, *ELISP],
+    "ci-validate-test-checks": [*CLEAN, *nix("wasm-tests"), *DOCTESTS, *ELISP],
     "coverage": [*CLEAN, *COVERAGE],
     "doctests": [*CLEAN, *DOCTESTS],
 }
@@ -462,7 +479,8 @@ def test_every_step_failure_is_its_status_and_stops_subsequent_work(
 def test_a_failing_gate_records_the_failed_step_and_status(
     workflow: Workflow,
 ) -> None:
-    result = workflow.dev("ci-validate-hermetic", failure=" ".join(nix("rust-format")))
+    build_step = nix("rust-format")[-1]
+    result = workflow.dev("ci-validate-hermetic", failure=" ".join(build_step))
     assert result.returncode == 17
     slices = workflow.checkout.merged()
     gate = slices["dev ci-validate-hermetic"]["args"]
@@ -483,13 +501,14 @@ def test_a_report_step_without_a_report_fails_closed(workflow: Workflow) -> None
     assert result.stdout == b"not a report\n"
     assert result.stderr == b"dev: wasm-budget: output is not a step report\n"
     order = (workflow.root / "order").read_text().splitlines()
-    assert order == [" ".join(argv) for argv in WASM_BUDGET[1:]]
+    assert order == [" ".join(argv) for argv in WASM_BUDGET[len(CSR_BUNDLE) :]]
 
 
 def test_the_wasm_budget_never_runs_without_its_bundle(workflow: Workflow) -> None:
-    result = workflow.dev("ci-validate-hermetic", failure=" ".join(WASM_BUDGET[0]))
+    failure = " ".join(CSR_BUNDLE[-1])
+    result = workflow.dev("ci-validate-hermetic", failure=failure)
     assert result.returncode == 17
-    assert workflow.commands() == [*CLEAN, *STATIC, WASM_BUDGET[0]]
+    assert workflow.commands() == [*CLEAN, *STATIC, *CSR_BUNDLE]
     assert "wasm-budget" not in workflow.checkout.merged()
 
 

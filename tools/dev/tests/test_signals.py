@@ -111,12 +111,14 @@ def test_a_signal_while_no_step_runs_closes_the_gate_as_signalled(
     checkout: Checkout, sent: signal.Signals
 ) -> None:
     # The Nix check's output query, not a step's child, is running when `dev` is
-    # signalled: the build has finished.
+    # signalled: the evaluation and the build have finished.
     checkout.tool(
         "nix",
-        'if sys.argv[1] == "path-info":\n'
+        'if "--json" in sys.argv:\n'
         '    pathlib.Path("ready").touch()\n'
         "    time.sleep(30)\n"
+        'elif "--derivation" in sys.argv:\n'
+        '    print("/nix/store/0000-demo.drv")\n'
         "else:\n"
         '    print("/nix/store/0000-demo")\n',
     )
@@ -132,6 +134,8 @@ def test_a_signal_while_no_step_runs_closes_the_gate_as_signalled(
     for name in ("dev nix-check", "demo"):
         assert slices[name]["args"]["jaunder.status"] == "signalled"
         assert slices[name]["args"]["process.exit.code"] == 128 + sent
+    for child in ("eval", "build"):
+        assert slices[child]["args"]["jaunder.status"] == "ok"
 
 
 def test_a_child_killed_by_a_signal_exits_128_plus_n(checkout: Checkout) -> None:
@@ -201,6 +205,35 @@ def test_a_request_while_the_trace_is_written_still_ends_the_gate_signalled(
     checkout.tool("demo", "")
     assert injected(checkout, WHILE_CLOSING) == 128 + signal.SIGTERM
     assert checkout.order() == "demo\n"
+
+
+# A step whose finished output is judged while `dev` itself is signalled.
+WHILE_JUDGING = """\
+import os, signal
+from pathlib import Path
+from dev import steps
+def judge(text):
+    os.kill(os.getpid(), signal.SIGTERM)
+    return None
+sys.exit(steps.gate(
+    Path.cwd(), "dev demo", lambda: steps.text("demo", ["demo"], refusal=judge)
+))
+"""
+
+
+def test_a_request_while_a_step_judges_its_output_closes_it_signalled(
+    checkout: Checkout,
+) -> None:
+    checkout.tool("demo", "")
+    result = checkout.run(launch(WHILE_JUDGING), checkout.environment())
+    assert result.returncode == 128 + signal.SIGTERM
+    slices = checkout.merged()
+    for name in ("dev demo", "demo"):
+        step = slices[name]["args"]
+        assert (step["jaunder.status"], step["process.exit.code"]) == (
+            "signalled",
+            128 + signal.SIGTERM,
+        )
 
 
 def test_a_request_while_a_child_starts_reaches_it_once_it_has(

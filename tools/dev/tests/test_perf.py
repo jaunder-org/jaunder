@@ -155,6 +155,8 @@ def fixture(checkout: Checkout, failed: str | None = None) -> Perf:
         )
         (root / "fragments" / "placeholder.json").write_text("{}")
     checkout.tool("nix", "import json\n" + NIX)
+    # The closure query fails: these producers' fetched bytes are not tested here.
+    checkout.tool("nix-store", "sys.exit(1)")
     checkout.tool("cargo", "")
     checkout.built("perf-data", "import json\n" + PERF_DATA)
     return Perf(checkout, outputs)
@@ -248,13 +250,24 @@ def test_a_later_producer_status_failure_keeps_evidence_and_stops(
 
 def test_each_producer_build_is_a_step_with_its_cache_state(perf: Perf) -> None:
     assert perf.run("success", "small").returncode == 0
-    slices = perf.checkout.merged()
+    events = perf.checkout.events()
+    order = perf.checkout.order().splitlines()
     for name, *_ in PRODUCERS:
-        step = slices[name]["args"]
-        assert step["process.command_line"] == (
+        (step,) = [event["args"] for event in events if event["name"] == name]
+        assert (step["jaunder.status"], step["jaunder.cache"]) == ("ok", "built")
+        # A selected derivation needs no evaluation: the step's one child is
+        # its build.
+        (child,) = [
+            event["args"]
+            for event in events
+            if event["args"].get("parent_id") == step["span_id"]
+        ]
+        assert child["process.command_line"] == (
             f"nix build -L --print-out-paths --no-link '/fake/{name}.drv^out'"
         )
-        assert (step["jaunder.status"], step["jaunder.cache"]) == ("ok", "built")
+        # What the build fetched is the derivation's closure, not its output's.
+        closure = f"nix-store --query --requisites --include-outputs /fake/{name}.drv"
+        assert closure in order
 
 
 def test_every_retained_producer_is_assembled_into_one_invocation(

@@ -65,6 +65,11 @@ class Checkout:
     def tool(self, name: str, body: str) -> None:
         _script(self.bin / name, body)
 
+    def nix_store(self) -> None:
+        """`nix` and `nix-store` as FAKE_NIX_STORE's one fake store."""
+        for name in ["nix", "nix-store"]:
+            self.tool(name, FAKE_NIX_STORE)
+
     def built(self, name: str, body: str) -> None:
         """A tools-workspace binary where its build step leaves it; a fake
         `cargo` stands in for that build."""
@@ -160,13 +165,15 @@ class Checkout:
     def runs(self) -> list[Path]:
         return sorted((self.root / ".xtask" / "run").glob("*.trace.d"))
 
-    def merged(self) -> dict[str, dict[str, Any]]:
-        """The single run's merged slices, keyed by span name."""
+    def events(self) -> list[dict[str, Any]]:
+        """The single run's merged slices, in trace order."""
         (run,) = self.runs()
         trace = json.loads(run.with_name(run.name[: -len(".d")] + ".json").read_text())
-        return {
-            event["name"]: event for event in trace["traceEvents"] if event["ph"] == "X"
-        }
+        return [event for event in trace["traceEvents"] if event["ph"] == "X"]
+
+    def merged(self) -> dict[str, dict[str, Any]]:
+        """The single run's merged slices, keyed by span name."""
+        return {event["name"]: event for event in self.events()}
 
 
 # A fake for every tool a workflow runs. Each appends its argv to $FAKE_LOG
@@ -178,8 +185,9 @@ class Checkout:
 # anywhere else with 23, answers checkout discovery from the real Git, and
 # reports a dirty tree while `dirty-status` exists. The CSR prerequisite prints
 # its root under `/verified`.
-# Nix cache queries fail, so Nix steps record no cache source; a build's
-# out-link points at a fake store path named after the link.
+# An evaluation prints a fake derivation named after the installable's last
+# component. Nix cache queries fail, so Nix steps record no cache source; a
+# build's out-link points at a fake store path named after the link.
 FAKE = r"""#!/bin/sh
 name=${0##*/}
 if [ "$name" = git ]; then
@@ -201,6 +209,7 @@ if [ "$name" = git ]; then
     esac
 fi
 case "$name $*" in
+  'nix path-info --derivation '*) ;;
   'nix path-info '*) exit 1 ;;
 esac
 if [ "$name" = cargo ]; then
@@ -259,6 +268,9 @@ if [ "$name $1" = "cargo build" ]; then
     fi
 fi
 case "$name $*" in
+  'nix path-info --derivation '*)
+    for installable; do :; done
+    printf '/nix/store/fake-%s.drv\n' "${installable##*[#/]}" ;;
   'csr-prerequisite '*)
     for root; do :; done
     printf '/verified%s\n' "$root" ;;
@@ -271,35 +283,83 @@ esac
 # any real step's start.
 REGISTERED_LONG_AGO = 0
 REGISTERED_LATER = 4102444800
-# A fake `nix` with a store holding one output, `build-out`. It is valid from
-# the start with NIX_VALID, registered long ago; otherwise a build registers it
-# later. A later build first moves that registration to long ago: the earlier
-# step registered it before this one started. The other variables inject query
-# and build failures.
+# A fake `nix` (and, under that name, `nix-store`) with a store holding one
+# output, `build-out`, of OUTPUT_SIZE bytes. It is valid from the start with
+# NIX_VALID, registered long ago; otherwise a build registers it later. A later
+# build first moves that registration to long ago: the earlier step registered
+# it before this one started. An evaluation prints DERIVATION, whose closure
+# is that output, the derivations and CLOSURE's dependencies. The other
+# variables inject evaluation, query and build failures.
+OUTPUT_SIZE = 1000
+DERIVATION = "/nix/store/fake-build.drv"
+# Each dependency's entry: (registration, ultimate, narSize), or None while it
+# is not valid. Only `fetched-dep` was substituted during the build.
+CLOSURE: dict[str, tuple[int, bool, int] | None] = {
+    "/nix/store/fake-input.drv": (REGISTERED_LATER, False, 50000),
+    "fetched-dep": (REGISTERED_LATER, False, 200),
+    "built-dep": (REGISTERED_LATER, True, 30),
+    "old-dep": (REGISTERED_LONG_AGO, False, 4),
+    "invalid-dep": None,
+}
+FETCHED_DEPENDENCIES = 200
 FAKE_NIX_STORE = (
     f'LONG_AGO, FUTURE = "{REGISTERED_LONG_AGO}", "{REGISTERED_LATER}"\n'
+    f"OUTPUT_SIZE, DERIVATION, CLOSURE = {OUTPUT_SIZE}, {DERIVATION!r}, {CLOSURE!r}\n"
     + """\
 import json
-command = sys.argv[1]
 env = os.environ.get
-if command == "path-info":
+if pathlib.Path(sys.argv[0]).name == "nix-store":
+    assert sys.argv[1:4] == ["--query", "--requisites", "--include-outputs"], sys.argv
+    if env("NIX_CLOSURE_FAIL"):
+        print("closure-err", file=sys.stderr)
+        sys.exit(1)
+    print("\\n".join([sys.argv[4], "build-out", *CLOSURE]))
+    sys.exit()
+command = sys.argv[1]
+
+
+def entry(path):
+    if path in CLOSURE:
+        found = CLOSURE[path]
+        if found is None:
+            return None
+        registered, ultimate, size = found
+        return {"registrationTime": registered, "ultimate": ultimate, "narSize": size}
+    if env("NIX_VALID"):
+        registered = LONG_AGO
+    elif os.path.exists("built"):
+        registered = open("built").read()
+    else:
+        return None
+    return {
+        "ultimate": bool(env("NIX_ULTIMATE")),
+        "version": 1,
+        "registrationTime": int(registered),
+        "narSize": OUTPUT_SIZE,
+    }
+
+
+if command == "path-info" and "--derivation" in sys.argv:
+    code = int(env("NIX_EVAL_CODE", "0"))
+    if code:
+        print("eval-err", file=sys.stderr)
+        sys.exit(code)
+    print(DERIVATION)
+elif command == "path-info":
     if env("NIX_INFO_FAIL"):
         print("info-err", file=sys.stderr)
         sys.exit(1)
     if env("NIX_INFO_GARBLED"):
         print("not json")
         sys.exit()
-    path = sys.argv[-1]
-    if env("NIX_VALID"):
-        registered = LONG_AGO
-    elif os.path.exists("built"):
-        registered = open("built").read()
+    if sys.argv[-1] == "--stdin":
+        if env("NIX_STDIN_FAIL"):
+            print("stdin-err", file=sys.stderr)
+            sys.exit(1)
+        paths = sys.stdin.read().split("\\n")
     else:
-        registered = None
-    info = {"ultimate": bool(env("NIX_ULTIMATE")), "version": 1}
-    if registered is not None:
-        info["registrationTime"] = int(registered)
-    print(json.dumps({path: info if registered is not None else None}))
+        paths = [sys.argv[-1]]
+    print(json.dumps({path: entry(path) for path in paths}))
     print("info-warning", file=sys.stderr)
 else:
     print("build-out")

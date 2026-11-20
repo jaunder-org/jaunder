@@ -6,13 +6,17 @@ Their full success populations are in test_gates.
 import subprocess
 
 import pytest
-from conftest import FAKE_NIX_STORE, Checkout, Workflow
+from conftest import Checkout, Workflow
 
 CLEAN = ["git", "status", "--porcelain", "--untracked-files=all"]
-NIX_BUILD = "nix build -L --no-update-lock-file --no-write-lock-file"
+FLAGS = "--no-update-lock-file --no-write-lock-file"
+NIX_EVAL = f"nix path-info --derivation {FLAGS}"
+NIX_BUILD = f"nix build -L {FLAGS}"
 STEPS = {
     "coverage": [
+        f"{NIX_EVAL} .#checks.x86_64-linux.coverage",
         f"{NIX_BUILD} --print-out-paths --out-link .xtask/gcroots/coverage .#checks.x86_64-linux.coverage",
+        f"{NIX_EVAL} .#checks.x86_64-linux.coverage-gate",
         f"{NIX_BUILD} --print-out-paths --no-link .#checks.x86_64-linux.coverage-gate",
         (
             "cargo build --locked --quiet --manifest-path tools/Cargo.toml "
@@ -21,7 +25,9 @@ STEPS = {
         "coverage-check policy --out .xtask/gcroots/coverage",
     ],
     "doctests": [
+        f"{NIX_EVAL} .#checks.x86_64-linux.doctests",
         f"{NIX_BUILD} --print-out-paths --out-link .xtask/gcroots/doctests .#checks.x86_64-linux.doctests",
+        f"{NIX_EVAL} .#checks.x86_64-linux.doctests-gate",
         f"{NIX_BUILD} --print-out-paths --no-link .#checks.x86_64-linux.doctests-gate",
     ],
 }
@@ -67,7 +73,7 @@ def test_public_workflows_refuse_a_really_dirty_checkout(
 def test_producer_and_gate_record_where_their_outputs_came_from(
     checkout: Checkout, extra: dict[str, str], cache: str
 ) -> None:
-    checkout.tool("nix", FAKE_NIX_STORE)
+    checkout.nix_store()
     (checkout.root / ".git" / "info" / "exclude").write_text(".xtask/\nbuilt\n")
     result = checkout.run(checkout.command("doctests"), checkout.environment(**extra))
     assert result.returncode == 0, result
@@ -75,8 +81,5 @@ def test_producer_and_gate_record_where_their_outputs_came_from(
     assert slices["doctests"]["args"]["jaunder.cache"] == cache
     # The fake store holds one output, which the producer step leaves valid.
     assert slices["doctests-gate"]["args"]["jaunder.cache"] == "reused"
-    # The build is the only evaluation, and it leaves the lock file untouched.
-    assert checkout.order().splitlines()[0] == (
-        "nix build -L --no-update-lock-file --no-write-lock-file --print-out-paths "
-        "--out-link .xtask/gcroots/doctests .#checks.x86_64-linux.doctests"
-    )
+    # The evaluation and the build both leave the lock file untouched.
+    assert checkout.order().splitlines()[:2] == STEPS["doctests"][:2]

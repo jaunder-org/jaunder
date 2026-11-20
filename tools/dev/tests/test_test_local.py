@@ -88,9 +88,13 @@ if args[0] != "build" and "--no-run" not in args:
         while not os.path.exists("release"):
             time.sleep(0.02)
 """
-# A build links its out-link to $BUNDLE, or fails with NIX_BUILD_CODE. It
-# prints no output path, so the step records no cache source.
+# An evaluation prints a derivation. A build links its out-link to $BUNDLE, or
+# fails with NIX_BUILD_CODE. It prints no output path, so the step records no
+# cache source.
 NIX = """\
+if "--derivation" in sys.argv:
+    print("/nix/store/fake-csr-bundle.drv")
+    sys.exit()
 code = int(os.environ.get("NIX_BUILD_CODE", "0"))
 if code:
     sys.exit(code)
@@ -147,6 +151,7 @@ def cargo(checkout: Checkout) -> list[dict[str, Any]]:
     return [json.loads(line) for line in lines]
 
 
+BUNDLE_EVAL = "nix path-info --derivation --accept-flake-config .#csrBundle"
 BUNDLE_BUILD = (
     "nix build -L --accept-flake-config --print-out-paths --out-link .xtask/gcroots/csr-bundle "
     ".#csrBundle"
@@ -166,6 +171,7 @@ def expected_order(*nextest_args: str) -> list[str]:
     return [
         f"{HOST_PROOF_BUILD} admit-inputs",
         "admit-inputs .#csrBundle.sourceAdmits",
+        BUNDLE_EVAL,
         BUNDLE_BUILD,
         f"{HOST_PROOF_BUILD} csr-prerequisite",
         "csr-prerequisite .xtask/gcroots/csr-bundle",

@@ -29,7 +29,16 @@ from opentelemetry.trace import Span
 
 from dev import trace
 from dev.commands import Tool
-from dev.spans import CACHE, COMMAND_LINE, EXIT_CODE, STATUS, Cache, Status
+from dev.spans import (
+    CACHE,
+    COMMAND_LINE,
+    EXIT_CODE,
+    FETCHED_BYTES,
+    NIX_OUTPUT,
+    STATUS,
+    Cache,
+    Status,
+)
 
 _HANDLED = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
 
@@ -353,15 +362,13 @@ class _QueryFailed(Exception):
     """A Nix query failed, so the step's cache source stays unrecorded."""
 
 
-def _store_entry(path: str) -> dict[str, Any] | None:
-    """`path`'s store metadata, or None while the path is not valid.
-
-    The query's streams never reach the user.
-    """
+def _query(argv: Sequence[str], stdin: bytes | None = None) -> bytes:
+    """A Nix query's stdout. Its streams never reach the user."""
     try:
         done = subprocess.run(
-            ["nix", "path-info", "--json", "--json-format", "1", "--", path],
+            argv,
             env=changed(os.environ, WITHOUT_GIT_OVERRIDES),
+            input=stdin,
             capture_output=True,
             check=False,
         )
@@ -369,13 +376,51 @@ def _store_entry(path: str) -> dict[str, Any] | None:
         raise _QueryFailed from error
     if done.returncode:
         raise _QueryFailed
+    return done.stdout
+
+
+# `nix path-info` with a JSON shape that stays stable across Nix releases.
+_PATH_INFO = ("nix", "path-info", "--json", "--json-format", "1")
+
+
+def _path_info(argv: Sequence[str], stdin: bytes | None = None) -> dict[str, Any]:
+    """Store metadata keyed by store path; an invalid path maps to null."""
     try:
-        listed = json.loads(done.stdout)
+        listed: dict[str, Any] = json.loads(_query(argv, stdin))
     except ValueError as error:
         raise _QueryFailed from error
-    # An object keyed by store path; an invalid path maps to null.
-    entry: dict[str, Any] | None = listed.get(path)
+    return listed
+
+
+def _store_entry(path: str) -> dict[str, Any] | None:
+    """`path`'s store metadata, or None while the path is not valid."""
+    entry: dict[str, Any] | None = _path_info([*_PATH_INFO, "--", path]).get(path)
     return entry
+
+
+def substituted_size(entry: Mapping[str, Any] | None, start: int) -> int:
+    """The bytes a substituter supplied for this path since the second `start`.
+
+    A path registered before `start` was already valid; an `ultimate` one was
+    built here, fixed-output downloads included. The size is the unpacked NAR.
+    """
+    registered = None if entry is None else entry.get("registrationTime")
+    size = None if entry is None else entry.get("narSize")
+    # bool is an int to Python, never to `nix path-info`.
+    if entry is None or type(registered) is not int or type(size) is not int:
+        return 0
+    return 0 if registered < start or entry.get("ultimate") else size
+
+
+def _fetched_bytes(derivation: str, start: int) -> int:
+    """What the build of `derivation` fetched: its closure's substituted paths."""
+    closure = _query(
+        ["nix-store", "--query", "--requisites", "--include-outputs", derivation]
+    )
+    # The evaluation wrote the derivations; they were never fetched.
+    paths = [path for path in closure.decode().split() if not path.endswith(".drv")]
+    listed = _path_info([*_PATH_INFO, "--stdin"], "\n".join(paths).encode())
+    return sum(substituted_size(entry, start) for entry in listed.values())
 
 
 def output_source(entry: Mapping[str, Any] | None, start: int) -> Cache | None:
@@ -411,33 +456,48 @@ def nix_build(
     keep: bool = True,
     refusal: Callable[[str], str | None] | None = None,
 ) -> str:
-    """Builds one flake installable as the step `name`; returns its output path.
+    """Builds one installable as the step `name`; returns its output path.
 
-    `keep` holds the output as the GC root GCROOTS/`name`. The build is the
-    step's only evaluation. Afterwards the step records `jaunder.cache` for the
-    one output path the build printed, judged by `output_source`. Several
-    printed paths, an undecidable registration or a failed query record nothing
-    rather than guess, and never change the step. `refusal`, if given, judges
-    the printed output as `text` judges its text.
+    A flake installable is evaluated first, as the child step `eval`, which
+    leaves the evaluation cached for the child step `build`: the flake is
+    evaluated once, and the evaluation is timed. A derivation path (one that
+    starts with `/`) has nothing to evaluate. `keep` holds the output as the GC
+    root GCROOTS/`name`; `refusal`, if given, judges the printed output as
+    `text` judges its text.
+
+    For the one output path a build printed, the step then records it, where it
+    came from (`jaunder.cache`, by `output_source`) and, unless it was reused,
+    the bytes the build fetched from substituters. Several printed paths, an
+    undecidable registration or a failed query record less rather than guess,
+    and never change the step.
     """
     if keep:
         Path(GCROOTS).mkdir(parents=True, exist_ok=True)
     link = ["--out-link", f"{GCROOTS}/{name}"] if keep else ["--no-link"]
     argv = ["nix", "build", "-L", *flags, "--print-out-paths", *link, installable]
-    with _step(name, argv) as span:
-        start = int(time.time())
-        code, signalled, printed = _supervise(argv, capture=True)
-        paths = _shell_text(printed)
-        if refusal is not None and not code:
-            reason = refusal(paths)
-            if reason is not None:
-                print(reason, file=sys.stderr, flush=True)
-                code = 1
-        _record_outcome(span, code, signalled)
-        if code == 0 and len(paths.splitlines()) == 1:
-            _record_cache(span, paths, start)
-    if code:
-        raise StepFailed(code, signalled)
+    with trace.tracer().start_as_current_span(name) as span:
+        try:
+            if installable.startswith("/"):
+                derivation = installable.partition("^")[0]
+            else:
+                evaluate = ["nix", "path-info", "--derivation", *flags, installable]
+                derivation = text("eval", evaluate)
+            # After the evaluation, which registers what it writes.
+            start = int(time.time())
+            paths = text("build", argv, refusal=refusal)
+            _record_outcome(span, 0, False)
+            if len(paths.splitlines()) == 1:
+                span.set_attribute(NIX_OUTPUT, paths)
+                with contextlib.suppress(_QueryFailed):
+                    cache = output_source(_store_entry(paths), start)
+                    if cache is not None:
+                        span.set_attribute(CACHE, cache)
+                    if cache is not Cache.REUSED:
+                        fetched = _fetched_bytes(derivation, start)
+                        span.set_attribute(FETCHED_BYTES, fetched)
+        except StepFailed as failure:
+            _record_outcome(span, failure.code, failure.signalled)
+            raise
     return paths
 
 
