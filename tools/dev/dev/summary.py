@@ -1,7 +1,8 @@
 """`dev trace summary`: a run's slowest spans, read from its span records.
 
 Every span that did not end `ok` is listed too, however short: the step that
-stopped a run is the row a reader looks for first.
+stopped a run is the row a reader looks for first. So is the time a CI job
+spent before its root `dev` started, and the root's runner heads the table.
 """
 
 from collections.abc import Callable
@@ -10,12 +11,14 @@ from pathlib import Path
 
 import click
 
-from dev import spans
+from dev import runner, spans
 from dev.spans import RunSpan, Status
 
 # The slowest spans shown; unsuccessful spans are shown beyond it.
 LIMIT = 20
 _UNSUCCESSFUL = {Status.FAILED, Status.SIGNALLED, Status.INCOMPLETE}
+# The row for a CI job's time between its start and its root `dev`.
+BEFORE_DEV = "before dev"
 
 
 @dataclass(frozen=True)
@@ -27,6 +30,39 @@ class Row:
     cache: str
     # Time no child covers; None for a span without children.
     untraced_ns: int | None
+    # Bytes a Nix step fetched from substituters; None where not recorded.
+    fetched_bytes: int | None = None
+
+
+@dataclass(frozen=True)
+class Summary:
+    # The root's runner, or None when it recorded none.
+    runner: str | None
+    rows: list[Row]
+
+
+def _integer(value: object) -> int | None:
+    # bool is an int to Python, never to a record writer.
+    return value if type(value) is int else None
+
+
+def _runner(root: RunSpan) -> str | None:
+    attributes = root.attributes
+    parts = [
+        str(attributes[runner.CPU_MODEL]) if runner.CPU_MODEL in attributes else "",
+        f"nproc {attributes[runner.NPROC]}" if runner.NPROC in attributes else "",
+        f"cloud {attributes[runner.CLOUD]}" if runner.CLOUD in attributes else "",
+    ]
+    shown = [part for part in parts if part]
+    return "Runner: " + ", ".join(shown) if shown else None
+
+
+def _before_dev(root: RunSpan) -> Row | None:
+    """The CI job's time before `root` started, if it recorded a positive one."""
+    job_start = _integer(root.attributes.get(runner.JOB_START))
+    if job_start is None or root.start_ns <= job_start:
+        return None
+    return Row(BEFORE_DEV, 0, root.start_ns - job_start, "", "", None)
 
 
 def latest(runs: Path) -> Path:
@@ -53,7 +89,7 @@ def _covered(parent: RunSpan, children: list[RunSpan]) -> int:
     return total
 
 
-def rows(directory: Path) -> list[Row]:
+def summarize(directory: Path) -> Summary:
     run = spans.load(directory)
     known = {span.span_id: span for span in run}
     children = spans.children(run)
@@ -74,19 +110,31 @@ def rows(directory: Path) -> list[Row]:
                 if children[span.span_id]
                 else None
             ),
+            fetched_bytes=_integer(span.attributes.get(spans.FETCHED_BYTES)),
         )
         for span in run
     ]
-    slowest_first = sorted(table, key=lambda row: row.duration_ns, reverse=True)
-    return [
+    roots = [span for span in run if span.parent_id is None]
+    before = [row for row in map(_before_dev, roots) if row is not None]
+    slowest_first = sorted(
+        [*table, *before], key=lambda row: row.duration_ns, reverse=True
+    )
+    pinned = {id(row) for row in before}
+    shown = [
         row
         for rank, row in enumerate(slowest_first)
-        if rank < LIMIT or row.status in _UNSUCCESSFUL
+        if rank < LIMIT or row.status in _UNSUCCESSFUL or id(row) in pinned
     ]
+    described = [line for line in map(_runner, roots) if line is not None]
+    return Summary(described[0] if described else None, shown)
 
 
 def _seconds(nanoseconds: int | None) -> str:
     return "" if nanoseconds is None else f"{nanoseconds / 1e9:.3f}s"
+
+
+def _mebibytes(count: int | None) -> str:
+    return "" if count is None else f"{count / 2**20:.1f}MiB"
 
 
 @dataclass(frozen=True)
@@ -103,15 +151,16 @@ _COLUMNS = (
     _Column("Depth", True, lambda row: str(row.depth)),
     _Column("Status", False, lambda row: row.status),
     _Column("Cache", False, lambda row: row.cache),
+    _Column("Fetched", True, lambda row: _mebibytes(row.fetched_bytes)),
     # Last, so a long span name needs no padding.
     _Column("Span", False, lambda row: row.name),
 )
 
 
-def render(table: list[Row], markdown: bool) -> str:
+def render(summary: Summary, markdown: bool) -> str:
     grid = [
         [column.heading for column in _COLUMNS],
-        *([column.cell(row) for column in _COLUMNS] for row in table),
+        *([column.cell(row) for column in _COLUMNS] for row in summary.rows),
     ]
     if markdown:
         rule = ["---:" if column.numeric else "---" for column in _COLUMNS]
@@ -134,4 +183,7 @@ def render(table: list[Row], markdown: bool) -> str:
             )
             for line in grid
         ]
+    if summary.runner is not None:
+        # A blank line keeps Markdown from reading the heading into the table.
+        lines = [summary.runner, *([""] if markdown else []), *lines]
     return "\n".join(lines) + "\n"

@@ -450,7 +450,7 @@ def trace_summary(path: Path | None, markdown: bool) -> None:
     # Any record content loads; a run that cannot be read is reported, never
     # a traceback.
     try:
-        table = summary.rows(path)
+        summarized = summary.summarize(path)
     except OSError as error:
         raise click.ClickException(f"cannot summarise {path}: {error}") from error
-    click.echo(summary.render(table, markdown), nl=False)
+    click.echo(summary.render(summarized, markdown), nl=False)

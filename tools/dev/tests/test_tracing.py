@@ -1,13 +1,16 @@
 """Run directories, the merged Chrome trace, and tracing failures."""
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
 from conftest import Checkout
 
-from dev import chrome
+from dev import chrome, runner
+from dev.summary import BEFORE_DEV
 
 KILL_PARENT = "os.kill(os.getppid(), signal.SIGKILL); sys.exit()"
 
@@ -179,15 +182,150 @@ def test_summary_does_not_sum_overlapping_children(
     text = checkout.dev("trace", "summary", str(run))
     assert text.returncode == 0, text
     assert text.stdout.decode() == (
-        "Duration  Untraced  Depth  Status  Cache   Span\n"
-        " 10.000s    4.000s      0  failed          dev check\n"
-        "  4.000s                1  ok      reused  nix build\n"
-        "  4.000s                1  failed          cargo test\n"
+        "Duration  Untraced  Depth  Status  Cache   Fetched  Span\n"
+        " 10.000s    4.000s      0  failed                   dev check\n"
+        "  4.000s                1  ok      reused           nix build\n"
+        "  4.000s                1  failed                   cargo test\n"
     )
     markdown = checkout.dev("trace", "summary", "--markdown", str(run))
     assert markdown.stdout.decode().splitlines()[2] == (
-        "| 10.000s | 4.000s | 0 | failed |  | dev check |"
+        "| 10.000s | 4.000s | 0 | failed |  |  | dev check |"
     )
+
+
+def test_summary_shows_the_runner_the_time_before_dev_and_fetched_bytes(
+    checkout: Checkout, tmp_path: Path
+) -> None:
+    run = tmp_path / "run.trace.d"
+    second = 1_000_000_000
+    root = {
+        "host.cpu.model.name": "AMD EPYC 7763 64-Core Processor",
+        "jaunder.host.nproc": 4,
+        "cloud.provider": "azure",
+        # The CI job started 90 seconds before the root.
+        "jaunder.ci.job_start_ns": 10 * second,
+        "jaunder.status": "ok",
+    }
+    write_records(
+        run,
+        start("gate", None, 100 * second, name="dev check"),
+        start("a", "gate", 101 * second, name="static-code"),
+        end(
+            "a",
+            "gate",
+            105 * second,
+            **{
+                "jaunder.status": "ok",
+                "jaunder.cache": "substituted",
+                "jaunder.nix.fetched_bytes": 3 * 2**20 + 2**19,
+            },
+        ),
+        end("gate", None, 110 * second, **root),
+    )
+    text = checkout.dev("trace", "summary", str(run))
+    assert text.returncode == 0, text
+    assert text.stdout.decode() == (
+        "Runner: AMD EPYC 7763 64-Core Processor, nproc 4, cloud azure\n"
+        "Duration  Untraced  Depth  Status  Cache        Fetched  Span\n"
+        " 90.000s                0                                before dev\n"
+        " 10.000s    6.000s      0  ok                            dev check\n"
+        "  4.000s                1  ok      substituted   3.5MiB  static-code\n"
+    )
+    markdown = checkout.dev("trace", "summary", "--markdown", str(run))
+    assert markdown.stdout.decode().splitlines()[:3] == [
+        "Runner: AMD EPYC 7763 64-Core Processor, nproc 4, cloud azure",
+        "",
+        "| Duration | Untraced | Depth | Status | Cache | Fetched | Span |",
+    ]
+
+
+@pytest.mark.parametrize(
+    "root",
+    [
+        # A mark after the root's start: no positive interval to show.
+        {"jaunder.ci.job_start_ns": 200_000_000_000},
+        # A writer never records a bool as a time.
+        {"jaunder.ci.job_start_ns": True},
+        {"host.cpu.model.name": "Intel Xeon"},
+    ],
+)
+def test_summary_omits_what_the_root_did_not_record(
+    checkout: Checkout, tmp_path: Path, root: dict[str, Any]
+) -> None:
+    run = tmp_path / "run.trace.d"
+    write_records(
+        run,
+        start("gate", None, 100_000_000_000, name="dev check"),
+        end("gate", None, 110_000_000_000, **{"jaunder.status": "ok", **root}),
+    )
+    lines = checkout.dev("trace", "summary", str(run)).stdout.decode().splitlines()
+    assert BEFORE_DEV not in "\n".join(lines)
+    expected = ["Runner: Intel Xeon"] if "host.cpu.model.name" in root else []
+    assert lines[: len(expected)] == expected
+    assert lines[len(expected)].startswith("Duration")
+
+
+def test_the_time_before_dev_is_shown_beyond_the_slowest(
+    checkout: Checkout, tmp_path: Path
+) -> None:
+    run = tmp_path / "run.trace.d"
+    root = {"jaunder.ci.job_start_ns": 99_999_999_999, "jaunder.status": "ok"}
+    records: list[dict[str, Any]] = [start("gate", None, 100_000_000_000)]
+    for index in range(25):
+        records.append(start(f"slow{index}", "gate", 100_000_000_000))
+        records.append(
+            end(f"slow{index}", "gate", 100_000_001_000, **{"jaunder.status": "ok"})
+        )
+    records.append(end("gate", None, 100_000_002_000, **root))
+    write_records(run, *records)
+    lines = checkout.dev("trace", "summary", str(run)).stdout.decode().splitlines()
+    assert lines[-1].endswith(BEFORE_DEV)
+
+
+def test_the_root_records_its_runner_and_the_ci_job_start(checkout: Checkout) -> None:
+    checkout.tool("tsc", "")
+    result = checkout.dev("static", "tsc", "--sandbox", JAUNDER_CI_JOB_START_NS="42")
+    assert result.returncode == 0, result
+    gate = checkout.merged()["dev static tsc"]["args"]
+    assert gate["jaunder.ci.job_start_ns"] == 42
+    assert gate["jaunder.host.nproc"] == os.process_cpu_count()
+    # A step's span is no root: it records neither.
+    assert "jaunder.host.nproc" not in checkout.merged()["tsc"]["args"]
+
+
+@pytest.mark.parametrize("value", ["", "soon", "-5", "4.2", "٤٢"])
+def test_a_malformed_ci_job_start_is_not_recorded(value: str) -> None:
+    environment = {runner.JOB_START_VARIABLE: value}
+    assert runner.JOB_START not in runner.attributes(environment)
+
+
+def test_runner_attributes_come_from_cpuinfo_and_dmi(tmp_path: Path) -> None:
+    cpuinfo = tmp_path / "cpuinfo"
+    cpuinfo.write_text(
+        "processor\t: 0\nmodel name\t:\nmodel name\t: AMD EPYC 9R14\nflags\t: x\n"
+    )
+    vendor = tmp_path / "sys_vendor"
+    vendor.write_text("Amazon EC2\n")
+    found = runner.attributes({}, cpuinfo, vendor)
+    assert found[runner.CPU_MODEL] == "AMD EPYC 9R14"
+    assert found[runner.CLOUD] == "aws"
+
+
+@pytest.mark.parametrize("vendor_text", [None, "ASUS\n", b"\xff\xfe"])
+def test_runner_attributes_omit_what_the_machine_does_not_expose(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, vendor_text: str | bytes | None
+) -> None:
+    vendor = tmp_path / "sys_vendor"
+    if isinstance(vendor_text, str):
+        vendor.write_text(vendor_text)
+    elif vendor_text is not None:
+        vendor.write_bytes(vendor_text)
+    cpuinfo = tmp_path / "cpuinfo"
+    cpuinfo.write_text("processor\t: 0\n")
+    monkeypatch.setattr(os, "process_cpu_count", lambda: None)
+    assert runner.attributes({}, cpuinfo, vendor) == {}
+    # A missing cpuinfo too.
+    assert runner.attributes({}, tmp_path / "missing", vendor) == {}
 
 
 def test_summary_lists_every_unsuccessful_span_beyond_the_slowest(
@@ -305,7 +443,10 @@ def test_malformed_records_change_neither_the_merge_nor_the_outcome(
     (run,) = checkout.runs()
     summary = checkout.dev("trace", "summary", str(run))
     assert summary.returncode == 0, summary
-    assert summary.stdout.decode().splitlines()[1].endswith("dev static tsc")
+    # The root's runner line, then the table: the gate is its slowest span.
+    lines = summary.stdout.decode().splitlines()
+    assert lines[0].startswith("Runner: ")
+    assert lines[2].endswith("dev static tsc")
 
 
 def test_a_failed_merge_warns_once_and_changes_nothing_else(

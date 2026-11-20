@@ -11,6 +11,8 @@ COMMAND_LINE = "process.command_line"
 EXIT_CODE = "process.exit.code"
 STATUS = "jaunder.status"
 CACHE = "jaunder.cache"
+NIX_OUTPUT = "jaunder.nix.output"
+FETCHED_BYTES = "jaunder.nix.fetched_bytes"
 
 
 class Status(StrEnum):

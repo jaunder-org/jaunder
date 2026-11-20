@@ -71,6 +71,8 @@ class Checkout:
                 "JAUNDER_TRACE_DIR",
                 "TRACEPARENT",
                 "TRACESTATE",
+                # Set in CI jobs; a test opts in to it.
+                "JAUNDER_CI_JOB_START_NS",
                 "E2E_TYPES_NODE_MODULES",
                 "E2E_PLAYWRIGHT_TEST",
                 "PYTHONPATH",
