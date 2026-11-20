@@ -164,6 +164,49 @@ FORWARDED: list[tuple[list[str], Commands]] = [
 ]
 
 
+SELECTED = "/nix/store/0000-selected"
+VERIFIER_NIX = r"""#!/bin/sh
+case "$1" in eval|path-info) exit 1 ;; esac
+printf '%s\037' nix "$@" >> "$FAKE_LOG"
+printf '\036' >> "$FAKE_LOG"
+case "$*" in *'.#host-proof') printf '%s\n' "$VERIFIER_OUT" ;; esac
+"""
+VERIFIER = r"""#!/bin/sh
+printf '%s\037' e2e-evidence "$@" >> "$FAKE_LOG"
+printf '\036' >> "$FAKE_LOG"
+printf '{"steps":[]}\n'
+"""
+
+
+def test_a_producer_builds_then_verifies_the_output_its_build_selected(
+    workflow: Workflow,
+) -> None:
+    lane = "sqlite-chromium-ordinary-1-of-2"
+    root = workflow.root
+    record = root / ".xtask" / "diagnostics" / f"e2e-{lane}" / "build.json"
+    record.parent.mkdir(parents=True)
+    record.write_text(json.dumps([{"outputs": {"out": SELECTED}}]))
+    workflow.checkout.executable("nix", VERIFIER_NIX)
+    verifier = root.parent / "verifier"
+    (verifier / "bin").mkdir(parents=True)
+    workflow.checkout.executable("e2e-evidence", VERIFIER)
+    (verifier / "bin" / "e2e-evidence").symlink_to(
+        workflow.checkout.bin / "e2e-evidence"
+    )
+    result = workflow.dev("e2e-producer", lane, VERIFIER_OUT=str(verifier))
+    assert result.returncode == 0, result
+    assert workflow.commands() == [
+        ["bash", "scripts/e2e-workflow", "producer", lane],
+        words(
+            "nix build -L --accept-flake-config --print-out-paths --no-link .#host-proof"
+        ),
+        words(
+            f"e2e-evidence verify --lane {lane} --catalog end2end/e2e-lanes.json"
+            f" --artifacts {SELECTED}"
+        ),
+    ]
+
+
 @pytest.mark.parametrize(("args", "expected"), FORWARDED)
 def test_each_entry_point_runs_its_command_with_arguments_kept_as_argv(
     workflow: Workflow, args: list[str], expected: Commands
