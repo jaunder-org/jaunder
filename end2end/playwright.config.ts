@@ -192,12 +192,13 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   workers,
   retries,
-  // CI default reporter: streamed line output for the build log + a machine-readable
-  // report at the conventional name, inside the default outputDir. The host driver
-  // overrides this with --reporter=html,line for interactive
-  // runs (#153).
+  // CI default reporter: one `list` line per finished attempt (status, project,
+  // file:line, title, retry, duration) for the build log, which survives a
+  // killed run (#2011), + a machine-readable report at the conventional name,
+  // inside the default outputDir. The host driver overrides this with
+  // --reporter=html,line for interactive runs (#153).
   reporter: [
-    ["line"],
+    ["list"],
     ["json", { outputFile: "test-results/results.json" }],
     ...(censusPreflight
       ? [["./e2eCensus.ts", { outputFile: censusOutput }] as const]

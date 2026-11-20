@@ -1232,7 +1232,8 @@ records:
   merge for a span with no end record or no parent, as when a child is killed);
 - `process.exit.code` and `process.command_line`, capped at 1 KiB;
 - `jaunder.cache`, for Nix build steps only: every Nix build `dev` runs as a
-  step. `scripts/e2e-workflow`'s own builds, inside its E2E steps, record none.
+  step, including each `e2e-producer` step: `scripts/e2e-workflow` runs that
+  build, and the step judges the one output its `build.json` selected.
 
 `jaunder.cache` describes only the one output path the build prints; the build
 is the step's only evaluation. `nix path-info` then reports when the local store

@@ -215,7 +215,7 @@ performanceBrowserTimeout = 4500;
 performanceGlobalTimeout = 6000;
 
 # #123/#49: run Playwright capturing its exit (NOT machine.succeed, which
-# would abort before we copy diagnostics), stream its line-reporter output
+# would abort before we copy diagnostics), stream its list-reporter output
 # to the build log, copy ALL artifacts out of the VM unconditionally, then
 # fail the check only after the copies are safe. On success the copies land
 # in $out; on failure they live in the --keep-failed build dir for the host's
@@ -602,9 +602,9 @@ e2eRunAndCapture =
       "success" if pw_status == 0 else "failed",
       "${backend}/${browser}: Playwright exited with status %d." % pw_status,
     )
-    # Stream the Playwright line-reporter output into the build log (-L), so
-    # the failing test + assertion are recoverable from build.log alone,
-    # even on failure and without --keep-failed.
+    # Stream the Playwright list-reporter output into the build log (-L), so
+    # each finished attempt and the failing test + assertion are recoverable
+    # from build.log alone, even on a timeout and without --keep-failed.
     print(pw_out)
 
     # Collect failures without aborting the remaining diagnostic lifts.

@@ -3,13 +3,7 @@
 set -euo pipefail
 catalog=end2end/e2e-lanes.json
 root=.xtask/diagnostics
-# Artifact-only verdicts print one JSON report, which the calling `dev` step
-# renders. The verifier is this checkout's cached Nix-built host-proof output.
-evidence() {
-  local out
-  out=$(nix build --no-link --print-out-paths .#host-proof)
-  "$out/bin/e2e-evidence" "$@"
-}
+# A producer builds and lifts; `dev e2e-producer` verifies what it selected.
 jq -er -f scripts/e2e-matrix.jq "$catalog" >/dev/null
 
 # Settle every listed producer, at most $1 at once; xargs owns bounded admission.
@@ -50,6 +44,7 @@ fi
 
 [[ ${1-} == producer ]] || { echo 'expected all, pair or producer' >&2; exit 2; }
 lane=${2:?expected lane identity}
+(( $# == 2 )) || { echo 'expected producer <lane>' >&2; exit 2; }
 jq -e --arg lane "$lane" '[.lanes[] | select(.enabled and .identity == $lane)] | length == 1' "$catalog" >/dev/null
 check="e2e-$lane"
 installable=".#checks.x86_64-linux.$check"
@@ -100,4 +95,3 @@ if (( status != 0 )); then
   exit "$status"
 fi
 (( lift_status == 0 )) || exit 1
-evidence verify --lane "$lane" --catalog "$catalog" --artifacts "$output"

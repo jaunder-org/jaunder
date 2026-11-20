@@ -4,7 +4,7 @@ import subprocess
 from typing import Any
 
 import pytest
-from conftest import FAKE_NIX_STORE, Checkout, launch
+from conftest import FAKE_NIX_STORE, REGISTERED_LATER, Checkout, launch
 
 from dev import steps
 from dev.spans import Cache
@@ -196,6 +196,64 @@ def test_a_refused_output_fails_its_build_step_without_a_cache(
     assert result.stderr == b"build-err\nrefused build-out\n"
     step = checkout.merged()["producer"]["args"]
     assert (step["jaunder.status"], step["process.exit.code"]) == ("failed", 1)
+    assert "jaunder.cache" not in step
+
+
+def realizing(
+    checkout: Checkout, extra: dict[str, str], code: int = 0
+) -> subprocess.CompletedProcess[bytes]:
+    """A plain step that runs its own Nix build, as `run(realizes=...)` sees it.
+
+    The builder registers a fresh output, as the fake store's own build does.
+    """
+    checkout.tool("nix", FAKE_NIX_STORE)
+    checkout.tool(
+        "builder",
+        f'open("built", "w").write("{REGISTERED_LATER}"); sys.exit({code})',
+    )
+    gate = (
+        "from pathlib import Path; from dev import steps; "
+        'sys.exit(steps.gate(Path.cwd(), "dev demo", '
+        'lambda: steps.run("producer", ["builder"], realizes=lambda: "build-out")))'
+    )
+    return checkout.run(launch(gate), checkout.environment(**extra))
+
+
+@pytest.mark.parametrize(
+    ("extra", "cache"),
+    [
+        ({"NIX_VALID": "1"}, "reused"),
+        ({"NIX_ULTIMATE": "1"}, "built"),
+        ({}, "substituted"),
+    ],
+)
+def test_a_step_that_realizes_an_installable_records_its_cache(
+    checkout: Checkout, extra: dict[str, str], cache: str
+) -> None:
+    result = realizing(checkout, extra)
+    assert result.returncode == 0, result
+    # No evaluation: one query of the selected output, after the step.
+    assert checkout.order() == "builder\n" + PATH_INFO
+    step = checkout.merged()["producer"]["args"]
+    assert (step["jaunder.status"], step["jaunder.cache"]) == ("ok", cache)
+    assert step["process.command_line"] == "builder"
+
+
+@pytest.mark.parametrize(
+    ("code", "extra"),
+    [
+        (4, {"NIX_ULTIMATE": "1"}),
+        (0, {"NIX_INFO_FAIL": "1"}),
+        (0, {"NIX_INFO_GARBLED": "1"}),
+    ],
+)
+def test_a_failed_realizing_step_or_query_records_no_cache(
+    checkout: Checkout, code: int, extra: dict[str, str]
+) -> None:
+    result = realizing(checkout, extra, code)
+    assert result.returncode == code
+    step = checkout.merged()["producer"]["args"]
+    assert step["process.exit.code"] == code
     assert "jaunder.cache" not in step
 
 

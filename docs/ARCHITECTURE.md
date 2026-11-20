@@ -4470,7 +4470,8 @@ Diagnostics are captured before the check is allowed to fail
 `trace: "retain-on-failure"` and `screenshot: "only-on-failure"`
 (`end2end/playwright.config.ts:62-63`), and the shared `e2eRunAndCapture` helper
 (`nix/checks.nix:116-185`) runs Playwright capturing its exit, streams the
-line-reporter output into `build.log`, copies every artifact out of the VM
+`list` reporter's output (one line per finished attempt, kept even when a
+timeout kills Playwright) into `build.log`, copies every artifact out of the VM
 unconditionally, and only then asserts the exit. On a failed build
 `scripts/e2e-workflow` recovers the lane's diagnostics from the `--keep-failed`
 build directory its own build log names into `.xtask/diagnostics/<check>/`,
@@ -4587,10 +4588,11 @@ against its return.
 Each gate and each step is an OpenTelemetry span. A step span carries its
 `jaunder.status` (`ok`, `failed`, `signalled`), `process.exit.code`, its command
 line capped at 1 KiB and, for Nix build steps only (every Nix build `dev` runs
-as a step), `jaunder.cache`: `reused` when the store registered the build's
-printed output path before the build started, otherwise `built` or `substituted`
-by `nix path-info`'s `ultimate` flag. The build is the step's only evaluation,
-and the value describes only that output. A `substituted` static verdict is
+as a step, and each E2E producer step for the output its `build.json` selected),
+`jaunder.cache`: `reused` when the store registered the build's printed output
+path before the build started, otherwise `built` or `substituted` by
+`nix path-info`'s `ultimate` flag. The build is the step's only evaluation, and
+the value describes only that output. A `substituted` static verdict is
 expected: static verdicts are sandboxed and input-addressed, so a stamp fetched
 for an identical derivation counts. Coverage and e2e verdicts are never
 substituted. Their `nonSubstitutable` wrapper guards local builds. In CI the

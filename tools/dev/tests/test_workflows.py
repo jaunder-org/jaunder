@@ -149,10 +149,6 @@ FORWARDED: list[tuple[list[str], Commands]] = [
     (["e2e"], [["bash", "scripts/e2e-workflow", "all", ""]]),
     (["e2e", "3"], [["bash", "scripts/e2e-workflow", "all", "3"]]),
     (
-        ["e2e-producer", "sqlite-chromium-ordinary-1-of-2"],
-        [words("bash scripts/e2e-workflow producer sqlite-chromium-ordinary-1-of-2")],
-    ),
-    (
         ["pr-land", "731", "f" * 40],
         [["bash", "scripts/pr-land.sh", "731", "f" * 40, "ordinary"]],
     ),
