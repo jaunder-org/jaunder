@@ -79,7 +79,7 @@ def _retain(run_root: Path, selected: dict[str, Any]) -> None:
     steps.run(
         f"{name}-validate",
         [
-            *PERF_DATA,
+            *steps.tool(PERF_DATA),
             "validate-producer",
             "--producer",
             kind,
@@ -104,7 +104,7 @@ def _retain(run_root: Path, selected: dict[str, Any]) -> None:
 
 
 def measure(request: Request) -> None:
-    nonce = steps.text("perf-nonce", [*PERF_DATA, "nonce"])
+    nonce = steps.text("perf-nonce", [*steps.tool(PERF_DATA), "nonce"])
     run_root = Path(".xtask/performance", nonce)
     (run_root / "producers").mkdir(parents=True, exist_ok=True)
     parameters = {"freshnessNonce": nonce, **dataclasses.asdict(request)}
@@ -118,7 +118,12 @@ def measure(request: Request) -> None:
     )
     steps.run(
         "perf-validate-selection",
-        [*PERF_DATA, "validate-selection", "--selection", str(selection_path)],
+        [
+            *steps.tool(PERF_DATA),
+            "validate-selection",
+            "--selection",
+            str(selection_path),
+        ],
     )
     selection = json.loads(selection_path.read_bytes())
     for selected in selection["producers"]:
@@ -137,13 +142,16 @@ def measure(request: Request) -> None:
         json.dumps(invocation, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
     steps.run(
-        "perf-assemble", [*PERF_DATA, "assemble", "--invocation", str(invocation_path)]
+        "perf-assemble",
+        [*steps.tool(PERF_DATA), "assemble", "--invocation", str(invocation_path)],
     )
 
 
 def compare(result: str) -> None:
-    steps.run("perf-compare", [*PERF_DATA, "compare", "--result", result])
+    steps.run("perf-compare", [*steps.tool(PERF_DATA), "compare", "--result", result])
 
 
 def import_baseline(run_id: str) -> None:
-    steps.run("perf-import-baseline", [*PERF_DATA, "import-baseline", run_id])
+    steps.run(
+        "perf-import-baseline", [*steps.tool(PERF_DATA), "import-baseline", run_id]
+    )

@@ -52,15 +52,25 @@ def launch(code: str, *args: str) -> list[str]:
     return [sys.executable, "-P", "-c", LAUNCH + code, str(PACKAGE), *args]
 
 
+def _script(path: Path, body: str) -> None:
+    path.write_text(f"#!{sys.executable}\n{PRELUDE}{body}\n", encoding="utf-8")
+    path.chmod(0o755)
+
+
 @dataclass
 class Checkout:
     root: Path
     bin: Path
 
     def tool(self, name: str, body: str) -> None:
-        path = self.bin / name
-        path.write_text(f"#!{sys.executable}\n{PRELUDE}{body}\n", encoding="utf-8")
-        path.chmod(0o755)
+        _script(self.bin / name, body)
+
+    def built(self, name: str, body: str) -> None:
+        """A tools-workspace binary where its build step leaves it; a fake
+        `cargo` stands in for that build."""
+        path = self.root / "tools" / "target" / "debug" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _script(path, body)
 
     def environment(self, **extra: str) -> dict[str, str]:
         environment = {
@@ -233,11 +243,27 @@ if [ "$name $*" = "${FAIL_COMMAND-}" ]; then
     printf '%s failed\n' "$name" >&2
     exit 17
 fi
+# A tool build leaves this fake as the built tool, so the tool records itself.
+if [ "$name $1" = "cargo build" ]; then
+    target= binary= previous=
+    for argument in "$@"; do
+        case "$previous" in
+          --target-dir) target=$argument ;;
+          --bin) binary=$argument ;;
+        esac
+        previous=$argument
+    done
+    if [ -n "$target" ] && [ -n "$binary" ]; then
+        mkdir -p "$target/debug"
+        cp "$0" "$target/debug/$binary"
+    fi
+fi
 case "$name $*" in
-  'cargo run '*' -p host-proof --bin csr-prerequisite -- '*)
+  'csr-prerequisite '*)
     for root; do :; done
     printf '/verified%s\n' "$root" ;;
-  'cargo run '*' -p host-proof --bin '*|'cargo run '*' --bin coverage-check '*)
+  'admit-inputs '*|'e2e-evidence '*|'e2e-local '*|'source-diagnostics '*|\
+  'trace-analysis '*|'wasm-audit '*|'coverage-check '*)
     printf '{"steps":[]}\n' ;;
 esac
 """

@@ -58,9 +58,10 @@ if os.environ["PERF_MODE"] == "build-failure" and name == "performance-browser-s
 print(os.environ.get("PERF_IDENTITY", pathlib.Path(os.environ["PERF_OUTPUTS"], name)))
 """
 )
-CARGO = f"""\
+# perf-data, as its build leaves it.
+PERF_DATA = f"""\
 log = pathlib.Path(os.environ["PERF_LOG"])
-command = sys.argv[sys.argv.index("--") + 1]
+command = sys.argv[1]
 if command == "nonce":
     print("{NONCE}")
 elif command == "validate-selection":
@@ -75,7 +76,7 @@ elif command == "validate-producer":
     sys.exit(not status["ok"])
 elif command == "assemble":
     with log.open("a") as out:
-        out.write(" ".join(["assemble", *sys.argv[sys.argv.index("--") + 2:]]) + "\\n")
+        out.write(" ".join(["assemble", *sys.argv[2:]]) + "\\n")
 else:
     sys.exit(91)
 """
@@ -154,7 +155,8 @@ def fixture(checkout: Checkout, failed: str | None = None) -> Perf:
         )
         (root / "fragments" / "placeholder.json").write_text("{}")
     checkout.tool("nix", "import json\n" + NIX)
-    checkout.tool("cargo", "import json\n" + CARGO)
+    checkout.tool("cargo", "")
+    checkout.built("perf-data", "import json\n" + PERF_DATA)
     return Perf(checkout, outputs)
 
 
@@ -280,6 +282,16 @@ def test_every_retained_producer_is_assembled_into_one_invocation(
         "performance-browser-postgres-chromium/performance",
     }
     assert document["producers"][2]["browser"] is None
+    # Every perf-data use after the first runs the binary its one build left.
+    order = perf.checkout.order().splitlines()
+    assert [line for line in order if line.startswith("cargo ")] == [
+        (
+            "cargo build --locked --quiet --manifest-path tools/Cargo.toml "
+            "--target-dir tools/target -p performance --bin perf-data"
+        )
+    ]
+    assert order[0].startswith("cargo build ")
+    assert len([line for line in order if line.startswith("perf-data ")]) == 7
 
 
 @pytest.mark.parametrize(

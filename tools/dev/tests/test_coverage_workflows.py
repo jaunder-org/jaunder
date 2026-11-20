@@ -10,15 +10,15 @@ from conftest import FAKE_NIX_STORE, Checkout, Workflow
 
 CLEAN = ["git", "status", "--porcelain", "--untracked-files=all"]
 NIX_BUILD = "nix build -L --no-update-lock-file --no-write-lock-file"
-CARGO_RUN = "cargo run --locked --quiet --manifest-path tools/Cargo.toml"
 STEPS = {
     "coverage": [
         f"{NIX_BUILD} --print-out-paths --out-link .xtask/gcroots/coverage .#checks.x86_64-linux.coverage",
         f"{NIX_BUILD} --print-out-paths --no-link .#checks.x86_64-linux.coverage-gate",
         (
-            f"{CARGO_RUN} -p coverage --features host --bin coverage-check -- "
-            "policy --out .xtask/gcroots/coverage"
+            "cargo build --locked --quiet --manifest-path tools/Cargo.toml "
+            "--target-dir tools/target -p coverage --features host --bin coverage-check"
         ),
+        "coverage-check policy --out .xtask/gcroots/coverage",
     ],
     "doctests": [
         f"{NIX_BUILD} --print-out-paths --out-link .xtask/gcroots/doctests .#checks.x86_64-linux.doctests",

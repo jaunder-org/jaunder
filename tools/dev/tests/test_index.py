@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from conftest import REAL_GIT, Workflow
+from conftest import FAKE, REAL_GIT, Workflow
 from test_gates import CHECK_NO_TEST, PREPUSH_SHARES_DOCS, STATIC_DOCS, docs_shape
 
 from dev import index
@@ -20,8 +20,9 @@ from dev.index import PathStatus, Reason, Refused, Snapshot
 shared_docs = pytest.mark.skipif(
     not PREPUSH_SHARES_DOCS, reason="the shared docs verdict is x86_64-linux only"
 )
-# What the fakes and `dev` write into the checkout root.
-EXCLUDE = "/order\n/commands\n/cache-env\n/cargo-env\n/.xtask/\n"
+# What the fakes and `dev` write into the checkout root; Jaunder's checkout
+# ignores built tools as well.
+EXCLUDE = "/order\n/commands\n/cache-env\n/cargo-env\n/.xtask/\n/tools/target/\n"
 MARKDOWN_HOST = [
     ["prettier", "-w", "**/*.md"],
     ["prettier", "-w", "end2end"],
@@ -78,6 +79,19 @@ class Repo:
 
     def tool(self, name: str, body: str) -> None:
         self.workflow.checkout.tool(name, body)
+
+    def fmt(self, body: str) -> None:
+        """Scripts `cargo fmt`, the broad host's first step; every other Cargo
+        command reaches the recording fake, so the tools still build."""
+        fake = self.workflow.checkout.bin.parent / "fake" / "cargo"
+        fake.parent.mkdir(exist_ok=True)
+        fake.write_text(FAKE, encoding="utf-8")
+        fake.chmod(0o755)
+        self.tool(
+            "cargo",
+            "if sys.argv[1:] != ['fmt']:\n"
+            f"    os.execv({str(fake)!r}, [{str(fake)!r}, *sys.argv[1:]])\n" + body,
+        )
 
 
 @pytest.fixture
@@ -152,8 +166,7 @@ def test_precommit_reconciles_staged_fixes_even_after_a_host_failure(
 ) -> None:
     repo.write("guide.txt", "staged\n")
     repo.git("add", "guide.txt")
-    repo.tool(
-        "cargo",
+    repo.fmt(
         "pathlib.Path('guide.txt').write_text('formatted\\n')\nsys.exit(23)",
     )
     result = repo.dev("precommit")
@@ -172,8 +185,7 @@ def test_precommit_preserves_the_host_failure_when_the_after_snapshot_fails(
     repo.write("guide.txt", "staged\n")
     repo.git("add", "guide.txt")
     index_before = repo.git("diff", "--cached", "--raw")
-    repo.tool(
-        "cargo",
+    repo.fmt(
         "pathlib.Path('guide.txt').write_text('formatted\\n')\n"
         "os.rename('.git', '.xtask/parked-git')\n"
         "sys.exit(23)",
@@ -200,8 +212,7 @@ def test_precommit_stages_only_safe_fixes_beside_unowned_changes(repo: Repo) -> 
     repo.commit()
     repo.write("guide.txt", "staged\n")
     repo.git("add", "guide.txt")
-    repo.tool(
-        "cargo",
+    repo.fmt(
         "for name, text in [('guide.txt', 'formatted'), ('unowned.txt', 'unexpected'),"
         " ('new.txt', 'new')]:\n"
         "    pathlib.Path(name).write_text(text + '\\n')\n"
@@ -225,7 +236,7 @@ def test_precommit_never_stages_mixed_work_or_preexisting_untracked_files(
     repo.git("add", "guide.txt")
     repo.write("guide.txt", "unstaged author work\n")
     repo.write("notes.txt", "untracked author work\n")
-    repo.tool("cargo", "pathlib.Path('guide.txt').write_text('formatted\\n')")
+    repo.fmt("pathlib.Path('guide.txt').write_text('formatted\\n')")
     result = repo.dev("precommit")
     assert result.returncode == 1
     assert result.stdout.startswith(
@@ -259,7 +270,7 @@ def test_precommit_refuses_to_stage_beside_unsafe_index_state(
     else:
         (repo.root / "link").symlink_to("guide.md")
         repo.git("add", "link")
-    repo.tool("cargo", "pathlib.Path('guide.txt').write_text('formatted\\n')")
+    repo.fmt("pathlib.Path('guide.txt').write_text('formatted\\n')")
     result = repo.dev("precommit")
     assert result.returncode == 1
     assert refusal in stderr(result)
@@ -281,8 +292,7 @@ def test_an_unreadable_index_refuses_before_any_check(repo: Repo) -> None:
 def test_a_signalled_host_check_stops_the_gate_without_staging(repo: Repo) -> None:
     repo.write("guide.txt", "staged\n")
     repo.git("add", "guide.txt")
-    repo.tool(
-        "cargo",
+    repo.fmt(
         "pathlib.Path('guide.txt').write_text('formatted\\n')\n"
         "os.kill(os.getpid(), signal.SIGKILL)",
     )
@@ -298,7 +308,7 @@ def test_a_partial_commit_reconciles_the_hooks_temporary_index(repo: Repo) -> No
     hook = repo.root / ".git" / "hooks" / "pre-commit"
     hook.write_text("#!/bin/sh\nexec dev precommit\n")
     hook.chmod(0o755)
-    repo.tool("cargo", "pathlib.Path('guide.txt').write_text('formatted\\n')")
+    repo.fmt("pathlib.Path('guide.txt').write_text('formatted\\n')")
     repo.write("other.txt", "staged elsewhere\n")
     repo.git("add", "other.txt")
     repo.write("guide.txt", "partial\n")
@@ -325,11 +335,7 @@ def test_host_checks_never_inherit_the_hooks_repository(
     """A check that initialises a scratch repository (as cargo test and pytest
     do) initialises it, not the hooked repository (which it could make bare)."""
     scratch = tmp_path / "scratch"
-    repo.tool(
-        "cargo",
-        "if sys.argv[1:] == ['fmt']:\n"
-        f"    subprocess.run(['git', 'init', '-q', {str(scratch)!r}], check=True)",
-    )
+    repo.fmt(f"subprocess.run(['git', 'init', '-q', {str(scratch)!r}], check=True)")
     repo.write("guide.txt", "staged\n")
     repo.git("add", "guide.txt")
     result = repo.dev("precommit")

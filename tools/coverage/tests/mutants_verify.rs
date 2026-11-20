@@ -23,10 +23,11 @@ fn verify_with_binary(fixture: Option<&Path>, status: i32, binary: &Path) -> Out
         &cargo,
         r#"#!/usr/bin/env bash
 set -eu
-if [ "$1" = run ]; then
-  while [ "$1" != -- ]; do shift; done
-  shift
-  exec "$CHECK_BIN" "$@"
+# `dev` builds coverage-check, then runs tools/target/debug/coverage-check:
+# the binary under test. A missing one cannot be launched.
+if [ "$1" = build ]; then
+  [ -x "$CHECK_BIN" ] || exit 127
+  exit 0
 fi
 [ "$1" = mutants ] || exit 64
 while [ "$#" -gt 0 ]; do

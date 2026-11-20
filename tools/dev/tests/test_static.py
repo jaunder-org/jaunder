@@ -187,7 +187,7 @@ PREPARATION = {
     "leptosfmt": [
         (
             "cargo build --locked --quiet --manifest-path tools/Cargo.toml "
-            "-p repository-policy --bin scoped-leptosfmt --target-dir tools/target"
+            "--target-dir tools/target -p repository-policy --bin scoped-leptosfmt"
         )
     ],
 }

@@ -15,9 +15,9 @@ from dev import e2e, index, report, static, steps
 from dev.checkout import clean_tree
 from dev.commands import (
     COVERAGE_CHECK,
-    HOST_PROOF,
-    REPOSITORY_POLICY,
     SOURCE_CONTRACT,
+    host_proof,
+    repository_policy,
 )
 from dev.static import Mode
 
@@ -108,7 +108,7 @@ def markdown(mode: Mode, docs: Docs) -> None:
 
 
 def repository_docs(check: str) -> None:
-    steps.run(check, [*REPOSITORY_POLICY, "repository-docs", "--", check])
+    steps.run(check, [*steps.tool(repository_policy("repository-docs")), check])
 
 
 def docs_shape() -> None:
@@ -117,7 +117,7 @@ def docs_shape() -> None:
 
 
 def source_contract(name: str) -> None:
-    steps.run(name, [*SOURCE_CONTRACT, name])
+    steps.run(name, [*steps.tool(SOURCE_CONTRACT), name])
 
 
 def source_contracts() -> None:
@@ -142,21 +142,24 @@ def elisp_checks(mode: Mode) -> None:
 # Shared steps of the gates.
 
 
+TOOLS_TESTS = (
+    "--manifest-path",
+    "tools/Cargo.toml",
+    "--lib",
+    "--bins",
+    "--tests",
+    "--features",
+    "coverage/host",
+)
+
+
 def host_tests() -> None:
-    steps.run(
-        "tools-tests",
-        [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "tools/Cargo.toml",
-            "--lib",
-            "--bins",
-            "--tests",
-            "--features",
-            "coverage/host",
-        ],
-    )
+    # Compiled first with the run's own arguments, so `tools-tests` times the
+    # tests alone.
+    steps.run("tools-tests-build", ["cargo", "test", "--no-run", *TOOLS_TESTS])
+    # The build rebuilt the tools' binaries with the tests' features.
+    steps.forget_tools()
+    steps.run("tools-tests", ["cargo", "test", *TOOLS_TESTS])
     steps.run("ruff-format", ["ruff", "format", "--check", "tools/dev"])
     steps.run("ruff-check", ["ruff", "check", "tools/dev"])
     steps.run("mypy", ["mypy", "--strict", "tools/dev"])
@@ -191,30 +194,41 @@ def test_local(nextest_args: tuple[str, ...] = ()) -> None:
             fcntl.flock(lock, fcntl.LOCK_EX)
         bundle = os.environ.get("JAUNDER_CSR_BUNDLE_DIR")
         if bundle is None:
-            steps.run(
-                "csr-admission",
-                [*HOST_PROOF, "admit-inputs", "--", ".#csrBundle.sourceAdmits"],
-            )
+            admit = steps.tool(host_proof("admit-inputs"))
+            steps.run("csr-admission", [*admit, ".#csrBundle.sourceAdmits"])
             bundle = csr_bundle()
-        root = steps.text(
-            "csr-prerequisite", [*HOST_PROOF, "csr-prerequisite", "--", bundle]
-        )
-        # Storage and seeding tests start the application worker, so it is
-        # built even when nextest selects only storage. aws-lc-sys keys its
+        prerequisite = steps.tool(host_proof("csr-prerequisite"))
+        root = steps.text("csr-prerequisite", [*prerequisite, bundle])
+        # One environment for every Cargo step below: build scripts track
+        # these (server's JAUNDER_CSR_BUNDLE_DIR, aws-lc-sys's CFLAGS), so any
+        # difference would rebuild between them. aws-lc-sys keys its
         # FORTIFY_SOURCE handling on CFLAGS being present: set it empty when
         # absent and keep an inherited value unchanged.
+        environment = {
+            "CFLAGS": os.environ.get("CFLAGS", ""),
+            "JAUNDER_CSR_BUNDLE_DIR": root,
+            "JAUNDER_TEST_EXECUTABLE": str(Path.cwd() / "target/debug/jaunder"),
+        }
+        # Storage and seeding tests start the application worker, so it is
+        # built even when nextest selects only storage.
         steps.run(
             "image-worker",
             ["cargo", "build", "--locked", "-p", "jaunder", "--bin", "jaunder"],
-            environment={"CFLAGS": os.environ.get("CFLAGS", "")},
+            environment=environment,
         )
+        if not nextest_args:
+            # The tests compile apart from their run when `dev` chooses the
+            # selection. Hand-typed arguments may include run options nextest
+            # refuses with --no-run (--no-fail-fast), so they compile in the run.
+            steps.run(
+                "nextest-build",
+                ["cargo", "nextest", "run", "--no-run", "--workspace"],
+                environment=environment,
+            )
         steps.run(
             "nextest",
             ["pg-run", "cargo", "nextest", "run", *(nextest_args or ("--workspace",))],
-            environment={
-                "JAUNDER_CSR_BUNDLE_DIR": root,
-                "JAUNDER_TEST_EXECUTABLE": str(Path.cwd() / "target/debug/jaunder"),
-            },
+            environment=environment,
         )
 
 
@@ -241,7 +255,7 @@ def wasm_budget() -> None:
     bundle = Path(csr_bundle()).resolve()
     steps.run(
         "wasm-budget",
-        [*HOST_PROOF, "wasm-audit", "--", "budget", "--site-path", str(bundle)],
+        [*steps.tool(host_proof("wasm-audit")), "budget", "--site-path", str(bundle)],
         report.render,
     )
 
@@ -260,7 +274,7 @@ def coverage_workflow() -> None:
     _producer_and_gate("coverage")
     steps.run(
         "coverage-policy",
-        [*COVERAGE_CHECK, "policy", "--out", f"{steps.GCROOTS}/coverage"],
+        [*steps.tool(COVERAGE_CHECK), "policy", "--out", f"{steps.GCROOTS}/coverage"],
         report.render,
     )
 
@@ -271,7 +285,8 @@ def doctests_workflow() -> None:
 
 def elisp_coverage() -> None:
     steps.nix_check("elisp-coverage-producer")
-    steps.run("elisp-consume", [*COVERAGE_CHECK, "elisp-consume"], report.render)
+    consume = [*steps.tool(COVERAGE_CHECK), "elisp-consume"]
+    steps.run("elisp-consume", consume, report.render)
 
 
 # Gates.

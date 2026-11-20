@@ -28,6 +28,7 @@ from typing import Any
 from opentelemetry.trace import Span
 
 from dev import trace
+from dev.commands import Tool
 from dev.spans import CACHE, COMMAND_LINE, EXIT_CODE, STATUS, Cache, Status
 
 _HANDLED = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
@@ -307,6 +308,26 @@ def output(
     `stdin`, if given, is the step's whole standard input.
     """
     return _run(name, argv, True, environment, stdin=stdin)
+
+
+# The tools this process has built and not since rebuilt.
+_built: set[Tool] = set()
+
+
+def tool(built: Tool) -> list[str]:
+    """The argv that runs `built`, built first as the step `<binary>-build`.
+
+    A process builds each tool once; `forget_tools` makes it build again.
+    """
+    if built not in _built:
+        run(f"{built.binary}-build", built.build())
+        _built.add(built)
+    return [built.path]
+
+
+def forget_tools() -> None:
+    """After a step that rebuilt the tools' binaries some other way."""
+    _built.clear()
 
 
 def _shell_text(output: bytes) -> str:
