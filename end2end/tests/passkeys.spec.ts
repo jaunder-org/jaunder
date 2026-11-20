@@ -19,15 +19,14 @@ import { navigateInApp } from "./navigate";
 import { SEL } from "./selectors";
 import { applySeededSession, seedConfigViaTool } from "./seed";
 import { installVirtualAuthenticator } from "./virtual-authenticator";
+import { projectsInRole } from "../e2eProjects";
 
 const PASSKEY_PAGE = '[data-test="passkeys-page"]';
 const PASSKEY_LOGIN = '[data-test="passkey-login-button"]';
 const PASSKEYS_LIST = '[data-test="passkey-credentials-list"]';
-// The serial site-settings project in the unsplit graph and in the split lane.
-const CHROMIUM_SITE_SETTINGS_PROJECTS = [
-  "chromium-admin-site",
-  "chromium-special-global-configuration",
-];
+const CHROMIUM_SITE_SETTINGS_PROJECTS = projectsInRole("siteSettings", [
+  "chromium",
+]);
 
 async function exposeNonSuccessfulWebAuthn(page: Page): Promise<void> {
   await page.addInitScript(() => {

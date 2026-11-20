@@ -1,6 +1,12 @@
 import { readFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import {
+  type Topology,
+  gatedBrowsers,
+  projectName,
+  roles,
+} from "./e2eProjects";
 
 type CensusTest = {
   file: string;
@@ -66,42 +72,22 @@ function population(census: Census): Set<string> {
   return set;
 }
 // Each browser's split lane projects must select exactly its unsplit graph.
-const graphs: Record<string, { unsplit: string[]; split: string[] }> = {
-  chromium: {
-    unsplit: [
-      "chromium-visual",
-      "chromium",
-      "chromium-admin-site",
-      "chromium-admin",
-    ],
-    split: [
-      "chromium-ordinary",
-      "chromium-special-visual",
-      "chromium-special-global-configuration",
-      "chromium-special-invite",
-    ],
-  },
-  firefox: {
-    unsplit: [
-      "firefox-visual",
-      "firefox",
-      "firefox-admin-site",
-      "firefox-admin",
-    ],
-    split: [
-      "firefox-ordinary",
-      "firefox-special-visual",
-      "firefox-special-global-configuration",
-      "firefox-special-invite",
-    ],
-  },
-};
-for (const [browser, graph] of Object.entries(graphs)) {
+for (const browser of gatedBrowsers) {
+  const projects = (topology: Topology) =>
+    roles.map((role) => projectName(browser, topology, role));
   const unsplit = population(
-    run(browser, `test-results/unsplit-${browser}-census.json`, graph.unsplit),
+    run(
+      browser,
+      `test-results/unsplit-${browser}-census.json`,
+      projects("unsplit"),
+    ),
   );
   const split = population(
-    run(browser, `test-results/split-${browser}-census.json`, graph.split),
+    run(
+      browser,
+      `test-results/split-${browser}-census.json`,
+      projects("split"),
+    ),
   );
   const missing = [...unsplit].filter((id) => !split.has(id));
   const unexpected = [...split].filter((id) => !unsplit.has(id));
