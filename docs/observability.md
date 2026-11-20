@@ -762,13 +762,12 @@ lane; fast feedback only in the static one.
 
 **Regeneration is explicit.** Every output is lane-qualified. The reconciled
 SQLite/Chromium lanes are the sole empirical source in local and CI workflows
-([split Chromium E2E lanes](adr/drafts/split-chromium-e2e-lanes.md)).
-Verification never builds a VM. It reads only lifted `e2e-<lane>` directories,
-and only after reconciliation proves the exact lane set, a complete disjoint
-population and a successful phase sidecar per lane. Each capture is extracted on
-its own, because span ids are unique only within one lane, and the per-lane
-coverage is unioned. Nix retains the existing finalization, archive hash/size
-and retention checks.
+([split Chromium E2E lanes](adr/0253-split-chromium-e2e-lanes.md)). Verification
+never builds a VM. It reads only lifted `e2e-<lane>` directories, and only after
+reconciliation proves the exact lane set, a complete disjoint population and a
+successful phase sidecar per lane. Each capture is extracted on its own, because
+span ids are unique only within one lane, and the per-lane coverage is unioned.
+Nix retains the existing finalization, archive hash/size and retention checks.
 
 SQLite/Chromium is authoritative because the Chromium split projects partition
 every spec file exactly once and no test is browser- or backend-conditional — so

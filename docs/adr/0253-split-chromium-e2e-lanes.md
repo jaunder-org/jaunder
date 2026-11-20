@@ -1,15 +1,14 @@
-# ADR-DRAFT: Split Chromium E2E lanes and reconcile flow coverage
+# ADR-0253: Split Chromium E2E lanes and reconcile flow coverage
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-19
 - Issue: [#1969](https://github.com/jaunder-org/jaunder/issues/1969)
 
 ## Context
 
-[ADR-0203](../0203-distribute-ci-validation-and-firefox-e2e-lanes.md) split
-Firefox into three isolated lanes per backend and kept Chromium as one unsplit
-lane per backend. By November 2026 that Chromium lane had become the E2E long
-pole:
+[ADR-0203](0203-distribute-ci-validation-and-firefox-e2e-lanes.md) split Firefox
+into three isolated lanes per backend and kept Chromium as one unsplit lane per
+backend. By November 2026 that Chromium lane had become the E2E long pole:
 
 - On AWS-hosted GitHub runners it took about 1484 s against the shared 1500 s
   Playwright cap, and some runs were killed with no failing test (#1985).
@@ -18,11 +17,10 @@ pole:
 - PostgreSQL/Chromium had already needed a one-off 1800 s cap.
 
 The unsplit SQLite/Chromium producer was also the sole source of server-function
-flow coverage ([ADR-0081](../0081-empirical-server-fn-flow-coverage.md)). Its
+flow coverage ([ADR-0081](0081-empirical-server-fn-flow-coverage.md)). Its
 consumer accepted only that producer's registered immutable `/nix/store` output
-and ran in the producer's job
-([ADR-0238](../0238-just-e2e-workflow-ownership.md); ADR-0203's
-producer/consumer-within-one-job rule).
+and ran in the producer's job ([ADR-0238](0238-just-e2e-workflow-ownership.md);
+ADR-0203's producer/consumer-within-one-job rule).
 
 ## Decision
 

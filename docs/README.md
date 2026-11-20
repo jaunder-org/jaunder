@@ -281,6 +281,7 @@ convention). See the Status column below for each ADR's current status.
 | [0250](adr/0250-graceful-shutdown-takes-a-final-backup.md)               | Graceful shutdown takes a final backup                                                                       | accepted   |
 | [0251](adr/0251-dev-runner-replaces-just.md)                             | A Python `dev` runner with OpenTelemetry tracing replaces Just                                               | accepted   |
 | [0252](adr/0252-substitutable-static-verdicts.md)                        | Static verdicts may be substituted; coverage and e2e may not                                                 | accepted   |
+| [0253](adr/0253-split-chromium-e2e-lanes.md)                             | Split Chromium E2E lanes and reconcile flow coverage                                                         | accepted   |
 
 <!-- adr-table:end -->
 

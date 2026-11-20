@@ -4195,7 +4195,7 @@ serial-special lane owning visual, global-configuration, and invite projects in
 dependency order. Unsplit catalog lanes are disabled; unsplit Firefox workers=2
 and workers=4 remain package-only measurement controls
 ([distributed CI lane topology](adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md),
-[split Chromium E2E lanes](adr/drafts/split-chromium-e2e-lanes.md)). Each lane's
+[split Chromium E2E lanes](adr/0253-split-chromium-e2e-lanes.md)). Each lane's
 one- or two-hex-digit `traceSeed` expands to a distinct trace id.
 
 CI runs twelve lane-qualified producers with `fail-fast: false`, all under the
@@ -4233,8 +4233,8 @@ before returning the real producer failure. Every producer only verifies its own
 lane. Server-function coverage belongs to the SQLite/Chromium reconciliation: it
 reconciles that pair's lifted artifacts first, then extracts each lane's capture
 on its own and unions the coverage
-([split Chromium E2E lanes](adr/drafts/split-chromium-e2e-lanes.md)). Failed
-kept outputs remain diagnostic only, and a failed phase fails reconciliation.
+([split Chromium E2E lanes](adr/0253-split-chromium-e2e-lanes.md)). Failed kept
+outputs remain diagnostic only, and a failed phase fails reconciliation.
 Artifact verifiers read runtime lane/catalog expectations; the embedded Rust
 catalog, Rust lane scheduler and E2E result/report envelopes are deleted.
 Reusable ownership, retry-duration, boot-trace and coverage verdicts stay in
@@ -5214,7 +5214,7 @@ inventory, and an e2e lane (host-proof
 `tools/host-proof/src/steps/server_fn_coverage_check.rs`) that recomputes that
 snapshot from the lifted SQLite/Chromium lane artifacts and runtime catalog,
 after reconciling that pair
-([split Chromium E2E lanes](adr/drafts/split-chromium-e2e-lanes.md)). Static
+([split Chromium E2E lanes](adr/0253-split-chromium-e2e-lanes.md)). Static
 inventory checking remains independent of E2E production; regeneration is
 explicit.
 
