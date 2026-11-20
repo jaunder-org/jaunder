@@ -87,6 +87,18 @@ def test_failed_query_records_no_cache_and_changes_nothing_else(
     assert "jaunder.cache" not in step
 
 
+def test_a_query_that_cannot_start_records_no_cache(checkout: Checkout) -> None:
+    # The build succeeds, then `nix` is gone before its output is queried.
+    checkout.tool("nix", 'print("/nix/store/0000-demo")\nos.unlink(sys.argv[0])')
+    result = checkout.run(checkout.command("nix-check", "demo"), checkout.environment())
+
+    assert result.returncode == 0, result
+    assert result.stderr == b""
+    step = checkout.merged()["demo"]["args"]
+    assert step["jaunder.status"] == "ok"
+    assert "jaunder.cache" not in step
+
+
 def test_cache_shows_in_the_summary(checkout: Checkout) -> None:
     assert nix_check(checkout, NIX_VALID="1").returncode == 0
     (run,) = checkout.runs()
