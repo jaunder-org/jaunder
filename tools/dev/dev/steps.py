@@ -8,7 +8,7 @@ Termination requests sent to `dev` alone are handled for the whole gate. While
 a step's child runs, SIGTERM and SIGHUP are forwarded to it and `dev` waits for
 it; a terminal's SIGINT already reaches the whole foreground process group, so
 `dev` only waits. At any other point (between steps, or while a Nix check
-probes its output) the gate stops at once. Either way the open spans close as
+queries its output) the gate stops at once. Either way the open spans close as
 `signalled`, the merged trace is written and `dev` exits with 128+n.
 """
 
@@ -19,6 +19,7 @@ import shlex
 import signal
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from types import FrameType
@@ -353,11 +354,21 @@ def _store_entry(path: str) -> dict[str, Any] | None:
     return entry
 
 
-def _built_source(output: str) -> Cache:
-    """Where a freshly valid output came from: built here, or substituted."""
-    entry = _store_entry(output)
-    if entry is None:
-        raise _QueryFailed
+def output_source(entry: Mapping[str, Any] | None, start: int) -> Cache | None:
+    """Where a built output came from, by when the store registered it.
+
+    `entry` is the output's `nix path-info` entry after the build, `start` the
+    wall-clock second at which the build started. A path registered before that
+    second was already valid; one registered after it is new, `built` here if
+    `ultimate` and otherwise substituted. In the start second itself, or with no
+    usable registration time, it cannot tell: None.
+    """
+    registered = None if entry is None else entry.get("registrationTime")
+    # bool is an int to Python, never to `nix path-info`.
+    if entry is None or type(registered) is not int or registered == start:
+        return None
+    if registered < start:
+        return Cache.REUSED
     return Cache.BUILT if entry.get("ultimate") else Cache.SUBSTITUTED
 
 
@@ -366,32 +377,23 @@ def nix_build(
     installable: str,
     flags: Sequence[str] = NIX_FLAGS,
     keep: bool = True,
-    output: str | None = None,
     refusal: Callable[[str], str | None] | None = None,
 ) -> str:
     """Builds one flake installable as the step `name`; returns its output path.
 
-    `keep` holds the output as the GC root GCROOTS/`name`. `flags` apply to the
-    build and to its probes alike. The step records `jaunder.cache` for the
-    top-level output only: `reused` if it was already valid, else `built` or
-    `substituted`. That output is `<installable>.outPath`, or `output` when the
-    caller knows it (a derivation installable has no attribute to evaluate). A
-    failed query records nothing rather than guess, and never changes the step.
-    `refusal`, if given, judges the output path as `text` judges its text.
+    `keep` holds the output as the GC root GCROOTS/`name`. The build is the
+    step's only evaluation. Afterwards the step records `jaunder.cache` for the
+    one output path the build printed, judged by `output_source`. Several
+    printed paths, an undecidable registration or a failed query record nothing
+    rather than guess, and never change the step. `refusal`, if given, judges
+    the printed output as `text` judges its text.
     """
     if keep:
         Path(GCROOTS).mkdir(parents=True, exist_ok=True)
     link = ["--out-link", f"{GCROOTS}/{name}"] if keep else ["--no-link"]
     argv = ["nix", "build", "-L", *flags, "--print-out-paths", *link, installable]
     with _step(name, argv) as span:
-        try:
-            if output is None:
-                output = _query(
-                    "nix", "eval", "--raw", *flags, f"{installable}.outPath"
-                ).decode()
-            reused = _store_entry(output) is not None
-        except _QueryFailed:
-            output, reused = None, False
+        start = int(time.time())
         code, signalled, printed = _supervise(argv, capture=True)
         built = _shell_text(printed)
         if refusal is not None and not code:
@@ -400,11 +402,11 @@ def nix_build(
                 print(reason, file=sys.stderr, flush=True)
                 code = 1
         _record_outcome(span, code, signalled)
-        if code == 0 and output is not None:
+        if code == 0 and len(built.splitlines()) == 1:
             with contextlib.suppress(_QueryFailed):
-                span.set_attribute(
-                    CACHE, Cache.REUSED if reused else _built_source(output)
-                )
+                cache = output_source(_store_entry(built), start)
+                if cache is not None:
+                    span.set_attribute(CACHE, cache)
     if code:
         raise StepFailed(code, signalled)
     return built

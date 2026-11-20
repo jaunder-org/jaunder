@@ -29,13 +29,15 @@ SELECTION = {
     "count_overrides": {"posts": None, "authors": None, "revisions": None},
 }
 # The selector, the store and the build of each producer; MODE injects one
-# failure. A producer's output is valid, built here, once it has been built.
+# failure. A producer's output is valid once it has been built, built here and
+# registered far in the future, so after the build step started.
 NIX = """\
 log = pathlib.Path(os.environ["PERF_LOG"])
 if sys.argv[1] == "path-info":
     path = sys.argv[-1]
     built = log.exists() and f"build:{pathlib.Path(path).name}" in log.read_text()
-    print(json.dumps({path: {"ultimate": True} if built else None}))
+    entry = {"ultimate": True, "registrationTime": 4102444800}
+    print(json.dumps({path: entry if built else None}))
     sys.exit(0)
 if sys.argv[1] == "eval":
     # The checkout is a git+file: flake, never a path: copy of .git and target/.
