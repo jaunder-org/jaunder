@@ -19,10 +19,14 @@ import { navigateInApp } from "./navigate";
 import { SEL } from "./selectors";
 import { applySeededSession, seedConfigViaTool } from "./seed";
 import { installVirtualAuthenticator } from "./virtual-authenticator";
+import { projectsInRole } from "../e2eProjects";
 
 const PASSKEY_PAGE = '[data-test="passkeys-page"]';
 const PASSKEY_LOGIN = '[data-test="passkey-login-button"]';
 const PASSKEYS_LIST = '[data-test="passkey-credentials-list"]';
+const CHROMIUM_SITE_SETTINGS_PROJECTS = projectsInRole("siteSettings", [
+  "chromium",
+]);
 
 async function exposeNonSuccessfulWebAuthn(page: Page): Promise<void> {
   await page.addInitScript(() => {
@@ -82,7 +86,7 @@ test("Chromium passkeys enroll, authenticate discoverably, refresh metadata, and
   setTestBudget(90_000);
   test.skip(
     browserName !== "chromium" ||
-      testInfo.project.name !== "chromium-admin-site",
+      !CHROMIUM_SITE_SETTINGS_PROJECTS.includes(testInfo.project.name),
     "real resident-key ceremonies run in the serial Chromium site-settings project",
   );
 

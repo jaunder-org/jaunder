@@ -200,7 +200,7 @@ in
   # Full interactive shell for local development.
   default = pkgs.mkShell (shellEnv // { buildInputs = ciInputs ++ devOnly; });
 } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-  # Only e2e-chromium and e2e-firefox-lane enter this host shell. Keep the
+  # Only the e2e-catalog, e2e-lane and e2e-reconcile jobs enter this host shell. Keep the
   # checkout-bound TMPDIR contract and native library prepend from shellEnv,
   # but do not inherit validation, browser, IDE-provisioning, or theme tools.
   ci-e2e = pkgs.mkShell {

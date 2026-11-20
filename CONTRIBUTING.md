@@ -671,26 +671,29 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
   gesture, losing the click. Keep destination-content assertions; do not repair
   this readiness gap with sleeps, larger timeouts or retries.
 
-- **The authoritative workflow** — `dev e2e` attempts all eight enabled hermetic
-  Nix VM lanes, then reconciles both Firefox backends even after producer
-  failures. Any producer, reconciliation or applicable coverage failure fails
-  the workflow. Full `dev validate` calls this same synchronous workflow after
-  its non-E2E surface. CI derives its matrices at runtime from
+- **The authoritative workflow** — `dev e2e` attempts all twelve enabled
+  hermetic Nix VM lanes, then reconciles every backend/browser pair even after
+  producer failures. Any producer, reconciliation or coverage failure fails the
+  workflow. Full `dev validate` calls this same synchronous workflow after its
+  non-E2E surface. CI derives its matrices at runtime from
   `end2end/e2e-lanes.json`, using `scripts/e2e-matrix.jq`, and invokes
   `dev e2e-producer <identity>` per lane and
-  `dev e2e-reconcile <backend> <artifact-root>` after the Firefox producers
-  settle. The artifact root contains `e2e-<identity>` directories. No Rust E2E
-  scheduler or embedded lane catalog remains. Run representative hermetic proof
-  when backend/browser parity, release behavior or the branch boundary matters;
-  this is not required before every push. The push hook remains `prepush`.
-- **Firefox reconciliation and controls** — Producers lift available
+  `dev e2e-reconcile <backend> <browser> <artifact-root>` after that pair's
+  producers settle. The artifact root contains `e2e-<identity>` directories. No
+  Rust E2E scheduler or embedded lane catalog remains. Run representative
+  hermetic proof when backend/browser parity, release behavior or the branch
+  boundary matters; this is not required before every push. The push hook
+  remains `prepush`.
+- **Reconciliation and controls** — Every browser uses the same split per
+  backend: ordinary shards 1 and 2 of 2 plus one serial-special lane owning the
+  visual, global-configuration and invite projects. Producers lift available
   lane-qualified diagnostics before propagating their original Nix failure;
   missing diagnostics cannot turn a failure green. Reconciliation fail-closed
   checks the independent census, report union, retries, duration manifests,
   phase sidecars and trace captures. The retired Rust producer/control aliases
-  are not parallel workflow entrypoints. Existing unsplit workers=2/workers=4
-  measurement installables remain available through ordinary `nix build`;
-  workers=4 remains rejected for production.
+  are not parallel workflow entrypoints. Existing unsplit Firefox
+  workers=2/workers=4 measurement installables remain available through ordinary
+  `nix build`; workers=4 remains rejected for production.
 - **Duration-pressure gate** — After an otherwise-successful VM lane has
   captured diagnostics, it reconciles `playwright-report-<lane>.json` and
   `duration-budget-manifest-<lane>.json` in `.xtask/diagnostics/e2e-<lane>/`.
@@ -721,9 +724,9 @@ there are enabled lanes. Invalid bounds fail before producers start. Full
 `dev validate` uses the ordinary default; `dev validate-no-e2e` omits E2E.
 
 A producer failure does not discard pending lanes. All producers settle before
-both Firefox reconciliations run. The helper normalizes producer failures for
-`xargs` so even exit 255 cannot cancel pending work. Lane artifacts and GC roots
-remain under `.xtask/diagnostics/e2e-<identity>` and
+every backend/browser reconciliation runs. The helper normalizes producer
+failures for `xargs` so even exit 255 cannot cancel pending work. Lane artifacts
+and GC roots remain under `.xtask/diagnostics/e2e-<identity>` and
 `.xtask/gcroots/e2e-<identity>`. Nix's selected output JSON is retained as
 `build.json`; successful-output verifiers read that immutable output, never a
 success-only root left by an older invocation. Phase sidecars remain available
@@ -958,7 +961,7 @@ CI/`dev validate-no-e2e` when hermetic confidence is the question. Focused
 | `dev precommit`       | Git/index custody selects Markdown or broad Fix checks, reconciles once, and conditionally verifies shared docs                                                                                      | auto-fixes    |
 | `dev prepush`         | clean tree; Verify host/static + auxiliary tests + `test-local` + Nix `doctests`/`doctests-gate`; x86_64-linux uses shared `static-docs` at the Markdown slot                                        | never mutates |
 | `dev validate-no-e2e` | clean tree; Verify host/static, Nix static proof (with `tools-doctests`), the `csrBundle` build and wasm budget, wasm tests, Rust coverage/CRAP, doctests, and authoritative Elisp producer/consumer | never mutates |
-| `dev validate`        | adds two Chromium and six Firefox E2E lanes, reconciliation, and final authoritative SQLite/Chromium server-function flow verification                                                               | never mutates |
+| `dev validate`        | adds six Chromium and six Firefox E2E lanes, reconciliation, and final authoritative SQLite/Chromium server-function flow verification                                                               | never mutates |
 
 The host check surface that `check-no-test`, `prepush`, `validate-no-e2e` and
 `ci-validate-host` share is five public groups, run in this order and stopping
@@ -1100,13 +1103,14 @@ stable `Validate (no e2e)` result-only job. The coverage source-filter probe
 (`dev coverage-check probe-source`) is an on-demand diagnostic, not an automatic
 CI step.
 
-E2E uses catalog-derived matrices for two unsplit Chromium producers and six
-isolated Firefox producers (`dev e2e-producer <identity>`). An `always()`
-reconciliation job per backend waits for the complete Firefox matrix, downloads
-its backend's three artifacts and runs `dev e2e-reconcile` even if downloads
-fail; stable `e2e gate` requires the catalog job, Chromium, every Firefox
-producer, and both reconciliations. Running independent surfaces across runners
-cuts workflow wall-clock; `dev validate` remains the full local equivalent and
+E2E uses one catalog-derived matrix of twelve isolated producers
+(`dev e2e-producer <identity>`), three per backend/browser pair. An `always()`
+reconciliation job per pair waits for the complete producer matrix, downloads
+that pair's three artifacts and runs `dev e2e-reconcile` even if downloads fail;
+the SQLite/Chromium job also verifies server-function coverage. Stable
+`e2e gate` requires the catalog job, every producer, and all four
+reconciliations. Running independent surfaces across runners cuts workflow
+wall-clock; `dev validate` remains the full local equivalent and
 `dev validate-no-e2e` remains its serial non-e2e form. See
 [ADR-0034](docs/adr/0034-ci-e2e-matrix-distribution.md), the
 [non-e2e validation lane decision](docs/adr/0192-split-ci-non-e2e-validation-lanes.md),
@@ -1964,12 +1968,13 @@ per-commit knob.
 **`#[server]` flow coverage is a separate gate** (#681, ADR — _empirical
 server-fn flow coverage_). Line coverage says a fn's body ran under _some_ test;
 this says a real browser session actually drove the endpoint. It is derived from
-the `sqlite × chromium` e2e run's OTLP traces. Its sole committed generated
-artifact is `docs/coverage/server-fns.json`, which records the covered
-`<vertical>::<ident>` set plus orphan reasons and is compared byte-for-byte. Do
-not hand-edit it: `regenerate` rewrites this snapshot, and `verify` recomputes
-and compares it from an authoritative capture. The static lane reads the
-snapshot together with the source-derived server-fn inventory.
+the OTLP traces of the three reconciled SQLite/Chromium e2e lanes, extracted per
+lane and unioned. Its sole committed generated artifact is
+`docs/coverage/server-fns.json`, which records the covered `<vertical>::<ident>`
+set plus orphan reasons and is compared byte-for-byte. Do not hand-edit it:
+`regenerate` rewrites this snapshot, and `verify` recomputes and compares it
+from an authoritative capture. The static lane reads the snapshot together with
+the source-derived server-fn inventory.
 
 **Per-test attribution is structural but intentionally not persisted (#757).**
 The extractor still uses the propagated `e2e.test` span id to distinguish
@@ -1984,25 +1989,29 @@ inspect a fresh trace capture; do not infer it from the committed snapshot.
 the fast lane reddens immediately — `server-fn-coverage` runs in `dev check` and
 `dev validate-no-e2e`, so you do not wait for the e2e matrix to find out:
 
-`dev e2e` verifies coverage automatically; it never regenerates the snapshot.
-For intentional regeneration, use the single explicit command:
+`dev e2e` verifies coverage automatically as part of the SQLite/Chromium
+reconciliation; it never regenerates the snapshot. For intentional regeneration,
+use the single explicit command:
 
 ```bash
 dev e2e-regenerate-coverage
 ```
 
-It runs the authoritative producer, selects that successful invocation's
-immutable Nix output and checks the required artifacts before writing the
-snapshot. Producer or artifact failures remain failures; snapshot verification
-is deliberately replaced by regeneration only for this explicit action. Ordinary
-`dev e2e` and `dev e2e-producer` remain verification-only.
+It freshly runs the three SQLite/Chromium producers, then reconciles their
+lifted artifacts before writing the snapshot. Producer, reconciliation or
+artifact failures remain failures; snapshot verification is deliberately
+replaced by regeneration only for this explicit action. Ordinary `dev e2e` and
+`dev e2e-producer` remain verification-only.
 
-The artifact-input CLI remains explicit for programmatic consumers. It requires
-the authoritative lane, a registered immutable Nix output, exact capture
-membership in that output, and the existing population/retry/boot verdicts.
-Nix's successful producer owns archive finalization, member hashes/sizes and
-required retention. These checks do not claim detection of arbitrary hidden
-capture omissions; no extra receipt or attestation schema is involved.
+The artifact-input CLI
+(`e2e-evidence server-fn-coverage {verify,regenerate} --catalog <catalog> --diagnostics-root <root>`)
+reads only already-lifted `e2e-<identity>` directories. It first reconciles the
+SQLite/Chromium pair: the exact enabled lane set, an identical complete census
+equal to the lanes' disjoint report union, and a successful phase sidecar per
+lane. Only then are the captures read. Each producer replaces its own lifted
+files before it builds, and the local workflows that reach coverage rerun the
+producers first. These checks do not claim detection of arbitrary hidden capture
+omissions; no extra receipt or attestation schema is involved.
 
 One further property is worth knowing before you fight the gate:
 
@@ -2181,7 +2190,7 @@ where install-nix-action's `always-allow-substitutes = true` overrides their
 JSON invalidation envelope. The Nix source filters assert representative
 membership inline (the coverage filter also has
 `dev coverage-check probe-source`); do not infer execution from reused outputs.
-`dev validate` adds all eight retained E2E lanes, Firefox reconciliation, and
+`dev validate` adds all twelve retained E2E lanes, their reconciliation, and
 server-function coverage verification to `dev validate-no-e2e`.
 
 ### Nix VM checks
@@ -2270,16 +2279,14 @@ server-function coverage verification to `dev validate-no-e2e`.
   tools workspace, without fence reconciliation, over its own source
   (`toolsDocTestSrc` in `nix/packages.nix`) in which every tools member is real,
   reusing the shared tools dependency build
-- `checks.x86_64-linux.e2e-{sqlite,postgres}-chromium-unsplit` — one unsplit
-  Chromium Playwright lane per backend
-- `checks.x86_64-linux.e2e-{sqlite,postgres}-firefox-ordinary-{1,2}-of-2` — two
-  ordinary Firefox shards per backend
-- `checks.x86_64-linux.e2e-{sqlite,postgres}-firefox-serial-special` — one
-  visual/global-configuration/invite Firefox lane per backend
+- `checks.x86_64-linux.e2e-{sqlite,postgres}-{chromium,firefox}-ordinary-{1,2}-of-2`
+  — two ordinary shards per backend and browser
+- `checks.x86_64-linux.e2e-{sqlite,postgres}-{chromium,firefox}-serial-special`
+  — one visual/global-configuration/invite lane per backend and browser
 - `checks.x86_64-linux.e2e` — the existing browser-only Nix aggregate. Direct
   realization does not perform the host artifact verdicts. `dev e2e` (also
   called by full `validate`) realizes the individual lane outputs above and then
-  performs both Firefox reconciliations.
+  performs every reconciliation.
 
 Additional Nix-backed checks available as packages (not run by default):
 
@@ -2312,8 +2319,8 @@ e2eSalt = "run3";   # any distinct string; the value itself is never read
 ```
 
 The salt rides the lane's extra-env string into the VM test script, so it
-changes every E2E derivation hash — eight retained gate checks, four unsplit
-workers=2/workers=4 control packages, and four historical single-worker
+changes every E2E derivation hash — twelve retained gate checks, four unsplit
+Firefox workers=2/workers=4 control packages, and four historical single-worker
 packages. It does **not** change `packages.x86_64-linux.jaunder`:
 `nix/checks.nix` sits outside the crane source filter owned by
 `nix/packages.nix`, so a salted run re-runs the VM suite without rebuilding the
@@ -2332,7 +2339,7 @@ For matched arms, interleaving and interpretation, see
 If you only need one of the VM-backed checks, you can run it directly:
 
 ```bash
-nix build .#checks.x86_64-linux.e2e-sqlite-chromium-unsplit
+nix build .#checks.x86_64-linux.e2e-sqlite-chromium-ordinary-1-of-2
 nix build .#checks.x86_64-linux.e2e-postgres-firefox-ordinary-1-of-2
 nix build .#checks.x86_64-linux.e2e-postgres-firefox-serial-special
 nix build .#packages.x86_64-linux.e2e-sqlite-firefox-single-worker

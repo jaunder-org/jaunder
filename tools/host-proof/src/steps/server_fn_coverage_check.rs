@@ -1,14 +1,18 @@
-//! Explicit producer-artifact flow verification; static inventory lives in repository-policy.
-//! The workflow, never this consumer, selects/builds the authoritative output.
+//! Reconciled lane-artifact flow verification; static inventory lives in repository-policy.
+//! The workflow, never this consumer, produces and lifts the lane evidence.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
 use crate::server_fn_coverage::io::{
-    SNAPSHOT_PATH, WEB_SRC, coverage_from_capture, inventory, write_snapshot,
+    SNAPSHOT_PATH, WEB_SRC, coverage_from_captures, inventory, write_snapshot,
 };
 use crate::server_fn_coverage::{REGENERATE_CMD, Snapshot, render};
+
+/// Flow coverage is authoritative only over the SQLite/Chromium population.
+const BACKEND: &str = "sqlite";
+const BROWSER: &str = "chromium";
 
 /// The e2e lane's core, over explicit paths so it is testable without the repo.
 ///
@@ -17,12 +21,12 @@ use crate::server_fn_coverage::{REGENERATE_CMD, Snapshot, render};
 /// a hand-edit that happens to parse equal is still drift.
 fn regenerate_or_verify(
     web_src: &Path,
-    capture: &Path,
+    captures: &[PathBuf],
     snapshot_path: &Path,
     regenerate: bool,
 ) -> Result<String> {
     let inventory = inventory(web_src)?;
-    let snapshot = coverage_from_capture(capture, &inventory)?.into_snapshot();
+    let snapshot = coverage_from_captures(captures, &inventory)?.into_snapshot();
     let covered = snapshot.covered.len();
 
     if regenerate {
@@ -68,48 +72,28 @@ fn compare_rendered(
     )
 }
 
-/// Consume only the selected successful immutable producer output. Nix owns
-/// writer quiescence, retention and archive member hash/size checks; the existing
-/// population and trace verdicts corroborate the artifacts, not hidden omissions.
-pub fn from_producer(inputs: &crate::e2e::ProducerCapture, regenerate: bool) -> Result<String> {
-    validate_selected_capture(&inputs.capture, &inputs.producer_output, &inputs.lane)?;
-    crate::e2e_evidence::verify_lane(&inputs.lane, &inputs.catalog, &inputs.producer_output)
-        .map_err(anyhow::Error::msg)?;
+/// The reconciled SQLite/Chromium lanes' captures. Reconciliation runs first and
+/// fails closed: the exact enabled lane set, one complete census equal to the
+/// lanes' disjoint report union, and a successful phase sidecar per lane. Only
+/// then is any capture read.
+fn reconciled_captures(catalog: &Path, diagnostics_root: &Path) -> Result<Vec<PathBuf>> {
+    let (_, lanes) =
+        crate::e2e_evidence::reconciled_lanes(BACKEND, BROWSER, catalog, diagnostics_root)
+            .map_err(anyhow::Error::msg)
+            .context("the SQLite/Chromium lanes must reconcile before flow coverage")?;
+    Ok(lanes.into_iter().map(|lane| lane.capture).collect())
+}
+
+/// Verify (or explicitly regenerate) the snapshot from the union of the
+/// reconciled SQLite/Chromium lanes' captures.
+pub fn from_reconciled(inputs: &crate::e2e::LiftedEvidence, regenerate: bool) -> Result<String> {
+    let captures = reconciled_captures(&inputs.catalog, &inputs.diagnostics_root)?;
     regenerate_or_verify(
         Path::new(WEB_SRC),
-        &inputs.capture,
+        &captures,
         Path::new(SNAPSHOT_PATH),
         regenerate,
     )
-}
-
-fn validate_selected_capture(capture: &Path, output: &Path, lane: &str) -> Result<()> {
-    if lane != "sqlite-chromium-unsplit" {
-        bail!("only sqlite-chromium-unsplit is authoritative for flow coverage");
-    }
-    let output = output
-        .canonicalize()
-        .context("resolving selected producer output")?;
-    if output.parent() != Some(Path::new("/nix/store")) {
-        bail!("producer output is not an immutable Nix output");
-    }
-    let capture = capture.canonicalize().context("resolving capture")?;
-    if capture != output.join(format!("capture-{lane}.tar.gz")) {
-        bail!("capture does not belong to the selected producer output");
-    }
-    // A kept failed output is not registered as a valid store path. Merely
-    // finding its capture (or a stale success-only gcroot) cannot grant authority.
-    let status = std::process::Command::new("nix")
-        .args(["path-info", "--offline"])
-        .arg(&output)
-        // Only validity matters; stdout carries this command's JSON report.
-        .stdout(std::process::Stdio::null())
-        .status()
-        .context("checking selected producer output validity")?;
-    if !status.success() {
-        bail!("selected producer output is not a successful registered Nix output");
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -299,7 +283,7 @@ mod tests {
 
     fn current_snapshot_for(capture: &Path, web_src: &Path, snapshot: &Path) {
         let inventory = inventory(web_src).expect("inventory");
-        let derived = coverage_from_capture(capture, &inventory)
+        let derived = coverage_from_captures(&[capture.to_owned()], &inventory)
             .expect("fixture capture derives coverage")
             .into_snapshot();
         write_snapshot(snapshot, &derived).expect("write matching snapshot");
@@ -314,7 +298,7 @@ mod tests {
         write_sample_capture(&capture);
         current_snapshot_for(&capture, tmp.path(), &snapshot);
 
-        assert!(regenerate_or_verify(tmp.path(), &capture, &snapshot, false).is_ok());
+        assert!(regenerate_or_verify(tmp.path(), &[capture], &snapshot, false).is_ok());
     }
 
     #[test]
@@ -326,7 +310,7 @@ mod tests {
         write_sample_capture(&capture);
         write_json(&snapshot, "stale\n");
 
-        let error = regenerate_or_verify(tmp.path(), &capture, &snapshot, false).unwrap_err();
+        let error = regenerate_or_verify(tmp.path(), &[capture], &snapshot, false).unwrap_err();
         let detail = error.to_string();
         assert!(detail.contains("server-fns.json"), "{detail}");
         assert!(detail.contains(REGENERATE_CMD), "{detail}");
@@ -352,7 +336,7 @@ mod tests {
             assert!(
                 regenerate_or_verify(
                     tmp.path(),
-                    &capture,
+                    std::slice::from_ref(&capture),
                     &tmp.path().join("server-fns.json"),
                     false
                 )
@@ -635,7 +619,7 @@ mod tests {
         web_src_with(tmp.path(), &["create_post"]);
         let err = regenerate_or_verify(
             tmp.path(),
-            Path::new("/nonexistent-capture.tar.gz"),
+            &[PathBuf::from("/nonexistent-capture.tar.gz")],
             &tmp.path().join("snap.json"),
             false,
         )
@@ -649,7 +633,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let err = regenerate_or_verify(
             &tmp.path().join("nonexistent"),
-            Path::new("/nonexistent-capture.tar.gz"),
+            &[PathBuf::from("/nonexistent-capture.tar.gz")],
             &tmp.path().join("snap.json"),
             false,
         )
@@ -676,58 +660,28 @@ mod tests {
         assert!(inventory(tmp.path()).expect("inventory scans").is_empty());
     }
     #[test]
-    fn selected_immutable_output_rejects_a_capture_from_another_output() {
-        fn store_capture(bytes: &str) -> std::path::PathBuf {
-            let temp = tempfile::tempdir().unwrap();
-            std::fs::write(
-                temp.path().join("capture-sqlite-chromium-unsplit.tar.gz"),
-                bytes,
-            )
-            .unwrap();
-            let output = std::process::Command::new("nix")
-                .args(["store", "add-path", "--name", "coverage-input-fixture"])
-                .arg(temp.path())
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            String::from_utf8(output.stdout).unwrap().trim().into()
-        }
-        let selected = store_capture("selected");
-        let other = store_capture("stale");
-        let name = "capture-sqlite-chromium-unsplit.tar.gz";
-        assert!(
-            validate_selected_capture(&selected.join(name), &selected, "sqlite-chromium-unsplit")
-                .is_ok()
-        );
-        let error =
-            validate_selected_capture(&other.join(name), &selected, "sqlite-chromium-unsplit")
-                .unwrap_err();
-        assert!(error.to_string().contains("does not belong"));
-        assert!(
-            validate_selected_capture(
-                &selected.join("missing"),
-                &selected,
-                "sqlite-chromium-unsplit"
-            )
-            .is_err()
-        );
+    fn coverage_is_the_union_of_every_lane_capture() {
+        // Two lanes, each extracted alone: the union covers what either covers,
+        // and no captures at all is an error rather than empty coverage.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let first = tmp.path().join("capture-a.tar.gz");
+        let second = tmp.path().join("capture-b.tar.gz");
+        let snapshot = tmp.path().join("server-fns.json");
+        write_sample_inventory(tmp.path());
+        write_sample_capture(&first);
+        write_sample_capture(&second);
+        current_snapshot_for(&first, tmp.path(), &snapshot);
+
+        assert!(regenerate_or_verify(tmp.path(), &[first, second], &snapshot, false).is_ok());
+        assert!(regenerate_or_verify(tmp.path(), &[], &snapshot, false).is_err());
     }
 
     #[test]
-    fn capture_authority_rejects_other_lanes_missing_outputs_and_mutable_copies() {
-        let temp = tempfile::tempdir().unwrap();
-        let capture = temp.path().join("capture-sqlite-chromium-unsplit.tar.gz");
-        write_sample_capture(&capture);
-        for (lane, output) in [
-            ("postgres-chromium-unsplit", temp.path().to_owned()),
-            ("sqlite-chromium-unsplit", temp.path().join("missing")),
-            ("sqlite-chromium-unsplit", temp.path().to_owned()),
-        ] {
-            assert!(validate_selected_capture(&capture, &output, lane).is_err());
-        }
+    fn coverage_refuses_unreconciled_lane_evidence() {
+        // No lane directories: reconciliation fails, so no capture is ever read.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let catalog = repo_root().join("end2end/e2e-lanes.json");
+        let error = reconciled_captures(&catalog, tmp.path()).unwrap_err();
+        assert!(format!("{error:#}").contains("must reconcile"), "{error:#}");
     }
 }

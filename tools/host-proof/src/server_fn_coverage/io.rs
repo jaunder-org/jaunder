@@ -6,7 +6,7 @@
 //! mechanism dishonest, since the failure mode it is guarding against and the
 //! failure mode of its own plumbing would look identical.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
@@ -26,7 +26,7 @@ pub fn coverage_from_jsonl(jsonl: &str, inventory: &[ServerFn]) -> Result<Covera
     if spans.is_empty() {
         bail!(
             "the e2e capture contains no spans — refusing to treat an empty capture as \
-             full coverage; re-run `dev e2e-producer sqlite-chromium-unsplit`"
+             full coverage; re-run `dev e2e`"
         );
     }
     Ok(extract(&spans, inventory))
@@ -34,11 +34,11 @@ pub fn coverage_from_jsonl(jsonl: &str, inventory: &[ServerFn]) -> Result<Covera
 
 /// Derive coverage from a `capture-*.tar.gz` bundle, reusing the trace extractor
 /// that `traces run` already uses rather than a second implementation.
-pub fn coverage_from_capture(tarball: &Path, inventory: &[ServerFn]) -> Result<Coverage> {
+fn coverage_from_capture(tarball: &Path, inventory: &[ServerFn]) -> Result<Coverage> {
     if !tarball.exists() {
         bail!(
-            "no e2e capture at {} — run `dev e2e-producer sqlite-chromium-unsplit` first (coverage is \
-             derived from that combo's traces, per the spec's D6)",
+            "no e2e capture at {} — run `dev e2e` first (coverage is derived from the \
+             reconciled SQLite/Chromium lanes' traces)",
             tarball.display()
         );
     }
@@ -48,6 +48,26 @@ pub fn coverage_from_capture(tarball: &Path, inventory: &[ServerFn]) -> Result<C
         .with_context(|| format!("extracting the otel trace from {}", tarball.display()))?;
     let jsonl = std::fs::read_to_string(&dest).context("reading the extracted otel trace")?;
     coverage_from_jsonl(&jsonl, inventory)
+}
+
+/// Union the coverage of several lanes' captures. Each capture is extracted on
+/// its own because span ids, and so attribution chains, are only unique within
+/// one lane. No captures is an error, never empty coverage.
+pub fn coverage_from_captures(tarballs: &[PathBuf], inventory: &[ServerFn]) -> Result<Coverage> {
+    if tarballs.is_empty() {
+        bail!("no e2e captures supplied — refusing to treat no evidence as coverage");
+    }
+    let mut union = Coverage::default();
+    for tarball in tarballs {
+        let coverage = coverage_from_capture(tarball, inventory)?;
+        for (name, tests) in coverage.covered {
+            union.covered.entry(name).or_default().extend(tests);
+        }
+        for (name, reasons) in coverage.orphans {
+            union.orphans.entry(name).or_default().extend(reasons);
+        }
+    }
+    Ok(union)
 }
 
 /// Render and write the generated coverage snapshot, creating

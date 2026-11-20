@@ -13,6 +13,7 @@ import {
   type MutationOutcome,
 } from "./helpers";
 import { test, type NewTracedContext } from "./fixtures";
+import { projectsInRole } from "../e2eProjects";
 
 export type ThemeAsset = { path: string; mime: string; bytes: Uint8Array };
 export type ThemePackage = {
@@ -265,12 +266,9 @@ export async function withSiteThemeSelection(
   use: (mutate: <T>(action: () => Promise<T>) => Promise<T>) => Promise<void>,
 ): Promise<void> {
   const project = test.info().project;
-  expect([
-    "chromium-admin-site",
-    "firefox-admin-site",
-    "firefox-special-global-configuration",
-    "webkit-theme",
-  ]).toContain(project.name);
+  expect([...projectsInRole("siteSettings"), "webkit-theme"]).toContain(
+    project.name,
+  );
   const context = await tracedContext();
   const failures: unknown[] = [];
   let original: SiteSelection | undefined;

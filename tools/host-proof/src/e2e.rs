@@ -30,15 +30,12 @@ impl E2eBrowser {
     }
 }
 
-/// Evidence selected by a successful producer's `nix build --json` invocation.
+/// Already-lifted lane evidence: `diagnostics_root` holds one `e2e-<lane>`
+/// directory per lane, checked against the caller-selected catalog.
 #[derive(Debug, clap::Args)]
-pub struct ProducerCapture {
+pub struct LiftedEvidence {
     #[arg(long)]
-    pub capture: std::path::PathBuf,
-    #[arg(long)]
-    pub producer_output: std::path::PathBuf,
-    #[arg(long)]
-    pub lane: String,
+    pub diagnostics_root: std::path::PathBuf,
     #[arg(long)]
     pub catalog: std::path::PathBuf,
 }

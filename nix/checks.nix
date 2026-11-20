@@ -948,19 +948,20 @@ e2eSalt = "";
 # slow" — nothing fails on its own, which is exactly why the guard exists.
 
 # All E2E lanes. backend picks the VM builder; projects select the Playwright
-# topology; traceDigit gives every isolated lane a distinct OTel trace id.
+# topology; traceSeed gives every isolated lane a distinct OTel trace id.
 # The catalog independently identifies retained production lanes and disabled
-# unsplit Firefox controls.
+# unsplit controls.
 e2eLaneCatalog = (builtins.fromJSON (builtins.readFile ../end2end/e2e-lanes.json)).lanes;
-# Production uses two Chromium unsplit lanes and the retained three-lane Firefox
-# split per backend. Disabled Firefox unsplit lanes are measurement controls only.
+# Production uses the retained three-lane split per {backend, browser}. Disabled
+# unsplit lanes are measurement and single-worker diagnostic controls only.
 e2eCombos = builtins.filter (lane: lane.enabled) e2eLaneCatalog;
-e2eFirefoxSplitLanes = builtins.filter (lane: lane.enabled && lane.browser == "firefox") e2eLaneCatalog;
 e2eFirefoxControlLanes = builtins.filter (lane: !lane.enabled && lane.browser == "firefox" && lane.partition == "unsplit") e2eLaneCatalog;
 e2eSingleWorkerLanes = builtins.filter (lane: lane.partition == "unsplit") e2eLaneCatalog;
-e2eFirefoxCensusProjectArgs =
+# Each split lane's independent census lists every project of its browser's split.
+e2eCensusProjectArgs = browser:
   pkgs.lib.concatMapStringsSep " " (project: "--project ${project}")
-    (pkgs.lib.unique (pkgs.lib.concatMap (lane: lane.projects) e2eFirefoxSplitLanes));
+    (pkgs.lib.unique (pkgs.lib.concatMap (lane: lane.projects)
+      (builtins.filter (lane: lane.browser == browser) e2eCombos)));
 
 mkE2eCombo =
   {
@@ -968,7 +969,7 @@ mkE2eCombo =
     browser,
     partition,
     identity,
-    traceDigit,
+    traceSeed,
     projects,
     enabled,
     shardIndex ? null,
@@ -983,8 +984,10 @@ mkE2eCombo =
     playwrightTimeout ? e2ePlaywrightTimeout,
   }:
   let
-    traceId = pkgs.lib.concatStrings (pkgs.lib.genList (_: traceDigit) 32);
-    traceParent = "00-${traceId}-${pkgs.lib.concatStrings (pkgs.lib.genList (_: traceDigit) 16)}-01";
+    # The seed is one or two hex digits (scripts/e2e-matrix.jq), repeated to fill each id.
+    repeatSeed = width: pkgs.lib.concatStrings (pkgs.lib.genList (_: traceSeed) (width / builtins.stringLength traceSeed));
+    traceId = repeatSeed 32;
+    traceParent = "00-${traceId}-${repeatSeed 16}-01";
     projectArgs = pkgs.lib.concatMapStringsSep " " (project: "--project ${project}") projects;
     shardArg = pkgs.lib.optionalString (shardIndex != null) " --shard=${toString shardIndex}/${toString shardCount}";
   in
@@ -1033,13 +1036,10 @@ e2eGateChecks = pkgs.lib.listToAttrs (
       # rather than failing the combo check, containing timeout flakiness
       # (Firefox 5s `expect` races) while results.json records it.
       extraEnv = " JAUNDER_E2E_RETRIES=1";
-      expectedCensusProjectArgs = pkgs.lib.optionalString (c.browser == "firefox") e2eFirefoxCensusProjectArgs;
+      expectedCensusProjectArgs = e2eCensusProjectArgs c.browser;
       expectedCensusTopology = "${c.backend}-${c.browser}-split";
       vmMemory = 3072;
       vmCores = 2;
-    } // pkgs.lib.optionalAttrs (c.backend == "postgres" && c.browser == "chromium") {
-      # Add suite headroom only here; shared lanes and census retain their cap.
-      playwrightTimeout = 1800;
     } // pkgs.lib.optionalAttrs (c.browser == "firefox" && c.partition == "ordinary") {
       vmMemory = 4096;
       vmDiskSize = 2048;
@@ -1067,8 +1067,9 @@ mkE2eControlPackages = workers: vmMemory: vmCores:
 e2eWorkers2ControlPackages = mkE2eControlPackages 2 3072 2;
 e2eWorkers4ControlPackages = mkE2eControlPackages 4 6144 4;
 
-# Single-worker variants: same combos as the gate checks but pinned to
-# workers=1, so per-navigation timings are free of worker contention.
+# Single-worker variants: the disabled unsplit catalog lanes (every
+# backend/browser, unsharded) pinned to workers=1, so per-navigation timings
+# are free of worker contention.
 # That isolation is their whole purpose — use them when the question is
 # "what does one navigation cost", not "what does the suite cost". The
 # worker count is the ONLY difference from the gate combos (#792), and the

@@ -322,7 +322,7 @@ def perf_import_baseline(run_id: str) -> None:
 @cli.command("e2e")
 @click.argument("jobs", default="")
 def e2e_command(jobs: str) -> None:
-    """Every E2E producer, at most JOBS at once, then both reconciliations."""
+    """Every E2E producer, at most JOBS at once, then every reconciliation."""
     _gate(lambda: e2e.run_all(jobs))
 
 
@@ -335,16 +335,17 @@ def e2e_producer(lane: str) -> None:
 
 @cli.command("e2e-regenerate-coverage")
 def e2e_regenerate_coverage() -> None:
-    """Regenerate the server-function coverage snapshot from its producer."""
+    """Regenerate the server-function coverage snapshot from fresh SQLite/Chromium lanes."""
     _gate(e2e.regenerate_coverage)
 
 
 @cli.command("e2e-reconcile")
 @click.argument("backend")
+@click.argument("browser")
 @click.argument("artifacts", default=".xtask/diagnostics")
-def e2e_reconcile(backend: str, artifacts: str) -> None:
-    """Reconcile BACKEND's producer ARTIFACTS without building any producer."""
-    _gate(lambda: e2e.reconcile(backend, artifacts))
+def e2e_reconcile(backend: str, browser: str, artifacts: str) -> None:
+    """Reconcile BACKEND/BROWSER producer ARTIFACTS without building any producer."""
+    _gate(lambda: e2e.reconcile(backend, browser, artifacts))
 
 
 @cli.command("issue-discover")

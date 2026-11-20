@@ -515,14 +515,13 @@ struct Strategy {
 
 /// This is a fixed repository interface, not a GitHub expression evaluator.
 fn catalog_output(job: &str, matrix: &YamlValue) -> Option<&'static str> {
-    let (dimension, output) = match job {
-        "e2e-chromium" => ("include", "chromium"),
-        "e2e-firefox-lane" => ("include", "firefox"),
-        "e2e-firefox-reconcile" => ("backend", "backends"),
+    let output = match job {
+        "e2e-lane" => "lanes",
+        "e2e-reconcile" => "reconciles",
         _ => return None,
     };
     let mapping = matrix.as_mapping()?;
-    let expression = mapping.get(YamlValue::String(dimension.into()))?.as_str()?;
+    let expression = mapping.get(YamlValue::String("include".into()))?.as_str()?;
     (mapping.len() == 1
         && expression.trim() == format!("${{{{ fromJSON(needs.e2e-catalog.outputs.{output}) }}}}"))
     .then_some(output)
@@ -538,7 +537,7 @@ fn project_catalog(
     let producer = jobs
         .get("e2e-catalog")
         .ok_or_else(|| invalid("missing e2e-catalog producer"))?;
-    for output in ["chromium", "firefox", "backends"] {
+    for output in ["lanes", "reconciles"] {
         if producer.outputs.get(output)
             != Some(&format!("${{{{ steps.matrix.outputs.{output} }}}}"))
         {
@@ -650,17 +649,8 @@ fn parse_jobs(source: &str, sources: &BTreeMap<String, String>) -> Result<Vec<Jo
                         job_key: key.clone(),
                         value: output.into(),
                     })?;
-                let rows = if output == "backends" {
-                    serde_json::from_value::<Vec<String>>(value.clone()).map(|backends| {
-                        backends
-                            .into_iter()
-                            .map(|backend| BTreeMap::from([("backend".into(), backend)]))
-                            .collect()
-                    })
-                } else {
-                    serde_json::from_value::<Vec<BTreeMap<String, String>>>(value.clone())
-                }
-                .map_err(|error| GraphError::InvalidMatrix {
+                let rows = serde_json::from_value::<Vec<BTreeMap<String, String>>>(value.clone())
+                    .map_err(|error| GraphError::InvalidMatrix {
                     job_key: key.clone(),
                     value: error.to_string(),
                 })?;
@@ -876,11 +866,7 @@ mod tests {
         .unwrap();
         let sources = catalog_sources();
         let graph = WorkflowGraph::parse_with_local_sources(&source, &sources).unwrap();
-        for (key, count) in [
-            ("e2e-chromium", 2),
-            ("e2e-firefox-lane", 6),
-            ("e2e-firefox-reconcile", 2),
-        ] {
+        for (key, count) in [("e2e-lane", 12), ("e2e-reconcile", 4)] {
             assert_eq!(
                 graph
                     .nodes
@@ -891,7 +877,10 @@ mod tests {
             );
         }
         assert_eq!(
-            graph.classify(&runtime("e2e (sqlite/chromium)"), &["e2e gate".into()]),
+            graph.classify(
+                &runtime("e2e (sqlite-chromium-ordinary-1-of-2)"),
+                &["e2e gate".into()]
+            ),
             Ok(Requirement::Transitive)
         );
         assert_eq!(
@@ -899,23 +888,17 @@ mod tests {
             Ok(Requirement::Transitive)
         );
         for broken in [
+            source.replace("${{ fromJSON(needs.e2e-catalog.outputs.lanes) }}", "${{ }}"),
             source.replace(
-                "${{ fromJSON(needs.e2e-catalog.outputs.chromium) }}",
-                "${{ }}",
+                "fromJSON(needs.e2e-catalog.outputs.lanes)",
+                "fromJSON(needs.other.outputs.lanes)",
             ),
             source.replace(
-                "fromJSON(needs.e2e-catalog.outputs.chromium)",
-                "fromJSON(needs.other.outputs.chromium)",
-            ),
-            source.replace(
-                "fromJSON(needs.e2e-catalog.outputs.chromium)",
-                "fromJSON(needs.e2e-catalog.outputs.firefox)",
+                "fromJSON(needs.e2e-catalog.outputs.lanes)",
+                "fromJSON(needs.e2e-catalog.outputs.reconciles)",
             ),
             source.replacen("needs: [e2e-catalog]", "needs: []", 1),
-            source.replace(
-                "steps.matrix.outputs.chromium",
-                "steps.other.outputs.chromium",
-            ),
+            source.replace("steps.matrix.outputs.lanes", "steps.other.outputs.lanes"),
             source.replace("-f scripts/e2e-matrix.jq", "-f scripts/other.jq"),
             source.replacen("fail-fast: false", "fail-fast: true", 1),
         ] {
@@ -948,7 +931,7 @@ mod tests {
                 )
             });
 
-        for job in ["e2e-chromium", "e2e-firefox-lane", "e2e-firefox-reconcile"] {
+        for job in ["e2e-lane", "e2e-reconcile"] {
             assert_eq!(
                 graph.matrix_fail_fast(job),
                 Ok(Some(false)),

@@ -1,6 +1,17 @@
 import { devices, defineConfig } from "@playwright/test";
 import type { PlaywrightTestConfig } from "@playwright/test";
 import { performanceEnabled } from "./tests/browser-performance";
+import {
+  type GatedBrowser,
+  type Role,
+  gatedBrowsers,
+  inviteSpecs,
+  projectName,
+  roles,
+  siteSettingsSpecs,
+  specPattern,
+  visualIgnoredSpecs,
+} from "./e2eProjects";
 
 type E2eLaneCatalog = {
   experimentalProjectDependencies: Record<string, string[]>;
@@ -83,6 +94,89 @@ const ignoreUnavailableSpecializedSpecs = (pattern: RegExp) => {
   return new RegExp(sources.join("|"));
 };
 
+const gatedBrowserUse: Record<GatedBrowser, Project["use"]> = {
+  chromium: {
+    ...devices["Desktop Chrome"],
+    launchOptions: chromiumLaunchOptions,
+  },
+  firefox: {
+    ...devices["Desktop Firefox"],
+    launchOptions: firefoxLaunchOptions,
+  },
+};
+
+/**
+ * One gated browser's unsplit graph and split lane projects, built from the
+ * same role filters so the two topologies cannot diverge (the census contract
+ * proves they select the same tests). Split projects deliberately have no
+ * dependencies outside their lane: Playwright otherwise expands a selected
+ * project with another lane's prerequisites.
+ */
+function gatedProjects(browser: GatedBrowser): Project[] {
+  const use = gatedBrowserUse[browser];
+  const site = siteSettingsSpecs(browser);
+  const role: Record<Role, Project> = {
+    visual: {
+      testIgnore: ignoreUnavailableSpecializedSpecs(
+        specPattern(visualIgnoredSpecs),
+      ),
+      grep: visualTag,
+      retries: 0,
+      use,
+    },
+    ordinary: {
+      testIgnore: ignoreUnavailableSpecializedSpecs(
+        specPattern([...site, ...inviteSpecs]),
+      ),
+      grepInvert: visualTag,
+      use: browser === "chromium" ? { ...use, ...productionBaselineTls } : use,
+    },
+    siteSettings: {
+      testMatch: specPattern(site),
+      grepInvert: visualTag,
+      fullyParallel: false,
+      workers: 1,
+      use,
+    },
+    invite: {
+      testMatch: specPattern(inviteSpecs),
+      grepInvert: visualTag,
+      fullyParallel: false,
+      use,
+    },
+  };
+  const unsplit = (name: Role) => projectName(browser, "unsplit", name);
+  const unsplitDependencies: Record<Role, Partial<Project>> = {
+    visual: {},
+    ordinary: diagnosticCoverage
+      ? { testMatch: diagnosticSpec, dependencies: [] }
+      : { dependencies: [unsplit("visual")] },
+    siteSettings: { dependencies: [unsplit("ordinary")] },
+    invite: { dependencies: [unsplit("siteSettings")] },
+  };
+  return [
+    ...roles.map((name) => ({
+      ...role[name],
+      name: unsplit(name),
+      ...unsplitDependencies[name],
+    })),
+    ...roles.map((name) =>
+      experimentalProject({
+        ...role[name],
+        name: projectName(browser, "split", name),
+        // The split visual project owns the same assertions as the unsplit
+        // one; reuse those reviewed baselines rather than minting
+        // topology-qualified snapshots that could silently diverge.
+        ...(name === "visual"
+          ? {
+              snapshotPathTemplate: `{snapshotDir}/{testFilePath}-snapshots/{arg}-${unsplit("visual")}-{platform}{ext}`,
+            }
+          : {}),
+      }),
+    ),
+  ];
+}
+
 export default defineConfig({
   testDir: "./tests",
   timeout: 30 * 1000,
@@ -135,161 +229,11 @@ export default defineConfig({
   // WebKit's dependent configuration project owns backup alongside its existing
   // theme, SMTP, and media coverage; production baseline remains excluded there.
   projects: [
-    {
-      name: "chromium-visual",
-      testIgnore: ignoreUnavailableSpecializedSpecs(
-        /(admin-site|backup|smtp|invite|media|production-baseline-flow)\.spec\.ts/,
-      ),
-      grep: visualTag,
-      retries: 0,
-      use: {
-        ...devices["Desktop Chrome"],
-        launchOptions: chromiumLaunchOptions,
-      },
-    },
-    {
-      name: "chromium",
-      testIgnore: ignoreUnavailableSpecializedSpecs(
-        /(admin-site|backup|smtp|theme|theme-management|theme-presentation|responsive-shell|post-image-fit|invite|media|passkeys|timeline-cls|production-baseline-flow)\.spec\.ts/,
-      ),
-      grepInvert: visualTag,
-      ...(diagnosticCoverage
-        ? { testMatch: diagnosticSpec, dependencies: [] }
-        : { dependencies: ["chromium-visual"] }),
-      use: {
-        ...devices["Desktop Chrome"],
-        launchOptions: chromiumLaunchOptions,
-        ...productionBaselineTls,
-      },
-    },
-    {
-      name: "chromium-admin-site",
-      testMatch:
-        /(admin-site|backup|smtp|theme|theme-management|theme-presentation|responsive-shell|post-image-fit|media|passkeys|timeline-cls|production-baseline-flow)\.spec\.ts/,
-      grepInvert: visualTag,
-      fullyParallel: false,
-      workers: 1,
-      dependencies: ["chromium"],
-      use: {
-        ...devices["Desktop Chrome"],
-        launchOptions: chromiumLaunchOptions,
-      },
-    },
-    {
-      name: "chromium-admin",
-      testMatch: /invite\.spec\.ts/,
-      grepInvert: visualTag,
-      fullyParallel: false,
-      dependencies: ["chromium-admin-site"],
-      use: {
-        ...devices["Desktop Chrome"],
-        launchOptions: chromiumLaunchOptions,
-      },
-    },
-    {
-      name: "firefox-visual",
-      testIgnore: ignoreUnavailableSpecializedSpecs(
-        /(admin-site|backup|smtp|invite|media|production-baseline-flow)\.spec\.ts/,
-      ),
-      grep: visualTag,
-      retries: 0,
-      use: {
-        ...devices["Desktop Firefox"],
-        launchOptions: firefoxLaunchOptions,
-      },
-    },
-    {
-      name: "firefox",
-      testIgnore: ignoreUnavailableSpecializedSpecs(
-        /(admin-site|backup|smtp|theme|theme-management|theme-presentation|responsive-shell|post-image-fit|invite|media|timeline-cls|production-baseline-flow)\.spec\.ts/,
-      ),
-      grepInvert: visualTag,
-      ...(diagnosticCoverage
-        ? { testMatch: diagnosticSpec, dependencies: [] }
-        : { dependencies: ["firefox-visual"] }),
-      use: {
-        ...devices["Desktop Firefox"],
-        launchOptions: firefoxLaunchOptions,
-      },
-    },
-    {
-      name: "firefox-admin-site",
-      testMatch:
-        /(admin-site|backup|smtp|theme|theme-management|theme-presentation|responsive-shell|post-image-fit|media|timeline-cls|production-baseline-flow)\.spec\.ts/,
-      grepInvert: visualTag,
-      fullyParallel: false,
-      workers: 1,
-      dependencies: ["firefox"],
-      use: {
-        ...devices["Desktop Firefox"],
-        launchOptions: firefoxLaunchOptions,
-      },
-    },
-    {
-      name: "firefox-admin",
-      testMatch: /invite\.spec\.ts/,
-      grepInvert: visualTag,
-      fullyParallel: false,
-      dependencies: ["firefox-admin-site"],
-      use: {
-        ...devices["Desktop Firefox"],
-        launchOptions: firefoxLaunchOptions,
-      },
-    },
-    // Experimental Firefox lanes select only these projects. They deliberately
-    // have no dependencies outside their lane: Playwright otherwise expands a
-    // selected project with another lane's prerequisites.
-    experimentalProject({
-      name: "firefox-ordinary",
-      testIgnore: ignoreUnavailableSpecializedSpecs(
-        /(admin-site|backup|smtp|theme|theme-management|theme-presentation|responsive-shell|post-image-fit|invite|media|timeline-cls|production-baseline-flow)\.spec\.ts/,
-      ),
-      grepInvert: visualTag,
-      use: {
-        ...devices["Desktop Firefox"],
-        launchOptions: firefoxLaunchOptions,
-      },
-    }),
-    experimentalProject({
-      name: "firefox-special-visual",
-      grep: visualTag,
-      retries: 0,
-      // The candidate owns the same visual assertions as `firefox-visual`.
-      // Reuse those reviewed baselines rather than minting topology-qualified
-      // snapshots that could silently diverge.
-      snapshotPathTemplate:
-        "{snapshotDir}/{testFilePath}-snapshots/{arg}-firefox-visual-{platform}{ext}",
-      use: {
-        ...devices["Desktop Firefox"],
-        launchOptions: firefoxLaunchOptions,
-      },
-    }),
-    experimentalProject({
-      name: "firefox-special-global-configuration",
-      testMatch:
-        /(admin-site|backup|smtp|theme|theme-management|theme-presentation|responsive-shell|post-image-fit|media|timeline-cls|production-baseline-flow)\.spec\.ts/,
-      grepInvert: visualTag,
-      fullyParallel: false,
-      workers: 1,
-      use: {
-        ...devices["Desktop Firefox"],
-        launchOptions: firefoxLaunchOptions,
-      },
-    }),
-    experimentalProject({
-      name: "firefox-special-invite",
-      testMatch: /invite\.spec\.ts/,
-      grepInvert: visualTag,
-      fullyParallel: false,
-      use: {
-        ...devices["Desktop Firefox"],
-        launchOptions: firefoxLaunchOptions,
-      },
-    }),
+    ...gatedBrowsers.flatMap(gatedProjects),
     {
       name: "webkit",
       testIgnore: ignoreUnavailableSpecializedSpecs(
-        /(admin-site|backup|smtp|theme|theme-management|theme-presentation|responsive-shell|post-image-fit|invite|media|timeline-cls|production-baseline-flow)\.spec\.ts/,
+        specPattern([...siteSettingsSpecs("firefox"), ...inviteSpecs]),
       ),
       grepInvert: visualTag,
       use: { ...devices["Desktop Safari"] },

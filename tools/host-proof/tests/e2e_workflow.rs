@@ -25,6 +25,7 @@ fn artifact_reconciliation_is_build_free_and_has_no_result_envelope() {
         .args([
             "reconcile",
             "sqlite",
+            "chromium",
             "--catalog",
             "end2end/e2e-lanes.json",
             "--diagnostics-root",

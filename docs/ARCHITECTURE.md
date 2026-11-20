@@ -2540,9 +2540,9 @@ consumer requires an exact project-set match with the trace-derived evidence, so
 a project-wide capture blackout cannot disappear from the denominator and an
 unexpected project cannot inflate it. Artifacts are still copied before a
 Playwright failure is propagated. Per-lane trace validation follows a successful
-VM result; distributed Firefox reconciliation runs after all producers even when
-a producer failed, consuming every recoverable artifact while the producer's
-primary failure remains visible
+VM result; each backend/browser reconciliation runs after all producers even
+when a producer failed, consuming every recoverable artifact while the
+producer's primary failure remains visible
 ([Playwright report population authority](adr/0165-playwright-report-defines-trace-gate-population.md)).
 
 ### Measurement frames are not mixed
@@ -4189,24 +4189,26 @@ Each browser E2E lane is a NixOS-test VM running Playwright against a real
 served instance. One JSON catalog, `end2end/e2e-lanes.json`, defines the
 retained topology consumed by Nix and runtime artifact verifiers. Pinned `jq`
 projects CI matrices at runtime; Actions `fromJSON` consumes that data rather
-than maintaining a second lane list in workflow YAML. Chromium has one unsplit
-lane per backend. Firefox has three isolated lanes per backend: two shards of
-the ordinary project and one serial-special lane owning visual,
-global-configuration, and invite projects in dependency order. Unsplit Firefox
-workers=2 and workers=4 remain package-only measurement controls
-([distributed CI lane topology](adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md)).
+than maintaining a second lane list in workflow YAML. Every browser has three
+isolated lanes per backend: two shards of its ordinary project and one
+serial-special lane owning visual, global-configuration, and invite projects in
+dependency order. Unsplit catalog lanes are disabled; unsplit Firefox workers=2
+and workers=4 remain package-only measurement controls
+([distributed CI lane topology](adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md),
+[split Chromium E2E lanes](adr/drafts/split-chromium-e2e-lanes.md)). Each lane's
+one- or two-hex-digit `traceSeed` expands to a distinct trace id.
 
-CI runs two Chromium producers and six lane-qualified Firefox producers with
-`fail-fast: false`. Every Firefox lane runs the same independent unsharded
-preflight census, then emits its own report, lane and duration manifests, phase
-sidecar, trace capture, journals, and Playwright archive. An `always()` host
-reconciliation job per backend downloads all three producer artifacts, proves
-the exact census/report/manifest union, and independently validates retries,
-duration pressure, panic phases, and boot traces. Missing, duplicated,
-misidentified, malformed, or failed evidence fails reconciliation; failed
-producers are still awaited and their recoverable evidence remains an aggregate
-input. The stable result-only `e2e gate` requires both Chromium jobs, all six
-Firefox producers, the catalog projection, and both reconciliations. Local
+CI runs twelve lane-qualified producers with `fail-fast: false`, all under the
+shared 1500 s Playwright cap. Every lane runs its browser's independent
+unsharded preflight census, then emits its own report, lane and duration
+manifests, phase sidecar, trace capture, journals, and Playwright archive. An
+`always()` host reconciliation job per backend/browser pair downloads its three
+producer artifacts, proves the exact census/report/manifest union, and
+independently validates retries, duration pressure, panic phases, and boot
+traces. Missing, duplicated, misidentified, malformed, or failed evidence fails
+reconciliation; failed producers are still awaited and their recoverable
+evidence remains an aggregate input. The stable result-only `e2e gate` requires
+every producer, the catalog projection, and all four reconciliations. Local
 `dev validate` inherits the non-E2E Elisp verdict, then calls the same
 synchronous `dev e2e` workflow; it does not rerun live ERT
 ([distributed e2e](adr/0034-ci-e2e-matrix-distribution.md)).
@@ -4214,11 +4216,11 @@ synchronous `dev e2e` workflow; it does not rerun live ERT
 #### `dev` E2E workflow (#1890, #1965)
 
 `dev e2e` is the default full local workflow. `dev` exposes the full workflow,
-one parameterized producer, artifact-only backend reconciliation and explicit
-`e2e-regenerate-coverage` snapshot regeneration. Ordinary workflows verify
-without regenerating. `scripts/e2e-workflow` uses `xargs -P` for bounded
+one parameterized producer, artifact-only backend/browser reconciliation and
+explicit `e2e-regenerate-coverage` snapshot regeneration. Ordinary workflows
+verify without regenerating. `scripts/e2e-workflow` uses `xargs -P` for bounded
 admission and normalizes child failures so all enabled producers are attempted.
-Both Firefox reconciliations run after producers settle, even when evidence is
+Every pair's reconciliation runs after producers settle, even when evidence is
 absent or producers failed. The aggregate remains failed if any producer or
 reconciliation failed. CI owns its standard matrix, `needs`, `always()`,
 artifact transport and aggregate job; reconciliation still executes after
@@ -4227,11 +4229,14 @@ missing/failed artifact downloads.
 Nix retains the existing lane installables and required capture-retention,
 writer-quiescence and archive hash/size checks. The producer helper retains GC
 roots, parks the invocation's `nix build --json` output and lifts diagnostics
-before returning the real producer failure. Only successful authoritative
-SQLite/Chromium production can invoke server-function coverage, with its capture
-and explicit selected immutable output. Failed kept outputs remain diagnostic
-only. Artifact verifiers read runtime lane/catalog expectations; the embedded
-Rust catalog, Rust lane scheduler and E2E result/report envelopes are deleted.
+before returning the real producer failure. Every producer only verifies its own
+lane. Server-function coverage belongs to the SQLite/Chromium reconciliation: it
+reconciles that pair's lifted artifacts first, then extracts each lane's capture
+on its own and unions the coverage
+([split Chromium E2E lanes](adr/drafts/split-chromium-e2e-lanes.md)). Failed
+kept outputs remain diagnostic only, and a failed phase fails reconciliation.
+Artifact verifiers read runtime lane/catalog expectations; the embedded Rust
+catalog, Rust lane scheduler and E2E result/report envelopes are deleted.
 Reusable ownership, retry-duration, boot-trace and coverage verdicts stay in
 place. Static inventory checking remains independent and regeneration explicit.
 No new receipt/schema or hidden-omission guarantee is introduced: authority is
@@ -4243,18 +4248,20 @@ whose workflow `dev` now owns
 ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)).
 
 `end2end/playwright.config.ts` is the one config, loaded verbatim by both the VM
-and the host loop ([ADR-0051](adr/0051-single-playwright-config.md)). Chromium's
-unsplit project graph remains `chromium-visual → chromium → chromium-admin`.
-Firefox's retained graph is distributed: `firefox-ordinary` is sharded across
-two VMs, while one serial-special VM selects
-`firefox-special-visual → firefox-special-global-configuration → firefox-special-invite`.
-The visual project selects the existing `@visual` behavioral tests, disables
-retries, and reuses the reviewed `firefox-visual` baseline paths rather than
-minting topology-qualified images. Ordinary excludes visual and global-state
-specs. Chromium and Firefox each own one Linux baseline per state under the
-owning spec's adjacent `*.spec.ts-snapshots/` directory. The filename carries
-browser identity but not backend, so SQLite and PostgreSQL compare the same
-expected image. WebKit has no visual project or baseline.
+and the host loop ([ADR-0051](adr/0051-single-playwright-config.md)). Each
+browser's lane graph is distributed: `<browser>-ordinary` is sharded across two
+VMs, while one serial-special VM selects
+`<browser>-special-visual → <browser>-special-global-configuration → <browser>-special-invite`.
+The unsplit Chromium graph
+`chromium-visual → chromium → chromium-admin-site → chromium-admin` remains for
+host E2E, production-baseline qualification and wasm coverage. Each visual
+project selects the existing `@visual` behavioral tests, disables retries, and
+reuses the reviewed `<browser>-visual` baseline paths rather than minting
+topology-qualified images. Ordinary excludes visual and global-state specs.
+Chromium and Firefox each own one Linux baseline per state under the owning
+spec's adjacent `*.spec.ts-snapshots/` directory. The filename carries browser
+identity but not backend, so SQLite and PostgreSQL compare the same expected
+image. WebKit has no visual project or baseline.
 
 Exact comparison is a controlled rendering seam: Nix supplies one DejaVu-only
 fontconfig universe to both host and VM browser processes, while
@@ -4412,18 +4419,18 @@ Ordinary specs are parallel-safe by construction, via per-test identity fixtures
 in `end2end/tests/provisioning.ts`, composed only by `end2end/tests/fixtures.ts`
 ([ADR-0039](adr/0039-e2e-parallelism-via-per-test-identity-fixtures.md)): `user`
 provisions a uniquely-named account out of band, `mailbox` is a recipient-scoped
-cursor-tracked mail waiter, and `verifiedUser` adds the verification flow.
-Firefox global-state specs are additionally isolated from both ordinary shards
-in the serial-special VM; Chromium keeps its serial admin project in the unsplit
-VM. The catalog and Playwright dependency graph require visual ownership exactly
-once and keep each special project's prerequisites in the same lane
+cursor-tracked mail waiter, and `verifiedUser` adds the verification flow. Each
+browser's global-state specs are additionally isolated from both ordinary shards
+in its serial-special VM. The catalog and Playwright dependency graph require
+visual ownership exactly once and keep each special project's prerequisites in
+the same lane
 ([distributed CI lane topology](adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md)).
 
 The config also carries a `webkit` project, but the gate never runs it: the
-retained catalog enumerates Chromium and Firefox only. Chromium visual coverage
-runs inside each unsplit Chromium VM; Firefox visual coverage runs exactly once
-per backend in the serial-special lane. Visual coverage adds no backend-specific
-baseline. Timeout budgets are stated for Chromium and scaled per browser
+retained catalog enumerates Chromium and Firefox only. Each browser's visual
+coverage runs exactly once per backend in its serial-special lane. Visual
+coverage adds no backend-specific baseline. Timeout budgets are stated for
+Chromium and scaled per browser
 ([ADR-0012](adr/0012-environment-aware-timeouts.md)) — `slowBrowserTimeoutMs`
 for an individual wait and the ambient whole-test budget,
 `slowBrowserFirstNavigationTimeoutMs` for the coldest navigation.
@@ -4700,14 +4707,13 @@ The explicit local workflows are:
   auxiliary host tests, wasm tests, public `dev coverage` and `dev doctests`,
   and Elisp producer/consumer. **`dev validate`** adds the currently landed E2E
   producers and final authoritative flow consumer; it never reruns live ERT.
-  Chromium runs once per backend; each backend's Firefox command owns its three
-  retained lanes and reconciliation. `dev` owns coverage/doctest composition and
-  hard status-gate requests. `dev e2e` owns the full local E2E workflow; CI
-  calls its producer and reconciliation boundaries directly, using the shared
-  enabled-lane catalog and artifact verifiers
-  ([ADR-0238](adr/0238-just-e2e-workflow-ownership.md)). Local dispatch and
-  distributed CI scheduling remain distinct; a producer-output join alone does
-  not establish the complete reconciled verdict.
+  Each backend/browser pair owns three retained lanes and one reconciliation.
+  `dev` owns coverage/doctest composition and hard status-gate requests.
+  `dev e2e` owns the full local E2E workflow; CI calls its producer and
+  reconciliation boundaries directly, using the shared enabled-lane catalog and
+  artifact verifiers ([ADR-0238](adr/0238-just-e2e-workflow-ownership.md)).
+  Local dispatch and distributed CI scheduling remain distinct; a
+  producer-output join alone does not establish the complete reconciled verdict.
 
 CI invokes four independent commands: `dev ci-validate-host`,
 `dev ci-validate-hermetic`, `dev ci-validate-test-checks`, and `dev coverage`.
@@ -4957,11 +4963,12 @@ Identity stability alone is not local/remote cache or compiler freshness
 evidence.
 
 `dev validate` composes `dev validate-no-e2e` and the synchronous `dev e2e`
-workflow, which settles all eight retained producers before both Firefox
-reconciliations and owns authoritative SQLite/Chromium flow verification.
-Gate-wide JSON invalidation reports are retired. The coverage source-filter
-probe remains an optional, named diagnostic; evidence belongs in ignored run
-storage or the PR. Do not purge the store or run routine measurement campaigns.
+workflow, which settles all twelve retained producers before every
+backend/browser reconciliation; the SQLite/Chromium reconciliation owns
+authoritative flow verification. Gate-wide JSON invalidation reports are
+retired. The coverage source-filter probe remains an optional, named diagnostic;
+evidence belongs in ignored run storage or the PR. Do not purge the store or run
+routine measurement campaigns.
 
 #### Sandboxed cargo-deny
 
@@ -5194,20 +5201,22 @@ the registrar count.
 `server-fn-coverage` ([ADR-0081](adr/0081-empirical-server-fn-flow-coverage.md))
 answers a question line coverage cannot: which server entry points a real
 browser session drives. The claim is **derived from evidence, not asserted** —
-the hit set is extracted from the OTLP traces a passing `sqlite × chromium` e2e
-run emits, matched forward from the inventory by `#[tracing::instrument]` span
-name plus `code.namespace`. A documentary convention was rejected precisely
-because a doc naming a spec that never touches the fn would stay green forever.
-The gate has two lanes: a static `source-contracts -- server-fn-coverage` lane
+the hit set is extracted from the OTLP traces of the reconciled SQLite/Chromium
+e2e lanes, each lane extracted on its own and the coverage unioned, matched
+forward from the inventory by `#[tracing::instrument]` span name plus
+`code.namespace`. A documentary convention was rejected precisely because a doc
+naming a spec that never touches the fn would stay green forever. The gate has
+two lanes: a static `source-contracts -- server-fn-coverage` lane
 (repository-policy) in `dev check`/`dev validate-no-e2e` that reads the sole
 committed `docs/coverage/server-fns.json` snapshot plus the source-derived
 inventory, and an e2e lane (host-proof
 `e2e-evidence server-fn-coverage verify|regenerate`,
 `tools/host-proof/src/steps/server_fn_coverage_check.rs`) that recomputes that
-snapshot from the successful SQLite/Chromium output selected by
-`dev e2e-producer sqlite-chromium-unsplit`, with explicit capture, output, lane
-and runtime catalog inputs. Static inventory checking remains independent of E2E
-production; regeneration is explicit.
+snapshot from the lifted SQLite/Chromium lane artifacts and runtime catalog,
+after reconciling that pair
+([split Chromium E2E lanes](adr/drafts/split-chromium-e2e-lanes.md)). Static
+inventory checking remains independent of E2E production; regeneration is
+explicit.
 
 No server-fn host gate carries an **endpoint-drift check**, and that is
 deliberate ([ADR-0120](adr/0120-no-endpoint-drift-check.md)). The retired
