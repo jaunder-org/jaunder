@@ -166,7 +166,7 @@ class Checkout:
 # anywhere else with 23, answers checkout discovery from the real Git, and
 # reports a dirty tree while `dirty-status` exists. The CSR prerequisite prints
 # its root under `/verified`.
-# Nix cache probes fail, so Nix steps record no cache source; a build's
+# Nix cache queries fail, so Nix steps record no cache source; a build's
 # out-link points at a fake store path named after the link.
 FAKE = r"""#!/bin/sh
 name=${0##*/}
@@ -189,7 +189,7 @@ if [ "$name" = git ]; then
     esac
 fi
 case "$name $*" in
-  'nix eval --raw '*|'nix path-info '*) exit 1 ;;
+  'nix path-info '*) exit 1 ;;
 esac
 if [ "$name" = cargo ]; then
     printf '%s\n' "${RUSTC_WRAPPER-unset}" "${CARGO_INCREMENTAL-unset}" "${SCCACHE_BASEDIRS-unset}" > cache-env
@@ -239,18 +239,22 @@ case "$name $*" in
     printf '{"steps":[]}\n' ;;
 esac
 """
-# A fake `nix` with a store: a check's output is valid once built, or from the
-# start with NIX_VALID; the other variables inject probe and build failures.
-FAKE_NIX_STORE = """\
+# Store registration times for fake `nix` path-info entries: before, and after,
+# any real step's start.
+REGISTERED_LONG_AGO = 0
+REGISTERED_LATER = 4102444800
+# A fake `nix` with a store holding one output, `build-out`. It is valid from
+# the start with NIX_VALID, registered long ago; otherwise a build registers it
+# later. A later build first moves that registration to long ago: the earlier
+# step registered it before this one started. The other variables inject query
+# and build failures.
+FAKE_NIX_STORE = (
+    f'LONG_AGO, FUTURE = "{REGISTERED_LONG_AGO}", "{REGISTERED_LATER}"\n'
+    + """\
 import json
 command = sys.argv[1]
 env = os.environ.get
-if command == "eval":
-    if env("NIX_EVAL_FAIL"):
-        print("eval-err", file=sys.stderr)
-        sys.exit(1)
-    print("/nix/store/0000-demo", end="")
-elif command == "path-info":
+if command == "path-info":
     if env("NIX_INFO_FAIL"):
         print("info-err", file=sys.stderr)
         sys.exit(1)
@@ -258,17 +262,30 @@ elif command == "path-info":
         print("not json")
         sys.exit()
     path = sys.argv[-1]
-    valid = bool(env("NIX_VALID")) or os.path.exists("built")
+    if env("NIX_VALID"):
+        registered = LONG_AGO
+    elif os.path.exists("built"):
+        registered = open("built").read()
+    else:
+        registered = None
     info = {"ultimate": bool(env("NIX_ULTIMATE")), "version": 1}
-    print(json.dumps({path: info if valid else None}))
+    if registered is not None:
+        info["registrationTime"] = int(registered)
+    print(json.dumps({path: info if registered is not None else None}))
     print("info-warning", file=sys.stderr)
 else:
-    print("build-out"); print("build-err", file=sys.stderr)
+    print("build-out")
+    if env("NIX_TWO_OUTPUTS"):
+        print("build-out-dev")
+    print("build-err", file=sys.stderr)
     code = int(env("NIX_BUILD_CODE", "0"))
     if code == 0 and not env("NIX_LOST"):
-        open("built", "w").close()
+        registered = LONG_AGO if os.path.exists("built") else FUTURE
+        with open("built", "w") as store:
+            store.write(registered)
     sys.exit(code)
 """
+)
 FAKE_TOOLS = (
     "bash",
     "cargo",

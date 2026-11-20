@@ -4587,15 +4587,16 @@ against its return.
 Each gate and each step is an OpenTelemetry span. A step span carries its
 `jaunder.status` (`ok`, `failed`, `signalled`), `process.exit.code`, its command
 line capped at 1 KiB and, for Nix build steps only (every Nix build `dev` runs
-as a step), `jaunder.cache`: `reused` when the build's top-level output path was
-already valid before the build, otherwise `built` or `substituted` by
-`nix path-info`'s `ultimate` flag. It describes only that top-level output. A
-`substituted` static verdict is expected: static verdicts are sandboxed and
-input-addressed, so a stamp fetched for an identical derivation counts. Coverage
-and e2e verdicts are never substituted. Their `nonSubstitutable` wrapper guards
-local builds. In CI the setup-ci Cachix `pushFilter` keeps them out of the
-cache, because install-nix-action's `always-allow-substitutes = true` overrides
-the wrapper there
+as a step), `jaunder.cache`: `reused` when the store registered the build's
+printed output path before the build started, otherwise `built` or `substituted`
+by `nix path-info`'s `ultimate` flag. The build is the step's only evaluation,
+and the value describes only that output. A `substituted` static verdict is
+expected: static verdicts are sandboxed and input-addressed, so a stamp fetched
+for an identical derivation counts. Coverage and e2e verdicts are never
+substituted. Their `nonSubstitutable` wrapper guards local builds. In CI the
+setup-ci Cachix `pushFilter` keeps them out of the cache, because
+install-nix-action's `always-allow-substitutes = true` overrides the wrapper
+there
 ([substitutable static verdicts](adr/0252-substitutable-static-verdicts.md)).
 Child processes join through `TRACEPARENT`/`TRACESTATE` plus
 `JAUNDER_TRACE_DIR`; the root is the `dev` process that finds the latter unset.

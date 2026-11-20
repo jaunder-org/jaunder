@@ -110,12 +110,15 @@ def test_a_child_that_exits_cleanly_after_termination_still_stops_the_gate(
 def test_a_signal_while_no_step_runs_closes_the_gate_as_signalled(
     checkout: Checkout, sent: signal.Signals
 ) -> None:
-    # The Nix check's output probe, not a step, is running when `dev` is signalled.
+    # The Nix check's output query, not a step's child, is running when `dev` is
+    # signalled: the build has finished.
     checkout.tool(
         "nix",
-        'if sys.argv[1] == "eval":\n'
+        'if sys.argv[1] == "path-info":\n'
         '    pathlib.Path("ready").touch()\n'
-        "    time.sleep(30)\n",
+        "    time.sleep(30)\n"
+        "else:\n"
+        '    print("/nix/store/0000-demo")\n',
     )
     dev = checkout.popen("nix-check", "demo")
     wait_for(checkout.root / "ready")
@@ -124,7 +127,7 @@ def test_a_signal_while_no_step_runs_closes_the_gate_as_signalled(
 
     assert dev.returncode == 128 + sent
     assert stderr == b""
-    assert "nix build" not in checkout.order()
+    assert "nix build" in checkout.order()
     slices = checkout.merged()
     for name in ("dev nix-check", "demo"):
         assert slices[name]["args"]["jaunder.status"] == "signalled"

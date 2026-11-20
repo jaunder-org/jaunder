@@ -75,8 +75,8 @@ def test_producer_and_gate_record_where_their_outputs_came_from(
     assert slices["doctests"]["args"]["jaunder.cache"] == cache
     # The fake store holds one output, which the producer step leaves valid.
     assert slices["doctests-gate"]["args"]["jaunder.cache"] == "reused"
-    # The probes evaluate the flake as the build does, lock file untouched.
+    # The build is the only evaluation, and it leaves the lock file untouched.
     assert checkout.order().splitlines()[0] == (
-        "nix eval --raw --no-update-lock-file --no-write-lock-file "
-        ".#checks.x86_64-linux.doctests.outPath"
+        "nix build -L --no-update-lock-file --no-write-lock-file --print-out-paths "
+        "--out-link .xtask/gcroots/doctests .#checks.x86_64-linux.doctests"
     )

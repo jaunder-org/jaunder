@@ -77,11 +77,9 @@ else:
         while not os.path.exists("release"):
             time.sleep(0.02)
 """
-# A build links its out-link to $BUNDLE, or fails with NIX_BUILD_CODE; cache
-# probes fail, so the step records no cache source.
+# A build links its out-link to $BUNDLE, or fails with NIX_BUILD_CODE. It
+# prints no output path, so the step records no cache source.
 NIX = """\
-if sys.argv[1] != "build":
-    sys.exit(1)
 code = int(os.environ.get("NIX_BUILD_CODE", "0"))
 if code:
     sys.exit(code)
@@ -151,10 +149,7 @@ def expected_order(*nextest_args: str) -> list[str]:
 def test_each_step_runs_in_order_as_a_span_of_the_gate(local: Checkout) -> None:
     result = run_test_local(local)
     assert result.returncode == 0, result
-    # Nix's cache probes run before its build and are not part of the order.
-    assert [line for line in order(local) if " eval " not in line] == expected_order(
-        "--workspace"
-    )
+    assert order(local) == expected_order("--workspace")
     slices = local.merged()
     gate = slices["dev test-local"]["args"]["span_id"]
     for name in STEPS:
@@ -235,7 +230,7 @@ def test_a_refused_bundle_stops_before_any_compilation(
 ) -> None:
     result = run_test_local(local, **failure)
     assert result.returncode == int(next(iter(failure.values()))), result
-    lines = [line for line in order(local) if " eval " not in line]
+    lines = order(local)
     assert last in lines[-1], lines
     assert not any(line.startswith("cargo build") for line in lines)
     assert not (local.root / "nextest.json").exists()
@@ -266,7 +261,7 @@ def test_the_lock_is_held_for_the_whole_run_so_a_second_run_waits(
     (local.root / "release").touch()
     assert first.wait(timeout=60) == 0
     assert second.wait(timeout=60) == 0
-    lines = [line for line in order(local) if " eval " not in line]
+    lines = order(local)
     assert lines == expected_order("-p", "common") * 2
 
 

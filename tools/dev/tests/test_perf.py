@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from conftest import Checkout
+from conftest import REGISTERED_LATER, Checkout
 
 NONCE = "0123456789abcdef" * 4
 PRODUCERS = [
@@ -29,13 +29,17 @@ SELECTION = {
     "count_overrides": {"posts": None, "authors": None, "revisions": None},
 }
 # The selector, the store and the build of each producer; MODE injects one
-# failure. A producer's output is valid, built here, once it has been built.
-NIX = """\
+# failure. A producer's output is valid once it has been built, built here and
+# registered after the build step started.
+NIX = (
+    f"REGISTERED = {REGISTERED_LATER}\n"
+    + """\
 log = pathlib.Path(os.environ["PERF_LOG"])
 if sys.argv[1] == "path-info":
     path = sys.argv[-1]
     built = log.exists() and f"build:{pathlib.Path(path).name}" in log.read_text()
-    print(json.dumps({path: {"ultimate": True} if built else None}))
+    entry = {"ultimate": True, "registrationTime": REGISTERED}
+    print(json.dumps({path: entry if built else None}))
     sys.exit(0)
 if sys.argv[1] == "eval":
     # The checkout is a git+file: flake, never a path: copy of .git and target/.
@@ -53,6 +57,7 @@ if os.environ["PERF_MODE"] == "build-failure" and name == "performance-browser-s
     sys.exit(73)
 print(os.environ.get("PERF_IDENTITY", pathlib.Path(os.environ["PERF_OUTPUTS"], name)))
 """
+)
 CARGO = f"""\
 log = pathlib.Path(os.environ["PERF_LOG"])
 command = sys.argv[sys.argv.index("--") + 1]

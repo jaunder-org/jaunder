@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 import pytest
-from conftest import PACKAGE, Checkout, Workflow
+from conftest import PACKAGE, REGISTERED_LONG_AGO, Checkout, Workflow
 
 CARGO_RUN = "cargo run --locked --quiet --manifest-path tools/Cargo.toml"
 HOST_PROOF = f"{CARGO_RUN} -p host-proof --bin"
@@ -260,14 +260,15 @@ def test_org_timezone_manifest_forwards_originals_without_bootstrap(
 
 
 def store_nix(output: str) -> str:
-    """A fake `nix` whose every installable evaluates and builds to `output`,
-    already valid in its store."""
+    """A fake `nix` whose every installable builds to `output`, registered in
+    its store long ago."""
     return (
         "import json\n"
         'if sys.argv[1] == "path-info":\n'
-        '    print(json.dumps({sys.argv[-1]: {"ultimate": False}}))\n'
+        f"    entry = {{'ultimate': False, 'registrationTime': {REGISTERED_LONG_AGO}}}\n"
+        "    print(json.dumps({sys.argv[-1]: entry}))\n"
         "else:\n"
-        f"    print({output!r}, end='' if sys.argv[1] == 'eval' else '\\n')\n"
+        f"    print({output!r})\n"
     )
 
 

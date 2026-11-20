@@ -24,7 +24,7 @@ class Status(StrEnum):
 
 
 class Cache(StrEnum):
-    """`jaunder.cache`: where a Nix step's top-level output came from."""
+    """`jaunder.cache`: where the one output path a Nix step printed came from."""
 
     REUSED = "reused"
     BUILT = "built"

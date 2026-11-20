@@ -1234,15 +1234,19 @@ records:
 - `jaunder.cache`, for Nix build steps only: every Nix build `dev` runs as a
   step. `scripts/e2e-workflow`'s own builds, inside its E2E steps, record none.
 
-`jaunder.cache` describes only the build's top-level output path, evaluated
-before the build (or, for a derivation installable such as a performance
-producer, the output path its selection names): `reused` if that path was
-already valid, otherwise `built` if `nix path-info` marks it `ultimate`
-afterwards and `substituted` if not. It says nothing about the output's
-dependencies, and no other step records a cache value. Neither elapsed time nor
-a missing `cache` attribute proves a fresh build, substitution or newly executed
-Nix builder work. Nested or overlapping spans are not additive CPU or human
-effort and must not be summed as such.
+`jaunder.cache` describes only the one output path the build prints; the build
+is the step's only evaluation. `nix path-info` then reports when the local store
+registered that path: `reused` if before the second the build started, otherwise
+`built` if it is `ultimate` and `substituted` if not. A path registered within
+the start second, a build printing several paths, or a failed query records
+nothing. This assumes the registration time is local, as for local builds and
+binary-cache substitution: Nix keeps a source store's registration time when
+copying a path in, so an output from a remote builder, an `ssh-ng://` or
+`local://` substituter or `nix copy` may read as `reused`. It says nothing about
+the output's dependencies, and no other step records a cache value. Neither
+elapsed time nor a missing `cache` attribute proves a fresh build, substitution
+or newly executed Nix builder work. Nested or overlapping spans are not additive
+CPU or human effort and must not be summed as such.
 
 Every process appends span start and end records, one JSON object per line, to
 its own `<pid>-<random>.jsonl` file in `.xtask/run/<run_id>.trace.d/`; the

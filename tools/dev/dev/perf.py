@@ -64,7 +64,6 @@ def _retain(run_root: Path, selected: dict[str, Any]) -> None:
         str(selected["installable"]),
         flags=(),
         keep=False,
-        output=identity,
         refusal=refusal,
     )
     producer_root = run_root / "producers" / name
