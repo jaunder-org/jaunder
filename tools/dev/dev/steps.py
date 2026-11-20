@@ -325,11 +325,14 @@ class _QueryFailed(Exception):
     """A Nix query failed, so the step's cache source stays unrecorded."""
 
 
-def _query(*argv: str) -> bytes:
-    """A Nix query's stdout; its streams never reach the user."""
+def _store_entry(path: str) -> dict[str, Any] | None:
+    """`path`'s store metadata, or None while the path is not valid.
+
+    The query's streams never reach the user.
+    """
     try:
         done = subprocess.run(
-            argv,
+            ["nix", "path-info", "--json", "--json-format", "1", "--", path],
             env=changed(os.environ, WITHOUT_GIT_OVERRIDES),
             capture_output=True,
             check=False,
@@ -338,15 +341,8 @@ def _query(*argv: str) -> bytes:
         raise _QueryFailed from error
     if done.returncode:
         raise _QueryFailed
-    return done.stdout
-
-
-def _store_entry(path: str) -> dict[str, Any] | None:
-    """`path`'s store metadata, or None while the path is not valid."""
     try:
-        listed = json.loads(
-            _query("nix", "path-info", "--json", "--json-format", "1", "--", path)
-        )
+        listed = json.loads(done.stdout)
     except ValueError as error:
         raise _QueryFailed from error
     # An object keyed by store path; an invalid path maps to null.
@@ -395,21 +391,21 @@ def nix_build(
     with _step(name, argv) as span:
         start = int(time.time())
         code, signalled, printed = _supervise(argv, capture=True)
-        built = _shell_text(printed)
+        paths = _shell_text(printed)
         if refusal is not None and not code:
-            reason = refusal(built)
+            reason = refusal(paths)
             if reason is not None:
                 print(reason, file=sys.stderr, flush=True)
                 code = 1
         _record_outcome(span, code, signalled)
-        if code == 0 and len(built.splitlines()) == 1:
+        if code == 0 and len(paths.splitlines()) == 1:
             with contextlib.suppress(_QueryFailed):
-                cache = output_source(_store_entry(built), start)
+                cache = output_source(_store_entry(paths), start)
                 if cache is not None:
                     span.set_attribute(CACHE, cache)
     if code:
         raise StepFailed(code, signalled)
-    return built
+    return paths
 
 
 def nix_check(

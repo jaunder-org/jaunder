@@ -239,16 +239,21 @@ case "$name $*" in
     printf '{"steps":[]}\n' ;;
 esac
 """
+# Store registration times for fake `nix` path-info entries: before, and after,
+# any real step's start.
+REGISTERED_LONG_AGO = 0
+REGISTERED_LATER = 4102444800
 # A fake `nix` with a store holding one output, `build-out`. It is valid from
 # the start with NIX_VALID, registered long ago; otherwise a build registers it
-# far in the future, so after any real step's start. A later build first moves
-# that registration to long ago: the earlier step registered it before this one
-# started. The other variables inject query and build failures.
-FAKE_NIX_STORE = """\
+# later. A later build first moves that registration to long ago: the earlier
+# step registered it before this one started. The other variables inject query
+# and build failures.
+FAKE_NIX_STORE = (
+    f'LONG_AGO, FUTURE = "{REGISTERED_LONG_AGO}", "{REGISTERED_LATER}"\n'
+    + """\
 import json
 command = sys.argv[1]
 env = os.environ.get
-LONG_AGO, FUTURE = "0", "4102444800"
 if command == "path-info":
     if env("NIX_INFO_FAIL"):
         print("info-err", file=sys.stderr)
@@ -280,6 +285,7 @@ else:
             store.write(registered)
     sys.exit(code)
 """
+)
 FAKE_TOOLS = (
     "bash",
     "cargo",
