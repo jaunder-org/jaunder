@@ -34,7 +34,7 @@ runs:
         # proves which support outputs could be admitted; the measured decision
         # report records why the broad boundary remains.
         pushFilter: "jaunder-coverage|jaunder-e2e"
-    # Host tools run through `cargo run` from the tools workspace, so cachix
+    # Host tools are built from the tools workspace by `dev`, so cachix
     # can't cover them; cache their compiled deps between runs.
     - name: Cache host tools build
       uses: actions/cache@v6

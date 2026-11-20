@@ -1233,21 +1233,47 @@ records:
 - `process.exit.code` and `process.command_line`, capped at 1 KiB;
 - `jaunder.cache`, for Nix build steps only: every Nix build `dev` runs as a
   step, including each `e2e-producer` step: `scripts/e2e-workflow` runs that
-  build, and the step judges the one output its `build.json` selected.
+  build, and the step judges the one output its `build.json` selected;
+- `jaunder.nix.output` and `jaunder.nix.fetched_bytes`, for the Nix build steps
+  `dev` itself builds (not `e2e-producer`).
 
-`jaunder.cache` describes only the one output path the build prints; the build
-is the step's only evaluation. `nix path-info` then reports when the local store
-registered that path: `reused` if before the second the build started, otherwise
-`built` if it is `ultimate` and `substituted` if not. A path registered within
-the start second, a build printing several paths, or a failed query records
-nothing. This assumes the registration time is local, as for local builds and
-binary-cache substitution: Nix keeps a source store's registration time when
-copying a path in, so an output from a remote builder, an `ssh-ng://` or
-`local://` substituter or `nix copy` may read as `reused`. It says nothing about
-the output's dependencies, and no other step records a cache value. Neither
-elapsed time nor a missing `cache` attribute proves a fresh build, substitution
-or newly executed Nix builder work. Nested or overlapping spans are not additive
-CPU or human effort and must not be summed as such.
+A Nix build step of a flake installable has two child steps: `eval`
+(`nix path-info --derivation`) evaluates it, leaving the evaluation cached, and
+`build` (`nix build`) builds it from that cache, so the flake is evaluated once
+and the evaluation is timed. A derivation-path installable has only `build`.
+`jaunder.nix.output` is the one output path the build prints, and
+`jaunder.cache` describes only that path. `nix path-info` reports when the local
+store registered it: `reused` if before the second the build started (after
+`eval`), otherwise `built` if it is `ultimate` and `substituted` if not. Unless
+it is `reused`, `jaunder.nix.fetched_bytes` sums the unpacked size of the paths
+in the build's closure (`nix-store --query --requisites --include-outputs`) that
+are not derivations, were registered from the start second on and are not
+`ultimate`: what substituters supplied. A path the previous step registered in
+that same second counts too; fixed-output downloads are `ultimate` and do not. A
+path registered within the start second, a build printing several paths, or a
+failed query records less, never more, and never changes the step. This assumes
+the registration time is local, as for local builds and binary-cache
+substitution: Nix keeps a source store's registration time when copying a path
+in, so an output from a remote builder, an `ssh-ng://` or `local://` substituter
+or `nix copy` may read as `reused`. It says nothing about the output's
+dependencies, and no other step records a cache value.
+
+A tools-workspace binary is built as its own step, `<bin>-build`
+(`cargo build --locked --quiet --manifest-path tools/Cargo.toml --target-dir tools/target -p <package> --bin <bin>`),
+once per `dev` process, and then runs directly from `tools/target/debug`, so its
+span times the tool and never the compiler. `tools-tests-build` and, when `dev`
+chooses the selection, `nextest-build` compile tests with their run's own
+arguments and environment (`--no-run`) before `tools-tests` and `nextest` run
+them.
+
+The root span also records its runner where the machine exposes it:
+`host.cpu.model.name` (`/proc/cpuinfo`), `jaunder.host.nproc` (the CPUs `dev`
+may use) and `cloud.provider` (`aws` or `azure`, from the DMI system vendor; a
+local Hyper-V machine reads as `azure`). In CI, setup-ci's first step exports
+`JAUNDER_CI_JOB_START_NS`, which the root records as `jaunder.ci.job_start_ns`.
+Neither elapsed time nor a missing `cache` attribute proves a fresh build,
+substitution or newly executed Nix builder work. Nested or overlapping spans are
+not additive CPU or human effort and must not be summed as such.
 
 Every process appends span start and end records, one JSON object per line, to
 its own `<pid>-<random>.jsonl` file in `.xtask/run/<run_id>.trace.d/`; the
@@ -1258,10 +1284,14 @@ ids in `args` and overlapping siblings on separate tracks. Open that file at
 <https://ui.perfetto.dev>. `dev trace summary [PATH] [--markdown]` reads a run
 directory (the latest under `.xtask/run/` by default, or one downloaded from CI)
 and prints the slowest spans, plus every span that did not end `ok`, with depth,
-status, cache and each parent's untraced time; overlapping children are not
-summed. Spans go only to these files; `dev` exports nothing over OTLP. Inside a
-Nix check the trace lands in the build directory and is discarded; the host-side
-Nix step records the cache result.
+status, cache, fetched bytes and each parent's untraced time; overlapping
+children are not summed. A runner line heads the table, and a `before dev` row
+shows a CI job's time from its start to the root (setup-ci, earlier steps and
+devShell entry). Only "Set up job" and checkout precede the mark, and the
+trace-summary step, uploads and post-job cleanup follow the root. Spans go only
+to these files; `dev` exports nothing over OTLP. Inside a Nix check the trace
+lands in the build directory and is discarded; the host-side Nix step records
+the cache result.
 
 Tracing never changes a step's exit status, stdout or stderr. If the trace
 directory cannot be written, `dev` warns once on stderr and otherwise behaves
@@ -1826,12 +1856,19 @@ dev test-local -p storage site_config_primitives_round_trip
    substituter own artifact identity/reuse; no cached test verdict is used.
 4. `csr-prerequisite` (`host-proof csr-prerequisite <root>`) validates the
    complete immutable output and prints its absolute root.
-5. `image-worker` builds `target/debug/jaunder` with `CFLAGS` set empty when
-   absent (an inherited value is kept), which storage and seeding tests start
-   even when nextest selects only storage.
-6. `nextest` runs `pg-run cargo nextest run <args>` (`--workspace` without args)
-   with `JAUNDER_CSR_BUNDLE_DIR` set to the verified root and
-   `JAUNDER_TEST_EXECUTABLE` to the image worker.
+5. `image-worker` builds `target/debug/jaunder`, which storage and seeding tests
+   start even when nextest selects only storage.
+6. `nextest-build`, without args only, compiles the workspace's tests
+   (`cargo nextest run --no-run --workspace`). Hand-typed args compile in
+   `nextest`: nextest refuses some run options, such as `--no-fail-fast`, with
+   `--no-run`.
+7. `nextest` runs `pg-run cargo nextest run <args>` (`--workspace` without
+   args).
+
+Steps 5–7 share one environment, so build scripts that track it never rebuild
+between them: `CFLAGS` set empty when absent (an inherited value is kept),
+`JAUNDER_CSR_BUNDLE_DIR` set to the verified root and `JAUNDER_TEST_EXECUTABLE`
+to the image worker.
 
 An explicit `JAUNDER_CSR_BUNDLE_DIR` skips steps 2 and 3; step 4 validates it
 instead. The first failing step stops the run, so admission, realization or

@@ -4591,10 +4591,19 @@ line capped at 1 KiB and, for Nix build steps only (every Nix build `dev` runs
 as a step, and each E2E producer step for the output its `build.json` selected),
 `jaunder.cache`: `reused` when the store registered the build's printed output
 path before the build started, otherwise `built` or `substituted` by
-`nix path-info`'s `ultimate` flag. The build is the step's only evaluation, and
-the value describes only that output. A `substituted` static verdict is
-expected: static verdicts are sandboxed and input-addressed, so a stamp fetched
-for an identical derivation counts. Coverage and e2e verdicts are never
+`nix path-info`'s `ultimate` flag. A flake step evaluates in an `eval` child
+(`nix path-info --derivation`) and builds from the cached evaluation in a
+`build` child, so it is evaluated once and the evaluation is timed; the value
+describes only the output, which the step records as `jaunder.nix.output`, with
+`jaunder.nix.fetched_bytes` for what substituters supplied to the build's
+closure unless the output was reused. Tools-workspace binaries are built as
+their own `<bin>-build` steps and run from `tools/target/debug`, and test runs
+compile in `--no-run` build steps first, so a tool or test span never times the
+compiler. The root span records its runner (CPU model, usable CPUs, cloud
+provider from the DMI vendor) and, in CI, the job's start from setup-ci, which
+`dev trace summary` shows as a `before dev` row. A `substituted` static verdict
+is expected: static verdicts are sandboxed and input-addressed, so a stamp
+fetched for an identical derivation counts. Coverage and e2e verdicts are never
 substituted. Their `nonSubstitutable` wrapper guards local builds. In CI the
 setup-ci Cachix `pushFilter` keeps them out of the cache, because
 install-nix-action's `always-allow-substitutes = true` overrides the wrapper
