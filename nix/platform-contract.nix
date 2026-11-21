@@ -12,11 +12,12 @@ let
       shells = flake.devShells.${system};
       linux = builtins.match ".*-linux" system != null;
       paths = map (name: packages.${name}.drvPath) portable
-        ++ map (name: shells.${name}.drvPath) [ "default" "ci" ];
+        ++ map (name: shells.${name}.drvPath) ([ "default" "ci" ] ++ (if linux then [ "ci-nix" ] else [ ]));
     in
     assert builtins.all (name: builtins.hasAttr name packages) portable;
     assert builtins.all (name: builtins.hasAttr name packages == linux) linuxOnly;
     assert builtins.hasAttr "theme-thumbnail" shells == linux;
+    assert builtins.hasAttr "ci-nix" shells == linux;
     assert linux || builtins.attrNames flake.checks.${system} == [ ];
     assert builtins.hasAttr "FONTCONFIG_FILE" shells.ci == linux;
     assert builtins.hasAttr "JAUNDER_THEME_THUMBNAIL_BROWSER" shells.default == linux;

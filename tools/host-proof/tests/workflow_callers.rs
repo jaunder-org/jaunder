@@ -43,11 +43,13 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
     let source = include_str!("../../../.github/workflows/ci.yml");
     let workflow: serde_yaml::Value = serde_yaml::from_str(source).unwrap();
     let jobs = &workflow["jobs"];
-    for (lane, gate) in [
-        ("host", "ci-validate-host"),
-        ("hermetic", "ci-validate-hermetic"),
-        ("test-checks", "ci-validate-test-checks"),
-        ("coverage", "coverage"),
+    // Only the host lane runs host tools beyond Nix and `dev`; the others take
+    // the lean shell.
+    for (lane, shell, gate) in [
+        ("host", "ci", "ci-validate-host"),
+        ("hermetic", "ci-nix", "ci-validate-hermetic"),
+        ("test-checks", "ci-nix", "ci-validate-test-checks"),
+        ("coverage", "ci-nix", "coverage"),
     ] {
         let id = format!("validate-{lane}");
         let job = &jobs[&id];
@@ -56,13 +58,20 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
             .iter()
             .filter_map(|step| step["run"].as_str())
             .map(|run| run.split_whitespace().collect::<Vec<_>>().join(" "))
-            .filter(|run| run.contains("-c dev "))
+            .filter(|run| run.contains("nix develop "))
             .collect::<Vec<_>>();
+        // The workflow and its trace summary enter the same shell.
+        assert_eq!(commands.len(), 2, "{id}: {commands:?}");
         assert_eq!(
-            commands,
-            [format!(
-                "nix develop .#ci --accept-flake-config -c dev {gate}"
-            )]
+            commands[0],
+            format!("nix develop .#{shell} --accept-flake-config -c dev {gate}")
+        );
+        assert!(
+            commands[1].starts_with(&format!(
+                "nix develop .#{shell} --accept-flake-config -c sh -c 'dev trace summary"
+            )),
+            "{id}: {}",
+            commands[1]
         );
         let encoded = serde_yaml::to_string(job).unwrap();
         assert!(!encoded.contains("last-result.json"));

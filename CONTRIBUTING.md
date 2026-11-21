@@ -65,8 +65,18 @@ Enter the development shell:
 nix develop
 ```
 
-Enter the default, CI, or mutants shell from the intended Git checkout. At
-entry, their shared startup hook creates and verifies the absolute
+The flake has five shells. `default` is the complete interactive shell. `ci` is
+`default` without the interactive-only tools; the CI host validation lane and
+the performance job enter it. `mutants` is `ci` plus `cargo-mutants`, for the
+scheduled mutation job. `ci-nix` is Linux-only and holds only `nix`, `git`,
+`dev`, `traced-run`, `jq` and basic shell utilities, with no Rust toolchain and
+no C compiler. The CI jobs that only run Nix builds and Nix-built tools enter
+`ci-nix`: the hermetic, test-checks and coverage validation lanes and the e2e
+catalog, lane and reconcile jobs. `theme-thumbnail` is described in
+[themes](docs/themes.md).
+
+Enter the default, CI, mutants or `ci-nix` shell from the intended Git checkout.
+At entry, their shared startup hook creates and verifies the absolute
 `<checkout>/.xtask/tmp` directory and exports it as `TMPDIR`, deliberately
 replacing any inherited value before provisioning or user commands run. Failure
 to resolve the checkout or create/use that directory visibly stops shell
@@ -81,7 +91,7 @@ not collect leftovers. Tools with explicit temporary/output paths (including
 browser profiles and Playwright outputs), Nix daemon/build processes, and
 sandbox storage are not universally redirected.
 
-On Linux, entering any project shell (`ci-e2e` included) also sets
+On Linux, entering any project shell (`ci-nix` included) also sets
 `LD_LIBRARY_PATH` to exactly the Nix OpenSSL and dav1d library directories,
 replacing any inherited value. Host library directories built against a
 different glibc otherwise break the pinned Playwright browsers; re-export after
@@ -860,9 +870,9 @@ and Git/index custody is `dev`'s own. Gates return process status and logs, not
 a gate-wide JSON report. The old cargo gate aliases and the `xtask` workspace
 are retired.
 
-On the host, the `default`, `ci` and `ci-e2e` devShells put a `dev` shim on
-`PATH`. The shim finds the checkout with `git rev-parse --show-toplevel` and
-runs that checkout's `tools/dev/` with `python -P` under the pinned
+On the host, the `default`, `ci`, `mutants` and `ci-nix` devShells put a `dev`
+shim on `PATH`. The shim finds the checkout with `git rev-parse --show-toplevel`
+and runs that checkout's `tools/dev/` with `python -P` under the pinned
 `python3.withPackages` interpreter, so hooks and gates always run the working
 tree's code with no virtualenv. Bytecode caching stays on; `__pycache__/` is
 ignored. Nix checks run a `dev` package built from a filtered `tools/dev/`

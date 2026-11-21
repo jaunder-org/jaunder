@@ -18,7 +18,7 @@ fn hooks() -> &'static BTreeMap<String, String> {
         let output = Command::new("nix")
             .args([
                 "eval", "--impure", "--json", ".#devShells", "--apply",
-                "all: let shells = all.${builtins.currentSystem}; selected = { inherit (shells) default ci mutants; } // (if builtins.hasAttr \"ci-e2e\" shells then { inherit (shells) ci-e2e; } else {}); in builtins.mapAttrs (_: shell: shell.shellHook) selected",
+                "all: let shells = all.${builtins.currentSystem}; selected = { inherit (shells) default ci mutants; } // (if builtins.hasAttr \"ci-nix\" shells then { inherit (shells) ci-nix; } else {}); in builtins.mapAttrs (_: shell: shell.shellHook) selected",
             ])
             .current_dir(checkout)
             .output()
@@ -105,7 +105,7 @@ fn enter_with_library_path(
 }
 
 #[test]
-fn ci_e2e_shell_environment_is_exact() {
+fn ci_nix_shell_environment_is_exact() {
     let checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
@@ -113,7 +113,7 @@ fn ci_e2e_shell_environment_is_exact() {
     let output = Command::new("nix")
         .args([
             "eval", "--impure", "--json", ".#devShells", "--apply",
-            "all: let shells = all.${builtins.currentSystem}; toolchains = builtins.filter (path: builtins.match \".*-rust-[0-9].*\" path != null) (map toString shells.ci.buildInputs); in if builtins.hasAttr \"ci-e2e\" shells then let shell = shells.ci-e2e; omitted = [ \"PLAYWRIGHT_BROWSERS_PATH\" \"PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD\" \"FONTCONFIG_FILE\" \"RUST_SRC_PATH\" \"JAUNDER_PRODUCT_CARGO_HOME\" \"E2E_TYPES_NODE_MODULES\" \"E2E_PLAYWRIGHT_TEST\" \"JAUNDER_THEME_THUMBNAIL_BROWSER\" ]; in { inputs = map toString shell.buildInputs; ci_toolchains = toolchains; lc_all = shell.LC_ALL; tz = shell.TZ; tzdir = shell.TZDIR; omitted = builtins.listToAttrs (map (name: { inherit name; value = builtins.hasAttr name shell; }) omitted); } else null",
+            "all: let shells = all.${builtins.currentSystem}; toolchains = builtins.filter (path: builtins.match \".*-rust-[0-9].*\" path != null) (map toString shells.ci.buildInputs); in if builtins.hasAttr \"ci-nix\" shells then let shell = shells.ci-nix; omitted = [ \"PLAYWRIGHT_BROWSERS_PATH\" \"PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD\" \"FONTCONFIG_FILE\" \"RUST_SRC_PATH\" \"JAUNDER_PRODUCT_CARGO_HOME\" \"E2E_TYPES_NODE_MODULES\" \"E2E_PLAYWRIGHT_TEST\" \"JAUNDER_THEME_THUMBNAIL_BROWSER\" ]; in { inputs = map toString shell.buildInputs; has_cc = shell.stdenv.hasCC; ci_toolchains = toolchains; lc_all = shell.LC_ALL; tz = shell.TZ; tzdir = shell.TZDIR; omitted = builtins.listToAttrs (map (name: { inherit name; value = builtins.hasAttr name shell; }) omitted); } else null",
         ])
         .current_dir(checkout)
         .output()
@@ -125,26 +125,50 @@ fn ci_e2e_shell_environment_is_exact() {
     );
     let contract: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     if contract.is_null() {
-        // ci-e2e is intentionally Linux-only; preserve this test on Darwin.
+        // ci-nix is intentionally Linux-only; preserve this test on Darwin.
         return;
     }
     assert_eq!(contract["lc_all"], "C.UTF-8");
     assert_eq!(contract["tz"], "UTC");
     let inputs = contract["inputs"].as_array().unwrap();
-    assert!(
-        inputs
-            .iter()
-            .any(|path| path.as_str().unwrap().contains("-cargo-")),
-        "ci-e2e must keep the Cargo subcommand dispatcher"
-    );
-    for tool in ["-nix-", "-findutils-", "-coreutils-", "-bash-"] {
+    // Store names without their hash, e.g. `git-2.55.0` or `dev`.
+    let names = inputs
+        .iter()
+        .map(|path| {
+            let path = path.as_str().unwrap();
+            let base = path.rsplit('/').next().unwrap();
+            base.split_once('-').unwrap().1.to_owned()
+        })
+        .collect::<Vec<_>>();
+    for tool in [
+        "bash-",
+        "coreutils-",
+        "findutils-",
+        "nix-",
+        "git-",
+        "jq-",
+        "traced-run-",
+    ] {
         assert!(
-            inputs
-                .iter()
-                .any(|path| path.as_str().unwrap().contains(tool)),
-            "ci-e2e must pin workflow tool {tool}"
+            names.iter().any(|name| name.starts_with(tool)),
+            "ci-nix must pin workflow tool {tool}: {names:?}"
         );
     }
+    assert!(
+        names.iter().any(|name| name == "dev"),
+        "ci-nix must pin the dev shim: {names:?}"
+    );
+    // Its jobs compile nothing on the host: every tool is a Nix output.
+    assert!(
+        !names
+            .iter()
+            .any(|name| name.starts_with("cargo-") || name.starts_with("rust")),
+        "ci-nix must hold no cargo or Rust toolchain: {names:?}"
+    );
+    assert_eq!(
+        contract["has_cc"], false,
+        "ci-nix must not carry a C compiler"
+    );
     let ci_toolchains = contract["ci_toolchains"].as_array().unwrap();
     assert_eq!(
         ci_toolchains.len(),
@@ -156,7 +180,7 @@ fn ci_e2e_shell_environment_is_exact() {
         inputs
             .iter()
             .all(|input| input.as_str() != Some(selected_toolchain)),
-        "selected .#ci Rust toolchain must not be a direct ci-e2e input"
+        "selected .#ci Rust toolchain must not be a direct ci-nix input"
     );
     assert!(
         contract["tzdir"]
@@ -165,7 +189,7 @@ fn ci_e2e_shell_environment_is_exact() {
             .ends_with("/share/zoneinfo")
     );
     for (name, present) in contract["omitted"].as_object().unwrap() {
-        assert!(!present.as_bool().unwrap(), "{name} must not enter ci-e2e");
+        assert!(!present.as_bool().unwrap(), "{name} must not enter ci-nix");
     }
 }
 
@@ -248,10 +272,10 @@ fn shared_shell_entry_replaces_inherited_tmpdir_before_provisioning() {
             String::from_utf8(output.stdout).unwrap(),
             format!("shell={}\n{0}\n{0}\n{0}\n", expected.display())
         );
-        if name == "ci-e2e" {
+        if name == "ci-nix" {
             assert!(
                 !record.exists(),
-                "ci-e2e must not provision IDE node modules"
+                "ci-nix must not provision IDE node modules"
             );
         } else {
             assert_eq!(
@@ -315,10 +339,10 @@ printenv TMPDIR
             String::from_utf8(output.stdout).unwrap(),
             format!("{}\n", b.join(".xtask/tmp").display())
         );
-        if name == "ci-e2e" {
+        if name == "ci-nix" {
             assert!(
                 !record.exists(),
-                "ci-e2e must not provision IDE node modules"
+                "ci-nix must not provision IDE node modules"
             );
         } else {
             assert_eq!(

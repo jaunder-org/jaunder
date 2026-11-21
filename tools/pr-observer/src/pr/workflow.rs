@@ -551,7 +551,7 @@ fn project_catalog(
         .and_then(|step| step.run.as_deref())
         .ok_or_else(|| invalid("missing catalog matrix producer step"))?;
     if command.split_whitespace().collect::<Vec<_>>().join(" ")
-        != "nix develop .#ci-e2e --accept-flake-config -c jq -r -f scripts/e2e-matrix.jq end2end/e2e-lanes.json >> \"$GITHUB_OUTPUT\""
+        != "nix develop .#ci-nix --accept-flake-config -c jq -r -f scripts/e2e-matrix.jq end2end/e2e-lanes.json >> \"$GITHUB_OUTPUT\""
     {
         return Err(invalid("unsupported catalog matrix producer command"));
     }

@@ -133,12 +133,12 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Validate hermetic lane (via dev)
-        run: nix develop .#ci --accept-flake-config -c dev ci-validate-hermetic
+        run: nix develop .#ci-nix --accept-flake-config -c dev ci-validate-hermetic
       # Diagnostic only: the table never decides the job's result.
       - name: Trace summary
         if: always()
         run:
-          nix develop .#ci --accept-flake-config -c sh -c 'dev trace
+          nix develop .#ci-nix --accept-flake-config -c sh -c 'dev trace
           summary --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace summary unavailable, see this step's log"
       - name: Upload hermetic validation diagnostics
         if: always()
@@ -168,7 +168,7 @@ jobs:
           .#ux-sandbox
       - name: Validate test checks lane (via dev)
         run:
-          nix develop .#ci --accept-flake-config -c dev ci-validate-test-checks
+          nix develop .#ci-nix --accept-flake-config -c dev ci-validate-test-checks
       - name: Build Emacs package for Cachix
         run:
           nix build --accept-flake-config --no-link
@@ -177,7 +177,7 @@ jobs:
       - name: Trace summary
         if: always()
         run:
-          nix develop .#ci --accept-flake-config -c sh -c 'dev trace
+          nix develop .#ci-nix --accept-flake-config -c sh -c 'dev trace
           summary --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace summary unavailable, see this step's log"
       - name: Upload test checks validation diagnostics
         if: always()
@@ -233,12 +233,12 @@ jobs:
             fi
           done
       - name: Validate Rust coverage lane (via dev)
-        run: nix develop .#ci --accept-flake-config -c dev coverage
+        run: nix develop .#ci-nix --accept-flake-config -c dev coverage
       # Diagnostic only: the table never decides the job's result.
       - name: Trace summary
         if: always()
         run:
-          nix develop .#ci --accept-flake-config -c sh -c 'dev trace
+          nix develop .#ci-nix --accept-flake-config -c sh -c 'dev trace
           summary --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace summary unavailable, see this step's log"
       - name: Capture coverage storage final snapshot
         if: always()
@@ -337,7 +337,7 @@ jobs:
       - name: Read enabled producer matrices from the catalog
         id: matrix
         run: |
-          nix develop .#ci-e2e --accept-flake-config -c jq -r -f scripts/e2e-matrix.jq end2end/e2e-lanes.json >> "$GITHUB_OUTPUT"
+          nix develop .#ci-nix --accept-flake-config -c jq -r -f scripts/e2e-matrix.jq end2end/e2e-lanes.json >> "$GITHUB_OUTPUT"
 
   e2e-lane:
     name: e2e (${{ matrix.lane }})
@@ -382,9 +382,9 @@ jobs:
               printf '\nmount: %s\nfindmnt unavailable\n' "$path" >> "$report"
             fi
           done
-      - name: E2E disk observation (after ci-e2e shell entry)
+      - name: E2E disk observation (after ci-nix shell entry)
         run: |
-          if nix develop .#ci-e2e --accept-flake-config -c df -P / /nix/store "$GITHUB_WORKSPACE"; then
+          if nix develop .#ci-nix --accept-flake-config -c df -P / /nix/store "$GITHUB_WORKSPACE"; then
             echo "observation_status=success"
           else
             status=$?
@@ -392,13 +392,13 @@ jobs:
           fi
       - name: Run isolated lane producer
         run:
-          nix develop .#ci-e2e --accept-flake-config -c dev e2e-producer ${{
+          nix develop .#ci-nix --accept-flake-config -c dev e2e-producer ${{
           matrix.lane }}
       # Diagnostic only: the table never decides the job's result.
       - name: Trace summary
         if: always()
         run:
-          nix develop .#ci-e2e --accept-flake-config -c sh -c 'dev trace
+          nix develop .#ci-nix --accept-flake-config -c sh -c 'dev trace
           summary --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace summary unavailable, see this step's log"
       - name: E2E disk observation (after producer)
         if: always()
@@ -511,12 +511,12 @@ jobs:
         if: always()
         run: |
           mkdir -p .xtask
-          nix develop .#ci-e2e --accept-flake-config -c dev e2e-reconcile ${{ matrix.backend }} ${{ matrix.browser }} .xtask/e2e-lanes > .xtask/reconcile.log 2>&1
+          nix develop .#ci-nix --accept-flake-config -c dev e2e-reconcile ${{ matrix.backend }} ${{ matrix.browser }} .xtask/e2e-lanes > .xtask/reconcile.log 2>&1
       # Diagnostic only: the table never decides the job's result.
       - name: Trace summary
         if: always()
         run:
-          nix develop .#ci-e2e --accept-flake-config -c sh -c 'dev trace
+          nix develop .#ci-nix --accept-flake-config -c sh -c 'dev trace
           summary --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace summary unavailable, see this step's log"
       - name: Upload reconciliation diagnostics
         if: always()
