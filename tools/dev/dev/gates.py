@@ -161,8 +161,6 @@ def host_tests() -> None:
     # Compiled first with the run's own arguments, so `tools-tests` times the
     # tests alone.
     steps.run("tools-tests-build", ["cargo", "test", "--no-run", *TOOLS_TESTS])
-    # The build rebuilt the tools' binaries with the tests' features.
-    steps.forget_tools()
     steps.run("tools-tests", ["cargo", "test", *TOOLS_TESTS])
     steps.run("ruff-format", ["ruff", "format", "--check", "tools/dev"])
     steps.run("ruff-check", ["ruff", "check", "tools/dev"])

@@ -28,13 +28,18 @@ SELECTION = {
     "browser": True,
     "count_overrides": {"posts": None, "authors": None, "revisions": None},
 }
-# The selector, the store and the build of each producer; MODE injects one
-# failure. A producer's output is valid once it has been built, built here and
-# registered after the build step started.
+# The selector, the store and the build of each producer, and perf-data's
+# package build to FAKE_TOOL_OUT; MODE injects one failure. A producer's output
+# is valid once it has been built, built here and registered after the build
+# step started.
 NIX = (
     f"REGISTERED = {REGISTERED_LATER}\n"
     + """\
 log = pathlib.Path(os.environ["PERF_LOG"])
+if sys.argv[-1] == ".#perf-data":
+    derivation = "--derivation" in sys.argv
+    print("/fake/perf-data.drv" if derivation else os.environ["FAKE_TOOL_OUT"])
+    sys.exit(0)
 if sys.argv[1] == "path-info":
     path = sys.argv[-1]
     built = log.exists() and f"build:{pathlib.Path(path).name}" in log.read_text()
@@ -157,7 +162,6 @@ def fixture(checkout: Checkout, failed: str | None = None) -> Perf:
     checkout.tool("nix", "import json\n" + NIX)
     # The closure query fails: these producers' fetched bytes are not tested here.
     checkout.tool("nix-store", "sys.exit(1)")
-    checkout.tool("cargo", "")
     checkout.built("perf-data", "import json\n" + PERF_DATA)
     return Perf(checkout, outputs)
 
@@ -297,13 +301,12 @@ def test_every_retained_producer_is_assembled_into_one_invocation(
     assert document["producers"][2]["browser"] is None
     # Every perf-data use after the first runs the binary its one build left.
     order = perf.checkout.order().splitlines()
-    assert [line for line in order if line.startswith("cargo ")] == [
-        (
-            "cargo build --locked --quiet --manifest-path tools/Cargo.toml "
-            "--target-dir tools/target -p performance --bin perf-data"
-        )
+    package_build = [
+        "nix path-info --derivation --accept-flake-config .#perf-data",
+        "nix build -L --accept-flake-config --print-out-paths --no-link .#perf-data",
     ]
-    assert order[0].startswith("cargo build ")
+    assert [line for line in order if line.endswith(" .#perf-data")] == package_build
+    assert order[:2] == package_build
     assert len([line for line in order if line.startswith("perf-data ")]) == 7
 
 

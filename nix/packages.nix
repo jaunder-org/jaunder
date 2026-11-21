@@ -485,15 +485,40 @@ let
       withWorkspacePlaceholders
       vendorPinnedFork
       sqlxSqlitePatchSource
+      sqlxSqliteExtraDummyScript
       ;
   };
   qualificationHostBin = import ./qualification.nix { inherit mkHostTool; };
-  # The host-proof executable CI runs from a cached output instead of
-  # compiling the tools workspace: the e2e verifier.
+  # The tools `dev` runs on the host, from cached outputs instead of compiling
+  # the tools workspace. Names stay clear of setup-ci's Cachix pushFilter.
   hostProofBin = mkHostTool {
     pname = "host-proof";
     member = "tools/host-proof";
-    bins = [ "e2e-evidence" ];
+    bins = [
+      "admit-inputs"
+      "csr-prerequisite"
+      "e2e-evidence"
+      "e2e-local"
+      "source-diagnostics"
+      "trace-analysis"
+      "wasm-audit"
+    ];
+  };
+  coverageCheckBin = mkHostTool {
+    pname = "coverage-check";
+    member = "tools/coverage";
+    bins = [ "coverage-check" ];
+    features = [ "host" ];
+  };
+  perfDataBin = mkHostTool {
+    pname = "perf-data";
+    member = "tools/performance";
+    bins = [ "perf-data" ];
+  };
+  prObserverBin = mkHostTool {
+    pname = "pr-observer";
+    member = "tools/pr-observer";
+    bins = [ "pr-observer" ];
   };
 
   repositoryPolicyBin = import ./repository-policy.nix {
@@ -1590,6 +1615,9 @@ in
     repository-policy = repositoryPolicyBin;
     qualification-host = qualificationHostBin;
     host-proof = hostProofBin;
+    coverage-check = coverageCheckBin;
+    perf-data = perfDataBin;
+    pr-observer = prObserverBin;
     adr-promoter = adrPromoter;
     dev = devBin;
     # The out-of-process e2e seed helper (ADR-0046). Exposed so it is
