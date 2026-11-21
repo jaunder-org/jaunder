@@ -1,6 +1,7 @@
 {
   system,
   pkgs,
+  kache,
   packageInternals,
 }:
 let
@@ -75,10 +76,9 @@ let
       pkgs.typescript
       # Theme-package export assertions use this pinned ZIP reader on the host.
       pkgs.unzip
-      # Host tool steps opt Rust-compiling cargo invocations into
-      # `RUSTC_WRAPPER=sccache`; the compile-cache policy maintains the multi-checkout
-      # `SCCACHE_BASEDIRS` registry at runtime.
-      pkgs.sccache
+      # `dev` runs host Cargo compilation under `RUSTC_WRAPPER=kache`, whose
+      # per-user store serves every worktree.
+      kache
       # `wasm-opt`, run by the shared locked Vite pipeline after `wasm-bindgen` (#836).
       pkgs.binaryen
       wasm-bindgen-cli

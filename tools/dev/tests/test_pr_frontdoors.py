@@ -22,15 +22,14 @@ HEAD = "a" * 40
 MERGE = "b" * 40
 HISTORICAL = "https://github.com/jaunder-org/jaunder/actions/runs/42"
 BASH = shutil.which("bash") or "/bin/sh"
-# Each native call must be the next scripted one. Checkout discovery and the
-# worktree listing that `dev` itself makes go to the real Git unrecorded. The
-# observer's build only appends to `builds`: the fixture already put the
-# scripted observer where the build leaves it.
+# Each native call must be the next scripted one. Checkout discovery, which
+# `dev` itself makes, goes to the real Git unrecorded. The observer's build
+# only appends to `builds`: the fixture already put the scripted observer where
+# the build leaves it.
 NATIVE = f"""#!{BASH}
 set -euo pipefail
 tool=${{0##*/}}
 if [[ "$tool $*" == 'git rev-parse --show-toplevel' ]]; then exec "$REAL_GIT" "$@"; fi
-if [[ "$tool $*" == 'git worktree list --porcelain' ]]; then printf 'worktree %s\\n' "$PWD"; exit 0; fi
 if [[ "$tool" == git ]]; then
     [[ -z "${{GIT_DIR+x}}${{GIT_WORK_TREE+x}}${{GIT_INDEX_FILE+x}}${{GIT_OBJECT_DIRECTORY+x}}${{GIT_COMMON_DIR+x}}${{GIT_NAMESPACE+x}}" ]] || {{ echo 'Git redirect not scrubbed' >&2; exit 23; }}
 fi

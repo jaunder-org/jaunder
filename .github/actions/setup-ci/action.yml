@@ -9,6 +9,12 @@ inputs:
   cachix-auth-token:
     description: Cachix auth token used to push build products.
     required: true
+  compile-cache:
+    description:
+      Restore the newest kache store saved by `main`. Only the job that compiles
+      the product workspace on the host turns this on; it saves the store
+      itself.
+    default: "false"
 
 runs:
   using: composite
@@ -48,3 +54,18 @@ runs:
           }}
         restore-keys: |
           tools-${{ runner.os }}-
+    # kache's store stays in its default location; only the daemon's socket
+    # and locks move, so they never enter the saved archive.
+    - name: Configure compile cache
+      if: inputs.compile-cache == 'true'
+      shell: bash
+      run: echo "KACHE_RUNTIME_DIR=$HOME/.cache/kache-run" >> "$GITHUB_ENV"
+    - name: Restore compile cache
+      if: inputs.compile-cache == 'true'
+      uses: actions/cache/restore@v6
+      with:
+        path: ~/.cache/kache
+        key:
+          kache-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          kache-${{ runner.os }}-

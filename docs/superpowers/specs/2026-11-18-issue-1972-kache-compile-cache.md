@@ -89,18 +89,20 @@ within the runner's default cap. The Nix derivations that already set
 that override (the debug `jaunder` binaries, `debugHostArgs`) also get line
 tables only.
 
-**Pin.** The dev shells' `ciInputs` provide `pkgs.kache` in place of
-`pkgs.sccache`, from the flake's single nixpkgs input.
+**Pin.** The dev shells' `ciInputs` provide kache in place of `pkgs.sccache`,
+from a second nixpkgs input, `nixpkgs-kache`, locked to
+`04906337b6d53e8bb0eaf0470ae9f070a4d4eb55`, the revision the measurements used,
+which carries kache 2.1.1. Nothing else reads that input.
 
-- The locked `nixos-unstable` revision (2026-09-08) has no kache. The lock moves
-  to `04906337b6d53e8bb0eaf0470ae9f070a4d4eb55`, the revision the measurements
-  used, which carries kache 2.1.1.
-- fenix follows that input but supplies rustc and Clippy from
-  `rust-toolchain.toml` (1.97.1), so the toolchain does not change.
-- Everything else taken from `pkgs` moves with the bump, including the `ci-e2e`
-  shell's nixpkgs `cargo` and `playwright-test`. `end2end/package.json` pins
-  `@playwright/test`, so the e2e lanes are the proof that the browsers still
-  match.
+- The locked `nixos-unstable` revision (2026-09-08) has no kache.
+- Bumping the main input instead was the approved plan, but at that revision,
+  and at `nixos-unstable` on 2026-11-20, `otelcol-contrib` 0.155.0 fails to
+  build under Go 1.27 and is not substituted. It builds with Go 1.26, but it is
+  also the product NixOS module's and the VM checks' collector, so working
+  around it would mean an overlay on every `pkgs`. The human chose the second
+  input on 2026-11-20.
+- The input is dropped once the main nixpkgs carries kache and builds
+  `otelcol-contrib`.
 
 **Off switch.** `KACHE_DISABLED=1` keeps the wrapper in place but sends every
 compile straight to `rustc`, without starting the daemon. `dev` passes it
@@ -196,8 +198,7 @@ not amended. The same commit projects the new decision into
   merge-queue `tools-` entries and any mutants `--iterate` state.
 - Locally on ext4, kache's store is extra disk on top of every worktree's full
   `target/`. Reflink filesystems are recommended, not enforced.
-- The nixpkgs bump rebuilds dependent derivations once and moves every non-fenix
-  devShell tool.
+- A second nixpkgs input for one tool, until the main input carries it.
 - Full debug info is no longer the default for dev and test builds.
 
 ## Acceptance
@@ -233,7 +234,7 @@ Deliverables to commit:
 - this spec
 - the `checkout.py` change and its tests
 - the profile change
-- the dev-shell and lock changes
+- the flake input, dev-shell and lock changes
 - the `setup-ci` input and the `validate-host` steps
 - the ADR draft
 - the `CONTRIBUTING.md` and `ARCHITECTURE.md` updates
