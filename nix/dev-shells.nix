@@ -84,15 +84,14 @@ let
       wasm-bindgen-cli
     ];
 
-  # Host-only E2E orchestration shell. Keep this separate from ciInputs: its
-  # verifier is the Nix-built host-proof output, run on the host. Guest/test
-  # dependencies are declared by the Nix checks and are intentionally unaffected.
-  ciE2eInputs = [
+  # Host orchestration of Nix-built verdicts. Keep this separate from ciInputs:
+  # these jobs only run `nix build`s and the tools `dev` takes from Nix outputs.
+  # Check, guest and test dependencies come with the Nix derivations.
+  ciNixInputs = [
     pkgs.bash
     pkgs.coreutils
     pkgs.findutils
     pkgs.nix
-    pkgs.cargo
     pkgs.git
     tracedRunBin
     devShim
@@ -189,22 +188,24 @@ let
   };
 in
 {
-  # Lean shell used by CI (`nix develop .#ci -c dev ci-validate-host`).
+  # The CI host validation lane's shell (`nix develop .#ci -c dev ci-validate-host`)
+  # and the performance job's.
   ci = pkgs.mkShell (shellEnv // { buildInputs = ciInputs; });
   # The scheduled mutation-testing job, and nothing else. `cargo-mutants`
-  # stays out of `ciInputs` on purpose: every PR job enters `.#ci`, and
-  # none of them run mutants. This shell is `ciInputs` plus that one
+  # stays out of `ciInputs` on purpose: the jobs that enter `.#ci` never
+  # run mutants. This shell is `ciInputs` plus that one
   # tool, so the weekly job gets it without the pull-request path paying
   # for it. See .github/workflows/mutants.yml.
   mutants = pkgs.mkShell (shellEnv // { buildInputs = ciInputs ++ [ pkgs.cargo-mutants ]; });
   # Full interactive shell for local development.
   default = pkgs.mkShell (shellEnv // { buildInputs = ciInputs ++ devOnly; });
 } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-  # Only the e2e-catalog, e2e-lane and e2e-reconcile jobs enter this host shell. Keep the
-  # checkout-bound TMPDIR contract and native library prepend from shellEnv,
-  # but do not inherit validation, browser, IDE-provisioning, or theme tools.
-  ci-e2e = pkgs.mkShell {
-    buildInputs = ciE2eInputs;
+  # The hermetic, test-checks and coverage validation lanes and the e2e catalog,
+  # lane and reconcile jobs enter this host shell. It keeps shellEnv's
+  # checkout-bound TMPDIR and native library path, but takes no toolchain,
+  # validation, browser, IDE-provisioning or theme tools, and no C compiler.
+  ci-nix = pkgs.mkShellNoCC {
+    buildInputs = ciNixInputs;
     LC_ALL = "C.UTF-8";
     TZ = "UTC";
     TZDIR = "${pkgs.tzdata}/share/zoneinfo";
