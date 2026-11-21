@@ -180,4 +180,4 @@ above held only for html5ever WARN and ERROR. The Collector's exact-target
 redaction stayed unchanged. Current state:
 [ARCHITECTURE.md § Shared Collector privacy policy](../ARCHITECTURE.md#shared-collector-privacy-policy).
 Decision:
-[html5ever parser stepping dropped at the log bridge](drafts/html5ever-parser-stepping-dropped-at-log-bridge.md).
+[html5ever parser stepping dropped at the log bridge](0257-html5ever-parser-stepping-dropped-at-log-bridge.md).

@@ -687,7 +687,7 @@ fn setup_exporter_runtime_with<T>(
 /// below WARN. Those records are discarded here, before they are formatted; html5ever WARN/ERROR and every other target
 /// go to the stock [`tracing_log::LogTracer`]. This is the one named exception
 /// to ADR-0222's no-filter rule
-/// (`docs/adr/drafts/html5ever-parser-stepping-dropped-at-log-bridge.md`).
+/// (`docs/adr/0257-html5ever-parser-stepping-dropped-at-log-bridge.md`).
 struct LogBridge(tracing_log::LogTracer);
 
 impl LogBridge {

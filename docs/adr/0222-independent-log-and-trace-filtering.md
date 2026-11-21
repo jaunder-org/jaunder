@@ -157,4 +157,4 @@ the `log` → `tracing` bridge discarded html5ever `log` records below WARN, and
 every other producer stayed admitted at every level. Current state:
 [ARCHITECTURE.md § Stock native logs and local diagnostic formatting](../ARCHITECTURE.md#stock-native-logs-and-local-diagnostic-formatting).
 Decision:
-[html5ever parser stepping dropped at the log bridge](drafts/html5ever-parser-stepping-dropped-at-log-bridge.md).
+[html5ever parser stepping dropped at the log bridge](0257-html5ever-parser-stepping-dropped-at-log-bridge.md).

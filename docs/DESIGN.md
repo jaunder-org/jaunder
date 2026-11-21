@@ -156,7 +156,7 @@ within scope `log`, never a global union allowlist. All events at the three
 exact reviewed parser targets survive at every severity/context with fixed
 body/event name; the Collector drops none. html5ever `log` records below WARN
 are discarded earlier, at the log bridge
-([decision](adr/drafts/html5ever-parser-stepping-dropped-at-log-bridge.md)).
+([decision](adr/0257-html5ever-parser-stepping-dropped-at-log-bridge.md)).
 Status descriptions are cleared/codes retained. Safe parser wording, direct-log
 paths where bespoke enrichment is needed, and private
 per-kind/coalescing/256-byte diagnostic guarantees retire; operation/browser

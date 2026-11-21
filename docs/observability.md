@@ -64,8 +64,8 @@ without application-level severity, target or context filtering. For example,
 limit configured OTLP output. Native logs also offer all application severities,
 TRACE through ERROR, without a level/target/context filter. The one exception:
 the `log` → `tracing` bridge discards html5ever `log` records below WARN
-([decision](adr/drafts/html5ever-parser-stepping-dropped-at-log-bridge.md)).
-Local `off` does not disable native logs, OTLP spans, metrics, independent WARN+
+([decision](adr/0257-html5ever-parser-stepping-dropped-at-log-bridge.md)). Local
+`off` does not disable native logs, OTLP spans, metrics, independent WARN+
 diagnostic capture or the panic hook. No endpoint means no OTLP provider/export;
 local logs and diagnostic context remain available without a Collector.
 
@@ -146,11 +146,11 @@ and context, but use `HTML parser diagnostic; text withheld` as complete body/
 event name, with only producer/location/level metadata. The Collector drops no
 parser events, but html5ever `log` records below WARN, `char_ref` included,
 never reach it: the log bridge discards them
-([decision](adr/drafts/html5ever-parser-stepping-dropped-at-log-bridge.md)).
-Safe state/EOF wording and future warning explanation are lost; `char_ref` is
-outside the exact selection. Span status descriptions are cleared, not status
-codes. Stock integer/string carriers remain, including decimal `%UserId` and
-overflow strings; custom integer/Debug-Option parsing retires.
+([decision](adr/0257-html5ever-parser-stepping-dropped-at-log-bridge.md)). Safe
+state/EOF wording and future warning explanation are lost; `char_ref` is outside
+the exact selection. Span status descriptions are cleared, not status codes.
+Stock integer/string carriers remain, including decimal `%UserId` and overflow
+strings; custom integer/Debug-Option parsing retires.
 
 **Stored query interface:** VictoriaLogs exposes the native producer as
 `scope.name`, message as `_msg`, and IDs as `trace_id`/`span_id`. Query

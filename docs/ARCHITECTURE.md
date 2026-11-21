@@ -2616,11 +2616,11 @@ occurrence at every severity retains context but receives fixed body/event-name
 text and only producer/location/level metadata; the Collector drops no events.
 The `log` → `tracing` bridge discards html5ever `log` records below WARN,
 `char_ref` included, before they reach any sink
-([decision](adr/drafts/html5ever-parser-stepping-dropped-at-log-bridge.md)).
-Safe parser state/EOF/future-warning meaning is an approved loss. Preserve
-operation names/determinants, browser boot/test evidence, resources, IDs and
-stock integer/string carriers, including overflow strings. Current links have
-empty attributes; no hypothetical universal link sanitizer is introduced.
+([decision](adr/0257-html5ever-parser-stepping-dropped-at-log-bridge.md)). Safe
+parser state/EOF/future-warning meaning is an approved loss. Preserve operation
+names/determinants, browser boot/test evidence, resources, IDs and stock
+integer/string carriers, including overflow strings. Current links have empty
+attributes; no hypothetical universal link sanitizer is introduced.
 
 This explicitly amends ADR-0011's pre-Collector privacy interpretation: raw
 application SDK, transport and trusted Collector input are accepted processing
@@ -2688,7 +2688,7 @@ severity without application-level severity, target or context filtering; the
 Collector owns preservation and potentially increased volume. The one exception
 is html5ever parser stepping: the log bridge discards html5ever `log` records
 below WARN
-([decision](adr/drafts/html5ever-parser-stepping-dropped-at-log-bridge.md)).
+([decision](adr/0257-html5ever-parser-stepping-dropped-at-log-bridge.md)).
 [#1742](https://github.com/jaunder-org/jaunder/issues/1742) owns the unfiltered
 span/event foundation, AlwaysOn recording despite clear upstream sampled hints,
 local-only filter accessor and retained field/diagnostic context. Local
