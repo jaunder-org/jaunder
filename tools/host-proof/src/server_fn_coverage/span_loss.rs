@@ -25,7 +25,8 @@ const PROCESSOR_PREFIX: &str = "BatchSpanProcessor.";
 /// `dropped_span_count` does not include.
 pub fn refuse_span_loss(diag_log: &str) -> Result<()> {
     let mut names = Vec::new();
-    let mut dropped: u64 = 0;
+    // The SDK's count is cumulative, so the largest reported value is the total.
+    let mut dropped: Option<u64> = None;
     for record in diag_log
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
@@ -37,17 +38,16 @@ pub fn refuse_span_loss(diag_log: &str) -> Result<()> {
             && name.starts_with(PROCESSOR_PREFIX)
         {
             names.push(name.to_owned());
-            dropped = dropped.max(record["fields"]["dropped_span_count"].as_u64().unwrap_or(0));
+            dropped = dropped.max(record["fields"]["dropped_span_count"].as_u64());
         }
     }
     if names.is_empty() {
         return Ok(());
     }
-    let lost = if dropped == 0 {
-        "an unknown number of".to_owned()
-    } else {
-        format!("at least {dropped}")
-    };
+    let lost = dropped.map_or_else(
+        || "an unknown number of".to_owned(),
+        |count| format!("at least {count}"),
+    );
     bail!(
         "the capture is incomplete: the server's OpenTelemetry SDK lost {lost} span(s) ({}), \
          which would surface as misattributed orphans — re-run the lane",

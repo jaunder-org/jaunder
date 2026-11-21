@@ -416,10 +416,6 @@ pub(crate) mod tests {
         "sqlite-firefox-serial-special",
     ];
 
-    pub(crate) fn write_capture(path: &Path, trace: &str) {
-        crate::test_support::write_capture(path, trace, Some(""));
-    }
-
     pub(crate) fn fixture(root: &Path) -> Vec<LaneEvidence> {
         IDENTITIES
             .iter()
@@ -437,7 +433,7 @@ pub(crate) mod tests {
                 fs::write(&report, REPORTS[index]).unwrap();
                 fs::write(&lane_manifest, LANE_MANIFESTS[index]).unwrap();
                 fs::write(&duration_manifest, DURATION_MANIFESTS[index]).unwrap();
-                write_capture(&capture, TRACES[index]);
+                crate::test_support::write_capture(&capture, TRACES[index], Some(""));
                 fs::write(&phase, PHASES[index]).unwrap();
                 LaneEvidence {
                     identity: (*identity).to_owned(),
@@ -649,7 +645,7 @@ pub(crate) mod tests {
             "e2e.navigation_top_dropped\",\"value\":{\"stringValue\":\"0\"",
             "e2e.navigation_top_dropped\",\"value\":{\"stringValue\":\"1\"",
         );
-        write_capture(&evidence[0].capture, &dropped);
+        crate::test_support::write_capture(&evidence[0].capture, &dropped, Some(""));
         assert!(
             errors(&evidence)
                 .iter()
