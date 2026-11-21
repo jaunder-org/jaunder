@@ -67,12 +67,7 @@ fn collect(roots: &[&str]) -> Result<(Vec<ScannedFile>, Vec<Violation>)> {
     let mut unreadable = Vec::new();
     for path in paths {
         match fs::read_to_string(&path) {
-            // A workspace run prints repo-relative paths, so both spellings match.
-            Ok(source) => files.push(ScannedFile {
-                run_path: path.clone(),
-                path,
-                source,
-            }),
+            Ok(source) => files.push(ScannedFile { path, source }),
             Err(e) => unreadable.push(Violation {
                 file: path,
                 line: None,
@@ -137,7 +132,7 @@ mod tests {
     #[test]
     fn the_scan_roots_are_the_shared_workspace_list() {
         assert_eq!(SCAN_ROOTS, crate::roots::WORKSPACE);
-        assert!(!SCAN_ROOTS.iter().any(|r| *r == "tools" || *r == "xtask"));
+        assert!(!SCAN_ROOTS.contains(&"tools"));
     }
 
     #[test]

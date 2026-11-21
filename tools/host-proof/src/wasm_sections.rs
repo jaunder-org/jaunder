@@ -128,7 +128,7 @@ mod tests {
         m.section(&code);
         m.section(&CustomSection {
             name: "producers".into(),
-            data: std::borrow::Cow::Borrowed(b"xtask-test"),
+            data: std::borrow::Cow::Borrowed(b"producer-test"),
         });
         m.finish()
     }

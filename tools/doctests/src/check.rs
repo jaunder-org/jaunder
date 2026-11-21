@@ -198,14 +198,11 @@ pub fn fence_violations(file: &str, scan: &Scan) -> Vec<Violation> {
     out
 }
 
-/// One `.rs` file under a scan root, carrying both spellings of its path.
+/// One `.rs` file under a scan root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScannedFile {
-    /// Repo-relative, for the report.
+    /// Repo-relative, as the workspace run prints it and the report says it.
     pub path: String,
-    /// As the runner prints it — repo-relative for a workspace run,
-    /// manifest-relative for a `--manifest-path` run.
-    pub run_path: String,
     pub source: String,
 }
 
@@ -237,18 +234,14 @@ pub fn problems(scanned: &[ScannedFile], output: &str) -> Vec<Violation> {
             .push(entry);
     }
 
-    // `run_path` is the join key; `path` is what the report says.
-    let scanned_paths: BTreeMap<_, _> = scanned
-        .iter()
-        .map(|file| (file.run_path.as_str(), file.path.as_str()))
-        .collect();
+    let scanned_paths: BTreeSet<&str> = scanned.iter().map(|file| file.path.as_str()).collect();
     let mut out = Vec::new();
     let mut matched = BTreeSet::new();
 
-    for ((run_path, line), group) in &groups {
-        let Some(path) = scanned_paths.get(run_path) else {
+    for ((path, line), group) in &groups {
+        if !scanned_paths.contains(path) {
             continue;
-        };
+        }
         if group.len() > 1 {
             out.push(Violation {
                 file: (*path).to_string(),
@@ -280,9 +273,9 @@ pub fn problems(scanned: &[ScannedFile], output: &str) -> Vec<Violation> {
         out.extend(fence_violations(&file.path, &scan));
 
         for fence in &scan.fences {
-            let group = groups.get(&(file.run_path.as_str(), fence.line));
+            let group = groups.get(&(file.path.as_str(), fence.line));
             if group.is_some() {
-                matched.insert((file.run_path.as_str(), fence.line));
+                matched.insert((file.path.as_str(), fence.line));
             }
             let expected_to_run = normalized(&fence.info) != TEXT;
             match (expected_to_run, group) {
@@ -332,15 +325,12 @@ pub fn problems(scanned: &[ScannedFile], output: &str) -> Vec<Violation> {
 
     // run → tree. Only files we actually scanned are in scope: a run may legitimately
     // report entries from paths outside the scanned roots, which are not ours to judge.
-    for ((run_path, line), _) in groups {
-        let Some(path) = scanned_paths.get(run_path) else {
-            continue;
-        };
-        if matched.contains(&(run_path, line)) {
+    for ((path, line), _) in groups {
+        if !scanned_paths.contains(path) || matched.contains(&(path, line)) {
             continue;
         }
         out.push(Violation {
-            file: (*path).to_string(),
+            file: path.to_string(),
             line: Some(line),
             kind: Kind::Orphan,
             detail: "the runner reported a doctest here that the scanner did not find, so the \
@@ -500,10 +490,9 @@ mod tests {
 
     // ---- reconciliation, both directions ----------------------------------
 
-    fn file(path: &str, run_path: &str, source: &str) -> ScannedFile {
+    fn file(path: &str, source: &str) -> ScannedFile {
         ScannedFile {
             path: path.to_string(),
-            run_path: run_path.to_string(),
             source: source.to_string(),
         }
     }
@@ -515,7 +504,7 @@ mod tests {
     fn a_tree_matching_its_run_has_no_problems() {
         let out =
             "test a.rs - a::A (line 2) ... ok\ntest a.rs - a::A (line 7) - compile fail ... ok\n";
-        let v = problems(&[file("a.rs", "a.rs", OK_SRC)], out);
+        let v = problems(&[file("a.rs", OK_SRC)], out);
         assert!(v.is_empty(), "{v:?}");
     }
 
@@ -525,7 +514,7 @@ mod tests {
         // out of reach, a crate with no lib target. Whatever the cause, the proof
         // was never evaluated.
         let out = "test a.rs - a::A (line 2) ... ok\n";
-        let v = problems(&[file("a.rs", "a.rs", OK_SRC)], out);
+        let v = problems(&[file("a.rs", OK_SRC)], out);
         assert_eq!(v.len(), 1, "{v:?}");
         assert_eq!(v[0].kind, Kind::NotRun);
         assert_eq!(v[0].line, Some(7));
@@ -535,7 +524,7 @@ mod tests {
     fn a_run_entry_matching_no_scanned_fence_fails() {
         // The gate shrinking its OWN population — principle 6 turned inward.
         let out = "test a.rs - a::A (line 2) ... ok\ntest a.rs - a::A (line 7) ... ok\ntest a.rs - a::A (line 99) ... ok\n";
-        let v = problems(&[file("a.rs", "a.rs", OK_SRC)], out);
+        let v = problems(&[file("a.rs", OK_SRC)], out);
         assert_eq!(v.len(), 1, "{v:?}");
         assert_eq!(v[0].kind, Kind::Orphan);
         assert_eq!(v[0].line, Some(99));
@@ -544,10 +533,7 @@ mod tests {
     #[test]
     fn a_text_fence_must_not_appear_in_the_run() {
         let src = "\n/// ```text\n/// prose\n/// ```\npub struct A;\n";
-        let v = problems(
-            &[file("a.rs", "a.rs", src)],
-            "test a.rs - a::A (line 2) ... ok\n",
-        );
+        let v = problems(&[file("a.rs", src)], "test a.rs - a::A (line 2) ... ok\n");
         assert_eq!(v.len(), 1, "{v:?}");
         assert_eq!(v[0].kind, Kind::Orphan);
     }
@@ -558,7 +544,7 @@ mod tests {
         // the assertion was evaluated — which is why `ignore` is banned outright.
         let src = "\n/// ```ignore\n/// let x = 1;\n/// ```\npub struct A;\n";
         let v = problems(
-            &[file("a.rs", "a.rs", src)],
+            &[file("a.rs", src)],
             "test a.rs - a::A (line 2) ... ignored\n",
         );
         let ks: Vec<_> = v.iter().map(|x| x.kind).collect();
@@ -571,7 +557,7 @@ mod tests {
         // Folding a failure into NotRun ("never evaluated") would be a misleading
         // message for the commonest case.
         let out = "test a.rs - a::A (line 2) ... ok\ntest a.rs - a::A (line 7) ... FAILED\n";
-        let v = problems(&[file("a.rs", "a.rs", OK_SRC)], out);
+        let v = problems(&[file("a.rs", OK_SRC)], out);
         assert_eq!(v.len(), 1, "{v:?}");
         assert_eq!(v[0].kind, Kind::Failed);
         assert_eq!(v[0].line, Some(7));
@@ -585,8 +571,8 @@ mod tests {
         let reverse = "test a.rs - a::A (line 7) ... FAILED\n\
                        test a.rs - a::A (line 2) ... ok\n\
                        test a.rs - a::A (line 7) ... ok\n";
-        let forward_violations = problems(&[file("a.rs", "a.rs", OK_SRC)], forward);
-        let reverse_violations = problems(&[file("a.rs", "a.rs", OK_SRC)], reverse);
+        let forward_violations = problems(&[file("a.rs", OK_SRC)], forward);
+        let reverse_violations = problems(&[file("a.rs", OK_SRC)], reverse);
         assert_eq!(forward_violations, reverse_violations);
         assert_eq!(
             forward_violations
@@ -599,7 +585,7 @@ mod tests {
         let identical = "test a.rs - a::A (line 2) ... ok\n\
                          test a.rs - a::A (line 7) ... ok\n\
                          test a.rs - a::A (line 7) ... ok\n";
-        let violations = problems(&[file("a.rs", "a.rs", OK_SRC)], identical);
+        let violations = problems(&[file("a.rs", OK_SRC)], identical);
         assert_eq!(violations.len(), 1, "{violations:?}");
         assert_eq!(violations[0].kind, Kind::Duplicate);
         assert_eq!(violations[0].line, Some(7));
@@ -628,7 +614,7 @@ mod tests {
             ),
         ];
         for (output, expected) in cases {
-            let kinds = problems(&[file("a.rs", "a.rs", OK_SRC)], output)
+            let kinds = problems(&[file("a.rs", OK_SRC)], output)
                 .into_iter()
                 .map(|violation| violation.kind)
                 .collect::<Vec<_>>();
@@ -642,7 +628,7 @@ mod tests {
                        test a.rs - a::A (line 7) ... ok\n\
                        test a.rs - a::A (line 99) ... ok\n\
                        test a.rs - a::A (line 99) ... FAILED\n";
-        let missing_kinds = problems(&[file("a.rs", "a.rs", OK_SRC)], missing)
+        let missing_kinds = problems(&[file("a.rs", OK_SRC)], missing)
             .into_iter()
             .map(|violation| violation.kind)
             .collect::<Vec<_>>();
@@ -651,7 +637,7 @@ mod tests {
         let text = "\n/// ```text\n/// prose\n/// ```\npub struct A;\n";
         let text_output =
             "test a.rs - a::A (line 2) ... ok\ntest a.rs - a::A (line 2) ... FAILED\n";
-        let text_kinds = problems(&[file("a.rs", "a.rs", text)], text_output)
+        let text_kinds = problems(&[file("a.rs", text)], text_output)
             .into_iter()
             .map(|violation| violation.kind)
             .collect::<Vec<_>>();
@@ -659,23 +645,8 @@ mod tests {
     }
 
     #[test]
-    fn the_run_path_is_used_for_matching_and_the_repo_path_for_reporting() {
-        // A `--manifest-path xtask/Cargo.toml` run prints `src/…`.
-        let out = "test src/a.rs - a::A (line 2) ... ok\ntest src/a.rs - a::A (line 7) - compile fail ... ok\n";
-        let v = problems(&[file("xtask/src/a.rs", "src/a.rs", OK_SRC)], out);
-        assert!(v.is_empty(), "{v:?}");
-    }
-
-    #[test]
-    fn a_failure_is_reported_against_the_repo_relative_path() {
-        let out = "test src/a.rs - a::A (line 2) ... ok\n";
-        let v = problems(&[file("xtask/src/a.rs", "src/a.rs", OK_SRC)], out);
-        assert_eq!(v[0].file, "xtask/src/a.rs");
-    }
-
-    #[test]
     fn an_unparseable_file_is_a_violation_not_a_skip() {
-        let v = problems(&[file("a.rs", "a.rs", "fn f( {")], "");
+        let v = problems(&[file("a.rs", "fn f( {")], "");
         assert_eq!(v.len(), 1, "{v:?}");
         assert_eq!(v[0].kind, Kind::Unreadable);
         assert_eq!(v[0].line, None);
@@ -686,7 +657,7 @@ mod tests {
         // Reconciliation judges only the roots it scanned; an entry from any
         // other path is not its orphan.
         let out = "test a.rs - a::A (line 2) ... ok\ntest a.rs - a::A (line 7) - compile fail ... ok\ntest elsewhere/b.rs - b::B (line 3) ... ok\n";
-        let v = problems(&[file("a.rs", "a.rs", OK_SRC)], out);
+        let v = problems(&[file("a.rs", OK_SRC)], out);
         assert!(v.is_empty(), "{v:?}");
     }
 }

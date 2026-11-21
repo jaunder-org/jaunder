@@ -2,13 +2,13 @@
 // Reduce a full e2e OTLP capture to the committed server-fn-coverage fixture
 // `otel-traces-seed.jsonl`, which sits next to this script (#681).
 //
-//     xtask/src/server_fn_coverage/testdata/reduce-otel-capture.mjs \
+//     tools/host-proof/src/server_fn_coverage/testdata/reduce-otel-capture.mjs \
 //       <otel-traces.jsonl> <out.jsonl>
 //
-// It lives under `xtask/` rather than `scripts/` for two reasons: it belongs to
-// the fixture it generates, and every flake source filter excludes `/xtask/`
-// (`flake.nix:288,1136,1183`) while the app filter ADMITS `scripts/` — so here
-// it cannot bust the e2e derivations' input hashes (spec AC16).
+// It lives beside the fixture it generates rather than under `scripts/`: the
+// host-only `tools/host-proof` sources are outside the application and e2e
+// source closures, so editing it cannot bust the e2e derivations' input hashes
+// (spec AC16).
 //
 // The fixture is the evidence behind `docs/coverage/server-fns.json` and the
 // allowlist, so spec AC11 — "every allowlist entry names a fn absent from the

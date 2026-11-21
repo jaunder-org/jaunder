@@ -180,7 +180,7 @@ class Repository:
                 limits = self.client.get_rate_limit().resources
                 resets = [bucket.reset.timestamp() for bucket in (limits.core, limits.graphql) if bucket.remaining == 0]
             except Exception:
-                print("xtask: warning: xtask.pr.rate_limit_reset: ignored failure while looking up rate-limit reset", file=sys.stderr)
+                print("adr-promoter: warning: adr-promoter.pr.rate_limit_reset: ignored failure while looking up rate-limit reset", file=sys.stderr)
             else:
                 if resets:
                     raise RuntimeError(f"rate limited until {int(max(resets))} (unix)") from error

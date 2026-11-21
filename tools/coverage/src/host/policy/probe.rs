@@ -31,10 +31,21 @@ use repository_policy::git;
 /// The ways the coverage source closure or producer boundary can drift.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DriftError {
-    AdmitsJunk { base: String, junk: String },
-    DropsSource { base: String },
-    DropsRequiredSource { path: &'static str, base: String },
-    AdmitsXtaskSource { base: String, xtask_source: String },
+    AdmitsJunk {
+        base: String,
+        junk: String,
+    },
+    DropsSource {
+        base: String,
+    },
+    DropsRequiredSource {
+        path: &'static str,
+        base: String,
+    },
+    AdmitsHostToolSource {
+        base: String,
+        host_tool_source: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,9 +112,12 @@ impl fmt::Display for DriftError {
             Self::DropsRequiredSource { path, base } => {
                 write!(f, "coverage source filter drops required {path} ({base})")
             }
-            Self::AdmitsXtaskSource { base, xtask_source } => write!(
+            Self::AdmitsHostToolSource {
+                base,
+                host_tool_source,
+            } => write!(
                 f,
-                "coverage source filter admits host-only tool source ({base} -> {xtask_source})"
+                "coverage source filter admits host-only tool source ({base} -> {host_tool_source})"
             ),
         }
     }
@@ -136,15 +150,15 @@ fn source_probe_verdict(matrix: &SourceProbeMatrix) -> Result<(), DriftError> {
             });
         }
     }
-    let xtask = matrix
+    let host_tool = matrix
         .arms
         .iter()
         .find(|observed| !observed.arm.required)
         .expect("one excluded probe arm");
-    if xtask.source_identity != matrix.source_base {
-        return Err(DriftError::AdmitsXtaskSource {
+    if host_tool.source_identity != matrix.source_base {
+        return Err(DriftError::AdmitsHostToolSource {
             base: matrix.source_base.clone(),
-            xtask_source: xtask.source_identity.clone(),
+            host_tool_source: host_tool.source_identity.clone(),
         });
     }
     Ok(())
@@ -182,7 +196,7 @@ fn report_worktree_cleanup(
     if failed {
         let _ = writeln!(
             stderr,
-            "xtask: warning: xtask.coverage.probe_worktree_cleanup: ignored failure while removing probe worktree"
+            "coverage-check: warning: coverage-check.coverage.probe_worktree_cleanup: ignored failure while removing probe worktree"
         );
     }
 }
@@ -465,7 +479,7 @@ mod tests {
         let warning = String::from_utf8(stderr).unwrap();
         assert_eq!(
             warning
-                .matches("xtask.coverage.probe_worktree_cleanup")
+                .matches("coverage-check.coverage.probe_worktree_cleanup")
                 .count(),
             1
         );
@@ -537,20 +551,20 @@ mod tests {
     }
 
     #[test]
-    fn source_probe_rejects_xtask_source_admission() {
+    fn source_probe_rejects_host_tool_source_admission() {
         let mut matrix = complete_matrix();
         matrix
             .arms
             .iter_mut()
             .find(|observed| !observed.arm.required)
             .expect("excluded catalog arm")
-            .source_identity = "source-xtask".into();
+            .source_identity = "source-host-tool".into();
 
         assert_eq!(
             source_probe_verdict(&matrix),
-            Err(DriftError::AdmitsXtaskSource {
+            Err(DriftError::AdmitsHostToolSource {
                 base: "source-base".into(),
-                xtask_source: "source-xtask".into(),
+                host_tool_source: "source-host-tool".into(),
             })
         );
     }
@@ -564,7 +578,7 @@ mod tests {
             .iter_mut()
             .find(|observed| !observed.arm.required)
             .expect("excluded catalog arm")
-            .source_identity = "source-xtask".into();
+            .source_identity = "source-host-tool".into();
 
         assert_eq!(
             source_probe_verdict(&matrix),

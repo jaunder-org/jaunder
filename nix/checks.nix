@@ -151,7 +151,6 @@ let
         in
         # Nix assembly is not coverage source; exclude only its top-level root.
         !(type == "directory" && path == "${toString (craneLib.path ../.)}/nix")
-        && !(pkgs.lib.hasInfix "/xtask/" path)
         && !(pkgs.lib.hasInfix "/docs/" path)
         && !(pkgs.lib.hasInfix "/.github/" path)
         && !(pkgs.lib.hasInfix "/elisp/" path)
@@ -2849,9 +2848,6 @@ mkWasmCoverageMeasurementProducer =
     ++ (map (attr: { inherit attr; family = "e2e-driver"; }) cacheSafetyDriverAttrs);
   clippySourceFilter =
     path: type:
-    let
-      isXtask = pkgs.lib.hasSuffix "/xtask" path || pkgs.lib.hasInfix "/xtask/" path;
-    in
     # The generic Cargo-manifest fallback must not admit excluded patch metadata.
     if pkgs.lib.hasSuffix "/${sqlxSqlitePatchRoot}" path || pkgs.lib.hasInfix "/${sqlxSqlitePatchRoot}/" path then
       type == "directory" || sqlxSqlitePatchSource path
@@ -2870,30 +2866,25 @@ mkWasmCoverageMeasurementProducer =
         pkgs.lib.hasSuffix ".css" path
         || pkgs.lib.hasSuffix "/nix/otel-processors.yaml" path
         || pkgs.lib.hasSuffix "/testdata/theme-repository/minimal/preview.png" path
-        || (
-          !isXtask
-          && (
-            builtins.any (suffix: pkgs.lib.hasSuffix suffix path) [
-              "/Cargo.toml"
-              "/Cargo.lock"
-              "/rust-toolchain.toml"
-              "/deny.toml"
-              "/clippy.toml"
-              "/.rustfmt.toml"
-              "/.prettierrc.json"
-              "/.prettierignore"
-              "/sgconfig.yml"
-            ]
-            || builtins.any (directory: pkgs.lib.hasInfix "/${directory}/" path) (workspaceMembers ++ [
-              ".cargo"
-              "ast-grep"
-              "public"
-              "tools"
-              "end2end"
-              "elisp"
-            ])
-          )
-        )
+        || builtins.any (suffix: pkgs.lib.hasSuffix suffix path) [
+          "/Cargo.toml"
+          "/Cargo.lock"
+          "/rust-toolchain.toml"
+          "/deny.toml"
+          "/clippy.toml"
+          "/.rustfmt.toml"
+          "/.prettierrc.json"
+          "/.prettierignore"
+          "/sgconfig.yml"
+        ]
+        || builtins.any (directory: pkgs.lib.hasInfix "/${directory}/" path) (workspaceMembers ++ [
+          ".cargo"
+          "ast-grep"
+          "public"
+          "tools"
+          "end2end"
+          "elisp"
+        ])
       )
     );
   clippySource = pkgs.lib.cleanSourceWith {
@@ -3609,21 +3600,18 @@ rust-format =
       if relative == sqlxSqlitePatchRoot || pkgs.lib.hasPrefix "${sqlxSqlitePatchRoot}/" relative then
         type == "directory" || sqlxSqlitePatchSource path
       else
-      !(relative == "xtask" || pkgs.lib.hasPrefix "xtask/" relative)
-      && (
-        sqlxSqlitePatchSource path
-        || type == "directory"
-        || pkgs.lib.hasSuffix ".rs" path
-        || builtins.any (suffix: pkgs.lib.hasSuffix suffix path) [
-          "/Cargo.toml"
-          "/Cargo.lock"
-          "/rust-toolchain.toml"
-          "/.rustfmt.toml"
-          "/rustfmt.toml"
-          "/leptosfmt.toml"
-        ]
-        || pkgs.lib.hasPrefix ".cargo/" relative
-      );
+      sqlxSqlitePatchSource path
+      || type == "directory"
+      || pkgs.lib.hasSuffix ".rs" path
+      || builtins.any (suffix: pkgs.lib.hasSuffix suffix path) [
+        "/Cargo.toml"
+        "/Cargo.lock"
+        "/rust-toolchain.toml"
+        "/.rustfmt.toml"
+        "/rustfmt.toml"
+        "/leptosfmt.toml"
+      ]
+      || pkgs.lib.hasPrefix ".cargo/" relative;
     rustFormatSrc = pkgs.lib.cleanSourceWith {
       src = craneLib.path ../.;
       filter =
@@ -3690,9 +3678,6 @@ static-code =
   let
     staticCodeSourceFilter =
       path: type:
-      let
-        isXtask = pkgs.lib.hasSuffix "/xtask" path || pkgs.lib.hasInfix "/xtask/" path;
-      in
       if pkgs.lib.hasSuffix "/${sqlxSqlitePatchRoot}" path || pkgs.lib.hasInfix "/${sqlxSqlitePatchRoot}/" path then
         type == "directory" || sqlxSqlitePatchSource path
       else
@@ -3705,29 +3690,24 @@ static-code =
           pkgs.lib.hasSuffix ".css" path
           || pkgs.lib.hasSuffix "/nix/otel-processors.yaml" path
           || pkgs.lib.hasSuffix "/testdata/theme-repository/minimal/preview.png" path
-          || (
-            !isXtask
-            && (
-              builtins.any (suffix: pkgs.lib.hasSuffix suffix path) [
-                "/Cargo.toml"
-                "/Cargo.lock"
-                "/rust-toolchain.toml"
-                "/deny.toml"
-                "/clippy.toml"
-                "/.rustfmt.toml"
-                "/.prettierrc.json"
-                "/.prettierignore"
-                "/sgconfig.yml"
-              ]
-              || builtins.any (directory: pkgs.lib.hasInfix "/${directory}/" path) (workspaceMembers ++ [
-                ".cargo"
-                "ast-grep"
-                "public"
-                "tools"
-                "end2end"
-              ])
-            )
-          )
+          || builtins.any (suffix: pkgs.lib.hasSuffix suffix path) [
+            "/Cargo.toml"
+            "/Cargo.lock"
+            "/rust-toolchain.toml"
+            "/deny.toml"
+            "/clippy.toml"
+            "/.rustfmt.toml"
+            "/.prettierrc.json"
+            "/.prettierignore"
+            "/sgconfig.yml"
+          ]
+          || builtins.any (directory: pkgs.lib.hasInfix "/${directory}/" path) (workspaceMembers ++ [
+            ".cargo"
+            "ast-grep"
+            "public"
+            "tools"
+            "end2end"
+          ])
         )
       );
     staticCodeSrc = pkgs.lib.cleanSourceWith {
@@ -3739,10 +3719,9 @@ static-code =
           && staticCodeSourceFilter (cargoSourcePath "${member}/src/main.rs") "regular"
         ) workspaceMembers;
         assert staticCodeSourceFilter (cargoSourcePath "ux-sandbox/tests/lifecycle.rs") "regular";
-        assert staticCodeSourceFilter "/source/xtask/theme.css" "regular";
+        assert staticCodeSourceFilter "/source/unlisted/theme.css" "regular";
         assert staticCodeSourceFilter "/source/nix/otel-processors.yaml" "regular";
-        assert staticCodeSourceFilter "/source/xtask" "directory";
-        assert !(staticCodeSourceFilter "/source/xtask/src/lib.rs" "regular");
+        assert !(staticCodeSourceFilter "/source/unlisted/src/lib.rs" "regular");
         assert !(staticCodeSourceFilter "/source/elisp" "directory");
         assert !(staticCodeSourceFilter "/source/elisp/scripts" "directory");
         assert !(staticCodeSourceFilter "/source/elisp/scripts/format.el" "regular");

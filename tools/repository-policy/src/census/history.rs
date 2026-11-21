@@ -295,8 +295,8 @@ mod tests {
         git(root, &["init"]);
         git(root, &["config", "user.email", "census@example.test"]);
         git(root, &["config", "user.name", "Census Fixture"]);
-        fs::create_dir_all(root.join("xtask")).expect("xtask dir");
-        let path = root.join("xtask/fixture.txt");
+        fs::create_dir_all(root.join("tools")).expect("tools dir");
+        let path = root.join("tools/fixture.txt");
         fs::write(&path, "<svg/>").expect("initial fixture");
         commit(root, "initial fixture");
         fs::write(&path, "<svg><!-- changed --></svg>").expect("changed fixture");
@@ -308,7 +308,7 @@ mod tests {
         assert!(
             candidates
                 .iter()
-                .any(|candidate| candidate.identity == "churn:xtask/fixture.txt")
+                .any(|candidate| candidate.identity == "churn:tools/fixture.txt")
         );
     }
     #[test]

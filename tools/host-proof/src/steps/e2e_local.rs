@@ -238,7 +238,7 @@ fn resolve_e2e_env(
         Err(env::VarError::NotUnicode(_)) => {
             let _ = writeln!(
                 stderr,
-                "xtask: warning: xtask.e2e.workers_config: ignored invalid-Unicode JAUNDER_E2E_WORKERS; using 1"
+                "e2e-local: warning: e2e-local.e2e.workers_config: ignored invalid-Unicode JAUNDER_E2E_WORKERS; using 1"
             );
             "1".to_owned()
         }
