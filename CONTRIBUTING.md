@@ -963,10 +963,13 @@ CI/`dev validate-no-e2e` when hermetic confidence is the question. Focused
 | `dev validate-no-e2e` | clean tree; Verify host/static, Nix static proof (with `tools-doctests`), the `csrBundle` build and wasm budget, wasm tests, Rust coverage/CRAP, doctests, and authoritative Elisp producer/consumer | never mutates |
 | `dev validate`        | adds six Chromium and six Firefox E2E lanes, reconciliation, and final authoritative SQLite/Chromium server-function flow verification                                                               | never mutates |
 
-The host check surface that `check-no-test`, `prepush`, `validate-no-e2e` and
-`ci-validate-host` share is five public groups, run in this order and stopping
-at the first failure. Each can be run on its own to re-check one kind of
-failure; `mode` is `verify` (the default) or `fix`:
+The host check surface that `check-no-test`, `prepush` and `validate-no-e2e`
+share is five public groups, run in this order and stopping at the first
+failure. `ci-validate-host` runs the same groups without the six Clippy units,
+because CI takes its Clippy verdict from the hermetic lane's `static-code`
+([CI Clippy verdict from Nix](docs/adr/drafts/ci-clippy-verdict-from-nix.md)).
+Each group can be run on its own to re-check one kind of failure; `mode` is
+`verify` (the default) or `fix`:
 
 | Group                       | Runs                                                                                   |
 | --------------------------- | -------------------------------------------------------------------------------------- |
@@ -1039,8 +1042,10 @@ selected consumers, inputs and populations in detail:
 - **Root/auxiliary Rust tests and Clippy:** retain fresh host product tests,
   explicit auxiliary suites and target-specific lint units. Auxiliary tests
   remain outside product coverage; lint compilation is not behavioral proof.
-  Host cargo-deny includes advisories; sandbox mode intentionally checks only
-  offline bans, licenses and sources (ADR-0145).
+  Hooks and local gates run host Clippy; CI runs only the hermetic Clippy
+  verdict, an attributable-cost decision under the deferral below (#2010). Host
+  cargo-deny includes advisories; sandbox mode intentionally checks only offline
+  bans, licenses and sources (ADR-0145).
 - **Doctests:** execute the root fence population only in the hermetic producer,
   whose bidirectional reconciliation prevents population loss, plus the
   separate, unreconciled `tools-doctests` run of the tools workspace.
@@ -1155,21 +1160,22 @@ and the
 - `elisp-fmt`, `ert`, and `byte-compile` run the elisp subproject's formatter,
   ERT suite, and warnings-as-errors byte-compilation under `emacs --batch` (see
   the Elisp subproject section below).
-- Six discrete Clippy checks run through the named shared `dev static` checks
-  from the host ladder: `product-core-clippy`, `web-server-clippy`,
-  `web-no-server-clippy`, `client-host-clippy`, `wasm-clippy`, and
-  `tools-clippy`. They use host-local Cargo with the devshell toolchain and
-  compile-cache environment; hermetic Nix exposes one terminal derivation per
-  unit and a narrow aggregate. Product core excludes web, client, and csr as
-  selected lint roots; their applicable server, featureless, host-CSR, and wasm
-  targets are checked separately. `wasm-clippy` deliberately excludes
-  `--all-targets`, because web's host-oriented test dependencies cannot compile
-  for `wasm32-unknown-unknown`. Root and tools workspaces retain separate
-  lock/test contexts (including `csr_bundle` and `performance` in tools). The
-  former combined root web(server+CSR) configuration is intentionally not
-  retained under approved request `2f0929a1-ebbd-4735-9a6c-b53e99a7a141`. The
-  former `xtask-clippy` host step and Nix verdict are retired with the xtask
-  workspace; host tools are linted by `tools-clippy`.
+- Six discrete Clippy checks run through the named shared `dev static` checks:
+  `product-core-clippy`, `web-server-clippy`, `web-no-server-clippy`,
+  `client-host-clippy`, `wasm-clippy`, and `tools-clippy`. The local host ladder
+  and hooks run them with host-local Cargo, the devshell toolchain and
+  compile-cache environment. Hermetic Nix exposes one terminal derivation per
+  unit and a narrow aggregate, which is CI's only Clippy verdict. Product core
+  excludes web, client, and csr as selected lint roots; their applicable server,
+  featureless, host-CSR, and wasm targets are checked separately. `wasm-clippy`
+  deliberately excludes `--all-targets`, because web's host-oriented test
+  dependencies cannot compile for `wasm32-unknown-unknown`. Root and tools
+  workspaces retain separate lock/test contexts (including `csr_bundle` and
+  `performance` in tools). The former combined root web(server+CSR)
+  configuration is intentionally not retained under approved request
+  `2f0929a1-ebbd-4735-9a6c-b53e99a7a141`. The former `xtask-clippy` host step
+  and Nix verdict are retired with the xtask workspace; host tools are linted by
+  `tools-clippy`.
 - `cargo nextest run` runs the default Rust unit and integration test suite.
 - Whole-test budgets are **ambient** — an auto fixture gives every test a scaled
   `DEFAULT_TEST_BUDGET_MS`, which covers the entire suite (#270). Don't set one

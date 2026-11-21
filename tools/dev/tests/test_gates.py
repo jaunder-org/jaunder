@@ -160,11 +160,15 @@ def source_contracts() -> Commands:
     ]
 
 
-def compile_checks() -> Commands:
+def tsc_and_cargo_deny() -> Commands:
     return [
         ["setup-e2e-node-modules", "", ""],
-        *commands("tsc --noEmit -p end2end/tsconfig.json", "cargo deny check", *CLIPPY),
+        *commands("tsc --noEmit -p end2end/tsconfig.json", "cargo deny check"),
     ]
+
+
+def compile_checks() -> Commands:
+    return [*tsc_and_cargo_deny(), *commands(*CLIPPY)]
 
 
 def elisp_checks() -> Commands:
@@ -309,7 +313,17 @@ GATES: dict[str, Commands] = {
     "prepush": PREPUSH,
     "validate-no-e2e": VALIDATE_NO_E2E,
     "validate": [*VALIDATE_NO_E2E, *E2E],
-    "ci-validate-host": [*CLEAN, *HOST_LANE, *host_tests()],
+    # CI's Clippy verdict is the hermetic lane's `static-code`.
+    "ci-validate-host": [
+        *CLEAN,
+        *format_checks("verify"),
+        *docs_shape(),
+        *source_contracts(),
+        *tsc_and_cargo_deny(),
+        *elisp_checks(),
+        PLATFORM,
+        *host_tests(),
+    ],
     "ci-validate-hermetic": [*CLEAN, *HERMETIC],
     "ci-validate-test-checks": [*CLEAN, *nix("wasm-tests"), *DOCTESTS, *ELISP],
     "coverage": [*CLEAN, *COVERAGE],
