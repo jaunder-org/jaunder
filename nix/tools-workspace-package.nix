@@ -2,7 +2,7 @@
 # dependencies-only build that the source cannot invalidate: only the
 # lockfile, toolchain, features and the members' manifests change it. A source
 # edit inside the closure (common/, host/, the tool) recompiles workspace
-# crates alone (ADR draft docs/adr/drafts/dev-runs-nix-built-host-tools.md).
+# crates alone (ADR draft docs/adr/0258-dev-runs-nix-built-host-tools.md).
 { pkgs, craneLib }:
 {
   pname,

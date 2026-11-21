@@ -1283,7 +1283,7 @@ or `nix copy` may read as `reused`. It says nothing about the output's
 dependencies, and no other step records a cache value.
 
 A Rust host tool comes from its flake package
-([`dev` runs Nix-built host tools](docs/adr/drafts/dev-runs-nix-built-host-tools.md)).
+([`dev` runs Nix-built host tools](docs/adr/0258-dev-runs-nix-built-host-tools.md)).
 `dev` builds the package as its own Nix step, `<package>-build`
 (`nix build .#<package>`), once per `dev` process, and then runs
 `<out>/bin/<bin>` directly, so the tool's span times the tool and never the

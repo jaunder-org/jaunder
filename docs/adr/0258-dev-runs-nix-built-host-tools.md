@@ -1,14 +1,14 @@
-# ADR-DRAFT: `dev` runs Nix-built host tools
+# ADR-0258: `dev` runs Nix-built host tools
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-20
 - Issue: [#1968](https://github.com/jaunder-org/jaunder/issues/1968)
 
 ## Context
 
-[ADR-0225](../0225-nix-cached-host-tooling.md) packaged host tooling through Nix
+[ADR-0225](0225-nix-cached-host-tooling.md) packaged host tooling through Nix
 and ran it on the host, so unchanged tool inputs reuse one output across
-checkouts. [ADR-0251](../0251-dev-runner-replaces-just.md) then had `dev` build
+checkouts. [ADR-0251](0251-dev-runner-replaces-just.md) then had `dev` build
 each tools-workspace binary from the checkout with locked Cargo into
 `tools/target`. Only the E2E verifier ran a cached Nix output
 (`packages.host-proof`).
@@ -74,7 +74,7 @@ registry and Git checkouts only, keyed on both lockfiles.
   they are never substituted.
 - This amends ADR-0251's statement that host workflows reach tools through Cargo
   from the checkout. It also amends the
-  [ADR-0254](../0254-dev-trace-step-accounting.md) rule that a tool is built
-  with Cargo as `<bin>-build` and run from `tools/target`. Tools are still built
+  [ADR-0254](0254-dev-trace-step-accounting.md) rule that a tool is built with
+  Cargo as `<bin>-build` and run from `tools/target`. Tools are still built
   before they run, now as `<package>-build`. ADR-0225's host-only execution and
   packaging boundaries stand.
