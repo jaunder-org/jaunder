@@ -236,23 +236,10 @@ mod tests {
         );
     }
 
+    const SAMPLE_TRACE: &str = include_str!("../server_fn_coverage/testdata/coverage-sample.jsonl");
+
     fn write_sample_capture(path: &Path) {
-        let file = std::fs::File::create(path).expect("create capture");
-        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
-        let mut archive = tar::Builder::new(encoder);
-        let jsonl = include_str!("../server_fn_coverage/testdata/coverage-sample.jsonl");
-        let mut header = tar::Header::new_gnu();
-        header.set_size(jsonl.len().try_into().expect("fixture length fits"));
-        header.set_mode(0o644);
-        header.set_cksum();
-        archive
-            .append_data(&mut header, "capture/otel-traces.jsonl", jsonl.as_bytes())
-            .expect("add trace");
-        archive
-            .into_inner()
-            .expect("finish archive")
-            .finish()
-            .expect("finish compression");
+        crate::test_support::write_capture(path, SAMPLE_TRACE, Some(""));
     }
 
     fn write_sample_inventory(dir: &Path) {
@@ -344,6 +331,38 @@ mod tests {
                 "{} must fail, not skip",
                 capture.display()
             );
+        }
+    }
+
+    /// Lost server spans orphan their surviving children, so a capture whose SDK
+    /// reported a loss — or that cannot show it had none — is refused rather than
+    /// verified or regenerated into the snapshot (#2029).
+    #[test]
+    fn a_capture_with_reported_or_unprovable_span_loss_is_refused() {
+        const DROPPED: &str = r#"{"level":"WARN","fields":{"name":"BatchSpanProcessor.SpansDropped","dropped_span_count":280},"target":"opentelemetry_sdk"}"#;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        write_sample_inventory(tmp.path());
+        let snapshot = tmp.path().join("server-fns.json");
+        let clean = tmp.path().join("clean.tar.gz");
+        write_sample_capture(&clean);
+        current_snapshot_for(&clean, tmp.path(), &snapshot);
+
+        for (diag_log, expected) in [(Some(DROPPED), "at least 280"), (None, "diag.log")] {
+            let capture = tmp.path().join("capture-sqlite.tar.gz");
+            crate::test_support::write_capture(&capture, SAMPLE_TRACE, diag_log);
+            for regenerate in [false, true] {
+                let detail = format!(
+                    "{:#}",
+                    regenerate_or_verify(
+                        tmp.path(),
+                        std::slice::from_ref(&capture),
+                        &snapshot,
+                        regenerate
+                    )
+                    .unwrap_err()
+                );
+                assert!(detail.contains(expected), "{detail}");
+            }
         }
     }
 

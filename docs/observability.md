@@ -840,6 +840,16 @@ again means something now issues traffic before the test proper starts; a
 different reason or an unfamiliar parent id means a context lost its traceparent
 or the capture is truncated.
 
+**Truncation the server reports is refused before extraction (#2029).** The
+server's SDK batch span processor loses spans when its queue fills, an export
+fails, or its shutdown flush times out; a lost `request` span leaves its
+server-fn child an `unknown-parent` orphan. The SDK records each loss in the
+capture's `diag.log` (`BatchSpanProcessor.SpanDroppingStarted`, `SpansDropped`,
+`ExportError`, …), so coverage refuses such a capture — and one with no
+`diag.log` — as incomplete rather than reporting a misleading orphan. The E2E VM
+gives the server a 16384-span queue (`OTEL_BSP_MAX_QUEUE_SIZE`) so ordinary host
+load does not overflow it.
+
 ## Server-side scoped diagnostic log — look here first (#144)
 
 When an e2e combo fails, **read the scoped diagnostic log before the journal.**

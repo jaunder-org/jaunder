@@ -872,6 +872,12 @@ mkE2eCheck =
         systemd.services.jaunder.environment = captureEnv // {
           RUST_LOG = "info";
           JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT = "http://127.0.0.1:4317";
+          # The SDK's 2048-span queue overflows when a loaded host stalls export,
+          # and a lost request span orphans its server-fn child (#2029). Coverage
+          # refuses any capture whose diag.log reports such a loss; this headroom
+          # keeps ordinary load from causing one. The SDK allocates every slot up
+          # front, so it stays a moderate multiple of the default.
+          OTEL_BSP_MAX_QUEUE_SIZE = "16384";
         };
       };
 
@@ -1787,6 +1793,9 @@ mkWasmCoverageMeasurementProducer =
     assert minimalTrustedProxyTypeFails;
     assert sqliteStack.config.services.jaunder.trustedProxies == [ "127.0.0.1/32" ];
     assert sqliteStack.config.systemd.services.jaunder.environment.JAUNDER_TRUSTED_PROXIES == "127.0.0.1/32";
+    # #2029: the E2E server keeps span-queue headroom under host load. Every lane
+    # shares mkE2eCheck's node module, so one lane represents them all.
+    assert (builtins.head (builtins.attrValues e2eGateChecks)).nodes.machine.systemd.services.jaunder.environment.OTEL_BSP_MAX_QUEUE_SIZE == "16384";
     assert postgresStack.config.services.jaunder.db == "postgresql://jaunder@localhost/jaunder?host=/run/postgresql";
     assert postgresStack.config.services.postgresql.enable;
     assert postgresStack.config.services.postgresql.ensureDatabases == [ "jaunder" ];

@@ -371,8 +371,6 @@ pub(crate) mod tests {
     use std::fs;
     use std::path::Path;
 
-    use flate2::Compression;
-    use flate2::write::GzEncoder;
     use serde_json::Value;
 
     use super::{LaneEvidence, reconcile};
@@ -386,8 +384,6 @@ pub(crate) mod tests {
     struct TestCatalog {
         lanes: Vec<super::ExpectedLane>,
     }
-    use crate::traces::run::TRACE_MEMBER;
-
     const CENSUS: &str = include_str!("testdata/e2e-ownership/expected-census.json");
     const REPORTS: [&str; 3] = [
         include_str!("testdata/e2e-ownership/ordinary-1-report.json"),
@@ -421,17 +417,7 @@ pub(crate) mod tests {
     ];
 
     pub(crate) fn write_capture(path: &Path, trace: &str) {
-        let file = fs::File::create(path).unwrap();
-        let encoder = GzEncoder::new(file, Compression::default());
-        let mut archive = tar::Builder::new(encoder);
-        let mut header = tar::Header::new_gnu();
-        header.set_size(trace.len().try_into().unwrap());
-        header.set_mode(0o644);
-        header.set_cksum();
-        archive
-            .append_data(&mut header, TRACE_MEMBER, trace.as_bytes())
-            .unwrap();
-        archive.into_inner().unwrap().finish().unwrap();
+        crate::test_support::write_capture(path, trace, Some(""));
     }
 
     pub(crate) fn fixture(root: &Path) -> Vec<LaneEvidence> {

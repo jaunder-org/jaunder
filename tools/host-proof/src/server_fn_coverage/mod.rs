@@ -9,6 +9,7 @@
 pub mod extract;
 pub mod io;
 pub mod snapshot;
+pub mod span_loss;
 
 pub use extract::{Coverage, extract};
 pub use snapshot::{REGENERATE_CMD, Snapshot, render};

@@ -46,7 +46,7 @@ also gets a larger span queue, so ordinary host load does not overflow it.
 ## Approach and tradeoffs
 
 1. **Detect (class fix).** Server-function coverage reads each lane's
-   `capture-*.tar.gz`. It will now read `capture/diag.log` in the same pass.
+   `capture-*.tar.gz`. It will now also read `capture/diag.log` from it.
    - **Archive reading.** It uses the existing shared archive-member reader,
      generalised from the trace member to a path parameter, not a second tar
      reader.
@@ -73,9 +73,8 @@ also gets a larger span queue, so ordinary host load does not overflow it.
    `OTEL_BSP_MAX_QUEUE_SIZE=16384`, eight times the default.
    - The SDK already reads this variable.
    - The SDK allocates its bounded channel up front, so the cost is about 16k
-     queue slots committed at startup. The exact figure will be measured with
-     `size_of::<SpanData>()` and recorded in the PR; the estimate is a few MB
-     against VMs with 2–4 GB.
+     queue slots committed at startup. Measured: `size_of::<SpanData>()` is 352
+     bytes, so about 5.8 MB against VMs with 2–4 GB.
    - A larger queue would make flushing a stalled backlog at shutdown more
      likely to time out, so the size stays moderate.
    - The larger queue does not prevent export errors. Detection still names

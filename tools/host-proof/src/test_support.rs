@@ -1,8 +1,30 @@
-//! Throwaway Git repositories for unit tests. Every call goes through
-//! [`crate::git::at`], which scrubs inherited `GIT_DIR` and friends so a hook
-//! environment cannot retarget a fixture at the real repository.
+//! Unit-test fixtures. Throwaway Git repositories go through [`crate::git::at`],
+//! which scrubs inherited `GIT_DIR` and friends so a hook environment cannot
+//! retarget a fixture at the real repository.
 
 use std::path::Path;
+
+use crate::traces::run::{DIAG_MEMBER, TRACE_MEMBER};
+
+/// Write a `capture-*.tar.gz` shaped like a VM capture: the given trace beside
+/// the server's `diag.log`, which every real capture carries (#2029). `None`
+/// omits the log, for the fail-closed case.
+pub fn write_capture(path: &Path, trace: &str, diag_log: Option<&str>) {
+    let file = std::fs::File::create(path).unwrap();
+    let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+    let mut archive = tar::Builder::new(encoder);
+    let diag = diag_log.map(|log| (DIAG_MEMBER, log));
+    for (member, contents) in std::iter::once((TRACE_MEMBER, trace)).chain(diag) {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(contents.len().try_into().unwrap());
+        header.set_mode(0o644);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, member, contents.as_bytes())
+            .unwrap();
+    }
+    archive.into_inner().unwrap().finish().unwrap();
+}
 
 pub fn git_ok(dir: &Path, args: &[&str]) {
     let status = crate::git::at(dir).args(args).status().unwrap();
