@@ -18,10 +18,8 @@ STEPS = {
         f"{NIX_BUILD} --print-out-paths --out-link .xtask/gcroots/coverage .#checks.x86_64-linux.coverage",
         f"{NIX_EVAL} .#checks.x86_64-linux.coverage-gate",
         f"{NIX_BUILD} --print-out-paths --no-link .#checks.x86_64-linux.coverage-gate",
-        (
-            "cargo build --locked --quiet --manifest-path tools/Cargo.toml "
-            "--target-dir tools/target -p coverage --features host --bin coverage-check"
-        ),
+        "nix path-info --derivation --accept-flake-config .#coverage-check",
+        "nix build -L --accept-flake-config --print-out-paths --no-link .#coverage-check",
         "coverage-check policy --out .xtask/gcroots/coverage",
     ],
     "doctests": [

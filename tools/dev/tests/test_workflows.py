@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 import pytest
-from conftest import PACKAGE, REGISTERED_LONG_AGO, Checkout, Workflow
+from conftest import PACKAGE, REGISTERED_LONG_AGO, TOOL_PACKAGES, Checkout, Workflow
 
 SHELL_SYNTAX = "a b ; touch pwned $(touch pwned)"
 
@@ -20,16 +20,16 @@ def words(line: str, *tail: str) -> list[str]:
     return [*line.split(" "), *tail]
 
 
-def build(package: str, binary: str, *features: str) -> list[str]:
-    """A tools-workspace binary's build step; the fake build leaves the fake
-    as the binary, which then records itself under the binary's name."""
-    return words(
-        "cargo build --locked --quiet --manifest-path tools/Cargo.toml "
-        f"--target-dir tools/target -p {package}",
-        *(["--features", ",".join(features)] if features else []),
-        "--bin",
-        binary,
-    )
+def build(package: str) -> Commands:
+    """A tool package's build step; the fake output holds the fake as each of
+    its binaries, which then records itself under the binary's name."""
+    return [
+        words(f"nix path-info --derivation --accept-flake-config .#{package}"),
+        words(
+            "nix build -L --accept-flake-config --print-out-paths --no-link "
+            f".#{package}"
+        ),
+    ]
 
 
 FORWARDED: list[tuple[list[str], Commands]] = [
@@ -51,7 +51,7 @@ FORWARDED: list[tuple[list[str], Commands]] = [
     (
         ["census", "--json", SHELL_SYNTAX],
         [
-            build("repository-policy", "source-contracts"),
+            *build("repository-policy"),
             ["source-contracts", "census", "--json", SHELL_SYNTAX],
         ],
     ),
@@ -67,28 +67,28 @@ FORWARDED: list[tuple[list[str], Commands]] = [
     (
         ["census", "--json", "--", "--"],
         [
-            build("repository-policy", "source-contracts"),
+            *build("repository-policy"),
             ["source-contracts", "census", "--json", "--", "--"],
         ],
     ),
     (
         ["org-timezone-manifest", "--", "-x.org"],
         [
-            build("repository-policy", "org-timezone-manifest"),
+            *build("repository-policy"),
             ["org-timezone-manifest", "--", "-x.org"],
         ],
     ),
     (
         ["coverage-check", "probe-source", "--help"],
         [
-            build("coverage", "coverage-check", "host"),
+            *build("coverage-check"),
             ["coverage-check", "probe-source", "--help"],
         ],
     ),
     *(
         (
             [binary, "--flag", SHELL_SYNTAX],
-            [build("host-proof", binary), [binary, "--flag", SHELL_SYNTAX]],
+            [*build("host-proof"), [binary, "--flag", SHELL_SYNTAX]],
         )
         for binary in [
             "wasm-audit",
@@ -100,41 +100,41 @@ FORWARDED: list[tuple[list[str], Commands]] = [
     (
         ["e2e-local", "--browser", "firefox", "end2end/tests/auth.spec.ts:12"],
         [
-            build("host-proof", "e2e-local"),
+            *build("host-proof"),
             words("e2e-local --browser firefox end2end/tests/auth.spec.ts:12"),
         ],
     ),
     (
         ["pr-watch", "731", "--once", "--expected-head", "f" * 40],
         [
-            build("pr-observer", "pr-observer"),
+            *build("pr-observer"),
             words("pr-observer watch 731 --once --expected-head", "f" * 40),
         ],
     ),
     (
         ["org-timezone-manifest", "a.org", SHELL_SYNTAX],
         [
-            build("repository-policy", "org-timezone-manifest"),
+            *build("repository-policy"),
             ["org-timezone-manifest", "--", "a.org", SHELL_SYNTAX],
         ],
     ),
     (
         ["adr-format"],
         [
-            build("repository-policy", "repository-docs"),
+            *build("repository-policy"),
             words("repository-docs adr-format"),
         ],
     ),
     (
         ["perf-compare", "candidate evidence.json"],
         [
-            build("performance", "perf-data"),
+            *build("perf-data"),
             words("perf-data compare --result", "candidate evidence.json"),
         ],
     ),
     (
         ["perf-import-baseline", "42"],
-        [build("performance", "perf-data"), words("perf-data import-baseline 42")],
+        [*build("perf-data"), words("perf-data import-baseline 42")],
     ),
     (["e2e"], [["bash", "scripts/e2e-workflow", "all", ""]]),
     (["e2e", "3"], [["bash", "scripts/e2e-workflow", "all", "3"]]),
@@ -230,7 +230,7 @@ def test_a_forwarded_tool_keeps_its_streams_and_status(
 def test_report_tools_fail_closed_without_a_report(
     checkout: Checkout, command: str, output: bytes
 ) -> None:
-    checkout.tool("cargo", "")
+    checkout.tool("nix", store_nix())
     checkout.built(command, f"sys.stdout.buffer.write({output!r})")
     result = checkout.dev(command, "budget")
     assert result.returncode == 1
@@ -252,7 +252,7 @@ def test_report_tools_fail_closed_without_a_report(
 def test_report_tools_show_their_help_unchanged(
     checkout: Checkout, command: str, help_args: list[str]
 ) -> None:
-    checkout.tool("cargo", "")
+    checkout.tool("nix", store_nix())
     checkout.built(command, 'print("Usage: tool [OPTIONS]")')
     result = checkout.dev(command, *help_args)
     assert (result.returncode, result.stdout, result.stderr) == (
@@ -275,7 +275,7 @@ sys.exit(0 if len(reports) == len(files) else 1)
 def test_org_timezone_manifest_forwards_originals_without_bootstrap(
     checkout: Checkout,
 ) -> None:
-    checkout.tool("cargo", "")
+    checkout.tool("nix", store_nix())
     checkout.built("org-timezone-manifest", "import json\n" + ORG_TOOL)
     name = "local ; touch unexpected.org"
     text = "#+PROPERTY: JAUNDER_ID 7\n#+PROPERTY: JAUNDER_DATE_TZ UTC\n"
@@ -295,9 +295,9 @@ def test_org_timezone_manifest_forwards_originals_without_bootstrap(
     assert (checkout.root / name).read_text() == text
 
 
-def store_nix(output: str) -> str:
-    """A fake `nix` whose every installable builds to `output`, registered in
-    its store long ago."""
+def store_nix(output: str = "/nix/store/fake-out") -> str:
+    """A fake `nix` whose tool packages build to FAKE_TOOL_OUT and every other
+    installable to `output`, all registered in its store long ago."""
     return (
         "import json\n"
         'if "--derivation" in sys.argv:\n'
@@ -305,23 +305,27 @@ def store_nix(output: str) -> str:
         'elif sys.argv[1] == "path-info":\n'
         f"    entry = {{'ultimate': False, 'registrationTime': {REGISTERED_LONG_AGO}}}\n"
         "    print(json.dumps({sys.argv[-1]: entry}))\n"
+        f"elif sys.argv[-1].removeprefix('.#') in {list(TOOL_PACKAGES)!r}:\n"
+        '    print(os.environ["FAKE_TOOL_OUT"])\n'
         "else:\n"
         f"    print({output!r})\n"
     )
 
 
+# The verifier: records its arguments in $EVENTS and reports one passing step.
+EVIDENCE = """\
+import json
+with open(os.environ["EVENTS"], "a") as events:
+    events.write(" ".join(sys.argv[1:]) + "\\n")
+print(json.dumps({"steps": [{"name": sys.argv[1], "ok": True, "duration_ms": 1}]}))
+"""
+
+
 def test_e2e_reconcile_runs_the_built_verifier_on_artifacts_only(
     checkout: Checkout,
 ) -> None:
-    verifier = checkout.root.parent / "host-proof"
-    (verifier / "bin").mkdir(parents=True)
-    evidence = verifier / "bin" / "e2e-evidence"
-    evidence.write_text(
-        '#!/bin/sh\necho "$*" >> "$EVENTS"\n'
-        'printf \'{"steps":[{"name":"%s","ok":true,"duration_ms":1}]}\' "$1"\n'
-    )
-    evidence.chmod(0o755)
-    checkout.tool("nix", store_nix(str(verifier)))
+    checkout.built("e2e-evidence", EVIDENCE)
+    checkout.tool("nix", store_nix())
     tail = "--catalog end2end/e2e-lanes.json --diagnostics-root"
     for browser, args, artifacts in [
         ("firefox", [], ".xtask/diagnostics"),
@@ -342,7 +346,8 @@ def test_e2e_reconcile_runs_the_built_verifier_on_artifacts_only(
             rendered += b"[ ok ] server-fn-coverage\n"
         assert events.read_text().splitlines() == expected
         assert result.stdout == rendered
-        assert checkout.merged()["host-proof"]["args"]["jaunder.cache"] == "reused"
+        step = checkout.merged()["host-proof-build"]["args"]
+        assert step["jaunder.cache"] == "reused"
         shutil.rmtree(checkout.root / ".xtask" / "run")
     assert [line for line in checkout.order().splitlines() if " build " in line] == [
         "nix build -L --accept-flake-config --print-out-paths --no-link .#host-proof"
@@ -352,15 +357,8 @@ def test_e2e_reconcile_runs_the_built_verifier_on_artifacts_only(
 def test_e2e_regenerate_coverage_produces_the_pair_then_regenerates(
     checkout: Checkout,
 ) -> None:
-    verifier = checkout.root.parent / "host-proof"
-    (verifier / "bin").mkdir(parents=True)
-    evidence = verifier / "bin" / "e2e-evidence"
-    evidence.write_text(
-        '#!/bin/sh\necho "$*" >> "$EVENTS"\n'
-        'printf \'{"steps":[{"name":"%s","ok":true,"duration_ms":1}]}\' "$1"\n'
-    )
-    evidence.chmod(0o755)
-    checkout.tool("nix", store_nix(str(verifier)))
+    checkout.built("e2e-evidence", EVIDENCE)
+    checkout.tool("nix", store_nix())
     # The pair's producers are recorded, not run.
     checkout.tool("bash", "")
     events = checkout.root / "events"
@@ -376,7 +374,7 @@ def test_e2e_regenerate_coverage_produces_the_pair_then_regenerates(
 
 STATIC_ALL = [
     words("cargo fmt --check"),
-    build("repository-policy", "scoped-leptosfmt"),
+    *build("repository-policy"),
     words("scoped-leptosfmt verify"),
     words("emacs --batch -Q -l elisp/scripts/format.el -f jaunder-fmt-check"),
     words("cargo fmt --manifest-path tools/Cargo.toml --all --check"),
@@ -485,7 +483,7 @@ def test_build_csr_assembles_the_bundle_into_target_site(
             ]
         ),
     ]
-    assert order[2] == " ".join(build("system-artifacts", "system-artifacts"))
+    assert order[2] == " ".join(build("system-artifacts")[-1])
     assert order[3].startswith("system-artifacts --out ")
     assert order[4].startswith(f"bash {checkout.root}/scripts/build-csr-assets.sh ")
 

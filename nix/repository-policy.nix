@@ -8,6 +8,7 @@
   workspaceMembers,
   withWorkspacePlaceholders,
   vendorPinnedFork,
+  mkToolsWorkspacePackage,
 }:
 let
   root = toString ../.;
@@ -36,32 +37,19 @@ let
         cargoSourceAdmits (pkgs.lib.removePrefix "${root}/" (toString path)) type;
     }
   ) placeholders;
-  vendor = craneLib.vendorCargoDeps {
-    src = source;
-    cargoLock = "${source}/tools/Cargo.lock";
-    overrideVendorGitCheckout = vendorPinnedFork "repository-policy";
-  };
 in
-craneLib.buildPackage {
+mkToolsWorkspacePackage {
   pname = "repository-policy";
-  version = "0.1.0";
-  src = source;
-  cargoVendorDir = vendor;
-  cargoArtifacts = null;
-  cargoExtraArgs = "--locked --manifest-path tools/Cargo.toml -p repository-policy --bins";
-  CARGO_PROFILE = "dev";
-  CARGO_PROFILE_DEV_DEBUG = "0";
-  JAUNDER_REPOSITORY_POLICY_SOURCE = ".#repository-policy.sourceAdmits";
-  # Auxiliary native tests run through the host tools workspace, not inside Nix.
-  doCheck = false;
-  doNotPostBuildInstallCargoBinaries = true;
-  installPhase = ''
-    mkdir -p "$out/bin"
-    cp tools/target/debug/{repository-docs,source-contracts,org-timezone-manifest,scoped-leptosfmt} "$out/bin/"
-  '';
-  meta = {
-    license = pkgs.lib.licenses.gpl3Plus;
-    mainProgram = "repository-docs";
+  inherit source vendorPinnedFork;
+  cargoExtraArgs = "--locked --manifest-path tools/Cargo.toml -p repository-policy";
+  bins = [
+    "repository-docs"
+    "source-contracts"
+    "org-timezone-manifest"
+    "scoped-leptosfmt"
+  ];
+  package = {
+    JAUNDER_REPOSITORY_POLICY_SOURCE = ".#repository-policy.sourceAdmits";
+    passthru = { inherit sourceAdmits cargoSourceAdmits; };
   };
-  passthru = { inherit sourceAdmits cargoSourceAdmits; };
 }

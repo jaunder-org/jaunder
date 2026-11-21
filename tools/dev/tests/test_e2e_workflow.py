@@ -266,11 +266,12 @@ def test_a_producer_records_its_output_cache_then_builds_and_runs_the_verifier(
     assert (
         producer["process.command_line"] == f"bash scripts/e2e-workflow producer {LANE}"
     )
-    assert spans["host-proof"]["args"]["jaunder.status"] == "ok"
+    assert spans["host-proof-build"]["args"]["jaunder.status"] == "ok"
     evidence = spans["e2e-evidence"]["args"]["process.command_line"]
     assert evidence.startswith(f"{e2e.root.parent}/evidence-out/bin/e2e-evidence ")
     starts = [
-        spans[name]["ts"] for name in ["e2e-producer", "host-proof", "e2e-evidence"]
+        spans[name]["ts"]
+        for name in ["e2e-producer", "host-proof-build", "e2e-evidence"]
     ]
     assert starts == sorted(starts)
 
@@ -296,7 +297,7 @@ def test_a_failed_producer_records_no_cache_and_builds_no_verifier(e2e: E2E) -> 
     assert result.returncode == 23
     spans = e2e.checkout.merged()
     assert "jaunder.cache" not in spans["e2e-producer"]["args"]
-    assert "host-proof" not in spans
+    assert "host-proof-build" not in spans
 
 
 def test_the_script_takes_no_coverage_action(e2e: E2E) -> None:
