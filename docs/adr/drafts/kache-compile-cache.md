@@ -24,8 +24,8 @@ debug info made each worktree's `target/` about twice the size of line tables
 only.
 
 Those CI runs measured a host lane that still ran Clippy. Since
-[CI's Clippy verdict comes from Nix](../drafts/ci-clippy-verdict-from-nix.md),
-the host lane compiles only the tools workspace, so its store is smaller than
+[CI's Clippy verdict comes from Nix](../0255-ci-clippy-verdict-from-nix.md), the
+host lane compiles only the tools workspace, so its store is smaller than
 measured.
 
 ## Decision
