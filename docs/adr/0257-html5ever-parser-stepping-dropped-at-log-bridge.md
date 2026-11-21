@@ -1,15 +1,15 @@
-# ADR-DRAFT: html5ever parser stepping records are dropped at the log bridge
+# ADR-0257: html5ever parser stepping records are dropped at the log bridge
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-20
 - Issue: [#2006](https://github.com/jaunder-org/jaunder/issues/2006)
 
 ## Context
 
-[ADR-0222](../0222-independent-log-and-trace-filtering.md) admits every
-application severity to the OTLP layers, with no application-level severity,
-target or context filter. [ADR-0224](../0224-native-otlp-process-logs.md) keeps
-every occurrence of the exact html5ever targets (`tokenizer`, `tree_builder`,
+[ADR-0222](0222-independent-log-and-trace-filtering.md) admits every application
+severity to the OTLP layers, with no application-level severity, target or
+context filter. [ADR-0224](0224-native-otlp-process-logs.md) keeps every
+occurrence of the exact html5ever targets (`tokenizer`, `tree_builder`,
 `serialize`) at every severity, with the text withheld at the Collector and no
 event dropping.
 

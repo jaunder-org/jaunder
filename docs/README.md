@@ -285,6 +285,7 @@ convention). See the Status column below for each ADR's current status.
 | [0254](adr/0254-dev-trace-step-accounting.md)                            | Dev trace spans time one thing each and account for the CI job                                               | accepted   |
 | [0255](adr/0255-ci-clippy-verdict-from-nix.md)                           | CI takes its Clippy verdict from Nix                                                                         | accepted   |
 | [0256](adr/0256-kache-compile-cache.md)                                  | kache replaces sccache as the host compile cache                                                             | accepted   |
+| [0257](adr/0257-html5ever-parser-stepping-dropped-at-log-bridge.md)      | html5ever parser stepping records are dropped at the log bridge                                              | accepted   |
 
 <!-- adr-table:end -->
 
