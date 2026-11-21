@@ -55,8 +55,8 @@ appending a comment to `tools/traced-run/src/main.rs` changed the derivation of
     ADR-0251's consequence that the in-derivation executables share the tools
     source.
   - From `tools/`, the product source admits only the crates the root
-    workspace's Cargo path closure reaches (today `tools/performance`). This
-    replaces the per-crate host-tool exclusions.
+    workspace's Cargo path closure reaches. This replaces the per-crate
+    host-tool exclusions.
   - Nix evaluation-time assertions enforce both boundaries.
 
 ## Consequences

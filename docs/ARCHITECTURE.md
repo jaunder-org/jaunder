@@ -5329,17 +5329,18 @@ decision):
   sandboxes or VM guests, where `nix` and the host tools are unavailable. Each
   is its own Nix package, and each derivation takes only the executable it runs.
   `coverage-sandbox`, `doctests` and `perf-producer` share the tools source and
-  dependency build. `system-artifacts`, which every CSR bundle and so the
-  product binary runs, is built from its own Cargo closure like the host tools
-  below, so an edit to an unrelated tool leaves the product derivation unchanged
+  dependency build. `system-artifacts` runs in every CSR bundle derivation,
+  which the product derivation depends on, so it is built from its own Cargo
+  closure like the host tools below; an edit to an unrelated tool leaves the
+  product derivation unchanged
   ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md);
-  [devtool retirement owners](adr/drafts/devtool-retirement-owners.md)).
-  Diagnostic-build reads wasm with `wasmparser`, the parser `host-proof` uses:
-  `coverage-sandbox` (`tools/coverage`: `emit` produces coverage artifacts into
-  `$out` for exfiltration, `validate-status` gates them, `wasm` drives the
-  browser WebAssembly coverage lifecycle, and `diagnostic-build` records the
-  diagnostic CSR build's artifacts); `doctests` (`tools/doctests`: `emit` runs
-  and reconciles the root workspace's doctests); `perf-producer`
+  [devtool retirement owners](adr/drafts/devtool-retirement-owners.md)). The
+  executables: `coverage-sandbox` (`tools/coverage`: `emit` produces coverage
+  artifacts into `$out` for exfiltration, `validate-status` gates them, `wasm`
+  drives the browser WebAssembly coverage lifecycle, and `diagnostic-build`
+  records the diagnostic CSR build's artifacts, reading wasm with `wasmparser`,
+  the parser `host-proof` uses); `doctests` (`tools/doctests`: `emit` runs and
+  reconciles the root workspace's doctests); `perf-producer`
   (`tools/perf-producer`: storage measurement and browser fragment validation in
   the performance producer VMs); and `system-artifacts`
   (`tools/system-artifacts`: stages the closed system styling inventory for
@@ -5678,9 +5679,9 @@ Each tool that renders a verdict prints one JSON report on stdout, from which
 ([draft decision](adr/0247-host-tool-json-report-contract.md)). The
 experiment-only two-worker coverage endpoints (`coverage emit --experiment`,
 `experiment-worker`, `experiment-aggregate`) and their `benchmark-local`
-comparison harness are retired, so full devtool retirement is no longer blocked;
-a future partitioning experiment rebuilds its own harness. The production
-producer and build endpoints live in the crates that own them
+comparison harness are retired, and devtool is fully retired; a future
+partitioning experiment rebuilds its own harness. The production producer and
+build endpoints live in the crates that own them
 ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md);
 [devtool retirement owners](adr/drafts/devtool-retirement-owners.md)). #1864's
 distinct verdicts and #1933's selected passive observations/retention remain

@@ -418,6 +418,11 @@ fn wasm_boundary(artifact: &'static str, wasm: &[u8]) -> Result<WasmBoundary> {
     let mut exports = Vec::new();
     for payload in wasmparser::Parser::new(0).parse_all(wasm) {
         match payload.with_context(|| format!("parsing {artifact}"))? {
+            wasmparser::Payload::Version { encoding, .. } => {
+                if encoding != wasmparser::Encoding::Module {
+                    bail!("{artifact} is not a wasm core module");
+                }
+            }
             wasmparser::Payload::CustomSection(section) => {
                 let name = section.name();
                 for (index, required) in COVERAGE_SECTIONS.iter().enumerate() {
@@ -575,6 +580,8 @@ mod tests {
         let truncated_export = [b"\0asm\x01\0\0\0".as_slice(), &[7, 1, 1]].concat();
         assert!(wasm_boundary("csr.wasm", &truncated_export).is_err());
         assert!(wasm_boundary("csr.wasm", b"not wasm").is_err());
+        let component = wasm_encoder::Component::new().finish();
+        assert!(wasm_boundary("csr.wasm", &component).is_err());
     }
 
     #[test]

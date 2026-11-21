@@ -37,9 +37,8 @@ let
     || relative == "tools/Cargo.toml"
     || relative == "tools/Cargo.lock"
     || builtins.any (name: relative == "${name}/Cargo.toml") placeholders
-    # Non-Cargo inputs of the host/storage closure: host compiles in the
-    # system theme inventory and application CSS.
-    || relative == "csr/index.html"
+    # Non-Cargo files compiled in: host's system theme inventory and
+    # application CSS, and storage's migrations for tools that reach storage.
     || relative == "server/assets/jaunder.css"
     || pkgs.lib.hasPrefix "host/system_theme_sources/" relative
     || pkgs.lib.hasPrefix "storage/migrations/" relative

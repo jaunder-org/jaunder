@@ -528,8 +528,9 @@ let
     member = "tools/pr-observer";
     bins = [ "pr-observer" ];
   };
-  # Every CSR bundle, and so the product binary, runs this executable. Its own
-  # Cargo closure keeps edits to unrelated tools out of the product derivation
+  # Every CSR bundle derivation runs this executable, and the product binary
+  # embeds the bundle. Its own Cargo closure keeps edits to unrelated tools out
+  # of the product derivation
   # (docs/adr/drafts/devtool-retirement-owners.md).
   mkSystemArtifacts =
     args:
@@ -883,7 +884,6 @@ let
     in
     type == "directory"
     || relative == "tools/Cargo.lock"
-    || relative == "csr/index.html"
     # Host, linked through storage, compiles in Theme Package inputs and
     # trusted application CSS, not just Cargo-recognized host sources.
     || relative == "server/assets/jaunder.css"
