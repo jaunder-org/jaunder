@@ -1,7 +1,7 @@
 //! One typed source contract per invocation; no scheduling or policy registration.
 #[derive(Clone, Copy, Debug)]
 pub enum Operation {
-    TestPatternCheck,
+    TestBackendPatternCheck,
     ServerFnRegistrarCheck,
     ServerFnTracingCheck,
     ServerFnWireArgErrorCheck,
@@ -46,7 +46,7 @@ impl Operation {
             Self::HtmlSinkCheck => "html-sink",
             Self::E2eScaffoldCheck => "e2e-scaffold",
             Self::XlangLiteralCheck => "xlang-literal",
-            Self::TestPatternCheck => "test-backend-pattern",
+            Self::TestBackendPatternCheck => "test-backend-pattern",
             Self::E2eServerFnEndpointCheck => "e2e-server-fn-endpoints",
             Self::SqlxNewtypeDecode => "sqlx-newtype-decode",
             Self::ServerFnCoverage => "server-fn-coverage",
@@ -72,7 +72,7 @@ impl Operation {
             "html-sink" => Some(Self::HtmlSinkCheck),
             "e2e-scaffold" => Some(Self::E2eScaffoldCheck),
             "xlang-literal" => Some(Self::XlangLiteralCheck),
-            "test-backend-pattern" => Some(Self::TestPatternCheck),
+            "test-backend-pattern" => Some(Self::TestBackendPatternCheck),
             "e2e-server-fn-endpoints" => Some(Self::E2eServerFnEndpointCheck),
             "sqlx-newtype-decode" => Some(Self::SqlxNewtypeDecode),
             "server-fn-coverage" => Some(Self::ServerFnCoverage),
@@ -81,7 +81,7 @@ impl Operation {
     }
     pub fn check(self) -> Result<Option<String>, String> {
         match self {
-            Self::TestPatternCheck => super::test_pattern_check::run(),
+            Self::TestBackendPatternCheck => super::test_pattern_check::run(),
             Self::ServerFnRegistrarCheck => super::server_fn_registrar_check::run(),
             Self::ServerFnTracingCheck => super::server_fn_tracing_check::run(),
             Self::ServerFnWireArgErrorCheck => super::server_fn_wire_arg_error_check::run(),
