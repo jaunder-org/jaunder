@@ -60,18 +60,22 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
             .map(|run| run.split_whitespace().collect::<Vec<_>>().join(" "))
             .filter(|run| run.contains("nix develop "))
             .collect::<Vec<_>>();
-        // The workflow and its trace summary enter the same shell.
-        assert_eq!(commands.len(), 2, "{id}: {commands:?}");
-        assert_eq!(
-            commands[0],
-            format!("nix develop .#{shell} --accept-flake-config -c dev {gate}")
+        // Every step enters the lane's shell, the workflow and its trace
+        // summary among them.
+        let entry = format!("nix develop .#{shell} --accept-flake-config -c ");
+        assert!(
+            commands.iter().all(|run| run.starts_with(&entry)),
+            "{id}: {commands:?}"
         );
         assert!(
-            commands[1].starts_with(&format!(
-                "nix develop .#{shell} --accept-flake-config -c sh -c 'dev trace summary"
-            )),
-            "{id}: {}",
-            commands[1]
+            commands.contains(&format!("{entry}dev {gate}")),
+            "{id}: {commands:?}"
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|run| run.starts_with(&format!("{entry}sh -c 'dev trace summary"))),
+            "{id}: {commands:?}"
         );
         let encoded = serde_yaml::to_string(job).unwrap();
         assert!(!encoded.contains("last-result.json"));
