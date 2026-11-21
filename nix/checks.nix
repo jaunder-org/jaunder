@@ -21,6 +21,7 @@ let
     sqlxSqlitePatchRoot
     sqlxSqlitePatchSource
     cargoArtifacts
+    cargoArtifactsTest
     leanTestProfile
     leanDevAndTestProfile
     jaunderBin
@@ -2696,18 +2697,18 @@ mkWasmCoverageMeasurementProducer =
   coverageFinalCacheChecks = rec {
     coverage = nonSubstitutable (craneLib.mkCargoDerivation (
       hostArgs
+      # Source-based coverage uses LLVM's embedded coverage map
+      # (-Cinstrument-coverage), not DWARF, so dropping debuginfo
+      # shrinks the instrumented test binaries dramatically with no
+      # loss of line coverage. Without this the instrumented link
+      # exhausts the build filesystem and rust-lld dies with SIGBUS
+      # writing its mmap'd output on the CI runner. The same settings
+      # keep cargoArtifactsTest's dependency fingerprints fresh.
+      // leanDevAndTestProfile
       // {
         src = coverageSrc;
-        inherit cargoArtifacts;
+        cargoArtifacts = cargoArtifactsTest;
         pname = "jaunder-coverage";
-        # Source-based coverage uses LLVM's embedded coverage map
-        # (-Cinstrument-coverage), not DWARF, so dropping debuginfo
-        # shrinks the instrumented test binaries dramatically with no
-        # loss of line coverage. Without this the instrumented link
-        # exhausts the build filesystem and rust-lld dies with SIGBUS
-        # writing its mmap'd output on the CI runner.
-        CARGO_PROFILE_DEV_DEBUG = "0";
-        CARGO_PROFILE_TEST_DEBUG = "0";
         # Stage the real CSR bundle + public assets so `server`'s
         # `build.rs` embeds a POPULATED `site::Site` under instrumentation
         # (#237). Without this the coverage sandbox has no bundle, and the
@@ -3804,14 +3805,13 @@ static-code =
 # feed the ADR-0050 coverage gate (`llvm-cov --doctests` is unstable).
 doctests = craneLib.mkCargoDerivation (
   hostArgs
+  # Doctest output comes from rustdoc/libtest diagnostics and the
+  # fence reconciler, not DWARF. Keep the override local so manual
+  # `cargo test --doc` remains fully debuggable.
+  // leanDevAndTestProfile
   // {
-    cargoArtifacts = craneLib.buildDepsOnly (hostArgs // leanDevAndTestProfile);
+    cargoArtifacts = cargoArtifactsTest;
     pname = "jaunder-doctests";
-    # Doctest output comes from rustdoc/libtest diagnostics and the
-    # fence reconciler, not DWARF. Keep the override local so manual
-    # `cargo test --doc` remains fully debuggable.
-    CARGO_PROFILE_DEV_DEBUG = "0";
-    CARGO_PROFILE_TEST_DEBUG = "0";
     nativeBuildInputs = hostArgs.nativeBuildInputs ++ [ doctestsBin ];
     buildPhaseCargoCommand = ''
       export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ]}:''${LD_LIBRARY_PATH:-}"

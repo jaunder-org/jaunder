@@ -571,6 +571,24 @@ let
 
   cargoArtifactsLeanDev = craneLib.buildDepsOnly (commonArgs // leanDevProfile);
 
+  # Dependencies for workspace test builds (nextest, coverage, doctests). An
+  # empty CARGO_PROFILE makes crane pass no `--profile`, so Cargo uses its own
+  # dev/test profiles; crane's release default is unusable to those builds.
+  # Only the `test --no-run` pass runs: its feature set is the one consumers
+  # resolve. cargo-llvm-cov instruments only workspace crates, so these
+  # uninstrumented artifacts serve coverage too. Keep `coverage` out of the
+  # name: the Cachix pushFilter excludes it.
+  cargoArtifactsTest = craneLib.buildDepsOnly (
+    hostArgs
+    // leanDevAndTestProfile
+    // {
+      pname = "jaunder-test";
+      CARGO_PROFILE = "";
+      doCheck = false;
+      buildPhaseCargoCommand = "cargoWithProfile test --locked --no-run";
+    }
+  );
+
   mkJaunderBin =
     {
       pname ? "jaunder",
@@ -1630,6 +1648,7 @@ in
       appOfflineCargoHome
       toolsOfflineCargoHome
       cargoArtifacts
+      cargoArtifactsTest
       leanTestProfile
       leanDevAndTestProfile
       jaunderBin
