@@ -12,17 +12,6 @@ from conftest import REAL_GIT, Workflow, launch
 PREPUSH_SHARES_DOCS = (platform.system(), platform.machine()) == ("Linux", "x86_64")
 
 
-def build(package: str, binary: str, features: str = "") -> str:
-    """A tools-workspace binary's build step, run before its first use; the
-    fake build leaves the fake as the binary, recording under its name."""
-    return (
-        "cargo build --locked --quiet --manifest-path tools/Cargo.toml "
-        f"--target-dir tools/target -p {package}"
-        + (f" --features {features}" if features else "")
-        + f" --bin {binary}"
-    )
-
-
 DOCS_SHAPE = [
     "sequence-check",
     "adr-format",
@@ -99,6 +88,18 @@ def nix_build(
     )
 
 
+def build(package: str) -> Commands:
+    """A tool package's build step, run before the first use of any of its
+    binaries; the fake output holds the fake as each binary, recording under
+    its name."""
+    return nix_build(f".#{package}", "--no-link")
+
+
+# Built once per process, before the first of its binaries runs.
+POLICY_BUILD = build("repository-policy")
+HOST_PROOF_BUILD = build("host-proof")
+COVERAGE_CHECK_BUILD = build("coverage-check")
+
 # The shared docs request leaves flake.lock as committed.
 STATIC_DOCS = nix_build(
     ".#checks.x86_64-linux.static-docs",
@@ -112,11 +113,11 @@ def format_checks(mode: str, shared_docs: bool = False) -> Commands:
     fix = mode == "fix"
     check = "" if fix else " --check"
     write = "-w" if fix else "--check"
-    expected = commands(
-        f"cargo fmt{check}",
-        build("repository-policy", "scoped-leptosfmt"),
-        f"scoped-leptosfmt {mode}",
-    )
+    expected = [
+        *commands(f"cargo fmt{check}"),
+        *POLICY_BUILD,
+        *commands(f"scoped-leptosfmt {mode}"),
+    ]
     if shared_docs:
         expected += PREPUSH_DOCS
     else:
@@ -132,29 +133,25 @@ def format_checks(mode: str, shared_docs: bool = False) -> Commands:
     ]
 
 
-def docs_shape() -> Commands:
-    return commands(
-        build("repository-policy", "repository-docs"),
-        *(f"repository-docs {name}" for name in DOCS_SHAPE),
-    )
-
-
-SOURCE_CONTRACTS_BUILD = commands(build("repository-policy", "source-contracts"))[0]
+def docs_shape(policy_built: bool = False) -> Commands:
+    return [
+        *([] if policy_built else POLICY_BUILD),
+        *commands(*(f"repository-docs {name}" for name in DOCS_SHAPE)),
+    ]
 
 
 def source_contract(name: str) -> list[str]:
     return ["source-contracts", name]
 
 
-def source_contracts() -> Commands:
+def source_contracts(policy_built: bool = False) -> Commands:
     return [
         *commands(
             "ast-grep test --config sgconfig.yml",
             "ast-grep scan --config sgconfig.yml --filter ^no-full-reload$ "
             "web/src client/src",
         ),
-        # Built once, before its first contract.
-        SOURCE_CONTRACTS_BUILD,
+        *([] if policy_built else POLICY_BUILD),
         *map(source_contract, SOURCE_CONTRACTS),
     ]
 
@@ -179,9 +176,10 @@ def elisp_checks() -> Commands:
 
 def host(mode: str, shared_docs: bool = False) -> Commands:
     return [
+        # The format checks built repository-policy for the scoped adapter.
         *format_checks(mode, shared_docs),
-        *docs_shape(),
-        *source_contracts(),
+        *docs_shape(policy_built=True),
+        *source_contracts(policy_built=True),
         *compile_checks(),
         *elisp_checks(),
     ]
@@ -235,12 +233,11 @@ STATIC = [
 CLEAN = commands("git status --porcelain --untracked-files=all")
 CSR_BUNDLE = nix_build(".#csrBundle", "--out-link .xtask/gcroots/csr-bundle")
 TEST_LOCAL = [
-    *commands(
-        build("host-proof", "admit-inputs"), "admit-inputs .#csrBundle.sourceAdmits"
-    ),
+    *HOST_PROOF_BUILD,
+    *commands("admit-inputs .#csrBundle.sourceAdmits"),
     *CSR_BUNDLE,
+    # csr-prerequisite shares admit-inputs' package, already built.
     *commands(
-        build("host-proof", "csr-prerequisite"),
         "csr-prerequisite .xtask/gcroots/csr-bundle",
         "cargo build --locked -p jaunder --bin jaunder",
         "cargo nextest run --no-run --workspace",
@@ -251,10 +248,8 @@ TEST_LOCAL = [
 # The bundle is its own Nix step; the budget measures the output it linked.
 WASM_BUDGET = [
     *CSR_BUNDLE,
-    *commands(
-        build("host-proof", "wasm-audit"),
-        "wasm-audit budget --site-path /nix/store/fake-csr-bundle",
-    ),
+    *HOST_PROOF_BUILD,
+    *commands("wasm-audit budget --site-path /nix/store/fake-csr-bundle"),
 ]
 E2E = [["bash", "scripts/e2e-workflow", "all", ""]]
 
@@ -268,12 +263,10 @@ def producer_and_gate(check: str) -> Commands:
     ]
 
 
-COVERAGE_CHECK_BUILD = build("coverage", "coverage-check", "host")
 COVERAGE = [
     *producer_and_gate("coverage"),
-    *commands(
-        COVERAGE_CHECK_BUILD, "coverage-check policy --out .xtask/gcroots/coverage"
-    ),
+    *COVERAGE_CHECK_BUILD,
+    *commands("coverage-check policy --out .xtask/gcroots/coverage"),
 ]
 DOCTESTS = producer_and_gate("doctests")
 # A lane that ran the coverage policy already built its tool.
@@ -283,7 +276,8 @@ ELISP_AFTER_COVERAGE = [
 ]
 ELISP = [
     *nix("elisp-coverage-producer"),
-    *commands(COVERAGE_CHECK_BUILD, "coverage-check elisp-consume"),
+    *COVERAGE_CHECK_BUILD,
+    *commands("coverage-check elisp-consume"),
 ]
 CHECK_NO_TEST = [*host("fix"), *host_tests()]
 CHECK = [*CHECK_NO_TEST, *TEST_LOCAL, *nix("wasm-tests"), *DOCTESTS]
@@ -337,8 +331,9 @@ def test_each_gate_runs_its_complete_population_in_order(
     result = workflow.dev(gate, cwd=workflow.root / "sub")
     assert result.returncode == 0, result
     assert workflow.commands() == expected
+    # Only a kept build holds a GC root; a tool package build keeps none.
     assert (workflow.root / ".xtask" / "gcroots").is_dir() == any(
-        argv[0] == "nix" and argv[1] == "build" for argv in expected
+        argv[:2] == ["nix", "build"] and "--out-link" in argv for argv in expected
     )
     assert not (workflow.root / ".xtask" / "last-result.json").exists()
     assert f"dev {gate}" in workflow.checkout.merged()
@@ -353,7 +348,7 @@ GROUPS: list[tuple[list[str], Commands]] = [
     (["elisp-checks"], elisp_checks()),
     (
         ["source-contract", "html-sink"],
-        [SOURCE_CONTRACTS_BUILD, source_contract("html-sink")],
+        [*POLICY_BUILD, source_contract("html-sink")],
     ),
     *(
         (args, expected)
@@ -380,7 +375,7 @@ def test_a_source_contract_name_stays_one_argument(workflow: Workflow) -> None:
     name = "html-sink ; touch pwned $(touch pwned)"
     result = workflow.dev("source-contract", name)
     assert result.returncode == 0, result
-    assert workflow.commands() == [SOURCE_CONTRACTS_BUILD, source_contract(name)]
+    assert workflow.commands() == [*POLICY_BUILD, source_contract(name)]
     assert not (workflow.root / "pwned").exists()
 
 
@@ -507,14 +502,13 @@ def test_a_failing_gate_records_the_failed_step_and_status(
 def test_a_report_step_without_a_report_fails_closed(workflow: Workflow) -> None:
     # In the hermetic lane only the wasm budget runs a tools-workspace binary,
     # and it prints a non-report.
-    workflow.checkout.tool("cargo", "")
     workflow.checkout.built("wasm-audit", 'print("not a report")')
     result = workflow.dev("ci-validate-hermetic")
     assert result.returncode == 1, result
     assert result.stdout == b"not a report\n"
     assert result.stderr == b"dev: wasm-budget: output is not a step report\n"
     order = (workflow.root / "order").read_text().splitlines()
-    assert order == [" ".join(argv) for argv in WASM_BUDGET[len(CSR_BUNDLE) :]]
+    assert order == [" ".join(WASM_BUDGET[-1])]
 
 
 def test_the_wasm_budget_never_runs_without_its_bundle(workflow: Workflow) -> None:
@@ -548,56 +542,61 @@ def test_a_tool_builds_once_per_process_then_runs_directly(
     result = workflow.dev("source-contracts")
     assert result.returncode == 0, result
     ran = workflow.commands()
-    first = ran.index(SOURCE_CONTRACTS_BUILD)
-    assert ran[first + 1 :] == [source_contract(name) for name in SOURCE_CONTRACTS]
-    assert ran.count(SOURCE_CONTRACTS_BUILD) == 1
+    assert ran[2:] == [*POLICY_BUILD, *map(source_contract, SOURCE_CONTRACTS)]
     slices = workflow.checkout.merged()
     gate = slices["dev source-contracts"]["args"]["span_id"]
-    assert slices["source-contracts-build"]["args"]["parent_id"] == gate
-    # The contract's own step times the binary, never the compiler.
+    step = slices["repository-policy-build"]["args"]
+    assert step["parent_id"] == gate
+    assert slices["eval"]["args"]["parent_id"] == step["span_id"]
+    assert slices["build"]["args"]["parent_id"] == step["span_id"]
+    # The contract's own step times the binary from the package output, never
+    # the build.
     assert slices["html-sink"]["args"]["process.command_line"] == (
-        "tools/target/debug/source-contracts html-sink"
+        f"{workflow.checkout.tool_out}/bin/source-contracts html-sink"
     )
 
 
 def test_a_failed_tool_build_stops_the_gate_before_the_tool_runs(
     workflow: Workflow,
 ) -> None:
-    failure = " ".join(SOURCE_CONTRACTS_BUILD)
+    failure = " ".join(POLICY_BUILD[-1])
     result = workflow.dev("source-contract", "html-sink", failure=failure)
     assert result.returncode == 17
-    assert workflow.commands() == [SOURCE_CONTRACTS_BUILD]
+    assert workflow.commands() == POLICY_BUILD
     slices = workflow.checkout.merged()
-    step = slices["source-contracts-build"]["args"]
+    step = slices["repository-policy-build"]["args"]
     assert (step["jaunder.status"], step["process.exit.code"]) == ("failed", 17)
     assert "html-sink" not in slices
+    assert not (workflow.root / "order").exists()
 
 
-# A gate that runs a tool, the host tests, then the same tool again.
+# A gate that runs two binaries of one package around the host tests.
 AROUND_HOST_TESTS = """\
 from pathlib import Path
 from dev import gates, steps
-from dev.commands import SOURCE_CONTRACT
+from dev.commands import SOURCE_CONTRACT, repository_policy
 def body():
-    steps.tool(SOURCE_CONTRACT)
+    print(steps.tool(SOURCE_CONTRACT))
     gates.host_tests()
-    steps.tool(SOURCE_CONTRACT)
+    print(steps.tool(repository_policy("repository-docs")))
 sys.exit(steps.gate(Path.cwd(), "dev demo", body))
 """
 
 
-def test_a_tool_used_after_the_host_tests_builds_again(workflow: Workflow) -> None:
+def test_a_package_builds_once_per_process_for_all_its_binaries(
+    workflow: Workflow,
+) -> None:
     log = workflow.root / "commands"
     log.write_bytes(b"")
     checkout = workflow.checkout
     environment = checkout.environment(FAKE_LOG=str(log), REAL_GIT=REAL_GIT)
     result = checkout.run(launch(AROUND_HOST_TESTS), environment)
     assert result.returncode == 0, result
-    # The tests' build rebuilt the tools' binaries with the tests' features.
-    assert workflow.commands() == [
-        SOURCE_CONTRACTS_BUILD,
-        *host_tests(),
-        SOURCE_CONTRACTS_BUILD,
+    assert workflow.commands() == [*POLICY_BUILD, *host_tests()]
+    out = checkout.tool_out / "bin"
+    assert result.stdout.decode().splitlines() == [
+        str([f"{out}/source-contracts"]),
+        str([f"{out}/repository-docs"]),
     ]
 
 
@@ -614,10 +613,10 @@ def test_the_tools_tests_compile_with_exactly_their_run_arguments(
 
 
 def test_leptosfmt_runs_the_adapter_this_checkout_built(workflow: Workflow) -> None:
-    # The adapter on PATH is stale: running it fails. The build leaves the
-    # recording fake in tools/target/debug.
+    # The adapter on PATH is stale: running it fails. The package output
+    # holds the recording fake, and leptosfmt's PATH finds it first.
     workflow.checkout.executable("scoped-leptosfmt", "#!/bin/sh\nexit 9\n")
     for mode, args in [("verify", []), ("fix", ["--fix"])]:
         result = workflow.dev("static", "leptosfmt", *args)
         assert result.returncode == 0, result
-        assert workflow.commands() == format_checks(mode)[1:3]
+        assert workflow.commands() == format_checks(mode)[1:4]

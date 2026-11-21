@@ -320,26 +320,6 @@ def output(
     return _run(name, argv, True, environment, stdin=stdin)
 
 
-# The tools this process has built and not since rebuilt.
-_built: set[Tool] = set()
-
-
-def tool(built: Tool) -> list[str]:
-    """The argv that runs `built`, built first as the step `<binary>-build`.
-
-    A process builds each tool once; `forget_tools` makes it build again.
-    """
-    if built not in _built:
-        run(f"{built.binary}-build", built.build())
-        _built.add(built)
-    return [built.path]
-
-
-def forget_tools() -> None:
-    """After a step that rebuilt the tools' binaries some other way."""
-    _built.clear()
-
-
 def _shell_text(output: bytes) -> str:
     return output.decode(errors="replace").rstrip("\n")
 
@@ -500,6 +480,22 @@ def nix_build(
             _record_outcome(span, failure.code, failure.signalled)
             raise
     return paths
+
+
+# The output path of each tool package this process has built.
+_packages: dict[str, str] = {}
+
+
+def tool(wanted: Tool) -> list[str]:
+    """The argv that runs `wanted`, its package built first as `<package>-build`.
+
+    A process builds each package once, however many of its binaries it runs.
+    """
+    if wanted.package not in _packages:
+        _packages[wanted.package] = nix_build(
+            f"{wanted.package}-build", f".#{wanted.package}", keep=False
+        )
+    return [f"{_packages[wanted.package]}/bin/{wanted.binary}"]
 
 
 def nix_check(

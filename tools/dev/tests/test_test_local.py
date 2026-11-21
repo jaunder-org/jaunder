@@ -15,17 +15,16 @@ from conftest import Checkout
 LOCK = ".xtask/host-artifacts.lock"
 STEPS = [
     "host-artifacts-lock",
-    "admit-inputs-build",
+    "host-proof-build",
     "csr-admission",
     "csr-bundle",
-    "csr-prerequisite-build",
     "csr-prerequisite",
     "image-worker",
     "nextest-build",
     "nextest",
 ]
 
-# Host-proof's helpers, as their builds leave them. They fail as ADMIT_CODE
+# Host-proof's helpers, in its package output. They fail as ADMIT_CODE
 # and PREREQUISITE_CODE say; with DAEMON set, admission first leaves behind a
 # daemon that keeps every inheritable descriptor, its pid in `daemon.pid`. The
 # prerequisite prints its resolved root.
@@ -49,16 +48,13 @@ if code:
 if binary == "csr-prerequisite":
     print(os.path.realpath(sys.argv[1]))
 """
-# The helpers' builds, the image worker build and nextest (behind the fake
-# pg-run). A helper build does nothing. Every other Cargo command records its
-# arguments and Cargo environment in `cargo.jsonl`. nextest's run records what
+# The image worker build and nextest (behind the fake pg-run). Every Cargo
+# command records its arguments and Cargo environment in `cargo.jsonl`. nextest's run records what
 # it was given, and while `hold` exists it removes it, says it is `holding`
 # and waits for `release`.
 CARGO = """\
 import json
 args = sys.argv[1:]
-if "--target-dir" in args:
-    sys.exit()
 with open("cargo.jsonl", "a") as records:
     records.write(json.dumps({
         "args": args,
@@ -88,13 +84,19 @@ if args[0] != "build" and "--no-run" not in args:
         while not os.path.exists("release"):
             time.sleep(0.02)
 """
-# An evaluation prints a derivation. A build links its out-link to $BUNDLE, or
-# fails with NIX_BUILD_CODE. It prints no output path, so the step records no
-# cache source.
+# host-proof's package builds to FAKE_TOOL_OUT. Otherwise an evaluation prints
+# a derivation, a cache query fails, and a build links its out-link to $BUNDLE,
+# or fails with NIX_BUILD_CODE. No step records a cache source.
 NIX = """\
+if sys.argv[-1] == ".#host-proof":
+    derivation = "--derivation" in sys.argv
+    print("/nix/store/fake-host-proof.drv" if derivation else os.environ["FAKE_TOOL_OUT"])
+    sys.exit()
 if "--derivation" in sys.argv:
     print("/nix/store/fake-csr-bundle.drv")
     sys.exit()
+if sys.argv[1] == "path-info":
+    sys.exit(1)
 code = int(os.environ.get("NIX_BUILD_CODE", "0"))
 if code:
     sys.exit(code)
@@ -137,7 +139,9 @@ def run_test_local(
 
 
 def order(checkout: Checkout) -> list[str]:
-    return checkout.order().splitlines()
+    """The recorded commands, without the cache queries after a tool build."""
+    lines = checkout.order().splitlines()
+    return [line for line in lines if not line.startswith("nix path-info --json ")]
 
 
 def nextest(checkout: Checkout) -> dict[str, Any]:
@@ -156,10 +160,11 @@ BUNDLE_BUILD = (
     "nix build -L --accept-flake-config --print-out-paths --out-link .xtask/gcroots/csr-bundle "
     ".#csrBundle"
 )
-HOST_PROOF_BUILD = (
-    "cargo build --locked --quiet --manifest-path tools/Cargo.toml "
-    "--target-dir tools/target -p host-proof --bin"
-)
+# Both helpers come from one package build: its evaluation, then the build.
+HOST_PROOF_BUILD = [
+    "nix path-info --derivation --accept-flake-config .#host-proof",
+    "nix build -L --accept-flake-config --print-out-paths --no-link .#host-proof",
+]
 WORKER_BUILD = "cargo build --locked -p jaunder --bin jaunder"
 NEXTEST_BUILD = "cargo nextest run --no-run --workspace"
 
@@ -169,11 +174,10 @@ def expected_order(*nextest_args: str) -> list[str]:
     first as their own step."""
     run = nextest_args or ("--workspace",)
     return [
-        f"{HOST_PROOF_BUILD} admit-inputs",
+        *HOST_PROOF_BUILD,
         "admit-inputs .#csrBundle.sourceAdmits",
         BUNDLE_EVAL,
         BUNDLE_BUILD,
-        f"{HOST_PROOF_BUILD} csr-prerequisite",
         "csr-prerequisite .xtask/gcroots/csr-bundle",
         WORKER_BUILD,
         *([] if nextest_args else [NEXTEST_BUILD]),
@@ -273,11 +277,8 @@ def test_an_explicit_bundle_root_is_verified_without_building_one(
     result = run_test_local(local, JAUNDER_CSR_BUNDLE_DIR=str(explicit))
     assert result.returncode == 0, result
     lines = order(local)
-    assert not any(line.startswith("nix ") for line in lines), lines
-    assert lines[:2] == [
-        f"{HOST_PROOF_BUILD} csr-prerequisite",
-        f"csr-prerequisite {explicit}",
-    ]
+    assert not any(".#csrBundle" in line for line in lines), lines
+    assert lines[:3] == [*HOST_PROOF_BUILD, f"csr-prerequisite {explicit}"]
     assert nextest(local)["bundle"] == os.path.realpath(explicit)
     assert "csr-bundle" not in local.merged()
 

@@ -70,10 +70,14 @@ class Checkout:
         for name in ["nix", "nix-store"]:
             self.tool(name, FAKE_NIX_STORE)
 
+    @property
+    def tool_out(self) -> Path:
+        """The output every fake tool package build prints (FAKE_TOOL_OUT)."""
+        return self.bin.parent / "tool-out"
+
     def built(self, name: str, body: str) -> None:
-        """A tools-workspace binary where its build step leaves it; a fake
-        `cargo` stands in for that build."""
-        path = self.root / "tools" / "target" / "debug" / name
+        """A host tool binary in the fake tool package output."""
+        path = self.tool_out / "bin" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         _script(path, body)
 
@@ -94,6 +98,7 @@ class Checkout:
             )
         }
         environment["PATH"] = f"{self.bin}{os.pathsep}{environment['PATH']}"
+        environment["FAKE_TOOL_OUT"] = str(self.tool_out)
         environment.update(extra)
         return environment
 
@@ -176,6 +181,30 @@ class Checkout:
         return {event["name"]: event for event in self.events()}
 
 
+# The flake packages that build host tools, with the binaries each holds.
+TOOL_PACKAGES = {
+    "repository-policy": (
+        "source-contracts",
+        "repository-docs",
+        "org-timezone-manifest",
+        "scoped-leptosfmt",
+    ),
+    "host-proof": (
+        "admit-inputs",
+        "csr-prerequisite",
+        "e2e-evidence",
+        "e2e-local",
+        "source-diagnostics",
+        "trace-analysis",
+        "wasm-audit",
+    ),
+    "coverage-check": ("coverage-check",),
+    "perf-data": ("perf-data",),
+    "pr-observer": ("pr-observer",),
+    "system-artifacts": ("system-artifacts",),
+}
+
+
 # A fake for every tool a workflow runs. Each appends its argv to $FAKE_LOG
 # (unit and record separators keep empty and whitespace-bearing arguments
 # exact) and exits 17 when its command line equals $FAIL_COMMAND; otherwise a
@@ -187,7 +216,9 @@ class Checkout:
 # its root under `/verified`.
 # An evaluation prints a fake derivation named after the installable's last
 # component. Nix cache queries fail, so Nix steps record no cache source; a
-# build's out-link points at a fake store path named after the link.
+# build's out-link points at a fake store path named after the link. A tool
+# package's build prints $FAKE_TOOL_OUT, the one fake output of every tool
+# package (`Checkout.built`).
 FAKE = r"""#!/bin/sh
 name=${0##*/}
 if [ "$name" = git ]; then
@@ -249,22 +280,18 @@ if [ "$name $*" = "${FAIL_COMMAND-}" ]; then
     printf '%s failed\n' "$name" >&2
     exit 17
 fi
-# A tool build leaves this fake as the built tool, so the tool records itself.
-if [ "$name $1" = "cargo build" ]; then
-    target= binary= previous=
-    for argument in "$@"; do
-        case "$previous" in
-          --target-dir) target=$argument ;;
-          --bin) binary=$argument ;;
-        esac
-        previous=$argument
-    done
-    if [ -n "$target" ] && [ -n "$binary" ]; then
-        mkdir -p "$target/debug"
-        cp "$0" "$target/debug/$binary"
-    fi
-fi
 case "$name $*" in
+  'nix build '*' --no-link .#'*)
+    for installable; do :; done
+    case "$installable" in
+      @TOOL_INSTALLABLES@)
+        # Every binary a test has not written records itself, as this fake.
+        mkdir -p "$FAKE_TOOL_OUT/bin"
+        for binary in @TOOL_BINARIES@; do
+            [ -e "$FAKE_TOOL_OUT/bin/$binary" ] || cp "$0" "$FAKE_TOOL_OUT/bin/$binary"
+        done
+        printf '%s\n' "$FAKE_TOOL_OUT" ;;
+    esac ;;
   'nix path-info --derivation '*)
     for installable; do :; done
     printf '/nix/store/fake-%s.drv\n' "${installable##*[#/]}" ;;
@@ -275,7 +302,12 @@ case "$name $*" in
   'trace-analysis '*|'wasm-audit '*|'coverage-check '*)
     printf '{"steps":[]}\n' ;;
 esac
-"""
+""".replace(
+    "@TOOL_INSTALLABLES@", "|".join(f".#{name}" for name in TOOL_PACKAGES)
+).replace(
+    "@TOOL_BINARIES@",
+    " ".join(binary for binaries in TOOL_PACKAGES.values() for binary in binaries),
+)
 # Store registration times for fake `nix` path-info entries: before, and after,
 # any real step's start.
 REGISTERED_LONG_AGO = 0

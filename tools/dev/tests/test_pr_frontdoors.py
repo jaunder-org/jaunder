@@ -23,9 +23,10 @@ MERGE = "b" * 40
 HISTORICAL = "https://github.com/jaunder-org/jaunder/actions/runs/42"
 BASH = shutil.which("bash") or "/bin/sh"
 # Each native call must be the next scripted one. Checkout discovery, which
-# `dev` itself makes, goes to the real Git unrecorded. The observer's build
-# only appends to `builds`: the fixture already put the scripted observer where
-# the build leaves it.
+# `dev` itself makes, goes to the real Git unrecorded. The observer's package
+# build only appends to `builds` and prints FAKE_TOOL_OUT, where the fixture
+# already put the scripted observer; its evaluation and cache queries go
+# unrecorded.
 NATIVE = f"""#!{BASH}
 set -euo pipefail
 tool=${{0##*/}}
@@ -33,7 +34,13 @@ if [[ "$tool $*" == 'git rev-parse --show-toplevel' ]]; then exec "$REAL_GIT" "$
 if [[ "$tool" == git ]]; then
     [[ -z "${{GIT_DIR+x}}${{GIT_WORK_TREE+x}}${{GIT_INDEX_FILE+x}}${{GIT_OBJECT_DIRECTORY+x}}${{GIT_COMMON_DIR+x}}${{GIT_NAMESPACE+x}}" ]] || {{ echo 'Git redirect not scrubbed' >&2; exit 23; }}
 fi
-if [[ "$tool $1" == 'cargo build' ]]; then printf '%s\\n' "$*" >> "$FIXTURE/builds"; exit 0; fi
+if [[ "$tool $*" == 'nix path-info --derivation '* ]]; then printf '/nix/store/fake.drv\\n'; exit 0; fi
+if [[ "$tool $*" == 'nix path-info '* ]]; then exit 1; fi
+if [[ "$tool $*" == 'nix build '* ]]; then
+    printf '%s\\n' "$*" >> "$FIXTURE/builds"
+    printf '%s\\n' "$FAKE_TOOL_OUT"
+    exit 0
+fi
 args=$(jq -cn --args '$ARGS.positional' -- "$@")
 jq -cn --arg tool "$tool" --argjson args "$args" '{{tool:$tool,args:$args}}' >> "$FIXTURE/calls"
 n=$(<"$FIXTURE/index"); printf '%s' "$((n+1))" > "$FIXTURE/index"
@@ -83,9 +90,9 @@ class Native:
 def native(checkout: Checkout) -> Native:
     require(shutil.which("jq") is not None, "jq")
     checkout.from_repository("scripts/pr-land.sh", "scripts/pr-cleanup.sh")
-    for tool in ["gh", "git", "cargo"]:
+    for tool in ["gh", "git", "cargo", "nix"]:
         checkout.executable(tool, NATIVE)
-    observer = checkout.root / "tools" / "target" / "debug" / "pr-observer"
+    observer = checkout.tool_out / "bin" / "pr-observer"
     observer.parent.mkdir(parents=True)
     observer.write_text(NATIVE)
     observer.chmod(0o755)
@@ -195,10 +202,7 @@ def test_an_approved_land_makes_one_head_bound_action_then_observes(
     observations = [call for call in calls if call["tool"] == "pr-observer"]
     builds = (native.checkout.root.parent / "builds").read_text().splitlines()
     assert builds == [
-        (
-            "build --locked --quiet --manifest-path tools/Cargo.toml "
-            "--target-dir tools/target -p pr-observer --bin pr-observer"
-        )
+        "build -L --accept-flake-config --print-out-paths --no-link .#pr-observer"
     ] * len(observations)
 
 

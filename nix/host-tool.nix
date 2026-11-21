@@ -10,11 +10,13 @@
   withWorkspacePlaceholders,
   vendorPinnedFork,
   sqlxSqlitePatchSource,
+  sqlxSqliteExtraDummyScript,
 }:
 {
   pname,
   member,
   bins,
+  features ? [ ],
   # Non-Cargo files the executables compile in or their build scripts read.
   extraSourceAdmits ? (_relative: false),
   env ? { },
@@ -61,17 +63,24 @@ let
     pkgs.sqlite
     pkgs.dav1d
   ];
-in
-craneLib.buildPackage (
-  {
+  common = {
     inherit pname;
     version = "0.1.0";
     src = source;
     cargoVendorDir = vendor;
-    cargoArtifacts = null;
+    # Crane places this lock at the source root (its dummy source keeps no
+    # nested lock); the link gives the nested workspace the same one.
+    cargoLock = "${source}/tools/Cargo.lock";
+    postPatch = ''
+      ln -sf ../Cargo.lock tools/Cargo.lock
+    '';
+    # The nested tools workspace must compile into the target crane's
+    # dependency archive restores.
+    CARGO_TARGET_DIR = "target";
     cargoExtraArgs =
-      "--locked --manifest-path tools/Cargo.toml -p ${builtins.baseNameOf member} "
-      + pkgs.lib.concatMapStringsSep " " (bin: "--bin ${bin}") bins;
+      "--locked --manifest-path tools/Cargo.toml -p ${builtins.baseNameOf member}"
+      + pkgs.lib.optionalString (features != [ ]) " --features ${pkgs.lib.concatStringsSep "," features}";
+    extraDummyScript = sqlxSqliteExtraDummyScript;
     CARGO_PROFILE = "dev";
     CARGO_PROFILE_DEV_DEBUG = "0";
     # Auxiliary native tests run through the host tools workspace, not inside Nix.
@@ -86,11 +95,21 @@ craneLib.buildPackage (
       pkgs.sqlite
       pkgs.dav1d
     ];
+  };
+  # Depends only on the manifests and lockfile, so a source edit inside the
+  # closure (common/, host/, the tool) recompiles workspace crates alone.
+  dependencies = craneLib.buildDepsOnly common;
+in
+craneLib.buildPackage (
+  common
+  // {
+    cargoArtifacts = dependencies;
+    cargoExtraArgs = common.cargoExtraArgs + " " + pkgs.lib.concatMapStringsSep " " (bin: "--bin ${bin}") bins;
     doNotPostBuildInstallCargoBinaries = true;
     installPhase = ''
       mkdir -p "$out/bin"
       for bin in ${pkgs.lib.escapeShellArgs bins}; do
-        cp "tools/target/debug/$bin" "$out/bin/$bin"
+        cp "target/debug/$bin" "$out/bin/$bin"
       done
     '';
     postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
