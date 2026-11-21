@@ -372,9 +372,8 @@ def test_a_failed_producer_that_lifts_nothing_says_so_and_keeps_its_status(
     }[output]
     result = e2e.run("e2e-producer", LANE, output=selected, status="23")
     assert result.returncode == 23, "the producer failure was replaced"
-    assert f"failed build of e2e-{LANE} left no lane artifacts".encode() in (
-        result.stderr
-    )
+    warning = f"no lane artifacts were lifted from the failed build of e2e-{LANE}"
+    assert warning.encode() in result.stderr
     assert b"unavailable or ambiguous" not in result.stderr
     assert "verifier" not in e2e.events()
 

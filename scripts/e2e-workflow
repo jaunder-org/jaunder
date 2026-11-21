@@ -83,7 +83,7 @@ fi
 # A failed VM test keeps its copied-out artifacts in the kept output (ADR-0037);
 # say so only when that left nothing to lift.
 if (( status != 0 )); then
-  (( lifted > 0 )) || printf 'warning: failed build of %s left no lane artifacts to lift\n' "$check" >&2 || true
+  (( lifted > 0 )) || printf 'warning: no lane artifacts were lifted from the failed build of %s\n' "$check" >&2 || true
   exit "$status"
 fi
 (( lift_status == 0 )) || exit 1
