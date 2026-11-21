@@ -109,14 +109,12 @@ jobs:
         continue-on-error: true
         run: nix develop .#ci --accept-flake-config -c kache stats
       # Only `main` saves the store; pull requests and the merge queue restore
-      # it. Removing the product target first releases the blobs it still
-      # links, so GC can bring the store within its cap, and stopping the
-      # daemon leaves an index nothing is writing. Entries are immutable, so the
-      # key is run-stamped and superseded ones age out of the Actions cache.
+      # it. GC brings the store within its cap, and stopping the daemon leaves
+      # an index nothing is writing. Entries are immutable, so the key is
+      # run-stamped and superseded ones age out of the Actions cache.
       - name: Prune compile cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          rm -rf target
           nix develop .#ci --accept-flake-config -c kache gc
           nix develop .#ci --accept-flake-config -c kache daemon stop
       - name: Save compile cache

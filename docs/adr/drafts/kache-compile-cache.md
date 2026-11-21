@@ -23,6 +23,11 @@ across worktrees gave stale Clippy results through Cargo's mtime freshness. Full
 debug info made each worktree's `target/` about twice the size of line tables
 only.
 
+Those CI runs measured a host lane that still ran Clippy. Since
+[CI's Clippy verdict comes from Nix](../drafts/ci-clippy-verdict-from-nix.md),
+the host lane compiles only the tools workspace, so its store is smaller than
+measured.
+
 ## Decision
 
 Host Cargo compilation runs under kache with one configuration locally and in
@@ -33,11 +38,11 @@ shell configuration into users' files. `KACHE_DISABLED=1` is the documented off
 switch.
 
 Locally one per-user store serves every worktree. In CI only `validate-host`,
-the one job that compiles the product workspace on the host, persists its store
+which builds and tests the tools workspace on the host, persists its store
 through the Actions cache: pushes to `main` save it under a run-stamped key
-after removing the product `target/`, running `kache gc` and stopping the
-daemon, and pull requests and the merge queue restore the newest entry. Other
-jobs run the wrapper with an empty, unpersisted store.
+after running `kache gc` and stopping the daemon, and pull requests and the
+merge queue restore the newest entry. Other jobs run the wrapper with an empty,
+unpersisted store.
 
 Dev and test builds of both Cargo workspaces emit line-table debug info only
 (`[profile.dev] debug = "line-tables-only"`).
